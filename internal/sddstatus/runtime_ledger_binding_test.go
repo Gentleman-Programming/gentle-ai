@@ -3,12 +3,13 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestRuntimeBindingImportsLegacyOnceAndReplacesPopulatedBinding(t *testing.T) {
@@ -65,6 +66,12 @@ func TestRuntimeBindingImportsLegacyOnceAndReplacesPopulatedBinding(t *testing.T
 	var conflict *BindingRevisionConflictError
 	if !errors.As(err, &conflict) || conflict.Expected != legacy.Revision || conflict.Current != successor.Revision {
 		t.Fatalf("populated stale conflict = %T %#v", err, err)
+	}
+	// The error already prints the current binding revision; it must also say
+	// how to use it, or a caller who only sees the string has no route back in.
+	wantRetry := fmt.Sprintf("--expected-binding-revision %q", successor.Revision)
+	if !strings.Contains(conflict.Error(), wantRetry) {
+		t.Fatalf("binding revision conflict error = %q, want it to name %q", conflict.Error(), wantRetry)
 	}
 	unchanged, statusErr := store.Status()
 	if statusErr != nil || unchanged.Revision != before || countRuntimeRecords(t, store.Dir) != 1 {

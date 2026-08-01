@@ -159,6 +159,10 @@
               "value": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
             },
             {
+              "name": "failed-evidence-record-digest",
+              "value": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            {
               "name": "finalize-request-digest",
               "value": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
             },
@@ -182,6 +186,7 @@
     "validating_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "target_identity": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
     "failed_evidence_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "failed_evidence_record_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "finalize_request_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
   }
 }

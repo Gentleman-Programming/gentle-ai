@@ -252,3 +252,241 @@ func TestRuntimeLedgerCASAllowsOnlyOneConcurrentBudgetReset(t *testing.T) {
 		t.Fatalf("concurrent reset status = %#v err=%v records=%d", status, err, countRuntimeRecords(t, store.Dir))
 	}
 }
+
+// TestRuntimeLedgerResetRecoversDriftDeadlockAfterInterruptedAttempt reproduces
+// the community-reported lifecycle dead-end (GinoL221, Refresh 4 c2b91ac9):
+// an attempt closes interrupted before launch with zero changed lines, an
+// authorized maintainer correction then changes the candidate with no active
+// attempt outstanding, and both `begin` (candidate drift) and the historical
+// `reset` precondition (decision-required-or-complete only) refuse. An
+// explicit maintainer reset must recover this scope without laundering the
+// per-objective budget: history, lifetime charges, and CAS discipline all
+// survive.
+func TestRuntimeLedgerResetRecoversDriftDeadlockAfterInterruptedAttempt(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "drift-deadlock")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	beginRequest := BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "deadlock-begin-1", WorkUnit: "sdd-objective",
+		EvidenceGoal: "prove recovery continuation", MaxAttempts: 2, MaxChangedLines: 400,
+	}
+	started, err := store.Begin(context.Background(), beginRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Attempt 1 closes interrupted BEFORE the executor ever launched: no
+	// workspace bytes changed, so the native line charge is exactly zero.
+	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "deadlock-finish-1", Outcome: AttemptInterrupted,
+		EvidenceRevision: runtimeTestHash('d'), Diagnosis: "transport closed before the executor was launched",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "no executor process was ever spawned",
+		ProcessEvidence: "pre-launch process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interrupted.CumulativeChangedLines != 0 || interrupted.DecisionRequired || interrupted.Complete ||
+		interrupted.NextAction != RuntimeActionBegin || interrupted.CumulativeAttempts != 1 || interrupted.LifetimeAttempts != 1 {
+		t.Fatalf("pre-drift interrupted status = %#v", interrupted)
+	}
+
+	// A maintainer-approved correction changes the candidate (e.g. fixing a
+	// circular plan dependency) without ever launching an executor.
+	appendRuntimeLedgerFile(t, repo, "corrected-plan-dependency\n")
+
+	retryBegin := BeginAttemptRequest{
+		ExpectedRevision: interrupted.Revision, RequestID: "deadlock-begin-2", WorkUnit: "sdd-objective",
+		EvidenceGoal: "prove recovery continuation", MaxAttempts: 2, MaxChangedLines: 400,
+	}
+	if _, err := store.Begin(context.Background(), retryBegin); !errors.Is(err, ErrRuntimeObjectiveChange) {
+		t.Fatalf("drifted begin error = %v, want ErrRuntimeObjectiveChange", err)
+	}
+	afterBlockedBegin, statusErr := store.Status()
+	if statusErr != nil || afterBlockedBegin.Revision != interrupted.Revision || countRuntimeRecords(t, store.Dir) != 2 {
+		t.Fatalf("blocked drift begin mutated authority: status=%#v err=%v records=%d", afterBlockedBegin, statusErr, countRuntimeRecords(t, store.Dir))
+	}
+
+	resetRequest := ResetObjectiveRequest{
+		ExpectedRevision: interrupted.Revision, RequestID: "deadlock-reset-1",
+		Reason: "maintainer corrected a circular plan dependency", Actor: "maintainer",
+	}
+	reset, err := store.Reset(context.Background(), resetRequest)
+	if err != nil {
+		t.Fatalf("maintainer reset refused the drift deadlock: %v", err)
+	}
+	if reset.Objective != nil || reset.ActiveAttempt != nil || reset.DecisionRequired || reset.Complete ||
+		reset.NextAction != RuntimeActionBegin {
+		t.Fatalf("post-reset status = %#v", reset)
+	}
+	// Lifetime charges and the objective generation counter survive the
+	// reset: the budget is not laundered by resetting.
+	if reset.CumulativeAttempts != 0 || reset.CumulativeChangedLines != 0 ||
+		reset.LifetimeAttempts != 1 || reset.LifetimeChangedLines != 0 || reset.ObjectiveGeneration != 1 {
+		t.Fatalf("reset laundered or lost budget accounting: %#v", reset)
+	}
+	if len(reset.Attempts) != 1 || reset.Attempts[0].Outcome != AttemptInterrupted {
+		t.Fatalf("reset lost immutable attempt history: %#v", reset.Attempts)
+	}
+	if reset.LastReset == nil || reset.LastReset.Reason != resetRequest.Reason || reset.LastReset.Actor != resetRequest.Actor {
+		t.Fatalf("reset audit context = %#v", reset.LastReset)
+	}
+
+	// begin now proceeds against the corrected, maintainer-authorized candidate.
+	next, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: reset.Revision, RequestID: "deadlock-begin-3", WorkUnit: "sdd-objective",
+		EvidenceGoal: "prove recovery continuation", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatalf("begin after recovery reset still refused: %v", err)
+	}
+	if next.Objective == nil || next.Objective.Generation != 2 || next.CumulativeAttempts != 1 ||
+		next.LifetimeAttempts != 2 || next.ActiveAttempt == nil {
+		t.Fatalf("post-recovery begin status = %#v", next)
+	}
+
+	// A fresh reset request against the now-stale expected revision must
+	// fail CAS rather than silently succeed against a newer generation.
+	_, err = store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: interrupted.Revision, RequestID: "deadlock-reset-1-stale",
+		Reason: "attempted reset against a stale revision", Actor: "maintainer",
+	})
+	var conflict *RuntimeRevisionConflictError
+	if !errors.As(err, &conflict) || conflict.Current != next.Revision {
+		t.Fatalf("stale reset after a new generation began = %T %#v, want RuntimeRevisionConflictError(%q)", err, err, next.Revision)
+	}
+}
+
+// TestRuntimeLedgerDriftResetStillRefusesWithActiveAttempt confirms the
+// widened reset precondition never admits a reset while an attempt is
+// active, even when the eventual terminal outcome would have been eligible.
+func TestRuntimeLedgerDriftResetStillRefusesWithActiveAttempt(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "drift-active-guard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "active-begin-1", WorkUnit: "sdd-objective",
+		EvidenceGoal: "prove active guard", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRuntimeLedgerFile(t, repo, "mid-attempt-change\n")
+	_, err = store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: started.Revision, RequestID: "active-reset-1",
+		Reason: "attempted reset while active", Actor: "maintainer",
+	})
+	if !errors.Is(err, ErrRuntimeAttemptActive) {
+		t.Fatalf("active drift reset error = %v, want ErrRuntimeAttemptActive", err)
+	}
+}
+
+// TestRuntimeLedgerDriftResetRequiresExactCAS confirms the widened reset
+// precondition still enforces the exact expected revision.
+func TestRuntimeLedgerDriftResetRequiresExactCAS(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "drift-cas-guard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "cas-begin-1", WorkUnit: "sdd-objective",
+		EvidenceGoal: "prove exact CAS", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "cas-finish-1", Outcome: AttemptInterrupted,
+		EvidenceRevision: runtimeTestHash('e'), Diagnosis: "transport closed before the executor was launched",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "no executor process was ever spawned",
+		ProcessEvidence: "pre-launch process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRuntimeLedgerFile(t, repo, "corrected-plan-dependency\n")
+	_, err = store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: started.Revision, RequestID: "cas-reset-1",
+		Reason: "attempted stale reset", Actor: "maintainer",
+	})
+	var conflict *RuntimeRevisionConflictError
+	if !errors.As(err, &conflict) || conflict.Current != interrupted.Revision {
+		t.Fatalf("stale drift reset error = %T %#v, want RuntimeRevisionConflictError(%q)", err, err, interrupted.Revision)
+	}
+}
+
+// TestRuntimeLedgerDriftResetRequiresMaintainerAuthorization confirms an
+// empty actor is refused even when the drift-eligible precondition holds.
+func TestRuntimeLedgerDriftResetRequiresMaintainerAuthorization(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "drift-authorization-guard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "auth-begin-1", WorkUnit: "sdd-objective",
+		EvidenceGoal: "prove maintainer authorization", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "auth-finish-1", Outcome: AttemptInterrupted,
+		EvidenceRevision: runtimeTestHash('f'), Diagnosis: "transport closed before the executor was launched",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "no executor process was ever spawned",
+		ProcessEvidence: "pre-launch process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRuntimeLedgerFile(t, repo, "corrected-plan-dependency\n")
+	_, err = store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: interrupted.Revision, RequestID: "auth-reset-1",
+		Reason: "attempted reset without an actor", Actor: "",
+	})
+	if err == nil {
+		t.Fatal("reset without maintainer actor unexpectedly succeeded")
+	}
+}
+
+// TestRuntimeLedgerResetWithoutDriftStillRequiresTerminalScope guards the
+// narrower scope of the fix: an early elective reset after a terminal
+// failed/interrupted attempt, with the candidate unchanged (begin would
+// still succeed), must remain refused so the per-objective budget cannot be
+// laundered by resetting instead of retrying.
+func TestRuntimeLedgerResetWithoutDriftStillRequiresTerminalScope(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "no-drift-guard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "no-drift-begin-1", WorkUnit: "sdd-objective",
+		EvidenceGoal: "prove undrifted reset refusal", MaxAttempts: 3, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "no-drift-finish-1", Outcome: AttemptInterrupted,
+		EvidenceRevision: runtimeTestHash('0'), Diagnosis: "transport closed before the executor was launched",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "no executor process was ever spawned",
+		ProcessEvidence: "pre-launch process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: interrupted.Revision, RequestID: "no-drift-reset-1",
+		Reason: "attempted early elective reset with no drift", Actor: "maintainer",
+	})
+	if !errors.Is(err, ErrRuntimeResetNotAllowed) {
+		t.Fatalf("undrifted early reset error = %v, want ErrRuntimeResetNotAllowed", err)
+	}
+}

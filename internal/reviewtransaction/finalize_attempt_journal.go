@@ -23,16 +23,18 @@ var writeFinalizeAttemptAtomic = writeAtomic
 // intentionally do not appear here: paths are transport, their payloads are
 // the authority-relevant request.
 type FinalizeAttemptRequest struct {
-	LineageID                string `json:"lineage_id"`
-	ExpectedRevision         string `json:"expected_revision"`
-	CandidateDigest          string `json:"candidate_digest"`
-	ReviewerResultsDigest    string `json:"reviewer_results_digest"`
-	CorrectionForecastDigest string `json:"correction_forecast_digest"`
-	ValidationDigest         string `json:"validation_digest"`
-	RefuterDigest            string `json:"refuter_digest"`
-	EvidenceDigest           string `json:"evidence_digest"`
-	FailedDigest             string `json:"failed_digest"`
-	RequestDigest            string `json:"request_digest"`
+	LineageID                string              `json:"lineage_id"`
+	ExpectedRevision         string              `json:"expected_revision"`
+	CandidateDigest          string              `json:"candidate_digest"`
+	ReviewerResultsDigest    string              `json:"reviewer_results_digest"`
+	CorrectionForecastDigest string              `json:"correction_forecast_digest"`
+	ValidationDigest         string              `json:"validation_digest"`
+	RefuterDigest            string              `json:"refuter_digest"`
+	EvidenceDigest           string              `json:"evidence_digest"`
+	FailedDigest             string              `json:"failed_digest"`
+	EvidenceRecordDigest     string              `json:"evidence_record_digest,omitempty"`
+	VerificationOutcome      VerificationOutcome `json:"verification_outcome,omitempty"`
+	RequestDigest            string              `json:"request_digest"`
 }
 
 type FinalizeAttemptTransition struct {
@@ -245,25 +247,38 @@ func (store CompactStore) PlanFinalizeAttemptTransition(requestDigest, operation
 	return revision, err
 }
 
+// MarkFinalizeAttemptReceiptPublished and CompleteFinalizeAttempt are the
+// post-terminal completion flags. Both are monotonic and idempotent, so their
+// writers wait out transient advisory contention instead of refusing — a
+// competitor holding the lock is completing the same bookkeeping. The
+// pre-commit journal writers (Reconcile/Plan/Record) keep the instant refusal.
 func (store CompactStore) MarkFinalizeAttemptReceiptPublished(requestDigest string) error {
-	return store.updateFinalizeAttempt(requestDigest, func(attempt *FinalizeAttempt) error {
+	return store.updateFinalizeAttemptWith(convergentCompletionStoreLock, requestDigest, func(attempt *FinalizeAttempt) error {
 		attempt.ReceiptPublished = true
 		return nil
 	})
 }
 
 func (store CompactStore) CompleteFinalizeAttempt(requestDigest string) error {
-	return store.updateFinalizeAttempt(requestDigest, func(attempt *FinalizeAttempt) error {
+	return store.updateFinalizeAttemptWith(convergentCompletionStoreLock, requestDigest, func(attempt *FinalizeAttempt) error {
 		attempt.Completed = true
 		return nil
 	})
 }
 
+func convergentCompletionStoreLock(path string) (*storeLock, error) {
+	return acquireStoreLockForConvergentCompletion(context.Background(), path)
+}
+
 func (store CompactStore) updateFinalizeAttempt(requestDigest string, update func(*FinalizeAttempt) error) error {
+	return store.updateFinalizeAttemptWith(acquireStoreLock, requestDigest, update)
+}
+
+func (store CompactStore) updateFinalizeAttemptWith(acquire func(string) (*storeLock, error), requestDigest string, update func(*FinalizeAttempt) error) error {
 	if !validSHA256(requestDigest) {
 		return errors.New("invalid finalize attempt request digest")
 	}
-	lock, err := acquireStoreLock(store.lockPath)
+	lock, err := acquire(store.lockPath)
 	if err != nil {
 		return err
 	}
@@ -380,6 +395,12 @@ func validateFinalizeAttemptRequest(lineageID string, request FinalizeAttemptReq
 		if !validSHA256(digest) {
 			return errors.New("invalid finalize attempt input digest")
 		}
+	}
+	if (request.EvidenceRecordDigest == "") != (request.VerificationOutcome == "") {
+		return errors.New("finalize attempt captured evidence binding is incomplete") // refusal:by-design world-action: persisted journal evidence metadata is partial and cannot be reconstructed safely
+	}
+	if request.EvidenceRecordDigest != "" && (!validSHA256(request.EvidenceRecordDigest) || !validVerificationOutcome(request.VerificationOutcome)) {
+		return errors.New("invalid finalize attempt captured evidence binding") // refusal:by-design world-action: persisted journal evidence metadata failed closed validation and requires code or storage repair
 	}
 	return nil
 }

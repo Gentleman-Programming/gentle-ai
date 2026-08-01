@@ -10,7 +10,7 @@
 | Linux (Ubuntu/Debian) | apt | Supported |
 | Linux (Arch) | pacman | Supported |
 | Linux (Fedora/RHEL family) | dnf | Supported |
-| Windows 10/11 | Go source install | Supported (binary distribution held) |
+| Windows 10/11 | `go install` (Go toolchain) | Supported (binary distribution held) |
 
 Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS, Manjaro, EndeavourOS, CentOS Stream, Rocky Linux, AlmaLinux, etc.).
 
@@ -20,9 +20,12 @@ Release archives are currently produced for macOS and Linux only. Windows source
 
 ## Windows Notes
 
-- **Install/update from source** with Go 1.25.10+:
-  `go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest`.
-- **Scoop and official Windows binaries are temporarily unavailable.** The installer and built-in upgrader fail closed to source-install guidance rather than downloading or executing an unsigned artifact or remote update script.
+- **Install from source** with Go 1.25.10+:
+  `go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest`.
+- **`gentle-ai upgrade` updates itself automatically when Go 1.25.10+ is on `PATH`.** It runs `go install …/cmd/gentle-ai@vX.Y.Z` pinned to the exact release tag. The module is verified against the Go checksum database (`sum.golang.org`) — a different trust anchor than the minisign signature used for the Linux/macOS release binaries, not a missing one.
+  Because `go install` writes to `GOBIN` (or `GOPATH\bin`), which is not necessarily the directory your shell resolves, the upgrade checks the destination afterwards and warns — naming both full paths — if a different `gentle-ai.exe` earlier on `PATH` would keep running.
+- **Without Go on `PATH`, the upgrader fails closed.** It downloads and executes nothing, and prints the runnable `go install` command instead.
+- **Scoop and official Windows binaries are still temporarily unavailable.** No unsigned artifact is ever downloaded and no remote update script is ever executed.
 - **npm global installs** do not require `sudo` on Windows (user-writable by default).
 - **curl** is pre-installed on Windows 10+ and does not require separate installation.
 - **PowerShell** is the default shell when `$SHELL` is not set.

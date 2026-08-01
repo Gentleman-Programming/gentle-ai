@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 func TestMain(m *testing.M) {
@@ -926,6 +926,75 @@ func TestReconcileOpenCodeCodeGraphUsesXDGConfigHome(t *testing.T) {
 	}
 	if !result.Changed || !reflect.DeepEqual(result.Files, []string{settingsPath}) {
 		t.Fatalf("result = %#v, want XDG OpenCode settings", result)
+	}
+}
+
+func TestInstallUsesUnifiedAntigravityConfigWithoutMigratedMarker(t *testing.T) {
+	home := t.TempDir()
+	unifiedPath := filepath.Join(home, ".gemini", "config", "mcp_config.json")
+	legacyPath := filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")
+	absoluteCodeGraph := filepath.Join(home, "bin", "codegraph")
+	mustWrite(t, unifiedPath, `{"mcpServers":{"user":{"command":"other"}}}`)
+	mustWrite(t, filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"), `{}`)
+
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(name string, args ...string) error {
+		command := strings.Join(append([]string{name}, args...), " ")
+		if command != "codegraph install --target antigravity,gemini --location global --yes" {
+			t.Fatalf("command = %q, want targeted Antigravity install", command)
+		}
+		mustWrite(t, unifiedPath, fmt.Sprintf(`{"mcpServers":{"user":{"command":"other"},"codegraph":{"command":%q,"args":["serve","--mcp"]}}}`, absoluteCodeGraph))
+		mustWrite(t, filepath.Join(home, ".gemini", "settings.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
+		return nil
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	if err != nil {
+		t.Fatalf("InstallWithHome() error = %v", err)
+	}
+	if !reflect.DeepEqual(result.CommandsRun, []string{"codegraph install --target antigravity,gemini --location global --yes"}) {
+		t.Fatalf("CommandsRun = %#v, want targeted Antigravity install", result.CommandsRun)
+	}
+	antigravity := findAgentStatus(t, *result.StatusAfter, model.AgentAntigravity)
+	if !antigravity.Detected || !antigravity.Configured {
+		t.Fatalf("Antigravity status = %#v, want detected and configured", antigravity)
+	}
+	content, readErr := os.ReadFile(unifiedPath)
+	if readErr != nil || !strings.Contains(string(content), `"user"`) || !strings.Contains(string(content), `"codegraph"`) {
+		t.Fatalf("unified config = %q, error = %v; want preserved user and CodeGraph entries", content, readErr)
+	}
+	if _, statErr := os.Stat(legacyPath); !os.IsNotExist(statErr) {
+		t.Fatalf("legacy config should not be created, stat error = %v", statErr)
+	}
+}
+
+func TestInstallRepairsRelativeAntigravityCommand(t *testing.T) {
+	home := t.TempDir()
+	unifiedPath := filepath.Join(home, ".gemini", "config", "mcp_config.json")
+	mustWrite(t, unifiedPath, `{"mcpServers":{"user":{"command":"other"},"codegraph":{"command":"./codegraph","args":["serve","--mcp"]}}}`)
+	mustWrite(t, filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"), `{}`)
+	mustWrite(t, filepath.Join(home, ".gemini", "settings.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
+
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(name string, args ...string) error {
+		command := strings.Join(append([]string{name}, args...), " ")
+		if command != "codegraph install --target antigravity,gemini --location global --yes" {
+			t.Fatalf("command = %q, want targeted Antigravity repair", command)
+		}
+		mustWrite(t, unifiedPath, `{"mcpServers":{"user":{"command":"other"},"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
+		mustWrite(t, filepath.Join(home, ".gemini", "settings.json"), `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
+		return nil
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	if err != nil {
+		t.Fatalf("InstallWithHome() error = %v", err)
+	}
+	before := findAgentStatus(t, *result.StatusBefore, model.AgentAntigravity)
+	if !before.Detected || before.Configured || before.Status != AgentStatusMissing {
+		t.Fatalf("Antigravity status before repair = %#v, want detected and missing", before)
+	}
+	wantCommands := []string{"codegraph install --target antigravity,gemini --location global --yes"}
+	if !reflect.DeepEqual(result.CommandsRun, wantCommands) {
+		t.Fatalf("CommandsRun = %#v, want repair command %#v", result.CommandsRun, wantCommands)
+	}
+	after := findAgentStatus(t, *result.StatusAfter, model.AgentAntigravity)
+	if !after.Detected || !after.Configured {
+		t.Fatalf("Antigravity status after repair = %#v, want detected and configured", after)
 	}
 }
 

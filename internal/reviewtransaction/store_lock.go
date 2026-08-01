@@ -107,13 +107,54 @@ func (err *AuthorityLockCancelledError) Unwrap() []error {
 	return []error{ErrAuthorityLockCancelled, err.Cause}
 }
 
+// ErrStoreLockContended reports the one refusal that proves, from where it is
+// produced rather than from its text, that nothing was mutated: the advisory
+// authority lock was already held, so the non-blocking acquisition syscall
+// refused and the guarded body never ran (1861).
+//
+// It is deliberately narrower than ErrConcurrentUpdate, which every
+// compare-and-swap precondition in this package also reports. Those describe
+// authority that moved under a caller and may need a re-derivation; this one
+// describes a caller that never got in. Only this sentinel is safe to treat as
+// a proven non-mutation, and only when nothing in the same operation committed
+// a native transition first — that remains genuinely unknown.
+var ErrStoreLockContended = errors.New("authoritative review store advisory lock is held")
+
 type storeLockBusyError struct{}
 
 func (err storeLockBusyError) Error() string {
 	return fmt.Sprintf("%v: authoritative review store advisory lock is held; persisted PID and host metadata are not current-holder proof", ErrConcurrentUpdate)
 }
 
-func (err storeLockBusyError) Unwrap() error { return ErrConcurrentUpdate }
+// Unwrap keeps ErrConcurrentUpdate in the chain so every existing bounded
+// retry helper still recognizes contention, and adds ErrStoreLockContended so
+// a caller can tell "never acquired the lock" apart from "lost a CAS".
+func (err storeLockBusyError) Unwrap() []error {
+	return []error{ErrStoreLockContended, ErrConcurrentUpdate}
+}
+
+// StoreLockPreAcquisitionError reports a failure that happened before the
+// authoritative store lock was acquired: directory creation, the secure
+// open walk, or the advisory lock syscall itself all fail before any review
+// authority mutation, so callers must classify this as not-started rather
+// than an unknown-mutation outcome (1781).
+type StoreLockPreAcquisitionError struct {
+	Err error
+}
+
+func (err *StoreLockPreAcquisitionError) Error() string {
+	if err == nil || err.Err == nil {
+		return "review store lock could not be acquired"
+	}
+	return fmt.Sprintf("review store lock could not be acquired: %v", err.Err)
+}
+
+func (err *StoreLockPreAcquisitionError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Err
+}
 
 func acquireStoreLock(path string) (*storeLock, error) {
 	maintenancePath, err := maintenanceLockPathForStoreLock(path)
@@ -138,16 +179,16 @@ func acquireStoreLock(path string) (*storeLock, error) {
 
 func acquireLocalStoreLock(path string) (*storeLock, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
+		return nil, &StoreLockPreAcquisitionError{Err: err}
 	}
 	file, err := secureOpenLocalStoreLock(path)
 	if err != nil {
-		return nil, err
+		return nil, &StoreLockPreAcquisitionError{Err: err}
 	}
 	locked, err := tryLockFile(file)
 	if err != nil {
 		_ = file.Close()
-		return nil, fmt.Errorf("acquire bounded review store lock: %w", err)
+		return nil, &StoreLockPreAcquisitionError{Err: fmt.Errorf("acquire bounded review store lock: %w", err)}
 	}
 	if !locked {
 		_ = file.Close()
@@ -182,6 +223,65 @@ func acquireLocalStoreLock(path string) (*storeLock, error) {
 		return nil, fmt.Errorf("write review store lock owner: %w", err)
 	}
 	return &storeLock{file: file, owner: owner}, nil
+}
+
+// readOnlyStoreLockTimeout and readOnlyStoreLockPollInterval bound how long a
+// read-only authority evaluation waits out transient contention. They mirror
+// the START acquisition budget (compactStartLockTimeout) so every bounded
+// waiter in this package converges on the same wall-clock ceiling.
+var readOnlyStoreLockTimeout = 2 * time.Second
+var readOnlyStoreLockPollInterval = 25 * time.Millisecond
+
+// acquireStoreLockForReadOnlyEvaluation waits out transient advisory
+// contention for a caller that only reads authority under the lock.
+//
+// Retrying here cannot double-apply anything, because there is nothing to
+// apply: the guarded body is a re-derivation, not a mutation. That is exactly
+// why the mutation paths do not get this treatment — waiting cannot make a
+// second writer legitimate, it can only delay its refusal.
+//
+// Exhaustion returns *AuthorityLockTimeoutError rather than the contention
+// error, so the caller reports a bounded wait that genuinely elapsed instead
+// of an instantaneous refusal.
+func acquireStoreLockForReadOnlyEvaluation(ctx context.Context, path string) (*storeLock, error) {
+	return acquireStoreLockWithBoundedWait(ctx, path)
+}
+
+// acquireStoreLockForConvergentCompletion admits the second caller class that
+// may wait out transient contention instead of refusing: idempotent
+// post-terminal completion. Once authority is terminal, the receipt bytes are
+// derived deterministically from that authority, publication accepts an
+// identical existing receipt, and the finalize-journal completion flags are
+// monotonic — so every completer converges on the same bytes and flags, and
+// waiting cannot double-apply anything. Refusing instantly here turned a
+// competitor's milliseconds-long critical section into a reported publication
+// failure for an operation whose outcome had already committed.
+//
+// The pre-commit mutation paths keep the instant refusal: there, waiting
+// cannot make a second writer legitimate, it can only delay its refusal.
+func acquireStoreLockForConvergentCompletion(ctx context.Context, path string) (*storeLock, error) {
+	// guard:population convergent-lock-contention too-tight: legitimate lock contenders include idempotent post-terminal completers that can safely wait for identical publication
+	return acquireStoreLockWithBoundedWait(ctx, path)
+}
+
+func acquireStoreLockWithBoundedWait(ctx context.Context, path string) (*storeLock, error) {
+	deadline := time.NewTimer(readOnlyStoreLockTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(readOnlyStoreLockPollInterval)
+	defer ticker.Stop()
+	for {
+		lock, err := acquireStoreLock(path)
+		if err == nil || !errors.Is(err, ErrStoreLockContended) {
+			return lock, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, &AuthorityLockCancelledError{Cause: ctx.Err()}
+		case <-deadline.C:
+			return nil, &AuthorityLockTimeoutError{Timeout: readOnlyStoreLockTimeout}
+		case <-ticker.C:
+		}
+	}
 }
 
 func acquireMaintenanceLock(ctx context.Context, path string, mode maintenanceLockMode) (*MaintenanceLock, error) {
@@ -301,6 +401,34 @@ func (lock *storeLock) release() error {
 		lock.maintenance = nil
 	}
 	return errors.Join(unlockErr, closeErr, maintenanceErr)
+}
+
+// secureLockRoot locates the repository's Git common directory that this
+// store lock path is derived from — the parent of the fixed "gentle-ai"
+// authority marker — so the secure open walk can anchor there instead of at
+// the filesystem root (1781). It mirrors the authority-root walk in
+// maintenanceLockPathForStoreLock, but absence or ambiguity is not an error
+// here: the caller falls back to the root-anchored walk, which is always
+// safe and matches today's behavior verbatim.
+func secureLockRoot(path string) (string, bool) {
+	cleanPath := filepath.Clean(path)
+	var authorityRoot string
+	for current := filepath.Dir(cleanPath); ; current = filepath.Dir(current) {
+		if filepath.Base(current) == "review-transactions" && filepath.Base(filepath.Dir(current)) == "gentle-ai" {
+			if authorityRoot != "" {
+				return "", false
+			}
+			authorityRoot = current
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+	}
+	if authorityRoot == "" {
+		return "", false
+	}
+	return filepath.Dir(filepath.Dir(authorityRoot)), true
 }
 
 func maintenanceLockPathForStoreLock(path string) (string, error) {

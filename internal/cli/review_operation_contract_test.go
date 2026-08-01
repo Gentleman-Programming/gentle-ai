@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/internal/sddstatus"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
 func TestNegotiatedReviewFinalizePreservesLegacyResultAndCanonicalIdentities(t *testing.T) {
@@ -227,9 +227,14 @@ func TestNegotiatedReviewBindSDDRejectsHistoricalLegacyThroughTypedFailureEnvelo
 		t.Fatalf("legacy bind-sdd succeeded: %s", output.String())
 	}
 	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	// organic-dx Phase 3b task 3b.4: the negotiated envelope now carries the
+	// same "choose a new lineage for compact authority" route the
+	// non-negotiated START collision already names, regardless of which
+	// operation hit the legacy-read-only lineage.
 	if failure.Operation != ReviewIntegrationOperationBindSDD || failure.Code != reviewtransaction.LegacyReadOnlyErrorCode ||
 		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe ||
-		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != "stop" ||
+		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != "review.start" ||
+		!strings.Contains(failure.Message, "choose a new lineage for compact authority") ||
 		strings.Contains(output.String(), fixture.repo) || strings.Contains(output.String(), fixture.store.Dir) {
 		t.Fatalf("legacy bind-sdd failure = %#v\n%s", failure, output.String())
 	}
@@ -244,7 +249,7 @@ func TestNegotiatedReviewBindSDDRejectsHistoricalLegacyThroughTypedFailureEnvelo
 }
 
 func TestNegotiatedReviewOperationsRejectInvalidContractsBeforeMutation(t *testing.T) {
-	for _, contract := range []string{"", "gentle-ai.review-integration/v2"} {
+	for _, contract := range []string{"", "gentle-ai.review-integration/v3"} {
 		t.Run("finalize_"+contract, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			writeNegotiatedOperationChange(t, repo, "thin")
@@ -343,15 +348,19 @@ func finalizeNegotiatedOperationFixture(t *testing.T, repo, lineage string, nego
 		t.Fatal(err)
 	}
 	args := []string{"--cwd", repo, "--lineage", started.LineageID}
+	resultPaths := make([]string, 0, len(started.SelectedLenses))
 	for index, lens := range started.SelectedLenses {
 		result := filepath.Join(t.TempDir(), fmt.Sprintf("reviewer-%d.json", index))
 		payload := fmt.Sprintf(`{"lens":%q,"findings":[],"evidence":["reviewed exact candidate tree"]}`, lens)
 		if err := os.WriteFile(result, []byte(payload), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		args = append(args, "--result", result)
+		resultPaths = append(resultPaths, result)
 	}
-	args = append(args, "--evidence", evidence)
+	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, resultPaths); err != nil {
+		t.Fatal(err)
+	}
+	args = append(args, "--captured-results=true", "--evidence", evidence)
 	if negotiated {
 		args = append([]string{"--contract", ReviewIntegrationContractV1}, args...)
 	}

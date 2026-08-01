@@ -6,17 +6,23 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 type mockAdapter struct {
 	agent model.AgentID
 }
 
-func (m mockAdapter) Agent() model.AgentID      { return m.agent }
-func (m mockAdapter) Tier() model.SupportTier   { return model.TierFull }
-func (m mockAdapter) SupportsAutoInstall() bool { return true }
+func (m mockAdapter) Agent() model.AgentID    { return m.agent }
+func (m mockAdapter) Tier() model.SupportTier { return model.TierFull }
+func (m mockAdapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.MustForAgent(m.agent)
+}
+func (m mockAdapter) SupportsAutoInstall() bool {
+	return m.CapabilityManifest().Features.AutoInstall
+}
 func (m mockAdapter) Detect(_ context.Context, _ string) (bool, string, string, bool, error) {
 	return false, "", "", false, nil
 }
@@ -31,16 +37,28 @@ func (m mockAdapter) SystemPromptStrategy() model.SystemPromptStrategy {
 }
 func (m mockAdapter) MCPStrategy() model.MCPStrategy          { return model.StrategySeparateMCPFiles }
 func (m mockAdapter) MCPConfigPath(_ string, _ string) string { return "" }
-func (m mockAdapter) SupportsOutputStyles() bool              { return false }
-func (m mockAdapter) OutputStyleDir(_ string) string          { return "" }
-func (m mockAdapter) SupportsSlashCommands() bool             { return false }
-func (m mockAdapter) CommandsDir(_ string) string             { return "" }
-func (m mockAdapter) SupportsSubAgents() bool                 { return false }
-func (m mockAdapter) SubAgentsDir(_ string) string            { return "" }
-func (m mockAdapter) EmbeddedSubAgentsDir() string            { return "" }
-func (m mockAdapter) SupportsSkills() bool                    { return true }
-func (m mockAdapter) SupportsSystemPrompt() bool              { return true }
-func (m mockAdapter) SupportsMCP() bool                       { return true }
+func (m mockAdapter) SupportsOutputStyles() bool {
+	return m.CapabilityManifest().Features.OutputStyles
+}
+func (m mockAdapter) OutputStyleDir(_ string) string { return "" }
+func (m mockAdapter) SupportsSlashCommands() bool {
+	return m.CapabilityManifest().Features.SlashCommands
+}
+func (m mockAdapter) CommandsDir(_ string) string { return "" }
+func (m mockAdapter) SupportsSubAgents() bool {
+	return m.CapabilityManifest().Features.FileSubAgents
+}
+func (m mockAdapter) SubAgentsDir(_ string) string { return "" }
+func (m mockAdapter) EmbeddedSubAgentsDir() string { return "" }
+func (m mockAdapter) SupportsSkills() bool {
+	return m.CapabilityManifest().Features.Skills
+}
+func (m mockAdapter) SupportsSystemPrompt() bool {
+	return m.CapabilityManifest().Features.SystemPrompt
+}
+func (m mockAdapter) SupportsMCP() bool {
+	return m.CapabilityManifest().Features.MCP
+}
 
 func TestRegistrySupportedAgentsSorted(t *testing.T) {
 	r, err := NewRegistry(

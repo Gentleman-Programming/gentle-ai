@@ -14,7 +14,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const (
@@ -37,20 +37,57 @@ const (
 	runtimeOperationFinishRemediation = "attempt/finish-remediation"
 	runtimeOperationReset             = "objective/reset"
 	runtimeOperationBind              = "binding/set"
+	runtimeLockAcquireAttempts        = 3
+
+	// runtimeLedgerStatusPointer suffixes every ledger refusal an ordinary
+	// caller can hit (budget exhausted, active attempt, no active attempt,
+	// objective already complete, no objective to reset) so the error text
+	// alone — without prior knowledge of the negotiated envelope — names the
+	// one command that already derives the correct continuation. The command
+	// includes --cwd/--change placeholders because the bare form is rejected
+	// by the CLI for missing required flags (internal/cli/sdd_attempt.go); a
+	// continuation that fails when pasted is worse than none.
+	runtimeLedgerStatusPointer = "run `gentle-ai sdd-attempt status --cwd <repo> --change <change>` — its next_action names the continuation"
+
+	// runtimeReviewIntegrationContract mirrors cli.ReviewIntegrationContractV1,
+	// which owns the value. internal/cli imports this package, so the constant
+	// cannot be imported back; it is duplicated only to keep a refusal from
+	// naming a `review status` invocation the CLI would reject for a missing
+	// contract selector.
+	runtimeReviewIntegrationContract = "gentle-ai.review-integration/v1"
 )
 
 var (
-	ErrRuntimeRevisionConflict             = errors.New("SDD runtime ledger revision conflict")
-	ErrRuntimeConcurrentUpdate             = errors.New("SDD runtime ledger is concurrently updated")
-	ErrRuntimeRequestConflict              = errors.New("SDD runtime request identifier was reused with different inputs")
-	ErrRuntimeBudgetExhausted              = errors.New("SDD runtime objective budget is exhausted")
-	ErrRuntimeAttemptActive                = errors.New("SDD runtime objective already has an active attempt")
-	ErrRuntimeNoActiveAttempt              = errors.New("SDD runtime objective has no active attempt")
-	ErrRuntimeObjectiveChange              = errors.New("SDD runtime objective changed without an explicit reset")
-	ErrRuntimeObjectiveDone                = errors.New("SDD runtime objective is complete")
-	ErrRuntimeNoObjective                  = errors.New("SDD runtime ledger has no objective to reset")
-	ErrRuntimeResetNotAllowed              = errors.New("SDD runtime objective reset requires decision-required or complete state")
-	ErrRuntimeRemediationSuccessorRequired = errors.New("a bound passing SDD runtime attempt requires an atomic approved recovery successor")
+	ErrRuntimeRevisionConflict = errors.New("SDD runtime ledger revision conflict")
+	ErrRuntimeConcurrentUpdate = errors.New("SDD runtime ledger is concurrently updated")
+	ErrRuntimeRequestConflict  = errors.New("SDD runtime request identifier was reused with different inputs")
+	ErrRuntimeBudgetExhausted  = errors.New("SDD runtime objective budget is exhausted; " + runtimeLedgerStatusPointer)
+	ErrRuntimeAttemptActive    = errors.New("SDD runtime objective already has an active attempt; " + runtimeLedgerStatusPointer)
+	ErrRuntimeNoActiveAttempt  = errors.New("SDD runtime objective has no active attempt; " + runtimeLedgerStatusPointer)
+	// ErrRuntimeObjectiveChange never travels alone either. Every return site
+	// wraps it with runtimeObjectiveChangeRefusal, which names the exact
+	// runnable continuation for the state the caller is actually in. The
+	// sentinel text names the reset in PROSE only, and prose is not a
+	// continuation: the reset it refers to needs six flags the message never
+	// listed, and it is itself refused when the candidate has not drifted.
+	ErrRuntimeObjectiveChange = errors.New("SDD runtime objective changed without an explicit reset")
+	ErrRuntimeObjectiveDone   = errors.New("SDD runtime objective is complete; " + runtimeLedgerStatusPointer)
+	ErrRuntimeNoObjective     = errors.New("SDD runtime ledger has no objective to reset; " + runtimeLedgerStatusPointer)
+	// ErrRuntimeResetNotAllowed named a STATE and no continuation, which is the
+	// same defect class as the sentinels above: an operator holding it knows
+	// what is refused and not one command that moves. The state it named was
+	// also already incomplete — a terminal failed or interrupted attempt whose
+	// candidate has drifted is admitted too — so it now says which shapes are
+	// admitted and routes to the ledger's own derived next action.
+	ErrRuntimeResetNotAllowed = errors.New("SDD runtime objective reset requires decision-required or complete state, or a terminal attempt whose candidate has drifted; " + runtimeLedgerStatusPointer)
+	// ErrRuntimeRemediationSuccessorRequired never travels alone. Every return
+	// site wraps it with runtimeRemediationExitRefusal, which names the exact
+	// runnable continuation for the state the caller is actually in. The
+	// sentinel text deliberately avoids the word "recovery": it sent the first
+	// reporter of this block to `review recover`, which refuses a same-lineage
+	// successor and refuses an unchanged approved scope, and is therefore the
+	// first step of a cycle with no exit.
+	ErrRuntimeRemediationSuccessorRequired = errors.New("a bound passing SDD runtime attempt must also bind the approved review of its corrected candidate")
 	ErrBindingRevisionConflict             = errors.New("SDD review binding revision conflict")
 
 	runtimeRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
@@ -60,6 +97,7 @@ var (
 	runtimePublishRecord                     = reviewtransaction.PublishFileNoReplace
 	runtimeReplaceHead                       = reviewtransaction.ReplaceFileAtomic
 	runtimeSyncDirectory                     = reviewtransaction.SyncReviewDirectory
+	runtimeAcquireAuthorityFileLock          = reviewtransaction.AcquireAuthorityFileLock
 	runtimeRemediationFinalAuthorizationHook = func() {}
 )
 
@@ -70,7 +108,7 @@ type RuntimeRevisionConflictError struct {
 }
 
 func (err *RuntimeRevisionConflictError) Error() string {
-	return fmt.Sprintf("%v: expected %q, current %q", ErrRuntimeRevisionConflict, err.Expected, err.Current)
+	return fmt.Sprintf("%v: expected %q, current %q; retry with --expected-revision %q", ErrRuntimeRevisionConflict, err.Expected, err.Current, err.Current)
 }
 
 func (err *RuntimeRevisionConflictError) Unwrap() error { return ErrRuntimeRevisionConflict }
@@ -85,7 +123,7 @@ type BindingRevisionConflictError struct {
 }
 
 func (err *BindingRevisionConflictError) Error() string {
-	return fmt.Sprintf("%v: expected %q, current %q", ErrBindingRevisionConflict, err.Expected, err.Current)
+	return fmt.Sprintf("%v: expected %q, current %q; retry with --expected-binding-revision %q", ErrBindingRevisionConflict, err.Expected, err.Current, err.Current)
 }
 
 func (err *BindingRevisionConflictError) Unwrap() error { return ErrBindingRevisionConflict }
@@ -231,7 +269,23 @@ type RuntimeStore struct {
 	Repo      string
 	Workspace string
 	Change    string
-	commonDir string
+	// ReviewDisabled records that the user's receipt-driven-development kill
+	// switch is off for this clone. While it is set, the runtime ledger imposes
+	// no review obligation of its own: a switched-off system has no
+	// implications, so closing an attempt never demands an approved recovery
+	// successor the operator could not obtain anyway (review/start is refused
+	// while the switch is off).
+	//
+	// It removes only the IMPLICIT demand. An explicit remediation request is a
+	// deliberate review operation and is still validated in full, and nothing
+	// here approves, advances, or invents review authority.
+	//
+	// The zero value enforces, so any caller that does not resolve the switch
+	// keeps today's behavior. The switch itself is read in the CLI layer, which
+	// owns the single source of truth for both of its sources; an unreadable
+	// switch is not a disabled switch and resolves to false.
+	ReviewDisabled bool
+	commonDir      string
 }
 
 type runtimeRecord struct {
@@ -295,13 +349,15 @@ type runtimeLegacyBindingImport struct {
 }
 
 type runtimeRequestReceipt struct {
-	Digest   string
-	Revision string
+	Digest                        string
+	Revision                      string
+	RemediationPredecessorLineage string
 }
 
 type runtimeReplay struct {
-	Status   RuntimeStatus
-	Requests map[string]runtimeRequestReceipt
+	Status        RuntimeStatus
+	Requests      map[string]runtimeRequestReceipt
+	AttemptTokens map[int]string
 }
 
 func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, error) {
@@ -360,7 +416,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			if request.WorkUnit != status.Objective.WorkUnit || request.EvidenceGoal != status.Objective.EvidenceGoal ||
 				request.MaxAttempts != status.Objective.MaxAttempts ||
 				request.MaxChangedLines != status.Objective.MaxChangedLines {
-				return runtimeRecord{}, ErrRuntimeObjectiveChange
+				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 			}
 			if len(status.Attempts) == 0 {
 				return runtimeRecord{}, errors.New("SDD runtime objective has no terminal candidate provenance")
@@ -370,16 +426,9 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 				last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
 				return runtimeRecord{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
 			}
-			intended, discoverErr := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).DiscoverIntendedUntracked(ctx)
-			if discoverErr != nil {
-				return runtimeRecord{}, fmt.Errorf("discover SDD runtime intended-untracked paths before launch: %w", discoverErr)
-			}
-			snapshot, err = (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).Build(ctx, reviewtransaction.Target{
-				Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: last.BeginCandidateTree,
-				Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intended,
-			})
+			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
 			if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
-				return runtimeRecord{}, ErrRuntimeObjectiveChange
+				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 			}
 		} else {
 			snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
@@ -452,9 +501,15 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("measure native SDD runtime line charge: %w", err)
 		}
-		if request.Outcome == AttemptPassed && currentBinding != nil && !remediation {
+		// While the kill switch is off the bound review has no say in whether
+		// this attempt may close: it would demand an approved recovery successor
+		// that review/start is refused from producing, which is a deadlock, not
+		// a safeguard. Re-enabling re-validates from the current state, because
+		// the binding still refers to the candidate it was approved for and the
+		// next enforcement point rediscovers that on its own.
+		if request.Outcome == AttemptPassed && currentBinding != nil && !remediation && !store.ReviewDisabled {
 			if snapshot.CandidateTree != active.BeginCandidateTree {
-				return runtimeRecord{}, ErrRuntimeRemediationSuccessorRequired
+				return runtimeRecord{}, store.runtimeRemediationExitRefusal(ctx, status, *currentBinding, active.Ordinal, snapshot.CandidateTree)
 			}
 			if currentBinding.Change != store.Change {
 				return runtimeRecord{}, errors.New("bound SDD review change does not match the runtime objective")
@@ -476,7 +531,19 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			if prepareErr != nil {
 				return runtimeRecord{}, prepareErr
 			}
-			if relationErr := validateRuntimeRemediationSuccessor(ctx, store.Repo, *currentBinding, prepared); relationErr != nil {
+			// An approved self-successor is the same lineage whose corrected,
+			// re-approved authority repairs the failed evidence. It never
+			// requires invalidating healthy approved authority or minting a
+			// distinct recovery lineage for an unchanged scope.
+			selfSuccessor := prepared.Lineage == currentBinding.Lineage
+			if selfSuccessor && request.EvidenceRevision == request.RemediatesEvidenceRevision {
+				return runtimeRecord{}, errors.New("approved SDD self-remediation requires distinct corrected evidence")
+			}
+			validateSuccessor := validateRuntimeRemediationSuccessor
+			if selfSuccessor {
+				validateSuccessor = validateRuntimeRemediationSelfSuccessor
+			}
+			if relationErr := validateSuccessor(ctx, store.Repo, *currentBinding, prepared); relationErr != nil {
 				return runtimeRecord{}, relationErr
 			}
 			runtimeRemediationFinalAuthorizationHook()
@@ -487,7 +554,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			if finalPrepared.Revision != prepared.Revision {
 				return runtimeRecord{}, errors.New("approved SDD remediation successor changed before native commit")
 			}
-			if relationErr := validateRuntimeRemediationSuccessor(ctx, store.Repo, *currentBinding, finalPrepared); relationErr != nil {
+			if relationErr := validateSuccessor(ctx, store.Repo, *currentBinding, finalPrepared); relationErr != nil {
 				return runtimeRecord{}, relationErr
 			}
 			if finalPrepared.GateContext.CandidateTree != snapshot.CandidateTree {
@@ -511,6 +578,154 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 	})
 }
 
+// runtimeRemediationExitRefusal turns the bound-passing-finish demand into a
+// refusal that names the continuation that actually clears it.
+//
+// The demand itself is correct: the candidate moved after the attempt began,
+// so closing the attempt as passed while keeping a binding approved for the
+// OLD bytes would launder unreviewed content into a passing runtime record.
+// What was missing is the exit. Since b37aa8e4 the bound lineage itself is a
+// legal --successor-lineage once the corrected candidate is approved on it, so
+// the ordinary way out is one re-run of this same finish with the remediation
+// trio — no `review recover`, no invalidation of healthy approved authority,
+// and no distinct recovery lineage that could never legally exist.
+//
+// The two states are distinguished rather than merged, because a message may
+// name a command only when running it resolves the block. When the bound
+// lineage does not currently hold the approved review of this candidate — it
+// was superseded by a real recovery successor, the live post-apply gate no
+// longer allows, or the approved bytes are not these bytes — the trio naming
+// that lineage is refused further in, so the refusal names the review router
+// instead and says which lineage the trio must eventually name.
+func (store RuntimeStore) runtimeRemediationExitRefusal(
+	ctx context.Context, status RuntimeStatus, binding ReviewBinding, ordinal int, candidateTree string,
+) error {
+	// The sentinel stays in the %w position in both branches: callers that
+	// route on errors.Is must keep working no matter which exit is named.
+	const provenance = "`sdd-attempt status` publishes those three as binding_revision, binding.lineage, and evidence_revision"
+	if !runtimeSelfSuccessorAvailable(ctx, store.Repo, store.Workspace, store.Change, binding, candidateTree) {
+		if stranded, ok := runtimeStrandedSuccessor(ctx, store.Repo, binding, candidateTree); ok {
+			return store.runtimeStrandedSuccessorRefusal(binding, stranded, ordinal)
+		}
+		return fmt.Errorf(
+			"%w: the candidate changed after attempt %d began, and lineage %q does not currently hold the approved review of this candidate, so it cannot be its own successor: get this candidate approved first with `gentle-ai review status --cwd %q --contract %s --next-transition`, which names the next review action, then re-run this finish adding --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision for the lineage that then holds it; %s",
+			ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage,
+			store.Workspace, runtimeReviewIntegrationContract, provenance,
+		)
+	}
+	// An objective with no recorded failed evidence still needs a repaired
+	// revision, and only the caller knows which one that is.
+	remediates := status.EvidenceRevision
+	if remediates == "" {
+		remediates = "<repaired-evidence-sha256>"
+	}
+	return fmt.Errorf(
+		"%w: the candidate changed after attempt %d began, and lineage %q already holds the approved review of the corrected candidate, so that same lineage IS the successor — re-run this finish with the remediation trio: `gentle-ai sdd-attempt finish --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --outcome passed --evidence-revision \"<corrected-evidence-sha256>\" --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<cleanup-evidence>\" --process-evidence \"<process-evidence>\" --expected-binding-revision %q --successor-lineage %q --remediates-evidence-revision %s`; %s, and --evidence-revision must differ from --remediates-evidence-revision",
+		ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage,
+		store.Workspace, store.Change, status.Revision,
+		binding.Revision, binding.Lineage, runtimeRemediatesArgument(remediates), provenance,
+	)
+}
+
+// runtimeStrandedSuccessorRefusal names the one operation that clears a
+// stranded recovery successor, and prints the maintainer authorization that
+// operation demands as a filled-in template.
+//
+// The review router is deliberately NOT named here. For this state its printed
+// transition is `review start` on a target no leaf governs, which runs, exits
+// zero and changes nothing; and even a fresh review started under a free
+// lineage is refused by the runtime one layer deeper, because a lineage that is
+// not a scope-changed recovery descendant of the populated binding can never be
+// its successor. Naming a command that runs and leaves the block in place is
+// the most expensive refusal this product can emit, because the operator then
+// trusts it.
+//
+// The authorization template is rendered by the same function the abandon gate
+// verifies against (reviewtransaction.RenderCompactAbandonAuthorization), with
+// only the two values the operator chooses left as placeholders, so the bytes a
+// reader assembles from this message are the bytes that gate accepts.
+func (store RuntimeStore) runtimeStrandedSuccessorRefusal(binding ReviewBinding, stranded RuntimeStrandedSuccessor, ordinal int) error {
+	// The sentinel stays in the %w position in every branch: callers that
+	// route on errors.Is must keep working no matter which exit is named.
+	return fmt.Errorf(
+		"%w: the candidate changed after attempt %d began, and lineage %q cannot hold the approved review of this candidate because recovery successor %q supersedes it and froze a target this candidate no longer has, so that successor can never be finalized — quarantine it, then re-run this finish: `gentle-ai review abandon --cwd %q --lineage %q --expected-revision %q --reason \"<why-it-is-abandoned>\" --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`; the abandonment quarantines the pristine successor and destroys nothing, because %q keeps the approved review of the corrected candidate. --maintainer-authorization is exactly these six lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
+		ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage, stranded.Lineage,
+		store.Workspace, stranded.Lineage, stranded.Revision, binding.Lineage,
+		reviewtransaction.RenderCompactAbandonAuthorization(
+			stranded.Lineage, stranded.Revision, stranded.SnapshotIdentity, "<--actor>", "<--reason>"))
+}
+
+// runtimeRemediatesArgument quotes a concrete revision and leaves an operator
+// placeholder bare, so the printed command tokenizes the same way either way.
+func runtimeRemediatesArgument(remediates string) string {
+	if strings.HasPrefix(remediates, "<") {
+		return remediates
+	}
+	return fmt.Sprintf("%q", remediates)
+}
+
+// runtimeObjectiveChangeRefusal turns the changed-objective begin demand into
+// a refusal that names the continuation that actually clears it.
+//
+// The demand itself is correct: an objective is an immutable scope, so a begin
+// whose parameters or whose terminal candidate no longer match the recorded
+// one would silently reopen a different piece of work under the old budget.
+// What was missing is the exit. The sentinel says "without an explicit reset",
+// which names an operation and never a command — the reset needs --cwd,
+// --change, --expected-revision, --request-id, --reason and --actor, and a
+// caller who has only the sentinel has none of them.
+//
+// The two states are distinguished rather than merged, because a message may
+// name a command only when running it resolves the block. `reset` is refused
+// one layer deeper for an unchanged candidate whose budget is intact
+// (runtimeResetStructurallyPermitted plus the drift check in Reset), because an
+// elective early reset would launder the per-objective budget. Naming it there
+// would be the same defect in a new place, so that branch names the begin the
+// ledger does accept, printing the objective parameters it already holds.
+func (store RuntimeStore) runtimeObjectiveChangeRefusal(ctx context.Context, status RuntimeStatus) error {
+	// The sentinel stays in the %w position in every branch: callers that
+	// route on errors.Is must keep working no matter which exit is named.
+	if store.runtimeObjectiveResetAdmissible(ctx, status) {
+		return fmt.Errorf(
+			"%w: reset the objective, then begin again — `gentle-ai sdd-attempt reset --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"`; the reset publishes a new ledger revision, so take the begin's --expected-revision from `gentle-ai sdd-attempt status --cwd %q --change %q` after it commits",
+			ErrRuntimeObjectiveChange, store.Workspace, store.Change, status.Revision, store.Workspace, store.Change)
+	}
+	objective := status.Objective
+	if objective == nil {
+		// Unreachable from Begin, which only reaches this refusal with a
+		// populated objective, and fail-closed if that ever stops holding:
+		// inventing an objective to print would be worse than the sentinel.
+		return ErrRuntimeObjectiveChange
+	}
+	return fmt.Errorf(
+		"%w: this objective is still open on its recorded scope and its candidate has not moved, so resetting it is refused as an elective budget reset; begin against the scope the ledger holds — `gentle-ai sdd-attempt begin --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d`; `sdd-attempt status` publishes those four as objective.work_unit, objective.evidence_goal, objective.max_attempts, and objective.max_changed_lines",
+		ErrRuntimeObjectiveChange, store.Workspace, store.Change, status.Revision,
+		objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines)
+}
+
+// runtimeObjectiveResetAdmissible answers exactly one question: would `reset`
+// be ACCEPTED right now? It re-runs the same structural rule and the same
+// drift check Reset itself applies, against the same terminal candidate
+// provenance, so a refusal that consults it can only name the reset when
+// running that reset works. It is deliberately read-only and fail-closed: an
+// active attempt, a missing objective, a non-terminal last attempt, or a
+// candidate capture that fails all answer false, and the caller then names the
+// begin the ledger already accepts instead of a command refused one layer in.
+func (store RuntimeStore) runtimeObjectiveResetAdmissible(ctx context.Context, status RuntimeStatus) bool {
+	if status.ActiveAttempt != nil || status.Objective == nil || !runtimeResetStructurallyPermitted(status) {
+		return false
+	}
+	if status.DecisionRequired || status.Complete {
+		return true
+	}
+	last := status.Attempts[len(status.Attempts)-1]
+	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+	if err != nil {
+		return false
+	}
+	return candidate.Identity != last.FinishCandidateIdentity || candidate.CandidateTree != last.FinishCandidateTree
+}
+
 // Reset closes a terminal objective scope without deleting its immutable
 // attempts. The next Begin receives a new generation and budget while global
 // ordinals and lifetime charges continue monotonically.
@@ -528,8 +743,24 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 		if status.Objective == nil {
 			return runtimeRecord{}, ErrRuntimeNoObjective
 		}
-		if !status.DecisionRequired && !status.Complete {
+		if !runtimeResetStructurallyPermitted(status) {
 			return runtimeRecord{}, ErrRuntimeResetNotAllowed
+		}
+		if !status.DecisionRequired && !status.Complete {
+			// The only remaining structurally-permitted scope is a terminal
+			// failed/interrupted attempt with budget still available: begin
+			// is the ordinary continuation here, so admit reset only when
+			// begin is actually blocked by candidate drift. Otherwise an
+			// elective early reset would launder the per-objective budget
+			// (CumulativeAttempts resets to zero on every reset).
+			last := status.Attempts[len(status.Attempts)-1]
+			candidate, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+			if driftErr != nil {
+				return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check reset drift eligibility: %w", driftErr)
+			}
+			if candidate.Identity == last.FinishCandidateIdentity && candidate.CandidateTree == last.FinishCandidateTree {
+				return runtimeRecord{}, ErrRuntimeResetNotAllowed
+			}
 		}
 		snapshot, err := captureRuntimeCandidate(ctx, store.Repo)
 		if err != nil {
@@ -563,11 +794,8 @@ func (store RuntimeStore) bindPreparedReview(
 	if err := store.ensureDirectories(); err != nil {
 		return RuntimeStatus{}, err
 	}
-	lock, err := reviewtransaction.AcquireAuthorityFileLock(filepath.Join(store.Dir, "LOCK"))
+	lock, err := store.acquireLock()
 	if err != nil {
-		if errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
-			return RuntimeStatus{}, fmt.Errorf("%w: %v", ErrRuntimeConcurrentUpdate, err)
-		}
 		return RuntimeStatus{}, err
 	}
 	defer lock.Release()
@@ -670,11 +898,11 @@ func (store RuntimeStore) mutate(
 	if err := store.ensureDirectories(); err != nil {
 		return RuntimeStatus{}, err
 	}
-	lock, err := reviewtransaction.AcquireAuthorityFileLock(filepath.Join(store.Dir, "LOCK"))
+	// acquireLock already maps contention to ErrRuntimeConcurrentUpdate; the
+	// re-wrap that used to live here duplicated the prefix and flattened the
+	// underlying contention proof back out of the chain (1861).
+	lock, err := store.acquireLock()
 	if err != nil {
-		if errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
-			return RuntimeStatus{}, fmt.Errorf("%w: %v", ErrRuntimeConcurrentUpdate, err)
-		}
 		return RuntimeStatus{}, err
 	}
 	defer lock.Release()
@@ -710,6 +938,37 @@ func (store RuntimeStore) mutate(
 	return store.commitRecordLocked(record)
 }
 
+func (store RuntimeStore) acquireLock() (*reviewtransaction.AuthorityFileLock, error) {
+	lockPath := filepath.Join(store.Dir, "LOCK")
+	var lastErr error
+	for attempt := 0; attempt < runtimeLockAcquireAttempts; attempt++ {
+		lock, err := runtimeAcquireAuthorityFileLock(lockPath)
+		if err == nil {
+			return lock, nil
+		}
+		if errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
+			// Wrapped rather than flattened so the contention proof survives
+			// (1861). Both callers of acquireLock -- bindPreparedReview and
+			// mutate -- refuse here strictly before commitRecordLocked, so a
+			// refusal at acquisition wrote nothing, and a caller must be told
+			// that instead of being handed an unknown mutation outcome. The
+			// rendered text is identical to the previous %v form.
+			return nil, fmt.Errorf("%w: %w", ErrRuntimeConcurrentUpdate, err)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		lastErr = err
+		if attempt == runtimeLockAcquireAttempts-1 {
+			break
+		}
+		if err := store.ensureDirectories(); err != nil {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("acquire SDD runtime ledger lock %q after %d attempts: %w", lockPath, runtimeLockAcquireAttempts, lastErr)
+}
+
 func (store RuntimeStore) commitRecordLocked(record runtimeRecord) (RuntimeStatus, error) {
 	revision, payload, err := runtimeRecordRevision(record)
 	if err != nil {
@@ -741,7 +1000,8 @@ func (store RuntimeStore) load() (runtimeReplay, error) {
 			Schema: RuntimeStatusSchema, Change: store.Change, Attempts: []RuntimeAttempt{},
 			NextOrdinal: 1, NextAction: RuntimeActionBegin,
 		},
-		Requests: map[string]runtimeRequestReceipt{},
+		Requests:      map[string]runtimeRequestReceipt{},
+		AttemptTokens: map[int]string{},
 	}
 	head, exists, err := readRuntimeHead(filepath.Join(store.Dir, "HEAD"))
 	if err != nil || !exists {
@@ -791,6 +1051,7 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 	if err := validateRuntimeRecordShape(record); err != nil {
 		return err
 	}
+	remediationPredecessorLineage := ""
 	switch record.Operation {
 	case runtimeOperationBegin:
 		event := record.Begin
@@ -843,6 +1104,7 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 			BeginCandidateTree: event.BeginCandidateTree, Outcome: AttemptRunning,
 		}
 		replay.Status.Attempts = append(replay.Status.Attempts, attempt)
+		replay.AttemptTokens[event.Ordinal] = revision
 		active := attempt
 		replay.Status.ActiveAttempt = &active
 		replay.Status.CumulativeAttempts++
@@ -864,11 +1126,15 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		if currentBinding == nil || currentBinding.Revision != record.Binding.ExpectedRevision {
 			return errors.New("atomic remediation binding does not match replay state")
 		}
+		remediationPredecessorLineage = currentBinding.Lineage
 		if replay.Status.EvidenceRevision != "" && replay.Status.EvidenceRevision != record.Finish.RemediatesEvidenceRevision {
 			return errors.New("atomic remediation failed evidence does not match replay state")
 		}
-		if record.Binding.Current.Lineage == currentBinding.Lineage {
-			return errors.New("atomic remediation binding does not select a distinct successor")
+		if record.Binding.Current.Lineage == currentBinding.Lineage &&
+			record.Finish.EvidenceRevision == record.Finish.RemediatesEvidenceRevision {
+			// A same-lineage record is a legal approved self-successor only when
+			// its corrected evidence differs from the failed evidence it repairs.
+			return errors.New("atomic remediation binding does not select a distinct successor or corrected self-successor")
 		}
 		if err := applyRuntimeFinishEvent(replay, record.Finish); err != nil {
 			return err
@@ -882,7 +1148,7 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 	case runtimeOperationReset:
 		event := record.Reset
 		objective := replay.Status.Objective
-		if replay.Status.ActiveAttempt != nil || objective == nil || !replay.Status.DecisionRequired && !replay.Status.Complete {
+		if replay.Status.ActiveAttempt != nil || objective == nil || !runtimeResetStructurallyPermitted(replay.Status) {
 			return errors.New("objective reset is not a valid successor")
 		}
 		if event.PreviousObjectiveID != objective.ID || event.PreviousGeneration != objective.Generation ||
@@ -910,7 +1176,10 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		return errors.New("unsupported SDD runtime record operation")
 	}
 	replay.Status.Revision = revision
-	replay.Requests[record.RequestID] = runtimeRequestReceipt{Digest: record.RequestDigest, Revision: revision}
+	replay.Requests[record.RequestID] = runtimeRequestReceipt{
+		Digest: record.RequestDigest, Revision: revision,
+		RemediationPredecessorLineage: remediationPredecessorLineage,
+	}
 	return nil
 }
 
@@ -1283,6 +1552,41 @@ func captureRuntimeCandidate(ctx context.Context, repo string) (reviewtransactio
 		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
 		IntendedUntracked: intended,
 	})
+}
+
+// captureRuntimeTerminalCandidate rebuilds the current workspace candidate
+// overlaid on the attempt's begin candidate tree, the same computation Begin
+// and Reset both use to detect whether the candidate drifted out from under
+// a terminal (no active attempt) objective scope.
+func captureRuntimeTerminalCandidate(ctx context.Context, store RuntimeStore, beginCandidateTree string) (reviewtransaction.Snapshot, error) {
+	builder := reviewtransaction.SnapshotBuilder{Repo: store.Repo}
+	intended, err := builder.DiscoverIntendedUntracked(ctx)
+	if err != nil {
+		return reviewtransaction.Snapshot{}, fmt.Errorf("discover SDD runtime intended-untracked paths: %w", err)
+	}
+	return builder.Build(ctx, reviewtransaction.Target{
+		Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: beginCandidateTree,
+		Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intended,
+	})
+}
+
+// runtimeResetStructurallyPermitted reports whether the ledger's terminal
+// scope (no active attempt, which callers must verify separately) is one
+// from which a reset record is a structurally valid successor: the
+// objective already requires a decision, is complete, or its last recorded
+// attempt is a terminal failure/interruption. This exact predicate is
+// evaluated both when writing a reset (RuntimeStore.Reset) and when
+// replaying one from the immutable chain (applyRuntimeRecord), so a
+// committed reset always replays deterministically.
+func runtimeResetStructurallyPermitted(status RuntimeStatus) bool {
+	if status.DecisionRequired || status.Complete {
+		return true
+	}
+	if len(status.Attempts) == 0 {
+		return false
+	}
+	last := status.Attempts[len(status.Attempts)-1]
+	return last.Outcome == AttemptFailed || last.Outcome == AttemptInterrupted
 }
 
 func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int) string {

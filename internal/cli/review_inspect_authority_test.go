@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const (
@@ -30,6 +30,7 @@ type inspectAuthorityTestResult struct {
 	Totals           reviewtransaction.CompactRecoveryInspectionTotals  `json:"totals"`
 	Edges            []reviewtransaction.CompactRecoveryEdgeInspection  `json:"edges"`
 	EntryDiagnostics []reviewtransaction.CompactRecoveryEntryDiagnostic `json:"entry_diagnostics"`
+	SanctionedExits  []reviewtransaction.CompactRecoverySanctionedExit  `json:"sanctioned_exits"`
 }
 
 func TestReviewInspectAuthorityHelpAndArguments(t *testing.T) {
@@ -94,7 +95,8 @@ func TestReviewInspectAuthorityCallsDomainOnceWithCanonicalRoot(t *testing.T) {
 	var result inspectAuthorityTestResult
 	decodeStrictReviewJSON(t, output.Bytes(), &result)
 	if result.Schema != inspectAuthorityTestSchema || result.Operation != inspectAuthorityTestOperation ||
-		result.RepositoryRoot != wantRoot || !result.Complete || !result.Valid || result.Edges == nil || result.EntryDiagnostics == nil {
+		result.RepositoryRoot != wantRoot || !result.Complete || !result.Valid || result.Edges == nil ||
+		result.EntryDiagnostics == nil || result.SanctionedExits == nil || len(result.SanctionedExits) != 0 {
 		t.Fatalf("inspect-authority result = %#v", result)
 	}
 }
@@ -172,6 +174,15 @@ func TestReviewInspectAuthorityReportsMixedCorruptionDeterministicallyWithoutMut
 		result.EntryDiagnostics[0].Problem != "malformed_compact_state" {
 		t.Fatalf("inspect-authority entry diagnostics = %#v", result.EntryDiagnostics)
 	}
+	// Every invalid edge names the operation that would accept it, and only
+	// invalid edges do; both of these are reconcilable anomaly classes.
+	wantExits := []reviewtransaction.CompactRecoverySanctionedExit{
+		{SuccessorLineageID: "b-unchanged-successor", Operation: reviewtransaction.CompactRecoveryEdgeExitReconcile},
+		{SuccessorLineageID: "c-malformed-successor", Operation: reviewtransaction.CompactRecoveryEdgeExitReconcile},
+	}
+	if !reflect.DeepEqual(result.SanctionedExits, wantExits) {
+		t.Fatalf("inspect-authority sanctioned exits = %#v, want %#v", result.SanctionedExits, wantExits)
+	}
 }
 
 func TestReviewInspectAuthorityPropagatesContextFailure(t *testing.T) {
@@ -187,7 +198,7 @@ func TestReviewInspectAuthorityPropagatesContextFailure(t *testing.T) {
 
 func writeInspectCLIRecoveryPair(t *testing.T, repo, prefix string, unchanged bool, authorization string) {
 	t.Helper()
-	path := filepath.Join("docs", prefix+".md")
+	path := "docs/" + prefix + ".md"
 	absolute := filepath.Join(repo, path)
 	if err := os.MkdirAll(filepath.Dir(absolute), 0o755); err != nil {
 		t.Fatal(err)

@@ -5,13 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func assertScopeChangeRecovery(t *testing.T, failure ReviewIntegrationFailure, lineage, privatePath string) {
@@ -55,6 +56,102 @@ func TestUnqualifiedGateDiscoverySelectsOneExactReceiptAcrossUnrelatedHistory(t 
 	if !result.Allowed || result.Context.LineageID != second.LineageID || result.Context.LineageID == first.LineageID {
 		t.Fatalf("exact receipt selection = %#v", result)
 	}
+}
+
+// TestPreCommitGateDiscoverySkipsAssessmentForGenesisDisjointTerminalLeaves is
+// organic-dx Phase 3d's RED/GREEN proof: as terminal lineages accumulate,
+// discoverCompactFacadeGateReview must not pay the full, git-subprocess-heavy
+// AssessCompactGateTarget cost for a lineage that provably cannot govern the
+// live pre-commit candidate (its genesis paths are disjoint from every path
+// the live staged candidate touches). Before the fix every terminal leaf is
+// assessed individually (assessed == n); after the fix only the one leaf
+// whose frozen candidate tree happens to equal the current HEAD tree (an
+// "exact recommit" branch AssessCompactGateTarget itself special-cases) still
+// needs the expensive path.
+func TestPreCommitGateDiscoverySkipsAssessmentForGenesisDisjointTerminalLeaves(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	const n = 12
+	for index := 0; index < n; index++ {
+		lineage := fmt.Sprintf("pre-commit-discovery-leaf-%02d", index)
+		logicalPath := fmt.Sprintf("docs/pre-commit-leaf-%02d.md", index)
+		approveDiscoveryMarkdown(t, repo, lineage, logicalPath, fmt.Sprintf("leaf %d\n", index))
+		runReviewCLIGit(t, repo, "add", "-A")
+		runReviewCLIGit(t, repo, "commit", "-qm", lineage)
+	}
+	// Shift HEAD away from every leaf's own recorded candidate tree so none
+	// of them can take AssessCompactGateTarget's "exact recommit" branch by
+	// accident of this fixture's own construction.
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("shifted head\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "-A")
+	runReviewCLIGit(t, repo, "commit", "-qm", "shift head away from every leaf candidate")
+
+	// The live pre-commit candidate: a staged change on a path disjoint from
+	// every leaf's genesis paths above.
+	if err := os.WriteFile(filepath.Join(repo, "live-candidate.txt"), []byte("live staged change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "-A")
+
+	assessed := 0
+	original := assessCompactGateTargetForDiscovery
+	assessCompactGateTargetForDiscovery = func(ctx context.Context, repo string, state reviewtransaction.CompactState, input reviewtransaction.NativeGateRequestInput) (reviewtransaction.CompactGateTargetAssessment, error) {
+		assessed++
+		return original(ctx, repo, state, input)
+	}
+	t.Cleanup(func() { assessCompactGateTargetForDiscovery = original })
+
+	_, _, discoveryErr := discoverCompactFacadeGateReview(context.Background(), repo, "", reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	var discovery *ReviewReceiptDiscoveryError
+	if !errors.As(discoveryErr, &discovery) || discovery.Kind != ReviewReceiptUnrelated || len(discovery.Candidates) != n {
+		t.Fatalf("pre-commit discovery over %d disjoint terminal leaves = %#v, err=%v", n, discovery, discoveryErr)
+	}
+	if assessed >= n {
+		t.Fatalf("expensive per-leaf assessment ran %d times for %d provably-unrelated terminal leaves, want fewer", assessed, n)
+	}
+	t.Logf("expensive per-leaf assessment ran %d times for %d provably-unrelated terminal leaves", assessed, n)
+}
+
+// TestPreCommitGateDiscoveryStillSelectsExactReceiptAmongDisjointNoiseLineages
+// is organic-dx Phase 3d's task 3d.4 non-negotiable regression proof: the
+// fast path introduced above must be byte-identical for any lineage that
+// governs the candidate or contributes to a discovery bucket. It builds the
+// exact same disjoint-noise history as the sibling test above, but the LIVE
+// staged candidate is the genuine, unmodified output of one of the reviewed
+// lineages -- so it must still be discovered and selected exactly as
+// AssessCompactGateTarget's un-skipped path would.
+func TestPreCommitGateDiscoveryStillSelectsExactReceiptAmongDisjointNoiseLineages(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	const n = 8
+	for index := 0; index < n; index++ {
+		lineage := fmt.Sprintf("pre-commit-exact-noise-%02d", index)
+		logicalPath := fmt.Sprintf("docs/pre-commit-exact-noise-%02d.md", index)
+		approveDiscoveryMarkdown(t, repo, lineage, logicalPath, fmt.Sprintf("noise %d\n", index))
+		runReviewCLIGit(t, repo, "add", "-A")
+		runReviewCLIGit(t, repo, "commit", "-qm", lineage)
+	}
+	governing, _ := approveDiscoveryMarkdownProjection(t, repo, "pre-commit-exact-governing", "docs/pre-commit-exact-governing.md", "governs\n", reviewtransaction.ProjectionStaged)
+
+	assessed := 0
+	original := assessCompactGateTargetForDiscovery
+	assessCompactGateTargetForDiscovery = func(ctx context.Context, repo string, state reviewtransaction.CompactState, input reviewtransaction.NativeGateRequestInput) (reviewtransaction.CompactGateTargetAssessment, error) {
+		assessed++
+		return original(ctx, repo, state, input)
+	}
+	t.Cleanup(func() { assessCompactGateTargetForDiscovery = original })
+
+	_, record, discoveryErr := discoverCompactFacadeGateReview(context.Background(), repo, "", reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	if discoveryErr != nil {
+		t.Fatalf("exact receipt among %d disjoint noise lineages failed: %v", n, discoveryErr)
+	}
+	if record.State.LineageID != governing.LineageID {
+		t.Fatalf("selected lineage = %q, want %q", record.State.LineageID, governing.LineageID)
+	}
+	if assessed > n {
+		t.Fatalf("expensive assessment ran %d times for %d noise lineages plus the governing one, want at most %d", assessed, n, n+1)
+	}
+	t.Logf("expensive per-leaf assessment ran %d times for %d disjoint noise lineages plus the governing one", assessed, n)
 }
 
 func TestReceiptlessTerminalLegacyChainIsInventoryReadableButNeverGateAuthority(t *testing.T) {
@@ -113,7 +210,10 @@ func TestUnqualifiedGateDiscoveryReturnsTypedMissingAndScopeChanged(t *testing.T
 			t.Fatal("missing receipt validation succeeded")
 		}
 		failure := decodeReviewIntegrationFailure(t, output.Bytes())
-		if failure.Code != "receipt_missing" || failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe || failure.NextAction != "stop" {
+		// organic-dx Phase 3b task 3b.1: an agent running a gate before any
+		// governing review exists is now told the way in (review.start)
+		// instead of a bare stop.
+		if failure.Code != "receipt_missing" || failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe || failure.NextAction != "review.start" {
 			t.Fatalf("missing receipt failure = %#v", failure)
 		}
 	})
@@ -173,7 +273,11 @@ func TestUnqualifiedGateDiscoveryReturnsTypedMissingAndScopeChanged(t *testing.T
 			t.Fatal("unrelated receipt validation succeeded")
 		}
 		failure := decodeReviewIntegrationFailure(t, output.Bytes())
-		if failure.Code != "receipt_unrelated" || failure.AuthorityApplicability != "unrelated" || failure.RetrySafe || failure.NextAction != "stop" {
+		// organic-dx Phase 3b task 3b.1: STATUS re-derives the same
+		// discovery and can name candidate lineages (or confirm none apply),
+		// so the receipt_unrelated block now names review.status instead of
+		// a bare stop.
+		if failure.Code != "receipt_unrelated" || failure.AuthorityApplicability != "unrelated" || failure.RetrySafe || failure.NextAction != "review.status" {
 			t.Fatalf("unrelated receipt failure = %#v", failure)
 		}
 	})
@@ -291,7 +395,7 @@ func TestUnqualifiedGateDiscoveryRoutesCommittedNextSliceWorkspace(t *testing.T)
 		if failure.Code == "authority_corrupted" {
 			t.Fatalf("healthy committed receipt misrouted as corrupted: %#v", failure)
 		}
-		if failure.Code != "receipt_unrelated" || failure.AuthorityApplicability != "unrelated" || failure.RetrySafe || failure.NextAction != "stop" {
+		if failure.Code != "receipt_unrelated" || failure.AuthorityApplicability != "unrelated" || failure.RetrySafe || failure.NextAction != "review.status" {
 			t.Fatalf("committed next-slice workspace failure = %#v", failure)
 		}
 	})
@@ -420,6 +524,12 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 			if !errors.As(discoveryErr, &discovery) || discovery.Kind != ReviewReceiptAmbiguous || !reflect.DeepEqual(discovery.Candidates, lineages) || discovery.Context != nil {
 				t.Fatalf("multiple scope-changed discovery = %#v, %v", discovery, discoveryErr)
 			}
+			// organic-dx Phase 3c: both contributing lineages are
+			// deterministically stale (scope-changed) -- discovery proved
+			// neither governs this candidate.
+			if !discovery.DeterministicallyStaleOnly {
+				t.Fatalf("multiple scope-changed discovery composition = %#v, want deterministically stale only", discovery)
+			}
 
 			var output bytes.Buffer
 			err := RunReview([]string{
@@ -429,10 +539,22 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 				t.Fatal("multiple scope-changed receipts were selected implicitly")
 			}
 			failure := decodeReviewIntegrationFailure(t, output.Bytes())
-			if failure.Code != "receipt_ambiguous" || failure.AuthorityApplicability != "ambiguous" || failure.Context != nil || failure.RetrySafe ||
-				failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "review.status" ||
-				!reflect.DeepEqual(failure.RequiredInputs, []string{"lineage_id"}) {
+			// organic-dx Phase 3c (maintainer scope extension): with reviews
+			// enabled, blocking stays correct -- this candidate was never
+			// reviewed -- but the caller is told the truth (nothing governs)
+			// instead of being sent to disambiguate history. review.start is
+			// the primary continuation; either prior lineage remains
+			// available as optional recovery, named in Message, never
+			// required.
+			if failure.Code != "receipt_ambiguous" || failure.AuthorityApplicability != "not_evaluated" || failure.Context != nil || failure.RetrySafe ||
+				failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "review.start" ||
+				!reflect.DeepEqual(failure.RequiredInputs, []string{}) {
 				t.Fatalf("multiple scope-changed failure = %#v", failure)
+			}
+			for _, lineage := range lineages {
+				if !strings.Contains(failure.Message, lineage) {
+					t.Fatalf("multiple scope-changed failure message = %q, want it to name candidate %q", failure.Message, lineage)
+				}
 			}
 
 			output.Reset()
@@ -443,9 +565,24 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 			}
 			var status ReviewTargetStatusResult
 			decodeStrictReviewJSON(t, output.Bytes(), &status)
-			if status.Applicability != reviewtransaction.TargetApplicabilityAmbiguous || status.Action != reviewtransaction.TargetStatusActionSelectLineage ||
-				status.Replayability != reviewtransaction.ReplayabilityStatusRequired || !reflect.DeepEqual(status.Candidates, lineages) {
+			// organic-dx Phase 3e: this assertion previously required
+			// Applicability=Ambiguous/Action=SelectLineage for `review
+			// status` itself -- the exact stale-history-decides framing
+			// Phase 3c's own completion notes named as a deliberately
+			// untouched, structurally separate follow-up
+			// (internal/reviewtransaction/target_status.go's own
+			// classification, not discoverCompactFacadeGateReview's). Two
+			// deterministically stale lineages must never force
+			// disambiguation here either: nothing governs this candidate, so
+			// `review status` now reports the same "start fresh" shape a
+			// genuinely empty candidate set already reports, while still
+			// listing both stale lineages as optional recovery candidates.
+			if status.Applicability != reviewtransaction.TargetApplicabilityUnrelated || status.Action != reviewtransaction.TargetStatusActionStart ||
+				status.Replayability != reviewtransaction.ReplayabilityNotReplayable || !reflect.DeepEqual(status.Candidates, lineages) {
 				t.Fatalf("multiple scope-changed status = %#v", status)
+			}
+			if err := status.Validate(); err != nil {
+				t.Fatalf("multiple scope-changed status failed contract validation: %v", err)
 			}
 
 			for _, lineage := range lineages {
@@ -463,6 +600,53 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 				assertScopeChangeRecovery(t, explicit, lineage, logicalPath)
 			}
 		})
+	}
+}
+
+// TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSwitch
+// covers the "same-pass candidate": a compact v2 receipt that exactly governs
+// the live candidate, contested by an independent terminal legacy v1 chain that
+// ALSO exactly governs it.
+//
+// This test previously asserted that the contest fails closed in BOTH modes
+// (`TestUnqualifiedGateDiscoveryFailsClosedOnMixedCompactAndLegacyAuthority`),
+// on the reasoning that reclassifying would mean silently picking one authority
+// system over the other. That reasoning holds only while reviews are ON, where
+// answering requires naming a governing receipt — and it still does. While
+// reviews are OFF nothing is picked: the gate names neither store, invents no
+// receipt, and defers to ordinary repository policy, so the contest has no
+// delivery consequence until the operator turns reviews back on.
+func TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSwitch(t *testing.T) {
+	fixture := newLegacyCLIFixture(t, "review-discovery-mixed-legacy")
+	// Reviews the identical, still-dirty candidate a second time under an
+	// independent compact v2 lineage: nothing changed on disk between the two
+	// reviews, so both exactly govern the live workspace target.
+	finalizeFacadeReviewForRepo(t, fixture.repo)
+
+	var enabled bytes.Buffer
+	err := RunReview([]string{
+		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", fixture.repo,
+		"--gate", string(reviewtransaction.GatePostApply),
+	}, &enabled)
+	if err == nil {
+		t.Fatal("mixed compact/legacy authority was silently resolved while enabled")
+	}
+
+	disableReviewForClone(t, fixture.repo)
+
+	var disabled bytes.Buffer
+	err = RunReview([]string{
+		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", fixture.repo,
+		"--gate", string(reviewtransaction.GatePostApply),
+	}, &disabled)
+	if err != nil {
+		t.Fatalf("mixed compact/legacy authority vetoed delivery while disabled: %v\n%s", err, disabled.String())
+	}
+	if !bytes.Contains(disabled.Bytes(), []byte(string(reviewtransaction.RDDDeliveryDisabledUnmanaged))) {
+		t.Fatalf("mixed compact/legacy authority while disabled did not report the disposition: %s", disabled.String())
+	}
+	if bytes.Contains(disabled.Bytes(), []byte(`"allowed":true`)) {
+		t.Fatalf("mixed compact/legacy authority while disabled fabricated an approval: %s", disabled.String())
 	}
 }
 

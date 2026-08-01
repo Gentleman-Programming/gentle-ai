@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,6 +121,73 @@ func TestPrePRGateFailsClosedForUnprovenBaseAdvance(t *testing.T) {
 				t.Fatalf("EvaluateNativeGate() = %#v, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestLegacyNativeGateScopeChangedNamesRecoveryDiagnostics is the RED-first
+// proof that a legacy (v1, non-compact) EvaluateNativeGate scope-changed
+// denial carries the same GateScopeChangeDiagnostics as the compact gate
+// path, instead of leaving Context.ScopeChange nil. EvaluateNativeGate holds
+// ctx and repo at the exact point it derives GateScopeChanged from
+// validateDerivedGate, so the diagnostics are derivable there — this test
+// pins that they are actually derived, reusing the same exported
+// CompactScopeChangeDiagnostics the compact path already uses.
+func TestLegacyNativeGateScopeChangedNamesRecoveryDiagnostics(t *testing.T) {
+	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
+	writeSnapshotFile(t, fixture.repo, fixture.deliveryPath, "changed delivery\n")
+	gitSnapshot(t, fixture.repo, "add", "--", fixture.deliveryPath)
+	gitSnapshot(t, fixture.repo, "commit", "-m", "change delivery")
+
+	got := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, fixture.request)
+	if got.Result != GateScopeChanged {
+		t.Fatalf("EvaluateNativeGate() = %#v, want scope-changed", got)
+	}
+	if got.Context.ScopeChange == nil {
+		t.Fatalf("EvaluateNativeGate() Context.ScopeChange = nil, want derived recovery diagnostics")
+	}
+	if got.Context.ScopeChange.RecoveryOperation != "review.recover" {
+		t.Fatalf("ScopeChange.RecoveryOperation = %q, want review.recover", got.Context.ScopeChange.RecoveryOperation)
+	}
+	wantInputs := []string{
+		"predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor",
+	}
+	if strings.Join(got.Context.ScopeChange.RecoveryRequiredInputs, ",") != strings.Join(wantInputs, ",") {
+		t.Fatalf("ScopeChange.RecoveryRequiredInputs = %v, want %v", got.Context.ScopeChange.RecoveryRequiredInputs, wantInputs)
+	}
+	if got.Context.ScopeChange.PredecessorLineageID != fixture.receipt.LineageID {
+		t.Fatalf("ScopeChange.PredecessorLineageID = %q, want %q", got.Context.ScopeChange.PredecessorLineageID, fixture.receipt.LineageID)
+	}
+
+	// Byte-identical proof (non-negotiable #3): the only JSON change this fix
+	// introduces to the negotiated envelope is populating the already-defined,
+	// previously-omitted "scope_change" key. Every other field — Result,
+	// Reason, Denial, and every other GateContext field — stays exactly what
+	// it was before diagnostics derivation existed for this call site.
+	withScopeChange, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutScopeChange := got
+	withoutScopeChange.Context.ScopeChange = nil
+	strippedPayload, err := json.Marshal(withoutScopeChange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var withMap, withoutMap map[string]any
+	if err := json.Unmarshal(withScopeChange, &withMap); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(strippedPayload, &withoutMap); err != nil {
+		t.Fatal(err)
+	}
+	withContext, _ := withMap["Context"].(map[string]any)
+	if withContext == nil {
+		t.Fatalf("marshaled evaluation has no Context object: %s", withScopeChange)
+	}
+	delete(withContext, "scope_change")
+	withoutContext, _ := withoutMap["Context"].(map[string]any)
+	if fmt.Sprint(withContext) != fmt.Sprint(withoutContext) || withMap["Result"] != withoutMap["Result"] || withMap["Reason"] != withoutMap["Reason"] {
+		t.Fatalf("negotiated envelope changed beyond the added scope_change field:\nwith (scope_change stripped) = %#v\nwithout = %#v", withContext, withoutContext)
 	}
 }
 
@@ -1656,6 +1724,72 @@ func repositoryLineageStoreDir(t *testing.T, repo, lineage string) string {
 	return filepath.Join(commonDir, "gentle-ai", "review-transactions", "v1", lineage)
 }
 
+// TestDiscoverCompactFacadeGateReviewClassification is the ladder table for
+// Group A (1699-adjacent target typing, and the published-delivery release
+// blocker): every producer that used to reach the pre-push path as an opaque
+// error now carries a typed sentinel the caller can act on.
+func TestDiscoverCompactFacadeGateReviewClassification(t *testing.T) {
+	t.Run("merge-base ambiguity types as target resolution (gate.go:748)", func(t *testing.T) {
+		repo, _ := emptyRemoteTrackingRepo(t)
+		branch := currentBranch(context.Background(), repo)
+		reviewedBaseTree := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}"))
+		gitSnapshot(t, repo, "checkout", "--orphan", "unrelated")
+		writeSnapshotFile(t, repo, "unrelated.txt", "unrelated\n")
+		gitSnapshot(t, repo, "add", "unrelated.txt")
+		gitSnapshot(t, repo, "commit", "-m", "unrelated")
+		gitSnapshot(t, repo, "push", "origin", "HEAD:refs/heads/"+branch)
+		gitSnapshot(t, repo, "checkout", branch)
+		writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+		gitSnapshot(t, repo, "commit", "-am", "reviewed delivery")
+
+		_, _, err := buildPushTarget(context.Background(), repo, "", reviewedBaseTree, "")
+		var targetErr *GateTargetResolutionError
+		if !errors.As(err, &targetErr) || targetErr.RequiredInput != "base_ref" || !strings.Contains(err.Error(), "--base-ref") {
+			t.Fatalf("merge-base ambiguity error = %T %v, want *GateTargetResolutionError naming --base-ref", err, err)
+		}
+	})
+
+	t.Run("unconfigured push remote types as target resolution (gate.go:752)", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		branch := currentBranch(context.Background(), repo)
+		remote := filepath.Join(t.TempDir(), "upstream.git")
+		gitSnapshot(t, repo, "init", "--bare", remote)
+		gitSnapshot(t, repo, "remote", "add", "upstream", remote)
+		gitSnapshot(t, repo, "push", "upstream", "HEAD:refs/heads/"+branch)
+
+		// The explicit selector resolves through the "upstream" remote alone,
+		// so no origin remote and no push-remote configuration ever exists:
+		// publicationRemote() has nothing to find.
+		_, _, err := buildPushTarget(context.Background(), repo, "upstream/"+branch, "", "")
+		var targetErr *GateTargetResolutionError
+		if !errors.As(err, &targetErr) || targetErr.RequiredInput != "base_ref" || !strings.Contains(err.Error(), "not configured") {
+			t.Fatalf("unconfigured push remote error = %T %v, want *GateTargetResolutionError naming the unconfigured remote", err, err)
+		}
+	})
+
+	t.Run("ambiguous reviewed delivery base types as delivery-base resolution (gate.go:1153)", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		reviewedTree := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}"))
+		mergeBase := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+		writeSnapshotFile(t, repo, "tracked.txt", "candidate change\n")
+		gitSnapshot(t, repo, "commit", "-am", "candidate change")
+		// Revert tracked.txt to the exact reviewed base content: this second
+		// commit's tree is byte-identical to the reviewed base tree, so the
+		// publication range now contains two commits whose tree equals the
+		// reviewed tree — publicationBase itself and this revert — which is
+		// exactly the ambiguous-match shape the sentinel exists for.
+		writeSnapshotFile(t, repo, "tracked.txt", "base\n")
+		gitSnapshot(t, repo, "commit", "-am", "revert to reviewed tree")
+		head := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+		_, err := reviewedDeliveryBase(context.Background(), repo, mergeBase, head, reviewedTree)
+		var deliveryErr *GateDeliveryBaseResolutionError
+		if !errors.As(err, &deliveryErr) {
+			t.Fatalf("ambiguous reviewed delivery base error = %T %v, want *GateDeliveryBaseResolutionError", err, err)
+		}
+	})
+}
+
 func trimGit(value string) string {
 	for len(value) > 0 && (value[len(value)-1] == '\n' || value[len(value)-1] == '\r') {
 		value = value[:len(value)-1]
@@ -1981,4 +2115,123 @@ func TestBootstrapDisclosureScopeExcludesCommitMetadata(t *testing.T) {
 	if strings.Contains(gitSnapshot(t, repo, "rev-list", "--objects", "HEAD"), tagObject) {
 		t.Fatal("annotated tag object is reachable from the published history")
 	}
+}
+
+// TestPrePushDeliversNothingNeverConfusesUnknownWithEmpty pins the safety
+// property the empty-publication-range allow rests on. The allow is permissive,
+// so the only tolerable failure direction is refusing to allow. Two things must
+// therefore hold, and each subtest below pins one of them:
+//
+//  1. A derivation the product could not complete is NOT an empty range. Every
+//     failure returns a non-nil error AND false, so a caller that drops the
+//     error still reads "something may be delivered".
+//  2. Emptiness against the tracked boundary is not emptiness of delivery. The
+//     boundary and the push destination are configured independently, so the
+//     range can be empty against `origin` while `git push` would transfer every
+//     commit to a different repository.
+func TestPrePushDeliversNothingNeverConfusesUnknownWithEmpty(t *testing.T) {
+	// publishedTrackingRepo returns a repo whose tracked upstream contains
+	// every commit reachable from HEAD: the empty-range state itself.
+	publishedTrackingRepo := func(t *testing.T) (string, string, string) {
+		t.Helper()
+		repo := initSnapshotRepo(t)
+		branch := currentBranch(context.Background(), repo)
+		remote := filepath.Join(t.TempDir(), "origin.git")
+		gitSnapshot(t, repo, "clone", "--bare", repo, remote)
+		gitSnapshot(t, repo, "remote", "add", "origin", remote)
+		gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+		gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+		writeSnapshotFile(t, repo, "tracked.txt", "delivery\n")
+		gitSnapshot(t, repo, "commit", "-am", "delivery")
+		gitSnapshot(t, repo, "push", "origin", "HEAD:refs/heads/"+branch)
+		return repo, remote, branch
+	}
+
+	t.Run("fully published branch delivers nothing", func(t *testing.T) {
+		repo, _, _ := publishedTrackingRepo(t)
+		nothing, err := PrePushDeliversNothing(context.Background(), repo, "")
+		if err != nil || !nothing {
+			t.Fatalf("PrePushDeliversNothing(published) = %v, %v; want true, nil", nothing, err)
+		}
+	})
+
+	t.Run("one unpublished commit delivers something", func(t *testing.T) {
+		repo, _, _ := publishedTrackingRepo(t)
+		writeSnapshotFile(t, repo, "tracked.txt", "unpublished\n")
+		gitSnapshot(t, repo, "commit", "-am", "unpublished")
+		nothing, err := PrePushDeliversNothing(context.Background(), repo, "")
+		if err != nil || nothing {
+			t.Fatalf("PrePushDeliversNothing(unpublished) = %v, %v; want false, nil", nothing, err)
+		}
+	})
+
+	t.Run("a push destination the boundary did not come from delivers something", func(t *testing.T) {
+		repo, _, branch := publishedTrackingRepo(t)
+		// A real second remote that carries none of the delivery. The range
+		// against the tracked upstream is still empty, but `git push` goes here.
+		fork := filepath.Join(t.TempDir(), "fork.git")
+		gitSnapshot(t, repo, "init", "--bare", fork)
+		gitSnapshot(t, repo, "remote", "add", "fork", fork)
+		gitSnapshot(t, repo, "config", "branch."+branch+".pushRemote", "fork")
+		nothing, err := PrePushDeliversNothing(context.Background(), repo, "")
+		if err != nil || nothing {
+			t.Fatalf("PrePushDeliversNothing(cross-remote) = %v, %v; want false, nil", nothing, err)
+		}
+	})
+
+	t.Run("a second remote name for the same repository still delivers nothing", func(t *testing.T) {
+		repo, remote, branch := publishedTrackingRepo(t)
+		// Identity is the normalized repository URL, so pushing through a
+		// different remote NAME for the same repository is still the boundary's
+		// own repository and must stay permissive.
+		gitSnapshot(t, repo, "remote", "add", "mirror", remote)
+		gitSnapshot(t, repo, "config", "branch."+branch+".pushRemote", "mirror")
+		nothing, err := PrePushDeliversNothing(context.Background(), repo, "")
+		if err != nil || !nothing {
+			t.Fatalf("PrePushDeliversNothing(same repository, other name) = %v, %v; want true, nil", nothing, err)
+		}
+	})
+
+	t.Run("an unreachable remote is unknown, never empty", func(t *testing.T) {
+		repo, remote, _ := publishedTrackingRepo(t)
+		// The exact state that would answer "delivers nothing" a moment ago,
+		// with the boundary now impossible to advertise. It must degrade to an
+		// error, never to the permissive answer.
+		if err := os.RemoveAll(remote); err != nil {
+			t.Fatal(err)
+		}
+		nothing, err := PrePushDeliversNothing(context.Background(), repo, "")
+		if err == nil || nothing {
+			t.Fatalf("PrePushDeliversNothing(unreachable remote) = %v, %v; want false and an error", nothing, err)
+		}
+	})
+
+	t.Run("a detached HEAD is unknown, never empty", func(t *testing.T) {
+		repo, _, _ := publishedTrackingRepo(t)
+		gitSnapshot(t, repo, "checkout", "--detach")
+		nothing, err := PrePushDeliversNothing(context.Background(), repo, "")
+		if err == nil || nothing {
+			t.Fatalf("PrePushDeliversNothing(detached HEAD) = %v, %v; want false and an error", nothing, err)
+		}
+	})
+
+	t.Run("a missing tracking upstream is unknown, never empty", func(t *testing.T) {
+		repo, _, branch := publishedTrackingRepo(t)
+		gitSnapshot(t, repo, "config", "--unset", "branch."+branch+".merge")
+		gitSnapshot(t, repo, "config", "--unset", "branch."+branch+".remote")
+		nothing, err := PrePushDeliversNothing(context.Background(), repo, "")
+		if err == nil || nothing {
+			t.Fatalf("PrePushDeliversNothing(no upstream) = %v, %v; want false and an error", nothing, err)
+		}
+	})
+
+	t.Run("an empty remote has published nothing, so it delivers something", func(t *testing.T) {
+		repo, _ := emptyRemoteTrackingRepo(t)
+		writeSnapshotFile(t, repo, "tracked.txt", "first publication\n")
+		gitSnapshot(t, repo, "commit", "-am", "first publication")
+		nothing, err := PrePushDeliversNothing(context.Background(), repo, "")
+		if err != nil || nothing {
+			t.Fatalf("PrePushDeliversNothing(empty remote) = %v, %v; want false, nil", nothing, err)
+		}
+	})
 }

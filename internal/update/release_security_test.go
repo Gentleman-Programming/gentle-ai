@@ -32,6 +32,9 @@ func TestReleaseWorkflowUsesFailClosedLeastPrivilegeGates(t *testing.T) {
 		"needs: preflight",
 		"environment: release",
 		"contents: write",
+		"actions: read",
+		"./scripts/require-ci-success.sh",
+		"GH_TOKEN: ${{ github.token }}",
 		"./scripts/release-preflight.sh",
 		"./scripts/canonicalize-release-public-keys.sh",
 		"id: trust-anchors",
@@ -171,7 +174,7 @@ func TestGoReleaserSignsBoundManifestAndInjectsTrustAnchors(t *testing.T) {
 		`- "${artifact}"`,
 		`- "${signature}"`,
 		`repo=Gentleman-Programming/gentle-ai;tag={{ .Tag }}`,
-		`github.com/gentleman-programming/gentle-ai/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}`,
+		`github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}`,
 		"-trimpath",
 	} {
 		if !strings.Contains(config, required) {
@@ -201,6 +204,17 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 				`MINISIGN_PUBLIC_KEYS`,
 				`configure one canonical key or a two-key rotation overlap`,
 				`public key payload must decode to 42 bytes`,
+			},
+		},
+		{
+			path: "require-ci-success.sh",
+			required: []string{
+				`require_env GITHUB_REPOSITORY`,
+				`require_env GITHUB_SHA`,
+				`require_env GH_TOKEN`,
+				`head_sha=$GITHUB_SHA`,
+				`actions/workflows/$workflow_ref/runs`,
+				`[[ "$conclusion" == "success" ]]`,
 			},
 		},
 		{
@@ -279,10 +293,128 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 	}
 }
 
+func TestRequireCISuccessSelectsNewestExactCommitRun(t *testing.T) {
+	const sha = "0123456789abcdef0123456789abcdef01234567"
+	tests := []struct {
+		name        string
+		ghOutput    string
+		ghFails     bool
+		wantSuccess bool
+		wantOutput  string
+	}{
+		{
+			name:       "API failure",
+			ghFails:    true,
+			wantOutput: "could not read workflow runs for " + sha,
+		},
+		{
+			name:       "no matching run",
+			wantOutput: "no CI run exists for " + sha,
+		},
+		{
+			name: "newest run in progress",
+			ghOutput: strings.Join([]string{
+				"2026-07-27T10:00:00Z\t100\tcompleted\tsuccess\thttps://example.test/runs/100",
+				"2026-07-27T11:00:00Z\t101\tin_progress\tnone\thttps://example.test/runs/101",
+			}, "\n"),
+			wantOutput: "CI is still in_progress for " + sha + " (https://example.test/runs/101)",
+		},
+		{
+			name:       "newest run failure",
+			ghOutput:   "2026-07-27T11:00:00Z\t101\tcompleted\tfailure\thttps://example.test/runs/101",
+			wantOutput: "CI concluded failure for " + sha + " (https://example.test/runs/101)",
+		},
+		{
+			name: "newest run success",
+			ghOutput: strings.Join([]string{
+				"2026-07-27T11:00:00Z\t101\tcompleted\tsuccess\thttps://example.test/runs/101",
+				"2026-07-27T10:00:00Z\t100\tcompleted\tfailure\thttps://example.test/runs/100",
+			}, "\n"),
+			wantSuccess: true,
+			wantOutput:  "release CI gate: CI succeeded for " + sha,
+		},
+		{
+			name:       "same-display-name alternate success cannot mask intended failure",
+			ghOutput:   "2026-07-27T11:00:00Z\t101\tcompleted\tfailure\thttps://example.test/runs/101",
+			wantOutput: "CI concluded failure for " + sha + " (https://example.test/runs/101)",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			home := filepath.Join(root, "home")
+			if err := os.Mkdir(home, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			fakeBin := filepath.Join(root, "bin")
+			if err := os.Mkdir(fakeBin, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			responsePath := filepath.Join(root, "response")
+			if err := os.WriteFile(responsePath, []byte(tc.ghOutput), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ghPath := filepath.Join(fakeBin, "gh")
+			if err := os.WriteFile(ghPath, []byte(`#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == api ]]
+[[ "$2" == --paginate ]]
+printf '%s\n' "$*" >"$FAKE_GH_LOG"
+if [[ "$3" == "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA&per_page=100" ]]; then
+  printf '2026-07-27T12:00:00Z\t200\tcompleted\tsuccess\thttps://example.test/runs/200\n'
+  exit 0
+fi
+[[ "$3" == "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&per_page=100" ]]
+[[ "$4" == --jq ]]
+[[ "$5" == '.workflow_runs[] | [.created_at, .id, .status, (.conclusion // "none"), .html_url] | @tsv' ]]
+[[ "${FAKE_GH_FAILS:-0}" != 1 ]] || exit 42
+cat "$FAKE_GH_RESPONSE"
+`), 0o700); err != nil {
+				t.Fatal(err)
+			}
+
+			command := exec.Command("bash", "scripts/require-ci-success.sh")
+			command.Dir = filepath.Clean(filepath.Join("..", ".."))
+			environment := make([]string, 0, len(os.Environ())+7)
+			for _, value := range os.Environ() {
+				name, _, _ := strings.Cut(value, "=")
+				switch name {
+				case "HOME", "PATH", "GH_TOKEN", "GITHUB_REPOSITORY", "GITHUB_SHA", "RELEASE_REQUIRED_WORKFLOW", "FAKE_GH_RESPONSE", "FAKE_GH_LOG", "FAKE_GH_FAILS":
+					continue
+				}
+				environment = append(environment, value)
+			}
+			command.Env = append(environment,
+				"HOME="+home,
+				"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"GH_TOKEN=test-token",
+				"GITHUB_REPOSITORY=Gentleman-Programming/gentle-ai",
+				"GITHUB_SHA="+sha,
+				"FAKE_GH_RESPONSE="+responsePath,
+				"FAKE_GH_LOG="+filepath.Join(root, "gh.log"),
+			)
+			if tc.ghFails {
+				command.Env = append(command.Env, "FAKE_GH_FAILS=1")
+			}
+			output, err := command.CombinedOutput()
+			if tc.wantSuccess && err != nil {
+				t.Fatalf("gate rejected newest successful run: %v\n%s", err, output)
+			}
+			if !tc.wantSuccess && err == nil {
+				t.Fatalf("gate accepted unsafe run state:\n%s", output)
+			}
+			if !strings.Contains(string(output), tc.wantOutput) {
+				t.Fatalf("gate output = %q, want substring %q", output, tc.wantOutput)
+			}
+		})
+	}
+}
+
 func TestCanonicalReleasePublicKeysControlRealLinkerBuild(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", ".."))
 	publicKey := strings.TrimSpace(readRepositoryFile(t, "internal", "update", "upgrade", "testdata", "minisign-test.pub"))
-	const linkerTarget = "github.com/gentleman-programming/gentle-ai/internal/update/upgrade.releaseMinisignPublicKeys"
+	const linkerTarget = "github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys"
 	const injectedOverride = "AUDIT_OVERRIDE"
 
 	build := func(t *testing.T, raw string) (string, []byte, error) {

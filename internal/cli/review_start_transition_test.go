@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
@@ -68,6 +68,46 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 			t.Fatalf("unborn START = %#v, want target %q", started, status.TargetIdentity)
 		}
 	})
+}
+
+func TestNegotiatedV2FreshStatusIncludesExactConsentRelay(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
+
+	status := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV2, "--lineage", "status-v2-consent-relay")
+	assertStartTransition(t, status, []string{"contract", "target", "projection", "lineage", "consent"})
+	consent := status.NextTransition.Execute.Arguments[len(status.NextTransition.Execute.Arguments)-1]
+	if consent != (ReviewTransitionArgument{Name: "consent", Value: "relay", Token: "--consent=relay"}) {
+		t.Fatalf("v2 START consent argument = %#v", consent)
+	}
+	wantCommand := "gentle-ai review start" +
+		" --contract=" + ReviewIntegrationContractV2 +
+		" --target=" + status.TargetIdentity +
+		" --projection=workspace" +
+		" --lineage=status-v2-consent-relay" +
+		" --consent=relay"
+	if status.NextTransition.Execute.Command != wantCommand {
+		t.Fatalf("v2 START command = %q, want %q", status.NextTransition.Execute.Command, wantCommand)
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("v2 fresh STATUS does not validate: %v", err)
+	}
+	invalid := status
+	transition := *status.NextTransition
+	execution := *status.NextTransition.Execute
+	execution.Arguments = append([]ReviewTransitionArgument(nil), execution.Arguments[:len(execution.Arguments)-1]...)
+	transition.Execute = &execution
+	invalid.NextTransition = &transition
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("v2 fresh STATUS accepted a START transition without consent=relay")
+	}
+
+	legacy := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV1, "--lineage", "status-v1-compatible")
+	assertStartTransition(t, legacy, []string{"contract", "target", "projection", "lineage"})
+	if strings.Contains(legacy.NextTransition.Execute.Command, "--consent") {
+		t.Fatalf("v1 START command changed compatibility behavior: %s", legacy.NextTransition.Execute.Command)
+	}
 }
 
 func TestNegotiatedStartRejectsIncompleteBindingsWithoutAuthority(t *testing.T) {
@@ -200,8 +240,12 @@ func TestStatusRejectsNonCanonicalStartTransition(t *testing.T) {
 }
 
 func negotiatedStartStatus(t *testing.T, repo string, selectors ...string) ReviewTargetStatusResult {
+	return negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV1, selectors...)
+}
+
+func negotiatedStartStatusForContract(t *testing.T, repo, contract string, selectors ...string) ReviewTargetStatusResult {
 	t.Helper()
-	args := []string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--action-eligibility", "--cwd", repo}
+	args := []string{"status", "--contract", contract, "--next-transition", "--action-eligibility", "--cwd", repo}
 	args = append(args, selectors...)
 	var output bytes.Buffer
 	if err := RunReview(args, &output); err != nil {

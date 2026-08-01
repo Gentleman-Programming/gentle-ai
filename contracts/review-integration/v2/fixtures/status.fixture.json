@@ -1,0 +1,113 @@
+{
+  "schema": "gentle-ai.review-integration.status/v3",
+  "contract": "gentle-ai.review-integration/v2",
+  "operation": "review.status",
+  "applicability": "current_target",
+  "authority": {
+    "version": "compact-v2",
+    "lineage_id": "review-status-fixture",
+    "state": "reviewing",
+    "generation": 1,
+    "revision": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390"
+  },
+  "receipt": {"status": "expected_missing"},
+  "action": "finalize",
+  "replayability": "not_replayable",
+  "frozen": {"tier": "medium", "original_changed_lines": 2, "correction_budget": 1},
+  "target_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+  "projection": {
+    "schema": "gentle-ai.review-integration.projection/v1",
+    "kind": "current-changes",
+    "projection": "workspace",
+    "base_tree": "3e21a205dd9b55021aeae87965092623807e455f",
+    "initial_review_tree": "1c3325617279b38743f073302ba190fc421b5a09",
+    "current_candidate_tree": "1c3325617279b38743f073302ba190fc421b5a09",
+    "paths_digest": "sha256:b93fca961a97d240c2b7023e98772f49ebd2995eda7db07043270b57bed75d71",
+    "paths": ["tracked.txt"],
+    "intended_untracked": [],
+    "intended_untracked_proof": "sha256:b97229718d4c7fe50a8892eb474ae5aa6491697bccb400e3e31dbaca4894d2f3",
+    "initial_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+    "current_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
+  },
+  "repair": {
+    "schema": "gentle-ai.review-authority-repair-assessment/v1",
+    "status": "unsupported",
+    "counts": {
+      "lineages": 0,
+      "compact_lineages": 0,
+      "legacy_lineages": 0,
+      "events": 0,
+      "bytes": 0,
+      "eligible_candidates": 0,
+      "unsupported_lineages": 0,
+      "conflicts": 0
+    },
+    "supported_operations": ["review/complete-fix", "review/validate-fix"],
+    "authorization_schema": "gentle-ai.review-repair-authorization/v1"
+  },
+  "candidates": [],
+  "next_transition": {
+    "kind": "collect",
+    "reason_code": "reviewer_results_required",
+    "collect": {
+      "inputs": [
+        {
+          "name": "reviewer_result",
+          "schema": "https://gentle-ai.dev/schema/review/reviewer/v1",
+          "capture_operation": "review.capture-result",
+          "arguments": [
+            {"name": "lineage", "value": "review-status-fixture", "token": "--lineage=review-status-fixture"},
+            {
+              "name": "expected-revision",
+              "value": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390",
+              "token": "--expected-revision=sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390"
+            },
+            {
+              "name": "target",
+              "value": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+              "token": "--target=sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
+            },
+            {
+              "name": "repository-context",
+              "value": "rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "token": "--repository-context=rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {"name": "lens", "value": "review-reliability", "token": "--lens=review-reliability"},
+            {"name": "order", "value": "0", "token": "--order=0"},
+            {
+              "name": "subject-hash",
+              "value": "sha256:34c226ef1586f0c77b30311320d4d2529819097fbb073ee31634f4d87a19da6a",
+              "token": "--subject-hash=sha256:34c226ef1586f0c77b30311320d4d2529819097fbb073ee31634f4d87a19da6a"
+            }
+          ],
+          "artifact_subject": {
+            "schema": "gentle-ai.review-artifact-subject/v2",
+            "subject_hash": "sha256:34c226ef1586f0c77b30311320d4d2529819097fbb073ee31634f4d87a19da6a",
+            "lineage_id": "review-status-fixture",
+            "authority_revision": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390",
+            "target_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+            "base_tree": "3e21a205dd9b55021aeae87965092623807e455f",
+            "candidate_tree": "1c3325617279b38743f073302ba190fc421b5a09",
+            "changed_path_manifest_sha256": "sha256:64d028ff676fb4ef10f2d4a3488d568854b364b4cc4399578b5932d144d2347b",
+            "lens": "review-reliability",
+            "selected_order": 0
+          },
+          "base_tree": "3e21a205dd9b55021aeae87965092623807e455f",
+          "candidate_tree": "1c3325617279b38743f073302ba190fc421b5a09",
+          "changed_path_manifest": [
+            {
+              "path": "tracked.txt",
+              "status": "M",
+              "old_mode": "100644",
+              "new_mode": "100644",
+              "deleted": false,
+              "type_changed": false,
+              "mode_only": false,
+              "intended_untracked": false
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

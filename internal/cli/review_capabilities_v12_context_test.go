@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestReviewCapabilitiesV13AdvertisesProviderAdmissionAndRecovery(t *testing.T) {
@@ -27,8 +27,8 @@ func TestReviewCapabilitiesV13AdvertisesProviderAdmissionAndRecovery(t *testing.
 		}
 	}
 	for _, schema := range []string{
-		reviewtransaction.ArtifactSubjectSchema,
-		reviewtransaction.AdmittedReviewerResultSchema,
+		reviewtransaction.ArtifactSubjectSchemaV1,
+		reviewtransaction.AdmittedReviewerResultSchemaV1,
 		reviewtransaction.TargetedValidationRequestSchema,
 	} {
 		if !slices.Contains(surface.Schemas, schema) {

@@ -15,7 +15,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const reviewBindingSchema = "gentle-ai.sdd-review-binding/v1"
@@ -283,6 +284,133 @@ func validateRuntimeRemediationSuccessor(ctx context.Context, repo string, curre
 	return errors.New("compact remediation recovery chain exceeds the bounded lineage count")
 }
 
+// validateRuntimeRemediationSelfSuccessor proves that an approved
+// self-successor — the corrected authority of the very lineage the runtime
+// binding already names — is healthy, current, content-bound, and still the
+// leaf of the compact recovery graph. A same-lineage remediation never mutates
+// compact authority and never demands the impossible invalidation of a healthy
+// approved predecessor: the corrected approved receipt itself is the successor
+// provenance. A lineage that has since gained a true recovery successor is no
+// longer the leaf and must be refused.
+func validateRuntimeRemediationSelfSuccessor(ctx context.Context, repo string, current, successor ReviewBinding) error {
+	if current.Lineage != successor.Lineage {
+		return errors.New("approved SDD self-remediation requires the bound lineage")
+	}
+	if _, err := loadRuntimeBoundCompactArtifacts(ctx, repo, successor); err != nil {
+		return fmt.Errorf("validate approved self-remediation authority: %w", err)
+	}
+	leaves, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
+	if err != nil {
+		return fmt.Errorf("validate compact recovery graph: %w", err)
+	}
+	for _, store := range leaves {
+		record, loadErr := store.Load()
+		if loadErr != nil {
+			return fmt.Errorf("load compact recovery leaf: %w", loadErr)
+		}
+		if record.State.LineageID == successor.Lineage && record.Revision == successor.AuthorityRevision {
+			return nil
+		}
+	}
+	return errors.New("approved SDD self-remediation authority is not the current compact recovery leaf")
+}
+
+// runtimeSelfSuccessorAvailable answers exactly one question: would the
+// self-successor finish be ACCEPTED right now? It runs the same preparation
+// and the same validator the finish itself would run, against the same
+// candidate tree the finish already charged, so a refusal that consults it
+// can only name the self-successor exit when running that exit works.
+//
+// It is deliberately read-only and fail-closed: any preparation error, any
+// gate that is not allow, an approved authority that binds different bytes, or
+// a lineage that is no longer the compact recovery leaf all answer false, and
+// the caller then names the review router instead of a command that would be
+// refused one layer deeper.
+func runtimeSelfSuccessorAvailable(ctx context.Context, repo, workspace, change string, binding ReviewBinding, candidateTree string) bool {
+	prepared, err := prepareApprovedRuntimeSuccessorBinding(ctx, repo, workspace, change, binding.Lineage)
+	if err != nil || prepared.Lineage != binding.Lineage || prepared.GateContext.CandidateTree != candidateTree {
+		return false
+	}
+	return validateRuntimeRemediationSelfSuccessor(ctx, repo, binding, prepared) == nil
+}
+
+// RuntimeStrandedSuccessor identifies the one recovery successor that stands
+// between a bound lineage and its own approved review, together with the two
+// persisted values `review abandon` demands in its authorization binding.
+type RuntimeStrandedSuccessor struct {
+	Lineage          string
+	Revision         string
+	SnapshotIdentity string
+}
+
+// runtimeStrandedSuccessor answers exactly one question: is the ONLY thing
+// standing between the bound lineage and the self-successor finish a recovery
+// successor that can never be finalized?
+//
+// A recovery successor freezes its own review target when it is minted. If the
+// candidate then moves away from that frozen target — the widened scope is
+// taken back out, the corrected file is reverted — the successor's live
+// projection will never match its own authority again, so it can never be
+// reviewed, never be approved, and never become a legal --successor-lineage.
+// While it exists the bound lineage is not the compact recovery leaf and its
+// post-apply gate does not allow, so every exit through the review router leads
+// to a review the runtime then refuses to accept. Quarantining the stranded
+// successor is the one operation that resolves it, and it destroys nothing the
+// operator still wants: a stranded successor is by definition pristine, and the
+// approved predecessor it superseded — which holds the operator's corrected
+// work — is exactly what quarantining it restores.
+//
+// It is deliberately read-only and fail-closed. The bound authority must be
+// approved for the very bytes this finish charged, the successor must be the
+// bound lineage's own direct recovery successor, it must be the current leaf,
+// its frozen candidate must NOT be the charged candidate, and `review abandon`
+// must already accept it. Anything else answers false and the caller names the
+// review router instead of an abandonment that would be refused one layer in —
+// most importantly a successor that DOES govern the charged candidate, which is
+// a live review the operator still wants and must never be sent to quarantine.
+func runtimeStrandedSuccessor(ctx context.Context, repo string, binding ReviewBinding, candidateTree string) (RuntimeStrandedSuccessor, bool) {
+	bound, err := loadRuntimeBoundCompactArtifacts(ctx, repo, binding)
+	if err != nil || bound.State.CurrentSnapshot.CandidateTree != candidateTree {
+		return RuntimeStrandedSuccessor{}, false
+	}
+	leaves, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
+	if err != nil {
+		return RuntimeStrandedSuccessor{}, false
+	}
+	found := RuntimeStrandedSuccessor{}
+	for _, store := range leaves {
+		record, loadErr := store.Load()
+		if loadErr != nil {
+			return RuntimeStrandedSuccessor{}, false
+		}
+		recovery := record.State.Recovery
+		if recovery == nil || recovery.PredecessorLineageID != binding.Lineage ||
+			recovery.PredecessorRevision != binding.AuthorityRevision {
+			continue
+		}
+		if found.Lineage != "" {
+			// A fork is structurally refused elsewhere; seeing one here means
+			// the graph is not what this probe can reason about.
+			return RuntimeStrandedSuccessor{}, false
+		}
+		if record.State.InitialSnapshot.CandidateTree == candidateTree {
+			// Not stranded: this successor governs the charged candidate and
+			// can still be reviewed, approved and named as the successor.
+			return RuntimeStrandedSuccessor{}, false
+		}
+		found.Lineage = record.State.LineageID
+	}
+	if found.Lineage == "" {
+		return RuntimeStrandedSuccessor{}, false
+	}
+	eligibility, err := reviewtransaction.InspectCompactPristineAbandonment(ctx, repo, found.Lineage)
+	if err != nil || !eligibility.Eligible {
+		return RuntimeStrandedSuccessor{}, false
+	}
+	found.Revision, found.SnapshotIdentity = eligibility.Revision, eligibility.SnapshotIdentity
+	return found, true
+}
+
 // loadRuntimeBoundCompactArtifacts validates immutable authority and receipt
 // identity without evaluating the live post-apply gate. The old binding is
 // expected to be live-stale after remediation; its exact approved bytes remain
@@ -465,16 +593,19 @@ func loadEffectiveReviewBinding(ctx context.Context, repo, change string) (Revie
 }
 
 func resolveBindingChangeRoot(ctx context.Context, root, workspace, change string) (string, error) {
-	workspace, err := filepath.Abs(workspace)
+	// Both operands are canonicalized the same way before any containment or
+	// equality decision below. Resolving only the workspace was 1773 boundary
+	// 1: on macOS the same repository spelled through /var and through
+	// /private/var compared unequal, and the planning workspace was reported
+	// outside its own repository.
+	workspace, err := canonicalBindingPath(workspace)
 	if err != nil {
 		return "", err
 	}
-	workspace, err = filepath.EvalSymlinks(workspace)
+	root, err = canonicalBindingPath(root)
 	if err != nil {
 		return "", err
 	}
-	root = filepath.Clean(root)
-	workspace = filepath.Clean(workspace)
 	if !pathWithinBindingRoot(root, workspace) {
 		return "", errors.New("planning workspace is outside selected repository")
 	}
@@ -503,7 +634,7 @@ func resolveBindingChangeRoot(ctx context.Context, root, workspace, change strin
 		} else if !os.IsNotExist(statErr) {
 			return "", statErr
 		}
-		if current == root {
+		if pathidentity.SameDirectory(current, root) {
 			break
 		}
 	}
@@ -581,9 +712,30 @@ func bindingChangeRoots(ctx context.Context, root, change string) ([]string, err
 	return matches, nil
 }
 
+// canonicalBindingPath is the single canonicalization every binding path goes
+// through before it is compared with another. Having one of these, used on
+// both operands, is what keeps a second spelling of one repository from
+// looking like a different repository.
+func canonicalBindingPath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(resolved), nil
+}
+
+// pathWithinBindingRoot defers containment to the filesystem identity policy
+// in internal/pathidentity, so alternate spellings that the operating system
+// resolves to one directory -- symlinked ancestors, case-insensitive volumes,
+// Unicode-equivalent names -- are one directory here too. Callers still
+// resolve a candidate with filepath.EvalSymlinks before asking, because this
+// answers "is it inside", never "did it get there through a symlink".
 func pathWithinBindingRoot(root, path string) bool {
-	relative, err := filepath.Rel(root, path)
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
+	return pathidentity.Contains(root, path)
 }
 
 func verifyBindingLedger(changeRoot string, findings []reviewtransaction.Finding) error {

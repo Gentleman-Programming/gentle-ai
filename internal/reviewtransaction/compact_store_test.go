@@ -127,7 +127,11 @@ func TestCompactStoreReloadsLegacyV2ReceiptWithoutRewritingItsIdentity(t *testin
 	}
 }
 
-func TestCompactStartResumesPrePolicyLargeDocumentationAuthority(t *testing.T) {
+// TestCompactStartNeverNarrowsAPrePolicyLargeDocumentationAuthority pins the
+// evidence-driven tier for a large documentation candidate: it is structural
+// readback with zero reviewers, and an authority frozen under the old size rule
+// with the full 4R set is blocked rather than silently narrowed to it.
+func TestCompactStartNeverNarrowsAPrePolicyLargeDocumentationAuthority(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "docs/guide.md", strings.Repeat("line\n", 401))
 	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
@@ -140,10 +144,14 @@ func TestCompactStartResumesPrePolicyLargeDocumentationAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	lenses, err := SelectReviewLenses(assessment, "risk")
+	if err != nil || assessment.Level != RiskLow || len(lenses) != 0 {
+		t.Fatalf("large documentation assessment = %q with lenses %v, %v; want low with zero reviewers", assessment.Level, lenses, err)
+	}
 	requested, err := NewCompactState(Start{
 		LineageID: "pre-policy-large-doc", Mode: ModeOrdinaryBounded, Generation: 1,
 		Snapshot: snapshot, PolicyHash: hash("d"), RiskLevel: assessment.Level,
-		SelectedLenses: []string{assessment.DominantLens}, OriginalChangedLines: &assessment.ChangedLines,
+		SelectedLenses: lenses, OriginalChangedLines: &assessment.ChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +178,7 @@ func TestCompactStartResumesPrePolicyLargeDocumentationAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Action != CompactStartResumed || result.Record.State.RiskLevel != RiskHigh ||
+	if result.Action != CompactStartBlocked || result.Record.State.RiskLevel != RiskHigh ||
 		!equalStrings(result.Record.State.SelectedLenses, existing.SelectedLenses) {
 		t.Fatalf("pre-policy resume = action %q, risk %q, lenses %v", result.Action, result.Record.State.RiskLevel, result.Record.State.SelectedLenses)
 	}
@@ -2373,6 +2381,93 @@ func TestCompactDiagnosticTraceContainsMetadataOnly(t *testing.T) {
 	}
 }
 
+// TestReplaceContextGuardedReportsTraceWriteFailureInsteadOfSwallowingIt
+// covers issue #1854: a caller supplying TracePath asked for observability,
+// so a failed trace write must be reported even though the mutation itself
+// has already committed and must not be rolled back or fail.
+func TestReplaceContextGuardedReportsTraceWriteFailureInsteadOfSwallowingIt(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "compact-trace-replace-fail")
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// TracePath's parent directory is a regular file, so appendCompactTrace's
+	// os.MkdirAll must fail deterministically.
+	store.TracePath = filepath.Join(blocker, "trace.jsonl")
+
+	var gotOperation, gotPath string
+	var gotErr error
+	original := compactTraceWarn
+	t.Cleanup(func() { compactTraceWarn = original })
+	compactTraceWarn = func(operation, path string, err error) {
+		gotOperation, gotPath, gotErr = operation, path, err
+	}
+
+	revision, err := store.Replace("", "review/start", state)
+	if err != nil {
+		t.Fatalf("a lost review trace must not fail the mutation: %v", err)
+	}
+	if revision == "" {
+		t.Fatal("expected a committed revision despite the trace write failure")
+	}
+	if gotErr == nil {
+		t.Fatal("expected the trace write failure to be reported instead of swallowed")
+	}
+	if gotOperation != "review/start" {
+		t.Fatalf("wrong operation reported for the lost trace: %q", gotOperation)
+	}
+	if gotPath != store.TracePath {
+		t.Fatalf("wrong path reported for the lost trace: %q", gotPath)
+	}
+}
+
+// TestStartCompactAuthorityReportsTraceWriteFailureInsteadOfSwallowingIt
+// covers the same defect (issue #1854) at the StartCompactAuthority call
+// site, which appends its diagnostic trace directly rather than through
+// replaceContextGuarded.
+func TestStartCompactAuthorityReportsTraceWriteFailureInsteadOfSwallowingIt(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "compact-trace-start-fail")
+
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tracePath := filepath.Join(blocker, "trace.jsonl")
+
+	var gotOperation, gotPath string
+	var gotErr error
+	original := compactTraceWarn
+	t.Cleanup(func() { compactTraceWarn = original })
+	compactTraceWarn = func(operation, path string, err error) {
+		gotOperation, gotPath, gotErr = operation, path, err
+	}
+
+	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state, TracePath: tracePath})
+	if err != nil {
+		t.Fatalf("a lost review trace must not fail compact start: %v", err)
+	}
+	if result.Action != CompactStartCreated {
+		t.Fatalf("expected the start to still commit despite the trace failure, got action %q", result.Action)
+	}
+	if gotErr == nil {
+		t.Fatal("expected the trace write failure to be reported instead of swallowed")
+	}
+	if gotOperation != "review/start" {
+		t.Fatalf("wrong operation reported for the lost trace: %q", gotOperation)
+	}
+	if gotPath != tracePath {
+		t.Fatalf("wrong path reported for the lost trace: %q", gotPath)
+	}
+}
+
 func TestCompactLifecycleComplexityMeasurements(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -2533,11 +2628,18 @@ func TestSnapshotCandidateLocationSupportsStructuredCausality(t *testing.T) {
 		location  string
 		causality CausalDisposition
 		want      bool
-	}{{"introduced replacement", "tracked.txt:2", CausalIntroduced, true}, {"introduced addition", "tracked.txt:5", CausalIntroduced, true}, {"introduced deletion", "deleted.txt:1", CausalIntroduced, false}, {"old-side deletion collision", "tracked.txt:4", CausalIntroduced, false}, {"introduced unchanged", "tracked.txt:1", CausalIntroduced, false}, {"worsened changed", "tracked.txt:2", CausalWorsened, true}, {"worsened unchanged", "tracked.txt:1", CausalWorsened, false}, {"activated unchanged", "tracked.txt:1", CausalBehaviorActivated, true}, {"activated deletion", "deleted.txt:1", CausalBehaviorActivated, false}, {"activated out of range", "tracked.txt:99", CausalBehaviorActivated, false}, {"outside genesis", "other.txt:1", CausalBehaviorActivated, false}, {"zero", "tracked.txt:0", CausalIntroduced, false}, {"malformed", "tracked.txt", CausalWorsened, false}} {
+		wantError FindingLocationErrorReason
+	}{{"introduced replacement", "tracked.txt:2", CausalIntroduced, true, ""}, {"introduced addition", "tracked.txt:5", CausalIntroduced, true, ""}, {"introduced deletion", "deleted.txt:1", CausalIntroduced, false, ""}, {"old-side deletion collision", "tracked.txt:4", CausalIntroduced, false, ""}, {"introduced unchanged", "tracked.txt:1", CausalIntroduced, false, ""}, {"worsened changed", "tracked.txt:2", CausalWorsened, true, ""}, {"worsened unchanged", "tracked.txt:1", CausalWorsened, false, ""}, {"activated unchanged", "tracked.txt:1", CausalBehaviorActivated, true, ""}, {"activated deletion", "deleted.txt:1", CausalBehaviorActivated, false, ""}, {"activated out of range", "tracked.txt:99", CausalBehaviorActivated, false, ""}, {"outside genesis", "other.txt:1", CausalBehaviorActivated, false, ""}, {"range", "tracked.txt:1-2", CausalIntroduced, false, "line_suffix_not_integer"}, {"non-numeric", "tracked.txt:one", CausalIntroduced, false, "line_suffix_not_integer"}, {"overflow", "tracked.txt:" + strings.Repeat("9", 64), CausalIntroduced, false, "line_suffix_not_integer"}, {"leading plus", "tracked.txt:+1", CausalIntroduced, false, "line_suffix_not_integer"}, {"zero", "tracked.txt:0", CausalIntroduced, false, "line_must_be_positive"}, {"negative", "tracked.txt:-1", CausalIntroduced, false, "line_must_be_positive"}, {"colon traversal", "internal:../tracked.txt:1", CausalIntroduced, false, "path_must_be_canonical"}, {"missing suffix", "tracked.txt:", CausalWorsened, false, "expected_path_and_line"}, {"malformed", "tracked.txt", CausalWorsened, false, "expected_path_and_line"}} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := (SnapshotBuilder{Repo: repo}).CandidateLocationSupportsCausality(context.Background(), snapshot, tt.location, tt.causality)
-			if err != nil || got != tt.want {
+			if tt.wantError == "" && (err != nil || got != tt.want) {
 				t.Fatalf("CandidateLocationSupportsCausality(%q, %q) = %t, %v", tt.location, tt.causality, got, err)
+			}
+			if tt.wantError != "" {
+				var locationErr *FindingLocationError
+				if got || !errors.Is(err, ErrInvalidFindingLocation) || !errors.As(err, &locationErr) || locationErr.Reason != tt.wantError {
+					t.Fatalf("CandidateLocationSupportsCausality(%q) = %t, %v; want typed %q", tt.location, got, err, tt.wantError)
+				}
 			}
 		})
 	}

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestStatusValidateTransitionPreservesCustomPublicationBase(t *testing.T) {
@@ -97,7 +97,7 @@ func TestStatusRecoverTransitionExecutesExactBaseDiffSelectors(t *testing.T) {
 		Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
 		ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, Evidence: []string{"reviewed exact base diff"}})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
@@ -326,6 +326,107 @@ func TestStatusRecoverTransitionExecutesApprovedStagedScopeExpansion(t *testing.
 	}
 }
 
+func TestStatusRecoverTransitionExecutesCorrectionRequiredStagedScopeExpansion(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int {\n\treturn 1\n}\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "candidate.go")
+	runReviewCLIGit(t, repo, "commit", "-qm", "add reviewed candidate")
+
+	const predecessorLineage = "correction-staged-root"
+	var startedOut bytes.Buffer
+	if err := RunReviewFacadeStart([]string{
+		"--cwd", repo, "--lineage", predecessorLineage, "--base-ref", base, "--committed-only",
+	}, &startedOut); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedOut.Bytes(), &started)
+	if len(started.SelectedLenses) == 0 {
+		t.Fatal("base-diff fixture selected no reviewer lenses")
+	}
+	finalizeArgs := []string{"--cwd", repo, "--lineage", predecessorLineage}
+	for index, lens := range started.SelectedLenses {
+		result := facadeReviewerResult{Lens: lens, Findings: []facadeFinding{}, Evidence: []string{"reviewed exact base diff"}}
+		if index == 0 {
+			result.Findings = []facadeFinding{{
+				Location: "candidate.go:4", Severity: "CRITICAL", Claim: "candidate returns the wrong value",
+				ProofRefs: []string{"candidate.go:4 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+				CausalDisposition: reviewtransaction.CausalIntroduced,
+			}}
+		}
+		path := filepath.Join(t.TempDir(), "reviewer.json")
+		writeReviewCLIJSON(t, path, result)
+		finalizeArgs = append(finalizeArgs, "--result", path)
+	}
+	if err := finalizeReviewCLIArgs(t, repo, finalizeArgs, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{
+		"--cwd", repo, "--lineage", predecessorLineage, "--correction-lines", "3",
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	predecessorStore, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, predecessorLineage)
+	predecessor, err := predecessorStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateBefore, _ := os.ReadFile(predecessorStore.StatePath())
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int {\n\treturn 2\n}\n", 0o644)
+	writeReviewStartCandidate(t, repo, "migration.sql", "CREATE TABLE recovered (id INTEGER);\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "candidate.go", "migration.sql")
+	writeReviewStartCandidate(t, repo, "tracked.txt", "unstaged divergence\n", 0o644)
+	writeReviewStartCandidate(t, repo, "scratch.txt", "untracked noise\n", 0o644)
+	wantTree := strings.TrimSpace(runReviewCLIGit(t, repo, "write-tree"))
+
+	selectors := []string{
+		"--lineage", predecessorLineage, "--base-ref", base, "--projection", "staged", "--workspace-overlay",
+	}
+	probe := selectorTransitionStatus(t, repo, selectors...)
+	if probe.Action != reviewtransaction.TargetStatusActionRecover || probe.ActionDisposition != reviewtransaction.RecoveryScopeChanged ||
+		probe.NextTransition == nil || probe.NextTransition.Collect == nil {
+		t.Fatalf("correction-required staged scope probe = %#v", probe)
+	}
+	const successor, actor, reason = "correction-staged-successor", "maintainer", "authorize staged correction scope expansion"
+	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + predecessorLineage +
+		"\npredecessor_revision=" + probe.Authority.Revision + "\ntarget_identity=" + probe.TargetIdentity +
+		"\nsuccessor_lineage=" + successor + "\nactor=" + actor + "\nreason=" + reason
+	status := selectorTransitionStatus(t, repo, append(selectors,
+		"--recovery-successor-lineage", successor, "--recovery-reason", reason,
+		"--recovery-actor", actor, "--recovery-authorization", authorization)...)
+	executeSelectorTransition(t, repo, status)
+
+	successorStore, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, successor)
+	recovered, err := successorStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := recovered.State
+	if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Kind != reviewtransaction.TargetBaseWorkspaceOverlay ||
+		state.InitialSnapshot.Projection != reviewtransaction.ProjectionStaged || state.InitialSnapshot.CandidateTree != wantTree ||
+		!reflect.DeepEqual(state.GenesisPaths, []string{"candidate.go", "migration.sql"}) {
+		t.Fatalf("recovered staged successor = %#v", state)
+	}
+	if state.CorrectionBudget != predecessor.State.CorrectionBudget ||
+		!state.CorrectionAttemptConsumed() || len(state.CorrectionAttempts) != 0 || state.CumulativeCorrectionLines != 0 ||
+		state.Recovery == nil || state.Recovery.ConsumedCorrectionAttempts != 1 || state.Recovery.ConsumedCorrectionLines != 3 {
+		t.Fatalf("recovered correction accounting = %#v, predecessor = %#v", state, predecessor.State)
+	}
+	if len(state.LensResults) != 0 || len(state.Findings) != 0 || state.EvidenceHash != "" || state.ProposedCorrectionLines != nil ||
+		state.ActualCorrectionLines != nil || state.CorrectionVerificationTarget != nil {
+		t.Fatalf("recovered successor inherited review or verification evidence: %#v", state)
+	}
+	if _, err := os.Stat(successorStore.ReceiptPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fresh correction successor receipt = %v", err)
+	}
+	stateAfter, _ := os.ReadFile(predecessorStore.StatePath())
+	if !bytes.Equal(stateBefore, stateAfter) || strings.TrimSpace(runReviewCLIGit(t, repo, "write-tree")) != wantTree {
+		t.Fatal("staged correction recovery mutated predecessor authority or index")
+	}
+}
+
 func TestCurrentChangesRecoverSelectorPresenceSurvivesJSONRoundTrip(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
@@ -340,7 +441,7 @@ func TestCurrentChangesRecoverSelectorPresenceSurvivesJSONRoundTrip(t *testing.T
 		Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
 		ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, Evidence: []string{"reviewed exact current changes"}})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
@@ -422,7 +523,7 @@ func TestStatusStopsUnrepresentableRecoveryWithoutMutation(t *testing.T) {
 		Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
 		ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, Evidence: []string{"reviewed exact current changes"}})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)

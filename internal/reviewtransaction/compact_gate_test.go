@@ -15,6 +15,71 @@ import (
 	"testing"
 )
 
+// TestCompactEscalatedGateReasonCarriesEscalationAccounting pins the organic
+// half of the escalation-accounting contract the testing guide's Flow 17
+// promises. The SDD-bound surface (sddstatus.resolveBoundedRemediation) has
+// always rendered spent, remaining and total; the organic gate used to render
+// the bare "transaction or external evidence is terminally escalated" with no
+// numbers at all, so the accounting frozen in the state was unreachable from
+// every non-SDD surface. Both now render EscalationAccountingReasonTemplate,
+// which is why they cannot drift.
+func TestCompactEscalatedGateReasonCarriesEscalationAccounting(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := accountingOnlyEscalatedState(t, repo, "escalated-gate-accounting")
+	if state.State != StateEscalated {
+		t.Fatalf("fixture state = %q, want escalated", state.State)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err := makeCompactRecord(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := state.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+		t.Fatal(err)
+	}
+
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{
+		Gate: GatePostApply, LineageID: state.LineageID,
+	})
+	if got.Result != GateEscalated {
+		t.Fatalf("escalated gate = %#v, want GateEscalated", got)
+	}
+	accounting := state.EscalationAccounting()
+	want := fmt.Sprintf(EscalationAccountingReasonTemplate,
+		accounting.Cause, accounting.Spent, accounting.Remaining, accounting.Total)
+	if got.Reason != want {
+		t.Fatalf("escalated gate reason = %q, want %q", got.Reason, want)
+	}
+	for _, label := range []string{"spent ", "remaining ", "total "} {
+		if !strings.Contains(got.Reason, label) {
+			t.Fatalf("escalated gate reason = %q, want it to name %q", got.Reason, label)
+		}
+	}
+}
+
+// TestCompactEscalatedGateReasonFallsBackWithoutDerivableCause pins that the
+// generic terminal reason survives for an escalated receipt whose authority
+// exposes no derivable escalation cause, so this never invents accounting it
+// cannot prove.
+func TestCompactEscalatedGateReasonFallsBackWithoutDerivableCause(t *testing.T) {
+	if got := compactEscalatedGateReason(CompactState{State: StateApproved}); got != nativeGateReason(GateEscalated) {
+		t.Fatalf("reason without a derivable cause = %q, want %q", got, nativeGateReason(GateEscalated))
+	}
+}
+
 func TestLegacyCurrentChangesGateRejectsCallerProjectionMismatch(t *testing.T) {
 	for _, gate := range []GateKind{GatePostApply, GatePreCommit} {
 		t.Run(string(gate), func(t *testing.T) {
@@ -676,7 +741,7 @@ func TestCompactCommittedNextSliceIntendedFilterPropagatesGitInfraFailure(t *tes
 	t.Cleanup(func() { gitProcessTreeStarter = originalStarter })
 	gitProcessTreeStarter = func(command *exec.Cmd) (func() error, error) {
 		for _, arg := range command.Args {
-			if arg == "--error-unmatch" {
+			if arg == "--cached" {
 				return nil, errors.New("job object creation rejected")
 			}
 		}
@@ -1150,22 +1215,53 @@ func TestCompactCorrectedPreCommitBindsStagedIndexAndIgnoresWorkspace(t *testing
 }
 
 func TestCompactCorrectedCurrentChangesPrePushUsesFinalDeliveryBinding(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	branch := currentBranch(context.Background(), repo)
-	configurePublicationRemote(t, repo, branch)
-	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
-	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
-	state := correctedCompactTestStateWithIntended(t, repo, "compact-corrected-current-delivery", []string{})
-	receipt := persistCorrectedCompactFixture(t, repo, state)
-	gitSnapshot(t, repo, "add", "tracked.txt")
-	gitSnapshot(t, repo, "commit", "-m", "corrected delivery")
-	input := NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: "origin/" + branch}
-	if got := EvaluateCompactGate(context.Background(), repo, receipt, input); got.Result != GateAllow {
-		t.Fatalf("one-commit corrected delivery = %#v", got)
+	tests := []struct {
+		name      string
+		mutate    func(t *testing.T, repo string)
+		wantExact bool
+		wantAllow bool
+	}{
+		{name: "exact squashed delivery", wantExact: true, wantAllow: true},
+		{name: "wrong candidate", mutate: func(t *testing.T, repo string) {
+			writeSnapshotFile(t, repo, "tracked.txt", "wrong corrected candidate\n")
+		}},
+		{name: "path drift", mutate: func(t *testing.T, repo string) {
+			writeSnapshotFile(t, repo, "extra.txt", "outside reviewed scope\n")
+		}},
+		{name: "non-squashed delivery", mutate: func(t *testing.T, repo string) {
+			gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "unreviewed extra commit")
+		}},
 	}
-	gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "unreviewed extra commit")
-	if got := EvaluateCompactGate(context.Background(), repo, receipt, input); got.Result == GateAllow {
-		t.Fatalf("multi-commit current-changes delivery = %#v", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			branch := currentBranch(context.Background(), repo)
+			configurePublicationRemote(t, repo, branch)
+			gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+			gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+			state := correctedCompactTestStateWithIntended(t, repo, "compact-corrected-current-delivery-"+strings.ReplaceAll(tt.name, " ", "-"), []string{})
+			receipt := persistCorrectedCompactFixture(t, repo, state)
+			if tt.mutate != nil {
+				tt.mutate(t, repo)
+			}
+			gitSnapshot(t, repo, "add", "-A")
+			gitSnapshot(t, repo, "commit", "-m", "corrected delivery")
+			input := NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: "origin/" + branch}
+			assessment, err := AssessCompactGateTarget(context.Background(), repo, state, input)
+			if tt.wantExact && (err != nil || assessment.Applicability != CompactGateTargetExact) {
+				t.Fatalf("delivery assessment = %#v, %v", assessment, err)
+			}
+			if !tt.wantExact && err == nil && assessment.Applicability == CompactGateTargetExact {
+				t.Fatalf("inexact delivery assessment = %#v", assessment)
+			}
+			got := EvaluateCompactGate(context.Background(), repo, receipt, input)
+			if tt.wantAllow && (got.Result != GateAllow || !got.Context.BaseRelationshipValid) {
+				t.Fatalf("exact squashed delivery = %#v", got)
+			}
+			if !tt.wantAllow && got.Result == GateAllow {
+				t.Fatalf("inexact delivery = %#v", got)
+			}
+		})
 	}
 }
 

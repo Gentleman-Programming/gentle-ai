@@ -788,6 +788,13 @@ func snapshotsEqual(previous, next Snapshot) bool {
 		equalStrings(previous.Paths, next.Paths)
 }
 
+// SnapshotsEqualExact is the public post-check seam. Unlike the historical
+// store comparison above it includes every Snapshot field, including
+// UnbornHead, so a source-mutating verifier cannot silently change its subject.
+func SnapshotsEqualExact(previous, next Snapshot) bool {
+	return previous.UnbornHead == next.UnbornHead && snapshotsEqual(previous, next)
+}
+
 func validInitialStoreRecord(record Record) bool {
 	if record.Operation != "review/start" || record.PreviousRevision != "" {
 		return false

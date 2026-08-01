@@ -11,20 +11,20 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
-	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/internal/skillregistry"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/tui"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
-	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
-	"github.com/gentleman-programming/gentle-ai/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/skillregistry"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
 
 // Version is set from main via ldflags at build time.
@@ -69,7 +69,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 	// --yes as a global CLI flag for self-update is handled via GENTLE_AI_YES=1.
 	// Per-subcommand --yes flags (e.g. restore --yes) are parsed by each subcommand.
 
-	// Info commands: no system detection, no self-update, no platform validation.
+	// Platform-independent commands: no system detection, self-update, or
+	// platform validation.
 	if len(args) > 0 {
 		switch args[0] {
 		case "version", "--version", "-v":
@@ -97,6 +98,11 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
 		case "review":
+			// The kill switch must stay reachable even when review authority
+			// itself is disabled, so it is dispatched ahead of the facade.
+			if len(args) >= 2 && args[1] == "mode" {
+				return cli.RunReviewMode(args[2:], stdout)
+			}
 			return cli.RunReview(args[1:], stdout)
 		case "review-start":
 			return cli.RunReviewStart(args[1:], stdout)

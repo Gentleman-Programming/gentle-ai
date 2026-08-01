@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/internal/sddstatus"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
 func TestNegotiatedReviewFailuresUseOneEnvelopeAcrossRoutes(t *testing.T) {
@@ -60,7 +60,7 @@ func TestNegotiatedReviewContractFailuresArePreMutationAndLegacyErrorsStayCompat
 		args []string
 		code string
 	}{
-		{name: "capabilities unsupported", args: []string{"capabilities", "--contract", "gentle-ai.review-integration/v2"}, code: "unsupported_contract"},
+		{name: "capabilities unsupported", args: []string{"capabilities", "--contract", "gentle-ai.review-integration/v3"}, code: "unsupported_contract"},
 		{name: "start empty", args: []string{"start", "--contract="}, code: "empty_contract"},
 		{name: "finalize malformed", args: []string{"finalize", "--contract"}, code: "invalid_request"},
 	}
@@ -85,6 +85,18 @@ func TestNegotiatedReviewContractFailuresArePreMutationAndLegacyErrorsStayCompat
 	var publicErr *ReviewIntegrationFailureError
 	if errors.As(err, &publicErr) {
 		t.Fatalf("unnegotiated error became negotiated: %v", err)
+	}
+}
+
+func TestNegotiatedReviewV2FailureUsesSuccessorEnvelope(t *testing.T) {
+	var output bytes.Buffer
+	err := RunReview([]string{"start", "--contract", ReviewIntegrationContractV2, "unexpected"}, &output)
+	if err == nil {
+		t.Fatal("invalid v2 request succeeded")
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Schema != ReviewIntegrationFailureSchemaV2 || failure.Contract != ReviewIntegrationContractV2 || failure.Code != "invalid_request" {
+		t.Fatalf("v2 failure = %#v", failure)
 	}
 }
 
@@ -130,7 +142,13 @@ func TestNegotiatedReviewFailuresPreserveRequestedLineage(t *testing.T) {
 	receiptConflict := newReviewIntegrationFailure(
 		ReviewIntegrationOperationFinalize,
 		[]string{"--lineage", lineage},
-		newFacadeReceiptPublicationError(lineage, "", &reviewtransaction.ImmutablePublicationConflictError{Cause: errors.New("conflict")}),
+		// review_facade.go:1516,1685,1734,1738,1741 (organic-dx Phase 5 task
+		// 5.5): newFacadeReceiptPublicationError now threads ctx/root to
+		// generate a tool-fault defect report on a genuine conflict; "." is
+		// not a real repository, so report generation fails closed to an
+		// empty clause here, which is exactly what this test already
+		// asserts nothing about (it never pinned the exact .Error() text).
+		newFacadeReceiptPublicationError(context.Background(), ".", lineage, "", &reviewtransaction.ImmutablePublicationConflictError{Cause: errors.New("conflict")}),
 	)
 	if receiptConflict.Code != "receipt_publication_conflict" || receiptConflict.MutationOutcome != ReviewMutationCommitted ||
 		receiptConflict.Replayability != reviewtransaction.ReplayabilityManualActionRequired || receiptConflict.RetrySafe ||
@@ -555,6 +573,26 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 	}
 }
 
+// TestNegotiatedStoreLockPreAcquisitionFailureIsNotStarted proves 1781: a
+// failure that happens before the authoritative store lock is acquired must
+// classify as not-started, exactly like the pre-mutation Git failure family,
+// instead of falling through to the generic unknown-mutation catch-all.
+func TestNegotiatedStoreLockPreAcquisitionFailureIsNotStarted(t *testing.T) {
+	err := &reviewtransaction.StoreLockPreAcquisitionError{Err: errors.New("permission denied")}
+	failure := newReviewIntegrationFailure("review.start", []string{"--lineage", "review-lock-boundary"}, err)
+	// organic-dx Phase 3b task 3b.5: this is advisory lock contention, not
+	// damage — the same wait-and-retry route authority_lock_timeout already
+	// names, contrasted here since previously this refusal named nothing.
+	if failure.Code != "store_lock_unavailable" || failure.Phase != "pre_native" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe ||
+		failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "retry_with_bounded_backoff" {
+		t.Fatalf("pre-lock-acquisition failure = %#v, want a not-started, retry-with-bounded-backoff classification", failure)
+	}
+	if !strings.Contains(failure.Message, "permission denied") {
+		t.Fatalf("pre-lock-acquisition failure message masks cause: %q", failure.Message)
+	}
+}
+
 func TestNegotiatedStatusProcessControlFailureIsTypedAndDiagnosable(t *testing.T) {
 	originalRunner := reviewFacadeCommandRunner
 	t.Cleanup(func() { reviewFacadeCommandRunner = originalRunner })
@@ -676,9 +714,12 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 	t.Cleanup(func() { reviewFacadeCommittedTransitionHook = oldTransitionHook })
 
 	tracePath := filepath.Join(t.TempDir(), "finalize-trace.jsonl")
+	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, []string{resultPath}); err != nil {
+		t.Fatalf("capture reviewer result: %v", err)
+	}
 	args := []string{
 		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
-		"--result", resultPath, "--correction-lines", "2", "--validation", validationPath, "--trace", tracePath,
+		"--captured-results=true", "--correction-lines", "2", "--validation", validationPath, "--trace", tracePath,
 	}
 	var output bytes.Buffer
 	if err := RunReview(args, &output); err == nil {
@@ -818,9 +859,14 @@ func TestNegotiatedLegacyReadOnlyFailurePreservesTypedCauseAcrossMutationRoutes(
 			if err := failure.Validate(); err != nil {
 				t.Fatal(err)
 			}
+			// organic-dx Phase 3b task 3b.4: the negotiated envelope now
+			// carries the same "choose a new lineage for compact authority"
+			// route the non-negotiated START collision already names
+			// (review_facade.go:1080), instead of a bare stop.
 			if failure.Code != reviewtransaction.LegacyReadOnlyErrorCode || failure.MutationOutcome != ReviewMutationNotStarted ||
 				failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityNotReplayable ||
-				failure.NextAction != "stop" || strings.Contains(failure.Message, secret) || strings.Contains(failure.Message, "/tmp/") {
+				failure.NextAction != "review.start" || !strings.Contains(failure.Message, "choose a new lineage for compact authority") ||
+				strings.Contains(failure.Message, secret) || strings.Contains(failure.Message, "/tmp/") {
 				t.Fatalf("legacy negotiated failure = %#v", failure)
 			}
 			publicErr := newReviewIntegrationFailureError(failure, runErr)
@@ -873,7 +919,7 @@ func TestNegotiatedReceiptPublicationFailureIsSanitizedAndExactlyReplayable(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	finalizeArgs := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, started)...)
+	finalizeArgs := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, repo, started)...)
 	if err := RunReviewFacadeFinalize(finalizeArgs, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -1029,6 +1075,33 @@ func TestReviewIntegrationFailureMapsTargetResolutionBeforeGateDenial(t *testing
 	}
 	if err := failure.Validate(); err != nil {
 		t.Fatalf("target-resolution failure validation = %v", err)
+	}
+}
+
+// TestNewReviewIntegrationFailureCause is the RED-first proof for 1666/1807:
+// the operation_outcome_unknown default envelope used to discard the real
+// native cause behind a fixed placeholder message. Code, Message, and
+// MutationOutcome stay byte-identical; the wrapped cause is now additive.
+func TestNewReviewIntegrationFailureCause(t *testing.T) {
+	runErr := errors.New("unexpected native repository state: dangling worktree lock file")
+	failure := newReviewIntegrationFailure("review.start", nil, runErr)
+	if failure.Code != "operation_outcome_unknown" || failure.Phase != "native_running" ||
+		failure.MutationOutcome != ReviewMutationUnknown ||
+		failure.Message != "The negotiated review operation failed without authoritative mutation evidence." {
+		t.Fatalf("operation_outcome_unknown envelope changed byte-identical fields = %#v", failure)
+	}
+	if failure.Cause != runErr.Error() {
+		t.Fatalf("failure.Cause = %q, want the wrapped native cause %q", failure.Cause, runErr.Error())
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatalf("operation_outcome_unknown failure with cause validation = %v", err)
+	}
+
+	// The read-only catch-all stays content-free: it must never leak the raw
+	// cause, which is exactly why it resets the message to a canned string.
+	readOnly := newReviewIntegrationFailure("review.status", nil, runErr)
+	if readOnly.Cause != "" {
+		t.Fatalf("read-only catch-all leaked cause = %q", readOnly.Cause)
 	}
 }
 

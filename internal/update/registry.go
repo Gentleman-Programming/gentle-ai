@@ -22,9 +22,14 @@ var Tools = []ToolInfo{
 		DetectCmd:     nil, // version comes from build-time ldflags (app.Version)
 		VersionPrefix: "v",
 		// gentle-ai: Homebrew when the package is brew-owned, authenticated binary
-		// release download on Linux/macOS, and a source-install fallback on Windows
-		// while official Windows distribution is intentionally omitted.
+		// release download on Linux/macOS, and `go install` on Windows, where no
+		// official signed binary is published.
 		InstallMethod: InstallBinary,
+		// GoImportPath is what makes the Windows self-upgrade possible. It is
+		// deliberately NOT a general opt-in to go-install: effectiveMethod routes
+		// gentle-ai on Linux/macOS to InstallBinary regardless of this field, so
+		// those platforms keep the minisign-verified release download.
+		GoImportPath: "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai",
 	},
 	{
 		Name:              "engram",

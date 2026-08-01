@@ -300,6 +300,121 @@ func TestHistoricalFailedValidatorRequiresChangedTargetRecovery(t *testing.T) {
 	}
 }
 
+// TestAccountingOnlyEscalationStatusOffersRecoveryInsteadOfDeadEndStop proves
+// the routing dead end: an escalated authority whose original review and
+// correction regression both passed, and whose target has not changed since
+// escalation, is a candidate the native store accepts via the evidence-bound
+// RecoveryEscalated edge. STATUS must offer that continuation instead of
+// stopping the operator on a target that never changed.
+func TestAccountingOnlyEscalationStatusOffersRecoveryInsteadOfDeadEndStop(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := accountingOnlyEscalatedState(t, repo, "accounting-only-status-dead-end")
+	_, record := persistEscalatedRecoveryFixture(t, repo, state)
+
+	target := Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}
+	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target, LineageID: state.LineageID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Action != TargetStatusActionRecover || status.ActionDisposition != RecoveryEscalated {
+		t.Fatalf("accounting-only escalation with an unchanged target = %#v, want an offered evidence-bound recovery continuation", status)
+	}
+
+	successor := recoveredEvidenceSuccessor(t, repo, state, "accounting-only-status-dead-end-successor")
+	const actor, reason = "maintainer@example.com", "recover accounting-only escalation with an unchanged target"
+	authorization := compactRecoveryAuthorizationBinding(state.LineageID, record.Revision, successor.InitialSnapshot.Identity, actor, reason)
+	recovered, err := RecoverCompactAuthority(context.Background(), repo, CompactRecoveryRequest{
+		PredecessorLineageID: state.LineageID, ExpectedPredecessorRevision: record.Revision,
+		Successor: successor, Disposition: RecoveryEscalated, Reason: reason, Actor: actor,
+		MaintainerAuthorization: authorization,
+	})
+	if err != nil {
+		t.Fatalf("evidence-bound recovery: %v", err)
+	}
+	if err := validateCompactRecoveryEdge(record, recovered.State); err != nil {
+		t.Fatalf("directly-constructed evidence-bound escalated recovery successor did not validate: %v", err)
+	}
+}
+
+// TestFailedCriteriaEscalationStatusStillStopsWithUnchangedTarget proves the
+// accounting-only routing fix stays scoped: an escalation caused by a failed
+// original-review or correction-regression criterion, not by accounting
+// alone, must never match compactAccountingOnlyEscalation and must keep
+// stopping the operator when its target has not changed.
+func TestFailedCriteriaEscalationStatusStillStopsWithUnchangedTarget(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfour\n")
+	state := newCompactTestState(t, repo, "failed-criteria-status-dead-end")
+	if state.CorrectionBudget < 2 || len(state.SelectedLenses) != 1 {
+		t.Fatalf("fixture risk/budget = %q/%d", state.RiskLevel, state.CorrectionBudget)
+	}
+	finding := Finding{
+		ID: "R3-001", Lens: "reliability", Location: "tracked.txt:5", Severity: "CRITICAL",
+		Claim: "candidate retains the wrong value", ProofRefs: []string{"candidate-only differential failure"},
+	}
+	if err := state.CompleteReview(CompactReviewInput{
+		LensResults:     []LensResult{{Lens: state.SelectedLenses[0], Findings: []Finding{finding}, Evidence: []string{"reviewed exact candidate tree"}}},
+		Classifications: []FindingEvidence{{FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk"}},
+		RefuterOutcomes: []EvidenceResult{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.BeginCorrection(1); err != nil {
+		t.Fatal(err)
+	}
+	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\n")
+	fix, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetFixDiff, Projection: state.InitialSnapshot.Projection, BaseRef: state.CurrentSnapshot.CandidateTree,
+		IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixHash := FixDeltaHashForSnapshot(fix)
+	validation := bindTargetedValidationForTest(ScopedValidationResult{
+		LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
+		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true},
+		CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: false},
+	}, fix)
+	if err := state.CompleteCorrection(fix, 1, validation); err != nil {
+		t.Fatal(err)
+	}
+	if state.State != StateEscalated {
+		t.Fatalf("fixture state = %q, want escalated", state.State)
+	}
+	if compactAccountingOnlyEscalation(state) {
+		t.Fatalf("failed-criteria escalation must never match the accounting-only predicate: %#v", state)
+	}
+	_, record := persistEscalatedRecoveryFixture(t, repo, state)
+
+	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+		Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: state.LineageID,
+	})
+	if err != nil || status.Action != TargetStatusActionStop || status.ActionDisposition != "" || status.Revision != record.Revision {
+		t.Fatalf("failed-criteria escalation status with an unchanged target = %#v, err=%v, want a terminal stop", status, err)
+	}
+}
+
+// TestAccountingOnlyEscalationRecoveryStillRequiresMaintainerAuthorization
+// proves the offered continuation still routes through the native
+// maintainer-authorization gate; STATUS names a disposition, it never
+// bypasses the authorization the recovery edge demands.
+func TestAccountingOnlyEscalationRecoveryStillRequiresMaintainerAuthorization(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := accountingOnlyEscalatedState(t, repo, "accounting-only-auth-required")
+	_, record := persistEscalatedRecoveryFixture(t, repo, state)
+	successor := recoveredEvidenceSuccessor(t, repo, state, "accounting-only-auth-required-successor")
+	const actor, reason = "maintainer@example.com", "recover accounting-only escalation"
+	_, err := RecoverCompactAuthority(context.Background(), repo, CompactRecoveryRequest{
+		PredecessorLineageID: state.LineageID, ExpectedPredecessorRevision: record.Revision,
+		Successor: successor, Disposition: RecoveryEscalated, Reason: reason, Actor: actor,
+		MaintainerAuthorization: "wrong-authorization",
+	})
+	if err == nil || !errors.Is(err, errCompactRecoveryAuthorizationInexact) {
+		t.Fatalf("accounting-only recovery without exact maintainer authorization = %v, want authorization error", err)
+	}
+}
+
 func TestCorrectionScopeExpansionGuidesStatusAndStartToRecovery(t *testing.T) {
 	repo, predecessor, _, _ := correctionScopeRecoveryFixture(t, "review-correction-expansion")
 	writeSnapshotFile(t, repo, "process_helper.go", "package processhelper\n")
@@ -633,6 +748,98 @@ func TestAssessTargetStatusMatchesCorrectedLegacyDelivery(t *testing.T) {
 	}
 }
 
+// TestAssessTargetStatusReportsPluralStaleLineagesAsUnrelatedWithOptionalRecovery
+// is the positive proof for organic-dx Phase 3e: zero EXACTLY governing
+// candidates plus 2+ stale (scope-changed) lineages must never decide
+// anything by itself. It reports the identical "nothing governs, start
+// fresh" shape a genuinely empty candidate set already reports, not
+// ambiguity/select_lineage. The stale lineages stay listed in
+// CandidateLineageIDs purely so recovering one of them remains a
+// discoverable OPTION, never a required disambiguation chore forced by
+// history alone.
+func TestAssessTargetStatusReportsPluralStaleLineagesAsUnrelatedWithOptionalRecovery(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
+	writeApprovedTargetStatusHistory(t, repo, 2)
+	gitSnapshot(t, repo, "add", "-A")
+	gitSnapshot(t, repo, "commit", "-m", "deliver reviewed candidate")
+	writeSnapshotFile(t, repo, "tracked.txt", "related follow-up\n")
+
+	got, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Applicability != TargetApplicabilityUnrelated || got.Action != TargetStatusActionStart ||
+		got.Replayability != ReplayabilityNotReplayable || got.LineageID != "" {
+		t.Fatalf("plural stale status = %#v", got)
+	}
+	if !equalStrings(got.CandidateLineageIDs, []string{"status-history-000", "status-history-001"}) {
+		t.Fatalf("plural stale candidate lineages = %#v", got.CandidateLineageIDs)
+	}
+}
+
+// TestAssessTargetStatusKeepsSingleStaleLineageUnrelatedWithoutCandidateListing
+// is negative proof #2 for organic-dx Phase 3e: exactly ONE stale
+// (scope-changed) lineage must remain byte-identical to today's shape — the
+// correction targets 2+ stale lineages only.
+func TestAssessTargetStatusKeepsSingleStaleLineageUnrelatedWithoutCandidateListing(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
+	writeApprovedTargetStatusHistory(t, repo, 1)
+	gitSnapshot(t, repo, "add", "-A")
+	gitSnapshot(t, repo, "commit", "-m", "deliver reviewed candidate")
+	writeSnapshotFile(t, repo, "tracked.txt", "related follow-up\n")
+
+	got, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Applicability != TargetApplicabilityUnrelated || got.Action != TargetStatusActionStart ||
+		got.Replayability != ReplayabilityNotReplayable || got.LineageID != "" || len(got.CandidateLineageIDs) != 0 {
+		t.Fatalf("single stale status = %#v", got)
+	}
+}
+
+// TestAssessTargetStatusKeepsExactAmbiguityWhenStaleLineagesAlsoExist is
+// negative proof #1 for organic-dx Phase 3e: 2+ EXACTLY governing candidates
+// remain ambiguous/select_lineage even when stale lineages exist alongside
+// them. That is present-tense competing authority — real damage the fix must
+// never mask.
+func TestAssessTargetStatusKeepsExactAmbiguityWhenStaleLineagesAlsoExist(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
+	writeApprovedTargetStatusHistory(t, repo, 2)
+	gitSnapshot(t, repo, "add", "-A")
+	gitSnapshot(t, repo, "commit", "-m", "deliver reviewed candidate")
+	writeSnapshotFile(t, repo, "tracked.txt", "different candidate\n")
+	storeCompactStartAuthority(t, repo, newCompactTestState(t, repo, "review-exact-b"))
+	storeCompactStartAuthority(t, repo, newCompactTestState(t, repo, "review-exact-a"))
+
+	got, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Applicability != TargetApplicabilityAmbiguous || got.Action != TargetStatusActionSelectLineage ||
+		!equalStrings(got.CandidateLineageIDs, []string{"review-exact-a", "review-exact-b"}) {
+		t.Fatalf("mixed exact+stale status = %#v", got)
+	}
+}
+
+// TestAssessTargetStatusReportsAmbiguousApprovedStagedScopeExpansion is
+// UNCHANGED by organic-dx Phase 3e and stays here as a negative-proof
+// companion: both "staged-status-first" and "staged-status-second" are
+// independently eligible for `compactApprovedStagedScopeRecovery` (a real,
+// per-candidate recovery match, not the generic scope-changed classifier),
+// so both land in `candidates`, not `scopeChangedCandidates`. That is 2+
+// EXACTLY governing/recoverable candidates competing for the same staged
+// scope-expansion recovery slot — present-tense authority damage — and must
+// stay ambiguous/select_lineage exactly as before. (Initially mis-suspected
+// as an instance of the stale-only bug during Phase 3e; empirically verified
+// via RED/GREEN to be a structurally different, legitimate bucket, so this
+// test is intentionally left untouched.)
 func TestAssessTargetStatusReportsAmbiguousApprovedStagedScopeExpansion(t *testing.T) {
 	repo, base, predecessor, _, _ := approvedBaseDiffScopeRecoveryFixture(t, "staged-status-first")
 	peer := predecessor
@@ -650,6 +857,46 @@ func TestAssessTargetStatusReportsAmbiguousApprovedStagedScopeExpansion(t *testi
 	if got.Applicability != TargetApplicabilityAmbiguous || got.Action != TargetStatusActionSelectLineage ||
 		!equalStrings(got.CandidateLineageIDs, []string{"staged-status-first", "staged-status-second"}) {
 		t.Fatalf("ambiguous staged scope status = %#v", got)
+	}
+}
+
+// TestAssessTargetStatusReportsPluralStaleStagedOverlayLineagesAsUnrelatedWithStop
+// is the positive proof that organic-dx Phase 3e's fix composes correctly
+// with the live overlay+staged safety stop. Unlike
+// TestAssessTargetStatusReportsAmbiguousApprovedStagedScopeExpansion (which
+// queries status against the SAME base the review used, matching
+// compactApprovedStagedScopeRecoveryShape's per-candidate recovery match),
+// this queries against a base that already advanced past the reviewed diff
+// (its immutable review content was already committed to HEAD before the
+// review even started, matching approvedBaseDiffScopeRecoveryFixture's own
+// construction). That breaks the recovery shape's
+// `next.BaseTree == initial.BaseTree` requirement, so both lineages fall
+// through to the generic scope-changed classifier instead — the actual bug
+// this phase fixes. The overlay+staged safety stop
+// (TargetStatusActionStop / ReplayabilityManualActionRequired) still
+// applies: it is the identical live-projection safety check the
+// zero-candidate branch already performs, unrelated to lineage history.
+// Both stale lineages stay listed as optional recovery candidates.
+func TestAssessTargetStatusReportsPluralStaleStagedOverlayLineagesAsUnrelatedWithStop(t *testing.T) {
+	repo, _, predecessor, _, _ := approvedBaseDiffScopeRecoveryFixture(t, "staged-overlay-stale-first")
+	peer := predecessor
+	peer.LineageID = "staged-overlay-stale-second"
+	writeTerminalTargetStatusAuthority(t, repo, peer)
+	reviewedBase := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "docs/candidate.md", "# Candidate\nexpanded again\n")
+	gitSnapshot(t, repo, "add", "docs/candidate.md")
+
+	got, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: Target{
+		Kind: TargetBaseWorkspaceOverlay, Projection: ProjectionStaged,
+		BaseRef: reviewedBase, IntendedUntracked: []string{},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Applicability != TargetApplicabilityUnrelated || got.Action != TargetStatusActionStop ||
+		got.Replayability != ReplayabilityManualActionRequired ||
+		!equalStrings(got.CandidateLineageIDs, []string{"staged-overlay-stale-first", "staged-overlay-stale-second"}) {
+		t.Fatalf("plural stale staged overlay status = %#v", got)
 	}
 }
 
@@ -1481,8 +1728,10 @@ func TestAssessTargetStatusStopsSecondArtifactReadOnDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || got.Applicability == TargetApplicabilityCorrupted {
 		t.Fatalf("deadline second artifact read status = %#v, error = %T %v", got, err, err)
 	}
-	if calls != 1 {
-		t.Fatalf("deadline second artifact read calls = %d, want 1", calls)
+	// The same deadline covers Git-backed snapshot setup, so a slow runner may
+	// exhaust it before the first authority observation. No second read may start.
+	if calls > 1 {
+		t.Fatalf("deadline second artifact read calls = %d, want at most 1", calls)
 	}
 }
 
@@ -1584,8 +1833,10 @@ func TestAssessTargetStatusStopsStableReadOnDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || got.Applicability == TargetApplicabilityCorrupted {
 		t.Fatalf("deadline coherent read status = %#v, error = %T %v", got, err, err)
 	}
-	if calls != 1 {
-		t.Fatalf("deadline coherent read attempts = %d, want 1", calls)
+	// The same deadline covers Git-backed snapshot setup, so a slow runner may
+	// exhaust it before the first authority observation. No second attempt may start.
+	if calls > 1 {
+		t.Fatalf("deadline coherent read attempts = %d, want at most 1", calls)
 	}
 }
 

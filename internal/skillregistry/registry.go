@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 )
 
 const (
 	RegistryRelPath = ".atl/skill-registry.md"
 	CacheRelPath    = ".atl/.skill-registry.cache.json"
-	RegistrySchema  = 4
+	RegistrySchema  = 5
 	sectionMarker   = "## Skills"
 	atlIgnoreEntry  = ".atl/"
 )
@@ -68,6 +68,8 @@ func UserSkillDirs(home string) []string {
 		filepath.Join(home, ".claude", "skills"),
 		filepath.Join(home, ".gemini", "skills"),
 		filepath.Join(home, ".gemini", "antigravity", "skills"),
+		filepath.Join(home, ".gemini", "antigravity-desktop", "skills"),
+		filepath.Join(home, ".gemini", "antigravity-cli", "skills"),
 		filepath.Join(home, ".cursor", "skills"),
 		filepath.Join(home, ".copilot", "skills"),
 		filepath.Join(home, ".codex", "skills"),
@@ -224,7 +226,13 @@ func Fingerprint(files []string) string {
 			lines = append(lines, file+":missing")
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("%s:%d:%d", file, info.ModTime().UnixNano(), info.Size()))
+		data, err := os.ReadFile(file)
+		if err != nil {
+			lines = append(lines, file+":unreadable")
+			continue
+		}
+		contentSum := sha1.Sum(data)
+		lines = append(lines, fmt.Sprintf("%s:%d:%d:%x", file, info.ModTime().UnixNano(), info.Size(), contentSum))
 	}
 	sort.Strings(lines)
 	sum := sha1.Sum([]byte(strings.Join(lines, "\n")))

@@ -56,6 +56,7 @@
     },
     "next_action": {"enum": ["correct_request", "retry", "retry_with_bounded_backoff", "review.status", "review.finalize", "review.repair", "review.bind_sdd", "explicit-maintainer-action", "stop"]},
     "cause_category": {"enum": ["inventory_io_or_layout", "lock_ambiguous", "reset_residue", "record_or_graph_invalid", "inventory_incomplete"]},
+    "cause": {"type": "string", "minLength": 1, "maxLength": 4000, "pattern": "^[^\\r\\n]+$"},
     "context": {"$ref": "#/$defs/gate_context"}
   },
   "allOf": [

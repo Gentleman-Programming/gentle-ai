@@ -7,7 +7,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestReviewFacadeKeepsInvalidatedAuthorityNonPoisoningAndNonUsable(t *testing.T) {

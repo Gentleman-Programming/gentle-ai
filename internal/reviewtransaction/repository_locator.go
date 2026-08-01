@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -22,6 +23,10 @@ const (
 	reviewRepositoryContextHandlePrefix = "rctx1_"
 	reviewRepositoryLocatorMaxBytes     = 64 << 10
 )
+
+// ErrRepositoryIdentityChanged reports that a live repository no longer
+// matches the exact filesystem identity captured by its lease.
+var ErrRepositoryIdentityChanged = errors.New("repository identity changed")
 
 // ReviewRepositoryContextBinding is the public, path-free portion of a
 // provider-issued repository context. The handle is discovery only: current
@@ -39,9 +44,39 @@ type reviewRepositoryIdentityRecord struct {
 	RepositoryIdentity string `json:"repository_identity"`
 }
 
+// RepositoryIdentity is the exact Git worktree identity bound by a
+// RepositoryIdentityLease. RepositoryRef preserves the existing canonical
+// sha256 reference used by review authority records.
+type RepositoryIdentity struct {
+	RepositoryRoot string
+	GitCommonDir   string
+	GitDir         string
+	RepositoryRef  string
+}
+
 type reviewRepositoryDirectoryIdentity struct {
 	path string
 	info fs.FileInfo
+}
+
+type reviewRepositoryControlIdentity struct {
+	path       string
+	info       fs.FileInfo
+	payload    []byte
+	hasPayload bool
+}
+
+// RepositoryIdentityLease is an immutable, read-only binding to one exact Git
+// worktree. Callers retain the pointer and validate it immediately around
+// authority operations that must fail closed across Git metadata replacement.
+type RepositoryIdentityLease struct {
+	identity      RepositoryIdentity
+	storageKey    string
+	root          reviewRepositoryDirectoryIdentity
+	commonDir     reviewRepositoryDirectoryIdentity
+	gitDir        reviewRepositoryDirectoryIdentity
+	gitControl    reviewRepositoryControlIdentity
+	commonControl *reviewRepositoryControlIdentity
 }
 
 type reviewRepositoryContextFile struct {
@@ -54,6 +89,65 @@ type reviewRepositoryContextFile struct {
 	RepositoryRoot     string `json:"repository_root"`
 	GitCommonDir       string `json:"git_common_dir"`
 	GitDir             string `json:"git_dir"`
+}
+
+// OpenRepositoryIdentityLease resolves and captures one exact Git worktree
+// without creating repository or authority storage.
+func OpenRepositoryIdentityLease(ctx context.Context, repo string) (*RepositoryIdentityLease, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return openRepositoryIdentityLeaseAtRoot(ctx, root)
+}
+
+// Identity returns the immutable value identity captured by the lease.
+func (lease *RepositoryIdentityLease) Identity() RepositoryIdentity {
+	if lease == nil {
+		return RepositoryIdentity{}
+	}
+	return lease.identity
+}
+
+// StorageKey returns the repository reference digest as a path-safe,
+// lowercase 64-hex segment without the sha256 prefix.
+func (lease *RepositoryIdentityLease) StorageKey() string {
+	if lease == nil {
+		return ""
+	}
+	return lease.storageKey
+}
+
+// Validate proves that the exact root, Git directories, and Git control
+// entries captured by the lease are still live and resolve to the same
+// canonical repository reference.
+func (lease *RepositoryIdentityLease) Validate(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if lease == nil || !validRepositoryIdentityLease(lease) {
+		return errors.New("repository identity lease is not initialized")
+	}
+	if err := lease.validateCapturedIdentity(); err != nil {
+		return repositoryIdentityChanged(err)
+	}
+	live, err := openRepositoryIdentityLeaseAtRoot(ctx, lease.identity.RepositoryRoot)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return repositoryIdentityChanged(err)
+	}
+	if live.identity != lease.identity || live.storageKey != lease.storageKey {
+		return repositoryIdentityChanged(errors.New("canonical repository reference changed"))
+	}
+	if err := lease.validateCapturedIdentity(); err != nil {
+		return repositoryIdentityChanged(err)
+	}
+	return nil
 }
 
 // DeriveReviewRepositoryContextHandle derives the path-free handle that START
@@ -182,7 +276,15 @@ func ResolveReviewRepositoryContext(ctx context.Context, handle string, binding 
 		return "", errors.New("review repository context identity is invalid")
 	}
 	live, err := reviewRepositoryIdentity(ctx, stored.RepositoryRoot)
-	if err != nil || !sameLocatorDirectory(stored.RepositoryRoot, live.RepositoryRoot) ||
+	if err != nil {
+		// Preserve the exact underlying cause behind the unchanged public
+		// message. A caller cannot distinguish an environmental refusal that
+		// no review action can repair (Git declining the repository outright,
+		// for example for ownership reasons) from a genuine identity change
+		// once the cause has been flattened into prose.
+		return "", &reviewRepositoryContextIdentityError{cause: err}
+	}
+	if !sameLocatorDirectory(stored.RepositoryRoot, live.RepositoryRoot) ||
 		!sameLocatorDirectory(stored.GitCommonDir, live.GitCommonDir) ||
 		!sameLocatorDirectory(stored.GitDir, live.GitDir) || live.RepositoryIdentity != stored.RepositoryIdentity {
 		return "", errors.New("review repository context identity changed")
@@ -192,6 +294,18 @@ func ResolveReviewRepositoryContext(ctx context.Context, handle string, binding 
 	}
 	return live.RepositoryRoot, nil
 }
+
+// reviewRepositoryContextIdentityError reports that the repository bound by a
+// provider-issued context could not be re-identified. Its message is exactly
+// the historical flattened one, so the public failure surface is unchanged,
+// while Unwrap keeps the real cause reachable through errors.As.
+type reviewRepositoryContextIdentityError struct{ cause error }
+
+func (err *reviewRepositoryContextIdentityError) Error() string {
+	return "review repository context identity changed"
+}
+
+func (err *reviewRepositoryContextIdentityError) Unwrap() error { return err.cause }
 
 func validateLiveReviewRepositoryContext(ctx context.Context, repo string, binding ReviewRepositoryContextBinding) error {
 	store, err := CompactAuthoritativeStore(ctx, repo, binding.LineageID)
@@ -375,60 +489,87 @@ func decodeReviewRepositoryContext(payload []byte, target *reviewRepositoryConte
 }
 
 func reviewRepositoryIdentity(ctx context.Context, repo string) (reviewRepositoryIdentityRecord, error) {
-	if err := ctx.Err(); err != nil {
-		return reviewRepositoryIdentityRecord{}, err
-	}
-	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
+	lease, err := OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
 		return reviewRepositoryIdentityRecord{}, err
 	}
-	return reviewRepositoryIdentityAtRoot(ctx, root)
+	return reviewRepositoryIdentityRecordFromLease(lease), nil
 }
 
 func reviewRepositoryIdentityAtRoot(ctx context.Context, root string) (reviewRepositoryIdentityRecord, error) {
-	if err := ctx.Err(); err != nil {
+	lease, err := openRepositoryIdentityLeaseAtRoot(ctx, root)
+	if err != nil {
 		return reviewRepositoryIdentityRecord{}, err
+	}
+	return reviewRepositoryIdentityRecordFromLease(lease), nil
+}
+
+func openRepositoryIdentityLeaseAtRoot(ctx context.Context, root string) (*RepositoryIdentityLease, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	rootIdentity, err := captureReviewRepositoryDirectory(root)
 	if err != nil {
-		return reviewRepositoryIdentityRecord{}, err
+		return nil, err
 	}
-	control, err := os.Lstat(filepath.Join(rootIdentity.path, ".git"))
+	gitControl, err := captureReviewRepositoryControl(
+		filepath.Join(rootIdentity.path, ".git"),
+		true,
+		true,
+	)
 	if err != nil {
-		return reviewRepositoryIdentityRecord{}, err
+		return nil, err
 	}
-	controlData, _ := os.ReadFile(filepath.Join(rootIdentity.path, ".git"))
 	directories, err := resolveReviewRepositoryDirectories(ctx, rootIdentity.path)
 	if err != nil {
-		return reviewRepositoryIdentityRecord{}, err
+		return nil, err
 	}
 	top, commonDir, gitDir := directories[0], directories[1], directories[2]
 	if !os.SameFile(rootIdentity.info, top.info) {
-		return reviewRepositoryIdentityRecord{}, errors.New("repository root identity changed")
+		return nil, errors.New("repository root identity changed")
 	}
-	if err := validateReviewGitCommonDirectory(gitDir, commonDir); err != nil {
-		return reviewRepositoryIdentityRecord{}, err
+	commonControl, err := captureReviewGitCommonDirectoryControl(gitDir, commonDir)
+	if err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
-		return reviewRepositoryIdentityRecord{}, err
+		return nil, err
 	}
 	for _, directory := range []reviewRepositoryDirectoryIdentity{rootIdentity, top, commonDir, gitDir} {
 		current, statErr := os.Stat(directory.path)
 		if statErr != nil || !current.IsDir() || !os.SameFile(directory.info, current) {
-			return reviewRepositoryIdentityRecord{}, errors.New("repository directory identity changed during resolution")
+			return nil, errors.New("repository directory identity changed during resolution")
 		}
 	}
-	currentControl, controlErr := os.Lstat(filepath.Join(rootIdentity.path, ".git"))
-	currentData, currentDataErr := os.ReadFile(filepath.Join(rootIdentity.path, ".git"))
-	if controlErr != nil || !os.SameFile(control, currentControl) ||
-		control.Mode().IsRegular() && (currentDataErr != nil || !bytes.Equal(controlData, currentData)) {
-		return reviewRepositoryIdentityRecord{}, errors.New("repository Git control entry changed during resolution")
+	if err := validateReviewRepositoryControl(gitControl); err != nil {
+		return nil, errors.New("repository Git control entry changed during resolution")
 	}
-	identity := reviewRepositoryIdentityRecord{
-		RepositoryRoot: rootIdentity.path, GitCommonDir: commonDir.path, GitDir: gitDir.path,
+	if commonControl != nil {
+		if err := validateReviewRepositoryControl(*commonControl); err != nil {
+			return nil, errors.New("repository common-directory control entry changed during resolution")
+		}
 	}
-	identity.RepositoryIdentity = reviewRepositoryIdentityHash(identity)
-	return identity, nil
+	record := reviewRepositoryIdentityRecord{
+		RepositoryRoot: rootIdentity.path,
+		GitCommonDir:   commonDir.path,
+		GitDir:         gitDir.path,
+	}
+	record.RepositoryIdentity = reviewRepositoryIdentityHash(record)
+	storageKey := strings.TrimPrefix(record.RepositoryIdentity, "sha256:")
+	return &RepositoryIdentityLease{
+		identity: RepositoryIdentity{
+			RepositoryRoot: record.RepositoryRoot,
+			GitCommonDir:   record.GitCommonDir,
+			GitDir:         record.GitDir,
+			RepositoryRef:  record.RepositoryIdentity,
+		},
+		storageKey:    storageKey,
+		root:          rootIdentity,
+		commonDir:     commonDir,
+		gitDir:        gitDir,
+		gitControl:    gitControl,
+		commonControl: commonControl,
+	}, nil
 }
 
 func captureReviewRepositoryDirectory(path string) (reviewRepositoryDirectoryIdentity, error) {
@@ -443,6 +584,83 @@ func captureReviewRepositoryDirectory(path string) (reviewRepositoryDirectoryIde
 	return reviewRepositoryDirectoryIdentity{path: canonical, info: info}, nil
 }
 
+func captureReviewRepositoryControl(path string, allowDirectory, allowSymlink bool) (reviewRepositoryControlIdentity, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return reviewRepositoryControlIdentity{}, err
+	}
+	switch {
+	case info.Mode().IsRegular():
+	case allowDirectory && info.IsDir():
+	case allowSymlink && info.Mode()&os.ModeSymlink != 0:
+	default:
+		return reviewRepositoryControlIdentity{}, errors.New("repository Git control entry has an unsupported type")
+	}
+	control := reviewRepositoryControlIdentity{path: filepath.Clean(path), info: info}
+	if !info.IsDir() {
+		control.payload, err = readReviewRepositoryControlPayload(control.path, info)
+		if err != nil {
+			return reviewRepositoryControlIdentity{}, err
+		}
+		control.hasPayload = true
+	}
+	if err := validateReviewRepositoryControl(control); err != nil {
+		return reviewRepositoryControlIdentity{}, err
+	}
+	return control, nil
+}
+
+func readReviewRepositoryControlPayload(path string, info fs.FileInfo) ([]byte, error) {
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(path)
+		if err != nil || len(target) > reviewRepositoryLocatorMaxBytes {
+			return nil, errors.New("repository Git control link is invalid")
+		}
+		current, statErr := os.Lstat(path)
+		if statErr != nil || !os.SameFile(info, current) {
+			return nil, errors.New("repository Git control link changed while reading")
+		}
+		return []byte(target), nil
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("repository Git control entry has no bounded payload")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	opened, statErr := file.Stat()
+	if statErr != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		_ = file.Close()
+		return nil, errors.New("repository Git control file changed while opening")
+	}
+	payload, readErr := io.ReadAll(io.LimitReader(file, reviewRepositoryLocatorMaxBytes+1))
+	closeErr := file.Close()
+	if readErr != nil || closeErr != nil || len(payload) > reviewRepositoryLocatorMaxBytes {
+		return nil, errors.New("repository Git control file is unreadable or oversized")
+	}
+	current, statErr := os.Lstat(path)
+	if statErr != nil || !os.SameFile(opened, current) {
+		return nil, errors.New("repository Git control file changed while reading")
+	}
+	return payload, nil
+}
+
+func validateReviewRepositoryControl(control reviewRepositoryControlIdentity) error {
+	current, err := os.Lstat(control.path)
+	if err != nil || current.Mode().Type() != control.info.Mode().Type() ||
+		!os.SameFile(control.info, current) {
+		return errors.New("repository Git control entry identity changed")
+	}
+	if control.hasPayload {
+		payload, err := readReviewRepositoryControlPayload(control.path, current)
+		if err != nil || !bytes.Equal(payload, control.payload) {
+			return errors.New("repository Git control entry payload changed")
+		}
+	}
+	return nil
+}
+
 func resolveReviewRepositoryDirectory(ctx context.Context, root, selector string) (reviewRepositoryDirectoryIdentity, error) {
 	path, err := resolveGitDirectory(ctx, root, selector)
 	if err != nil {
@@ -454,7 +672,9 @@ func resolveReviewRepositoryDirectory(ctx context.Context, root, selector string
 func resolveReviewRepositoryDirectories(ctx context.Context, root string) ([]reviewRepositoryDirectoryIdentity, error) {
 	output, err := runGit(ctx, root, nil, nil, "rev-parse", "--show-toplevel", "--git-common-dir", "--git-dir")
 	if err != nil {
-		return nil, err
+		// This combined selection includes --show-toplevel, so it is the other
+		// boundary a bare repository reaches first.
+		return nil, bareRepositoryFailure(ctx, root, err)
 	}
 	records := bytes.Split(bytes.TrimSuffix(output, []byte{'\n'}), []byte{'\n'})
 	if len(records) != 3 {
@@ -474,15 +694,26 @@ func resolveReviewRepositoryDirectories(ctx context.Context, root string) ([]rev
 	return directories, nil
 }
 
-func validateReviewGitCommonDirectory(gitDir, commonDir reviewRepositoryDirectoryIdentity) error {
+func captureReviewGitCommonDirectoryControl(
+	gitDir,
+	commonDir reviewRepositoryDirectoryIdentity,
+) (*reviewRepositoryControlIdentity, error) {
 	if os.SameFile(gitDir.info, commonDir.info) {
-		return nil
+		return nil, nil
 	}
-	record, err := os.ReadFile(filepath.Join(gitDir.path, "commondir"))
+	control, err := captureReviewRepositoryControl(
+		filepath.Join(gitDir.path, "commondir"),
+		false,
+		false,
+	)
+	if err != nil {
+		return nil, errors.New("Git common directory relationship is invalid")
+	}
+	record := append([]byte(nil), control.payload...)
 	record = bytes.TrimSuffix(bytes.TrimSuffix(record, []byte{'\n'}), []byte{'\r'})
-	if err != nil || len(record) == 0 || bytes.IndexByte(record, 0) >= 0 || bytes.ContainsAny(record, "\r\n") ||
+	if len(record) == 0 || bytes.IndexByte(record, 0) >= 0 || bytes.ContainsAny(record, "\r\n") ||
 		strings.TrimSpace(string(record)) == "" || bytes.HasPrefix(record, []byte("--")) {
-		return errors.New("Git common directory relationship is invalid")
+		return nil, errors.New("Git common directory relationship is invalid")
 	}
 	path := string(record)
 	if !filepath.IsAbs(path) {
@@ -490,9 +721,9 @@ func validateReviewGitCommonDirectory(gitDir, commonDir reviewRepositoryDirector
 	}
 	resolved, err := captureReviewRepositoryDirectory(path)
 	if err != nil || !os.SameFile(resolved.info, commonDir.info) {
-		return errors.New("Git common directory relationship is invalid")
+		return nil, errors.New("Git common directory relationship is invalid")
 	}
-	return nil
+	return &control, nil
 }
 
 func reviewRepositoryIdentityHash(identity reviewRepositoryIdentityRecord) string {
@@ -503,6 +734,57 @@ func reviewRepositoryIdentityHash(identity reviewRepositoryIdentityRecord) strin
 	}{RepositoryRoot: filepath.Clean(identity.RepositoryRoot), GitCommonDir: filepath.Clean(identity.GitCommonDir), GitDir: filepath.Clean(identity.GitDir)}
 	payload, _ := json.Marshal(preimage)
 	return "sha256:" + identityHash(string(payload))
+}
+
+func reviewRepositoryIdentityRecordFromLease(lease *RepositoryIdentityLease) reviewRepositoryIdentityRecord {
+	identity := lease.Identity()
+	return reviewRepositoryIdentityRecord{
+		RepositoryRoot:     identity.RepositoryRoot,
+		GitCommonDir:       identity.GitCommonDir,
+		GitDir:             identity.GitDir,
+		RepositoryIdentity: identity.RepositoryRef,
+	}
+}
+
+func validRepositoryIdentityLease(lease *RepositoryIdentityLease) bool {
+	if lease == nil || !filepath.IsAbs(lease.identity.RepositoryRoot) ||
+		!filepath.IsAbs(lease.identity.GitCommonDir) || !filepath.IsAbs(lease.identity.GitDir) ||
+		!validSHA256(lease.identity.RepositoryRef) ||
+		len(lease.storageKey) != 64 || lease.storageKey != strings.ToLower(lease.storageKey) ||
+		lease.identity.RepositoryRef != "sha256:"+lease.storageKey {
+		return false
+	}
+	_, err := hex.DecodeString(lease.storageKey)
+	return err == nil
+}
+
+func (lease *RepositoryIdentityLease) validateCapturedIdentity() error {
+	for _, directory := range []reviewRepositoryDirectoryIdentity{
+		lease.root,
+		lease.commonDir,
+		lease.gitDir,
+	} {
+		current, err := os.Stat(directory.path)
+		if err != nil || !current.IsDir() || !os.SameFile(directory.info, current) {
+			return errors.New("repository directory identity changed")
+		}
+	}
+	if err := validateReviewRepositoryControl(lease.gitControl); err != nil {
+		return err
+	}
+	if lease.commonControl != nil {
+		if err := validateReviewRepositoryControl(*lease.commonControl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func repositoryIdentityChanged(cause error) error {
+	if cause == nil {
+		return ErrRepositoryIdentityChanged
+	}
+	return fmt.Errorf("%w: %v", ErrRepositoryIdentityChanged, cause)
 }
 
 func canonicalLocatorDirectory(path string) (string, error) {

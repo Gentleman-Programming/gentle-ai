@@ -571,7 +571,7 @@ func decodeLegacyFixScopeReclaimRecord(payload []byte) (CompactReclaimRecord, er
 
 func validateCommittedLegacyFixScopeReplay(record CompactReclaimRecord, quarantinePath, versionRoot, repository string, request LegacyFixScopeQuarantineRequest) error {
 	proof := record.LegacyFixScopeQuarantine
-	if record.Schema != CompactReclaimRecordSchema || record.Status != CompactReclaimCommitted || record.LineageID != request.LineageID || record.ReclaimedAt.IsZero() || proof == nil || record.InvalidRecoveryEdge != nil || record.MalformedRecoveryAuthorization != nil || record.PristineAbandonment != nil || record.MalformedLegacyFreeze != nil || record.LegacyAliasRepair != nil {
+	if record.Schema != CompactReclaimRecordSchema || record.Status != CompactReclaimCommitted || record.LineageID != request.LineageID || record.ReclaimedAt.IsZero() || proof == nil || record.InvalidRecoveryEdge != nil || record.MalformedRecoveryAuthorization != nil || record.PristineAbandonment != nil || record.IncompleteAbandonment != nil || record.MalformedLegacyFreeze != nil || record.LegacyAliasRepair != nil {
 		return errors.New("review quarantine-legacy-fix-scope refused incomplete or mismatched committed replay record")
 	}
 	if record.SourcePath != filepath.Join(versionRoot, request.LineageID) || record.QuarantinePath != quarantinePath || record.Reason != strings.TrimSpace(request.Reason) || record.Actor != strings.TrimSpace(request.Actor) {

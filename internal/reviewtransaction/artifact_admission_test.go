@@ -1,14 +1,34 @@
 package reviewtransaction
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
 
 func admittedArtifactFixture(t *testing.T) (ArtifactSubject, FrozenCandidateContext, ArtifactAdmissionRequest) {
 	t.Helper()
-	state, revision, context := artifactSubjectFixture(t)
-	subject, err := NewArtifactSubject(state, revision, context, LensReliability, 0, "")
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "internal/a.go", "package internal\n\nconst value = 1\n")
+	writeSnapshotFile(t, repo, "internal/secret.go", "package internal\n")
+	writeSnapshotFile(t, repo, "secret.go", "package secret\n")
+	gitSnapshot(t, repo, "add", "-A", "--")
+	gitSnapshot(t, repo, "commit", "-m", "add admission fixtures")
+	writeSnapshotFile(t, repo, "internal/a.go", "package internal\n\nconst value = 2\n")
+	writeSnapshotFile(t, repo, "internal/b.go", "package internal\n")
+	gitSnapshot(t, repo, "add", "-A", "--")
+	gitSnapshot(t, repo, "commit", "-m", "candidate")
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(t.Context(), Target{Kind: TargetExactRevision, Revision: strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	context, err := (SnapshotBuilder{Repo: repo}).FrozenCandidateContext(t.Context(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := CompactState{LineageID: "review-artifact-subject", SelectedLenses: []string{LensReliability, LensReadability}, InitialSnapshot: snapshot}
+	subject, err := NewArtifactSubject(state, "sha256:"+strings.Repeat("2", 64), context, LensReliability, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +74,7 @@ func TestExtractBoundedSingleJSONObject(t *testing.T) {
 
 func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 	_, _, request := admittedArtifactFixture(t)
-	canonical, admission, err := AdmitArtifact(request)
+	canonical, admission, err := AdmitArtifact(t.Context(), request)
 	if err != nil {
 		t.Fatalf("AdmitArtifact() error = %v", err)
 	}
@@ -78,24 +98,21 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 			r.Result.Evidence = []string{"Inspection blocked: read access denied; no candidate contents were available."}
 		}, decision: ArtifactAdmissionIncomplete},
 		{name: "partial inspection", mutate: func(r *ArtifactAdmissionRequest) { r.Inspection.Paths = []string{"internal/a.go"} }, decision: ArtifactAdmissionIncomplete},
-		{name: "repository path manifest missing", mutate: func(r *ArtifactAdmissionRequest) {
-			r.FrozenContext.repositoryPaths = nil
-		}, decision: ArtifactAdmissionBindingMismatch},
-		{name: "repository path manifest non-canonical", mutate: func(r *ArtifactAdmissionRequest) {
-			r.FrozenContext.repositoryPaths = append([]string{"./not-canonical.go"}, r.FrozenContext.repositoryPaths...)
-		}, decision: ArtifactAdmissionBindingMismatch},
-		{name: "changed path absent from repository manifest", mutate: func(r *ArtifactAdmissionRequest) {
-			r.FrozenContext.repositoryPaths = []string{"internal/a.go"}
+		{name: "repository authority missing", mutate: func(r *ArtifactAdmissionRequest) {
+			r.FrozenContext.repositoryRoot = ""
 		}, decision: ArtifactAdmissionBindingMismatch},
 		{name: "out of scope finding", mutate: func(r *ArtifactAdmissionRequest) { r.Result.Findings[0].Location = "unrelated/old.go:3" }, decision: ArtifactAdmissionOutOfScope},
-		{name: "out of scope proof", mutate: func(r *ArtifactAdmissionRequest) {
-			r.Result.Findings[0].ProofRefs = []string{"diff: unrelated/old.go:3"}
+		{name: "unknown repository proof", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Findings[0].ProofRefs = []string{"diff: missing/old.go:3"}
 		}, decision: ArtifactAdmissionOutOfScope},
-		{name: "root path evidence outside scope", mutate: func(r *ArtifactAdmissionRequest) {
-			r.Result.Evidence = append(r.Result.Evidence, "diff: secret.go:42")
+		{name: "unknown repository evidence", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Evidence = append(r.Result.Evidence, "diff: missing.go:42")
 		}, decision: ArtifactAdmissionOutOfScope},
-		{name: "root path proof outside scope", mutate: func(r *ArtifactAdmissionRequest) {
-			r.Result.Findings[0].ProofRefs = []string{"diff: secret.go:42"}
+		{name: "directory repository evidence does not recurse", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Evidence = append(r.Result.Evidence, "directory: `internal:1`")
+		}, decision: ArtifactAdmissionOutOfScope},
+		{name: "non-canonical repository proof", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Findings[0].ProofRefs = []string{"diff: ./secret.go:42"}
 		}, decision: ArtifactAdmissionOutOfScope},
 		{name: "non ASCII finding id", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings[0].ID = "R3-é"
@@ -105,7 +122,7 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, candidate := admittedArtifactFixture(t)
 			tc.mutate(&candidate)
-			_, admission, err := AdmitArtifact(candidate)
+			_, admission, err := AdmitArtifact(t.Context(), candidate)
 			if err == nil || admission.Decision != tc.decision {
 				t.Fatalf("AdmitArtifact() decision = %q, error = %v; want %q", admission.Decision, err, tc.decision)
 			}
@@ -113,13 +130,250 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 	}
 }
 
-func TestReferenceOutsideScopeRecognizesOnlyStructuredRepositoryPaths(t *testing.T) {
-	allowed := map[string]struct{}{
-		"docs/naïve guide.md": {},
-		"internal/a.go":       {},
-		"main.go":             {},
-		"Makefile":            {},
+// legacyAdmittedArtifactFixture rebinds the shared admission fixture onto a
+// negotiated review-integration/v1 subject, whose identity is the rendered
+// candidate diff rather than the frozen Git trees.
+func legacyAdmittedArtifactFixture(t *testing.T) ArtifactAdmissionRequest {
+	t.Helper()
+	native, frozen, request := admittedArtifactFixture(t)
+	state := CompactState{
+		LineageID: native.LineageID, SelectedLenses: []string{LensReliability, LensReadability},
+		InitialSnapshot: Snapshot{
+			Identity: native.TargetIdentity, BaseTree: frozen.BaseTree, CandidateTree: frozen.CandidateTree,
+			Paths: manifestPaths(frozen.ChangedPathManifest),
+		},
 	}
+	diff, err := NewFrozenCandidateDiff([]byte("diff --git a/internal/a.go b/internal/a.go\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen.LegacyCandidateDiff = &diff
+	subject, err := NewLegacyArtifactSubject(state, native.AuthorityRevision, frozen, LensReliability, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.ExpectedSubject, request.FrozenContext = subject, frozen
+	request.EchoedSubjectHash = subject.SubjectHash
+	return request
+}
+
+// A v1 subject carries no trees by construction, so admission has to bind it
+// through the candidate diff digest. Comparing the blanked trees against the
+// frozen context rejected every legacy capture before it could consume its lens
+// slot, leaving the collect loop to re-offer the same slot forever.
+func TestAdmitArtifactBindsLegacySubjectByCandidateDiff(t *testing.T) {
+	request := legacyAdmittedArtifactFixture(t)
+	canonical, admission, err := AdmitArtifact(t.Context(), request)
+	if err != nil {
+		t.Fatalf("AdmitArtifact() error = %v (decision %q, diagnostic %q)", err, admission.Decision, admission.Diagnostic)
+	}
+	if admission.Decision != ArtifactAdmissionCompleted || admission.ResultHash != canonical.ResultHash {
+		t.Fatalf("admission = %#v, canonical = %#v", admission, canonical)
+	}
+	if err := admission.Validate(request.ExpectedSubject); err != nil {
+		t.Fatalf("admission.Validate() error = %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*ArtifactAdmissionRequest)
+	}{
+		{name: "legacy transport absent", mutate: func(r *ArtifactAdmissionRequest) {
+			r.FrozenContext.LegacyCandidateDiff = nil
+		}},
+		{name: "legacy transport rerendered", mutate: func(r *ArtifactAdmissionRequest) {
+			other, err := NewFrozenCandidateDiff([]byte("diff --git a/internal/b.go b/internal/b.go\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.FrozenContext.LegacyCandidateDiff = &other
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := legacyAdmittedArtifactFixture(t)
+			tc.mutate(&candidate)
+			_, admission, err := AdmitArtifact(t.Context(), candidate)
+			if err == nil || admission.Decision != ArtifactAdmissionBindingMismatch {
+				t.Fatalf("AdmitArtifact() decision = %q, error = %v; want %q",
+					admission.Decision, err, ArtifactAdmissionBindingMismatch)
+			}
+		})
+	}
+}
+
+func TestAdmitArtifactAllowsSupportingProofOutsideChangedManifest(t *testing.T) {
+	_, _, request := admittedArtifactFixture(t)
+	gitSnapshot(t, request.FrozenContext.repositoryRoot, "rm", "--", "secret.go")
+	writeSnapshotFile(t, request.FrozenContext.repositoryRoot, "live-only.go", "package liveonly\n")
+	request.Result.Evidence = append(request.Result.Evidence, "supporting implementation: internal/secret.go:7")
+	request.Result.Findings[0].ProofRefs = []string{"repository proof: secret.go:42"}
+
+	canonical, admission, err := AdmitArtifact(t.Context(), request)
+	if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+		t.Fatalf("AdmitArtifact() = %q, %v; want completed", admission.Decision, err)
+	}
+	if stringIndex(canonical.Evidence, "supporting implementation: internal/secret.go:7") < 0 ||
+		!equalStrings(canonical.Findings[0].ProofRefs, request.Result.Findings[0].ProofRefs) {
+		t.Fatalf("supporting repository proof was not preserved: %#v", canonical)
+	}
+
+	request.Inspection.Paths = append(request.Inspection.Paths, "internal/secret.go")
+	if _, rejected, err := AdmitArtifact(t.Context(), request); err == nil || rejected.Decision != ArtifactAdmissionOutOfScope {
+		t.Fatalf("external proof path became an inspectable candidate path: decision=%q error=%v", rejected.Decision, err)
+	}
+	request.Inspection.Paths = []string{"internal/a.go", "internal/b.go"}
+	request.Result.Evidence = []string{"live-only proof: live-only.go:1"}
+	if _, rejected, err := AdmitArtifact(t.Context(), request); err == nil || rejected.Decision != ArtifactAdmissionOutOfScope {
+		t.Fatalf("live-worktree-only proof was admitted: decision=%q error=%v", rejected.Decision, err)
+	}
+}
+
+// admittedCandidateCausalArtifactFixture builds a request whose single
+// finding is severe and candidate-causal, so AdmitArtifact populates
+// wantCandidateCausalIDs and the request.CandidateCausalFindingIDs
+// comparison in AdmitArtifact actually exercises the 1699 canonicalization
+// seam instead of comparing two empty slices.
+func admittedCandidateCausalArtifactFixture(t *testing.T) ArtifactAdmissionRequest {
+	t.Helper()
+	_, _, request := admittedArtifactFixture(t)
+	request.Result.Findings[0].Severity = "BLOCKER"
+	request.Result.Findings[0].EvidenceClass = EvidenceDeterministic
+	request.Result.Findings[0].CausalDisposition = CausalIntroduced
+	return request
+}
+
+// TestArtifactAdmissionCandidateCausalCanonicalization is the RED-first proof
+// for 1699: the predicate used to compare canonicalized verifiedIDs against
+// the raw submitted CandidateCausalFindingIDs, so a semantically identical but
+// differently formatted submission was misclassified out_of_scope.
+func TestArtifactAdmissionCandidateCausalCanonicalization(t *testing.T) {
+	t.Run("non-canonical submitted order still admits", func(t *testing.T) {
+		request := admittedCandidateCausalArtifactFixture(t)
+		request.CandidateCausalFindingIDs = []string{" R3-001 "}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+			t.Fatalf("AdmitArtifact() = %q, %v; want completed", admission.Decision, err)
+		}
+		if len(admission.CandidateCausalFindingIDs) != 1 || admission.CandidateCausalFindingIDs[0] != "R3-001" {
+			t.Fatalf("admission.CandidateCausalFindingIDs = %v, want canonical [R3-001]", admission.CandidateCausalFindingIDs)
+		}
+	})
+	t.Run("canonicalization error becomes incomplete and names the offending id", func(t *testing.T) {
+		request := admittedCandidateCausalArtifactFixture(t)
+		request.CandidateCausalFindingIDs = []string{"R3-001", "R3-001"}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
+			t.Fatalf("AdmitArtifact() = %q, %v; want incomplete", admission.Decision, err)
+		}
+		if !strings.Contains(admission.Diagnostic, "R3-001") {
+			t.Fatalf("admission.Diagnostic = %q, want the offending id named", admission.Diagnostic)
+		}
+	})
+	t.Run("real set mismatch stays out of scope byte-identical", func(t *testing.T) {
+		request := admittedCandidateCausalArtifactFixture(t)
+		request.CandidateCausalFindingIDs = []string{"R3-999"}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		wantMessage := "candidate-causal findings are not proven by repository-derived changed-line evidence"
+		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope || admission.Diagnostic != wantMessage {
+			t.Fatalf("AdmitArtifact() = %q, %q, %v; want out-of-scope %q", admission.Decision, admission.Diagnostic, err, wantMessage)
+		}
+		var admissionErr *ArtifactAdmissionError
+		if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil {
+			t.Fatalf("candidate-causal error = %v; want structured diagnostic", err)
+		}
+		if admissionErr.Diagnostic.FindingID != "R3-001" ||
+			admissionErr.Diagnostic.Location != "internal/a.go:7" ||
+			admissionErr.Diagnostic.Reason != "line_not_changed_by_candidate" {
+			t.Fatalf("candidate-causal diagnostic = %#v", admissionErr.Diagnostic)
+		}
+	})
+}
+
+func TestAdmitArtifactReturnsStructuredInvalidLocationDiagnostic(t *testing.T) {
+	request := admittedCandidateCausalArtifactFixture(t)
+	request.Result.Findings[0].Location = "internal/a.go:7-9"
+
+	_, admission, err := AdmitArtifact(t.Context(), request)
+	var admissionErr *ArtifactAdmissionError
+	var locationErr *FindingLocationError
+	if admission.Decision != ArtifactAdmissionOutOfScope ||
+		!errors.As(err, &admissionErr) || !errors.As(err, &locationErr) {
+		t.Fatalf("AdmitArtifact() = %#v, %v; want typed location refusal", admission, err)
+	}
+	if admissionErr.Diagnostic == nil ||
+		admissionErr.Diagnostic.Code != "invalid_finding_location" ||
+		admissionErr.Diagnostic.FindingID != "R3-001" ||
+		admissionErr.Diagnostic.Location != "internal/a.go:7-9" ||
+		admissionErr.Diagnostic.Reason != "line_suffix_not_integer" {
+		t.Fatalf("structured diagnostic = %#v", admissionErr.Diagnostic)
+	}
+
+	for _, unsafe := range []string{
+		"internal:../private/a.go:7-9", "internal/a.go:7:/home/private/repo.go",
+		"internal/a.go:7:https://private.example/repo", `internal/a.go:7:C:\Users\private\repo.go`,
+	} {
+		request.Result.Findings[0].Location = unsafe
+		_, _, err = AdmitArtifact(t.Context(), request)
+		if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil ||
+			admissionErr.Diagnostic.Location != "" || strings.Contains(err.Error(), unsafe) {
+			t.Fatalf("unsafe location escaped structured diagnostic: %#v, %v", admissionErr.Diagnostic, err)
+		}
+	}
+
+	err = NewArtifactLocationAdmissionError("R3-001", "internal/a.go:bad", errors.New("untyped cause"))
+	if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil || admissionErr.Diagnostic.Reason != "invalid_location" || admissionErr.Diagnostic.Location != "" {
+		t.Fatalf("untyped location cause was not handled safely: %v", err)
+	}
+}
+
+func TestFindingAdmissionDiagnosticRequiresCompatibleLocation(t *testing.T) {
+	tests := []struct {
+		name, code, location, reason string
+		wantLocation                 bool
+	}{
+		{"invalid range", "invalid_finding_location", "internal/a.go:7-9", "line_suffix_not_integer", true},
+		{"candidate line", "candidate_causality_unproven", "internal/a.go:7", "line_not_changed_by_candidate", true},
+		{"candidate range", "candidate_causality_unproven", "internal/a.go:7-9", "line_not_changed_by_candidate", false},
+		{"invalid valid line", "invalid_finding_location", "internal/a.go:7", "line_suffix_not_integer", false},
+		{"invalid reason mismatch", "invalid_finding_location", "internal/a.go:7-9", "line_must_be_positive", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diagnostic := findingAdmissionDiagnostic(tt.code, "R3-001", tt.location, tt.reason)
+			if (diagnostic.Location != "") != tt.wantLocation {
+				t.Fatalf("findingAdmissionDiagnostic() = %#v", diagnostic)
+			}
+		})
+	}
+}
+
+// TestAdmitArtifactOmittedSubjectDiagnosticNamesContinuation pins the
+// discoverability contract for the community-reported dead end (PR #1801): a
+// rejected admission never consumes the lens slot, so the incomplete
+// diagnostic must tell the operator that the lens can be re-run and captured
+// again with the required top-level subject_hash and inspection envelope. The
+// machine-readable decision stays "incomplete"; only the prose is extended.
+func TestAdmitArtifactOmittedSubjectDiagnosticNamesContinuation(t *testing.T) {
+	_, _, request := admittedArtifactFixture(t)
+	request.EchoedSubjectHash = ""
+	_, admission, err := AdmitArtifact(t.Context(), request)
+	if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
+		t.Fatalf("AdmitArtifact() decision = %q, error = %v; want incomplete", admission.Decision, err)
+	}
+	for _, want := range []string{
+		"omitted the provider-owned artifact subject",
+		"subject_hash",
+		"inspection",
+		"re-run",
+	} {
+		if !strings.Contains(admission.Diagnostic, want) {
+			t.Fatalf("incomplete diagnostic %q does not name %q", admission.Diagnostic, want)
+		}
+	}
+}
+
+func TestReferenceOutsideRepositoryRecognizesOnlyCanonicalRepositoryPaths(t *testing.T) {
 	repository := map[string]struct{}{}
 	for _, logicalPath := range []string{
 		"Dockerfile", "Makefile", "docs/naïve guide.md", "docs/秘密 guide.md", "internal/a.go",
@@ -127,31 +381,42 @@ func TestReferenceOutsideScopeRecognizesOnlyStructuredRepositoryPaths(t *testing
 	} {
 		repository[logicalPath] = struct{}{}
 	}
+	lookup := func(logicalPath string) (bool, error) {
+		_, known := repository[logicalPath]
+		return known, nil
+	}
 	tests := []struct {
 		name    string
 		value   string
 		outside bool
 	}{
 		{name: "root path in scope", value: "main.go:42"},
-		{name: "root path outside scope", value: "secret.go:42", outside: true},
+		{name: "root supporting path", value: "secret.go:42"},
 		{name: "nested path in scope", value: "diff: internal/a.go:7"},
-		{name: "nested path outside scope", value: "diff: internal/secret.go:7", outside: true},
+		{name: "nested supporting path", value: "diff: internal/secret.go:7"},
 		{name: "quoted unicode and spaces in scope", value: "reviewed \"docs/naïve guide.md:9\""},
-		{name: "quoted unicode and spaces outside scope", value: "reviewed \"docs/秘密 guide.md:9\"", outside: true},
+		{name: "quoted unicode and spaces supporting", value: "reviewed \"docs/秘密 guide.md:9\""},
 		{name: "quoted extensionless root in scope", value: "reviewed `Makefile:12`"},
-		{name: "quoted extensionless root outside scope", value: "reviewed `Dockerfile:12`", outside: true},
+		{name: "quoted extensionless root supporting", value: "reviewed `Dockerfile:12`"},
 		{name: "sha256 digest", value: "sha256:1234567890123456789012345678901234567890123456789012345678901234"},
 		{name: "timestamp", value: "2026-07-22T12:34:56Z"},
 		{name: "timestamp without zone", value: "2026-07-22T12:34:56"},
 		{name: "numeric status", value: "status:500"},
-		{name: "filename token absent from repository", value: "not-in-repository.go:42"},
+		{name: "filename token absent from repository", value: "not-in-repository.go:42", outside: true},
+		{name: "absolute path", value: "/tmp/secret.go:42", outside: true},
+		{name: "traversal path", value: "../secret.go:42", outside: true},
+		{name: "non-canonical path", value: "./secret.go:42", outside: true},
 		{name: "https URL", value: "https://example.test/internal/secret.go:42"},
 		{name: "URL port", value: "http://127.0.0.1:8080/path"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := referenceOutsideScope(tt.value, allowed, repository); got != tt.outside {
-				t.Fatalf("referenceOutsideScope(%q) = %v, want %v", tt.value, got, tt.outside)
+			got, err := referenceOutsideRepository(tt.value, lookup)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.outside {
+				t.Fatalf("referenceOutsideRepository(%q) = %v, want %v", tt.value, got, tt.outside)
 			}
 		})
 	}

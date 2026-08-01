@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/update"
-	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
 )
 
 // ─── RenderUpgrade states ──────────────────────────────────────────────────
@@ -132,7 +132,7 @@ func TestRenderUpgrade_ErrorState(t *testing.T) {
 // containing ": " is split so the command appears on its own line and is not clipped
 // by BubbleTea at the terminal width.
 func TestRenderUpgrade_LongManualHintSplitsAcrossLines(t *testing.T) {
-	longHint := "Windows binary distribution is temporarily unavailable. Install/update from source with Go 1.25.10+:\n  go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.1.0"
+	longHint := "Windows binary distribution is temporarily unavailable. Install/update from source with Go 1.25.10+:\n  go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v1.1.0"
 	report := &upgrade.UpgradeReport{
 		Results: []upgrade.ToolUpgradeResult{
 			{
@@ -158,7 +158,7 @@ func TestRenderUpgrade_LongManualHintSplitsAcrossLines(t *testing.T) {
 	if preambleIndex == -1 {
 		t.Fatalf("hint preamble should appear in output; got:\n%s", out)
 	}
-	if !strings.Contains(out, "go install") || !strings.Contains(out, "gentle-ai/cmd/gentle-ai@v1.1.0") {
+	if !strings.Contains(out, "go install") || !strings.Contains(out, "gentle-ai/v2/cmd/gentle-ai@v1.1.0") {
 		t.Fatalf("full manual command should remain visible; got:\n%s", out)
 	}
 	for _, line := range lines[preambleIndex+1:] {

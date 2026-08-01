@@ -243,7 +243,6 @@ func (scan *authorityRepairScan) scanCompact(ctx context.Context, budget *author
 	if status := probeAuthorityRepairLock(filepath.Join(root, "LOCK")); status != authorityRepairLockReleased && status != authorityRepairLockAbsent {
 		scan.conflicts++
 	}
-	stores := map[string]CompactStore{}
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -290,11 +289,14 @@ func (scan *authorityRepairScan) scanCompact(ctx context.Context, budget *author
 			continue
 		}
 		scan.compact[lineage] = record
-		stores[lineage] = CompactStore{Dir: dir, lineageID: lineage}
 	}
-	if _, err := compactAuthorityLeaves(scan.compact, stores); err != nil {
-		scan.unsupported++
-	}
+	// One count per lineage that actually carries a graph defect. Collapsing
+	// the whole graph into a single increment reported `unsupported_lineages:
+	// 1` while two independent edges were invalid, which understated the work
+	// an operator still had to do and made the assessment disagree with
+	// `review inspect-authority`.
+	violations, _ := compactAuthorityGraphViolations(scan.compact)
+	scan.unsupported += len(violations)
 	return nil
 }
 

@@ -10,15 +10,85 @@ import (
 	"reflect"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
-func canonicalTempDir(t *testing.T) string {
+// sameDirectory reports whether the open file descriptor and the directory
+// at path refer to the exact same underlying inode, so an anchor comparison
+// does not depend on path string equality.
+func sameDirectory(t *testing.T, fd int, path string) bool {
 	t.Helper()
-	root, err := filepath.EvalSymlinks(t.TempDir())
+	var fdStat unix.Stat_t
+	if err := unix.Fstat(fd, &fdStat); err != nil {
+		t.Fatal(err)
+	}
+	pathStat, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return root
+	pathSys, ok := pathStat.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("path stat does not expose syscall.Stat_t")
+	}
+	return uint64(fdStat.Dev) == uint64(pathSys.Dev) && fdStat.Ino == pathSys.Ino
+}
+
+// TestSecureOpenLockParentAnchor proves 1781: the secure open walk anchors
+// at an explicit root instead of unconditionally opening the filesystem
+// root, narrowing the walk to repository-owned directories, while a target
+// outside that root fails safe by falling back to today's root-anchored
+// walk verbatim so no working configuration regresses.
+func TestSecureOpenLockParentAnchor(t *testing.T) {
+	t.Run("under-root walk succeeds", func(t *testing.T) {
+		root := canonicalTempDir(t)
+		target := filepath.Join(root, "a", "b")
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		fd, err := secureOpenLockParent(root, target)
+		if err != nil {
+			t.Fatalf("secureOpenLockParent(root, under-root target) error = %v", err)
+		}
+		defer unix.Close(fd)
+		if !sameDirectory(t, fd, target) {
+			t.Fatal("under-root walk opened the wrong directory")
+		}
+	})
+
+	t.Run("not-under-root falls back to the root-anchored walk verbatim", func(t *testing.T) {
+		root := canonicalTempDir(t)
+		outside := canonicalTempDir(t)
+		fallbackFD, err := secureOpenLockParent(string(filepath.Separator), outside)
+		if err != nil {
+			t.Fatalf("secureOpenLockParent(/, outside) error = %v", err)
+		}
+		defer unix.Close(fallbackFD)
+
+		fd, err := secureOpenLockParent(root, outside)
+		if err != nil {
+			t.Fatalf("secureOpenLockParent(root, not-under-root target) error = %v", err)
+		}
+		defer unix.Close(fd)
+		if !sameDirectory(t, fd, outside) {
+			t.Fatal("not-under-root fallback opened the wrong directory")
+		}
+	})
+
+	t.Run("symlinked component is refused", func(t *testing.T) {
+		root := canonicalTempDir(t)
+		real := filepath.Join(root, "real")
+		if err := os.MkdirAll(real, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		linked := filepath.Join(root, "linked")
+		if err := os.Symlink(real, linked); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := secureOpenLockParent(root, linked); err == nil {
+			t.Fatal("secureOpenLockParent(root, symlinked component) succeeded")
+		}
+	})
 }
 
 func TestAcquireLocalStoreLockRejectsSymlinkAndPreservesTarget(t *testing.T) {

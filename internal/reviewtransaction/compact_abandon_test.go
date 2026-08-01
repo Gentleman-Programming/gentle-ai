@@ -590,3 +590,34 @@ func TestAbandonRefusesCorruptedNonPristineInvalidatedRecord(t *testing.T) {
 		t.Fatalf("refused abandonment moved the corrupted entry: %v", statErr)
 	}
 }
+
+// An abandon refusal must name what to run next. `review reclaim` already ends
+// its cascade by naming `gentle-ai review inspect-authority` and asking for the
+// report to be escalated; abandon refused with the reason alone, which leaves
+// an operator holding a diagnosis and no next command. The damaged-store bench
+// axis declares that composition a dead end, and a refusal that names a
+// runnable command outranks the declaration mechanically.
+func TestAbandonRefusalOverAuthoritativeArtifactNamesAContinuation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	record, store := pristineReviewingFixture(t, repo, "abandon-holds-results")
+
+	// The entry stays a pristine reviewing state; only its directory gains an
+	// authoritative artifact, which is exactly the shape the axis builds.
+	if err := os.MkdirAll(filepath.Join(store.Dir, CompactReviewerResultsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := AbandonPristineCompactStore(context.Background(), repo, CompactAbandonRequest{
+		LineageID: "abandon-holds-results", ExpectedRevision: record.Revision,
+		Reason: "retire the damaged successor", Actor: "maintainer@example.com",
+	})
+	if err == nil {
+		t.Fatal("abandon must refuse an entry holding an authoritative artifact")
+	}
+	if !strings.Contains(err.Error(), "holds authoritative artifact") {
+		t.Fatalf("abandon refusal lost its reason: %v", err)
+	}
+	if !strings.Contains(err.Error(), "gentle-ai review inspect-authority") {
+		t.Fatalf("abandon refusal names no runnable continuation: %v", err)
+	}
+}

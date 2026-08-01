@@ -66,27 +66,28 @@ const (
 type SkillID string
 
 const (
-	SkillSDDInit         SkillID = "sdd-init"
-	SkillSDDApply        SkillID = "sdd-apply"
-	SkillSDDVerify       SkillID = "sdd-verify"
-	SkillSDDExplore      SkillID = "sdd-explore"
-	SkillSDDPropose      SkillID = "sdd-propose"
-	SkillSDDSpec         SkillID = "sdd-spec"
-	SkillSDDDesign       SkillID = "sdd-design"
-	SkillSDDTasks        SkillID = "sdd-tasks"
-	SkillSDDArchive      SkillID = "sdd-archive"
-	SkillSDDOnboard      SkillID = "sdd-onboard"
-	SkillGoTesting       SkillID = "go-testing"
-	SkillCreator         SkillID = "skill-creator"
-	SkillImprover        SkillID = "skill-improver"
-	SkillJudgmentDay     SkillID = "judgment-day"
-	SkillBranchPR        SkillID = "branch-pr"
-	SkillIssueCreation   SkillID = "issue-creation"
-	SkillSkillRegistry   SkillID = "skill-registry"
-	SkillChainedPR       SkillID = "chained-pr"
-	SkillCognitiveDoc    SkillID = "cognitive-doc-design"
-	SkillCommentWriter   SkillID = "comment-writer"
-	SkillWorkUnitCommits SkillID = "work-unit-commits"
+	SkillSDDInit           SkillID = "sdd-init"
+	SkillSDDApply          SkillID = "sdd-apply"
+	SkillSDDVerify         SkillID = "sdd-verify"
+	SkillSDDExplore        SkillID = "sdd-explore"
+	SkillSDDPropose        SkillID = "sdd-propose"
+	SkillSDDSpec           SkillID = "sdd-spec"
+	SkillSDDDesign         SkillID = "sdd-design"
+	SkillSDDTasks          SkillID = "sdd-tasks"
+	SkillSDDArchive        SkillID = "sdd-archive"
+	SkillSDDOnboard        SkillID = "sdd-onboard"
+	SkillGoTesting         SkillID = "go-testing"
+	SkillCreator           SkillID = "skill-creator"
+	SkillImprover          SkillID = "skill-improver"
+	SkillJudgmentDay       SkillID = "judgment-day"
+	SkillBranchPR          SkillID = "branch-pr"
+	SkillIssueCreation     SkillID = "issue-creation"
+	SkillSkillRegistry     SkillID = "skill-registry"
+	SkillChainedPR         SkillID = "chained-pr"
+	SkillCognitiveDoc      SkillID = "cognitive-doc-design"
+	SkillCommentWriter     SkillID = "comment-writer"
+	SkillWorkUnitCommits   SkillID = "work-unit-commits"
+	SkillRDDDefectWorkflow SkillID = "rdd-defect-workflow"
 )
 
 type PersonaID string
@@ -188,62 +189,4 @@ type Profile struct {
 	Name              string                     // e.g. "cheap", "premium"; empty = default
 	OrchestratorModel ModelAssignment            // orchestrator model
 	PhaseAssignments  map[string]ModelAssignment // key = phase name (e.g. "sdd-apply")
-}
-
-// TriggerEvent is the closed set of lifecycle moments the orchestrator is told
-// to recognize. These are SEMANTIC moments honored by the AI orchestrator, not
-// OS-level hooks. gentle-ai never fires them.
-type TriggerEvent string
-
-const (
-	EventPreCommit    TriggerEvent = "pre-commit"
-	EventPrePush      TriggerEvent = "pre-push"
-	EventPrePR        TriggerEvent = "pre-pr"
-	EventRelease      TriggerEvent = "release"
-	EventPostSDDPhase TriggerEvent = "post-sdd-phase"
-	EventOnCI         TriggerEvent = "on-ci"
-	EventOnSchedule   TriggerEvent = "on-schedule"
-)
-
-// TriggerMode selects the routing wording for a binding in the 4R v2
-// deterministic triage. "advisory" renders the everyday router (trivial diffs
-// skip review; standard diffs run exactly ONE lens); "strong" renders a
-// direct run directive whenever the condition matches. Neither mode is a hard
-// gate: gentle-ai renders instruction text and never blocks the workflow.
-type TriggerMode string
-
-const (
-	ModeAdvisory TriggerMode = "advisory"
-	ModeStrong   TriggerMode = "strong"
-)
-
-// TriggerWhen is a structured, NON-evaluated condition. gentle-ai renders it to
-// plain instruction text; the orchestrator interprets it. The vocabulary is
-// deliberately tiny and documented so it cannot drift per agent.
-type TriggerWhen struct {
-	Always       bool     `json:"always,omitempty"`         // "on every occurrence"
-	PathGlobs    []string `json:"path_globs,omitempty"`     // diff touches any of these
-	MinDiffLines int      `json:"min_diff_lines,omitempty"` // diff exceeds N changed lines
-	Phases       []string `json:"phases,omitempty"`         // for post-sdd-phase: design, apply, ...
-	Combine      string   `json:"combine,omitempty"`        // "or" (default) | "and"
-}
-
-// TriggerBinding maps an event to one or more agents under a condition, with a
-// recommendation strength and a one-line rationale rendered into the directive.
-// On, When, Run, and Mode are REQUIRED. Reason is OPTIONAL and is the ONLY
-// permitted optional binding field: it carries the per-binding token-budget
-// justification and is rendered into the directive when present.
-type TriggerBinding struct {
-	On     TriggerEvent `json:"on"`
-	When   TriggerWhen  `json:"when"`
-	Run    []string     `json:"run"` // agent names: review-risk, judgment-day, etc.
-	Mode   TriggerMode  `json:"mode"`
-	Reason string       `json:"reason,omitempty"` // OPTIONAL — token-budget/why note; only optional binding field
-}
-
-// TriggerRuleSet is the whole declarative layer: the closed events catalog plus
-// the ordered bindings. One set is rendered per agent.
-type TriggerRuleSet struct {
-	Events   []TriggerEvent   `json:"events"`
-	Bindings []TriggerBinding `json:"bindings"`
 }

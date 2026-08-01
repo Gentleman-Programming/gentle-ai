@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -92,7 +92,7 @@ func TestReviewRetryFinalVerificationOperationAndStatusCompleteNormally(t *testi
 		t.Fatal(err)
 	}
 	if err := RunReview([]string{"capture-evidence", "--cwd", fixture.repo, "--lineage", successor.State.LineageID,
-		"--target", successor.State.CurrentSnapshot.Identity, "--expected-revision", successor.Revision, "--input", passed}, &bytes.Buffer{}); err != nil {
+		"--target", successor.State.CurrentSnapshot.Identity, "--expected-revision", successor.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", passed}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	var finalized bytes.Buffer
@@ -151,7 +151,7 @@ func TestReviewRetryFinalVerificationCorrectedRestartUsesFrozenAuthorityTarget(t
 		t.Fatal(err)
 	}
 	if err := RunReview([]string{"capture-evidence", "--cwd", fixture.repo, "--lineage", successorStatus.Authority.LineageID,
-		"--target", successorStatus.AuthorityTargetIdentity, "--expected-revision", successorStatus.Authority.Revision, "--input", passed}, &bytes.Buffer{}); err != nil {
+		"--target", successorStatus.AuthorityTargetIdentity, "--expected-revision", successorStatus.Authority.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", passed}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	var terminal bytes.Buffer
@@ -188,8 +188,11 @@ func TestReviewRetryFinalVerificationNegotiatedDenialIsNoMutation(t *testing.T) 
 	}
 	var failure ReviewIntegrationFailure
 	decodeStrictReviewJSON(t, output.Bytes(), &failure)
+	// organic-dx Phase 3b task 3b.3: STATUS already re-derives retry
+	// eligibility for this lineage, so the denial now names review.status
+	// instead of a bare stop.
 	if failure.Operation != ReviewIntegrationOperationRetryFinalVerification || failure.Code != "final_verification_retry_denied" ||
-		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe || failure.NextAction != "stop" {
+		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe || failure.NextAction != "review.status" {
 		t.Fatalf("retry denial failure = %#v", failure)
 	}
 	if after := cliReviewAuthoritySnapshot(t, fixture.repo); !reflect.DeepEqual(after, before) {
@@ -308,13 +311,113 @@ func TestFinalVerificationRetryContractFixturesAreStrictAndPathFree(t *testing.T
 	if err := status.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	retryPayload, err := json.Marshal(status.FinalVerificationRetry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateStatusV2FinalVerificationRetrySchema(t, retryPayload)
 	if status.Action != reviewtransaction.TargetStatusActionRetryFinalVerification ||
 		status.FinalVerificationRetry == nil || status.NextTransition == nil ||
-		status.NextTransition.ReasonCode != "final_verification_retry_authorization_required" {
+		status.NextTransition.ReasonCode != "final_verification_retry_authorization_required" ||
+		status.FinalVerificationRetry.FailedEvidenceRecordDigest == "" ||
+		transitionArgumentValue(t, status.NextTransition, "failed-evidence-record-digest") != status.FinalVerificationRetry.FailedEvidenceRecordDigest {
 		t.Fatalf("retry status fixture = %#v", status)
 	}
 	if strings.Contains(string(statusPayload), "/tmp/") || strings.Contains(string(statusPayload), `\\`) {
 		t.Fatal("retry status fixture contains a local path")
+	}
+}
+
+func TestStatusV2FinalVerificationRetryRecordDigestIsAdditiveAndProviderBound(t *testing.T) {
+	fixturePath := filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "status-v2-final-verification-retry.fixture.json")
+	payload, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var historical map[string]any
+	if err := json.Unmarshal(payload, &historical); err != nil {
+		t.Fatal(err)
+	}
+	retry := historical["final_verification_retry"].(map[string]any)
+	delete(retry, "failed_evidence_record_digest")
+	transition := historical["next_transition"].(map[string]any)
+	collection := transition["collect"].(map[string]any)
+	inputs := collection["inputs"].([]any)
+	input := inputs[0].(map[string]any)
+	arguments := input["arguments"].([]any)
+	legacyArguments := make([]any, 0, len(arguments)-1)
+	for _, raw := range arguments {
+		argument := raw.(map[string]any)
+		if argument["name"] != "failed-evidence-record-digest" {
+			legacyArguments = append(legacyArguments, argument)
+		}
+	}
+	input["arguments"] = legacyArguments
+	historicalPayload, err := json.Marshal(historical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historicalRetryPayload, err := json.Marshal(retry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateStatusV2FinalVerificationRetrySchema(t, historicalRetryPayload)
+	var historicalStatus ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, historicalPayload, &historicalStatus)
+	if err := historicalStatus.Validate(); err != nil || historicalStatus.FinalVerificationRetry == nil || historicalStatus.FinalVerificationRetry.FailedEvidenceRecordDigest != "" {
+		t.Fatalf("historical status-v2 retry artifact = %#v, %v", historicalStatus.FinalVerificationRetry, err)
+	}
+
+	var mismatched ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, payload, &mismatched)
+	for index := range mismatched.NextTransition.Collect.Inputs[0].Arguments {
+		argument := &mismatched.NextTransition.Collect.Inputs[0].Arguments[index]
+		if argument.Name == "failed-evidence-record-digest" {
+			argument.Value = "sha256:" + strings.Repeat("c", 64)
+		}
+	}
+	if err := mismatched.Validate(); err == nil {
+		t.Fatal("new status-v2 retry artifact accepted a transition bound to a different evidence record digest")
+	}
+}
+
+func validateStatusV2FinalVerificationRetrySchema(t *testing.T, payload []byte) {
+	t.Helper()
+	path := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas", "status-v2.schema.json")
+	schemaPayload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(schemaPayload, &document); err != nil {
+		t.Fatal(err)
+	}
+	definitions := document["$defs"].(map[string]any)
+	properties := document["properties"].(map[string]any)
+	retry := properties["final_verification_retry"].(map[string]any)
+	const location = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/_test-final-verification-retry.schema.json"
+	synthetic := map[string]any{
+		"$schema": document["$schema"],
+		"$id":     location,
+		"$defs":   map[string]any{"sha256": definitions["sha256"]},
+	}
+	for key, value := range retry {
+		synthetic[key] = value
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource(location, synthetic); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile(location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(value); err != nil {
+		t.Fatalf("published status-v2 final_verification_retry schema rejected artifact: %v", err)
 	}
 }
 
@@ -413,7 +516,7 @@ func failedFinalVerificationCLIFixture(t *testing.T) failedFinalVerificationCLI 
 		t.Fatal(err)
 	}
 	if err := RunReviewCaptureEvidence([]string{"--cwd", repo, "--lineage", started.LineageID,
-		"--target", validating.State.CurrentSnapshot.Identity, "--expected-revision", validating.Revision, "--input", evidencePath}, &bytes.Buffer{}); err != nil {
+		"--target", validating.State.CurrentSnapshot.Identity, "--expected-revision", validating.Revision, "--outcome", string(reviewtransaction.VerificationOutcomeProceduralFailure), "--input", evidencePath}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-evidence", "--failed"}, &bytes.Buffer{}); err != nil {
@@ -458,7 +561,7 @@ func failedCorrectedFinalVerificationCLIFixture(t *testing.T) failedFinalVerific
 			CausalDisposition: reviewtransaction.CausalIntroduced,
 		}}, Evidence: []string{"inspected corrected candidate"},
 	})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2"}, &bytes.Buffer{}); err != nil {
@@ -468,16 +571,43 @@ func failedCorrectedFinalVerificationCLIFixture(t *testing.T) failedFinalVerific
 		t.Fatal(err)
 	}
 	validationPath := filepath.Join(t.TempDir(), "validation.json")
-	writeReviewCLIJSON(t, validationPath, facadeValidationResult{
+	validation := facadeValidationResult{
 		OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"original criteria passed"}},
 		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"correction regression passed"}},
 		FollowUps:            []reviewtransaction.FollowUp{},
-	})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--validation", validationPath}, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
 	}
+	writeReviewCLIJSON(t, validationPath, validation)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
+		t.Fatal(err)
+	}
+	correction, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fix, err := facadeVerificationEvidenceTarget(context.Background(), repo, correction.State, correction.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := reviewtransaction.BuildTargetedValidationRequestFromSnapshot(context.Background(), repo, correction.State, correction.Revision, fix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validation.TargetedValidationRequestHash = request.RequestHash
+	validation.CorrectionTargetIdentity = request.CorrectionTargetIdentity
+	native, err := validation.compact(reviewtransaction.FixDeltaHashForSnapshot(fix), correction.State.FixFindingIDs, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(context.Background(), fix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyValidating := correction.State
+	if err := legacyValidating.CompleteCorrection(fix, actual, native); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(correction.Revision, "review/complete-fix", legacyValidating); err != nil {
 		t.Fatal(err)
 	}
 	validating, err := store.Load()
@@ -490,7 +620,7 @@ func failedCorrectedFinalVerificationCLIFixture(t *testing.T) failedFinalVerific
 		t.Fatal(err)
 	}
 	if err := RunReviewCaptureEvidence([]string{"--cwd", repo, "--lineage", started.LineageID,
-		"--target", validating.State.CurrentSnapshot.Identity, "--expected-revision", validating.Revision, "--input", evidencePath}, &bytes.Buffer{}); err != nil {
+		"--target", validating.State.CurrentSnapshot.Identity, "--expected-revision", validating.Revision, "--outcome", string(reviewtransaction.VerificationOutcomeProceduralFailure), "--input", evidencePath}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-evidence", "--failed"}, &bytes.Buffer{}); err != nil {

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 // TestSharedPromptDir verifies the expected directory path is returned.
@@ -151,8 +151,7 @@ func sddReviewSubAgentsForCodeGraphTest() []string {
 }
 
 func sddShellDisabledSubAgentsForCodeGraphTest() []string {
-	agents := []string{"jd-judge-a", "jd-judge-b"}
-	return append(agents, sddReviewSubAgentsForCodeGraphTest()...)
+	return []string{"jd-judge-a", "jd-judge-b", "review-refuter"}
 }
 
 func assertOpenCodeSubAgentReadOnlyTools(t *testing.T, agentsMap map[string]any, agentName string) {

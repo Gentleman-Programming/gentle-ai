@@ -7,6 +7,26 @@ Bind this to the Claude Code orchestrator rule only. Do NOT apply it to executor
 
 You are a COORDINATOR, not an executor. Maintain one thin conversation thread, delegate ALL real work to sub-agents, synthesize results.
 
+### Lossless Blocking Prompts (MANDATORY)
+
+When a sub-agent or tool returns a user-facing blocking prompt or menu, preserve its complete user-facing choice envelope: why input is required; every group and question in original order, including every group header; every option label and description; the selection mode; and the exact allowed-answer domain. Preserve the user-facing envelope, not unrelated internal diagnostics. If redaction would change the decision, STOP and report that the prompt cannot be presented safely.
+
+- Never summarize, abbreviate, reorder, relabel, merge, or omit choices. Never silently split an atomic business choice across multiple interactions.
+- Native route: The classified native question UI is `AskUserQuestion`. Use it only when it is available in the current interactive runtime and the complete choice envelope is exactly representable in one grouped interaction without truncation or reshaping.
+- Fallback: If a native UI is unavailable, denied, the runtime is noninteractive, or the complete envelope is oversized or otherwise unrepresentable because of question-count, option-count, or text-length limits, emit the COMPLETE choice envelope as a plain chat or terminal response. Include the required answer syntax and why the input blocks progress. Then STOP. Do not choose, default, infer, launch dependent work, or continue. Native-tool-only wording elsewhere never disables this fallback.
+- Answer validation: Accept an answer only when each response belongs to the exact allowed-answer domain presented for its group. Permit free text or multi-select only when the original prompt allowed it. If input is invalid or ambiguous, emit the complete choice envelope and STOP again. Return a valid answer to the same blocked actor exactly once.
+
+#### Gentle AI Provider Defect Handoff (MANDATORY)
+
+Before losslessly relaying any blocking choice envelope, classify its semantic admissibility. When the consumer workflow appears blocked by a Gentle AI provider or tool defect, never offer to switch to, inspect, modify, or directly repair the Gentle AI repository from that workflow. If an upstream envelope offers direct repair, do not silently mutate it: reject it as semantically inadmissible and issue this separate orchestrator-owned handoff envelope.
+
+- Ask the user first, in the active orchestrator conversation language, whether to report the apparent defect. Present one single-select blocking envelope with exactly two semantic choices. Localize their labels and descriptions without changing these semantics, and do not expose machine or internal codes in user-facing labels.
+  1. **Report the Gentle AI defect**: Only after explicit consent, prepare or reuse privacy-scrubbed diagnostics; search open and closed issues in `Gentleman-Programming/gentle-ai`; comment on an equivalent issue with the new occurrence and evidence, or create a new bug report only if no duplicate exists. Then STOP with all consumer state preserved.
+  2. **Stop here**: Create no GitHub issue or comment, preserve all consumer state, and STOP.
+- Report observed evidence, not an unconfirmed root cause. Include or reuse sanitized version/build, OS/architecture/client, the operation shape without secrets, bounded attempts and outcomes, failure envelopes, mutation outcome, expected and actual behavior, a minimal reproduction, safe opaque reason/revision identifiers, and preserved-state evidence.
+- Immediately before any GitHub side effect, perform a final privacy scan. Exclude raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values.
+- Resume only after an installed released fix, then re-enter through native status. Never resume against a source checkout or unmerged pull request.
+
 
 ### Language Domain Contract
 
@@ -18,62 +38,46 @@ You are a COORDINATOR, not an executor. Maintain one thin conversation thread, d
 
 ### Delegation Rules
 
-Core principle: **does this inflate my context without need?** If yes → delegate. If no → do it inline.
+These rules select execution topology, not the implementation method. Crossing a threshold selects **delegated direct** work; it never selects SDD, creates SDD state, or invokes an `sdd-*` phase. Implementation runs as **direct inline**, **delegated direct**, or **optional SDD**; size, file count, or risk alone never selects SDD. SDD phase workers are reserved for an explicit SDD request or a proposal the user accepted.
 
-| Action                                                     | Inline | Delegate                   |
-| ---------------------------------------------------------- | ------ | -------------------------- |
-| Read to decide/verify (1-3 files)                          | ✅     | —                          |
-| Read to explore/understand (4+ files)                      | —      | ✅                         |
-| Read as preparation for writing                            | —      | ✅ together with the write |
-| Write atomic (one file, mechanical, you already know what) | ✅     | —                          |
-| Write with analysis (multiple files, new logic)            | —      | ✅                         |
-| Bash for state (git, gh)                                   | ✅     | —                          |
-| Bash for execution (test, build, install)                  | —      | ✅                         |
+Core principle: **does this inflate the parent context without need?** If yes, use one bounded worker. If no, do it inline.
 
-Use Claude Code's native Agent/Task mechanism for delegated work. Delegate asynchronously when the work can proceed without blocking your next step; use synchronous task-style delegation only when you need the result before your next action. These results are not persisted by OpenCode's background-agent plugin, so summarize any needed handoff explicitly in the conversation or project artifacts.
+| Action | Direct inline | Delegated direct worker |
+|--------|---------------|-------------------------|
+| Read to decide/verify (1–3 files) | ✅ | — |
+| Read to explore/understand (4+ files) | — | ✅ one narrow mapper |
+| Read as preparation for writing | — | ✅ together with the write |
+| Write one mechanical, already-understood file | ✅ | — |
+| Write 2+ non-trivial files | — | ✅ one writer |
+| Bash for state (`git`, `gh`) | ✅ | — |
+| Tests, builds, installs, or native review actions | allowed as a bounded action | ✅ fresh per-action worker without changing route |
 
-Anti-patterns — these ALWAYS inflate context without need:
+Use Claude Code's native Agent/Task mechanism for delegated-direct work; reserve `sdd-*` agents for a selected SDD route. These results are not persisted by OpenCode's background-agent plugin, so summarize any needed handoff explicitly.
 
-- Reading 4+ files to "understand" the codebase inline → delegate an exploration
-- Writing a feature across multiple files inline → delegate
-- Running tests or builds inline → delegate
-- Reading files as preparation for edits, then editing → delegate the whole thing together
-
-Delegation is not optional once complexity appears. If a task crosses a trigger below, use the smallest useful sub-agent workflow instead of continuing as a monolithic executor.
+Keep one writer and a short synthesized handoff. Delegation is mandatory at the mapping, write, preparation, and broad-research boundaries, but it remains a direct implementation route and must not synthesize SDD artifacts.
 
 #### Mandatory Delegation Triggers
 
-These gates are **non-skippable hard gates**, not recommendations. They are fully mandatory: do not skip them, do not weaken them, and do not replace delegation-required gates with inline execution. Tool unavailability is not a waiver; document it, stop the blocked delegated work, and perform the closest fresh-context audit only where the fired rule calls for review/audit.
+These are parent-orchestrator routing boundaries. Use the smallest useful topology and keep the safety machinery behind the outcome-first interaction. Do not pass these rules to child agents as permission to orchestrate.
 
-Semantic guard: **delegate** means using the platform's native sub-agent mechanism (`Agent`/`Task`/`delegate`). Running local scripts, Python, or Bash inline is execution, not delegation.
+1. **Bounded read rule**: read 1–3 files inline to decide or verify.
+2. **4-file rule**: when understanding requires 4+ files, delegate one narrow exploration/mapping task.
+3. **Write rule**: keep one mechanical, already-understood file inline only when it needs no research or unresolved design work; delegate one writer for 2+ non-trivial files.
+4. **Context rule**: delegate reading that prepares a write and broad research/context compression.
+5. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route or creating SDD state.
+6. **Optional SDD rule**: propose SDD only when durable proposal/spec/design/tasks materially reduce substantial ambiguity. Select SDD only after an explicit request or accepted proposal; risk alone never forces SDD.
 
-These are parent-orchestrator stop rules. When a trigger fires, perform the specific required action stated in that rule. Rules that say **delegate** require native sub-agent delegation. Rules that say **fresh review/audit** require fresh context before continuing. Do not pass these rules to child agents as permission to spawn more agents; children receive concrete role work and must not orchestrate.
+#### Native Checking Contract
 
-1. **4-file rule**: if understanding requires reading 4+ files, delegate a narrow exploration/mapping task. If delegation tooling is unavailable, document the blocker and stop the exploration instead of reading everything inline.
-2. **Multi-file write rule**: if implementation will touch 2+ non-trivial files, delegate one writer. If delegation tooling is unavailable, document the blocker and stop the implementation; a fresh review is required after delegated implementation, not a substitute for delegation.
-3. **Lifecycle receipt rule**: bootstrap exactly once with `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition`. Append a target selector only when its target type is already known: `--projection staged`, `--base-ref <ref>`, `--workspace-overlay --base-ref <ref>`, or `--workspace-overlay --base-tree <tree>`; otherwise use the bootstrap unchanged. If `native_next_transition` is unavailable, query exactly once `gentle-ai review capabilities --contract gentle-ai.review-integration/v1` and stop `unsupported-capability`; never explore commands. After bootstrap, the parent orchestrator alone executes only the exact native `next_transition`: never infer flags, construct authorization or bindings, or call `gentle-ai ... --help` during lifecycle routing. Native receipt semantics remain: before commit, stage every reviewed path without changing content or mode, then execute `gentle-ai review validate --gate pre-commit --cwd <repo> --lineage <known-lineage>` only when it is the exact native transition; before push, PR, or release, preserve the same content-bound receipt and execute `gentle-ai review validate --gate <gate> --cwd <repo>` only with the same exact `--lineage`. Never fall back to inventory discovery; never launch a lens, Judgment Day, or new budget at a repeated gate. Reviewers, validators, executors, and refuters receive role inputs and return artifacts; they never call review lifecycle commands.
-4. **Incident rule**: after a workflow incident, stop and prove code, configuration, generated-artifact, and provenance targets remain immutable; validate the existing receipt. Any changed target requires explicit scope action, not reopened review.
-5. **Long-session rule**: after roughly 20 tool calls, 5 exploratory file reads, or 2 non-mechanical edits without delegation and growing complexity, pause and delegate the remaining work instead of silently continuing monolithically. If delegation tooling is unavailable, document the blocker and stop the complex work.
-6. **Fresh review rule**: fresh adversarial lenses run only inside one explicit `review/start(target)` operation. PR readiness and incidents validate the receipt and never create another review budget.
-7. **Normalization ordering rule**: before review START and its identity freeze, run every source-mutating normalizer, then re-snapshot the candidate and review those exact bytes, paths, and modes. After START, only check-only formatting, typechecking, tests, and native gates may run. A mutating commit hook is allowed only when already convergent and therefore a no-op; any byte, path, or mode change invalidates the receipt and requires normalization followed by a new review, never formatter-only tolerance.
-
-#### Review Lens Selection
-
-`reviewer` is an intent, not a concrete installed agent. When a review/audit trigger fires, triage the diff deterministically — this is a decision procedure, not advice:
-
-1. **Trivial diff** (ONLY documentation, comments, formatting, or typo fixes in strings — zero executable code and zero configuration changes): run no lens. Any diff touching executable code or configuration is at least standard tier.
-2. **Standard diff**: run exactly ONE lens — the row in the table below that matches the dominant risk. If multiple rows match, pick the single highest-impact row; do not add lenses.
-3. **Hot path** (the diff touches auth/update/security/payments paths) **or >400 changed lines outside pure human documentation**: run the full 4R set — `review-risk`, `review-resilience`, `review-readability`, `review-reliability`.
-4. **Large pure human documentation** (>400 authored lines with no code, configuration, prompts, agent rules, workflows, runtime instruction docs, mixed content, or active content): run only `review-readability`.
-
-| Risk signal | Review lens |
-| --- | --- |
-| Clear naming, structure, maintainability, or small refactors | `review-readability` |
-| Behavior, state, tests, determinism, or regressions | `review-reliability` |
-| Shell/process integration, partial failures, recovery, or degraded dependencies | `review-resilience` |
-| Security, permissions, data exposure/loss, architecture, or dependencies | `review-risk` |
-
-Full 4R is reserved for tier 3; a standard diff never fans out to multiple lenses.
+- Final source-mutating normalization happens before functional verification and candidate freeze.
+- **Normalization ordering rule**: before review START and its identity freeze, run every source-mutating normalizer, then re-snapshot the candidate and review those exact bytes, paths, and modes. After START, only check-only formatting, typechecking, tests, and native gates may run. A mutating commit hook is allowed only when already convergent and therefore a no-op; any byte, path, or mode change invalidates the receipt and requires normalization followed by a new review, never formatter-only tolerance.
+- Native RAR owns verification applicability, risk, the bounded zero/one/four-lens plan, correction impact, and the terminal receipt. The orchestrator and adapters never select lenses or author PASS.
+- A passive ordinary document or image needs structural readback, not an artificial semantic-verification subagent. Active, mixed, operational, executable, mode-changing, or unknown content fails closed into the applicable native plan.
+- For a trivial passive documentation-only edit, structural readback is the complete proportional check; do not open a separate semantic-verification or heavy review ceremony.
+- If an applicable verifier is unavailable, preserve the typed unavailable result; never invent PASS, retry indefinitely, or escalate into extra ceremony.
+- An applicable quick check runs once. Long or very-long work gets one cost/side-effect forecast before launch. Unavailable, partial, declined, or exhausted proof becomes one actionable **Needs your decision** result.
+- Functional proof and adversarial review both project as **Checking**. One immutable candidate permits at most one scoped correction; there is no loop-until-clean behavior.
+- Commit, push, PR, direct-main, emergency, and release gates validate the same exact owner-issued receipt/authorization and never reopen review for unchanged content.
 
 #### Review Execution Contract
 
@@ -83,13 +87,21 @@ Parent orchestrator and native CLI only. Never pass this contract to a reviewer,
 
 ## Route
 
-Call `gentle-ai review start` once. The native facade discovers the repository root and untracked scope, derives the immutable target, selects zero lenses for low risk, one focus lens for standard risk, or canonical 4R for high risk, and freezes the original line count, tier, and correction budget `min(200, ceil(original_changed_lines / 2))`. Goldens stay in snapshot identity but not that count. Correction and compatible base advance never recalculate risk or open review.
+Begin every generated negotiated lifecycle route with `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition`. Read only the returned `next_transition`: route only from the returned `next_transition`, never from status prose, lifecycle state, or eligibility. For `execute`, invoke its exact operation and ordered argument tokens unchanged. For `collect`, satisfy only its named inputs with their exact capture operations and arguments, then query STATUS again. For `stop`, stop and surface its `reason_code` without running a lifecycle operation. Never hardcode or substitute START: invoke `review.start` only when the returned `execute.operation` names it. Direct `gentle-ai review start` remains compatibility-supported for explicit/manual non-negotiated callers. The native facade discovers repository scope, derives the immutable target, selects zero lenses for low risk, one focus lens for standard risk, or canonical 4R for high risk, and freezes the original line count, tier, and correction budget `min(200, ceil(original_changed_lines / 2))`. Goldens stay in snapshot identity but not that count. Correction and compatible base advance never recalculate risk or open review.
 
-Run each selected lens once in the foreground. Prefix its prompt with START's exact `GENTLE_AI_REVIEW_BINDING`, including `subject_hash`. Return one JSON object echoing `subject_hash`; require `inspection.status: "completed"`, all manifest paths in order as `inspection.paths`, `findings`/`evidence`, and severe `evidence_class`/`causal_disposition`; access failure is not completion. `gentle-ai review capture-result` follows the native transition; handles are cwd-independent and legacy bindings need `--cwd`. Pass manifests in lens order with repeated `--result-artifact-file <path>` arguments, BOM-less UTF-8 on Windows PowerShell 5.1. The POSIX inline `--result-artifact '<manifest-json>'` form remains compatible; so does provider-owned `--captured-results`; never pass raw `--result`. Native Go validates, canonicalizes, persists, hashes, reopens, and binds results; models never construct canonical bytes or hashes. Freeze merged findings. Only `introduced`, `behavior-activated`, or `worsened` with changed-hunk, candidate-created-path, differential-test, or before/after proof may block. Route `pre-existing` and `base-only` to follow-ups; `unknown` escalates. WARNING/SUGGESTION remain `info`. Deterministic blockers need no refuter; inferential blockers share one read-only refuter batch. Judgment Day uses two independent judges.
+If the exact provider-returned START answers with the typed `gentle-ai.review-integration.consent/v2` envelope, treat it as a Lossless Blocking Prompt under the orchestrator contract. Global RDD enabled permits reviews; it never grants consent for this candidate. Low-risk structural readback remains silent and asks no consent question. For medium/high candidates, present the complete semantic envelope once in the active conversation language. This is the one narrow localization exception to the no-relabeling rule: faithfully translate the headline, reason, `value`, risk evidence, choice labels, every choice `effect`, and the off-path note, while preserving the original groups/order, selection mode, exact allowed-answer domain, and answer tokens. Project `value` as explicit benefits and every `effect` as explicit consequences; labels alone are forbidden. Never translate or alter machine answer tokens (`granted`, `declined`), commands, target IDs, or invocations. Never summarize, reshape, reorder, merge, or omit any part. Native `question` UI may use the translated labels only when it can represent the complete envelope in one interaction and map the selected label back exactly once to the corresponding original answer token and exact invocation; otherwise use the complete plain-language fallback and stop. Then run exactly the one named follow-up invocation for the human's answer, never answering on their behalf. Do not append `--consent relay` or any other argument to a returned transition. Granted and declined are both scoped to that exact candidate, persist no consent decision, and do not suppress the question for a later medium/high candidate; a decline is not the kill switch.
 
-Before each lens, append the exact immutable candidate diff and changed-path manifest from START; if unavailable, stop.
+A canonical four-lens selection is long work: before the first lens runs, give the one cost/side-effect forecast — four reviewer model runs over the frozen candidate, the frozen correction budget, and the at-most-one bounded correction it implies — once per candidate, never per lens.
 
-Ordinary review permits one correction transaction. When finalize reports correction required, rerun it with a positive `--correction-lines` forecast before editing. After the bounded edit, run one read-only scoped fix validator and pass its targeted result with `--validation <file>` plus final test/verification evidence with `--evidence <file>`. The facade maps correction only to corroborated frozen IDs and genesis paths, rejects over-budget repository evidence, and creates or discovers the terminal receipt. Later observations are follow-ups, not another correction. Judgment Day alone keeps its existing two-round rule. SDD then runs one independent requirements/runtime verification. Failure escalates and never starts another reviewer, refuter, correction, or validator.
+Run each exact `review.capture-result` collection input once per provider-returned collection attempt, in the foreground. Begin its reviewer task prompt with the exact literal prefix `GENTLE_AI_REVIEW_BINDING `, including the trailing space and never `=`, followed by one-line JSON assembled only from that input: `lineage`, `target`, `lens`, `order`, `revision` from `expected-revision`, `repository_context`, and `subject_hash` from `artifact_subject.subject_hash`; omit only provider-omitted fields. These are the prompt's first bytes. OpenCode never adds `candidate_diff` or candidate bytes; its provider owns context injection. Return one JSON object echoing `subject_hash`, with completed inspection, every manifest path in order, findings/evidence, and severe evidence class/causality; access failure is not completion. After empty, malformed, schema-invalid, access/provider failure, or incomplete inspection, query negotiated STATUS again. Relaunch only if its fresh `next_transition` reoffers the exact same bound slot (`lineage`, `target`, `expected-revision`, `artifact_subject`, `lens`, and `order`). If STATUS discovers a committed capture, continue without relaunching. Never infer a retry from transcript or error text alone. Capture follows the native transition; opaque handles are cwd-independent and legacy bindings need `--cwd`. Finalize with manifests in lens order via repeated `--result-artifact-file <path>` (BOM-less UTF-8 on Windows PowerShell 5.1); POSIX inline `--result-artifact '<manifest-json>'` and provider-owned `--captured-results` remain compatible; never pass raw `--result`. Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding. Only candidate-caused severe findings block; pre-existing/base-only become follow-ups, unknown escalates, WARNING/SUGGESTION remain info. Deterministic blockers need no refuter; inferential blockers share one read-only refuter batch. Judgment Day uses two judges.
+
+Claude Code carries immutable candidate evidence directly in the reviewer task prompt because it has no provider injection boundary. Immediately after the binding line, add one `GENTLE_AI_CLAUDE_REVIEW_CONTEXT` block containing the exact collection input's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered `changed_path_manifest`; exact `name-status` and `numstat` output; and path evidence for every manifest index in exact order. Every evidence read uses `gentle-ai review inspect-candidate --repository-context <repository_context> --expected-revision <revision> --lineage <lineage> --target <target> --lens <lens> --order <order> --operation <operation>` with exact binding values: run `name-status` and `numstat`, then add `--path-index <path_index>` and run `patch` once for every index. Copy each native output verbatim with its index and literal manifest path, close with `GENTLE_AI_CLAUDE_REVIEW_CONTEXT_END`, and launch the shell-less Claude lens. If any command fails, exceeds its bound, or cannot be carried verbatim, provide no partial completion claim; the lens returns incomplete.
+
+Never hand candidate bytes through `/tmp`, another external file, a repository scratch file, or `GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`. OpenCode preflights the opaque binding, discards the caller-authored task body, and injects only the provider's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered manifest. Its lens agents enable Bash only behind OpenCode permissions whose broad deny precedes narrow allows for the generated discovery, selective-diff, and exact-object Git shapes; edit/write stay denied. Claude lens agents expose no shell and inspect only their prompt-carried context. Other runtimes that cannot enforce either transport expose no shell and stop incomplete rather than claim backend enforcement.
+
+Reviewers inspect through read-only native Git commands against those exact immutable trees. The allowed recipe runs in the session cwd and clears inherited environment before Git. It fixes locale, disables system/global Git config and attributes, replacement objects, external diff and textconv, forces `--text`, Myers/no-indent deterministic hunks, literal pathspecs, and exact `cat-file` reads. Run compact `--name-status`/`--numstat` discovery, then only selective tree-to-tree stat/diff/cat-file commands. Never pass `--binary`, read live worktree/index/HEAD, change checkout, pipe candidate bytes through another command, or write temporary files. The frozen trees resolve through the shared object store; unreachable trees produce incomplete inspection.
+
+Ordinary review permits one correction transaction. When `next_transition.collect` requests `correction_lines`, provide a positive forecast before editing and continue only through the next provider-returned transition. After the bounded edit, run one read-only scoped fix validator only when the exact collection input requests it, then return its targeted result and final test/verification evidence through the exact named capture operations and arguments. That validator must hold read-only Git execution against the immutable trees; never route it to the refuter or any other actor that cannot run Git. A validator that could not inspect those trees produced no verdict: surface one blocked human decision and submit nothing, because an inconclusive check recorded as a failed one consumes the single correction attempt irreversibly. The facade maps correction only to corroborated frozen IDs and genesis paths, rejects over-budget repository evidence, and creates or discovers the terminal receipt. Later observations are follow-ups, not another correction. Judgment Day alone keeps its existing two-round rule. SDD then runs one independent requirements/runtime verification. Failure escalates and never starts another reviewer, refuter, correction, or validator.
 
 <!-- authority-first-terminal-procedure:start -->
 ### Authority-First Terminal Procedure
@@ -98,17 +110,17 @@ Use only the compact facade; it appends and reads back native authority before m
 
 | Order | Operation | Required result | Terminal mirrors |
 |---|---|---|---|
-| 01 | `gentle-ai review start` | target, tier, lenses, and budget bound | blocked |
-| 02 | `gentle-ai review finalize` | results, evidence, native transitions, and receipt bound | blocked |
-| 03 | `gentle-ai review validate --gate <gate> --cwd <repo>` | authority, receipt, and live Git checked | blocked |
+| 01 | `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` | one provider-owned `next_transition` returned | blocked |
+| 02 | `provider-returned transition` | exact `execute` operation/arguments or `collect` inputs completed; `stop` halts | blocked |
+| 03 | repeat 01–02 | exact returned `review.validate` allows the terminal gate | blocked |
 | 04 | `reconcile-terminal-mirrors` | existing mirrors reconciled | allowed |
 
-After ambiguous output, rerun the same facade operation; native discovery resumes committed authority without another budget. Malformed or ambiguous lineage remains invalid.
+After ambiguous output, query STATUS again; native discovery reports the committed authority and its next transition without another budget. Malformed or ambiguous lineage remains invalid.
 <!-- authority-first-terminal-procedure:end -->
 
 ## Delivery
 
-Repository Git common-dir CAS remains authoritative. Existing transaction, policy, ledger, receipt, bundle, and gate-context schemas, prerequisites, and compatibility behavior remain unchanged in this work unit. Reconcile mirrors only after native allow. Supported lifecycle CLI gates are `post-apply`, `pre-commit`, `pre-push`, `pre-pr`, and `release`; they discover and validate the same receipt and never launch reviewers or create a budget. Archive still requires structured status with `reviewGate.result: allow` and its approved receipt. Model/provider/profile selection remains user-owned.
+Repository Git common-dir CAS remains authoritative. Existing transaction, policy, ledger, receipt, bundle, and gate-context schemas, prerequisites, and compatibility behavior remain unchanged in this work unit. Reconcile mirrors only after native allow. Supported lifecycle CLI gates are `post-apply`, `pre-commit`, `pre-push`, `pre-pr`, and `release`; they discover and validate the same receipt and never launch reviewers or create a budget. Archive still requires structured status with `reviewGate.result: allow` and its approved receipt, or `reviewGate.delivery: disabled/unmanaged` while the kill switch is off. Model/provider/profile selection remains user-owned.
 
 Before commit, stage all reviewed paths without content/mode changes, then validate pre-commit. Frozen intended-untracked paths must remain all untracked or all move to an index whose complete tree and paths match the receipt.
 
@@ -116,7 +128,7 @@ Before commit, stage all reviewed paths without content/mode changes, then valid
 
 - Use exploration sub-agents to compress broad repo reading into a short handoff.
 - Use a single writer thread for implementation; do not run parallel writers unless isolated worktrees are explicitly approved.
-- Start concrete review lenses only inside one explicit post-implementation `review/start(target)`; conflict and incident handling validate the existing receipt and immutable boundaries instead of reopening review.
+- Let the native review and delivery providers select checking and delivery actions; repeated gates reuse exact authority and never reopen review for unchanged content.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
 ## SDD Workflow (lazy-loaded)
@@ -127,21 +139,3 @@ The detailed SDD procedure is intentionally NOT embedded in this always-on paren
 
 That lazy surface contains the SDD commands, init/dispatcher guards, execution-mode gatekeeper, artifact store policy, delivery strategy, dependency graph, review workload guard, model assignments, sub-agent launch protocol, context protocol, topic keys, and recovery rules.
 <!-- /gentle-ai:sdd-orchestrator -->
-
-<!-- gentle-ai:trigger-rules -->
-## Agent Trigger Rules
-
-Deterministic bounded-review lifecycle router; apply it as a decision procedure, not advice. Post-apply starts `review/start(target)` only when no valid receipt exists. Pre-commit, pre-push, and pre-PR validate the same content-bound receipt and never create a new review budget or silently start Judgment Day. Release from protected `main` may bypass receipt validation only when the tag targets the current immutable `origin/main` SHA, required CI for that exact SHA is successful, the remote head is rechecked before tag push, and no fresh risk evidence exists; otherwise fail closed through native receipt validation. Major and post-incident releases require explicit extraordinary review.
-
-Receipt action table: missing → start explicitly after implementation/post-apply; scope-changed → require explicit maintainer action; invalidated → require explicit maintainer action; escalated → stop. New CI, vulnerability, base, policy, provenance, or release evidence may invalidate/escalate without reopening unchanged code review.
-
-Inside explicit `review/start(target)` only, select initial lenses by deterministic risk: **Low** (only documentation, comments, formatting, or typo-only string edits; zero executable-code and configuration changes) → no lens; **Medium** (every remaining change; pure human documentation above 400 authored changed lines is pinned to `review-readability`) → exactly ONE dominant-risk lens; **High** (security/auth/update/payments, data loss or exposure, permission changes, shell/process integration, or more than 400 authored changed lines in code, configuration, prompts, agent rules, workflows, runtime instruction docs, mixed content, or active content) → four initial 4R lens sweeps. Generated goldens are excluded from the authored threshold but remain in snapshot identity. Model, provider, profile, and reasoning effort are never classifier inputs.
-
-Risk table: Clear naming, structure, maintainability, or small refactors → `review-readability`; Behavior, state, tests, determinism, or regressions → `review-reliability`; Shell/process integration, partial failures, recovery, or degraded dependencies → `review-resilience`; Security, permissions, data exposure/loss, architecture, or dependencies → `review-risk`.
-
-- At **pre-commit**, always: validate the existing content-bound receipt with native `gentle-ai review validate --gate <gate>`; never start a reviewer or reset its budget. (validate the staged/intended content against the existing receipt; never create a review budget)
-- At **pre-push**, always: validate the existing content-bound receipt with native `gentle-ai review validate --gate <gate>`; never start a reviewer or reset its budget. (validate pushed commits against the same content-bound receipt)
-- At **pre-pr**, always: validate the existing content-bound receipt with native `gentle-ai review validate --gate <gate>`; never start a reviewer or reset its budget. (validate candidate tree, paths, policy, evidence, base relationship, and receipt without reopening review)
-- At **release**, always: validate the existing content-bound receipt with native `gentle-ai review validate --gate <gate>`; never start a reviewer or reset its budget. (validate immutable release tree, provenance, evidence, and publication boundary)
-- At **post-sdd-phase**, after the apply phase completes: if no valid receipt exists, explicitly run `review/start(target)`; otherwise reuse the receipt. (explicitly start ordinary bounded implementation review after apply only when no valid receipt exists)
-<!-- /gentle-ai:trigger-rules -->

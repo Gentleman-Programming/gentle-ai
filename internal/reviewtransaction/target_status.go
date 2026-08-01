@@ -147,6 +147,7 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 
 	candidates := []targetStatusCandidate{}
 	scopeChangedCandidates := []targetStatusCandidate{}
+	approvedScopeRecovery := []targetStatusCandidate{}
 	for lineage, candidate := range view.compact {
 		if request.LineageID != "" && request.LineageID != lineage {
 			continue
@@ -173,12 +174,55 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				continue
 			}
 		}
+		if state.State == StateCorrectionRequired {
+			_, eligible, eligibilityErr := compactCorrectionRequiredStagedScopeRecovery(ctx, repo, state, live)
+			if eligibilityErr != nil {
+				return targetStatusFailure(base, eligibilityErr)
+			}
+			if eligible {
+				candidate.correctionRecovery, candidate.recoveryDisposition = true, RecoveryScopeChanged
+				candidates = append(candidates, candidate)
+				continue
+			}
+		}
+		// The same predicates START uses to refuse a fresh lineage against an
+		// approved predecessor: either the frozen delivery scope has a changed
+		// candidate, or a disjoint base advance preserves the exact feature patch.
+		// Classifying either relationship more weakly makes negotiated status emit
+		// a START the store then refuses while recovery authorization stays unreachable.
+		// Like the staged scope-expansion edge above, only a published
+		// canonical receipt may bind an approved predecessor for recovery; a
+		// receiptless approved authority keeps its publication-repair routing.
+		// Collection stays separate from governing candidates: the sole such
+		// predecessor mirrors START's single-recovery-candidate answer below,
+		// while plural matches keep the Phase 3e "nothing governs" listing.
+		if candidate.receiptPublished && candidate.receiptCanonical {
+			rebasedRecovery, rebasedErr := compactApprovedRebasedScopeRecovery(ctx, repo, state, live)
+			if rebasedErr != nil {
+				return targetStatusFailure(base, rebasedErr)
+			}
+			if compactApprovedScopeChangedRecovery(state, live) || rebasedRecovery {
+				recovery := candidate
+				recovery.correctionRecovery = true
+				recovery.recoveryDisposition = RecoveryScopeChanged
+				approvedScopeRecovery = append(approvedScopeRecovery, recovery)
+			}
+		}
 		if state.State == StateEscalated {
 			requested := state
 			requested.InitialSnapshot = live
 			if compactStartDeliveryScopeMatches(state, requested) {
 				candidate.correctionRecovery = compactEscalatedRecoveryTargetChanged(state.CurrentSnapshot, live)
 				if candidate.correctionRecovery {
+					candidate.recoveryDisposition = RecoveryEscalated
+				} else if compactAccountingOnlyEscalation(state) {
+					// An accounting-only escalation (both original review and
+					// correction regression passed; only the cumulative
+					// correction line count crossed the budget) has a native
+					// evidence-bound RecoveryEscalated edge that does not
+					// require a changed target. Offering it here mirrors that
+					// edge instead of dead-ending the operator at Stop.
+					candidate.correctionRecovery = true
 					candidate.recoveryDisposition = RecoveryEscalated
 				} else if eligibility, ok, inspectErr := InspectCompactFinalVerificationRetrySource(ctx, repo, state.LineageID, candidate.compact.Revision); inspectErr != nil {
 					return targetStatusFailure(base, inspectErr)
@@ -234,6 +278,13 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			candidates = append(candidates, candidate)
 		}
 	}
+	if len(candidates) == 0 && len(approvedScopeRecovery) == 1 {
+		// START answers recover for exactly one approved delivery-scope
+		// predecessor with no other claimant, so status must bind that same
+		// predecessor for recovery instead of routing to a START the store
+		// refuses (issue #1826). Plural matches stay stale listings below.
+		candidates = approvedScopeRecovery
+	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].lineage != candidates[j].lineage {
 			return candidates[i].lineage < candidates[j].lineage
@@ -244,9 +295,20 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		return scopeChangedCandidates[i].lineage < scopeChangedCandidates[j].lineage
 	})
 	if len(candidates) == 0 && len(scopeChangedCandidates) > 1 {
-		base.Applicability = TargetApplicabilityAmbiguous
-		base.Action = TargetStatusActionSelectLineage
-		base.Replayability = ReplayabilityStatusRequired
+		// Two or more stale (scope-changed) lineages never decide anything
+		// by themselves: with no EXACTLY governing candidate, nothing
+		// governs this live target, so the sole continuation is the same
+		// "start fresh" shape the zero-candidate case already reports below
+		// (including its own overlay+staged safety stop, a live-projection
+		// check unrelated to lineage history). The stale lineages stay
+		// listed in CandidateLineageIDs purely so recovering one of them
+		// remains a discoverable OPTION, never a required disambiguation
+		// chore forced by history alone.
+		base.Applicability = TargetApplicabilityUnrelated
+		base.Action, base.Replayability = TargetStatusActionStart, ReplayabilityNotReplayable
+		if live.Kind == TargetBaseWorkspaceOverlay && live.Projection == ProjectionStaged {
+			base.Action, base.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+		}
 		for _, candidate := range scopeChangedCandidates {
 			base.CandidateLineageIDs = append(base.CandidateLineageIDs, candidate.lineage)
 		}

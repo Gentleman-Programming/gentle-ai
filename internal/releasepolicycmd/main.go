@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/gentleman-programming/gentle-ai/internal/releasepolicy"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/releasepolicy"
 )
 
 func main() {

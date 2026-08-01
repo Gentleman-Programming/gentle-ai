@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const ReviewReconcileAuthorityBatchPreparationInputSchema = "gentle-ai.review-batch-reconcile-preparation-input/v1"
@@ -57,7 +57,7 @@ func runReviewReconcileAuthorityBatch(ctx context.Context, args []string, stdout
 	if strings.TrimSpace(*input) == "" {
 		return errors.New("review reconcile-authority-batch requires --input")
 	}
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
+	root, err := resolveReviewMutationRoot(ctx, *cwd)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
 	}

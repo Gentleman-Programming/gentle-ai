@@ -128,27 +128,33 @@
           "arguments": [
             {
               "name": "lineage",
-              "value": "review-status-fixture"
+              "value": "review-status-fixture",
+              "token": "--lineage=review-status-fixture"
             },
             {
               "name": "expected-revision",
-              "value": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390"
+              "value": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390",
+              "token": "--expected-revision=sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390"
             },
             {
               "name": "target",
-              "value": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
+              "value": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+              "token": "--target=sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
             },
             {
               "name": "repository-context",
-              "value": "rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              "value": "rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "token": "--repository-context=rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             },
             {
               "name": "lens",
-              "value": "review-reliability"
+              "value": "review-reliability",
+              "token": "--lens=review-reliability"
             },
             {
               "name": "order",
-              "value": "0"
+              "value": "0",
+              "token": "--order=0"
             }
           ],
           "artifact_subject": {

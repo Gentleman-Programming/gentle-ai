@@ -19,6 +19,25 @@ func TestHelpContainsAllCommands(t *testing.T) {
 	}
 }
 
+// TestHelpAdvertisesNoRetiredWorkCommands keeps help and dispatch aligned: the
+// retired remote control-plane commands no longer dispatch, so help must not
+// advertise any of them.
+func TestHelpAdvertisesNoRetiredWorkCommands(t *testing.T) {
+	var buf bytes.Buffer
+	printHelp(&buf, "v1.0.0-test")
+	output := buf.String()
+
+	for _, cmd := range []string{
+		"work-capabilities", "work-start", "work-route", "work-advance",
+		"work-verification-decide", "work-reconcile", "work-status", "work-transition",
+		"WORK CONTRACT COMPATIBILITY",
+	} {
+		if strings.Contains(output, cmd) {
+			t.Errorf("help output still advertises retired command surface %q", cmd)
+		}
+	}
+}
+
 func TestHelpPresentsFlatReviewCommandsAsCompatibilityPaths(t *testing.T) {
 	var buf bytes.Buffer
 	printHelp(&buf, "v1.0.0-test")
@@ -70,6 +89,32 @@ func TestHelpRejectsStaleMutableAndMandatoryReviewWording(t *testing.T) {
 	} {
 		if strings.Contains(output, stale) {
 			t.Fatalf("help output retains stale review contract %q:\n%s", stale, output)
+		}
+	}
+}
+
+func TestHelpDocumentsUserControlledReviewModeKillSwitch(t *testing.T) {
+	var buf bytes.Buffer
+	printHelp(&buf, "v1.0.0-test")
+	output := buf.String()
+	for _, want := range []string{
+		"review mode <enable|disable|status>",
+		"--scope <global|clone>",
+		"off wins",
+		"status never mutates",
+		"asks once per clone",
+		"'not now' applies to that candidate only",
+		"gentle-ai review mode disable",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("help output missing review mode documentation %q:\n%s", want, output)
+		}
+	}
+	// The permanent disable stopped being a numbered answer, so the help must
+	// not keep advertising it as one.
+	for _, stale := range []string{"never ask again", "Never ask again"} {
+		if strings.Contains(output, stale) {
+			t.Fatalf("help output still offers a permanent disable as an answer %q:\n%s", stale, output)
 		}
 	}
 }

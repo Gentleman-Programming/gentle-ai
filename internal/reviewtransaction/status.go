@@ -57,16 +57,24 @@ const (
 )
 
 type AuthorityInventoryEntry struct {
-	Version       AuthorityVersion           `json:"version"`
-	LineageID     string                     `json:"lineage_id,omitempty"`
-	Path          string                     `json:"path"`
-	Status        AuthorityStatus            `json:"status"`
-	State         State                      `json:"state,omitempty"`
-	Revision      string                     `json:"revision,omitempty"`
-	ChainIdentity string                     `json:"chain_identity,omitempty"`
-	Recovery      *CompactRecoveryProvenance `json:"recovery,omitempty"`
-	Problems      []string                   `json:"problems"`
-	compact       *CompactRecord
+	Version   AuthorityVersion `json:"version"`
+	LineageID string           `json:"lineage_id,omitempty"`
+	Path      string           `json:"path"`
+	Status    AuthorityStatus  `json:"status"`
+	State     State            `json:"state,omitempty"`
+	Revision  string           `json:"revision,omitempty"`
+	// SnapshotIdentity is the frozen initial snapshot identity of a compact
+	// entry, read from the persisted state alone. Maintainer authorization
+	// bindings are bound over exactly this value, and the live worktree is
+	// never consulted to produce it, so a stale lineage still publishes the
+	// identity its own authority was frozen at. The negotiated target status
+	// cannot serve that role: it recomputes the identity from the worktree
+	// and withholds the authority block entirely once the target drifts.
+	SnapshotIdentity string                     `json:"snapshot_identity,omitempty"`
+	ChainIdentity    string                     `json:"chain_identity,omitempty"`
+	Recovery         *CompactRecoveryProvenance `json:"recovery,omitempty"`
+	Problems         []string                   `json:"problems"`
+	compact          *CompactRecord
 }
 
 type AuthorityLockEvidence struct {
@@ -195,7 +203,15 @@ func inventoryVersion(ctx context.Context, repo, root, directory string, version
 			result = inventoryUnexpected(result, path, "authority directory is not a canonical lineage identifier")
 			continue
 		}
-		entry, locks := inventoryLineage(ctx, repo, version, path, item.Name())
+		entry, locks, quarantine := inventoryLineage(ctx, repo, version, path, item.Name())
+		if quarantine != nil {
+			// A TERMINAL lineage that fails semantic validation is quarantined
+			// out of the entries table alone (issue-1813): auditable via this
+			// diagnostic, never silently dropped, but never counted against
+			// report.Complete/Authoritative for every other healthy lineage.
+			result.diagnostics = append(result.diagnostics, *quarantine)
+			continue
+		}
 		result.entries = append(result.entries, entry)
 		result.locks = append(result.locks, locks...)
 		if entry.Status == AuthorityStatusReset {
@@ -217,12 +233,12 @@ func inventoryUnexpected(result authorityVersionInventory, path, problem string)
 	return result
 }
 
-func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion, path, lineage string) (AuthorityInventoryEntry, []AuthorityLockEvidence) {
+func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion, path, lineage string) (AuthorityInventoryEntry, []AuthorityLockEvidence, *AuthorityInventoryDiagnostic) {
 	entry := AuthorityInventoryEntry{Version: version, LineageID: lineage, Path: path, Problems: []string{}}
 	items, err := os.ReadDir(path)
 	if err != nil {
 		entry.Status, entry.Problems = AuthorityStatusInvalid, []string{err.Error()}
-		return entry, nil
+		return entry, nil, nil
 	}
 	locks := []AuthorityLockEvidence{}
 	if version == AuthorityVersionLegacy {
@@ -237,21 +253,30 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 		}
 	}
 	if entry.Status == AuthorityStatusReset {
-		return entry, locks
+		return entry, locks, nil
 	}
 	if version == AuthorityVersionCompact {
 		if _, statErr := os.Stat(filepath.Join(path, compactStateFileName)); os.IsNotExist(statErr) && !compactStoreHoldsAuthority(items) {
 			entry.Status = AuthorityStatusIncomplete
 			entry.Problems = []string{"compact store entry has no review-state.json and no authoritative artifacts; quarantine it with gentle-ai review reclaim"}
-			return entry, locks
+			return entry, locks, nil
 		}
 		store := CompactStore{Dir: path, lineageID: lineage, repo: repo}
 		record, err := store.LoadContext(ctx)
 		if err != nil {
+			// A TERMINAL lineage that fails semantic validation is quarantined
+			// (issue-1813): diagnostic-only, excluded from the entries table,
+			// never counted against report.Complete/Authoritative. Every other
+			// load failure (structural: JSON decode, schema, checksum) still
+			// fails this entry closed as AuthorityStatusInvalid.
+			if _, quarantinable := compactLineageQuarantinable(err); quarantinable {
+				return entry, locks, &AuthorityInventoryDiagnostic{Path: path, Problem: "quarantined-terminal-lineage: " + err.Error()}
+			}
 			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{err.Error()}
-			return entry, locks
+			return entry, locks, nil
 		}
 		entry.Revision, entry.State, entry.Recovery = record.Revision, record.State.State, record.State.Recovery
+		entry.SnapshotIdentity = record.State.InitialSnapshot.Identity
 		entry.compact = &record
 		entry.Status = authorityStatusForState(record.State.State)
 		if payload, err := os.ReadFile(store.ReceiptPath()); err == nil {
@@ -267,13 +292,13 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 		} else if !os.IsNotExist(err) {
 			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"read compact receipt: " + err.Error()}
 		}
-		return entry, locks
+		return entry, locks, nil
 	}
 	store := Store{Dir: path, lineageID: lineage, repo: repo, readOnly: true}
 	chain, err := store.LoadChain()
 	if err != nil {
 		entry.Status, entry.Problems = AuthorityStatusInvalid, []string{err.Error()}
-		return entry, locks
+		return entry, locks, nil
 	}
 	transaction := chain.Records[len(chain.Records)-1].Transaction
 	entry.State, entry.Revision, entry.ChainIdentity = transaction.State, chain.HeadRevision, chain.Identity
@@ -298,7 +323,7 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 	} else if !os.IsNotExist(err) {
 		entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"read legacy receipt: " + err.Error()}
 	}
-	return entry, locks
+	return entry, locks, nil
 }
 
 func authorityStatusForState(state State) AuthorityStatus {

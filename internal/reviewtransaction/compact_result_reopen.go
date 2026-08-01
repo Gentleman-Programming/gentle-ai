@@ -16,19 +16,32 @@ import (
 )
 
 const (
-	AdmittedReviewerResultSchema           = "gentle-ai.review-admitted-result/v1"
+	AdmittedReviewerResultSchemaV1         = "gentle-ai.review-admitted-result/v1"
+	AdmittedReviewerResultSchema           = "gentle-ai.review-admitted-result/v2"
 	CompactResultReopenOperation           = "review/reopen-results"
 	CompactQuarantinedReviewerResultsDir   = "quarantined-reviewer-results"
 	compactResultReopenAuthorizationSchema = "gentle-ai.review-result-reopen-authorization/v1"
 	compactReviewerResultSizeLimit         = 4 << 20
 )
 
+func admittedReviewerResultSchemaForSubject(subject ArtifactSubject) string {
+	if subject.Schema == ArtifactSubjectSchemaV1 {
+		return AdmittedReviewerResultSchemaV1
+	}
+	return AdmittedReviewerResultSchema
+}
+
 type CompactResultReopenRequest struct {
-	LineageID               string
-	ExpectedRevision        string
-	TargetIdentity          string
-	Reason                  string
-	Actor                   string
+	LineageID        string
+	ExpectedRevision string
+	TargetIdentity   string
+	Reason           string
+	Actor            string
+	// QuarantineLenses names the admitted reviewer results the maintainer
+	// explicitly overrides. Native detection never quarantines an admitted
+	// slot; only a lens named here — and named again inside the emitted
+	// maintainer authorization — may move an admitted result into quarantine.
+	QuarantineLenses        []string
 	MaintainerAuthorization string
 	ReopenedAt              time.Time
 }
@@ -39,6 +52,7 @@ type CompactResultReopenPlan struct {
 	TargetIdentity                  string                    `json:"target_identity"`
 	Quarantined                     []CompactResultReopenSlot `json:"quarantined"`
 	Retained                        []CompactResultReopenSlot `json:"retained"`
+	AuthorizedLenses                []string                  `json:"authorized_lenses,omitempty"`
 	RequiredMaintainerAuthorization string                    `json:"required_maintainer_authorization"`
 }
 
@@ -67,13 +81,25 @@ type compactProviderReviewerResult struct {
 	Evidence    []string           `json:"evidence"`
 }
 
-func CompactResultReopenAuthorization(repository string, request CompactResultReopenRequest, quarantined, retained []CompactResultReopenSlot) string {
+// CompactResultReopenAuthorization derives the exact maintainer binding for
+// one reopen. authorizedLenses must already be canonical (selected order,
+// deduplicated); when a maintainer overrides admitted slots the binding names
+// them on their own line, so an authorization emitted for one override set can
+// never be replayed to sweep a different one, and a binding emitted for a
+// purely native plan (no line) can never quarantine an admitted slot. The
+// empty case stays byte-identical to the historical binding so persisted
+// audits keep re-deriving exactly.
+func CompactResultReopenAuthorization(repository string, request CompactResultReopenRequest, quarantined, retained []CompactResultReopenSlot, authorizedLenses []string) string {
 	entries := func(slots []CompactResultReopenSlot) string {
 		values := make([]string, len(slots))
 		for index, slot := range slots {
 			values[index] = strconv.Itoa(slot.SelectedOrder) + ":" + slot.Lens + ":" + slot.ArtifactDigest + ":" + slot.ResultHash
 		}
 		return strings.Join(values, ",")
+	}
+	authorized := ""
+	if len(authorizedLenses) > 0 {
+		authorized = "\nauthorized_lenses=" + strings.Join(authorizedLenses, ",")
 	}
 	return compactResultReopenAuthorizationSchema +
 		"\nrepository=" + repository +
@@ -82,8 +108,34 @@ func CompactResultReopenAuthorization(repository string, request CompactResultRe
 		"\ntarget_identity=" + request.TargetIdentity +
 		"\nquarantined=" + entries(quarantined) +
 		"\nretained=" + entries(retained) +
+		authorized +
 		"\nactor=" + strings.TrimSpace(request.Actor) +
 		"\nreason=" + strings.TrimSpace(request.Reason)
+}
+
+// canonicalReopenQuarantineLenses validates and canonicalizes the maintainer's
+// named admitted-slot overrides: every entry must be a frozen selected lens,
+// duplicates collapse, and the result is ordered by selected order so the
+// binding and audit are deterministic regardless of flag order.
+func canonicalReopenQuarantineLenses(state CompactState, lenses []string) ([]string, error) {
+	if len(lenses) == 0 {
+		return nil, nil
+	}
+	named := make(map[string]struct{}, len(lenses))
+	for _, lens := range lenses {
+		lens = strings.TrimSpace(lens)
+		if stringIndex(state.SelectedLenses, lens) < 0 {
+			return nil, fmt.Errorf("review reopen-results --quarantine-lens %q does not name a selected lens; this review's frozen selection is %s", lens, strings.Join(state.SelectedLenses, ", "))
+		}
+		named[lens] = struct{}{}
+	}
+	canonical := make([]string, 0, len(named))
+	for _, lens := range state.SelectedLenses {
+		if _, ok := named[lens]; ok {
+			canonical = append(canonical, lens)
+		}
+	}
+	return canonical, nil
 }
 
 func PrepareCompactResultReopen(ctx context.Context, repo string, request CompactResultReopenRequest) (CompactResultReopenPlan, error) {
@@ -140,9 +192,10 @@ func ReopenCompactReviewerResults(ctx context.Context, repo string, request Comp
 	}
 	audit := CompactResultReopen{
 		PreviousRevision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity,
-		Quarantined: append([]CompactResultReopenSlot(nil), plan.Quarantined...),
-		Retained:    append([]CompactResultReopenSlot(nil), plan.Retained...),
-		Reason:      strings.TrimSpace(request.Reason), Actor: strings.TrimSpace(request.Actor),
+		Quarantined:      append([]CompactResultReopenSlot(nil), plan.Quarantined...),
+		Retained:         append([]CompactResultReopenSlot(nil), plan.Retained...),
+		AuthorizedLenses: append([]string(nil), plan.AuthorizedLenses...),
+		Reason:           strings.TrimSpace(request.Reason), Actor: strings.TrimSpace(request.Actor),
 		ReopenedAt: request.ReopenedAt.UTC(), MaintainerAuthorization: request.MaintainerAuthorization,
 	}
 	next := record.State
@@ -166,7 +219,7 @@ func ReopenCompactReviewerResults(ctx context.Context, repo string, request Comp
 		} else if !os.IsNotExist(statErr) {
 			return statErr
 		}
-		quarantined, retained, inspectErr := classifyCompactResultReopenSlots(store.Dir, record.State, frozen)
+		quarantined, retained, inspectErr := classifyCompactResultReopenSlots(ctx, repository, store.Dir, record.State, frozen, plan.AuthorizedLenses)
 		if inspectErr != nil {
 			return inspectErr
 		}
@@ -198,50 +251,91 @@ func validateCompactResultReopenRequest(request CompactResultReopenRequest, appl
 	return nil
 }
 
+// compactResultReopenStateEligible gates which authorities may reopen
+// reviewer results. Validating keeps its historical full-pristineness
+// requirements. Correction-required is additionally eligible — that is where
+// admitted results carrying blocking findings land — but only while the
+// authority is still uncorrected: no completed correction attempt, no actual
+// correction accounting, no validation criteria, and no delivery evidence. A
+// correction forecast alone (proposed lines with zero byte movement) does not
+// close the door, because the product's own collect transition asks for that
+// forecast before the operator can even see the reopen route. Everything the
+// gate tolerates here is derived review state that the reopen transition
+// resets and audits; the frozen scope, tier, budget, and candidate identity
+// stay untouched either way.
+func compactResultReopenStateEligible(state CompactState) bool {
+	if !snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) ||
+		len(state.CorrectionAttempts) != 0 || state.ActualCorrectionLines != nil ||
+		state.OriginalCriteria != nil || state.CorrectionRegression != nil || state.EvidenceHash != "" {
+		return false
+	}
+	// guard:population result-reopen-state too-tight: legitimate reopen authorities are uncorrected validating or correction-required states on the frozen candidate
+	switch state.State {
+	case StateValidating:
+		return len(state.FixFindingIDs) == 0 && state.ProposedCorrectionLines == nil
+	case StateCorrectionRequired:
+		return true
+	default:
+		return false
+	}
+}
+
 func buildCompactResultReopenPlan(ctx context.Context, repository string, store CompactStore, record CompactRecord, request CompactResultReopenRequest) (CompactResultReopenPlan, error) {
 	if record.Revision != request.ExpectedRevision {
 		return CompactResultReopenPlan{}, fmt.Errorf("%w: expected compact revision %q, current %q", ErrConcurrentUpdate, request.ExpectedRevision, record.Revision)
 	}
 	state := record.State
-	if state.State != StateValidating || state.InitialSnapshot.Identity != request.TargetIdentity ||
-		!snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) || len(state.FixFindingIDs) != 0 ||
-		len(state.CorrectionAttempts) != 0 || state.ProposedCorrectionLines != nil || state.ActualCorrectionLines != nil ||
-		state.OriginalCriteria != nil || state.CorrectionRegression != nil || state.EvidenceHash != "" {
-		return CompactResultReopenPlan{}, errors.New("review reopen-results requires an uncorrected validating authority on the exact frozen target")
+	if state.InitialSnapshot.Identity != request.TargetIdentity || !compactResultReopenStateEligible(state) {
+		return CompactResultReopenPlan{}, errors.New("review reopen-results requires an uncorrected validating or correction-required authority on the exact frozen target; run `gentle-ai review status --cwd <repo>` to see where this review actually is")
 	}
 	if _, err := os.Stat(store.ReceiptPath()); err == nil {
 		return CompactResultReopenPlan{}, errors.New("review reopen-results refuses an authority that already has a receipt")
 	} else if !os.IsNotExist(err) {
 		return CompactResultReopenPlan{}, err
 	}
+	authorizedLenses, err := canonicalReopenQuarantineLenses(state, request.QuarantineLenses)
+	if err != nil {
+		return CompactResultReopenPlan{}, err
+	}
 	frozen, err := (SnapshotBuilder{Repo: repository}).FrozenCandidateContext(ctx, state.InitialSnapshot)
 	if err != nil {
 		return CompactResultReopenPlan{}, err
 	}
-	quarantined, retained, err := classifyCompactResultReopenSlots(store.Dir, state, frozen)
+	quarantined, retained, err := classifyCompactResultReopenSlots(ctx, repository, store.Dir, state, frozen, authorizedLenses)
 	if err != nil {
 		return CompactResultReopenPlan{}, err
 	}
 	if len(quarantined) == 0 {
-		return CompactResultReopenPlan{}, errors.New("review reopen-results found no unusable or unadmitted reviewer result to quarantine")
+		return CompactResultReopenPlan{}, errors.New("review reopen-results found no unusable or unadmitted reviewer result to quarantine; to override admitted results whose reviewer input was wrong, name each one with `--quarantine-lens <lens>` and re-run `--prepare`")
 	}
 	plan := CompactResultReopenPlan{
 		LineageID: request.LineageID, Revision: record.Revision, TargetIdentity: state.InitialSnapshot.Identity,
-		Quarantined: quarantined, Retained: retained,
+		Quarantined: quarantined, Retained: retained, AuthorizedLenses: authorizedLenses,
 	}
-	plan.RequiredMaintainerAuthorization = CompactResultReopenAuthorization(repository, request, quarantined, retained)
+	plan.RequiredMaintainerAuthorization = CompactResultReopenAuthorization(repository, request, quarantined, retained, authorizedLenses)
 	return plan, nil
 }
 
-func classifyCompactResultReopenSlots(storeDir string, state CompactState, frozen FrozenCandidateContext) ([]CompactResultReopenSlot, []CompactResultReopenSlot, error) {
+// classifyCompactResultReopenSlots splits every selected lens slot into
+// quarantined and retained. Native detection quarantines only what the store
+// can prove unusable: an artifact that fails exact re-admission or evidence
+// reporting that candidate inspection was unavailable. authorizedLenses adds
+// the maintainer's explicitly named admitted slots — the one and only path by
+// which a structurally valid, provider-admitted result leaves its slot.
+func classifyCompactResultReopenSlots(ctx context.Context, repository, storeDir string, state CompactState, frozen FrozenCandidateContext, authorizedLenses []string) ([]CompactResultReopenSlot, []CompactResultReopenSlot, error) {
+	authorized := make(map[string]struct{}, len(authorizedLenses))
+	for _, lens := range authorizedLenses {
+		authorized[lens] = struct{}{}
+	}
 	quarantined := make([]CompactResultReopenSlot, 0)
 	retained := make([]CompactResultReopenSlot, 0)
 	for order, lens := range state.SelectedLenses {
-		slot, trusted, err := inspectCompactResultReopenSlot(storeDir, state, frozen, order, lens)
+		slot, trusted, err := inspectCompactResultReopenSlot(ctx, repository, storeDir, state, frozen, order, lens)
 		if err != nil {
 			return nil, nil, err
 		}
-		unusable := !trusted
+		_, named := authorized[lens]
+		unusable := !trusted || named
 		for _, evidence := range state.LensResults[order].Evidence {
 			unusable = unusable || evidenceReportsUnavailableInspection(evidence)
 		}
@@ -254,7 +348,7 @@ func classifyCompactResultReopenSlots(storeDir string, state CompactState, froze
 	return quarantined, retained, nil
 }
 
-func inspectCompactResultReopenSlot(storeDir string, state CompactState, frozen FrozenCandidateContext, order int, lens string) (CompactResultReopenSlot, bool, error) {
+func inspectCompactResultReopenSlot(ctx context.Context, repository, storeDir string, state CompactState, frozen FrozenCandidateContext, order int, lens string) (CompactResultReopenSlot, bool, error) {
 	if order >= len(state.LensResults) {
 		return CompactResultReopenSlot{}, false, errors.New("validating authority does not contain every selected lens result")
 	}
@@ -273,14 +367,14 @@ func inspectCompactResultReopenSlot(storeDir string, state CompactState, frozen 
 		return slot, false, nil
 	}
 	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF || envelope.Schema != AdmittedReviewerResultSchema || len(envelope.Result) == 0 {
+	if err := decoder.Decode(&extra); err != io.EOF || envelope.Schema != admittedReviewerResultSchemaForSubject(envelope.Subject) || len(envelope.Result) == 0 {
 		return slot, false, nil
 	}
-	expected, err := NewArtifactSubject(state, envelope.Subject.AuthorityRevision, frozen, lens, order, envelope.Subject.CorrectionTargetIdentity)
+	frozen, expected, err := artifactSubjectForSchema(ctx, SnapshotBuilder{Repo: repository}, state, envelope.Subject.AuthorityRevision, frozen, lens, order, envelope.Subject.CorrectionTargetIdentity, envelope.Subject.Schema)
 	if err != nil || envelope.Subject != expected || envelope.Admission.Validate(expected) != nil {
 		return slot, false, nil
 	}
-	result, admitted := reAdmitCompactReviewerResult(envelope, expected, frozen)
+	result, admitted := reAdmitCompactReviewerResult(ctx, envelope, expected, frozen)
 	if !admitted || result.ResultHash != state.LensResults[order].ResultHash {
 		return slot, false, nil
 	}
@@ -288,7 +382,7 @@ func inspectCompactResultReopenSlot(storeDir string, state CompactState, frozen 
 	return slot, true, nil
 }
 
-func reAdmitCompactReviewerResult(envelope compactAdmittedReviewerResult, expected ArtifactSubject, frozen FrozenCandidateContext) (LensResult, bool) {
+func reAdmitCompactReviewerResult(ctx context.Context, envelope compactAdmittedReviewerResult, expected ArtifactSubject, frozen FrozenCandidateContext) (LensResult, bool) {
 	decoder := json.NewDecoder(bytes.NewReader(envelope.Result))
 	decoder.DisallowUnknownFields()
 	var provider compactProviderReviewerResult
@@ -307,7 +401,7 @@ func reAdmitCompactReviewerResult(envelope compactAdmittedReviewerResult, expect
 		return LensResult{}, false
 	}
 	canonicalPayload = append(canonicalPayload, '\n')
-	result, admission, err := AdmitArtifact(ArtifactAdmissionRequest{
+	result, admission, err := AdmitArtifact(ctx, ArtifactAdmissionRequest{
 		ExpectedSubject: expected, FrozenContext: frozen, EchoedSubjectHash: provider.SubjectHash,
 		Inspection:                provider.Inspection,
 		Result:                    LensResult{Lens: expected.Lens, Findings: provider.Findings, Evidence: provider.Evidence},
@@ -332,15 +426,14 @@ func compactProviderLensMatches(provided, expected string) bool {
 }
 
 func readCompactReviewerArtifact(path string) ([]byte, string, error) {
-	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return nil, "", errors.New("reviewer artifact is not a regular provider-owned file")
-	}
-	payload, err := os.ReadFile(path)
-	if err != nil || len(payload) == 0 || len(payload) > compactReviewerResultSizeLimit {
+	payload, err := readPrivateCompactReviewerFile(
+		path,
+		compactReviewerResultSizeLimit,
+	)
+	if err != nil {
 		return nil, "", errors.New("reviewer artifact is unreadable or outside the native size bound")
 	}
-	digestPayload, err := os.ReadFile(path + ".sha256")
+	digestPayload, err := readPrivateCompactReviewerFile(path+".sha256", 256)
 	if err != nil {
 		return nil, "", errors.New("reviewer artifact digest sidecar is unavailable")
 	}

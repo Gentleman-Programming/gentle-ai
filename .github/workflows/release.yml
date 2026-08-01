@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - "v*"
+      # Pre-release tags (v2.2.0-rc.1, v3.0.0-beta.2, ...) are for community
+      # testing, never for publication: preflight only accepts exact stable
+      # semver, so triggering on them can only ever turn the repo red.
+      - "!v*-*"
 
 # Read-only is the workflow default. Only the publication job receives the one
 # write capability GoReleaser needs.
@@ -20,6 +24,10 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      # Reading the CI conclusion for this exact commit. Release and CI are
+      # independent workflows on the same commit, so without this the release
+      # path never learns that CI was red on the bytes it is about to sign.
+      actions: read
     env:
       MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
     steps:
@@ -27,7 +35,19 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 0
+          # The preflight requires refs/tags/<tag> to be the annotated tag
+          # object. actions/checkout fetches with --no-tags by default, so
+          # without this the tag ref never exists on the runner and the
+          # annotation check dies on a tag that IS annotated. Never caught
+          # before v2.2.0: no stable tag was cut between this preflight
+          # landing on 2026-07-22 and that release.
+          fetch-tags: true
           persist-credentials: false
+
+      - name: Require successful CI for release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/require-ci-success.sh
 
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
@@ -83,6 +103,13 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 0
+          # The preflight requires refs/tags/<tag> to be the annotated tag
+          # object. actions/checkout fetches with --no-tags by default, so
+          # without this the tag ref never exists on the runner and the
+          # annotation check dies on a tag that IS annotated. Never caught
+          # before v2.2.0: no stable tag was cut between this preflight
+          # landing on 2026-07-22 and that release.
+          fetch-tags: true
           persist-credentials: false
 
       - name: Set up Go
@@ -163,6 +190,13 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 0
+          # The preflight requires refs/tags/<tag> to be the annotated tag
+          # object. actions/checkout fetches with --no-tags by default, so
+          # without this the tag ref never exists on the runner and the
+          # annotation check dies on a tag that IS annotated. Never caught
+          # before v2.2.0: no stable tag was cut between this preflight
+          # landing on 2026-07-22 and that release.
+          fetch-tags: true
           persist-credentials: false
 
       - name: Install Minisign

@@ -8,11 +8,13 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const ReviewIntegrationRepairSchema = "gentle-ai.review-integration.repair/v1"
 const ReviewIntegrationRepairSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/repair.schema.json"
+const ReviewIntegrationRepairSchemaV2 = "gentle-ai.review-integration.repair/v2"
+const ReviewIntegrationRepairSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/repair.schema.json"
 
 type ReviewRepairMode string
 
@@ -43,7 +45,9 @@ type ReviewRepairResult struct {
 }
 
 func (result ReviewRepairResult) Validate() error {
-	if result.Schema != ReviewIntegrationRepairSchema || result.Contract != ReviewIntegrationContractV1 ||
+	legacyContract := result.Schema == ReviewIntegrationRepairSchema && result.Contract == ReviewIntegrationContractV1
+	nativeGitContract := result.Schema == ReviewIntegrationRepairSchemaV2 && result.Contract == ReviewIntegrationContractV2
+	if (!legacyContract && !nativeGitContract) ||
 		result.Operation != "review.repair" {
 		return errors.New("review repair result identity is invalid")
 	}
@@ -128,8 +132,8 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 	if flags.NArg() != 0 {
 		return reviewPreflightError(errors.New("review repair received an unexpected positional argument"))
 	}
-	if *contract != ReviewIntegrationContractV1 {
-		return reviewPreflightError(errors.New("review repair requires the supported review integration contract"))
+	if err := validateReviewIntegrationContract(*contract); err != nil {
+		return reviewPreflightError(err)
 	}
 	if *lineage != "" && !validReviewIntegrationLineage(*lineage) {
 		return reviewPreflightError(errors.New("review repair lineage is invalid"))
@@ -137,6 +141,13 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
 	if err != nil {
 		return &reviewRepairOperationError{message: "review repair could not resolve repository authority", cause: err}
+	}
+	// --preflight only assesses and reports; execution is what repairs durable
+	// authority, so only execution is refused while reviews are off.
+	if !*preflight {
+		if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
+			return err
+		}
 	}
 	assessment, err := reviewtransaction.AssessAuthorityRepairAtRepositoryRoot(ctx, root)
 	if err != nil {
@@ -150,7 +161,7 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 			(assessment.Candidate == nil || assessment.Candidate.LineageID != *lineage) {
 			return reviewPreflightError(errors.New("review repair selector does not match the unique classified candidate"))
 		}
-		result := newReviewRepairPreflightResult(assessment)
+		result := newReviewRepairPreflightResult(assessment, *contract)
 		if err := result.Validate(); err != nil {
 			return fmt.Errorf("validate review repair preflight: %w", err)
 		}
@@ -179,6 +190,9 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 		Schema: ReviewIntegrationRepairSchema, Contract: ReviewIntegrationContractV1, Operation: "review.repair",
 		Mode: ReviewRepairModeExecute, Assessment: assessment, RequiredInputs: []string{}, Execution: &execution,
 	}
+	if *contract == ReviewIntegrationContractV2 {
+		result.Schema, result.Contract = ReviewIntegrationRepairSchemaV2, ReviewIntegrationContractV2
+	}
 	if err := result.Validate(); err != nil {
 		return fmt.Errorf("validate review repair execution: %w", err)
 	}
@@ -194,10 +208,13 @@ func repairExecutionInputPresent(values ...string) bool {
 	return false
 }
 
-func newReviewRepairPreflightResult(assessment reviewtransaction.AuthorityRepairAssessment) ReviewRepairResult {
+func newReviewRepairPreflightResult(assessment reviewtransaction.AuthorityRepairAssessment, contracts ...string) ReviewRepairResult {
 	result := ReviewRepairResult{
 		Schema: ReviewIntegrationRepairSchema, Contract: ReviewIntegrationContractV1, Operation: "review.repair",
 		Mode: ReviewRepairModePreflight, Assessment: assessment, RequiredInputs: []string{},
+	}
+	if len(contracts) > 0 && contracts[0] == ReviewIntegrationContractV2 {
+		result.Schema, result.Contract = ReviewIntegrationRepairSchemaV2, ReviewIntegrationContractV2
 	}
 	if assessment.Status != reviewtransaction.AuthorityRepairEligible || assessment.Candidate == nil {
 		return result

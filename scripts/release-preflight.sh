@@ -25,6 +25,19 @@ if ! canonical_public_keys=$(./scripts/canonicalize-release-public-keys.sh); the
 fi
 [[ "$canonical_public_keys" == "$MINISIGN_PUBLIC_KEYS" ]] || die "public-key canonicalization changed the configured value"
 
+# actions/checkout fetches every tag correctly and then immediately overwrites
+# this one with a lightweight ref: its second fetch is
+# `+<sha>:refs/tags/<tag>`, which maps the commit straight onto the tag name.
+# So refs/tags/<tag> on the runner points at a commit no matter how the tag was
+# created, and the annotation check below can never pass without restoring the
+# real object first. Re-fetch it from the remote, where it is still annotated.
+#
+# Verified against the checkout log of the first release that ever ran this
+# preflight: it fetched `+refs/tags/*:refs/tags/*`, then
+# `+ef13eecc...:refs/tags/v2.2.0`. Setting fetch-tags on the action does not
+# help, because the clobbering fetch happens afterwards either way.
+git fetch --force --quiet origin "refs/tags/$tag:refs/tags/$tag" ||
+  die "release tag $tag could not be fetched from origin; push the annotated tag first"
 [[ "$(git cat-file -t "refs/tags/$tag")" == "tag" ]] || die "release tag must be annotated"
 head_sha=$(git rev-parse 'HEAD^{commit}')
 event_sha=$(git rev-parse "$GITHUB_SHA^{commit}")

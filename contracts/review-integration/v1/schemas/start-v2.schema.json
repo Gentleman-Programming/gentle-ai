@@ -194,6 +194,7 @@
         "code": {
           "enum": [
             "configuration_change",
+            "empty_content",
             "executable_change",
             "executable_mode",
             "hot_path",

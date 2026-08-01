@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestNegotiatedReviewFinalizeRejectsStaleLiveTargetWithoutMutation(t *testing.T) {
@@ -182,7 +182,7 @@ func TestReviewFinalizeCrowdedStoreSelectsOnlyFullLiveSnapshotMatch(t *testing.T
 		t.Fatal(err)
 	}
 	staleBytes := readReviewOperationFile(t, stale.StatePath())
-	resultArgs := facadeReviewerResultArgs(t, ReviewFacadeStartResult{SelectedLenses: exactState.SelectedLenses})
+	resultArgs := facadeReviewerResultArgs(t, repo, ReviewFacadeStartResult{LineageID: exactState.LineageID, SelectedLenses: exactState.SelectedLenses})
 	args := []string{"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo}
 	args = append(args, resultArgs...)
 	if err := RunReview(args, &bytes.Buffer{}); err != nil {
@@ -195,7 +195,9 @@ func TestReviewFinalizeCrowdedStoreSelectsOnlyFullLiveSnapshotMatch(t *testing.T
 	if got := readReviewOperationFile(t, stale.StatePath()); !bytes.Equal(got, staleBytes) {
 		t.Fatal("crowded FINALIZE mutated stale lineage")
 	}
-	assertCompactLineageFiles(t, stale, []string{"review-state.json"})
+	// The fixture admitted this lineage's reviewer results before the crowded
+	// FINALIZE ran; what must not change is the state, which is asserted above.
+	assertCompactLineageFiles(t, stale, []string{"review-state.json", "reviewer-results"})
 }
 
 func TestReviewFinalizeConvergesCommittedPendingJournalAfterWorktreeDrift(t *testing.T) {
@@ -302,7 +304,7 @@ func startFinalizeLiveTarget(t *testing.T, repo, lineage string, extra ...string
 	if err != nil {
 		t.Fatal(err)
 	}
-	return started, store, facadeReviewerResultArgs(t, started)
+	return started, store, facadeReviewerResultArgs(t, repo, started)
 }
 func assertFinalizeLiveTargetDenied(t *testing.T, repo, lineage string, resultArgs []string) {
 	t.Helper()
@@ -317,8 +319,15 @@ func assertFinalizeLiveTargetDenied(t *testing.T, repo, lineage string, resultAr
 		t.Fatalf("stale FINALIZE succeeded: %s", output.String())
 	}
 	failure := decodeReviewIntegrationFailure(t, output.Bytes())
-	if failure.Operation != ReviewIntegrationOperationFinalize || failure.Phase != "preflight" ||
-		failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe || lineage != "" && failure.LineageID != lineage {
+	// Reading admitted reviewer results needs the frozen candidate context, so a
+	// repository whose frozen Git evidence was destroyed fails as a typed Git
+	// failure before preflight rather than as a stale target. Both are denials
+	// that start no mutation, which is the property this helper exists to hold;
+	// the phase differs because the two states are genuinely different.
+	staleShape := failure.Phase == "preflight" && failure.RetrySafe
+	gitEvidenceLost := failure.Phase == "pre_native" && failure.Code == "git_command_failed" && failure.NextAction == "stop"
+	if failure.Operation != ReviewIntegrationOperationFinalize || failure.MutationOutcome != ReviewMutationNotStarted ||
+		!(staleShape || gitEvidenceLost) || lineage != "" && failure.LineageID != lineage {
 		t.Fatalf("stale FINALIZE failure = %#v", failure)
 	}
 	if after := cliReviewAuthoritySnapshot(t, repo); !reflect.DeepEqual(after, before) {
@@ -421,21 +430,21 @@ func TestNegotiatedReviewFinalizeRetriesSameLineageAfterReviewerSchemaRejection(
 	}
 	beforeBytes := readReviewOperationFile(t, store.StatePath())
 
+	// The reviewer payload is now rejected where it is admitted rather than at
+	// finalize, because finalize only consumes results the provider already
+	// admitted. The property under test is unchanged: a rejected payload leaves
+	// the lineage retryable with a corrected one.
 	resultPath := filepath.Join(t.TempDir(), "reviewer.json")
 	if err := os.WriteFile(resultPath, []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	args := []string{
 		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
-		"--lineage", lineage, "--result", resultPath,
+		"--lineage", lineage, "--captured-results=true",
 	}
 	var output bytes.Buffer
-	if err := RunReview(args, &output); err == nil {
-		t.Fatalf("invalid reviewer payload succeeded: %s", output.String())
-	}
-	failure := decodeReviewIntegrationFailure(t, output.Bytes())
-	if failure.Phase != "preflight" || failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe {
-		t.Fatalf("preflight failure = %#v", failure)
+	if err := captureReviewCLIResultFiles(t, repo, lineage, []string{resultPath}); err == nil {
+		t.Fatal("invalid reviewer payload was admitted")
 	}
 	rejected, err := store.Load()
 	if err != nil {
@@ -451,6 +460,9 @@ func TestNegotiatedReviewFinalizeRetriesSameLineageAfterReviewerSchemaRejection(
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 		Lens: reviewtransaction.LensReliability, Findings: []facadeFinding{}, Evidence: []string{"reviewed exact candidate tree"},
 	})
+	if err := captureReviewCLIResultFiles(t, repo, lineage, []string{resultPath}); err != nil {
+		t.Fatalf("corrected reviewer payload capture: %v", err)
+	}
 	output.Reset()
 	if err := RunReview(args, &output); err != nil {
 		t.Fatalf("corrected reviewer payload retry: %v\n%s", err, output.String())
@@ -513,11 +525,9 @@ func TestNegotiatedReviewFinalizeRequiresExplicitLineageWhenAuthorityIsAmbiguous
 			t.Fatal(err)
 		}
 	}
-	resultPath := filepath.Join(t.TempDir(), "reviewer.json")
-	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
-		Lens: started.SelectedLenses[0], Findings: []facadeFinding{}, Evidence: []string{"reviewed exact candidate tree"},
-	})
-	args := []string{"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--result", resultPath}
+	// Ambiguity is reported by discovery, so the request only has to name a
+	// reviewer-result source that survives; it never gets far enough to read one.
+	args := []string{"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--captured-results=true"}
 	var output bytes.Buffer
 	if err := RunReview(args, &output); err == nil {
 		t.Fatalf("ambiguous FINALIZE error = %v\n%s", err, output.String())
@@ -536,6 +546,13 @@ func TestNegotiatedReviewFinalizeRequiresExplicitLineageWhenAuthorityIsAmbiguous
 		}
 	}
 
+	resultPath := filepath.Join(t.TempDir(), "reviewer.json")
+	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
+		Lens: started.SelectedLenses[0], Findings: []facadeFinding{}, Evidence: []string{"reviewed exact candidate tree"},
+	})
+	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, []string{resultPath}); err != nil {
+		t.Fatalf("capture reviewer result for the named lineage: %v", err)
+	}
 	output.Reset()
 	args = append(args, "--lineage", started.LineageID)
 	if err := RunReview(args, &output); err != nil {

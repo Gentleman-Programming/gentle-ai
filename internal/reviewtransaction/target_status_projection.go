@@ -52,14 +52,28 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 	records := make(map[string]CompactRecord, len(stores))
 	selected := []CompactStore{}
 	if lineageID == "" {
+		// A separate, locally scoped store map: compactAuthorityLeaves selects
+		// leaves from whichever store map it is given, so the shared
+		// storeByLineage (needed unfiltered by the explicit-selector branch
+		// below, including for a caller naming this exact quarantined lineage)
+		// must not be the one used here.
+		healthyStoreByLineage := make(map[string]CompactStore, len(stores))
 		for _, store := range stores {
 			record, loadErr := store.LoadContext(ctx)
 			if loadErr != nil {
+				// Selector-free enumeration quarantines one TERMINAL lineage that
+				// fails semantic validation instead of poisoning every other
+				// healthy lineage's status (issue-1813). An explicit selector
+				// naming this lineage below still fails closed.
+				if _, quarantinable := compactLineageQuarantinable(loadErr); quarantinable {
+					continue
+				}
 				return nil, loadErr
 			}
 			records[record.State.LineageID] = record
+			healthyStoreByLineage[record.State.LineageID] = store
 		}
-		selected, err = compactAuthorityLeaves(records, storeByLineage)
+		selected, err = compactAuthorityLeaves(records, healthyStoreByLineage)
 		if err != nil {
 			return nil, err
 		}

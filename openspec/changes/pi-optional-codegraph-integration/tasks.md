@@ -8,8 +8,8 @@
 | Estimated changed files | 12–15 |
 | 800-line budget risk | High (450–750 lines over) |
 | Chained PRs recommended | Yes |
-| Suggested split | Candidate units below; not authorized under single-pr-default |
-| Delivery strategy | single-pr-default |
+| Suggested split | Candidate units below; not authorized under single-pr |
+| Delivery strategy | single-pr |
 | Chain strategy | pending |
 
 Decision needed before apply: Yes

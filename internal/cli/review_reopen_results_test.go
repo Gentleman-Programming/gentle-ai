@@ -9,10 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestReviewReopenResultsQuarantinesLegacyUnadmittedArtifactAndReplacesSlot(t *testing.T) {
@@ -23,7 +24,7 @@ func TestReviewReopenResultsQuarantinesLegacyUnadmittedArtifactAndReplacesSlot(t
 	}
 	legacyPath := filepath.Join(t.TempDir(), "legacy-result.json")
 	writeReviewCLIJSON(t, legacyPath, legacy)
-	if err := RunReviewFacadeFinalize([]string{
+	if err := finalizeReviewCLIArgs(t, repo, []string{
 		"--cwd", repo, "--lineage", started.LineageID, "--result", legacyPath,
 	}, io.Discard); err != nil {
 		t.Fatalf("finalize historical result: %v", err)
@@ -159,21 +160,20 @@ func TestReviewReopenResultsRetainsAdmittedSlotsAndRejectsCleanAuthority(t *test
 			t.Fatal(err)
 		}
 		resultPaths[order] = path
+		// Every slot is admitted now that finalize only consumes captured
+		// results; order 0's manifest is the one this test later re-checks.
+		var output bytes.Buffer
+		if err := RunReviewCaptureResult([]string{
+			"--cwd", repo, "--lineage", started.LineageID, "--target", initial.State.InitialSnapshot.Identity,
+			"--lens", lens, "--order", strconv.Itoa(order), "--input", path,
+		}, &output); err != nil {
+			t.Fatal(err)
+		}
 		if order == 0 {
-			var output bytes.Buffer
-			if err := RunReviewCaptureResult([]string{
-				"--cwd", repo, "--lineage", started.LineageID, "--target", initial.State.InitialSnapshot.Identity,
-				"--lens", lens, "--order", "0", "--input", path,
-			}, &output); err != nil {
-				t.Fatal(err)
-			}
 			decodeStrictReviewJSON(t, output.Bytes(), &retainedManifest)
 		}
 	}
-	finalizeArgs := []string{"--cwd", repo, "--lineage", started.LineageID}
-	for _, path := range resultPaths {
-		finalizeArgs = append(finalizeArgs, "--result", path)
-	}
+	finalizeArgs := []string{"--cwd", repo, "--lineage", started.LineageID, "--captured-results=true"}
 	if err := RunReviewFacadeFinalize(finalizeArgs, io.Discard); err != nil {
 		t.Fatal(err)
 	}
