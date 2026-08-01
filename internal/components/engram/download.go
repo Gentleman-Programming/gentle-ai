@@ -551,11 +551,10 @@ func engramDownloadToFile(ctx context.Context, url string, outPath string) (hexD
 	if err := f.Sync(); err != nil {
 		return "", fmt.Errorf("sync download file %s: %w", outPath, err)
 	}
+	closed = true
 	if err := f.Close(); err != nil {
-		closed = true
 		return "", fmt.Errorf("close download file %s: %w", outPath, err)
 	}
-	closed = true
 
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
