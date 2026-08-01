@@ -315,14 +315,6 @@ func validateStatusContract(contract string) error {
 	return fmt.Errorf("unsupported sdd-status contract %q; supported contract is %s", contract, StatusContractV1)
 }
 
-func ListActiveOpenSpecChanges(cwd string) ([]string, error) {
-	root, err := absOrCWD(cwd)
-	if err != nil {
-		return nil, err
-	}
-	return listActiveOpenSpecChanges(root)
-}
-
 func listActiveOpenSpecChanges(workspaceRoot string) ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(workspaceRoot, "openspec", "changes"))
 	if err != nil {

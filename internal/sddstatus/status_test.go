@@ -10,23 +10,6 @@ import (
 	"testing"
 )
 
-func TestListActiveOpenSpecChanges(t *testing.T) {
-	root := t.TempDir()
-	mkdir(t, filepath.Join(root, "openspec", "changes", "z-change"))
-	mkdir(t, filepath.Join(root, "openspec", "changes", "a-change"))
-	mkdir(t, filepath.Join(root, "openspec", "changes", "archive", "2026-01-01-old"))
-
-	changes, err := ListActiveOpenSpecChanges(root)
-	if err != nil {
-		t.Fatalf("ListActiveOpenSpecChanges() error = %v", err)
-	}
-
-	want := []string{"a-change", "z-change"}
-	if !reflect.DeepEqual(changes, want) {
-		t.Fatalf("ListActiveOpenSpecChanges() = %v, want %v", changes, want)
-	}
-}
-
 func TestResolveSharesOneNormalizedWorkspaceWithReviewMode(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, filepath.Join(root, "openspec", "changes"))
