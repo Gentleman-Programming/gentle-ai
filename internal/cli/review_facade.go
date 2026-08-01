@@ -863,7 +863,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 						}
 						stagedScopeRecovery := result.Action == reviewtransaction.TargetStatusActionRecover &&
 							result.ActionDisposition == reviewtransaction.RecoveryScopeChanged &&
-							record.State.State == reviewtransaction.StateApproved &&
+							(record.State.State == reviewtransaction.StateApproved || record.State.State == reviewtransaction.StateCorrectionRequired) &&
 							record.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff &&
 							target.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
 							selector.Projection == reviewtransaction.ProjectionStaged && selector.WorkspaceOverlay
@@ -1125,7 +1125,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		*actor = reviewAuditActor(context.Background(), root)
 		*reason = reviewSelfRecoveryReason(shape)
 		successorForBinding := ""
-		if stagedScopeOverlay && predecessorRecord.State.State == reviewtransaction.StateApproved {
+		if stagedScopeOverlay && (predecessorRecord.State.State == reviewtransaction.StateApproved || predecessorRecord.State.State == reviewtransaction.StateCorrectionRequired) {
 			successorForBinding = *successor
 		}
 		*authorization = reviewTransitionRecoveryAuthorization(ReviewTransitionBinding{LineageID: *predecessor, Revision: *expected, TargetIdentity: snapshot.Identity}, successorForBinding, *actor, *reason)
@@ -2526,14 +2526,18 @@ func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state
 		if err != nil {
 			return plan, err
 		}
+		complete, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).BuildCorrectedCandidate(ctx, state.InitialSnapshot, fix)
+		if err != nil {
+			return plan, err
+		}
 		native, err := validation.compact(reviewtransaction.FixDeltaHashForSnapshot(fix), state.FixFindingIDs, request)
 		if err != nil {
 			return plan, err
 		}
-		if err := state.CompleteCorrectionVerification(fix, actual, native, captured.Record, captured.Payload); err != nil {
+		if err := state.CompleteCorrectionVerification(fix, actual, native, captured.Record, captured.Payload, complete); err != nil {
 			return plan, err
 		}
-		plan.Candidate = fix
+		plan.Candidate = complete
 		appendState("review/complete-correction-verification")
 	}
 	if state.State == reviewtransaction.StateValidating {
@@ -3846,8 +3850,11 @@ func emitCandidateDeclinedUnmanagedDelivery(stdout io.Writer, gate reviewtransac
 		Reason:   "review is unmanaged by candidate choice; ordinary repository policy governs this exact declined candidate",
 		Delivery: reviewtransaction.RDDDeliveryCandidateDeclinedUnmanaged,
 		Context: reviewtransaction.GateContext{
-			Gate:   gate,
-			Denial: &reviewtransaction.GateDenial{Stage: "candidate-decline", Code: "exact_candidate"},
+			Gate:          gate,
+			BaseTree:      decline.Snapshot.BaseTree,
+			CandidateTree: decline.Snapshot.CandidateTree,
+			PathsDigest:   decline.Snapshot.PathsDigest,
+			Denial:        &reviewtransaction.GateDenial{Stage: "candidate-decline", Code: "exact_candidate"},
 		},
 	}
 	// Keep the derived authorization live in this boundary: this guards against a

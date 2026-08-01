@@ -38,13 +38,14 @@ func TestMVPSkillsNoDuplicates(t *testing.T) {
 
 func TestMVPSkillsIncludeRequestedBundledSkillsWithCanonicalNames(t *testing.T) {
 	required := map[model.SkillID]string{
-		model.SkillCreator:       "skill-creator",
-		model.SkillSkillRegistry: "skill-registry",
-		model.SkillCognitiveDoc:  "cognitive-doc-design",
-		model.SkillCommentWriter: "comment-writer",
-		model.SkillJudgmentDay:   "judgment-day",
-		model.SkillSDDInit:       "sdd-init",
-		model.SkillImprover:      "skill-improver",
+		model.SkillCreator:           "skill-creator",
+		model.SkillSkillRegistry:     "skill-registry",
+		model.SkillCognitiveDoc:      "cognitive-doc-design",
+		model.SkillCommentWriter:     "comment-writer",
+		model.SkillJudgmentDay:       "judgment-day",
+		model.SkillSDDInit:           "sdd-init",
+		model.SkillImprover:          "skill-improver",
+		model.SkillRDDDefectWorkflow: "rdd-defect-workflow",
 	}
 
 	found := make(map[model.SkillID]string)

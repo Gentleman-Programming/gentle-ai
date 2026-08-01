@@ -24,12 +24,14 @@ func TestGGAFixInstallErrorWhenAlreadyAvailable(t *testing.T) {
 	origCmdLookPath := cmdLookPath
 	origRunCmd := runCommand
 	origGGAAvailableCheck := ggaAvailableCheck
+	origCleanup := cleanupGGAInstallDir
 
 	t.Cleanup(func() {
 		osUserHomeDir = origHome
 		cmdLookPath = origCmdLookPath
 		runCommand = origRunCmd
 		ggaAvailableCheck = origGGAAvailableCheck
+		cleanupGGAInstallDir = origCleanup
 	})
 
 	// Setup mocks
@@ -53,6 +55,7 @@ func TestGGAFixInstallErrorWhenAlreadyAvailable(t *testing.T) {
 		// (this is the fix scenario: install failed but GGA is there)
 		return runCommandCalled
 	}
+	cleanupGGAInstallDir = func() error { return nil }
 
 	// Create a minimal config so the test can run
 	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
@@ -98,12 +101,14 @@ func TestGGAFixInstallErrorWhenNotAvailable(t *testing.T) {
 	origRunCmd := runCommand
 	origGGAAvailableCheck := ggaAvailableCheck
 	origCmdLookPath := cmdLookPath
+	origCleanup := cleanupGGAInstallDir
 
 	t.Cleanup(func() {
 		osUserHomeDir = origHome
 		runCommand = origRunCmd
 		ggaAvailableCheck = origGGAAvailableCheck
 		cmdLookPath = origCmdLookPath
+		cleanupGGAInstallDir = origCleanup
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
@@ -115,6 +120,7 @@ func TestGGAFixInstallErrorWhenNotAvailable(t *testing.T) {
 	ggaAvailableCheck = func(profile system.PlatformProfile) bool {
 		return false
 	}
+	cleanupGGAInstallDir = func() error { return nil }
 
 	// Simulate a REAL install error (not the TTY issue)
 	runCommand = func(name string, args ...string) error {

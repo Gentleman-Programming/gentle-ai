@@ -453,6 +453,63 @@ func TestComponentOperationsClaudeNeverDeleteUserRegistry(t *testing.T) {
 	}
 }
 
+func TestComponentOperationsEngramClaudePreservesRegistryAndRemovesManagedLegacy(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("Claude adapter not found in registry")
+	}
+
+	registryPath := claude.UserConfigPath(homeDir)
+	registry := []byte(`{"oauthAccount":{"emailAddress":"user@example.com"},"mcpServers":{"codegraph":{"command":"codegraph"},"engram":{"command":"/usr/local/bin/engram","args":["mcp","--tools=agent"]}}}`)
+	if err := os.WriteFile(registryPath, registry, 0o600); err != nil {
+		t.Fatalf("WriteFile(user registry) error = %v", err)
+	}
+	legacyPath := adapter.MCPConfigPath(homeDir, "engram")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(legacy dir) error = %v", err)
+	}
+	if err := os.WriteFile(legacyPath, []byte(`{"command":"/usr/local/bin/engram","args":["mcp","--tools=agent"]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy config) error = %v", err)
+	}
+
+	ops, targets, err := svc.componentOperations(adapter, model.ComponentEngram)
+	if err != nil {
+		t.Fatalf("componentOperations(engram) error = %v", err)
+	}
+	for _, want := range []string{registryPath, legacyPath} {
+		if !slices.Contains(targets, want) {
+			t.Fatalf("uninstall targets missing %q: %v", want, targets)
+		}
+	}
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("operation %v on %q error = %v", op.typeID, op.path, err)
+		}
+	}
+
+	remaining := readJSONFileForTest(t, registryPath)
+	servers, _ := remaining["mcpServers"].(map[string]any)
+	if _, exists := servers["engram"]; exists {
+		t.Fatalf("user registry still contains mcpServers.engram: %#v", remaining)
+	}
+	if got := remaining["oauthAccount"].(map[string]any)["emailAddress"]; got != "user@example.com" {
+		t.Fatalf("OAuth data changed during uninstall: %#v", remaining)
+	}
+	if _, statErr := os.Stat(legacyPath); !os.IsNotExist(statErr) {
+		t.Fatalf("managed legacy config must be removed; stat error = %v", statErr)
+	}
+	if info, statErr := os.Stat(registryPath); statErr != nil {
+		t.Fatalf("Stat(user registry) error = %v", statErr)
+	} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("user registry mode = %o; want 0600", info.Mode().Perm())
+	}
+}
+
 func TestComponentOperationsContext7ClaudePreservesCustomLegacyFile(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()

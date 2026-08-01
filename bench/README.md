@@ -306,7 +306,7 @@ invents a metric is worse than one that admits a gap.
    classifier reads a field other than exit code and denial shape, and widening
    it would let the product talk its way out of a denial.
 
-7. **The corpus is honest, not exhaustive.** Forty-three core journeys that run
+7. **The corpus is honest, not exhaustive.** Forty-nine core journeys that run
    end to end, weighted toward failure paths because that is where friction
    lives. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts) are
    inspection steps rather than review-lifecycle friction and are not modelled.
@@ -388,7 +388,7 @@ invents a metric is worse than one that admits a gap.
     (cluttered repositories, interleaved lifecycles) governed by a different
     growth rule: community-reported shapes become journeys, so its size tracks
     community reports, not releases, and folding it into the core would make
-    "43 journeys" a moving claim. Two of its numbers need careful reading.
+    "50 journeys" a moving claim. Two of its numbers need careful reading.
     `rw01` pins issue #1881 while a product fix is in flight: a block there is
     the truth about today's build, not a permanent verdict, and the journey is
     kept precisely so the fix has a permanent pin. And the no-echo assertions
@@ -397,6 +397,14 @@ invents a metric is worse than one that admits a gap.
     product ever *read* the secret file or the ignored binary, only whether it
     quoted them. "The journey passed" means "nothing counted echoed it",
     nothing stronger.
+
+13. **A boundary-specific fix is omitted when this harness cannot cross its real
+    boundary.** Issue #2028 is an OpenCode plugin session-local retry and remains
+    plugin-covered; a CLI journey would never exercise that session boundary.
+    Issue #2074 is a Claude install/registry migration and remains E2E-covered;
+    this isolated review-lifecycle harness does not install or migrate Claude.
+    Issue #910 requires genuine Windows PowerShell host resolution; a Linux
+    fixture pretending to be Windows would be a proxy, not benchmark coverage.
 
 ## Measured: the current build
 
@@ -423,7 +431,7 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 
 Those numbers are the **14-journey** corpus against the binary named above,
 kept as-is because they belong to that named build. The corpus has since grown
-to 43 journeys; re-run `run` against your own binary rather than reading the
+to 50 journeys; re-run `run` against your own binary rather than reading the
 block above as current totals. The row labels moved too: `by_design` did not
 exist when this was recorded and is now printed as `4d`, next to the number it
 carves out of, with `dead_end` at `4e`.
@@ -555,6 +563,42 @@ mode-only change asserts the index really went `100644` → `100755` with a
 the nonsense mode record asserts that it still parses as JSON so the journey
 cannot silently decay into the already-covered corrupt-record case.
 
+### Wave 1 integration regressions (`journeys_wave1.go`)
+
+Journeys 44 to 50 pin fixes that internal tests already covered below the user
+boundary. All remain core black-box journeys: fixtures create repository inputs,
+and every native authority state is reached through the measured binary.
+
+| ID | Flow | Shape |
+|---|---|---|
+| `j44-corrected-current-changes-delivery` | corrected current-changes receipt in a proven linked worktree, exact one-commit delivery, selector-free pre-push discovery | issue #1819 + 3 |
+| `j45-completed-final-verification-retry` | procedural final-verification failure, status-derived retry successor, successful completion, authoritative inventory and selector-free post-apply | issue #1915 + 3 |
+| `j46-correction-required-staged-recovery` | correction-required base-diff authority, negotiated staged-overlay recovery, fresh successor review, exact pre-commit/pre-push/pre-PR delivery | issue #1921 |
+| `j47-disabled-mode-archives-discovered-invalidated-receipt` | enabled discovered invalidation, disabled/unmanaged archive without allow, explicit invalid receipt control, and re-enabled enforcement | issue #2128 |
+| `j48-recovered-workspace-preserves-full-candidate-scope` | two-path workspace candidate, strict-subset correction, complete terminal and recovered scope, immediate pre-commit allow, byte/path drift controls | issue #2090 |
+| `j49-status-without-cwd-honors-kill-switch` | clone-local mode disabled, explicit-CWD control, omitted-CWD status using the same repository identity, disabled/unmanaged archive without approval | issue #2129 |
+| `j50-candidate-decline-preserves-frozen-delivery-identity` | status-derived v2 consent relay and decline, exact non-authorizing delivery identity, clean authority inventory, release and byte/path drift controls | issue #2045 |
+
+`j44` proves the linked checkout/common-dir topology and remote baseline before
+review starts, then proves the staged delivery tree equals the corrected receipt
+and `HEAD` is exactly one clean commit above upstream before pre-push runs.
+`j45` constructs the canonical incident and exact maintainer authorization only
+from negotiated status fields, then requires the global inventory to report the
+predecessor as `superseded`, the approved successor as `recovered`, and the
+inventory as complete and authoritative before selector-free post-apply runs.
+`j46` proves the staged overlay is the exact authorized recovery target and
+delivers only through its fresh approved successor. `j47` preserves one native
+authority revision while review mode is toggled, proving that only discovered
+governance steps aside and an explicit invalid receipt remains fail-closed.
+`j48` keeps one-path correction evidence local while corrected and recovered
+authority retain the complete two-path tree and manifest; exact pre-commit
+targets allow, while later byte and path drift still fail closed. `j49` proves
+that explicit and omitted CWD status calls reach the same clone-local switch and
+the same archive-ready change without fabricating review authority. `j50`
+executes only provider-emitted START and decline invocations, then proves the
+unchanged staged candidate retains its base/tree/path identity without review
+authority while release, byte drift, and path drift cannot inherit the decline.
+
 ## Opt-in axes
 
 Everything above this line is the core corpus, and the core corpus is
@@ -575,7 +619,7 @@ its own declaration.
 
 - **Nothing runs unless you name it.** Default is the core alone. `--axis all`
   takes everything registered. An unknown name is a hard error, because
-  "43 journeys" and "43 journeys plus an axis" are different measurements and a
+  "50 journeys" and "50 journeys plus an axis" are different measurements and a
   typo must never silently produce the first.
 - **The core does not depend on any axis.** `rm bench/axis_damaged_store*.go`
   leaves the corpus compiling, testing and reporting exactly the numbers it
@@ -745,7 +789,7 @@ flight): all 12 journeys complete, nothing unsupported, nothing failed. The
 axis adds 6 blocks to the corpus — five `in_band` and one `out_of_band`,
 which is `rw01` recording #1881 exactly (`discover intended untracked files:
 logical path is not canonical: ".wt/test/"`, exit 1, nothing runnable named).
-Against the 43-journey core alone, the axis adds +60 commands, +3 model runs,
+Against the then-43-journey core alone, the axis added +60 commands, +3 model runs,
 +3 human prompts, +2,739 stderr bytes — and **+98,512 git subprocesses,
 96,294 of them in `rw02`**, whose `review start` alone spends 15,089 walking
 3,000 untracked files. The honest reading of the block pattern: untracked
@@ -770,6 +814,7 @@ journeys.go    the corpus, as data — guide flows and their failure paths
 journeys_edge.go  the edge-case part of the corpus, with self-proving fixtures
 journeys_sdd.go   the SDD remediation successor cycle, the kill switch against
                   SDD, and the recovery guard rails
+journeys_wave1.go  integrated community fixes exercised at their CLI boundary
 axis.go        the opt-in axis seam: registry, --axis selection, provenance
 axis_damaged_store.go  ONE axis, deletable: journeys starting from a store
                   damaged on disk. Not black-box; declares so itself.

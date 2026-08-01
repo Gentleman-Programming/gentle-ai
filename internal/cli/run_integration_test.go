@@ -1798,7 +1798,7 @@ func TestRunInstallUpgradeIdempotency(t *testing.T) {
 
 	// Capture all relevant output files after the first run.
 	claudeMDPath := filepath.Join(home, ".claude", "CLAUDE.md")
-	engramMCPPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	engramMCPPath := filepath.Join(home, ".claude.json")
 
 	claudeMDAfterRun1, err := os.ReadFile(claudeMDPath)
 	if err != nil {

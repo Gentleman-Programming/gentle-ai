@@ -966,6 +966,12 @@ func TestReadFacadeReviewerResultsRejectsNonNativeFields(t *testing.T) {
 func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runReviewCLIGit(t, repo, "clone", "--bare", repo, remote)
+	runReviewCLIGit(t, repo, "remote", "add", "origin", remote)
+	runReviewCLIGit(t, repo, "config", "branch."+branch+".remote", "origin")
+	runReviewCLIGit(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1093,6 +1099,15 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 	}
 	if committedReuse.Action != "reuse-receipt" || committedReuse.LensesRequired || committedReuse.LineageID != started.LineageID || committedReuse.State != reviewtransaction.StateApproved {
 		t.Fatalf("equivalent committed corrected target did not reuse receipt: %#v", committedReuse)
+	}
+	output.Reset()
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output); err != nil {
+		t.Fatalf("selector-free corrected pre-push discovery: %v\n%s", err, output.String())
+	}
+	var delivery ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &delivery)
+	if !delivery.Allowed || delivery.Context.LineageID != started.LineageID || !delivery.Context.BaseRelationshipValid {
+		t.Fatalf("selector-free corrected pre-push discovery = %#v", delivery)
 	}
 }
 
@@ -2034,11 +2049,12 @@ func TestCompactTransportAllowsCorrectedPrePushWithoutTransientBaseObject(t *tes
 	clone := filepath.Join(t.TempDir(), "clone")
 	runReviewCLIGit(t, source, "clone", "--no-local", source, clone)
 	runReviewCLIGit(t, source, "branch", "reviewed-base", "HEAD^")
-	for _, tree := range []string{initial.State.InitialSnapshot.CandidateTree, sourceRecord.State.CurrentSnapshot.BaseTree} {
-		command := exec.Command("git", "-C", clone, "cat-file", "-e", tree+"^{tree}")
-		if err := command.Run(); err == nil {
-			t.Fatalf("clean clone unexpectedly retained dangling intermediate tree %s", tree)
-		}
+	if sourceRecord.State.CurrentSnapshot.BaseTree != initial.State.InitialSnapshot.BaseTree {
+		t.Fatalf("corrected authority base = %s, want reviewed base %s", sourceRecord.State.CurrentSnapshot.BaseTree, initial.State.InitialSnapshot.BaseTree)
+	}
+	intermediate := initial.State.InitialSnapshot.CandidateTree
+	if err := exec.Command("git", "-C", clone, "cat-file", "-e", intermediate+"^{tree}").Run(); err == nil {
+		t.Fatalf("clean clone unexpectedly retained dangling intermediate tree %s", intermediate)
 	}
 	if err := RunReviewBundleImport([]string{"--cwd", clone, "--bundle", bundlePath}, io.Discard); err != nil {
 		t.Fatalf("corrected compact import: %v", err)
