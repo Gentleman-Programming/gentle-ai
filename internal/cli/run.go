@@ -623,7 +623,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	for _, tool := range r.selection.CommunityTools {
-		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, state: r.state})
+		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, agents: r.resolved.Agents, state: r.state})
 	}
 
 	for _, component := range r.resolved.OrderedComponents {
@@ -1061,13 +1061,14 @@ type communityToolInstallStep struct {
 	tool         model.CommunityToolID
 	workspaceDir string
 	homeDir      string
+	agents       []model.AgentID
 	state        *runtimeState
 }
 
 func (s communityToolInstallStep) ID() string { return s.id }
 
 func (s communityToolInstallStep) Run() error {
-	result, err := installCommunityToolWithHome(s.tool, s.workspaceDir, s.homeDir, communitytool.RunnerFunc(runCommand), communitytool.DetectorFunc(cmdLookPath))
+	result, err := installCommunityToolWithHome(s.tool, s.workspaceDir, s.homeDir, communitytool.RunnerFunc(runCommand), communitytool.DetectorFunc(cmdLookPath), s.agents...)
 	if err != nil {
 		return fmt.Errorf("install community tool %q: %w", s.tool, err)
 	}
@@ -1460,8 +1461,10 @@ func (s componentApplyStep) Run() error {
 		}
 		return nil
 	case model.ComponentOpenCodeGentleLogo:
-		if _, err := opencodeplugin.Install(s.homeDir, model.OpenCodePluginGentleLogo); err != nil {
-			return fmt.Errorf("install OpenCode Gentle Logo plugin: %w", err)
+		if containsAgent(s.selection.Agents, model.AgentOpenCode) {
+			if _, err := opencodeplugin.Install(s.homeDir, model.OpenCodePluginGentleLogo); err != nil {
+				return fmt.Errorf("install OpenCode Gentle Logo plugin: %w", err)
+			}
 		}
 		return nil
 	default:
@@ -1881,10 +1884,12 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				paths = append(paths, filepath.Join(homeDir, ".claude", "themes", "gentleman.json"))
 			}
 		case model.ComponentOpenCodeGentleLogo:
-			paths = append(paths,
-				filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
-				filepath.Join(homeDir, ".config", "opencode", "tui.json"),
-			)
+			if containsAgent(selection.Agents, model.AgentOpenCode) {
+				paths = append(paths,
+					filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
+					filepath.Join(homeDir, ".config", "opencode", "tui.json"),
+				)
+			}
 		}
 	}
 

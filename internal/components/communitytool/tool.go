@@ -116,7 +116,7 @@ func Install(id model.CommunityToolID, workspaceDir string, runner Runner) (Resu
 	return InstallWithHome(id, workspaceDir, defaultHomeDir(), runner, DetectorFunc(exec.LookPath))
 }
 
-func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir string, runner Runner, detector Detector) (Result, error) {
+func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir string, runner Runner, detector Detector, selectedAgents ...model.AgentID) (Result, error) {
 	if runner == nil {
 		return Result{}, fmt.Errorf("community tool runner is not configured")
 	}
@@ -142,24 +142,29 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		return result, cause
 	}
 	if before.CodeGraphReconcileSatisfied() || codeGraphCanRepairWithoutFullInstall(homeDir, before) {
-		if NeedsOpenCodeCodeGraphReconcile(homeDir) {
-			result.CommandsRun = append(result.CommandsRun, "codegraph install --target opencode --location global --yes")
-		}
-		openCodeResult, err := ReconcileOpenCodeCodeGraph(homeDir, runner)
-		if err != nil {
-			return rollback(err)
+		var openCodeResult GuidanceInjectionResult
+		if len(selectedAgents) == 0 || slices.Contains(selectedAgents, model.AgentOpenCode) {
+			if NeedsOpenCodeCodeGraphReconcile(homeDir) {
+				result.CommandsRun = append(result.CommandsRun, "codegraph install --target opencode --location global --yes")
+			}
+			openCodeResult, err = ReconcileOpenCodeCodeGraph(homeDir, runner)
+			if err != nil {
+				return rollback(err)
+			}
 		}
 		guidanceResult, err := InjectCodeGraphGuidanceIfSelected(homeDir, []model.CommunityToolID{id})
 		if err != nil {
 			return rollback(err)
 		}
-		piResult, err := reconcileDetectedPiCodeGraph(homeDir, workspaceDir)
-		if err != nil {
-			return rollback(err)
-		}
-		result.PiCodeGraph = piResult
-		if piResult != nil {
-			result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
+		if len(selectedAgents) == 0 || slices.Contains(selectedAgents, model.AgentPi) {
+			piResult, err := reconcileDetectedPiCodeGraph(homeDir, workspaceDir)
+			if err != nil {
+				return rollback(err)
+			}
+			result.PiCodeGraph = piResult
+			if piResult != nil {
+				result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
+			}
 		}
 		after := DetectStatus(id, homeDir, detector)
 		result.StatusAfter = &after
@@ -174,7 +179,7 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		return result, nil
 	}
 
-	targets := detectedCodeGraphTargets(homeDir)
+	targets := detectedCodeGraphTargets(homeDir, selectedAgents...)
 	commands := make([][]string, 0, 2)
 	if len(targets) > 0 {
 		commands = append(commands, []string{"codegraph", "install", "--target", strings.Join(targets, ","), "--location", "global", "--yes"})

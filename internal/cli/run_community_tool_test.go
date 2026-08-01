@@ -418,7 +418,7 @@ func TestCommunityToolInstallStepUsesInjectableInstaller(t *testing.T) {
 	var gotTool model.CommunityToolID
 	var gotWorkspace string
 	var runner communitytool.Runner
-	installCommunityToolWithHome = func(tool model.CommunityToolID, workspaceDir string, _ string, r communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(tool model.CommunityToolID, workspaceDir string, _ string, r communitytool.Runner, _ communitytool.Detector, _ ...model.AgentID) (communitytool.Result, error) {
 		gotTool = tool
 		gotWorkspace = workspaceDir
 		runner = r
@@ -438,7 +438,7 @@ func TestCommunityToolInstallStepPassesRuntimeHomeToPiReconciler(t *testing.T) {
 	previous := installCommunityToolWithHome
 	t.Cleanup(func() { installCommunityToolWithHome = previous })
 	var gotHome string
-	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, home string, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, home string, _ communitytool.Runner, _ communitytool.Detector, _ ...model.AgentID) (communitytool.Result, error) {
 		gotHome = home
 		return communitytool.Result{Tool: model.CommunityToolCodeGraph}, nil
 	}
@@ -455,7 +455,7 @@ func TestInstallPipelinePropagatesInitialPiPendingWhenPiUnselected(t *testing.T)
 	previous := installCommunityToolWithHome
 	t.Cleanup(func() { installCommunityToolWithHome = previous })
 	pending := communitytool.PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph runtime verification is pending."}}
-	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector, _ ...model.AgentID) (communitytool.Result, error) {
 		return communitytool.Result{Tool: model.CommunityToolCodeGraph, PiCodeGraph: &pending}, nil
 	}
 	runtime := &installRuntime{
@@ -482,7 +482,7 @@ func TestInstallPipelineDoesNotDuplicatePiPendingWhenSelected(t *testing.T) {
 		reconcilePiCodeGraph = previousReconcile
 	})
 	pending := communitytool.PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph integration remains pending: CodeGraph configuration was installed and preserved, and direct MCP capability was verified. Pi adapter activation health cannot be machine-verified on the detected Pi version."}}
-	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector, _ ...model.AgentID) (communitytool.Result, error) {
 		return communitytool.Result{Tool: model.CommunityToolCodeGraph, PiCodeGraph: &pending}, nil
 	}
 	reconcilePiCodeGraph = func(communitytool.PiCodeGraphOptions) (communitytool.PiCodeGraphResult, error) {
@@ -608,4 +608,22 @@ func installFakeCodeGraphMCP(t *testing.T, tools string) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestComponentOpenCodeGentleLogoSkippedWhenOpenCodeUnselected(t *testing.T) {
+	home := t.TempDir()
+	runtime := &installRuntime{
+		homeDir:   home,
+		selection: model.Selection{Agents: []model.AgentID{model.AgentCodex}},
+	}
+
+	step := componentApplyStep{id: "component:opencode-gentle-logo", component: model.ComponentOpenCodeGentleLogo, homeDir: home, selection: runtime.selection}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	logoPath := filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
+	if _, err := os.Stat(logoPath); !os.IsNotExist(err) {
+		t.Fatalf("Gentle Logo plugin path %q was created when OpenCode was not selected", logoPath)
+	}
 }

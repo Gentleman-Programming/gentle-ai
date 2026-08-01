@@ -187,13 +187,16 @@ func hasCanonicalAntigravityCodeGraphServer(data []byte) bool {
 	return slices.Equal(server.Args, []string{"serve", "--mcp"})
 }
 
-func detectedCodeGraphTargets(homeDir string) []string {
+func detectedCodeGraphTargets(homeDir string, selectedAgents ...model.AgentID) []string {
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
 		return nil
 	}
 	targets := make([]string, 0)
 	for _, installed := range agents.DiscoverInstalled(reg, homeDir) {
+		if len(selectedAgents) > 0 && !slices.Contains(selectedAgents, installed.ID) {
+			continue
+		}
 		compatibility, ok := codeGraphCompatibilityFor(installed.ID)
 		if ok && compatibility.Strategy == codeGraphNative && compatibility.Target != "" {
 			targets = append(targets, compatibility.Target)
