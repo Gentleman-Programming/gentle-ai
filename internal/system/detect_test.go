@@ -109,6 +109,16 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			wantDistro: LinuxDistroDebian,
 		},
 		{
+			name:       "deepin linux",
+			osRelease:  "ID=deepin\nID_LIKE=debian\nVERSION_ID=\"23\"\n",
+			wantDistro: LinuxDistroDebian,
+		},
+		{
+			name:       "uos linux",
+			osRelease:  "ID=uos\nID_LIKE=debian\nVERSION_ID=\"20\"\n",
+			wantDistro: LinuxDistroDebian,
+		},
+		{
 			name:       "linux mint derivative of ubuntu",
 			osRelease:  "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\nVERSION_ID=\"21.3\"\n",
 			wantDistro: LinuxDistroUbuntu,
