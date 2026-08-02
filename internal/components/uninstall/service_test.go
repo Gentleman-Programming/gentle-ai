@@ -90,6 +90,54 @@ func mustReadServiceFile(t *testing.T, path string) []byte {
 	return data
 }
 
+func TestPartialUninstallPreservesKimiTOMLSettings(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+	adapter, ok := svc.registry.Get(model.AgentKimi)
+	if !ok {
+		t.Fatal("Kimi adapter not found in registry")
+	}
+
+	settingsPath := adapter.SettingsPath(homeDir)
+	settings := "default_model = \"kimi-k2\"\n"
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(settings), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings) error = %v", err)
+	}
+
+	promptPath := adapter.SystemPromptFile(homeDir)
+	prompt := "user instructions\n\n<!-- gentle-ai:persona -->\ngentle persona\n<!-- /gentle-ai:persona -->\n"
+	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
+		t.Fatalf("WriteFile(prompt) error = %v", err)
+	}
+
+	result, err := svc.PartialUninstall(
+		[]model.AgentID{model.AgentKimi},
+		[]model.ComponentID{model.ComponentPersona, model.ComponentTheme},
+	)
+	if err != nil {
+		t.Fatalf("PartialUninstall() error = %v", err)
+	}
+	if !slices.Contains(result.ChangedFiles, promptPath) {
+		t.Fatalf("ChangedFiles = %v, want managed prompt %q removed", result.ChangedFiles, promptPath)
+	}
+
+	remainingPrompt := string(mustReadServiceFile(t, promptPath))
+	if strings.Contains(remainingPrompt, "gentle-ai:persona") || !strings.Contains(remainingPrompt, "user instructions") {
+		t.Fatalf("prompt after persona uninstall = %q, want user instructions without managed persona", remainingPrompt)
+	}
+
+	if got := string(mustReadServiceFile(t, settingsPath)); got != settings {
+		t.Fatalf("TOML settings = %q, want preserved %q", got, settings)
+	}
+}
+
 func TestExecutePlanPiUninstallPreservesPreexistingMarkedUserChildAndUserMCP(t *testing.T) {
 	homeDir := t.TempDir()
 	svc, err := NewService(homeDir, t.TempDir(), "dev")
