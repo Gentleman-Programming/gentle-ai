@@ -761,8 +761,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		var runtime model.AgentID
 		if *contract == ReviewIntegrationContractV2 {
 			if reviewRuntimeAgentCount(args) != 1 {
-				// refusal:by-design world-action: a lifecycle route without one generated runtime identity cannot safely select a review transport
-				return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, errors.New("negotiated lifecycle STATUS requires exactly one generated runtime identity"))
+				// Not a by-design world-action: a stale or malformed route has a
+				// runnable exit, and the message names it.
+				return reviewPreflightRefusal(reviewRuntimeIdentityUnresolvedReason, errors.New("negotiated lifecycle STATUS requires exactly one generated runtime identity; regenerate the route with gentle-ai sync and re-run it unchanged"))
 			}
 			var runtimeErr error
 			runtime, runtimeErr = reviewRuntimeWithImmutableTransport(*runtimeAgent)
@@ -1476,8 +1477,9 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	runtimeRequested := reviewRuntimeAgentCount(args) > 0
 	if negotiated && (*contract == ReviewIntegrationContractV2 || runtimeRequested) {
 		if reviewRuntimeAgentCount(args) != 1 {
-			// refusal:by-design world-action: a START without one generated runtime identity cannot safely create review authority
-			return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, errors.New("negotiated START requires exactly one generated runtime identity"))
+			// Not a by-design world-action: a stale or malformed route has a
+			// runnable exit, and the message names it.
+			return reviewPreflightRefusal(reviewRuntimeIdentityUnresolvedReason, errors.New("negotiated START requires exactly one generated runtime identity; regenerate the route with gentle-ai sync and re-run it unchanged"))
 		}
 		if _, err := reviewRuntimeWithImmutableTransport(*runtimeAgent); err != nil {
 			return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, err)

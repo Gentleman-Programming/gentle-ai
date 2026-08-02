@@ -59,7 +59,6 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		{name: "Pi", runtime: string(model.AgentPi)},
 		{name: "Kilo", runtime: string(model.AgentKilocode)},
 		{name: "unknown", runtime: "unknown-runtime"},
-		{name: "missing runtime"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			for _, invocation := range []struct {
@@ -73,10 +72,7 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 				{name: "start", operation: "review.start", args: []string{"start", "--contract", ReviewIntegrationContractV2, "--target", target, "--projection", "workspace", "--cwd", missingRepository}},
 			} {
 				t.Run(invocation.name, func(t *testing.T) {
-					args := append([]string{}, invocation.args...)
-					if test.runtime != "" {
-						args = append(args, "--agent", test.runtime)
-					}
+					args := append(append([]string{}, invocation.args...), "--agent", test.runtime)
 					var output bytes.Buffer
 					if err := RunReview(args, &output); err == nil {
 						t.Fatalf("%s accepted runtime %q", invocation.name, test.runtime)
@@ -115,19 +111,53 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 	}
 }
 
-func TestV21RejectsDuplicateRuntimeAgentsBeforeRepositoryAccess(t *testing.T) {
-	var output bytes.Buffer
-	err := RunReview([]string{
-		"status", "--contract", ReviewIntegrationContractV2, "--cwd", t.TempDir() + "/missing",
-		"--agent", string(model.AgentClaudeCode), "--agent", string(model.AgentClaudeCode),
-	}, &output)
-	if err == nil {
-		t.Fatal("v2.1 STATUS accepted multiple runtime identities")
-	}
-	failure := decodeReviewIntegrationFailure(t, output.Bytes())
-	if failure.Code != reviewImmutableTransportUnsupportedCode || failure.Operation != "review.status" ||
-		failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "not_evaluated" {
-		t.Fatalf("duplicate runtime failure = %#v", failure)
+// An absent or duplicated --agent is a malformed or stale route, not a claim
+// about any runtime's transport. Issue #2242 reported the absent case being
+// reported as immutable_review_transport_unsupported with next_action stop and
+// no way out, which named a capability the facade never evaluated.
+func TestUnresolvedRuntimeIdentityIsNotReportedAsUnsupportedTransport(t *testing.T) {
+	missingRepository := t.TempDir() + "/missing"
+
+	for _, test := range []struct {
+		name      string
+		operation string
+		args      []string
+	}{
+		{
+			name: "status without runtime identity", operation: "review.status",
+			args: []string{"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", missingRepository},
+		},
+		{
+			name: "status with duplicate runtime identity", operation: "review.status",
+			args: []string{
+				"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", missingRepository,
+				"--agent", string(model.AgentClaudeCode), "--agent", string(model.AgentClaudeCode),
+			},
+		},
+		{
+			name: "start without runtime identity", operation: "review.start",
+			args: []string{"start", "--contract", ReviewIntegrationContractV2, "--projection", "workspace", "--cwd", missingRepository},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunReview(test.args, &output); err == nil {
+				t.Fatalf("%s accepted an unresolved runtime identity", test.name)
+			}
+			failure := decodeReviewIntegrationFailure(t, output.Bytes())
+			if failure.Operation != test.operation ||
+				failure.Code != reviewRuntimeIdentityUnresolvedCode ||
+				failure.MutationOutcome != ReviewMutationNotStarted ||
+				failure.AuthorityApplicability != "not_evaluated" ||
+				failure.NextAction != "correct_request" ||
+				!failure.RetrySafe ||
+				failure.Message != reviewRuntimeIdentityUnresolvedReason.Message {
+				t.Fatalf("unresolved runtime identity failure = %#v", failure)
+			}
+			if !strings.Contains(failure.Cause, "gentle-ai sync") {
+				t.Fatalf("failure cause names no recovery path: %q", failure.Cause)
+			}
+		})
 	}
 }
 
