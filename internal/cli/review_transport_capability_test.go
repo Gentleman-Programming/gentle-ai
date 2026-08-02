@@ -160,6 +160,19 @@ func TestUnresolvedRuntimeIdentityIsNotReportedAsUnsupportedTransport(t *testing
 			name: "status with a whitespace-only runtime identity", operation: "review.status",
 			args: []string{"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", missingRepository, "--agent", "   "},
 		},
+		// START resolves the identity in its own preflight branch, so each
+		// unresolved shape needs coverage on both operations.
+		{
+			name: "start with a duplicate runtime identity", operation: "review.start",
+			args: []string{
+				"start", "--contract", ReviewIntegrationContractV2, "--projection", "workspace", "--cwd", missingRepository,
+				"--agent", string(model.AgentClaudeCode), "--agent", string(model.AgentClaudeCode),
+			},
+		},
+		{
+			name: "start with a whitespace-only runtime identity", operation: "review.start",
+			args: []string{"start", "--contract", ReviewIntegrationContractV2, "--projection", "workspace", "--cwd", missingRepository, "--agent", "   "},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
