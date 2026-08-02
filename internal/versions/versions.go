@@ -11,7 +11,7 @@ const ClaudeCode = "2.1.140"
 const Kilocode = "7.2.52"
 
 // renovate: datasource=npm depName=opencode-ai
-const OpenCode = "1.14.48"
+const OpenCode = "1.18.4"
 
 // renovate: datasource=npm depName=@qwen-code/qwen-code
 const QwenCode = "0.15.10"

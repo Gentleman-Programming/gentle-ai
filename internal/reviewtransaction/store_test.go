@@ -138,7 +138,7 @@ func TestStoreAppendRepairsInterruptedEventAndIsIdempotentAtHead(t *testing.T) {
 }
 
 func TestStoreLockReportsLiveOwnerAndCannotBeStolen(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 	lock, err := acquireStoreLock(filepath.Join(store.Dir, "LOCK"))
 	if err != nil {
 		t.Fatalf("acquireStoreLock(first) error = %v", err)
@@ -216,7 +216,7 @@ func TestStoreLockRecoversCrashAndCorruptOwnerRecords(t *testing.T) {
 		`{"schema":"gentle-ai.review-store-lock/v1","owner_id":"crashed","pid":999999,"host":"gone","acquired_at":"2000-01-01T00:00:00Z"}` + "\n",
 	} {
 		t.Run(content[:min(len(content), 8)], func(t *testing.T) {
-			store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+			store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
 			if err := os.MkdirAll(store.Dir, 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -241,7 +241,7 @@ func TestStoreLockIsReleasedWhenOwnerProcessExits(t *testing.T) {
 		_ = lock
 		return
 	}
-	path := filepath.Join(t.TempDir(), "review-store", "LOCK")
+	path := filepath.Join(canonicalTempDir(t), "review-store", "LOCK")
 	command := exec.Command(os.Args[0], "-test.run=^TestStoreLockIsReleasedWhenOwnerProcessExits$")
 	command.Env = append(os.Environ(), "GENTLE_AI_LOCK_EXIT_HELPER=1", "GENTLE_AI_LOCK_EXIT_PATH="+path)
 	if output, err := command.CombinedOutput(); err != nil {
@@ -255,7 +255,7 @@ func TestStoreLockIsReleasedWhenOwnerProcessExits(t *testing.T) {
 }
 
 func TestConcurrentStoreLockRecoverersCannotBothWin(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "review-store", "LOCK")
+	path := filepath.Join(canonicalTempDir(t), "review-store", "LOCK")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}

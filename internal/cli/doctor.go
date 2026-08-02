@@ -12,31 +12,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/state"
-	"github.com/gentleman-programming/gentle-ai/internal/storage"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/storage"
 )
 
-// CheckStatus is the outcome of a doctor check: pass, warn, or fail.
-type CheckStatus string
+type CheckStatus = doctor.Status
+type CheckResult = doctor.Result
+type DoctorReport = doctor.Report
 
 const (
-	CheckStatusPass CheckStatus = "pass"
-	CheckStatusWarn CheckStatus = "warn"
-	CheckStatusFail CheckStatus = "fail"
+	CheckStatusPass = doctor.StatusPass
+	CheckStatusWarn = doctor.StatusWarn
+	CheckStatusFail = doctor.StatusFail
 )
-
-// CheckResult is the result of one doctor check.
-type CheckResult struct {
-	Name   string
-	Status CheckStatus
-	Detail string
-	Remedy string // optional fix suggestion
-}
-
-// DoctorReport aggregates all check results.
-type DoctorReport struct {
-	Checks []CheckResult
-}
 
 // coreTools are ecosystem-level binaries that gentle-ai always requires
 // regardless of which agents the user installed. Agent-specific binaries are
@@ -84,7 +73,8 @@ var (
 	pathDirsFn          = func() []string {
 		return filepath.SplitList(os.Getenv("PATH"))
 	}
-	httpGetFn = func(url string, timeout time.Duration) (int, error) {
+	osExecutableDoctor = os.Executable
+	httpGetFn          = func(url string, timeout time.Duration) (int, error) {
 		resp, err := (&http.Client{Timeout: timeout}).Get(url) //nolint:noctx
 		if err != nil {
 			return 0, err
@@ -107,11 +97,21 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	// reports the always-required core tools — preserving the first-time-install
 	// behaviour where the user has not yet selected any agents (#709).
 
-	report := DoctorReport{}
-	report.Checks = append(report.Checks, checkToolBinaries(pathDirsFn(), installedAgents)...)
-	report.Checks = append(report.Checks, checkStateJSON(homeDir))
-	report.Checks = append(report.Checks, checkEngramReachable())
-	report.Checks = append(report.Checks, checkDiskSpace(homeDir))
+	pathDirs := pathDirsFn()
+	requiredTools := requiredDoctorTools(installedAgents)
+	checks := make([]doctor.Check, 0, len(requiredTools)+3)
+	for _, tool := range requiredTools {
+		tool := tool
+		checks = append(checks, doctor.Check{ID: doctor.ToolCheckID(tool), Run: func(context.Context) doctor.Result {
+			return checkOneTool(tool, pathDirs)
+		}})
+	}
+	checks = append(checks,
+		doctor.Check{ID: doctor.CheckStateJSON, Run: func(context.Context) doctor.Result { return checkStateJSON(homeDir) }},
+		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(context.Context) doctor.Result { return checkEngramReachable() }},
+		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
+	)
+	report := (doctor.Runner{Checks: checks}).Run(ctx)
 
 	renderDoctorReport(w, report)
 	return nil
@@ -133,25 +133,29 @@ func readDoctorInstalledAgents(homeDir string) ([]string, error) {
 // shadowing. The required set is coreTools plus one binary per installed
 // agent ID (resolved via agentToolBinaries), so the doctor only flags agents
 // the user actually selected (#709). Unknown agent IDs are skipped.
-func checkToolBinaries(pathDirs []string, installedAgents []string) []CheckResult {
+func requiredDoctorTools(installedAgents []string) []string {
 	required := make([]string, 0, len(coreTools)+len(installedAgents))
 	required = append(required, coreTools...)
 	seen := make(map[string]struct{}, len(required))
-	for _, t := range required {
-		seen[t] = struct{}{}
+	for _, tool := range required {
+		seen[tool] = struct{}{}
 	}
 	for _, agentID := range installedAgents {
 		bin, ok := agentToolBinaries[agentID]
 		if !ok || bin == "" {
 			continue
 		}
-		if _, dup := seen[bin]; dup {
+		if _, duplicate := seen[bin]; duplicate {
 			continue
 		}
 		seen[bin] = struct{}{}
 		required = append(required, bin)
 	}
+	return required
+}
 
+func checkToolBinaries(pathDirs []string, installedAgents []string) []CheckResult {
+	required := requiredDoctorTools(installedAgents)
 	results := make([]CheckResult, 0, len(required))
 	for _, tool := range required {
 		results = append(results, checkOneTool(tool, pathDirs))
@@ -162,21 +166,39 @@ func checkToolBinaries(pathDirs []string, installedAgents []string) []CheckResul
 func checkOneTool(tool string, pathDirs []string) CheckResult {
 	resolved, shim, err := resolveDoctorTool(tool)
 	if err != nil {
+		// resolved is "" here: there is no PATH-resolved copy to name or to
+		// compare against, but the executable running THIS check is still
+		// independently derivable (osExecutableDoctor does not depend on
+		// PATH lookup succeeding). doctorInvokedGentleAIClause("") names it
+		// without fabricating a comparison that has nothing to compare
+		// against (organic-dx recovery: the clause must render on every
+		// derivable gentle-ai branch, not only the healthy one).
+		detail := tool + " not found in PATH"
+		if tool == "gentle-ai" {
+			detail += doctorInvokedGentleAIClause(resolved)
+		}
 		return CheckResult{
-			Name:   "tool:" + tool,
+			Name:   doctor.ToolCheckID(tool),
 			Status: CheckStatusFail,
-			Detail: tool + " not found in PATH",
-			Remedy: "Install " + tool + " or add its directory to PATH",
+			Detail: detail,
+			Remedy: doctor.NewRemedy(doctor.RemedyInstallTool, "Install "+tool+" or add its directory to PATH"),
 		}
 	}
 
 	copies := doctorToolCopies(tool, pathDirs)
 	if len(copies) > 1 {
+		// The duplicate branch is exactly where ambiguity about which build
+		// is running is guaranteed, so this is the branch that most needs
+		// the invoked-executable clause -- it must not be dropped here.
+		detail := fmt.Sprintf("%s resolved to %s but %d copies found in PATH: %s", tool, resolved, len(copies), strings.Join(copies, ", "))
+		if tool == "gentle-ai" {
+			detail += doctorInvokedGentleAIClause(resolved)
+		}
 		return CheckResult{
-			Name:   "tool:" + tool,
+			Name:   doctor.ToolCheckID(tool),
 			Status: CheckStatusWarn,
-			Detail: fmt.Sprintf("%s resolved to %s but %d copies found in PATH: %s", tool, resolved, len(copies), strings.Join(copies, ", ")),
-			Remedy: "Remove duplicate binaries; keep only one copy of " + tool + " in PATH",
+			Detail: detail,
+			Remedy: doctor.NewRemedy(doctor.RemedyRemoveDuplicates, "Remove duplicate binaries; keep only one copy of "+tool+" in PATH"),
 		}
 	}
 
@@ -184,11 +206,57 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 	if shim != "" {
 		detail += " (" + shim + ")"
 	}
+	if tool == "gentle-ai" {
+		detail += doctorInvokedGentleAIClause(resolved)
+	}
 	return CheckResult{
-		Name:   "tool:" + tool,
+		Name:   doctor.ToolCheckID(tool),
 		Status: CheckStatusPass,
 		Detail: detail,
 	}
+}
+
+// doctorInvokedGentleAIClause names the exact executable and version that is
+// running THIS doctor check, alongside the PATH-resolved gentle-ai reported
+// above. An RC tester who invokes gentle-ai by an absolute path may have a
+// different gentle-ai earlier on PATH; without this, doctor would report only
+// that other, unexercised copy as healthy, leaving the report ambiguous about
+// which build was actually under test (organic-dx Phase 3f task 3f.5).
+//
+// It must render on every gentle-ai branch where it is derivable -- not only
+// the healthy one -- since PATH duplicates are exactly the situation where
+// knowing which build is actually running matters most. pathResolved may be
+// "" when the tool check has no PATH-resolved copy to name (e.g. gentle-ai
+// itself is not found on PATH); in that case the clause still names the
+// invoked executable but skips the comparison, since there is honestly
+// nothing to compare it against.
+func doctorInvokedGentleAIClause(pathResolved string) string {
+	invoked, err := osExecutableDoctor()
+	if err != nil {
+		return ""
+	}
+	version, _ := reviewGentleAIVersionAndCommit()
+	clause := fmt.Sprintf("; invoked executable: %s (version %s)", invoked, version)
+	if pathResolved != "" && !doctorSameExecutable(invoked, pathResolved) {
+		clause += " -- this differs from the PATH-resolved copy above; the PATH copy's health does not describe the build actually running"
+	}
+	return clause
+}
+
+// doctorSameExecutable reports whether two paths resolve to the same file,
+// tolerating symlinks and path formatting differences. It fails closed to
+// "different" when either path cannot be resolved, so a resolution error
+// never silently suppresses the mismatch warning.
+func doctorSameExecutable(a, b string) bool {
+	resolvedA, errA := filepath.EvalSymlinks(a)
+	if errA != nil {
+		resolvedA = filepath.Clean(a)
+	}
+	resolvedB, errB := filepath.EvalSymlinks(b)
+	if errB != nil {
+		resolvedB = filepath.Clean(b)
+	}
+	return resolvedA == resolvedB
 }
 
 func resolveDoctorTool(tool string) (string, string, error) {
@@ -207,15 +275,18 @@ func resolveDoctorTool(tool string) (string, string, error) {
 }
 
 func doctorToolCopies(tool string, pathDirs []string) []string {
-	seenDirs := make(map[string]struct{}, len(pathDirs))
+	seenCopies := make(map[string]struct{}, len(pathDirs))
 	copies := make([]string, 0, len(pathDirs))
 	for _, dir := range pathDirs {
-		cleanDir := filepath.Clean(dir)
-		if _, seen := seenDirs[cleanDir]; seen {
-			continue
-		}
 		if p := toolInDir(dir, tool); p != "" {
-			seenDirs[cleanDir] = struct{}{}
+			resolved, err := filepath.EvalSymlinks(p)
+			if err != nil {
+				resolved = filepath.Clean(p)
+			}
+			if _, seen := seenCopies[resolved]; seen {
+				continue
+			}
+			seenCopies[resolved] = struct{}{}
 			copies = append(copies, p)
 		}
 	}
@@ -300,33 +371,33 @@ func appendUniqueExt(exts []string, ext string) []string {
 
 // checkStateJSON validates ~/.gentle-ai/state.json and agent config dirs.
 func checkStateJSON(homeDir string) CheckResult {
-	const name = "state:json"
+	const id = doctor.CheckStateJSON
 	statePath := state.Path(homeDir)
 
 	s, err := state.Read(homeDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return CheckResult{
-				Name:   name,
+				Name:   id,
 				Status: CheckStatusWarn,
 				Detail: "state file not found at " + statePath + " (expected for first-time install)",
-				Remedy: "Run 'gentle-ai install' to create initial state",
+				Remedy: doctor.NewRemedy(doctor.RemedyInstall, "Run 'gentle-ai install' to create initial state"),
 			}
 		}
 		return CheckResult{
-			Name:   name,
+			Name:   id,
 			Status: CheckStatusFail,
 			Detail: "failed to parse " + statePath + ": " + err.Error(),
-			Remedy: "Delete or repair " + statePath + ", then re-run 'gentle-ai install'",
+			Remedy: doctor.NewRemedy(doctor.RemedyRepairState, "Delete or repair "+statePath+", then re-run 'gentle-ai install'"),
 		}
 	}
 
 	if len(s.InstalledAgents) == 0 {
 		return CheckResult{
-			Name:   name,
+			Name:   id,
 			Status: CheckStatusWarn,
 			Detail: "state file found at " + statePath + " with no installed agents",
-			Remedy: "Run 'gentle-ai install' to configure agents",
+			Remedy: doctor.NewRemedy(doctor.RemedyInstall, "Run 'gentle-ai install' to configure agents"),
 		}
 	}
 
@@ -341,15 +412,15 @@ func checkStateJSON(homeDir string) CheckResult {
 
 	if len(missing) > 0 {
 		return CheckResult{
-			Name:   name,
+			Name:   id,
 			Status: CheckStatusWarn,
 			Detail: fmt.Sprintf("state lists %d agent(s) whose config dirs are missing: %s", len(missing), strings.Join(missing, ", ")),
-			Remedy: "Run 'gentle-ai sync' to restore missing config files",
+			Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to restore missing config files"),
 		}
 	}
 
 	return CheckResult{
-		Name:   name,
+		Name:   id,
 		Status: CheckStatusPass,
 		Detail: fmt.Sprintf("state file OK — %d agent(s) installed: %s", len(s.InstalledAgents), strings.Join(s.InstalledAgents, ", ")),
 	}
@@ -380,7 +451,7 @@ func agentConfigDir(homeDir, agentID string) string {
 
 // checkEngramReachable checks whether the engram HTTP health endpoint responds.
 func checkEngramReachable() CheckResult {
-	const name = "engram:reachable"
+	const id = doctor.CheckEngramReachable
 
 	baseURL := os.Getenv(engramHealthEnvVar)
 	if baseURL == "" {
@@ -391,22 +462,22 @@ func checkEngramReachable() CheckResult {
 	statusCode, err := httpGetFn(healthURL, 3*time.Second)
 	if err != nil {
 		return CheckResult{
-			Name:   name,
+			Name:   id,
 			Status: CheckStatusFail,
 			Detail: "engram health endpoint unreachable at " + healthURL + ": " + err.Error(),
-			Remedy: "Start engram or check that it is configured as an MCP server",
+			Remedy: doctor.NewRemedy(doctor.RemedyStartEngram, "Start engram or check that it is configured as an MCP server"),
 		}
 	}
 	if statusCode < 200 || statusCode >= 300 {
 		return CheckResult{
-			Name:   name,
+			Name:   id,
 			Status: CheckStatusWarn,
 			Detail: fmt.Sprintf("engram health endpoint %s returned HTTP %d", healthURL, statusCode),
-			Remedy: "Check engram logs for errors",
+			Remedy: doctor.NewRemedy(doctor.RemedyInspectEngram, "Check engram logs for errors"),
 		}
 	}
 	return CheckResult{
-		Name:   name,
+		Name:   id,
 		Status: CheckStatusPass,
 		Detail: fmt.Sprintf("engram health endpoint OK at %s (HTTP %d)", healthURL, statusCode),
 	}
@@ -414,33 +485,33 @@ func checkEngramReachable() CheckResult {
 
 // checkDiskSpace reports free space on the ~/.gentle-ai filesystem.
 func checkDiskSpace(homeDir string) CheckResult {
-	const name = "disk:space"
+	const id = doctor.CheckDiskSpace
 	dir := filepath.Join(homeDir, ".gentle-ai")
 
 	free, err := availableBytesFn(dir)
 	if err != nil {
-		return CheckResult{Name: name, Status: CheckStatusWarn, Detail: "could not determine free disk space for " + dir + ": " + err.Error()}
+		return CheckResult{Name: id, Status: CheckStatusWarn, Detail: "could not determine free disk space for " + dir + ": " + err.Error()}
 	}
 
 	freeMB := free / (1024 * 1024)
 	switch {
 	case free < diskFailThreshold:
 		return CheckResult{
-			Name:   name,
+			Name:   id,
 			Status: CheckStatusFail,
 			Detail: fmt.Sprintf("critically low disk space: %d MB free on %s filesystem", freeMB, dir),
-			Remedy: "Free up disk space before running install or sync operations",
+			Remedy: doctor.NewRemedy(doctor.RemedyFreeDiskSpace, "Free up disk space before running install or sync operations"),
 		}
 	case free < diskWarnThreshold:
 		return CheckResult{
-			Name:   name,
+			Name:   id,
 			Status: CheckStatusWarn,
 			Detail: fmt.Sprintf("low disk space: %d MB free on %s filesystem", freeMB, dir),
-			Remedy: "Consider freeing disk space",
+			Remedy: doctor.NewRemedy(doctor.RemedyFreeDiskSpace, "Consider freeing disk space"),
 		}
 	default:
 		return CheckResult{
-			Name:   name,
+			Name:   id,
 			Status: CheckStatusPass,
 			Detail: fmt.Sprintf("%d MB free on %s filesystem", freeMB, dir),
 		}
@@ -467,8 +538,8 @@ func renderDoctorReport(w io.Writer, report DoctorReport) {
 
 	for _, c := range report.Checks {
 		fmt.Fprintf(w, "  %s  %-30s %s\n", statusIcon(c.Status), c.Name, c.Detail)
-		if c.Remedy != "" {
-			fmt.Fprintf(w, "       Remedy: %s\n", c.Remedy)
+		if c.Remedy != nil {
+			fmt.Fprintf(w, "       Remedy: %s\n", c.Remedy.Description)
 		}
 	}
 

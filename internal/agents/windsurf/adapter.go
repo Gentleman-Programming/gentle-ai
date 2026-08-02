@@ -6,8 +6,9 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 type statResult struct {
@@ -59,7 +60,13 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 
 // --- Installation ---
 
-func (a *Adapter) SupportsAutoInstall() bool { return false }
+func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.MustForAgent(model.AgentWindsurf)
+}
+
+func (a *Adapter) SupportsAutoInstall() bool {
+	return a.CapabilityManifest().Features.AutoInstall
+}
 
 func (a *Adapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 	return nil, AgentNotInstallableError{Agent: model.AgentWindsurf}
@@ -137,20 +144,34 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 
 // --- Optional capabilities ---
 
-func (a *Adapter) SupportsOutputStyles() bool     { return false }
+func (a *Adapter) SupportsOutputStyles() bool {
+	return a.CapabilityManifest().Features.OutputStyles
+}
 func (a *Adapter) OutputStyleDir(_ string) string { return "" }
-func (a *Adapter) SupportsSlashCommands() bool    { return false }
-func (a *Adapter) CommandsDir(_ string) string    { return "" }
-func (a *Adapter) SupportsSubAgents() bool        { return false }
-func (a *Adapter) SubAgentsDir(_ string) string   { return "" }
-func (a *Adapter) EmbeddedSubAgentsDir() string   { return "" }
-func (a *Adapter) SupportsSkills() bool           { return true }
-func (a *Adapter) SupportsSystemPrompt() bool     { return true }
-func (a *Adapter) SupportsMCP() bool              { return true }
+func (a *Adapter) SupportsSlashCommands() bool {
+	return a.CapabilityManifest().Features.SlashCommands
+}
+func (a *Adapter) CommandsDir(_ string) string { return "" }
+func (a *Adapter) SupportsSubAgents() bool {
+	return a.CapabilityManifest().Features.FileSubAgents
+}
+func (a *Adapter) SubAgentsDir(_ string) string { return "" }
+func (a *Adapter) EmbeddedSubAgentsDir() string { return "" }
+func (a *Adapter) SupportsSkills() bool {
+	return a.CapabilityManifest().Features.Skills
+}
+func (a *Adapter) SupportsSystemPrompt() bool {
+	return a.CapabilityManifest().Features.SystemPrompt
+}
+func (a *Adapter) SupportsMCP() bool {
+	return a.CapabilityManifest().Features.MCP
+}
 
 // SupportsWorkflows reports that Windsurf can consume native workflow files
 // placed in .windsurf/workflows/ inside the active workspace.
-func (a *Adapter) SupportsWorkflows() bool { return true }
+func (a *Adapter) SupportsWorkflows() bool {
+	return a.CapabilityManifest().Features.Workflows
+}
 
 // WorkflowsDir returns the target directory for Windsurf native workflows.
 // Windsurf reads *.md files from .windsurf/workflows/ in the workspace root.

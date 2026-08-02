@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
 )
 
 func TestNewCodexModelPickerState(t *testing.T) {
@@ -22,9 +22,9 @@ func TestNewCodexModelPickerStateFromAssignments_KnownPreset(t *testing.T) {
 		wantPreset  screens.CodexModelPreset
 	}{
 		{
-			name:        "Recommended map → LowCost preset when profiles are equivalent",
+			name:        "Recommended map → Recommended preset",
 			assignments: model.CodexModelPresetRecommended(),
-			wantPreset:  screens.CodexPresetLowCost,
+			wantPreset:  screens.CodexPresetRecommended,
 		},
 		{
 			name:        "Powerful map → Powerful preset",
@@ -198,19 +198,19 @@ func TestCodexPickerLabels_SelfDescribing(t *testing.T) {
 			preset:           screens.CodexPresetLowCost,
 			wantStrongEffort: "medium",
 			wantMidEffort:    "medium",
-			wantCheapEffort:  "low",
+			wantCheapEffort:  "high",
 		},
 		{
 			preset:           screens.CodexPresetRecommended,
 			wantStrongEffort: "medium",
-			wantMidEffort:    "medium",
-			wantCheapEffort:  "low",
+			wantMidEffort:    "high",
+			wantCheapEffort:  "high",
 		},
 		{
 			preset:           screens.CodexPresetPowerful,
-			wantStrongEffort: "high",
+			wantStrongEffort: "xhigh",
 			wantMidEffort:    "high",
-			wantCheapEffort:  "low",
+			wantCheapEffort:  "high",
 		},
 	}
 	for _, tc := range tests {

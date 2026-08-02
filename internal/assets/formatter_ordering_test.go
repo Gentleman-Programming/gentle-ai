@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 func TestSDDOrchestratorsRequireSafeFormatterOrdering(t *testing.T) {
@@ -45,7 +47,18 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 
 	jobs := []struct{ id, next string }{
 		{id: "unit-tests", next: "windows-runtime"},
-		{id: "windows-runtime", next: "e2e-tests"},
+		// The sharded Windows full suite is deliberately NOT here: it lives in
+		// its own workflow while the pre-existing Windows failures it exposed
+		// are paid down, so it is not one of ci.yml's required checks and owes
+		// no fail-closed contract to a go-format job in another file.
+		{id: "windows-runtime", next: "darwin-runtime"},
+		// darwin-runtime is a required check like its siblings, so it owes the
+		// same fail-closed contract. Listing it here is also what keeps the
+		// section slicing honest: a job this list does not know about gets
+		// swallowed into its predecessor's section, and its own guard step
+		// then reads as the predecessor bypassing the format gate.
+		{id: "darwin-runtime", next: "organic-runtime-e2e"},
+		{id: "organic-runtime-e2e", next: "e2e-tests"},
 		{id: "e2e-tests"},
 	}
 	for _, job := range jobs {
@@ -74,6 +87,63 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 				t.Fatalf("%s can bypass the failed format guard", job.id)
 			}
 		})
+	}
+}
+
+func TestOrganicRuntimeE2EUsesInstalledOpenCodePin(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	install := "npm install --global opencode-ai@" + versions.OpenCode
+	if strings.Count(string(data), install) != 1 {
+		t.Fatalf("organic runtime E2E must install exact supported OpenCode pin %q once", install)
+	}
+}
+
+func TestWindowsReleaseBlockerCannotSkipOwnerRebinding(t *testing.T) {
+	workflow, err := os.ReadFile(filepath.Join(
+		"..",
+		"..",
+		".github",
+		"workflows",
+		"ci.yml",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"TestRARPrivateOwnerRemainsTokenUserOnly",
+		`GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER: "1"`,
+	} {
+		if !strings.Contains(string(workflow), required) {
+			t.Fatalf(
+				"Windows release-blocker workflow missing %q",
+				required,
+			)
+		}
+	}
+	if strings.Contains(string(workflow), "internal/deliveryadmission") {
+		t.Fatal(
+			"Windows release-blocker workflow still tests the retired deliveryadmission package",
+		)
+	}
+
+	testSource, err := os.ReadFile(filepath.Join(
+		"..",
+		"reviewtransaction",
+		"rar_path_safety_windows_test.go",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(
+		string(testSource),
+		`os.Getenv("GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER") == "1"`,
+	) {
+		t.Fatal(
+			"native Windows owner-rebinding test can skip the release precondition",
+		)
 	}
 }
 
@@ -142,5 +212,81 @@ func TestFormatterOrderingBehaviorContract(t *testing.T) {
 				t.Fatalf("mutation passed: receipt=%t commits=%d", fixture.receipt, fixture.commits)
 			}
 		})
+	}
+}
+
+// TestWindowsFullSuiteShardsCoverEveryTestName proves the sharded Windows lane
+// still runs every test. Sharding trades one long job for several short ones,
+// and its failure mode is silent: a range edited to leave a letter uncovered
+// skips those tests while every shard, and the lane, still reports green.
+//
+// Go test names are "Test" plus an uppercase letter, so the space the ranges
+// must tile is exactly A-Z. Per package, the ranges have to be contiguous and
+// disjoint from A through Z -- no gap, no overlap.
+func TestWindowsFullSuiteShardsCoverEveryTestName(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "windows-full-suite.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(data), "  windows-full-suite:")
+	if start < 0 {
+		t.Fatal("missing windows-full-suite job")
+	}
+	section := string(data)[start:]
+	// Stop at the step list: steps carry their own `run:` keys, and a shell
+	// command is not a shard selector.
+	if end := strings.Index(section, "\n    steps:"); end >= 0 {
+		section = section[:end]
+	}
+
+	// Ranges are read straight out of the matrix, so this cannot drift from
+	// what actually runs the way a copy of the list would.
+	type shard struct{ pkg, lo, hi string }
+	var shards []shard
+	var pkg string
+	for _, line := range strings.Split(section, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if value, ok := strings.CutPrefix(trimmed, "packages: "); ok {
+			pkg = strings.Trim(value, `"`)
+		}
+		value, ok := strings.CutPrefix(trimmed, "run: ")
+		if !ok {
+			continue
+		}
+		value = strings.Trim(value, `"`)
+		if value == "" {
+			continue
+		}
+		if len(value) != len(`^Test[A-Z]`) || !strings.HasPrefix(value, "^Test[") || !strings.HasSuffix(value, "]") {
+			t.Fatalf("shard selector %q is not the ^Test[A-Z] form this guard can verify", value)
+		}
+		shards = append(shards, shard{pkg: pkg, lo: value[6:7], hi: value[8:9]})
+	}
+	if len(shards) == 0 {
+		t.Fatal("no range shards found; the guard would pass vacuously")
+	}
+
+	byPackage := map[string][]shard{}
+	for _, s := range shards {
+		byPackage[s.pkg] = append(byPackage[s.pkg], s)
+	}
+	for pkg, ranges := range byPackage {
+		covered := map[rune]string{}
+		for _, r := range ranges {
+			if r.lo > r.hi {
+				t.Fatalf("%s: range %s-%s is inverted", pkg, r.lo, r.hi)
+			}
+			for letter := rune(r.lo[0]); letter <= rune(r.hi[0]); letter++ {
+				if owner, taken := covered[letter]; taken {
+					t.Fatalf("%s: letter %c is covered by both %s and %s-%s", pkg, letter, owner, r.lo, r.hi)
+				}
+				covered[letter] = r.lo + "-" + r.hi
+			}
+		}
+		for letter := 'A'; letter <= 'Z'; letter++ {
+			if _, ok := covered[letter]; !ok {
+				t.Fatalf("%s: no shard runs tests starting with Test%c", pkg, letter)
+			}
+		}
 	}
 }

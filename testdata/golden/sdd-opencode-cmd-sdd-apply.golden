@@ -37,7 +37,7 @@ If all gates pass, launch the hidden `sdd-apply` sub-agent with:
 Return a structured orchestration result with: status, executive_summary, artifacts, next_recommended, risks, and skill_resolution.
 
 POST-APPLY REVIEW ROUTING:
-After apply returns, rerun native status. If `nextRecommended: review`, the parent orchestrator runs `gentle-ai review start --cwd <repo>`. The facade derives repository scope, lineage, tier, lenses, and correction budget from live Git. The apply executor never launches review.
+After apply returns, rerun native SDD status. If `nextRecommended: review`, the parent orchestrator begins negotiated review routing with `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition`. Read only `next_transition` and route only from the returned `next_transition`: for `execute`, invoke its exact operation and ordered argument tokens unchanged; for `collect`, satisfy only its exact named inputs and capture operations, then query STATUS again; for `stop`, stop without running a lifecycle operation. The parent never substitutes direct START, and the apply executor never launches review.
 
 ### Authority-First Terminal Procedure
 
@@ -45,11 +45,11 @@ Use only the compact facade; it appends and reads back native authority before m
 
 | Order | Operation | Required result | Terminal mirrors |
 |---|---|---|---|
-| 01 | `gentle-ai review start` | target, tier, lenses, and budget bound | blocked |
-| 02 | `gentle-ai review finalize` | results, evidence, native transitions, and receipt bound | blocked |
-| 03 | `gentle-ai review validate --gate <gate> --cwd <repo>` | authority, receipt, and live Git checked | blocked |
+| 01 | `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` | one provider-owned `next_transition` returned | blocked |
+| 02 | `provider-returned transition` | exact `execute` operation/arguments or `collect` inputs completed; `stop` halts | blocked |
+| 03 | repeat 01–02 | exact returned `review.validate` allows the terminal gate | blocked |
 | 04 | `reconcile-terminal-mirrors` | existing mirrors reconciled | allowed |
 
-After ambiguous output, rerun the same facade operation; native discovery resumes committed authority without another budget. Malformed or ambiguous lineage remains invalid.
+After ambiguous output, query STATUS again; native discovery reports the committed authority and its next transition without another budget. Malformed or ambiguous lineage remains invalid.
 
 Reuse a valid receipt; later commit/push/PR/release events only validate it.

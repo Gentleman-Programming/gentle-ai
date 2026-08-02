@@ -55,6 +55,19 @@ func legacyAliasRepairAuthorizationBinding(repository, lineage, revision, diagno
 // a complete LF authorization binding, a re-derived chain proof, and the
 // authority-wide maintenance lease. It never makes historical events valid.
 func RepairHistoricalLegacyAlias(ctx context.Context, repo string, request LegacyAliasRepairRequest) (CompactReclaimRecord, error) {
+	return repairHistoricalLegacyAlias(ctx, repo, request, legacyAliasRepairOptions{})
+}
+
+type legacyAliasRepairOptions struct {
+	waitForCooperativeRepair bool
+	maintenanceAlreadyHeld   bool
+	classifiedAudit          *ClassifiedAuthorityRepairAudit
+}
+
+// repairHistoricalLegacyAlias lets the provider-owned classified operation
+// wait behind another cooperative repair at the common maintenance lock. The
+// compatibility command retains its historical immediate active-owner refusal.
+func repairHistoricalLegacyAlias(ctx context.Context, repo string, request LegacyAliasRepairRequest, options legacyAliasRepairOptions) (CompactReclaimRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return CompactReclaimRecord{}, err
 	}
@@ -75,11 +88,32 @@ func RepairHistoricalLegacyAlias(ctx context.Context, repo string, request Legac
 		return CompactReclaimRecord{}, err
 	}
 	dir := filepath.Join(base, "v1", request.LineageID)
+	if _, statErr := os.Stat(dir); statErr == nil {
+		if !options.waitForCooperativeRepair {
+			if status := probeAuthorityRepairLock(filepath.Join(dir, "LOCK")); status == authorityRepairLockHeld || status == authorityRepairLockUnknown {
+				return CompactReclaimRecord{}, fmt.Errorf("review repair-legacy-alias refused active ownership: %w", ErrConcurrentUpdate)
+			}
+		}
+	} else if !os.IsNotExist(statErr) {
+		return CompactReclaimRecord{}, fmt.Errorf("inspect legacy alias repair target: %w", statErr)
+	}
+	if !options.maintenanceAlreadyHeld {
+		maintenance, err := acquireMaintenanceLock(ctx, compactMaintenanceLockPath(base), maintenanceExclusive)
+		if err != nil {
+			return CompactReclaimRecord{}, err
+		}
+		defer maintenance.Release()
+	}
 	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {
 			return replayCommittedLegacyAliasRepair(base, repository, request)
 		}
 		return CompactReclaimRecord{}, fmt.Errorf("inspect legacy alias repair target: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "v2", request.LineageID)); err == nil {
+		return CompactReclaimRecord{}, fmt.Errorf("review repair-legacy-alias refused: lineage %q also exists in compact-v2 authority", request.LineageID)
+	} else if !os.IsNotExist(err) {
+		return CompactReclaimRecord{}, fmt.Errorf("inspect same-lineage compact authority: %w", err)
 	}
 
 	localLock, err := acquireLocalStoreLock(filepath.Join(dir, "LOCK"))
@@ -95,17 +129,6 @@ func RepairHistoricalLegacyAlias(ctx context.Context, repo string, request Legac
 		return localLock.release()
 	}
 	defer releaseLocalLock()
-
-	maintenance, err := acquireMaintenanceLock(ctx, compactMaintenanceLockPath(base), maintenanceExclusive)
-	if err != nil {
-		return CompactReclaimRecord{}, err
-	}
-	defer maintenance.Release()
-	if _, err := os.Stat(filepath.Join(base, "v2", request.LineageID)); err == nil {
-		return CompactReclaimRecord{}, fmt.Errorf("review repair-legacy-alias refused: lineage %q also exists in compact-v2 authority", request.LineageID)
-	} else if !os.IsNotExist(err) {
-		return CompactReclaimRecord{}, fmt.Errorf("inspect same-lineage compact authority: %w", err)
-	}
 
 	store := Store{Dir: dir, lineageID: request.LineageID, repo: repository, readOnly: true}
 	proof, err := inspectHistoricalLegacyAlias(store, request.ExpectedRevision)
@@ -134,10 +157,11 @@ func RepairHistoricalLegacyAlias(ctx context.Context, repo string, request Legac
 	if err := releaseLocalLock(); err != nil {
 		return CompactReclaimRecord{}, fmt.Errorf("release legacy lineage lock before alias repair: %w", err)
 	}
-	record, err := quarantineCompactStoreEntry(base, dir, CompactReclaimRecord{
+	record, err := quarantineCompactStoreEntry(ctx, base, dir, CompactReclaimRecord{
 		Schema: CompactReclaimRecordSchema, Status: CompactReclaimPrepared,
 		LineageID: request.LineageID, Reason: strings.TrimSpace(request.Reason), Actor: strings.TrimSpace(request.Actor),
 		ReclaimedAt: request.RepairedAt.UTC(), SourcePath: dir, Residue: residue, LegacyAliasRepair: &proof,
+		ClassifiedAuthorityRepair: options.classifiedAudit,
 	})
 	if err != nil {
 		return record, err

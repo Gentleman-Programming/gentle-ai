@@ -146,7 +146,7 @@ func QuarantineMalformedLegacyFreeze(ctx context.Context, repo string, request L
 	if err := releaseLocalLock(); err != nil {
 		return CompactReclaimRecord{}, fmt.Errorf("release legacy lineage lock before quarantine: %w", err)
 	}
-	return quarantineCompactStoreEntry(base, dir, CompactReclaimRecord{
+	return quarantineCompactStoreEntry(ctx, base, dir, CompactReclaimRecord{
 		Schema: CompactReclaimRecordSchema, Status: CompactReclaimPrepared,
 		LineageID: request.LineageID, Reason: strings.TrimSpace(request.Reason),
 		Actor: strings.TrimSpace(request.Actor), ReclaimedAt: request.QuarantinedAt.UTC(),

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/verification-evidence.schema.json",
+  "title": "Gentle AI outcome-bearing verification evidence record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "lineage_id",
+    "authority_revision",
+    "target_identity",
+    "candidate_tree",
+    "paths_digest",
+    "paths",
+    "ledger_ids",
+    "raw_payload_sha256",
+    "raw_payload_bytes",
+    "outcome",
+    "record_digest"
+  ],
+  "properties": {
+    "schema": { "const": "gentle-ai.review-verification-evidence/v2" },
+    "version": { "const": 2 },
+    "lineage_id": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "authority_revision": { "$ref": "#/$defs/sha256" },
+    "target_identity": { "$ref": "#/$defs/sha256" },
+    "candidate_tree": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "paths_digest": { "$ref": "#/$defs/sha256" },
+    "paths": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "ledger_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "raw_payload_sha256": { "$ref": "#/$defs/sha256" },
+    "raw_payload_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4194304
+    },
+    "outcome": {
+      "enum": ["passed", "verification_failed", "procedural_tooling_failed"]
+    },
+    "record_digest": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

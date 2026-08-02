@@ -2,6 +2,7 @@ package reviewtransaction
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -75,7 +76,7 @@ func TestTargetedValidationRequestRejectsUnchangedAndStaleAuthority(t *testing.T
 		OriginalCriteria:     ValidationCheck{Passed: true, EvidenceHash: hash("2"), FixDeltaHash: fixHash},
 		CorrectionRegression: ValidationCheck{Passed: true, EvidenceHash: hash("3"), FixDeltaHash: fixHash},
 	}
-	if err := next.CompleteCorrection(fix, 2, validation); err != nil {
+	if err := next.CompleteCorrection(fix, 2, bindTargetedValidationForTest(validation, fix)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Replace(staleRevision, "review/complete-fix", next); err != nil {
@@ -106,6 +107,83 @@ func TestTargetedValidationRequestFromSnapshotIgnoresLaterWorkspaceChanges(t *te
 	}
 	if got := gitSnapshot(t, repo, "show", request.CorrectionCandidateTree+":tracked.txt"); got != "base\nfixed\n" {
 		t.Fatalf("request candidate content = %q, want captured content", got)
+	}
+}
+
+func TestTargetedValidationRequestCountsOnlyPartialCorrectionAcrossIntendedUntracked(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	var tracked, intended strings.Builder
+	for index := 0; index < 120; index++ {
+		fmt.Fprintf(&tracked, "candidate tracked line %03d\n", index)
+		fmt.Fprintf(&intended, "var CandidateValue%03d = %d\n", index, index)
+	}
+	writeSnapshotFile(t, repo, "tracked.txt", tracked.String())
+	writeSnapshotFile(t, repo, "intended.go", intended.String())
+
+	state := newCompactTestStateWithIntended(t, repo, "targeted-validation-partial-intended", []string{"intended.go"})
+	if state.OriginalChangedLines <= 200 || state.RiskLevel != RiskMedium || len(state.SelectedLenses) != 1 {
+		t.Fatalf("original review scope = lines:%d risk:%q lenses:%v", state.OriginalChangedLines, state.RiskLevel, state.SelectedLenses)
+	}
+	store := storeCompactStartAuthority(t, repo, state)
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := Finding{
+		ID: "R3-001", Lens: strings.TrimPrefix(state.SelectedLenses[0], "review-"), Location: "tracked.txt:61", Severity: "CRITICAL",
+		Claim: "candidate values require a paired correction", ProofRefs: []string{"candidate-only differential failure"},
+	}
+	if err := state.CompleteReview(CompactReviewInput{
+		LensResults:     []LensResult{{Lens: state.SelectedLenses[0], Findings: []Finding{finding}, Evidence: []string{"reviewed exact initial candidate"}}},
+		Classifications: []FindingEvidence{{FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk"}},
+		RefuterOutcomes: []EvidenceResult{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	revision, err := store.Replace(record.Revision, "review/complete-review", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.BeginCorrection(4); err != nil {
+		t.Fatal(err)
+	}
+	revision, err = store.Replace(revision, "review/begin-fix", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	correctedTracked := strings.Replace(tracked.String(), "candidate tracked line 060", "corrected tracked line 060", 1)
+	correctedIntended := strings.Replace(intended.String(), "var CandidateValue060 = 60", "var CorrectedValue060 = 60", 1)
+	writeSnapshotFile(t, repo, "tracked.txt", correctedTracked)
+	writeSnapshotFile(t, repo, "intended.go", correctedIntended)
+	live, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, Projection: state.InitialSnapshot.Projection,
+		IntendedUntracked: state.InitialSnapshot.IntendedUntracked,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := BuildTargetedValidationRequestFromSnapshot(context.Background(), repo, state, revision, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeFix, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetFixDiff, Projection: state.InitialSnapshot.Projection,
+		BaseRef: state.CurrentSnapshot.CandidateTree, IntendedUntracked: state.InitialSnapshot.IntendedUntracked,
+		LedgerIDs: state.FixFindingIDs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeLines, err := (SnapshotBuilder{Repo: repo}).ChangedLines(context.Background(), nativeFix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPaths := []string{"intended.go", "tracked.txt"}
+	if nativeLines != 4 || !reflect.DeepEqual(nativeFix.Paths, wantPaths) ||
+		request.CorrectionCandidateTree != nativeFix.CandidateTree || request.CorrectionTargetIdentity != nativeFix.Identity ||
+		!reflect.DeepEqual(request.CorrectionPaths, wantPaths) || request.CorrectionPathsDigest != nativeFix.PathsDigest {
+		t.Fatalf("partial correction = lines:%d fix:%#v request:%#v", nativeLines, nativeFix, request)
 	}
 }
 

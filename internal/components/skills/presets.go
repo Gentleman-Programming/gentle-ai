@@ -1,6 +1,6 @@
 package skills
 
-import "github.com/gentleman-programming/gentle-ai/internal/model"
+import "github.com/gentleman-programming/gentle-ai/v2/internal/model"
 
 // sddSkills are the SDD orchestrator skills — always included.
 var sddSkills = []model.SkillID{
@@ -29,6 +29,7 @@ var foundationSkills = []model.SkillID{
 	model.SkillCognitiveDoc,
 	model.SkillCommentWriter,
 	model.SkillWorkUnitCommits,
+	model.SkillRDDDefectWorkflow,
 }
 
 // SkillsForPreset returns which skills should be installed for a given preset.

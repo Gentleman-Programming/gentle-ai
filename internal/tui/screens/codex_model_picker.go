@@ -6,8 +6,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 )
 
 // CodexModelPreset represents a named effort-tier preset for Codex per-phase
@@ -544,7 +544,9 @@ func codexModelSearchDisplay(query string) string {
 // Labels are self-describing: they include the model id and effort tier per
 // carril so the user can see what will be written to profile files.
 //
-// All presets also set the main orchestrator to gpt-5.6-sol/medium.
+// Every preset runs the main orchestrator at medium effort, but not on the
+// same model: low-cost runs it on gpt-5.6-terra. The label reads the real
+// assignment rather than restating a policy that no longer holds uniformly.
 // Format: "<Plan> — Orquestador <model>/<effort> · Razonamiento <model>/<effort> · Código <model>/<effort> · Liviano <model>/<effort>"
 func CodexPresetLabel(preset CodexModelPreset) string {
 	defaults := model.CodexPresetCarrilDefaults(string(preset))

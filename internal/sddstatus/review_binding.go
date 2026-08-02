@@ -15,16 +15,16 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const reviewBindingSchema = "gentle-ai.sdd-review-binding/v1"
 
 var reviewBindingChange = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var reviewBindingLineage = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var reviewBindingHash = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 var bindingFinalAuthorizationHook = func() {}
-var bindingRename = reviewtransaction.ReplaceFileAtomic
-var syncBindingDirectory = reviewtransaction.SyncReviewDirectory
 
 type ReviewBindingPublicationError struct{ Cause error }
 
@@ -52,7 +52,59 @@ func BindApprovedReview(ctx context.Context, repo, change, lineage, expected str
 	if err != nil {
 		return ReviewBinding{}, err
 	}
-	changeRoot, err := resolveBindingChangeRoot(root, repo, change)
+	if _, err := resolveBindingChangeRoot(ctx, root, repo, change); err != nil {
+		return ReviewBinding{}, err
+	}
+	if err := rejectHistoricalLegacyBinding(ctx, root, lineage); err != nil {
+		return ReviewBinding{}, err
+	}
+	runtimeStore, err := OpenRuntimeStore(ctx, root, change)
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	requestID := "bind-" + strings.TrimPrefix(runtimeValueHash("gentle-ai.sdd-review-binding-request-id/v1", struct {
+		Change   string `json:"change"`
+		Lineage  string `json:"lineage"`
+		Expected string `json:"expected"`
+	}{Change: change, Lineage: lineage, Expected: expected}), "sha256:")
+	status, err := runtimeStore.bindPreparedReview(ctx, BindReviewRequest{
+		ExpectedBindingRevision: expected, RequestID: requestID, LineageID: lineage,
+	}, func() (ReviewBinding, error) {
+		return prepareApprovedReviewBinding(ctx, root, repo, change, lineage)
+	})
+	if err != nil {
+		var publication *RuntimePublicationError
+		if errors.As(err, &publication) {
+			return ReviewBinding{}, &ReviewBindingPublicationError{Cause: err}
+		}
+		return ReviewBinding{}, err
+	}
+	if status.Binding == nil {
+		return ReviewBinding{}, errors.New("native SDD runtime binding commit returned no binding")
+	}
+	return *status.Binding, nil
+}
+
+func rejectHistoricalLegacyBinding(ctx context.Context, root, lineage string) error {
+	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, lineage)
+	if err != nil {
+		return err
+	}
+	if _, err := store.Load(); !errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	legacy, legacyErr := reviewtransaction.AuthoritativeStore(ctx, root, lineage)
+	if legacyErr != nil {
+		return nil
+	}
+	if _, legacyErr = legacy.LoadChain(); legacyErr == nil {
+		return reviewtransaction.NewLegacyReadOnlyError("review/bind-sdd", lineage)
+	}
+	return nil
+}
+
+func prepareApprovedReviewBinding(ctx context.Context, root, workspace, change, lineage string) (ReviewBinding, error) {
+	changeRoot, err := resolveBindingChangeRoot(ctx, root, workspace, change)
 	if err != nil {
 		return ReviewBinding{}, err
 	}
@@ -94,11 +146,318 @@ func BindApprovedReview(ctx context.Context, repo, change, lineage, expected str
 	final, finalErr := store.Load()
 	finalPayload, readErr := os.ReadFile(store.ReceiptPath())
 	finalGate := reviewtransaction.EvaluateCompactGate(ctx, root, receipt, input)
-	finalChangeRoot, changeErr := resolveBindingChangeRoot(root, repo, change)
+	finalChangeRoot, changeErr := resolveBindingChangeRoot(ctx, root, workspace, change)
 	if finalErr != nil || readErr != nil || changeErr != nil || finalChangeRoot != changeRoot || final.Revision != record.Revision || !bytes.Equal(payload, finalPayload) || finalGate.Result != reviewtransaction.GateAllow || !reflect.DeepEqual(gate.Context, finalGate.Context) {
 		return ReviewBinding{}, errors.New("authority or live gate changed before binding publish")
 	}
-	return binding, writeBinding(bindingPath(store, change), expected, binding)
+	return binding, nil
+}
+
+// prepareApprovedRuntimeSuccessorBinding preserves the OpenSpec ledger check
+// whenever the selected change has a file-backed root. Pure Engram changes do
+// not have such a root, so their already-approved compact authority and live
+// post-apply gate are the complete native successor provenance.
+func prepareApprovedRuntimeSuccessorBinding(ctx context.Context, root, workspace, change, lineage string) (ReviewBinding, error) {
+	matches, err := bindingChangeRoots(ctx, root, change)
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	if len(matches) != 0 {
+		return prepareApprovedReviewBinding(ctx, root, workspace, change, lineage)
+	}
+	return prepareApprovedCompactBinding(ctx, root, change, lineage)
+}
+
+func prepareApprovedCompactBinding(ctx context.Context, root, change, lineage string) (ReviewBinding, error) {
+	if !validReviewBindingChange(change) || !validReviewBindingLineage(lineage) {
+		return ReviewBinding{}, errors.New("invalid compact SDD review binding identity")
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, lineage)
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	record, err := store.Load()
+	if err != nil || record.State.State != reviewtransaction.StateApproved {
+		return ReviewBinding{}, errors.New("explicit compact authority is not approved")
+	}
+	payload, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	receipt, parseErr := reviewtransaction.ParseCompactReceipt(payload)
+	authoritative, receiptErr := record.State.Receipt()
+	if parseErr != nil || receiptErr != nil || !reflect.DeepEqual(receipt, authoritative) {
+		return ReviewBinding{}, errors.New("compact receipt does not match approved authority")
+	}
+	input := reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: lineage}
+	evaluation := reviewtransaction.EvaluateCompactGate(ctx, root, receipt, input)
+	if evaluation.Result != reviewtransaction.GateAllow {
+		return ReviewBinding{}, errors.New("compact post-apply gate is not allow")
+	}
+	binding := ReviewBinding{
+		Schema: reviewBindingSchema, Change: change, Lineage: lineage,
+		AuthorityRevision: record.Revision, ReceiptHash: bindingHash(payload), GateContext: evaluation.Context,
+	}
+	binding.Revision = bindingDigest(binding)
+	finalRecord, finalErr := loadRuntimeBoundCompactArtifacts(ctx, root, binding)
+	if finalErr != nil || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalRecord.State, record.State) {
+		return ReviewBinding{}, errors.New("authority or receipt changed before compact binding selection")
+	}
+	finalReceipt, finalReceiptErr := finalRecord.State.Receipt()
+	if finalReceiptErr != nil {
+		return ReviewBinding{}, errors.New("approved compact authority cannot produce its final receipt")
+	}
+	finalGate := reviewtransaction.EvaluateCompactGate(ctx, root, finalReceipt, input)
+	if finalGate.Result != reviewtransaction.GateAllow || !reflect.DeepEqual(evaluation.Context, finalGate.Context) {
+		return ReviewBinding{}, errors.New("compact post-apply gate changed before binding selection")
+	}
+	return binding, nil
+}
+
+// validateRuntimeRemediationSuccessor proves that an already approved binding
+// is the current leaf of the native compact recovery graph rooted at the
+// populated binding. It deliberately does not mutate compact authority: the
+// runtime ledger selects the independently approved successor and records the
+// attempt charge, evidence transition, and binding swap in its own one-HEAD
+// compare-and-swap.
+func validateRuntimeRemediationSuccessor(ctx context.Context, repo string, current, successor ReviewBinding) error {
+	if current.Lineage == successor.Lineage {
+		return errors.New("atomic SDD remediation requires a distinct recovery descendant")
+	}
+	currentRecord, err := loadRuntimeBoundCompactArtifacts(ctx, repo, current)
+	if err != nil {
+		return fmt.Errorf("validate current remediation binding: %w", err)
+	}
+	leaves, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
+	if err != nil {
+		return fmt.Errorf("validate compact recovery graph: %w", err)
+	}
+	leaf := false
+	for _, store := range leaves {
+		record, loadErr := store.Load()
+		if loadErr != nil {
+			return fmt.Errorf("load compact recovery leaf: %w", loadErr)
+		}
+		if record.State.LineageID == successor.Lineage && record.Revision == successor.AuthorityRevision {
+			leaf = true
+			break
+		}
+	}
+	if !leaf {
+		return errors.New("approved SDD remediation authority is not the current compact recovery leaf")
+	}
+
+	successorStore, err := reviewtransaction.CompactAuthoritativeStore(ctx, repo, successor.Lineage)
+	if err != nil {
+		return err
+	}
+	cursor, err := successorStore.Load()
+	if err != nil || cursor.Revision != successor.AuthorityRevision {
+		return errors.New("approved SDD remediation successor authority changed before native commit")
+	}
+	seen := map[string]struct{}{}
+	for steps := 0; steps < 10_000; steps++ {
+		if _, duplicate := seen[cursor.State.LineageID]; duplicate {
+			return errors.New("compact remediation recovery chain contains a cycle")
+		}
+		seen[cursor.State.LineageID] = struct{}{}
+		recovery := cursor.State.Recovery
+		if recovery == nil || recovery.Disposition != reviewtransaction.RecoveryScopeChanged {
+			return errors.New("approved SDD remediation authority is not a scope-changed recovery descendant of the populated binding")
+		}
+		predecessorStore, storeErr := reviewtransaction.CompactAuthoritativeStore(ctx, repo, recovery.PredecessorLineageID)
+		if storeErr != nil {
+			return storeErr
+		}
+		predecessor, loadErr := predecessorStore.Load()
+		if loadErr != nil || predecessor.Revision != recovery.PredecessorRevision {
+			return errors.New("compact remediation predecessor revision changed before native commit")
+		}
+		if predecessor.State.LineageID == current.Lineage {
+			if predecessor.Revision != currentRecord.Revision {
+				return errors.New("compact remediation recovery chain does not reach the populated binding revision")
+			}
+			return nil
+		}
+		cursor = predecessor
+	}
+	return errors.New("compact remediation recovery chain exceeds the bounded lineage count")
+}
+
+// validateRuntimeRemediationSelfSuccessor proves that an approved
+// self-successor — the corrected authority of the very lineage the runtime
+// binding already names — is healthy, current, content-bound, and still the
+// leaf of the compact recovery graph. A same-lineage remediation never mutates
+// compact authority and never demands the impossible invalidation of a healthy
+// approved predecessor: the corrected approved receipt itself is the successor
+// provenance. A lineage that has since gained a true recovery successor is no
+// longer the leaf and must be refused.
+func validateRuntimeRemediationSelfSuccessor(ctx context.Context, repo string, current, successor ReviewBinding) error {
+	if current.Lineage != successor.Lineage {
+		return errors.New("approved SDD self-remediation requires the bound lineage")
+	}
+	if _, err := loadRuntimeBoundCompactArtifacts(ctx, repo, successor); err != nil {
+		return fmt.Errorf("validate approved self-remediation authority: %w", err)
+	}
+	leaves, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
+	if err != nil {
+		return fmt.Errorf("validate compact recovery graph: %w", err)
+	}
+	for _, store := range leaves {
+		record, loadErr := store.Load()
+		if loadErr != nil {
+			return fmt.Errorf("load compact recovery leaf: %w", loadErr)
+		}
+		if record.State.LineageID == successor.Lineage && record.Revision == successor.AuthorityRevision {
+			return nil
+		}
+	}
+	return errors.New("approved SDD self-remediation authority is not the current compact recovery leaf")
+}
+
+// runtimeSelfSuccessorAvailable answers exactly one question: would the
+// self-successor finish be ACCEPTED right now? It runs the same preparation
+// and the same validator the finish itself would run, against the same
+// candidate tree the finish already charged, so a refusal that consults it
+// can only name the self-successor exit when running that exit works.
+//
+// It is deliberately read-only and fail-closed: any preparation error, any
+// gate that is not allow, an approved authority that binds different bytes, or
+// a lineage that is no longer the compact recovery leaf all answer false, and
+// the caller then names the review router instead of a command that would be
+// refused one layer deeper.
+func runtimeSelfSuccessorAvailable(ctx context.Context, repo, workspace, change string, binding ReviewBinding, candidateTree string) bool {
+	prepared, err := prepareApprovedRuntimeSuccessorBinding(ctx, repo, workspace, change, binding.Lineage)
+	if err != nil || prepared.Lineage != binding.Lineage || prepared.GateContext.CandidateTree != candidateTree {
+		return false
+	}
+	return validateRuntimeRemediationSelfSuccessor(ctx, repo, binding, prepared) == nil
+}
+
+// RuntimeStrandedSuccessor identifies the one recovery successor that stands
+// between a bound lineage and its own approved review, together with the two
+// persisted values `review abandon` demands in its authorization binding.
+type RuntimeStrandedSuccessor struct {
+	Lineage          string
+	Revision         string
+	SnapshotIdentity string
+}
+
+// runtimeStrandedSuccessor answers exactly one question: is the ONLY thing
+// standing between the bound lineage and the self-successor finish a recovery
+// successor that can never be finalized?
+//
+// A recovery successor freezes its own review target when it is minted. If the
+// candidate then moves away from that frozen target — the widened scope is
+// taken back out, the corrected file is reverted — the successor's live
+// projection will never match its own authority again, so it can never be
+// reviewed, never be approved, and never become a legal --successor-lineage.
+// While it exists the bound lineage is not the compact recovery leaf and its
+// post-apply gate does not allow, so every exit through the review router leads
+// to a review the runtime then refuses to accept. Quarantining the stranded
+// successor is the one operation that resolves it, and it destroys nothing the
+// operator still wants: a stranded successor is by definition pristine, and the
+// approved predecessor it superseded — which holds the operator's corrected
+// work — is exactly what quarantining it restores.
+//
+// It is deliberately read-only and fail-closed. The bound authority must be
+// approved for the very bytes this finish charged, the successor must be the
+// bound lineage's own direct recovery successor, it must be the current leaf,
+// its frozen candidate must NOT be the charged candidate, and `review abandon`
+// must already accept it. Anything else answers false and the caller names the
+// review router instead of an abandonment that would be refused one layer in —
+// most importantly a successor that DOES govern the charged candidate, which is
+// a live review the operator still wants and must never be sent to quarantine.
+func runtimeStrandedSuccessor(ctx context.Context, repo string, binding ReviewBinding, candidateTree string) (RuntimeStrandedSuccessor, bool) {
+	bound, err := loadRuntimeBoundCompactArtifacts(ctx, repo, binding)
+	if err != nil || bound.State.CurrentSnapshot.CandidateTree != candidateTree {
+		return RuntimeStrandedSuccessor{}, false
+	}
+	leaves, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
+	if err != nil {
+		return RuntimeStrandedSuccessor{}, false
+	}
+	found := RuntimeStrandedSuccessor{}
+	for _, store := range leaves {
+		record, loadErr := store.Load()
+		if loadErr != nil {
+			return RuntimeStrandedSuccessor{}, false
+		}
+		recovery := record.State.Recovery
+		if recovery == nil || recovery.PredecessorLineageID != binding.Lineage ||
+			recovery.PredecessorRevision != binding.AuthorityRevision {
+			continue
+		}
+		if found.Lineage != "" {
+			// A fork is structurally refused elsewhere; seeing one here means
+			// the graph is not what this probe can reason about.
+			return RuntimeStrandedSuccessor{}, false
+		}
+		if record.State.InitialSnapshot.CandidateTree == candidateTree {
+			// Not stranded: this successor governs the charged candidate and
+			// can still be reviewed, approved and named as the successor.
+			return RuntimeStrandedSuccessor{}, false
+		}
+		found.Lineage = record.State.LineageID
+	}
+	if found.Lineage == "" {
+		return RuntimeStrandedSuccessor{}, false
+	}
+	eligibility, err := reviewtransaction.InspectCompactPristineAbandonment(ctx, repo, found.Lineage)
+	if err != nil || !eligibility.Eligible {
+		return RuntimeStrandedSuccessor{}, false
+	}
+	found.Revision, found.SnapshotIdentity = eligibility.Revision, eligibility.SnapshotIdentity
+	return found, true
+}
+
+// loadRuntimeBoundCompactArtifacts validates immutable authority and receipt
+// identity without evaluating the live post-apply gate. The old binding is
+// expected to be live-stale after remediation; its exact approved bytes remain
+// the predecessor provenance that the successor recovery edge must name.
+func loadRuntimeBoundCompactArtifacts(ctx context.Context, repo string, binding ReviewBinding) (reviewtransaction.CompactRecord, error) {
+	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, repo, binding.Lineage)
+	if err != nil {
+		return reviewtransaction.CompactRecord{}, err
+	}
+	record, err := store.Load()
+	if err != nil || record.Revision != binding.AuthorityRevision || record.State.State != reviewtransaction.StateApproved {
+		return reviewtransaction.CompactRecord{}, errors.New("bound compact predecessor is stale or not approved")
+	}
+	payload, err := os.ReadFile(store.ReceiptPath())
+	if err != nil || bindingHash(payload) != binding.ReceiptHash {
+		return reviewtransaction.CompactRecord{}, errors.New("bound compact predecessor receipt changed")
+	}
+	receipt, parseErr := reviewtransaction.ParseCompactReceipt(payload)
+	authoritative, receiptErr := record.State.Receipt()
+	if parseErr != nil || receiptErr != nil || !reflect.DeepEqual(receipt, authoritative) {
+		return reviewtransaction.CompactRecord{}, errors.New("bound compact predecessor receipt does not match authority")
+	}
+	return record, nil
+}
+
+// validateRuntimeBoundCandidate proves that an unchanged runtime attempt still
+// has the exact approved compact authority, receipt, live gate context, and
+// candidate tree recorded by its existing binding. It deliberately does not
+// resolve an OpenSpec change root, so Engram-backed changes use the same native
+// compact authority path.
+func validateRuntimeBoundCandidate(ctx context.Context, repo string, binding ReviewBinding, candidateTree string) error {
+	record, err := loadRuntimeBoundCompactArtifacts(ctx, repo, binding)
+	if err != nil {
+		return err
+	}
+	receipt, err := record.State.Receipt()
+	if err != nil {
+		return errors.New("bound compact authority cannot produce its receipt")
+	}
+	evaluation := reviewtransaction.EvaluateCompactGate(ctx, repo, receipt, reviewtransaction.NativeGateRequestInput{
+		Gate: reviewtransaction.GatePostApply, LineageID: binding.Lineage,
+	})
+	if evaluation.Result != reviewtransaction.GateAllow || evaluation.Context.CandidateTree != candidateTree ||
+		!boundGateContextMatches(binding.GateContext, evaluation.Context) {
+		return errors.New("bound compact post-apply gate context changed")
+	}
+	return nil
 }
 
 func validateBoundReview(ctx context.Context, repo, change string) (ReviewBinding, reviewtransaction.NativeGateEvaluation, error) {
@@ -109,21 +468,13 @@ func validateBoundReview(ctx context.Context, repo, change string) (ReviewBindin
 	if err != nil {
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
 	}
-	changeRoot, err := resolveBindingChangeRoot(root, repo, change)
+	changeRoot, err := resolveBindingChangeRoot(ctx, root, repo, change)
 	if err != nil {
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
 	}
-	probe, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, "binding-probe")
+	binding, err := loadEffectiveReviewBinding(ctx, root, change)
 	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
-	}
-	payload, err := os.ReadFile(bindingPath(probe, change))
-	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, fmt.Errorf("approved review binding is missing: %w", err)
-	}
-	binding, err := parseBinding(payload)
-	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, fmt.Errorf("approved review binding is invalid: %w", err)
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, fmt.Errorf("approved review binding is missing or invalid: %w", err)
 	}
 	if binding.Change != change {
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("approved review binding change does not match selected change")
@@ -153,11 +504,11 @@ func validateBoundReview(ctx context.Context, repo, change string) (ReviewBindin
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact post-apply gate context changed")
 	}
 	bindingFinalAuthorizationHook()
-	finalBinding, bindingErr := os.ReadFile(bindingPath(probe, change))
+	finalBinding, bindingErr := loadEffectiveReviewBinding(ctx, root, change)
 	finalRecord, recordErr := store.Load()
 	finalReceipt, receiptErr := os.ReadFile(store.ReceiptPath())
-	finalChangeRoot, changeErr := resolveBindingChangeRoot(root, repo, change)
-	if bindingErr != nil || recordErr != nil || receiptErr != nil || changeErr != nil || finalChangeRoot != changeRoot || !bytes.Equal(finalBinding, payload) || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalRecord.State, record.State) || finalRecord.State.State != reviewtransaction.StateApproved || !bytes.Equal(finalReceipt, receiptPayload) || bindingHash(finalReceipt) != binding.ReceiptHash {
+	finalChangeRoot, changeErr := resolveBindingChangeRoot(ctx, root, repo, change)
+	if bindingErr != nil || recordErr != nil || receiptErr != nil || changeErr != nil || finalChangeRoot != changeRoot || !reflect.DeepEqual(finalBinding, binding) || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalRecord.State, record.State) || finalRecord.State.State != reviewtransaction.StateApproved || !bytes.Equal(finalReceipt, receiptPayload) || bindingHash(finalReceipt) != binding.ReceiptHash {
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound authority, receipt, or binding changed during final read")
 	}
 	finalReceiptValue, parseErr := reviewtransaction.ParseCompactReceipt(finalReceipt)
@@ -200,28 +551,61 @@ func bindingExists(ctx context.Context, repo, change string) (bool, error) {
 	if err != nil {
 		return false, nil
 	}
-	probe, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, "binding-probe")
+	store, err := OpenRuntimeStore(ctx, root, change)
 	if err != nil {
 		return false, err
 	}
-	_, err = os.Stat(bindingPath(probe, change))
+	status, err := store.Status()
+	if err != nil {
+		return false, err
+	}
+	if status.Binding != nil {
+		return true, nil
+	}
+	legacyPath := filepath.Join(store.commonDir, "gentle-ai", "sdd-review-bindings", "v1", change, "binding.json")
+	_, err = os.Lstat(legacyPath)
 	if os.IsNotExist(err) {
 		return false, nil
 	}
 	return err == nil, err
 }
 
-func resolveBindingChangeRoot(root, workspace, change string) (string, error) {
-	workspace, err := filepath.Abs(workspace)
+func loadEffectiveReviewBinding(ctx context.Context, repo, change string) (ReviewBinding, error) {
+	store, err := OpenRuntimeStore(ctx, repo, change)
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	status, err := store.Status()
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	if status.Binding != nil {
+		return *status.Binding, nil
+	}
+	legacy, _, err := store.readLegacyBinding()
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	if legacy == nil {
+		return ReviewBinding{}, os.ErrNotExist
+	}
+	return *legacy, nil
+}
+
+func resolveBindingChangeRoot(ctx context.Context, root, workspace, change string) (string, error) {
+	// Both operands are canonicalized the same way before any containment or
+	// equality decision below. Resolving only the workspace was 1773 boundary
+	// 1: on macOS the same repository spelled through /var and through
+	// /private/var compared unequal, and the planning workspace was reported
+	// outside its own repository.
+	workspace, err := canonicalBindingPath(workspace)
 	if err != nil {
 		return "", err
 	}
-	workspace, err = filepath.EvalSymlinks(workspace)
+	root, err = canonicalBindingPath(root)
 	if err != nil {
 		return "", err
 	}
-	root = filepath.Clean(root)
-	workspace = filepath.Clean(workspace)
 	if !pathWithinBindingRoot(root, workspace) {
 		return "", errors.New("planning workspace is outside selected repository")
 	}
@@ -250,7 +634,7 @@ func resolveBindingChangeRoot(root, workspace, change string) (string, error) {
 		} else if !os.IsNotExist(statErr) {
 			return "", statErr
 		}
-		if current == root {
+		if pathidentity.SameDirectory(current, root) {
 			break
 		}
 	}
@@ -280,7 +664,7 @@ func resolveBindingChangeRoot(root, workspace, change string) (string, error) {
 		return "", errors.New("selected OpenSpec change uses a symlinked path")
 	}
 
-	matches, err := bindingChangeRoots(root, change)
+	matches, err := bindingChangeRoots(ctx, root, change)
 	if err != nil {
 		return "", err
 	}
@@ -290,45 +674,68 @@ func resolveBindingChangeRoot(root, workspace, change string) (string, error) {
 	return selected, nil
 }
 
-func bindingChangeRoots(root, change string) ([]string, error) {
+func bindingChangeRoots(ctx context.Context, root, change string) ([]string, error) {
+	paths, err := (reviewtransaction.SnapshotBuilder{Repo: root}).DiscoverTrackedAndUnignoredPaths(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
 	matches := []string{}
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	for _, logicalPath := range paths {
+		parts := strings.Split(logicalPath, "/")
+		if parts[len(parts)-1] == "openspec" {
+			parts = append(parts, "changes", change)
 		}
-		if entry.IsDir() && entry.Name() == ".git" && path != root {
-			return filepath.SkipDir
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			if entry.Name() == "openspec" {
-				candidate := filepath.Join(path, "changes", change)
-				if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-					matches = append(matches, candidate)
-				} else if err != nil && !os.IsNotExist(err) {
-					return err
-				}
-			} else if isBindingChangePath(path, change) {
-				matches = append(matches, path)
+		for index := 0; index+2 < len(parts); index++ {
+			if parts[index] != "openspec" || parts[index+1] != "changes" || parts[index+2] != change {
+				continue
 			}
-			return nil
+			rootPath := strings.Join(parts[:index+3], "/")
+			if _, duplicate := seen[rootPath]; duplicate {
+				break
+			}
+			seen[rootPath] = struct{}{}
+			candidate := filepath.Join(root, filepath.FromSlash(rootPath))
+			info, statErr := os.Lstat(candidate)
+			if os.IsNotExist(statErr) {
+				break
+			}
+			if statErr != nil {
+				return nil, statErr
+			}
+			if info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				matches = append(matches, filepath.Clean(candidate))
+			}
+			break
 		}
-		if !entry.IsDir() || !isBindingChangePath(path, change) {
-			return nil
-		}
-		matches = append(matches, filepath.Clean(path))
-		return filepath.SkipDir
-	})
-	return matches, err
+	}
+	return matches, nil
 }
 
-func isBindingChangePath(path, change string) bool {
-	changesRoot := filepath.Dir(path)
-	return filepath.Base(path) == change && filepath.Base(changesRoot) == "changes" && filepath.Base(filepath.Dir(changesRoot)) == "openspec"
+// canonicalBindingPath is the single canonicalization every binding path goes
+// through before it is compared with another. Having one of these, used on
+// both operands, is what keeps a second spelling of one repository from
+// looking like a different repository.
+func canonicalBindingPath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(resolved), nil
 }
 
+// pathWithinBindingRoot defers containment to the filesystem identity policy
+// in internal/pathidentity, so alternate spellings that the operating system
+// resolves to one directory -- symlinked ancestors, case-insensitive volumes,
+// Unicode-equivalent names -- are one directory here too. Callers still
+// resolve a candidate with filepath.EvalSymlinks before asking, because this
+// answers "is it inside", never "did it get there through a symlink".
 func pathWithinBindingRoot(root, path string) bool {
-	relative, err := filepath.Rel(root, path)
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
+	return pathidentity.Contains(root, path)
 }
 
 func verifyBindingLedger(changeRoot string, findings []reviewtransaction.Finding) error {
@@ -362,6 +769,10 @@ func validReviewBindingChange(change string) bool {
 	return len(change) <= 96 && reviewBindingChange.MatchString(change)
 }
 
+func validReviewBindingLineage(lineage string) bool {
+	return len(lineage) <= 128 && reviewBindingLineage.MatchString(lineage)
+}
+
 func bindingBytes(binding ReviewBinding) ([]byte, error) {
 	payload, err := json.Marshal(binding)
 	if err != nil {
@@ -382,64 +793,8 @@ func parseBinding(payload []byte) (ReviewBinding, error) {
 		return ReviewBinding{}, errors.New("multiple binding values")
 	}
 	canonical, err := bindingBytes(binding)
-	if err != nil || !bytes.Equal(payload, canonical) || binding.Schema != reviewBindingSchema || !validReviewBindingChange(binding.Change) || !reviewBindingHash.MatchString(binding.Revision) || !reviewBindingHash.MatchString(binding.AuthorityRevision) || !reviewBindingHash.MatchString(binding.ReceiptHash) || binding.Revision != bindingDigest(binding) || binding.GateContext.Gate != reviewtransaction.GatePostApply || binding.GateContext.LineageID != binding.Lineage || binding.GateContext.StoreRevision != binding.AuthorityRevision {
+	if err != nil || !bytes.Equal(payload, canonical) || binding.Schema != reviewBindingSchema || !validReviewBindingChange(binding.Change) || !validReviewBindingLineage(binding.Lineage) || !reviewBindingHash.MatchString(binding.Revision) || !reviewBindingHash.MatchString(binding.AuthorityRevision) || !reviewBindingHash.MatchString(binding.ReceiptHash) || binding.Revision != bindingDigest(binding) || binding.GateContext.Gate != reviewtransaction.GatePostApply || binding.GateContext.LineageID != binding.Lineage || binding.GateContext.StoreRevision != binding.AuthorityRevision {
 		return ReviewBinding{}, errors.New("invalid binding")
 	}
 	return binding, nil
-}
-
-func writeBinding(path, expected string, binding ReviewBinding) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	lock, err := acquireBindingLock(filepath.Join(filepath.Dir(path), "LOCK"))
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	current := ""
-	if payload, err := os.ReadFile(path); err == nil {
-		old, parseErr := parseBinding(payload)
-		if parseErr != nil || old.Change != binding.Change {
-			return errors.New("invalid existing binding")
-		}
-		current = old.Revision
-		if current == binding.Revision {
-			if err := syncBindingDirectory(filepath.Dir(path)); err != nil {
-				return &ReviewBindingPublicationError{Cause: fmt.Errorf("sync SDD review binding directory: %w", err)}
-			}
-			return nil
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if current != expected {
-		return fmt.Errorf("binding revision conflict: expected %q, current %q", expected, current)
-	}
-	payload, err := bindingBytes(binding)
-	if err != nil {
-		return err
-	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".binding-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(temp.Name())
-	if _, err = temp.Write(payload); err == nil {
-		err = temp.Sync()
-	}
-	if closeErr := temp.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		_ = os.Remove(temp.Name())
-		return err
-	}
-	if err := bindingRename(temp.Name(), path); err != nil {
-		return err
-	}
-	if err := syncBindingDirectory(filepath.Dir(path)); err != nil {
-		return &ReviewBindingPublicationError{Cause: fmt.Errorf("sync SDD review binding directory: %w", err)}
-	}
-	return nil
 }

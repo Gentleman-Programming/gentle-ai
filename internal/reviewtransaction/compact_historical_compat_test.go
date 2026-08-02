@@ -213,6 +213,42 @@ func TestNewCompactAuthorityNeverPersistsRetiredRecoveryReviewStart(t *testing.T
 	}
 }
 
+func TestCompactStoreLoadsHistoricalCandidateArtifactRequiredWithoutRewrite(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "candidate-artifact-required-lineage")
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace("", "review/start", state); err != nil {
+		t.Fatal(err)
+	}
+	revision := injectRetiredCompactStateField(t, store.StatePath(), "candidate_artifact_required")
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	record, err := store.Load()
+	if err != nil {
+		t.Fatalf("load historical candidate_artifact_required record: %v", err)
+	}
+	if record.Revision != revision || record.State.LineageID != state.LineageID || !record.HistoricalCompat {
+		t.Fatalf("historical record = %#v, want read-only revision %s", record, revision)
+	}
+	_, canonical, err := makeCompactRecord(record.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(canonical, []byte("candidate_artifact_required")) {
+		t.Fatal("canonical compact authority retained candidate_artifact_required")
+	}
+	if after, err := os.ReadFile(store.StatePath()); err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("historical authority bytes changed: %v", err)
+	}
+}
+
 func TestCompactStoreLoadsHistoricalZeroEditEscalationReadOnly(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -262,7 +298,7 @@ func TestCompactStoreLoadsHistoricalZeroEditEscalationReadOnly(t *testing.T) {
 	}
 }
 
-func TestCompactStoreStillRejectsUnknownNonRetiredFields(t *testing.T) {
+func TestCompactStoreStillRejectsUnknownNonRetiredFieldsAfterCompatibilityFallback(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 	state := newCompactTestState(t, repo, "unknown-field-lineage")
@@ -273,9 +309,17 @@ func TestCompactStoreStillRejectsUnknownNonRetiredFields(t *testing.T) {
 	if _, err := store.Replace("", "review/start", state); err != nil {
 		t.Fatal(err)
 	}
-	injectRetiredCompactStateField(t, store.StatePath(), "future_unknown_field")
+	injectRetiredCompactStateField(t, store.StatePath(), "candidate_artifact_required")
+	injectRetiredCompactStateField(t, store.StatePath(), "zz_future_unknown_field")
 	if _, err := store.Load(); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("unknown non-retired field load error = %v", err)
+	}
+	payload, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseHistoricalCompactRecord(payload); err == nil || !strings.Contains(err.Error(), `unknown field "zz_future_unknown_field"`) {
+		t.Fatalf("historical compatibility fallback error = %v", err)
 	}
 }
 
@@ -287,8 +331,10 @@ func TestNewCompactAuthorityNeverPersistsRetiredZeroEditEscalation(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(payload, []byte("zero_edit_escalation")) {
-		t.Fatal("new compact authority serialized a retired compatibility field")
+	for _, field := range []string{"candidate_artifact_required", "zero_edit_escalation"} {
+		if bytes.Contains(payload, []byte(field)) {
+			t.Fatalf("new compact authority serialized retired compatibility field %q", field)
+		}
 	}
 	if record.HistoricalCompat {
 		t.Fatal("new compact record is marked as historical compatibility authority")
@@ -297,7 +343,9 @@ func TestNewCompactAuthorityNeverPersistsRetiredZeroEditEscalation(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(statePayload, []byte("zero_edit_escalation")) {
-		t.Fatal("new compact state serialization emitted a retired compatibility field")
+	for _, field := range []string{"candidate_artifact_required", "zero_edit_escalation"} {
+		if bytes.Contains(statePayload, []byte(field)) {
+			t.Fatalf("new compact state serialization emitted retired compatibility field %q", field)
+		}
 	}
 }

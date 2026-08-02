@@ -34,6 +34,8 @@ Execute all steps from the skill directly in this context window:
 4. Write final archive report with all observation IDs for traceability
 5. Persist archive report to active backend
 
+Treat `verify-report` and `apply-progress` as intermediate snapshots: the archive report records the state at close per the skill's Final-State Authority section, and explicit final-state facts in your launch prompt outrank stale snapshot claims.
+
 ## Engram Save (mandatory)
 
 After completing work, call `mem_save` with:
