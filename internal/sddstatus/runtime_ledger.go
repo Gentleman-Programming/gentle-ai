@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -31,6 +32,7 @@ const (
 	RuntimeActionBegin                = "begin"
 	RuntimeActionFinish               = "finish"
 	RuntimeActionReset                = "reset"
+	RuntimeActionAuthorizeRemediation = "authorize-remediation"
 	RuntimeActionComplete             = "complete"
 	runtimeOperationBegin             = "attempt/begin"
 	runtimeOperationFinish            = "attempt/finish"
@@ -200,26 +202,42 @@ type RuntimeReset struct {
 	Actor                  string `json:"actor"`
 }
 
+// UnmanagedRemediationAuthorization is the one correction scope admitted when
+// review delivery is deliberately disabled. It is ledger authority, never a
+// review receipt, approval, or binding.
+type UnmanagedRemediationAuthorization struct {
+	FailedEvidenceRevision   string `json:"failed_evidence_revision"`
+	FailedCandidateIdentity  string `json:"failed_candidate_identity"`
+	FailedCandidateTree      string `json:"failed_candidate_tree"`
+	FailedBeginCandidateTree string `json:"failed_begin_candidate_tree"`
+	WorkUnit                 string `json:"work_unit"`
+	EvidenceGoal             string `json:"evidence_goal"`
+	MaxChangedLines          int    `json:"max_changed_lines"`
+	Actor                    string `json:"actor"`
+	Reason                   string `json:"reason"`
+}
+
 type RuntimeStatus struct {
-	Schema                 string            `json:"schema"`
-	Change                 string            `json:"change"`
-	Revision               string            `json:"revision"`
-	Objective              *RuntimeObjective `json:"objective,omitempty"`
-	ActiveAttempt          *RuntimeAttempt   `json:"active_attempt,omitempty"`
-	Attempts               []RuntimeAttempt  `json:"attempts"`
-	ObjectiveGeneration    int               `json:"objective_generation"`
-	NextOrdinal            int               `json:"next_ordinal"`
-	CumulativeAttempts     int               `json:"cumulative_attempts"`
-	CumulativeChangedLines int               `json:"cumulative_changed_lines"`
-	LifetimeAttempts       int               `json:"lifetime_attempts"`
-	LifetimeChangedLines   int               `json:"lifetime_changed_lines"`
-	EvidenceRevision       string            `json:"evidence_revision"`
-	DecisionRequired       bool              `json:"decision_required"`
-	Complete               bool              `json:"complete"`
-	NextAction             string            `json:"next_action"`
-	LastReset              *RuntimeReset     `json:"last_reset,omitempty"`
-	BindingRevision        string            `json:"binding_revision"`
-	Binding                *ReviewBinding    `json:"binding,omitempty"`
+	Schema                 string                             `json:"schema"`
+	Change                 string                             `json:"change"`
+	Revision               string                             `json:"revision"`
+	Objective              *RuntimeObjective                  `json:"objective,omitempty"`
+	ActiveAttempt          *RuntimeAttempt                    `json:"active_attempt,omitempty"`
+	Attempts               []RuntimeAttempt                   `json:"attempts"`
+	ObjectiveGeneration    int                                `json:"objective_generation"`
+	NextOrdinal            int                                `json:"next_ordinal"`
+	CumulativeAttempts     int                                `json:"cumulative_attempts"`
+	CumulativeChangedLines int                                `json:"cumulative_changed_lines"`
+	LifetimeAttempts       int                                `json:"lifetime_attempts"`
+	LifetimeChangedLines   int                                `json:"lifetime_changed_lines"`
+	EvidenceRevision       string                             `json:"evidence_revision"`
+	DecisionRequired       bool                               `json:"decision_required"`
+	Complete               bool                               `json:"complete"`
+	NextAction             string                             `json:"next_action"`
+	LastReset              *RuntimeReset                      `json:"last_reset,omitempty"`
+	BindingRevision        string                             `json:"binding_revision"`
+	Binding                *ReviewBinding                     `json:"binding,omitempty"`
+	UnmanagedRemediation   *UnmanagedRemediationAuthorization `json:"unmanaged_remediation,omitempty"`
 }
 
 type BeginAttemptRequest struct {
@@ -246,10 +264,16 @@ type FinishAttemptRequest struct {
 }
 
 type ResetObjectiveRequest struct {
-	ExpectedRevision string `json:"expected_revision"`
-	RequestID        string `json:"request_id"`
-	Reason           string `json:"reason"`
-	Actor            string `json:"actor"`
+	ExpectedRevision           string `json:"expected_revision"`
+	RequestID                  string `json:"request_id"`
+	Reason                     string `json:"reason"`
+	Actor                      string `json:"actor"`
+	Disposition                string `json:"disposition,omitempty"`
+	RemediatesEvidenceRevision string `json:"remediates_evidence_revision,omitempty"`
+	WorkUnit                   string `json:"work_unit,omitempty"`
+	EvidenceGoal               string `json:"evidence_goal,omitempty"`
+	MaxChangedLines            int    `json:"max_changed_lines,omitempty"`
+	MaintainerAuthorization    string `json:"maintainer_authorization,omitempty"`
 }
 
 // BindReviewRequest performs a binding-only compare-and-swap. The expected
@@ -314,12 +338,19 @@ type runtimeBeginEvent struct {
 }
 
 type runtimeResetEvent struct {
-	PreviousObjectiveID    string `json:"previous_objective_id"`
-	PreviousGeneration     int    `json:"previous_generation"`
-	ResetCandidateIdentity string `json:"reset_candidate_identity"`
-	ResetCandidateTree     string `json:"reset_candidate_tree"`
-	Reason                 string `json:"reason"`
-	Actor                  string `json:"actor"`
+	PreviousObjectiveID        string `json:"previous_objective_id"`
+	PreviousGeneration         int    `json:"previous_generation"`
+	ResetCandidateIdentity     string `json:"reset_candidate_identity"`
+	ResetCandidateTree         string `json:"reset_candidate_tree"`
+	Reason                     string `json:"reason"`
+	Actor                      string `json:"actor"`
+	Disposition                string `json:"disposition,omitempty"`
+	RemediatesEvidenceRevision string `json:"remediates_evidence_revision,omitempty"`
+	WorkUnit                   string `json:"work_unit,omitempty"`
+	EvidenceGoal               string `json:"evidence_goal,omitempty"`
+	MaxChangedLines            int    `json:"max_changed_lines,omitempty"`
+	MaintainerAuthorization    string `json:"maintainer_authorization,omitempty"`
+	FailedBeginCandidateTree   string `json:"failed_begin_candidate_tree,omitempty"`
 }
 
 type runtimeFinishEvent struct {
@@ -407,6 +438,11 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		if status.DecisionRequired {
 			return runtimeRecord{}, ErrRuntimeBudgetExhausted
 		}
+		// guard:population unmanaged-begin-delivery fail-closed: an authorized unmanaged correction may begin only while review delivery remains disabled.
+		if status.UnmanagedRemediation != nil && !store.ReviewDisabled {
+			// refusal:by-design human-authority: re-enabling review invalidates the disabled-only correction scope.
+			return runtimeRecord{}, errors.New("unmanaged remediation authorization is invalid because receipt-driven development is no longer disabled")
+		}
 
 		generation := status.ObjectiveGeneration + 1
 		var snapshot reviewtransaction.Snapshot
@@ -418,17 +454,25 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 				request.MaxChangedLines != status.Objective.MaxChangedLines {
 				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 			}
-			if len(status.Attempts) == 0 {
-				return runtimeRecord{}, errors.New("SDD runtime objective has no terminal candidate provenance")
-			}
-			last := status.Attempts[len(status.Attempts)-1]
-			if last.ObjectiveID != status.Objective.ID || last.Outcome == AttemptRunning ||
-				last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
-				return runtimeRecord{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
-			}
-			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
-			if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
-				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+			if status.UnmanagedRemediation != nil {
+				snapshot, err = captureRuntimeTerminalCandidate(ctx, store, status.UnmanagedRemediation.FailedBeginCandidateTree)
+				if err == nil && (snapshot.Identity != status.UnmanagedRemediation.FailedCandidateIdentity || snapshot.CandidateTree != status.UnmanagedRemediation.FailedCandidateTree) {
+					// refusal:by-design human-authority: a frozen correction authorization cannot be retargeted after candidate drift.
+					return runtimeRecord{}, errors.New("unmanaged remediation target changed before its authorized attempt began")
+				}
+			} else {
+				if len(status.Attempts) == 0 {
+					return runtimeRecord{}, errors.New("SDD runtime objective has no terminal candidate provenance")
+				}
+				last := status.Attempts[len(status.Attempts)-1]
+				if last.ObjectiveID != status.Objective.ID || last.Outcome == AttemptRunning ||
+					last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
+					return runtimeRecord{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
+				}
+				snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+				if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
+					return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+				}
 			}
 		} else {
 			snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
@@ -486,6 +530,12 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				return runtimeRecord{}, fmt.Errorf("failed evidence revision %q does not match native runtime evidence %q", request.RemediatesEvidenceRevision, status.EvidenceRevision)
 			}
 		}
+		unmanagedRemediation := status.UnmanagedRemediation
+		// guard:population unmanaged-finish-delivery fail-closed: an authorized unmanaged correction may finish only while review delivery remains disabled.
+		if unmanagedRemediation != nil && !store.ReviewDisabled {
+			// refusal:by-design human-authority: re-enabling review invalidates the disabled-only correction scope.
+			return runtimeRecord{}, errors.New("unmanaged remediation authorization is invalid because receipt-driven development is no longer disabled")
+		}
 		intended, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).DiscoverIntendedUntracked(ctx)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("discover SDD runtime intended-untracked paths: %w", err)
@@ -500,6 +550,16 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		changedLines, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).ChangedLines(ctx, snapshot)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("measure native SDD runtime line charge: %w", err)
+		}
+		if unmanagedRemediation != nil && request.Outcome == AttemptPassed {
+			if snapshot.Identity == active.BeginCandidateIdentity || snapshot.CandidateTree == active.BeginCandidateTree || changedLines == 0 {
+				// refusal:by-design world-action: the active correction must alter the frozen candidate before it can close successfully.
+				return runtimeRecord{}, errors.New("unmanaged remediation must finish a changed candidate with non-zero line accounting")
+			}
+			if request.EvidenceRevision == unmanagedRemediation.FailedEvidenceRevision {
+				// refusal:by-design operator-knowledge: corrected evidence must name a distinct immutable revision.
+				return runtimeRecord{}, errors.New("unmanaged remediation requires distinct corrected evidence")
+			}
 		}
 		// While the kill switch is off the bound review has no say in whether
 		// this attempt may close: it would demand an approved recovery successor
@@ -734,14 +794,25 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	digest := runtimeValueHash("gentle-ai.sdd-runtime-reset-request/v1", request)
+	domain := "gentle-ai.sdd-runtime-reset-request/v1"
+	if request.Disposition == "failed-evidence-remediation" {
+		domain = "gentle-ai.sdd-runtime-unmanaged-remediation-request/v1"
+	}
+	digest := runtimeValueHash(domain, request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
+		if request.Disposition == "failed-evidence-remediation" {
+			return store.authorizeUnmanagedRemediation(ctx, status, request)
+		}
 		if status.ActiveAttempt != nil {
 			return runtimeRecord{}, ErrRuntimeAttemptActive
 		}
 		if status.Objective == nil {
 			return runtimeRecord{}, ErrRuntimeNoObjective
+		}
+		if status.UnmanagedRemediation != nil {
+			// refusal:by-design human-authority: the single correction authorization is consumed and cannot open another budget.
+			return runtimeRecord{}, errors.New("a consumed unmanaged remediation authorization cannot be reset or renamed")
 		}
 		if !runtimeResetStructurallyPermitted(status) {
 			return runtimeRecord{}, ErrRuntimeResetNotAllowed
@@ -772,6 +843,57 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 			Reason: request.Reason, Actor: request.Actor,
 		}}, nil
 	})
+}
+
+func (store RuntimeStore) authorizeUnmanagedRemediation(ctx context.Context, status RuntimeStatus, request ResetObjectiveRequest) (runtimeRecord, error) {
+	// guard:population unmanaged-runtime-authorization-delivery fail-closed: native authorization is admitted only under disabled/unmanaged delivery.
+	if !store.ReviewDisabled {
+		// refusal:by-design human-authority: disabled/unmanaged authority cannot be substituted after review delivery is enabled.
+		return runtimeRecord{}, errors.New("failed-evidence remediation requires disabled/unmanaged delivery")
+	}
+	if status.ActiveAttempt != nil {
+		return runtimeRecord{}, ErrRuntimeAttemptActive
+	}
+	if status.Objective == nil || status.UnmanagedRemediation != nil || len(status.Attempts) == 0 {
+		// refusal:by-design human-authority: only one unconsumed failed objective may receive the exceptional correction.
+		return runtimeRecord{}, errors.New("failed-evidence remediation requires one unconsumed terminal failed objective")
+	}
+	last := status.Attempts[len(status.Attempts)-1]
+	if last.ObjectiveID != status.Objective.ID || last.Outcome != AttemptFailed || last.EvidenceRevision != request.RemediatesEvidenceRevision ||
+		last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" || status.EvidenceRevision != request.RemediatesEvidenceRevision {
+		// refusal:by-design operator-knowledge: the immutable terminal record must exactly match the requested failed evidence.
+		return runtimeRecord{}, errors.New("failed-evidence remediation does not match the terminal failed runtime attempt")
+	}
+	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+	if err != nil {
+		return runtimeRecord{}, fmt.Errorf("capture failed remediation candidate: %w", err)
+	}
+	if candidate.Identity != last.FinishCandidateIdentity || candidate.CandidateTree != last.FinishCandidateTree {
+		// refusal:by-design human-authority: candidate drift invalidates rather than retargets a maintainer authorization.
+		return runtimeRecord{}, errors.New("failed-evidence remediation target drifted from the admitted failed candidate")
+	}
+	authorization, err := parseUnmanagedRemediationAuthorization(request.MaintainerAuthorization)
+	if err != nil {
+		return runtimeRecord{}, err
+	}
+	if authorization.RuntimeRevision != status.Revision || authorization.Change != store.Change ||
+		authorization.PreviousObjectiveID != status.Objective.ID || authorization.PreviousGeneration != status.Objective.Generation ||
+		authorization.FailedEvidenceRevision != request.RemediatesEvidenceRevision ||
+		authorization.FailedCandidateIdentity != candidate.Identity || authorization.FailedCandidateTree != candidate.CandidateTree ||
+		authorization.WorkUnit != request.WorkUnit || authorization.EvidenceGoal != request.EvidenceGoal ||
+		authorization.MaxChangedLines != request.MaxChangedLines {
+		// refusal:by-design operator-knowledge: authorization bytes are valid only for their exact persisted binding.
+		return runtimeRecord{}, errors.New("maintainer authorization does not exactly bind the failed-evidence remediation request")
+	}
+	return runtimeRecord{Operation: runtimeOperationReset, Reset: &runtimeResetEvent{
+		PreviousObjectiveID: status.Objective.ID, PreviousGeneration: status.Objective.Generation,
+		ResetCandidateIdentity: candidate.Identity, ResetCandidateTree: candidate.CandidateTree,
+		Reason: authorization.Reason, Actor: authorization.Actor, Disposition: request.Disposition,
+		RemediatesEvidenceRevision: request.RemediatesEvidenceRevision, WorkUnit: request.WorkUnit,
+		EvidenceGoal: request.EvidenceGoal, MaxChangedLines: request.MaxChangedLines,
+		MaintainerAuthorization:  request.MaintainerAuthorization,
+		FailedBeginCandidateTree: last.BeginCandidateTree,
+	}}, nil
 }
 
 // bindPreparedReview imports a legacy binding at most once and replaces the
@@ -1090,8 +1212,14 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 				event.Ordinal != replay.Status.NextOrdinal {
 				return errors.New("begin record changes the active objective or ordinal")
 			}
-			if len(replay.Status.Attempts) == 0 ||
-				event.BeginCandidateTree != replay.Status.Attempts[len(replay.Status.Attempts)-1].FinishCandidateTree {
+			if replay.Status.UnmanagedRemediation != nil {
+				if event.BeginCandidateIdentity != objective.InitialCandidateIdentity || event.BeginCandidateTree != objective.InitialCandidateTree {
+					// refusal:by-design operator-knowledge: replay must reject an immutable record that does not reproduce its authorized target.
+					return errors.New("begin record does not continue the authorized remediation candidate")
+				}
+			} else if len(replay.Status.Attempts) == 0 {
+				return errors.New("begin record does not continue the terminal candidate")
+			} else if event.BeginCandidateTree != replay.Status.Attempts[len(replay.Status.Attempts)-1].FinishCandidateTree {
 				return errors.New("begin record does not continue the terminal candidate")
 			}
 		}
@@ -1148,14 +1276,50 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 	case runtimeOperationReset:
 		event := record.Reset
 		objective := replay.Status.Objective
-		if replay.Status.ActiveAttempt != nil || objective == nil || !runtimeResetStructurallyPermitted(replay.Status) {
+		if replay.Status.ActiveAttempt != nil || objective == nil {
 			return errors.New("objective reset is not a valid successor")
 		}
 		if event.PreviousObjectiveID != objective.ID || event.PreviousGeneration != objective.Generation ||
 			event.PreviousGeneration != replay.Status.ObjectiveGeneration {
 			return errors.New("objective reset does not match the terminal objective")
 		}
-		replay.Status.Objective = nil
+		if event.Disposition == "failed-evidence-remediation" {
+			if replay.Status.UnmanagedRemediation != nil || len(replay.Status.Attempts) == 0 {
+				// refusal:by-design operator-knowledge: replay cannot create a second correction successor from immutable history.
+				return errors.New("unmanaged remediation reset is not a valid successor")
+			}
+			last := replay.Status.Attempts[len(replay.Status.Attempts)-1]
+			if last.ObjectiveID != objective.ID || last.Outcome != AttemptFailed || last.EvidenceRevision != event.RemediatesEvidenceRevision ||
+				last.FinishCandidateIdentity != event.ResetCandidateIdentity || last.FinishCandidateTree != event.ResetCandidateTree ||
+				last.BeginCandidateTree != event.FailedBeginCandidateTree {
+				// refusal:by-design operator-knowledge: replay rejects a reset whose immutable predecessor does not exactly match.
+				return errors.New("unmanaged remediation reset does not bind the terminal failed attempt")
+			}
+			authorization, err := parseUnmanagedRemediationAuthorization(event.MaintainerAuthorization)
+			if err != nil || authorization.RuntimeRevision != record.PreviousRevision || authorization.Change != record.Change ||
+				authorization.PreviousObjectiveID != event.PreviousObjectiveID || authorization.PreviousGeneration != event.PreviousGeneration ||
+				authorization.FailedEvidenceRevision != event.RemediatesEvidenceRevision || authorization.FailedCandidateIdentity != event.ResetCandidateIdentity ||
+				authorization.FailedCandidateTree != event.ResetCandidateTree || authorization.WorkUnit != event.WorkUnit ||
+				authorization.EvidenceGoal != event.EvidenceGoal || authorization.MaxChangedLines != event.MaxChangedLines ||
+				authorization.Actor != event.Actor || authorization.Reason != event.Reason {
+				// refusal:by-design operator-knowledge: replay accepts only the authorization bytes bound to this immutable reset record.
+				return errors.New("unmanaged remediation authorization does not bind its reset record")
+			}
+			generation := objective.Generation + 1
+			objectiveID := runtimeObjectiveID(record.Change, event.WorkUnit, event.EvidenceGoal, event.ResetCandidateIdentity, generation)
+			replay.Status.Objective = &RuntimeObjective{ID: objectiveID, Generation: generation, WorkUnit: event.WorkUnit,
+				EvidenceGoal: event.EvidenceGoal, InitialCandidateIdentity: event.ResetCandidateIdentity, InitialCandidateTree: event.ResetCandidateTree,
+				MaxAttempts: 1, MaxChangedLines: event.MaxChangedLines}
+			replay.Status.ObjectiveGeneration = generation
+			replay.Status.UnmanagedRemediation = &UnmanagedRemediationAuthorization{FailedEvidenceRevision: event.RemediatesEvidenceRevision,
+				FailedCandidateIdentity: event.ResetCandidateIdentity, FailedCandidateTree: event.ResetCandidateTree, WorkUnit: event.WorkUnit,
+				FailedBeginCandidateTree: event.FailedBeginCandidateTree, EvidenceGoal: event.EvidenceGoal, MaxChangedLines: event.MaxChangedLines, Actor: event.Actor, Reason: event.Reason}
+		} else {
+			if !runtimeResetStructurallyPermitted(replay.Status) || replay.Status.UnmanagedRemediation != nil {
+				return errors.New("objective reset is not a valid successor")
+			}
+			replay.Status.Objective = nil
+		}
 		replay.Status.CumulativeAttempts = 0
 		replay.Status.CumulativeChangedLines = 0
 		replay.Status.EvidenceRevision = ""
@@ -1336,6 +1500,31 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
 			return errors.New("invalid SDD runtime reset event")
 		}
+		if event.Disposition == "failed-evidence-remediation" {
+			if !runtimeRevisionPattern.MatchString(event.RemediatesEvidenceRevision) || validateRuntimeText(event.WorkUnit, 160) != nil ||
+				validateRuntimeText(event.EvidenceGoal, 240) != nil || event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines ||
+				!runtimeGitTreePattern.MatchString(event.FailedBeginCandidateTree) {
+				// refusal:by-design operator-knowledge: malformed immutable remediation records cannot be repaired during replay.
+				return errors.New("invalid unmanaged remediation reset event")
+			}
+			authorization, err := parseUnmanagedRemediationAuthorization(event.MaintainerAuthorization)
+			if err != nil || authorization.Actor != event.Actor || authorization.Reason != event.Reason {
+				// refusal:by-design operator-knowledge: malformed authorization embedded in immutable history fails closed.
+				return errors.New("invalid unmanaged remediation authorization")
+			}
+			request := ResetObjectiveRequest{ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID,
+				Disposition: event.Disposition, RemediatesEvidenceRevision: event.RemediatesEvidenceRevision, WorkUnit: event.WorkUnit,
+				EvidenceGoal: event.EvidenceGoal, MaxChangedLines: event.MaxChangedLines, MaintainerAuthorization: event.MaintainerAuthorization}
+			if runtimeValueHash("gentle-ai.sdd-runtime-unmanaged-remediation-request/v1", request) != record.RequestDigest {
+				// refusal:by-design operator-knowledge: a digest mismatch proves immutable record tampering or corruption.
+				return errors.New("unmanaged remediation request digest does not match record")
+			}
+			break
+		}
+		if event.Disposition != "" || event.RemediatesEvidenceRevision != "" || event.WorkUnit != "" || event.EvidenceGoal != "" || event.MaxChangedLines != 0 || event.MaintainerAuthorization != "" || event.FailedBeginCandidateTree != "" {
+			// refusal:by-design operator-knowledge: legacy reset records cannot carry a partial unmanaged disposition.
+			return errors.New("invalid SDD runtime reset disposition")
+		}
 		request := ResetObjectiveRequest{
 			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Reason: event.Reason, Actor: event.Actor,
 		}
@@ -1465,6 +1654,22 @@ func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjecti
 	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
 		return ResetObjectiveRequest{}, errors.New("request_id must be a canonical lowercase identifier")
 	}
+	if request.Disposition == "failed-evidence-remediation" {
+		if request.Reason != "" || request.Actor != "" || !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) ||
+			validateRuntimeText(request.WorkUnit, 160) != nil || validateRuntimeText(request.EvidenceGoal, 240) != nil ||
+			request.MaxChangedLines < 1 || request.MaxChangedLines > maximumRuntimeChangedLines {
+			// refusal:by-design operator-knowledge: callers must provide the full typed correction request before any authority mutation.
+			return ResetObjectiveRequest{}, errors.New("invalid failed-evidence remediation reset request")
+		}
+		if _, err := parseUnmanagedRemediationAuthorization(request.MaintainerAuthorization); err != nil {
+			return ResetObjectiveRequest{}, err
+		}
+		return request, nil
+	}
+	if request.Disposition != "" || request.RemediatesEvidenceRevision != "" || request.WorkUnit != "" || request.EvidenceGoal != "" || request.MaxChangedLines != 0 || request.MaintainerAuthorization != "" {
+		// refusal:by-design operator-knowledge: unrecognized typed reset inputs cannot be interpreted as legacy resets.
+		return ResetObjectiveRequest{}, errors.New("unknown reset disposition")
+	}
 	if err := validateRuntimeText(request.Reason, 500); err != nil {
 		return ResetObjectiveRequest{}, fmt.Errorf("invalid reset reason: %w", err)
 	}
@@ -1472,6 +1677,94 @@ func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjecti
 		return ResetObjectiveRequest{}, fmt.Errorf("invalid reset actor: %w", err)
 	}
 	return request, nil
+}
+
+type unmanagedRemediationAuthorization struct {
+	RuntimeRevision         string
+	Change                  string
+	PreviousObjectiveID     string
+	PreviousGeneration      int
+	FailedEvidenceRevision  string
+	FailedCandidateIdentity string
+	FailedCandidateTree     string
+	WorkUnit                string
+	EvidenceGoal            string
+	MaxChangedLines         int
+	Actor                   string
+	Reason                  string
+}
+
+// RenderUnmanagedRemediationAuthorization returns the exact canonical binding
+// that a maintainer may authorize for one disabled/unmanaged correction.
+func RenderUnmanagedRemediationAuthorization(
+	runtimeRevision, change, previousObjectiveID string, previousGeneration int,
+	failedEvidenceRevision, failedCandidateIdentity, failedCandidateTree,
+	workUnit, evidenceGoal string, maxChangedLines int, actor, reason string,
+) string {
+	return strings.Join([]string{
+		"schema: gentle-ai.unmanaged-remediation-authorization/v1",
+		"runtime_revision: " + runtimeRevision,
+		"change: " + change,
+		"predecessor_objective_id: " + previousObjectiveID,
+		"predecessor_generation: " + strconv.Itoa(previousGeneration),
+		"failed_evidence_revision: " + failedEvidenceRevision,
+		"failed_candidate_identity: " + failedCandidateIdentity,
+		"failed_candidate_tree: " + failedCandidateTree,
+		"delivery: disabled/unmanaged",
+		"work_unit: " + workUnit,
+		"evidence_goal: " + evidenceGoal,
+		"max_changed_lines: " + strconv.Itoa(maxChangedLines),
+		"actor: " + actor,
+		"reason: " + reason,
+	}, "\n")
+}
+
+func parseUnmanagedRemediationAuthorization(value string) (unmanagedRemediationAuthorization, error) {
+	if len(value) == 0 || len(value) > 4096 || strings.ContainsAny(value, "\r\x00") {
+		// refusal:by-design operator-knowledge: authorization transport must remain bounded and canonical before parsing.
+		return unmanagedRemediationAuthorization{}, errors.New("maintainer authorization must be a bounded canonical LF binding")
+	}
+	fields := make(map[string]string, 14)
+	for _, line := range strings.Split(value, "\n") {
+		key, field, ok := strings.Cut(line, ": ")
+		if !ok || key == "" || field == "" {
+			// refusal:by-design operator-knowledge: noncanonical authorization bytes have no safe field interpretation.
+			return unmanagedRemediationAuthorization{}, errors.New("maintainer authorization is not a canonical binding")
+		}
+		if _, exists := fields[key]; exists {
+			// refusal:by-design operator-knowledge: duplicate authorization fields are ambiguous and therefore fail closed.
+			return unmanagedRemediationAuthorization{}, errors.New("maintainer authorization contains duplicate fields")
+		}
+		fields[key] = field
+	}
+	if len(fields) != 14 || fields["schema"] != "gentle-ai.unmanaged-remediation-authorization/v1" || fields["delivery"] != "disabled/unmanaged" {
+		// refusal:by-design operator-knowledge: only the exact disabled/unmanaged authorization schema is interpretable.
+		return unmanagedRemediationAuthorization{}, errors.New("maintainer authorization has an unsupported schema or delivery")
+	}
+	generation, generationErr := strconv.Atoi(fields["predecessor_generation"])
+	lines, linesErr := strconv.Atoi(fields["max_changed_lines"])
+	authorization := unmanagedRemediationAuthorization{
+		RuntimeRevision: fields["runtime_revision"], Change: fields["change"], PreviousObjectiveID: fields["predecessor_objective_id"],
+		PreviousGeneration: generation, FailedEvidenceRevision: fields["failed_evidence_revision"],
+		FailedCandidateIdentity: fields["failed_candidate_identity"], FailedCandidateTree: fields["failed_candidate_tree"],
+		WorkUnit: fields["work_unit"], EvidenceGoal: fields["evidence_goal"], MaxChangedLines: lines,
+		Actor: fields["actor"], Reason: fields["reason"],
+	}
+	canonical := RenderUnmanagedRemediationAuthorization(authorization.RuntimeRevision, authorization.Change,
+		authorization.PreviousObjectiveID, authorization.PreviousGeneration, authorization.FailedEvidenceRevision,
+		authorization.FailedCandidateIdentity, authorization.FailedCandidateTree, authorization.WorkUnit,
+		authorization.EvidenceGoal, authorization.MaxChangedLines, authorization.Actor, authorization.Reason)
+	if generationErr != nil || linesErr != nil || value != canonical || !runtimeRevisionPattern.MatchString(authorization.RuntimeRevision) ||
+		!validReviewBindingChange(authorization.Change) || !runtimeRevisionPattern.MatchString(authorization.PreviousObjectiveID) ||
+		authorization.PreviousGeneration < 1 || !runtimeRevisionPattern.MatchString(authorization.FailedEvidenceRevision) ||
+		!runtimeRevisionPattern.MatchString(authorization.FailedCandidateIdentity) || !runtimeGitTreePattern.MatchString(authorization.FailedCandidateTree) ||
+		validateRuntimeText(authorization.WorkUnit, 160) != nil || validateRuntimeText(authorization.EvidenceGoal, 240) != nil ||
+		authorization.MaxChangedLines < 1 || authorization.MaxChangedLines > maximumRuntimeChangedLines ||
+		validateRuntimeText(authorization.Actor, 128) != nil || validateRuntimeText(authorization.Reason, 500) != nil {
+		// refusal:by-design operator-knowledge: noncanonical bound values cannot safely represent maintainer authorization.
+		return unmanagedRemediationAuthorization{}, errors.New("maintainer authorization contains invalid bound values")
+	}
+	return authorization, nil
 }
 
 func normalizeBindReviewRequest(request BindReviewRequest) (BindReviewRequest, error) {

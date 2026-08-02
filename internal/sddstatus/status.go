@@ -403,8 +403,13 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
+	verifyReportText := readText(firstPath(artifactPaths.VerifyReport))
 	runtimeStatus, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
+	unmanagedRemediationEligible := nativeUnmanagedRemediationEligible(runtimeStatus, verifyResult, verifyReportText, ValidateVerifyReportAdmission(verifyReportText, specCounts).Valid)
 	reviewState, reviewStateReason := readReviewTransaction(firstPath(artifactPaths.ReviewState), "")
+	if reviewState != nil || reviewStateReason != "bounded review transaction is missing" {
+		unmanagedRemediationEligible = false
+	}
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
@@ -516,10 +521,14 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if boundGate != nil {
 		status.ReviewGate = boundGate
 	}
+	if reviewDisabled && unmanagedRemediationEligible && status.ReviewGate == nil && runtimeStatusErr == nil {
+		applyReviewGateEvaluation(&status, resolveReviewAuthority(context.Background(), workspaceRoot, firstPath(artifactPaths.ReviewReceipt), "", changeName), true)
+	}
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
 	} else {
 		applyNativeRuntimeRouting(&status)
+		applyNativeUnmanagedRemediationRouting(&status, verifyResult, verifyReportText, unmanagedRemediationEligible)
 	}
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if options.IncludeInstructions {
@@ -627,6 +636,78 @@ func applyNativeRuntimeRouting(status *Status) {
 	}
 }
 
+func applyNativeUnmanagedRemediationRouting(status *Status, verify verifyResultEvaluation, reportText string, admitted bool) {
+	if status == nil || status.RuntimeStatus == nil || status.ReviewGate == nil ||
+		status.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
+		return
+	}
+	runtime := status.RuntimeStatus
+	if runtime.UnmanagedRemediation == nil {
+		if !admitted {
+			return
+		}
+		status.Dependencies.Apply = DependencyBlocked
+		status.Dependencies.Verify = DependencyBlocked
+		status.Dependencies.Archive = DependencyBlocked
+		status.NextRecommended = RuntimeActionAuthorizeRemediation
+		status.RemediationState = RemediationState{}
+		return
+	}
+
+	authorization := runtime.UnmanagedRemediation
+	if runtime.ActiveAttempt == nil && !runtime.Complete && !runtime.DecisionRequired && runtime.Objective != nil &&
+		runtime.Objective.WorkUnit == authorization.WorkUnit {
+		status.Dependencies.Apply = DependencyReady
+		status.Dependencies.Verify = DependencyBlocked
+		status.Dependencies.Archive = DependencyBlocked
+		status.NextRecommended = "apply"
+		status.RemediationState = RemediationState{}
+		return
+	}
+	if len(runtime.Attempts) == 0 {
+		return
+	}
+	last := runtime.Attempts[len(runtime.Attempts)-1]
+	if runtime.Complete && runtime.Objective != nil && last.ObjectiveID == runtime.Objective.ID && last.Outcome == AttemptPassed &&
+		last.ChangedLines > 0 && !last.ChangedLineBudgetExceeded && last.EvidenceRevision != authorization.FailedEvidenceRevision &&
+		admitted && verify.EvidenceRevision == authorization.FailedEvidenceRevision {
+		status.Dependencies.Verify = DependencyReady
+		status.Dependencies.Archive = DependencyBlocked
+		status.NextRecommended = "verify"
+		status.RemediationState = RemediationState{}
+		return
+	}
+	if admitted && runtime.Objective != nil && last.ObjectiveID == runtime.Objective.ID && runtime.ActiveAttempt == nil && (runtime.DecisionRequired || runtime.Complete) {
+		status.Dependencies.Apply = DependencyBlocked
+		status.Dependencies.Verify = DependencyBlocked
+		status.Dependencies.Archive = DependencyBlocked
+		status.NextRecommended = "resolve-blockers"
+		reason := "the single disabled/unmanaged remediation authorization was consumed; a new review authority was not created"
+		if !contains(status.BlockedReasons, reason) {
+			status.BlockedReasons = append(status.BlockedReasons, reason)
+		}
+	}
+}
+
+func nativeUnmanagedRemediationEligible(runtime *RuntimeStatus, verify verifyResultEvaluation, reportText string, admitted bool) bool {
+	if runtime == nil || !admitted || verify.EvidenceRevision == "" {
+		return false
+	}
+	report, parseReason := parseVerifyReport(reportText)
+	if parseReason != "" || report.Verdict != "fail" || report.AuthorityOnly {
+		return false
+	}
+	if authorization := runtime.UnmanagedRemediation; authorization != nil {
+		return verify.EvidenceRevision == authorization.FailedEvidenceRevision
+	}
+	if runtime.ActiveAttempt != nil || runtime.Objective == nil || len(runtime.Attempts) == 0 {
+		return false
+	}
+	last := runtime.Attempts[len(runtime.Attempts)-1]
+	return last.ObjectiveID == runtime.Objective.ID && last.Outcome == AttemptFailed &&
+		last.EvidenceRevision == verify.EvidenceRevision && last.FinishCandidateIdentity != "" && last.FinishCandidateTree != ""
+}
+
 func authorityOnlyFailedReport(report string) bool {
 	fields, ok := authorityFailureFields(report)
 	return ok && fields["authority_only_failure"] == "true" && fields["missing_review_authority"] == "true" &&
@@ -691,8 +772,13 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	taskProgress := countTaskProgressText(artifactsByType["tasks"].Content)
 	specCounts := countSpecRequirementsAndScenarios([]string{artifactsByType["spec"].Content})
 	verifyResult := parseVerifyResult(artifactsByType["verify-report"].Content, specCounts)
+	verifyReportText := artifactsByType["verify-report"].Content
 	runtimeStatus, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
+	unmanagedRemediationEligible := nativeUnmanagedRemediationEligible(runtimeStatus, verifyResult, verifyReportText, ValidateVerifyReportAdmission(verifyReportText, specCounts).Valid)
 	reviewState, reviewStateReason := readReviewTransaction("", artifactsByType["review/transaction"].Content)
+	if reviewState != nil || reviewStateReason != "bounded review transaction is missing" {
+		unmanagedRemediationEligible = false
+	}
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
@@ -802,10 +888,14 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	if boundGate != nil {
 		status.ReviewGate = boundGate
 	}
+	if reviewDisabled && unmanagedRemediationEligible && status.ReviewGate == nil && runtimeStatusErr == nil {
+		applyReviewGateEvaluation(&status, resolveReviewAuthority(context.Background(), workspaceRoot, "", artifactsByType["review/receipt"].Content, changeName), true)
+	}
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
 	} else {
 		applyNativeRuntimeRouting(&status)
+		applyNativeUnmanagedRemediationRouting(&status, verifyResult, verifyReportText, unmanagedRemediationEligible)
 	}
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if includeInstructions {

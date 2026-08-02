@@ -74,10 +74,16 @@ type sddRuntimeStatus struct {
 		Outcome            string `json:"outcome"`
 	} `json:"active_attempt"`
 	Attempts []struct {
-		Ordinal          int    `json:"ordinal"`
-		Outcome          string `json:"outcome"`
-		EvidenceRevision string `json:"evidence_revision"`
+		Ordinal                 int    `json:"ordinal"`
+		Outcome                 string `json:"outcome"`
+		EvidenceRevision        string `json:"evidence_revision"`
+		FinishCandidateIdentity string `json:"finish_candidate_identity"`
+		FinishCandidateTree     string `json:"finish_candidate_tree"`
 	} `json:"attempts"`
+	Objective *struct {
+		ID         string `json:"id"`
+		Generation int    `json:"generation"`
+	} `json:"objective"`
 	EvidenceRevision string `json:"evidence_revision"`
 	BindingRevision  string `json:"binding_revision"`
 	Binding          *struct {
@@ -488,6 +494,22 @@ const sddVerifyReport = "```yaml\n" +
 	"build_output_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333\n" +
 	"```\n"
 
+const sddUnmanagedFailReport = "```yaml\n" +
+	"schema: gentle-ai.verify-result/v1\n" +
+	"evidence_revision: " + sddFailedEvidence + "\n" +
+	"verdict: fail\n" +
+	"blockers: 1\n" +
+	"critical_findings: 0\n" +
+	"requirements: 1/1\n" +
+	"scenarios: 1/1\n" +
+	"test_command: go test ./internal/example\n" +
+	"test_exit_code: 0\n" +
+	"test_output_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222\n" +
+	"build_command: go test ./cmd/gentle-ai\n" +
+	"build_exit_code: 0\n" +
+	"build_output_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333\n" +
+	"```\n"
+
 // ---------------------------------------------------------------------------
 // Counted operator work
 // ---------------------------------------------------------------------------
@@ -583,6 +605,100 @@ func sddBeginThenInterrupt(r *journeyRun) error {
 		return errors.New("fixture claims budget remaining but the runtime reports the objective complete")
 	}
 	return nil
+}
+
+func sddUnmanagedRemediation(r *journeyRun) error {
+	status, err := readRuntimeStatus(r)
+	if err != nil {
+		return err
+	}
+	objective := []string{"--work-unit", "bench unmanaged correction", "--evidence-goal", "prove one changed correction", "--max-attempts", "1", "--max-changed-lines", "60"}
+	r.run(sddAttemptArgs(r, "begin", status.Revision, "unmanaged-begin-failed", objective...), false)
+	if status, err = readRuntimeStatus(r); err != nil {
+		return err
+	}
+	r.run(sddAttemptArgs(r, "finish", status.Revision, "unmanaged-finish-failed",
+		append([]string{"--outcome", "failed", "--evidence-revision", sddFailedEvidence}, sddTerminalEvidence...)...), false)
+	statusObservation := r.run([]string{"sdd-status", sddChange, "--cwd", r.sandbox.Repo, "--json"}, false)
+	var routed sddStatusV1
+	if err := json.Unmarshal([]byte(strings.TrimSpace(statusObservation.Stdout)), &routed); err != nil || routed.NextRecommended != "authorize-remediation" || routed.ReviewGate == nil || routed.ReviewGate.Delivery != deliveryDisabledUnmanaged || routed.ReviewGate.Result == "allow" {
+		return fmt.Errorf("disabled failed evidence did not expose unmanaged authorization: status=%+v parse=%v", routed, err)
+	}
+	if status, err = readRuntimeStatus(r); err != nil {
+		return err
+	}
+	if status.Objective == nil || len(status.Attempts) != 1 || status.Attempts[0].Outcome != "failed" {
+		return fmt.Errorf("fixture did not reach one terminal failed attempt: %+v", status)
+	}
+	failed := status.Attempts[0]
+	authorization := strings.Join([]string{
+		"schema: gentle-ai.unmanaged-remediation-authorization/v1",
+		"runtime_revision: " + status.Revision,
+		"change: " + sddChange,
+		"predecessor_objective_id: " + status.Objective.ID,
+		fmt.Sprintf("predecessor_generation: %d", status.Objective.Generation),
+		"failed_evidence_revision: " + sddFailedEvidence,
+		"failed_candidate_identity: " + failed.FinishCandidateIdentity,
+		"failed_candidate_tree: " + failed.FinishCandidateTree,
+		"delivery: disabled/unmanaged",
+		"work_unit: bench unmanaged correction",
+		"evidence_goal: prove one changed correction",
+		"max_changed_lines: 60",
+		"actor: bench@example.invalid",
+		"reason: one bounded correction is authorized",
+	}, "\n")
+	r.sandbox.Scratch["unmanaged_authorization"] = authorization
+	reset := sddAttemptArgs(r, "reset", status.Revision, "unmanaged-authorize",
+		"--disposition", "failed-evidence-remediation", "--remediates-evidence-revision", sddFailedEvidence,
+		"--work-unit", "bench unmanaged correction", "--evidence-goal", "prove one changed correction",
+		"--max-changed-lines", "60", "--maintainer-authorization", authorization)
+	r.run(reset, false)
+	// Exact replay is idempotent and must not create a second correction scope.
+	r.run(reset, false)
+	if status, err = readRuntimeStatus(r); err != nil {
+		return err
+	}
+	if status.Objective == nil || status.Objective.Generation != 2 || len(status.Attempts) != 1 || status.Binding != nil {
+		return fmt.Errorf("unmanaged authorization created review authority or another attempt: %+v", status)
+	}
+	r.run(sddAttemptArgs(r, "begin", status.Revision, "unmanaged-begin-correction", objective...), false)
+	return nil
+}
+
+func sddUnmanagedFinish(r *journeyRun) error {
+	status, err := readRuntimeStatus(r)
+	if err != nil {
+		return err
+	}
+	r.run(sddAttemptArgs(r, "finish", status.Revision, "unmanaged-finish-correction",
+		append([]string{"--outcome", "passed", "--evidence-revision", sddCorrectedEvidence}, sddTerminalEvidence...)...), false)
+	status, err = readRuntimeStatus(r)
+	if err != nil {
+		return err
+	}
+	if !status.Complete || len(status.Attempts) != 2 || status.Binding != nil {
+		return fmt.Errorf("unmanaged correction did not close without review authority: %+v", status)
+	}
+	return nil
+}
+
+func sddUnmanagedSecondCorrectionRejected(r *journeyRun) error {
+	status, err := readRuntimeStatus(r)
+	if err != nil {
+		return err
+	}
+	observation := r.run(sddAttemptArgs(r, "reset", status.Revision, "unmanaged-authorize",
+		"--disposition", "failed-evidence-remediation", "--remediates-evidence-revision", sddFailedEvidence,
+		"--work-unit", "bench second correction", "--evidence-goal", "prove another correction",
+		"--max-changed-lines", "61", "--maintainer-authorization", r.sandbox.Scratch["unmanaged_authorization"]), false)
+	if observation.ExitCode == 0 {
+		return errors.New("changed authorization replay unexpectedly opened a second unmanaged correction")
+	}
+	return nil
+}
+
+func sddFreshPass(sandbox *Sandbox) error {
+	return sandbox.write(filepath.Join(sddChangeRoot(sandbox), "verify-report.md"), sddVerifyReport)
 }
 
 // sddBindApprovedReview binds the approved lineage to the change. The lineage is
@@ -1291,6 +1407,32 @@ func sddJourneys() []Journey {
 						}
 						return nil
 					})},
+			},
+		},
+		{
+			ID:     "j44-sdd-unmanaged-failed-evidence-remediation",
+			Title:  "Disabled substantive FAIL gets one ledger-bound correction and fresh verification without review authority",
+			Source: "issue #2182 accepted unmanaged remediation contract",
+			Steps: []Step{
+				{Name: "fixture: complete planning with admitted substantive FAIL", Fixture: sddPlanningArtifacts(sddUnmanagedFailReport)},
+				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
+				{Name: "authorize exactly one unmanaged correction and replay it", Requires: sddAttemptResetCapability, Composite: sddUnmanagedRemediation},
+				{Name: "fixture: correction changes the candidate", Fixture: sddBoundedCorrection},
+				{Name: "finish the one changed correction", Requires: sddAttemptFinishCapability, Composite: sddUnmanagedFinish},
+				{Name: "changed authorization replay cannot create a second correction", Requires: sddAttemptResetCapability, Composite: sddUnmanagedSecondCorrectionRejected},
+				{Name: "status requires fresh independent verification", Requires: sddStatusCapability, Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("unmanaged correction routing", func(status sddStatusV1) error {
+					if status.NextRecommended != "verify" || status.Dependencies.Verify != "ready" || status.Dependencies.Archive != "blocked" {
+						return fmt.Errorf("next=%q verify=%q archive=%q, want fresh verify", status.NextRecommended, status.Dependencies.Verify, status.Dependencies.Archive)
+					}
+					return nil
+				})},
+				{Name: "fixture: fresh independent PASS", Fixture: sddFreshPass},
+				{Name: "fresh PASS reaches disabled unmanaged archive without approval", Requires: sddStatusCapability, Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("unmanaged archive", func(status sddStatusV1) error {
+					if status.Dependencies.Archive != "ready" || status.ReviewGate == nil || status.ReviewGate.Delivery != deliveryDisabledUnmanaged || status.ReviewGate.Result == "allow" {
+						return fmt.Errorf("archive=%q reviewGate=%+v, want ready disabled/unmanaged non-allow", status.Dependencies.Archive, status.ReviewGate)
+					}
+					return nil
+				})},
 			},
 		},
 
