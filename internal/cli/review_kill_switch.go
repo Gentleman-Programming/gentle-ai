@@ -58,7 +58,7 @@ func resolveReviewMutationRoot(ctx context.Context, cwd string) (string, error) 
 }
 
 // authorizeReviewAuthorityMutation refuses to advance or consume existing
-// review authority while review-driven development is switched off. It is
+// review authority while receipt-driven development is switched off. It is
 // separate from resolveReviewMutationRoot for the verbs that resolve their root
 // before they know whether this run mutates anything.
 func authorizeReviewAuthorityMutation(ctx context.Context, repo string) error {

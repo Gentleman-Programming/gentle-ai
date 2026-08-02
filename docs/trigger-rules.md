@@ -60,13 +60,13 @@ status contract; direct and delegated runs do not create or consume an SDD run.
 
 ## Review mode
 
-Review-driven development is user-owned and independent of the implementation
+Receipt-driven development is user-owned and independent of the implementation
 route:
 
 | Command | Effect |
 |---|---|
 | `gentle-ai review mode status --cwd <repo>` | Report the global source, clone-local source, deciding source, and effective mode without mutation. |
-| `gentle-ai review mode disable --cwd <repo>` | Disable review-driven development globally. |
+| `gentle-ai review mode disable --cwd <repo>` | Disable receipt-driven development globally. |
 | `gentle-ai review mode disable --scope clone --cwd <repo>` | Disable it only for this clone; no other clone inherits the override. |
 | `gentle-ai review mode enable --cwd <repo>` | Enable it globally for future candidates. |
 | `gentle-ai review mode enable --scope clone --cwd <repo>` | Clear this clone's off-only override. |

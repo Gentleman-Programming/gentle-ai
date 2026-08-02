@@ -16,7 +16,7 @@ import (
 // that -- "advances existing authority. Disabled mode rejects it" -- and then
 // never reached the CLI surface, so the only guarded operation was START. A
 // lineage started before the switch went off could still be finalized to an
-// approved terminal receipt while review-driven development was switched off,
+// approved terminal receipt while receipt-driven development was switched off,
 // which also defeats the second half of the rule: re-enabling would rediscover
 // approved authority and skip the re-validation that makes the switch safe.
 //
@@ -25,7 +25,7 @@ import (
 // unit test on AuthorizeRDDOperation passed the entire time.
 
 // disabledReviewRepo freezes an in-flight low-risk lineage and then turns
-// review-driven development off for this clone, which is the exact shape the
+// receipt-driven development off for this clone, which is the exact shape the
 // hand reproduction hit: authority that already exists, and a switch that is
 // now off.
 func disabledReviewRepo(t *testing.T, lineage string) (repo string, started ReviewFacadeStartResult) {

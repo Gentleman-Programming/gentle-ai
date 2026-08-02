@@ -916,7 +916,7 @@ func TestMergeAgents_PreservesPendingSync(t *testing.T) {
 	}
 }
 
-// TestRDDMode_RoundTrip verifies the global review-driven-development kill
+// TestRDDMode_RoundTrip verifies the global receipt-driven-development kill
 // switch survives a write/read cycle in uncommitted user state.
 func TestRDDMode_RoundTrip(t *testing.T) {
 	home := t.TempDir()

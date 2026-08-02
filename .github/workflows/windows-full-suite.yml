@@ -1,0 +1,143 @@
+name: Windows Full Suite
+
+# Deliberately its own workflow, not a job in ci.yml.
+#
+# Until 2026-07-29 this suite never once completed: windows-runtime declared a
+# 30-minute job timeout around a 35-minute step, so every push to main was
+# cancelled at 30m and reported the whole run cancelled. v2.2.0 shipped without
+# these tests ever having run. Unblocking them surfaced eighteen genuine
+# Windows failures that predate the release.
+#
+# Keeping the lane inside ci.yml would make that pre-existing debt block
+# publication, because the release gate requires a green ci.yml run on the
+# exact tagged commit. Running it here instead keeps the signal visible and
+# lets the debt be paid down without holding releases hostage to it. This is
+# not a permanent home: once the eighteen are fixed, fold this back into ci.yml
+# so it gates again.
+#
+# Everything below is otherwise identical to the ci.yml job it replaces.
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    # 03:20 UTC daily, offset from ci.yml's 03:00 so the two do not contend
+    # for the same Windows runner pool.
+    - cron: "20 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Coverage is identical to running the suite in one job -- every package runs
+  # on every push and schedule -- but wall-clock is set by the slowest shard
+  # rather than the sum.
+  #
+  # Sharding, not test selection: the shards are content-independent, so a
+  # change is never the reason a package does or does not run. Selecting tests
+  # from the diff would break exactly the case this repo keeps hitting, where a
+  # change in one package fails a ratchet or contract test that lives in
+  # another.
+  #
+  # Split by measured cost: internal/cli and internal/reviewtransaction are
+  # ~44% and ~33% of total test time. internal/cli alone exceeded the 30m
+  # go-test timeout, so it takes four shards and TestR* -- 453 of its 960
+  # tests -- keeps one to itself. `rest` is derived from `go list` rather than
+  # listed, so a new package is covered the day it is added.
+  #
+  # Intra-package t.Parallel() would be the deeper fix, but internal/cli has 89
+  # os.Setenv/t.Setenv sites and t.Setenv panics in a parallel test, so that is
+  # a refactor of shared global state and not a CI change.
+  windows-full-suite:
+    name: Windows Full Suite (${{ matrix.shard.name }})
+    runs-on: windows-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ranges are contiguous and disjoint over A-Z, which is what keeps
+        # sharding honest: internal/assets asserts that, so a shard cannot be
+        # edited into leaving a letter uncovered and silently skipping tests
+        # while the lane still reports green. Every Go test name begins with
+        # "Test" plus an uppercase letter, so A-Z is the whole space.
+        shard:
+          - name: cli-a-c
+            packages: ./internal/cli
+            run: ^Test[A-C]
+          - name: cli-d-q
+            packages: ./internal/cli
+            run: ^Test[D-Q]
+          - name: cli-r
+            packages: ./internal/cli
+            run: ^Test[R-R]
+          - name: cli-s-z
+            packages: ./internal/cli
+            run: ^Test[S-Z]
+          - name: reviewtransaction-a-k
+            packages: ./internal/reviewtransaction
+            run: ^Test[A-K]
+          - name: reviewtransaction-l-z
+            packages: ./internal/reviewtransaction
+            run: ^Test[L-Z]
+          - name: rest
+            packages: ""
+            run: ""
+    steps:
+      # This suite is process- and filesystem-bound, not CPU-bound: it spawns
+      # git constantly and builds throwaway repositories under TEMP. Defender
+      # scans every one of those writes and every spawned image, which is the
+      # single largest reason the same suite takes ~5m on Linux and far longer
+      # here. Exclusions are scoped to the two trees the run owns and last only
+      # for the life of the ephemeral runner.
+      #
+      # Best-effort on purpose: Defender policy can refuse the call on a
+      # hardened image, and a CI lane must not go red because an optimisation
+      # was unavailable.
+      - name: Exclude runner work and temp trees from Defender
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath $env:RUNNER_TEMP -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess 'git.exe','go.exe','gentle-ai.exe' -ErrorAction SilentlyContinue
+
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Run shard
+        shell: pwsh
+        timeout-minutes: 35
+        run: |
+          if ('${{ matrix.shard.packages }}' -ne '') {
+            $packages = @('${{ matrix.shard.packages }}')
+          } else {
+            $packages = go list ./... | Where-Object {
+              $_ -notmatch '/internal/cli$' -and $_ -notmatch '/internal/reviewtransaction$'
+            }
+          }
+          if (-not $packages) { throw 'shard resolved to no packages' }
+          $selector = '${{ matrix.shard.run }}'
+          $arguments = @('test') + $packages + @('-count=1', '-timeout=30m')
+          if ($selector -ne '') { $arguments += @('-run', $selector) }
+          # A range shard that matches nothing is a silent hole: the shard
+          # passes, the letters it owned never ran, and the lane is green.
+          # Count first and fail loudly instead.
+          if ($selector -ne '') {
+            $selected = (go test $packages[0] -list $selector | Where-Object { $_ -match '^Test' }).Count
+            Write-Host "shard ${{ matrix.shard.name }}: $selected test(s) match $selector"
+            if ($selected -eq 0) { throw "shard selector $selector matched no test" }
+          } else {
+            Write-Host "shard ${{ matrix.shard.name }}: $($packages.Count) package(s)"
+          }
+          go @arguments
+          exit $LASTEXITCODE

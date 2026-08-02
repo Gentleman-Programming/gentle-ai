@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -18,10 +19,11 @@ const (
 // form is complete, its collect form identifies one externally supplied input,
 // and its stop form intentionally contains no command-shaped data.
 type ReviewNextTransition struct {
-	Kind       string                      `json:"kind"`
-	ReasonCode string                      `json:"reason_code"`
-	Execute    *ReviewTransitionExecution  `json:"execute,omitempty"`
-	Collect    *ReviewTransitionCollection `json:"collect,omitempty"`
+	Kind              string                                   `json:"kind"`
+	ReasonCode        string                                   `json:"reason_code"`
+	Execute           *ReviewTransitionExecution               `json:"execute,omitempty"`
+	Collect           *ReviewTransitionCollection              `json:"collect,omitempty"`
+	CorrectionRequest *reviewtransaction.CorrectionPlanRequest `json:"correction_request,omitempty"`
 }
 
 type ReviewTransitionExecution struct {
@@ -108,7 +110,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 				input.Selector.Projection == reviewtransaction.ProjectionStaged {
 				return reviewStopTransition("staged_workspace_overlay_recovery_unavailable")
 			}
-			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
+			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage, input.RuntimeAgent), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
 		case reviewtransaction.TargetApplicabilityAmbiguous:
 			return reviewCollectTransition("lineage_selection_required", ReviewTransitionInput{
 				Name: "lineage_selection", Schema: "gentle-ai.review-lineage-selection/v1", CaptureOperation: "external.select_lineage",
@@ -195,12 +197,22 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			})
 		}
 		if input.CorrectionForecasted {
-			return reviewStopTransition("corrected_candidate_unavailable")
+			if input.CorrectionRequest == nil {
+				return reviewStopTransition("corrupted_or_unverifiable_authority")
+			}
+			transition := reviewStopTransition("corrected_candidate_unavailable")
+			transition.CorrectionRequest = input.CorrectionRequest
+			return transition
 		}
-		return reviewCollectTransition("correction_plan_required", ReviewTransitionInput{
+		if input.CorrectionRequest == nil {
+			return reviewStopTransition("corrupted_or_unverifiable_authority")
+		}
+		transition := reviewCollectTransition("correction_plan_required", ReviewTransitionInput{
 			Name: "correction_lines", Schema: "gentle-ai.review-correction-plan/v1", CaptureOperation: "external.plan_correction",
 			Arguments: reviewBindingArguments(binding),
 		})
+		transition.CorrectionRequest = input.CorrectionRequest
+		return transition
 	case reviewtransaction.StateValidating:
 		if input.EvidenceErr != nil && !errors.Is(input.EvidenceErr, reviewtransaction.ErrCapturedVerificationEvidenceMissing) &&
 			!errors.Is(input.EvidenceErr, reviewtransaction.ErrCapturedVerificationEvidenceMetadataMissing) {
@@ -289,6 +301,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 type reviewFinalizeTransitionContext struct {
 	RepositoryContext string
 	ValidationRequest *reviewtransaction.TargetedValidationRequest
+	CorrectionRequest *reviewtransaction.CorrectionPlanRequest
 	CaptureContext    *reviewCaptureContext
 	CapturedEvidence  *reviewtransaction.VerificationEvidenceRecord
 	EvidenceErr       error
@@ -310,6 +323,13 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 	if len(contexts) > 0 {
 		transitionContext = contexts[0]
 	}
+	if state.State == reviewtransaction.StateCorrectionRequired && !state.CorrectionAttemptConsumed() && transitionContext.CorrectionRequest == nil {
+		request, err := reviewtransaction.BuildCorrectionPlanRequest(state, revision)
+		if err != nil {
+			return reviewStopTransition("corrupted_or_unverifiable_authority")
+		}
+		transitionContext.CorrectionRequest = &request
+	}
 	if state.State == reviewtransaction.StateReviewing && artifactErr == nil && len(artifacts) != len(state.SelectedLenses) {
 		return reviewMissingCaptureTransition(reviewTransitionBinding(status.Authority, status.TargetIdentity, transitionContext.RepositoryContext), state.SelectedLenses, artifacts, transitionContext.CaptureContext)
 	}
@@ -318,7 +338,7 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 	}
 	return newReviewNextTransition(status, state.SelectedLenses, artifacts, transitionContext.CapturedEvidence, artifactErr, reviewNextTransitionInput{
 		RepositoryContext: transitionContext.RepositoryContext, ValidationRequest: transitionContext.ValidationRequest,
-		EvidenceErr: transitionContext.EvidenceErr, CorrectionForecasted: state.ProposedCorrectionLines != nil,
+		CorrectionRequest: transitionContext.CorrectionRequest, EvidenceErr: transitionContext.EvidenceErr, CorrectionForecasted: state.ProposedCorrectionLines != nil,
 		CaptureContext: transitionContext.CaptureContext,
 	})
 }
@@ -411,8 +431,10 @@ type reviewNextTransitionInput struct {
 	Successor, Reason, Actor, Authorization        string
 	RepairActor, RepairReason, RepairAuthorization string
 	StartLineage                                   string
+	RuntimeAgent                                   model.AgentID
 	RepositoryContext                              string
 	ValidationRequest                              *reviewtransaction.TargetedValidationRequest
+	CorrectionRequest                              *reviewtransaction.CorrectionPlanRequest
 	EvidenceErr                                    error
 	CorrectionForecasted                           bool
 	CaptureContext                                 *reviewCaptureContext
@@ -429,7 +451,7 @@ type reviewTransitionSelector struct {
 	PrePRRepresentable    bool
 }
 
-func reviewStartArguments(status ReviewTargetStatusResult, lineage string) []ReviewTransitionArgument {
+func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runtime model.AgentID) []ReviewTransitionArgument {
 	contract := status.Contract
 	if contract == "" {
 		contract = ReviewIntegrationContractV1
@@ -447,6 +469,9 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string) []Rev
 	}
 	if strings.TrimSpace(lineage) != "" {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "lineage", Value: lineage})
+	}
+	if runtime != "" {
+		arguments = append(arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime)})
 	}
 	if contract == ReviewIntegrationContractV2 {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "consent", Value: string(reviewConsentModeRelay)})

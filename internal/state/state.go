@@ -115,7 +115,7 @@ type InstallState struct {
 	// false for backward-compatibility with existing state files.
 	PendingSync bool `json:"pending_sync,omitempty"`
 
-	// RDDMode is the global, user-owned review-driven-development kill switch
+	// RDDMode is the global, user-owned receipt-driven-development kill switch
 	// ("on"|"off"). It lives in uncommitted user state precisely so that no
 	// repository can ship, share, or force a review policy onto a clone.
 	// Empty means the user never expressed a preference, which preserves the

@@ -161,9 +161,9 @@ func TestRenderRoutingObeysTheUserOnReviewMode(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"When the user asks to stop using review-driven development, run `disable`.",
+		"When the user asks to stop using receipt-driven development, run `disable`.",
 		"Do not argue, do not work around it, and do not propose alternatives first.",
-		"Never enable review-driven development on the user's behalf unless the user explicitly asks for it.",
+		"Never enable receipt-driven development on the user's behalf unless the user explicitly asks for it.",
 		"do not start reviews, do not retry, do not reactivate it, and do not fall back to any retired path",
 		"reports `disabled/unmanaged`",
 		"never a fabricated approval",

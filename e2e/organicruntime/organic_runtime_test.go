@@ -710,9 +710,9 @@ func TestOrganicKillSwitchStopsAtTheDeliveryBoundary(t *testing.T) {
 
 	_, stderr, err := harness.gentleAllowFailure("review", "start", "--cwd", harness.repo.worktree, "--lineage", "organic-killed")
 	if err == nil {
-		t.Fatal("review start succeeded while review-driven development was disabled")
+		t.Fatal("review start succeeded while receipt-driven development was disabled")
 	}
-	if !strings.Contains(stderr, "review-driven development is disabled") || !strings.Contains(stderr, "clone_local") {
+	if !strings.Contains(stderr, "receipt-driven development is disabled") || !strings.Contains(stderr, "clone_local") {
 		t.Fatalf("disabled start was refused without naming the deciding source: %s", stderr)
 	}
 

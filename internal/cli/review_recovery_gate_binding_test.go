@@ -121,7 +121,7 @@ func TestValidateAllowsTheNamedRecoveryAfterThePredecessorDeliveryWasPushed(t *t
 	runReviewCLIGit(t, repo, "push", "-q", "origin", branch)
 
 	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone"}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("disable review-driven development: %v", err)
+		t.Fatalf("disable receipt-driven development: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(repo, "docs", "unreviewed.md"), []byte("unreviewed\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestValidateAllowsTheNamedRecoveryAfterThePredecessorDeliveryWasPushed(t *t
 	runReviewCLIGit(t, repo, "add", "-A")
 	runReviewCLIGit(t, repo, "commit", "-qm", "unreviewed change")
 	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone"}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("re-enable review-driven development: %v", err)
+		t.Fatalf("re-enable receipt-driven development: %v", err)
 	}
 
 	scope := reviewPrePushScopeChangeDenial(t, repo, branch)

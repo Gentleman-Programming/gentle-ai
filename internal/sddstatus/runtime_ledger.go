@@ -269,7 +269,7 @@ type RuntimeStore struct {
 	Repo      string
 	Workspace string
 	Change    string
-	// ReviewDisabled records that the user's review-driven-development kill
+	// ReviewDisabled records that the user's receipt-driven-development kill
 	// switch is off for this clone. While it is set, the runtime ledger imposes
 	// no review obligation of its own: a switched-off system has no
 	// implications, so closing an attempt never demands an approved recovery
@@ -349,13 +349,15 @@ type runtimeLegacyBindingImport struct {
 }
 
 type runtimeRequestReceipt struct {
-	Digest   string
-	Revision string
+	Digest                        string
+	Revision                      string
+	RemediationPredecessorLineage string
 }
 
 type runtimeReplay struct {
-	Status   RuntimeStatus
-	Requests map[string]runtimeRequestReceipt
+	Status        RuntimeStatus
+	Requests      map[string]runtimeRequestReceipt
+	AttemptTokens map[int]string
 }
 
 func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, error) {
@@ -998,7 +1000,8 @@ func (store RuntimeStore) load() (runtimeReplay, error) {
 			Schema: RuntimeStatusSchema, Change: store.Change, Attempts: []RuntimeAttempt{},
 			NextOrdinal: 1, NextAction: RuntimeActionBegin,
 		},
-		Requests: map[string]runtimeRequestReceipt{},
+		Requests:      map[string]runtimeRequestReceipt{},
+		AttemptTokens: map[int]string{},
 	}
 	head, exists, err := readRuntimeHead(filepath.Join(store.Dir, "HEAD"))
 	if err != nil || !exists {
@@ -1048,6 +1051,7 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 	if err := validateRuntimeRecordShape(record); err != nil {
 		return err
 	}
+	remediationPredecessorLineage := ""
 	switch record.Operation {
 	case runtimeOperationBegin:
 		event := record.Begin
@@ -1100,6 +1104,7 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 			BeginCandidateTree: event.BeginCandidateTree, Outcome: AttemptRunning,
 		}
 		replay.Status.Attempts = append(replay.Status.Attempts, attempt)
+		replay.AttemptTokens[event.Ordinal] = revision
 		active := attempt
 		replay.Status.ActiveAttempt = &active
 		replay.Status.CumulativeAttempts++
@@ -1121,6 +1126,7 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		if currentBinding == nil || currentBinding.Revision != record.Binding.ExpectedRevision {
 			return errors.New("atomic remediation binding does not match replay state")
 		}
+		remediationPredecessorLineage = currentBinding.Lineage
 		if replay.Status.EvidenceRevision != "" && replay.Status.EvidenceRevision != record.Finish.RemediatesEvidenceRevision {
 			return errors.New("atomic remediation failed evidence does not match replay state")
 		}
@@ -1170,7 +1176,10 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		return errors.New("unsupported SDD runtime record operation")
 	}
 	replay.Status.Revision = revision
-	replay.Requests[record.RequestID] = runtimeRequestReceipt{Digest: record.RequestDigest, Revision: revision}
+	replay.Requests[record.RequestID] = runtimeRequestReceipt{
+		Digest: record.RequestDigest, Revision: revision,
+		RemediationPredecessorLineage: remediationPredecessorLineage,
+	}
 	return nil
 }
 

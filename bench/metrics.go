@@ -151,6 +151,10 @@ type Results struct {
 	Mode                string          `json:"mode"` // driven | observed
 	Binary              string          `json:"binary"`
 	BinaryVersion       string          `json:"binary_version"`
+	RequestedSelectors  []string        `json:"requested_selectors,omitempty"`
+	ResolvedIDs         *[]string       `json:"resolved_ids,omitempty"`
+	RunStatus           string          `json:"run_status,omitempty"`
+	FailureReason       string          `json:"failure_reason,omitempty"`
 	Journeys            []JourneyResult `json:"journeys"`
 	Totals              MetricSet       `json:"totals"`
 	JourneysCounted     int             `json:"journeys_counted"`

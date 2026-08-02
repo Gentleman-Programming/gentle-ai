@@ -5,6 +5,11 @@ on:
   push:
     branches:
       - main
+  # Manual re-run. `gh run rerun` refuses a run whose workflow file has changed
+  # since, which is exactly when a re-run is needed most: a known-flaky failure
+  # on a commit that is otherwise ready to tag, right after the workflow moved.
+  # Without this the only way to re-run CI on main is to push another commit.
+  workflow_dispatch:
   schedule:
     # 03:00 UTC daily — full Tier 1+2+3 across all platforms as a safety net
     - cron: "0 3 * * *"
@@ -63,16 +68,60 @@ jobs:
       - name: Check for new unreachable functions
         run: ./scripts/deadcode-ratchet.sh
 
+  claude-network-none:
+    name: Claude Network-None Runtime (Required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Build pinned Claude runtime proof image
+        run: docker build -f e2e/Dockerfile.claude-network-none -t gentle-ai-claude-network-none:ci .
+      - name: Prove Claude transport without external networking
+        run: |
+          docker run --rm --pull=never --network none --cap-drop=ALL \
+            --security-opt=no-new-privileges --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
+            -e GENTLE_AI_PARENT_NETNS="$(stat -Lc %i /proc/self/ns/net)" \
+            gentle-ai-claude-network-none:ci
+
   windows-runtime:
     name: Windows Runtime
     needs: go-format
     if: always()
     runs-on: windows-latest
-    timeout-minutes: 30
+    # Release blockers only; the full suite moved to windows-full-suite. Must
+    # exceed the sum of its own step budgets, or a step can never reach its
+    # limit -- the previous 30 here killed a 35-minute step at exactly 30m on
+    # every push to main, reporting `cancelled` for the whole run and blocking
+    # the release gate, while pull requests stayed green because the full
+    # suite only ran on push and schedule.
+    timeout-minutes: 20
     steps:
       - name: Require successful Go format
         if: needs.go-format.result != 'success'
         run: exit 1
+
+      # This suite is process- and filesystem-bound, not CPU-bound: it spawns
+      # git constantly and builds throwaway repositories under TEMP. Defender
+      # scans every one of those writes and every spawned image, which is the
+      # single largest reason the same suite takes ~155s on Linux and over
+      # 30m here. Exclusions are scoped to the two trees the run owns and last
+      # only for the life of the ephemeral runner.
+      #
+      # Deliberately not `if: failure()`-guarded or made required: Defender
+      # policy can refuse the call on a hardened image, and a CI lane must not
+      # go red because an optimisation was unavailable. `-ErrorAction
+      # SilentlyContinue` keeps it best-effort.
+      - name: Exclude runner work and temp trees from Defender
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath $env:RUNNER_TEMP -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess 'git.exe','go.exe','gentle-ai.exe' -ErrorAction SilentlyContinue
 
       - name: Checkout exact event candidate
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
@@ -101,11 +150,6 @@ jobs:
 
       # PR runs the release-blocker subset only; push to main and the nightly
       # schedule run the full Windows suite, mirroring the E2E tier policy.
-      - name: Run full Windows suite
-        shell: pwsh
-        timeout-minutes: 35
-        run: if ($env:GITHUB_EVENT_NAME -eq 'push' -or $env:GITHUB_EVENT_NAME -eq 'schedule') { go test ./... -count=1 -timeout=30m; exit $LASTEXITCODE } else { Write-Host 'Skipping full suite on pull_request; release-blocker tests already ran.' }
-
   # Native Darwin release blockers (#1853). Four macOS defects (#1773, #1781,
   # #1804, #1850) and the #1872 RAR lock convoy shipped because no CI lane
   # executes Darwin semantics; GOOS=darwin cross-builds prove compilation, not
@@ -186,7 +230,15 @@ jobs:
           node-version: "24"
 
       - name: Install pinned OpenCode runtime
-        run: npm install --global opencode-ai@1.18.4
+        run: npm install --global opencode-ai@1.18.10
+
+      - name: Verify Windows OpenCode reviewer rejection E2E is registered
+        shell: pwsh
+        run: |
+          $tests = go test -list '^TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash$' ./e2e/organicruntime
+          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash') {
+            throw 'Windows OpenCode reviewer rejection E2E is missing'
+          }
 
       - name: Run organic journeys
         # No -run filter: a renamed test must fail this job loudly, never let

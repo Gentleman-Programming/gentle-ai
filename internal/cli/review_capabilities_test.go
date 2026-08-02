@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 const capabilityFixtureExecutable = "gentle-ai capability fixture\n"
@@ -84,7 +85,7 @@ func TestReviewCapabilitiesMatchesConformanceFixtureOutsideRepository(t *testing
 }
 
 func TestReviewCapabilitiesV2MatchesConformanceFixture(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities.fixture.json"))
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.1.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +108,48 @@ func TestReviewCapabilitiesV2MatchesConformanceFixture(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("v2 capabilities do not match conformance fixture:\ngot=%#v\nwant=%#v", got, want)
+	}
+	if got.Schema != ReviewIntegrationCapabilitiesSchemaV21 || got.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 1}) ||
+		got.Bootstrap == nil || got.Bootstrap.Command != reviewNextTransitionRefreshCommandV21 {
+		t.Fatalf("v2.1 capabilities runtime surface = %#v", got)
+	}
+	validateReviewCapabilitiesV21Schema(t, fixture)
+}
+
+func validateReviewCapabilitiesV21Schema(t *testing.T, fixture []byte) {
+	t.Helper()
+	root := filepath.Join("..", "..", "contracts", "review-integration")
+	v14, err := os.ReadFile(filepath.Join(root, "v1", "schemas", "capabilities-v1.4.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v21, err := os.ReadFile(filepath.Join(root, "v2", "schemas", "capabilities-v2.1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	for uri, payload := range map[string][]byte{
+		"https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities-v1.4.schema.json": v14,
+		ReviewIntegrationCapabilitiesSchemaIDV21:                                                      v21,
+	} {
+		var document any
+		if err := json.Unmarshal(payload, &document); err != nil {
+			t.Fatal(err)
+		}
+		if err := compiler.AddResource(uri, document); err != nil {
+			t.Fatal(err)
+		}
+	}
+	schema, err := compiler.Compile(ReviewIntegrationCapabilitiesSchemaIDV21)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document any
+	if err := json.Unmarshal(fixture, &document); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(document); err != nil {
+		t.Fatalf("v2.1 capabilities schema rejected fixture: %v", err)
 	}
 }
 
@@ -136,7 +179,7 @@ func TestReviewCapabilitiesContractValidationIsExactAndReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var nativeGit ReviewCapabilitiesResult
-	if err := json.Unmarshal(output.Bytes(), &nativeGit); err != nil || nativeGit.Contract != ReviewIntegrationContractV2 || nativeGit.Schema != ReviewIntegrationCapabilitiesSchemaV2 {
+	if err := json.Unmarshal(output.Bytes(), &nativeGit); err != nil || nativeGit.Contract != ReviewIntegrationContractV2 || nativeGit.Schema != ReviewIntegrationCapabilitiesSchemaV21 {
 		t.Fatalf("native Git capabilities = %#v, %v", nativeGit, err)
 	}
 	entries, readErr := os.ReadDir(outside)

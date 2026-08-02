@@ -16,7 +16,7 @@ import (
 )
 
 // wantEnabledReviewGateFields is the exact shipped field set of a gate result
-// produced while review-driven development is on. It guards the regression that
+// produced while receipt-driven development is on. It guards the regression that
 // matters most here: the delivery disposition must stay invisible on every path
 // that already worked, so no consumer of the current projection changes.
 var wantEnabledReviewGateFields = []string{"action", "allowed", "context", "reason", "result", "schema"}
@@ -36,7 +36,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryWithoutReceipt(t *testing
 	var output bytes.Buffer
 	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output)
 	// The gate reports; it does not veto. Ordinary repository policy governs
-	// delivery once the user has switched review-driven development off.
+	// delivery once the user has switched receipt-driven development off.
 	if err != nil {
 		t.Fatalf("disabled delivery gate vetoed delivery instead of reporting it: %v\n%s", err, output.String())
 	}
@@ -227,7 +227,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryWithPriorReceipt(t *testi
 			var output bytes.Buffer
 			err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(shape.gate)}, &output)
 			// The gate reports; it does not veto: ordinary repository policy
-			// governs delivery once review-driven development is off, and the
+			// governs delivery once receipt-driven development is off, and the
 			// prior receipt governs only the bytes it approved.
 			if err != nil {
 				t.Fatalf("disabled delivery with a prior receipt was denied instead of reported: %v\n%s", err, output.String())
@@ -304,7 +304,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverDeliveredWorkspaceRec
 	var output bytes.Buffer
 	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output)
 	// The gate reports; it does not veto: ordinary repository policy governs
-	// delivery once review-driven development is off.
+	// delivery once receipt-driven development is off.
 	if err != nil {
 		t.Fatalf("disabled delivery over a delivered workspace receipt was denied instead of reported: %v\n%s", err, output.String())
 	}
@@ -397,7 +397,7 @@ func TestReviewValidateDeniesDeliveredWorkspaceReceiptPrePushAsScopeMismatchWhil
 // is the pre-push half of the corrupted-authority decision. This test used to
 // assert the opposite (`...KeepsFailingClosedOnCorruptedAuthorityWhileDisabledAtPrePush`)
 // on the reasoning that damage is not "unmanaged by choice". The maintainer's
-// rule supersedes that: with reviews off, review-driven development does not
+// rule supersedes that: with reviews off, receipt-driven development does not
 // exist, so damage to its own private store cannot stop an ordinary push. The
 // damage is reported, not hidden — the denial code stays `authority_corrupted`
 // and the reason names it — and it is deferred, not forgiven, because
@@ -445,7 +445,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthorityAtP
 // TestReviewValidateReportsDisabledUnmanagedDeliveryWhenNoUpstreamConfigured
 // proves issue-1832: a disposable repository with no remote and no branch
 // upstream has no publication boundary to derive at all. While
-// review-driven development is disabled, that is not authority damage and
+// receipt-driven development is disabled, that is not authority damage and
 // not something the gate should be blocking pre-push on — it is exactly the
 // same "no receipt can govern this while off" shape as a missing,
 // scope-changed, or unrelated receipt. Before the fix, the gate resolved the
@@ -594,7 +594,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthorityNoU
 
 // TestReviewValidatePluralStaleReceiptsReportDisabledUnmanagedDelivery closes
 // the community-reported blocker (decode2, PR #1801): plural terminal
-// receipts are the NORM for any active review-driven-development user --
+// receipts are the NORM for any active receipt-driven-development user --
 // nothing prunes them, and overlapping genesis paths classify scope-changed
 // -- so this is the cross-product fixture that was missing from the disabled
 // coverage above (which only ever exercised {none, one governing, one stale,
@@ -760,7 +760,7 @@ func disableReviewForClone(t *testing.T, repo string) {
 	t.Helper()
 	var output bytes.Buffer
 	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone", "--json"}, &output); err != nil {
-		t.Fatalf("disable review-driven development: %v\n%s", err, output.String())
+		t.Fatalf("disable receipt-driven development: %v\n%s", err, output.String())
 	}
 	if status := decodeReviewModeResult(t, output.Bytes()).Status; status.Effective != reviewtransaction.RDDModeOff {
 		t.Fatalf("kill switch did not take effect: %#v", status)

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -368,6 +369,14 @@ func (result ReviewTargetStatusResult) Validate() error {
 			transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest)) {
 			return errors.New("negotiated status validation request copies differ")
 		}
+		if request := result.NextTransition.CorrectionRequest; request != nil {
+			if result.Authority == nil || result.Frozen == nil || result.Authority.Version != reviewtransaction.AuthorityVersionCompact ||
+				result.Authority.State != reviewtransaction.StateCorrectionRequired || request.LineageID != result.Authority.LineageID ||
+				request.ExpectedRevision != result.Authority.Revision || request.TargetIdentity != result.TargetIdentity ||
+				request.CorrectionBudget != result.Frozen.CorrectionBudget {
+				return errors.New("negotiated status correction request binding is invalid") // refusal:by-design world-action: provider-generated status and request bindings require a code fix when they disagree
+			}
+		}
 	}
 	switch result.Applicability {
 	case reviewtransaction.TargetApplicabilityCurrent:
@@ -644,7 +653,14 @@ func (result ReviewTargetStatusResult) validateStartNextTransition() error {
 	if lineage != "" && !validReviewIntegrationLineage(lineage) {
 		return errors.New("fresh target START lineage is not canonical")
 	}
-	wantArguments := reviewStartArguments(result, lineage)
+	runtime := model.AgentID(arguments["agent"])
+	if runtime != "" {
+		if _, err := reviewRuntimeWithImmutableTransport(string(runtime)); err != nil {
+			// refusal:by-design world-action: a START transition with an unproven runtime transport cannot be safely executed
+			return errors.New("fresh target START runtime lacks immutable review transport")
+		}
+	}
+	wantArguments := reviewStartArguments(result, lineage, runtime)
 	for index, argument := range wantArguments {
 		argument.Token = reviewTransitionArgumentToken(argument)
 		wantArguments[index] = argument
@@ -779,6 +795,13 @@ func reviewTransitionValidationRequest(transition *ReviewNextTransition) *review
 func (transition ReviewNextTransition) Validate() error {
 	if strings.TrimSpace(transition.ReasonCode) == "" {
 		return errors.New("review next transition requires a reason code")
+	}
+	correctionRequestRequired := transition.ReasonCode == "correction_plan_required" || transition.ReasonCode == "corrected_candidate_unavailable"
+	if correctionRequestRequired != (transition.CorrectionRequest != nil) {
+		return errors.New("correction transition must carry exactly one provider-owned request") // refusal:by-design world-action: provider-generated routing requires a code fix when its request is missing or misplaced
+	}
+	if transition.CorrectionRequest != nil && reviewtransaction.ValidateCorrectionPlanRequest(*transition.CorrectionRequest) != nil {
+		return errors.New("correction transition request is invalid") // refusal:by-design world-action: malformed provider-owned findings cannot safely authorize planning
 	}
 	switch transition.Kind {
 	case reviewNextTransitionStop:

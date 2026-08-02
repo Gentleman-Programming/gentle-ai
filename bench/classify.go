@@ -355,7 +355,7 @@ func IsBlock(o Observation) bool {
 	// A gate that hands delivery back to ordinary repository policy stopped
 	// nothing, so it is not a block, and counting it as one would report the
 	// kill switch working as friction it caused. It carries `allowed: false`
-	// and `result: invalidated` because review-driven development is refusing
+	// and `result: invalidated` because receipt-driven development is refusing
 	// to express an opinion, not refusing the delivery -- and refusing to
 	// fabricate an approval it did not earn is the whole point.
 	//

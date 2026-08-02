@@ -179,7 +179,7 @@ type ReviewGateState struct {
 	// Delivery names what governs the change when the review gate itself
 	// cannot, mirroring the delivery gate's own disposition field
 	// (internal/cli.reviewDeliveryDisposition). It is set only while the
-	// review-driven-development kill switch is off and the change has no
+	// receipt-driven-development kill switch is off and the change has no
 	// review authority of its own, where it reports
 	// RDDDeliveryDisabledUnmanaged: no review governs this change and it
 	// closes under ordinary repository policy rather than under a receipt.
@@ -222,15 +222,15 @@ type ResolveOptions struct {
 	WorkspaceRoot       string
 	ChangeName          string
 	IncludeInstructions bool
-	// ReviewDisabled records that the user's review-driven-development kill
-	// switch is off for this clone. While it is off review-driven development
+	// ReviewDisabled records that the user's receipt-driven-development kill
+	// switch is off for this clone. While it is off receipt-driven development
 	// does not exist, so it must have no implications: the archive gate never
 	// demands a terminal review receipt the operator could not obtain anyway
 	// (review/start is refused while the switch is off), which would otherwise
 	// loop an orchestrator forever on `nextRecommended: "resolve-review"`.
 	//
 	// It removes only the IMPLICIT demand. A change that carries an explicit
-	// review receipt asked for review-driven development to act, so that
+	// review receipt asked for receipt-driven development to act, so that
 	// receipt is still validated in full: an approved one still governs and a
 	// scope-changed, escalated, or invalidated one still blocks. Nothing here
 	// approves, advances, or invents review authority.
@@ -240,6 +240,10 @@ type ResolveOptions struct {
 	// owns the single source of truth for both of its sources; an unreadable
 	// switch is not a disabled switch and resolves to false.
 	ReviewDisabled bool
+	// ReviewDisabledForWorkspace lets the composition root resolve the switch
+	// against the exact workspace normalized by Resolve. When set, it is called
+	// once and its result replaces ReviewDisabled for the whole status decision.
+	ReviewDisabledForWorkspace func(workspaceRoot string) bool
 }
 
 type CommandArgs struct {
@@ -311,12 +315,8 @@ func validateStatusContract(contract string) error {
 	return fmt.Errorf("unsupported sdd-status contract %q; supported contract is %s", contract, StatusContractV1)
 }
 
-func ListActiveOpenSpecChanges(cwd string) ([]string, error) {
-	root, err := absOrCWD(cwd)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(filepath.Join(root, "openspec", "changes"))
+func listActiveOpenSpecChanges(workspaceRoot string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(workspaceRoot, "openspec", "changes"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []string{}, nil
@@ -339,9 +339,13 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
+	reviewDisabled := options.ReviewDisabled
+	if options.ReviewDisabledForWorkspace != nil {
+		reviewDisabled = options.ReviewDisabledForWorkspace(workspaceRoot)
+	}
 	planningHome := filepath.Join(workspaceRoot, "openspec")
 	changesDir := filepath.Join(planningHome, "changes")
-	activeChanges, err := ListActiveOpenSpecChanges(workspaceRoot)
+	activeChanges, err := listActiveOpenSpecChanges(workspaceRoot)
 	if err != nil {
 		return Status{}, err
 	}
@@ -350,7 +354,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if changeName == "" {
 		switch len(activeChanges) {
 		case 0:
-			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, options.ReviewDisabled); ok || err != nil {
+			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 				return status, err
 			}
 			return blockedStatus(workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
@@ -362,7 +366,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 
 	if !contains(activeChanges, changeName) {
-		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, options.ReviewDisabled); ok || err != nil {
+		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 			return status, err
 		}
 		return blockedStatus(workspaceRoot, &changeName, nil, "sdd-new", []string{fmt.Sprintf("Active OpenSpec change not found: %s.", changeName)}, options.IncludeInstructions), nil
@@ -483,7 +487,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 		applyPreVerifyCompactBridgeRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, bridge)
 	}
 	if !bindingPresent && !bridge.Eligible && !bridge.Relevant {
-		applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason)
+		applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason, reviewDisabled)
 	}
 
 	status := baseStatus(workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
@@ -505,7 +509,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 				workspaceRoot,
 				firstPath(artifactPaths.ReviewReceipt),
 				"",
-				options.ReviewDisabled,
+				reviewDisabled,
 			)
 		}
 	}
@@ -580,7 +584,7 @@ func applyNativeRuntimeErrorRouting(status *Status, runtimeErr error) {
 		change = *status.ChangeName
 	}
 	reason := fmt.Sprintf(
-		"native SDD runtime authority is unreadable and execution is blocked: %v; do not launch another actor or edit the Git-common-dir authority manually; inspect `gentle-ai sdd-attempt status --cwd %q --change %q` and require explicit maintainer recovery",
+		"native SDD runtime authority is unreadable and execution is blocked: %v; do not launch another actor or edit the Git-common-dir authority manually; the compact attempt path reports blocked(corrupt_authority), and full `gentle-ai sdd-attempt status --cwd %q --change %q` is a maintainer diagnostic only",
 		runtimeErr, status.ActionContext.WorkspaceRoot, change,
 	)
 	status.Dependencies.Apply = DependencyBlocked
@@ -603,16 +607,13 @@ func applyNativeRuntimeRouting(status *Status) {
 	switch {
 	case runtimeStatus.DecisionRequired:
 		reason = fmt.Sprintf(
-			"native SDD runtime revision %s requires an explicit maintainer scope decision before more execution; inspect `gentle-ai sdd-attempt status --cwd %q --change %q`, then use `gentle-ai sdd-attempt reset --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --reason \"<maintainer-approved-reason>\" --actor \"<maintainer>\"` only when that reset is authorized",
-			runtimeStatus.Revision, status.ActionContext.WorkspaceRoot, change,
-			status.ActionContext.WorkspaceRoot, change, runtimeStatus.Revision,
+			"native SDD runtime execution requires an explicit maintainer scope decision; compact acquire reports blocked(maintainer_decision). Reset remains exceptional and may be run only after explicit maintainer authorization; full status is diagnostic only for %q in %q",
+			change, status.ActionContext.WorkspaceRoot,
 		)
 	case runtimeStatus.ActiveAttempt != nil:
 		reason = fmt.Sprintf(
-			"native SDD runtime attempt %d is active at revision %s; do not launch another continuation and finish the charged attempt with `gentle-ai sdd-attempt finish --cwd %q --change %q --expected-revision %q` plus the required outcome, evidence, diagnosis, harness, cleanup, and process fields%s",
-			runtimeStatus.ActiveAttempt.Ordinal, runtimeStatus.Revision,
-			status.ActionContext.WorkspaceRoot, change, runtimeStatus.Revision,
-			nativeRuntimeRemediationFlagAdvice(runtimeStatus),
+			"native SDD runtime attempt %d is active; compact acquire reports blocked(active_attempt) with its opaque settle token. Do not launch another continuation; settle only the external execution already associated with that token for %q in %q",
+			runtimeStatus.ActiveAttempt.Ordinal, change, status.ActionContext.WorkspaceRoot,
 		)
 	default:
 		return
@@ -624,32 +625,6 @@ func applyNativeRuntimeRouting(status *Status) {
 	if !contains(status.BlockedReasons, reason) {
 		status.BlockedReasons = append(status.BlockedReasons, reason)
 	}
-}
-
-// nativeRuntimeRemediationFlagAdvice completes the flag set the active-attempt
-// blocker advertises. The six ordinary finish fields close an UNBOUND attempt;
-// a bound attempt whose candidate moved during the attempt is refused until it
-// also carries the remediation trio, so advertising the short set routes the
-// caller straight into that refusal. The values are the ones the ledger
-// already holds, and the unobvious part — that the bound lineage is itself an
-// acceptable --successor-lineage — is stated rather than left to be guessed.
-//
-// It stays silent for an unbound attempt: the trio does not apply there, and a
-// flag set that names an inapplicable route is its own kind of dead end.
-func nativeRuntimeRemediationFlagAdvice(runtimeStatus *RuntimeStatus) string {
-	if runtimeStatus == nil || runtimeStatus.Binding == nil {
-		return ""
-	}
-	// Only the caller knows which evidence a correction repairs when the
-	// objective has not recorded a failed revision yet.
-	remediates := runtimeStatus.EvidenceRevision
-	if remediates == "" {
-		remediates = "<repaired-evidence-sha256>"
-	}
-	return fmt.Sprintf(
-		"; a bound attempt that changed the candidate cannot close as passed on those alone and must also pass --expected-binding-revision %q --successor-lineage %q --remediates-evidence-revision %s, where the bound lineage is itself the successor once the corrected candidate is approved on it",
-		runtimeStatus.Binding.Revision, runtimeStatus.Binding.Lineage, runtimeRemediatesArgument(remediates),
-	)
 }
 
 func authorityOnlyFailedReport(report string) bool {
@@ -794,7 +769,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		}
 		applyPreVerifyCompactBridgeRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, bridge)
 		if !bridge.Eligible && !bridge.Relevant {
-			applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason)
+			applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason, reviewDisabled)
 		}
 	}
 
@@ -851,11 +826,14 @@ func blockedEngramStatus(workspaceRoot string, changeName *string, next string, 
 	return status
 }
 
-func applyPreVerifyReviewRouting(dependencies *Dependencies, next *string, blockedReasons *blockerReasons, applyState ApplyState, verifyReportDone bool, transaction *reviewtransaction.Transaction, transactionReason string) {
+func applyPreVerifyReviewRouting(dependencies *Dependencies, next *string, blockedReasons *blockerReasons, applyState ApplyState, verifyReportDone bool, transaction *reviewtransaction.Transaction, transactionReason string, reviewDisabled bool) {
 	if applyState != ApplyAllDone || verifyReportDone {
 		return
 	}
 	if transaction == nil {
+		if reviewDisabled {
+			return
+		}
 		dependencies.Verify = DependencyBlocked
 		*next = "review"
 		blockedReasons.genuine = append(blockedReasons.genuine, "explicit bounded review/start(target) is required after apply before independent final verification: "+transactionReason)
@@ -1698,10 +1676,10 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 func nativeRuntimeInstructions(status Status, change string) []string {
 	workspace := status.ActionContext.WorkspaceRoot
 	return []string{
-		fmt.Sprintf("Before any runtime-bearing apply, verify, or remediation launch, read `gentle-ai sdd-attempt status --cwd %q --change %q`; the Git-common-dir native ledger is authoritative for both OpenSpec and Engram.", workspace, change),
-		fmt.Sprintf("When next_action is begin, consume the ordinal before launch with `gentle-ai sdd-attempt begin --cwd %q --change %q --expected-revision \"<runtime-revision>\" --request-id \"<unique-request-id>\" --work-unit \"<label>\" --evidence-goal \"<stable-goal>\" --max-attempts <count> --max-changed-lines <count>`.", workspace, change),
-		fmt.Sprintf("After every passed, failed, or interrupted run, persist its evidence with `gentle-ai sdd-attempt finish --cwd %q --change %q --expected-revision \"<runtime-revision>\" --request-id \"<unique-request-id>\" --outcome <passed|failed|interrupted> --evidence-revision <sha256> --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`.", workspace, change),
-		"Never launch while active_attempt is populated or decision_required is true. `gentle-ai sdd-attempt reset` is an explicit maintainer scope decision, never an automatic counter reset.",
+		fmt.Sprintf("Before any runtime-bearing apply, verify, or remediation launch, run `gentle-ai sdd-attempt acquire --cwd %q --change %q --request-id \"<unique-request-id>\" --work-unit \"<label>\" --evidence-goal \"<stable-goal>\" --max-attempts <count> --max-changed-lines <count>`.", workspace, change),
+		"Launch only for state proceed and retain its opaque token. State blocked or complete stops the launch; full runtime status is a diagnostic escape hatch, not normal model context.",
+		fmt.Sprintf("After the external run, call `gentle-ai sdd-attempt settle --cwd %q --change %q --token \"<acquire-token>\" --request-id \"<unique-request-id>\" --outcome <passed|failed|interrupted> --evidence-revision <sha256> --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`; add --successor-lineage only for a distinct approved remediation successor.", workspace, change),
+		"Treat settle state proceed as permission for another bounded acquire, blocked as a hard stop, and complete as terminal. Reset is exceptional, requires an explicit maintainer scope decision, and is never automatic.",
 	}
 }
 

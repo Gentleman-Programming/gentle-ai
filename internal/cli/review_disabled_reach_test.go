@@ -15,7 +15,7 @@ import (
 )
 
 // The maintainer's rule for this file: while the kill switch is off,
-// review-driven development does not exist, so it has no implications. The gate
+// receipt-driven development does not exist, so it has no implications. The gate
 // never blocks, never vetoes, and never gates; ordinary repository policy —
 // hooks, tests, CI — decides. Turning reviews back on re-validates from the
 // current state instead of resuming a stale obligation.
@@ -27,12 +27,12 @@ import (
 // disabled disposition.
 
 // enableReviewForClone clears this clone's off-only override, turning
-// review-driven development back on for the next candidate.
+// receipt-driven development back on for the next candidate.
 func enableReviewForClone(t *testing.T, repo string) {
 	t.Helper()
 	var output bytes.Buffer
 	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--json"}, &output); err != nil {
-		t.Fatalf("re-enable review-driven development: %v\n%s", err, output.String())
+		t.Fatalf("re-enable receipt-driven development: %v\n%s", err, output.String())
 	}
 	if status := decodeReviewModeResult(t, output.Bytes()).Status; status.Effective != reviewtransaction.RDDModeOn {
 		t.Fatalf("kill switch did not come back on: %#v", status)

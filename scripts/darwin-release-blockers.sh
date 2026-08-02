@@ -107,7 +107,15 @@ for pkg in ${packages}; do
   listed="$(go test -list '.*' "${pkg}" | grep '^Test' || true)"
   wanted="$(printf '%s' "${entries}" | awk -F'\t' -v p="${pkg}" '$1 == p {print $2}' | sort -u)"
   for test_name in ${wanted}; do
-    if printf '%s\n' "${listed}" | grep -qx "${test_name}"; then
+    # A here-string, not a pipe into grep. Under `set -o pipefail` the pipe
+    # form reports the pipeline as failed whenever grep -q finds its match
+    # early enough to exit while printf still has output buffered: printf takes
+    # SIGPIPE, exits 141, and pipefail surfaces that instead of grep's success.
+    # The test is present and the guard calls it drift. It fires only when the
+    # listing outgrows the pipe buffer, so it grew with the suite and lands on
+    # whichever entries sit early in the listing -- which is why the Darwin
+    # lane failed on two of twenty-nine and looked arbitrary.
+    if grep -qxF -- "${test_name}" <<<"${listed}"; then
       continue
     fi
     if [[ "${host_goos}" != "darwin" ]] && \

@@ -55,6 +55,32 @@ func stubGoEnv(t *testing.T, values map[string]string) {
 	}
 }
 
+// stubDetectOS pins the OS the strategy resolves the go-install destination
+// for. Without it these tests read runtime.GOOS and silently change meaning
+// with the host: the same fixture that writes "engram" is then checked against
+// "engram.exe" on a Windows runner, and every one of them fails for a reason
+// that has nothing to do with what it asserts. The Windows naming and
+// comparison rules have their own test, which passes osName explicitly.
+func stubDetectOS(t *testing.T, osName string) {
+	t.Helper()
+	origDetectOS := detectOS
+	t.Cleanup(func() { detectOS = origDetectOS })
+	detectOS = func() string { return osName }
+}
+
+// resolvedTempDir is t.TempDir() with symlinks and short names already
+// resolved, so a fixture path compares equal to the same path after the
+// production code normalizes it.
+func resolvedTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return dir
+	}
+	return resolved
+}
+
 func writeFakeBinary(t *testing.T, dir, name string) string {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -79,6 +105,7 @@ func goInstallResult() update.UpdateResult {
 }
 
 func TestGoInstallUpgradeIsSilentWhenDestinationMatchesEffectiveBinary(t *testing.T) {
+	stubDetectOS(t, "linux")
 	gobin := t.TempDir()
 	installed := writeFakeBinary(t, gobin, "engram")
 
@@ -101,6 +128,7 @@ func TestGoInstallUpgradeIsSilentWhenDestinationMatchesEffectiveBinary(t *testin
 }
 
 func TestGoInstallUpgradeWarnsWhenDestinationDiffersFromEffectiveBinary(t *testing.T) {
+	stubDetectOS(t, "linux")
 	gobin := t.TempDir()
 	stale := t.TempDir()
 	installed := writeFakeBinary(t, gobin, "engram")
@@ -133,6 +161,7 @@ func TestGoInstallUpgradeWarnsWhenDestinationDiffersFromEffectiveBinary(t *testi
 }
 
 func TestGoInstallUpgradeTreatsSymlinkIntoGoBinAsMatch(t *testing.T) {
+	stubDetectOS(t, "linux")
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires elevated privileges on Windows runners")
 	}
@@ -163,6 +192,7 @@ func TestGoInstallUpgradeTreatsSymlinkIntoGoBinAsMatch(t *testing.T) {
 }
 
 func TestGoInstallUpgradeFallsBackToGoPathBinWhenGoBinIsEmpty(t *testing.T) {
+	stubDetectOS(t, "linux")
 	gopath := t.TempDir()
 	installed := writeFakeBinary(t, filepath.Join(gopath, "bin"), "engram")
 
@@ -265,6 +295,7 @@ func TestGoInstallUpgradeReportsUnverifiedWhenNothingLandedInTheDestination(t *t
 // The beta self-upgrade runs the same `go install` mechanism and carries the
 // same silent-no-op risk, so it must be verified identically.
 func TestBetaGoInstallMainUpgradeWarnsWhenDestinationDiffers(t *testing.T) {
+	stubDetectOS(t, "linux")
 	gobin := t.TempDir()
 	stale := t.TempDir()
 	installed := writeFakeBinary(t, gobin, "gentle-ai")
@@ -307,7 +338,15 @@ func TestBetaGoInstallMainUpgradeWarnsWhenDestinationDiffers(t *testing.T) {
 // No real Windows execution happens in this suite; a synthetic "windows" osName
 // is the only way the Windows naming and comparison rules are exercised.
 func TestGoInstallDestinationNoticeOnWindowsMatchesExeAgainstCaseDifferentPath(t *testing.T) {
-	gobin := t.TempDir()
+	// Canonicalised up front because normalization resolves symlinks
+	// best-effort, and the two sides of this comparison do not resolve alike:
+	// the destination exists, so it expands, while the deliberately
+	// case-different PATH entry does not exist under that exact name and stays
+	// verbatim. On a Windows runner TEMP is reached through an 8.3 short name
+	// (RUNNER~1), so one side became ...\runneradmin\... and the other stayed
+	// ...\runner~1\..., and the test failed on a difference it never meant to
+	// introduce. Starting from the resolved form makes that expansion a no-op.
+	gobin := resolvedTempDir(t)
 	writeFakeBinary(t, gobin, "gentle-ai.exe")
 
 	origLookPath := lookPathFn

@@ -12,12 +12,16 @@ import (
 )
 
 func TestCanonicalGitDirectoryRejectsMalformedRecords(t *testing.T) {
-	repo := t.TempDir()
+	// canonicalTempDir, not t.TempDir: canonicalGitDirectory returns the
+	// resolved spelling, and on a Windows runner TEMP is reached through an
+	// 8.3 short name, so a raw fixture path expects RUNNER~1 while the
+	// function correctly answers runneradmin.
+	repo := canonicalTempDir(t)
 	gitDir := filepath.Join(repo, ".git")
 	if err := os.Mkdir(gitDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	outside := t.TempDir()
+	outside := canonicalTempDir(t)
 
 	tests := []struct {
 		name    string
@@ -101,13 +105,13 @@ func TestReviewAuthorityRootRejectsLegacyOptionEchoWithoutMutation(t *testing.T)
 	if _, _, err := reviewAuthorityRoot(context.Background(), repo); err == nil {
 		t.Fatal("reviewAuthorityRoot() accepted legacy option echo")
 	}
-	for _, path := range []string{
-		filepath.Join(repo, "--path-format=absolute\n.git"),
-		filepath.Join(repo, "gentle-ai"),
-	} {
-		if _, err := os.Lstat(path); !os.IsNotExist(err) {
-			t.Fatalf("malformed Git output created %q", path)
-		}
+	malformedPath := filepath.Join(repo, "--path-format=absolute\n.git")
+	if _, err := os.Lstat(malformedPath); err == nil {
+		t.Fatalf("malformed Git output created %q", malformedPath)
+	}
+	path := filepath.Join(repo, "gentle-ai")
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("malformed Git output created authority storage %q", path)
 	}
 }
 
@@ -133,7 +137,7 @@ func TestResolveRepositoryRootRejectsUnrelatedAbsoluteOutput(t *testing.T) {
 func TestReviewAuthorityRootPreservesSymlinkedGitDirectory(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
-	externalGitDir := filepath.Join(t.TempDir(), "git-dir")
+	externalGitDir := filepath.Join(canonicalTempDir(t), "git-dir")
 	if err := os.Rename(filepath.Join(repo, ".git"), externalGitDir); err != nil {
 		t.Fatal(err)
 	}
@@ -281,14 +285,11 @@ func TestGitCommonDirectoryMismatchFailsBeforeAuthorityMutation(t *testing.T) {
 func TestReviewRepositoryIdentityRejectsReplacedCommonDirectory(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
-	common := filepath.Join(t.TempDir(), "common")
+	common := filepath.Join(canonicalTempDir(t), "common")
 	if err := os.Mkdir(common, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.Stat(common)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := openedPathIdentity(t, common)
 	replaced := false
 	overrideGitDirectoryOutputs(t, repo, common, common+"-old", func() {
 		if replaced {
@@ -340,7 +341,7 @@ func TestReviewAuthorityRootRejectsMidQueryGitControlReplacement(t *testing.T) {
 }
 
 func TestReviewRepositoryIdentityAcceptsDisjointCommonDirectory(t *testing.T) {
-	repo, parent := initSnapshotRepo(t), t.TempDir()
+	repo, parent := initSnapshotRepo(t), canonicalTempDir(t)
 	gitDir, commonDir := filepath.Join(parent, "git-dir"), filepath.Join(parent, "common")
 	for _, path := range []string{gitDir, commonDir} {
 		if err := os.Mkdir(path, 0o700); err != nil {
