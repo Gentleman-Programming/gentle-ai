@@ -8,10 +8,14 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/hermes"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
+func hermesAdapter() agents.Adapter   { return hermes.NewAdapter() }
+func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 
 func TestInjectMergesThemeOverlayIntoAdapterSettings(t *testing.T) {
@@ -94,6 +98,54 @@ func TestInjectCreatesAdapterSettingsWhenMissing(t *testing.T) {
 	}
 	if root.Theme != "gentleman" {
 		t.Fatalf("theme = %q, want gentleman", root.Theme)
+	}
+}
+
+func TestInjectPreservesNonJSONSettings(t *testing.T) {
+	tests := []struct {
+		name    string
+		adapter agents.Adapter
+		content string
+	}{
+		{
+			name:    "Kimi TOML",
+			adapter: kimiAdapter(),
+			content: "default_model = \"kimi-k2\"\n",
+		},
+		{
+			name:    "Hermes YAML",
+			adapter: hermesAdapter(),
+			content: "model: hermes-3\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			settingsPath := tt.adapter.SettingsPath(home)
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatalf("MkdirAll(settings dir) error = %v", err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("WriteFile(settings) error = %v", err)
+			}
+
+			result, err := Inject(home, tt.adapter)
+			if err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+			if result.Changed || len(result.Files) != 0 {
+				t.Fatalf("Inject() = %#v, want no-op", result)
+			}
+
+			content, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(settings) error = %v", err)
+			}
+			if string(content) != tt.content {
+				t.Fatalf("settings = %q, want preserved %q", content, tt.content)
+			}
+		})
 	}
 }
 

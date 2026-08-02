@@ -40,6 +40,10 @@ var gentlemanClaudeTheme = claudeTheme{
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	if !agents.SupportsJSONSettingsObjectMutation(adapter) {
+		return InjectionResult{}, nil
+	}
+
 	settingsPath := adapter.SettingsPath(homeDir)
 	if settingsPath == "" {
 		return InjectionResult{}, nil
