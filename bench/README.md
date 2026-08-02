@@ -330,10 +330,13 @@ invents a metric is worse than one that admits a gap.
    classifier reads a field other than exit code and denial shape, and widening
    it would let the product talk its way out of a denial.
 
-7. **The corpus is honest, not exhaustive.** Fifty-eight core journeys that run
-   end to end, weighted toward failure paths because that is where friction
-   lives. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts) are
-   inspection steps rather than review-lifecycle friction and are not modelled.
+7. **The corpus is honest, not exhaustive.** Fifty-seven mandatory portable
+   black-box journeys run end to end, weighted toward failure paths because that
+   is where friction lives. `j57` is one explicit source-coupled journey that
+   requires a `bench_fixture`-tagged product binary, for 58 registered journey
+   IDs total. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts)
+   are inspection steps rather than review-lifecycle friction and are not
+   modelled.
 
 8. **Some edge cases are unreachable from a temp directory and are guide flows
    instead.** A network mount where advisory locks fail in ways that are
