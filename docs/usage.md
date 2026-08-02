@@ -209,8 +209,8 @@ brew upgrade engram
 ### Beta upgrades and the Go module proxy
 
 `GENTLE_AI_CHANNEL=beta` makes update checks compare the Gentle AI binary with
-the current `main` commit instead of only the latest release. Set it in the
-shell where you run the command:
+the current `main` commit instead of only the latest release. Use it as a
+per-invocation override; the POSIX form does not change the current shell:
 
 ```bash
 # macOS / Linux: check or upgrade the beta-selected managed tools
@@ -218,45 +218,65 @@ GENTLE_AI_CHANNEL=beta gentle-ai upgrade
 ```
 
 ```powershell
-# Windows PowerShell: the POSIX NAME=value command form is invalid here
-$env:GENTLE_AI_CHANNEL = "beta"; gentle-ai upgrade
+# Windows PowerShell: restore the previous value after this invocation
+$hadChannel = Test-Path Env:GENTLE_AI_CHANNEL
+$previousChannel = $env:GENTLE_AI_CHANNEL
+try {
+    $env:GENTLE_AI_CHANNEL = "beta"
+    gentle-ai upgrade
+} finally {
+    if ($hadChannel) {
+        $env:GENTLE_AI_CHANNEL = $previousChannel
+    } else {
+        Remove-Item Env:GENTLE_AI_CHANNEL -ErrorAction SilentlyContinue
+    }
+}
 ```
 
 The explicit binary refresh path is a source install from `main`, using the v2
-module path:
+module path. The `@main` suffix selects the beta source; `GENTLE_AI_CHANNEL` is
+not needed for this direct `go install` command. If the public module proxy is
+stale, override only `GOPROXY` for this invocation:
 
 ```bash
-GENTLE_AI_CHANNEL=beta \
 GOPROXY=direct \
-GONOSUMDB=github.com/gentleman-programming/gentle-ai/v2 \
-GOPRIVATE=github.com/gentleman-programming/gentle-ai/v2 \
-GONOPROXY=github.com/gentleman-programming/gentle-ai/v2 \
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 ```
 
 ```powershell
-$env:GENTLE_AI_CHANNEL = "beta"
-$env:GOPROXY = "direct"
-$env:GONOSUMDB = "github.com/gentleman-programming/gentle-ai/v2"
-$env:GOPRIVATE = "github.com/gentleman-programming/gentle-ai/v2"
-$env:GONOPROXY = "github.com/gentleman-programming/gentle-ai/v2"
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
+$hadGoProxy = Test-Path Env:GOPROXY
+$previousGoProxy = $env:GOPROXY
+try {
+    $env:GOPROXY = "direct"
+    go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
+} finally {
+    if ($hadGoProxy) {
+        $env:GOPROXY = $previousGoProxy
+    } else {
+        Remove-Item Env:GOPROXY -ErrorAction SilentlyContinue
+    }
+}
 ```
 
-Use the direct-proxy settings only for this beta source install. If you have
-existing comma-separated `GONOSUMDB`, `GOPRIVATE`, or `GONOPROXY` patterns,
-append the Gentle AI module instead of replacing unrelated entries. The beta
-installer applies the same module-scoped bypass while preserving existing
-patterns.
+`GOPROXY=direct` controls module source lookup for this `go install` process;
+it is not a persistent setting and it is not scoped by `GONOPROXY`. Do not add
+the public Gentle AI module to `GONOSUMDB`, `GOPRIVATE`, or `GONOPROXY` merely
+to work around proxy lag: those variables control checksum or private-module
+behavior separately, and overwriting existing comma-separated values can break
+other modules. Leave existing values unchanged unless an explicit private
+module policy requires otherwise. The beta installers currently preserve
+existing patterns while preparing their own beta install and do not set
+`GOPROXY`; the manual command above intentionally keeps the normal public
+module checksum verification path.
 
 `proxy.golang.org` can lag behind a newly published `main`. A successful
 `go install ...@main` may therefore leave an older binary in place. Safe
 workarounds are:
 
 1. Retry after the proxy catches up, then verify with `gentle-ai version`.
-2. Use the module-scoped `GOPROXY=direct` command above for the beta `main`
-   build; do not disable proxy or checksum behavior globally for unrelated
-   modules.
+2. Use the command-scoped `GOPROXY=direct` command above for the beta `main`
+   build; do not persist the override or disable checksum behavior for this
+   public module.
 3. If a released build is sufficient, install an explicit released tag such as
    `@v2.2.2` with the normal proxy and checksum settings. A release tag is not
    the current `main` build.

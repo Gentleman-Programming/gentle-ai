@@ -150,11 +150,11 @@ Workspace scope applies to selected agents for agent-scoped files such as system
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
 
 # Windows (PowerShell)
-$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 ```
 
-To check or upgrade the beta-selected managed tools later, set the channel in the
-current shell. PowerShell does not support the POSIX `NAME=value command` form:
+To check or upgrade the beta-selected managed tools later, pass the channel as a
+per-invocation override. The POSIX form does not change the current shell:
 
 ```bash
 # macOS / Linux
@@ -162,16 +162,26 @@ GENTLE_AI_CHANNEL=beta gentle-ai upgrade
 ```
 
 ```powershell
-# Windows PowerShell
-$env:GENTLE_AI_CHANNEL = "beta"; gentle-ai upgrade
+# Windows PowerShell: restore the previous value after this invocation
+$hadChannel = Test-Path Env:GENTLE_AI_CHANNEL
+$previousChannel = $env:GENTLE_AI_CHANNEL
+try {
+  $env:GENTLE_AI_CHANNEL = "beta"
+  gentle-ai upgrade
+} finally {
+  if ($hadChannel) {
+    $env:GENTLE_AI_CHANNEL = $previousChannel
+  } else {
+    Remove-Item Env:GENTLE_AI_CHANNEL -ErrorAction SilentlyContinue
+  }
+}
 ```
 
 `gentle-ai upgrade` checks the managed-tool cohort; it does not run `install` or
-`sync`. To explicitly refresh the main `gentle-ai` binary, use the `go install
-...@main` command above (or rerun the beta installer). If `proxy.golang.org` is
+`sync`. To explicitly refresh the main `gentle-ai` binary, use the `go install ...@main` command above (or rerun the beta installer). If `proxy.golang.org` is
 serving an older `main`, `go install` can succeed without changing the binary.
 See [beta upgrades and the Go module proxy](docs/usage.md#beta-upgrades-and-the-go-module-proxy)
-for the module-scoped direct-proxy workaround and release-tag alternative.
+for the temporary direct-proxy workaround and release-tag alternative.
 
 ### RDD version policy
 
