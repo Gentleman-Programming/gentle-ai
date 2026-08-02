@@ -24,6 +24,7 @@ func TestBoundedReviewContractLeavesCanonicalizationToNativeGo(t *testing.T) {
 		"Only candidate-caused severe findings block",
 		"OpenCode preflights the opaque binding",
 		"injects only the provider's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered manifest",
+		"Claude Code carries immutable candidate evidence directly in the reviewer task prompt",
 		"read-only native Git commands",
 	} {
 		if !strings.Contains(content, want) {
@@ -383,8 +384,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// +457 defines STATUS-mediated recollection without adding retry state.
 		// Native inspect-candidate removes repeated shell hardening prose and operands.
 		// Reviewer prompts no longer expose native Git flags owned by that capability.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_874, maxCharacters: 18_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 29_259, maxCharacters: 36_000},
+		// +1,190 gives Claude's shell-less reviewer a complete prompt-carried
+		// immutable transport while OpenCode keeps provider-owned injection (#2003).
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 16_064, maxCharacters: 18_500},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_449, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

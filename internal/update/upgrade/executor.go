@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
@@ -242,7 +243,7 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 
 	switch adapter.Agent() {
 	case model.AgentClaudeCode:
-		add(filepath.Join(homeDir, ".claude", "themes", "gentleman.json"))
+		add(claude.UserConfigPath(homeDir), filepath.Join(homeDir, ".claude", "themes", "gentleman.json"))
 	case model.AgentOpenCode:
 		add(
 			filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"),
