@@ -50,8 +50,8 @@ func TestParseSyncFlagsDefaults(t *testing.T) {
 	if flags.SDDMode != "" {
 		t.Errorf("SDDMode = %q, want empty", flags.SDDMode)
 	}
-	if flags.Scope != "global" {
-		t.Errorf("Scope = %q, want %q", flags.Scope, "global")
+	if flags.Scope != "" {
+		t.Errorf("Scope = %q, want empty so environment resolution remains available", flags.Scope)
 	}
 }
 
@@ -75,6 +75,22 @@ func TestParseSyncFlagsScope(t *testing.T) {
 	_, err = ParseSyncFlags([]string{"--scope", "invalid-scope"})
 	if err == nil {
 		t.Fatalf("expected error for invalid scope, got nil")
+	}
+
+	t.Setenv(scopeEnvVar, string(ScopeWorkspace))
+	flags, err = ParseSyncFlags(nil)
+	if err != nil {
+		t.Fatalf("ParseSyncFlags() with environment scope error = %v", err)
+	}
+	if scope, err = ResolveInstallScope(flags.Scope); err != nil || scope != ScopeWorkspace {
+		t.Fatalf("environment-only scope = %q, %v; want workspace", scope, err)
+	}
+	flags, err = ParseSyncFlags([]string{"--scope", "global"})
+	if err != nil {
+		t.Fatalf("ParseSyncFlags() explicit override error = %v", err)
+	}
+	if scope, err = ResolveInstallScope(flags.Scope); err != nil || scope != ScopeGlobal {
+		t.Fatalf("explicit scope override = %q, %v; want global", scope, err)
 	}
 }
 
@@ -2772,6 +2788,30 @@ func TestRunSyncWithSelection_NoAgentsIsNoOp(t *testing.T) {
 func TestRunSyncWithScopeWorkspace(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
+	t.Setenv(scopeEnvVar, string(ScopeWorkspace))
+
+	seeded := map[string]struct {
+		content string
+		mode    os.FileMode
+	}{
+		filepath.Join(home, ".claude.json"):                                {`{"seed":"claude-registry"}`, 0o600},
+		filepath.Join(home, ".claude", "settings.json"):                    {`{"seed":"claude-settings"}`, 0o640},
+		filepath.Join(home, ".claude", "CLAUDE.md"):                        {"global claude prompt\n", 0o600},
+		filepath.Join(home, ".config", "opencode", "opencode.json"):        {`{"agent":{"sdd-orchestrator-global-profile":{"mode":"primary","model":"anthropic/claude-haiku"}}}`, 0o640},
+		filepath.Join(home, ".config", "gga", "config.toml"):               {"global gga config\n", 0o600},
+		filepath.Join(home, ".local", "share", "gga", "lib", "pr_mode.sh"): {"global gga runtime\n", 0o700},
+	}
+	for path, seed := range seeded {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create seed parent: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(seed.content), seed.mode); err != nil {
+			t.Fatalf("seed global file: %v", err)
+		}
+		if err := os.Chmod(path, seed.mode); err != nil {
+			t.Fatalf("set seed mode: %v", err)
+		}
+	}
 
 	restoreDir, _ := os.Getwd()
 	if err := os.Chdir(workspace); err != nil {
@@ -2783,18 +2823,72 @@ func TestRunSyncWithScopeWorkspace(t *testing.T) {
 	osUserHomeDir = func() (string, error) { return home, nil }
 	t.Cleanup(func() { osUserHomeDir = restoreHome })
 
-	result, err := RunSync([]string{"--agent", "claude-code", "--scope", "workspace"})
+	result, err := RunSync([]string{"--agents", "claude-code,opencode"})
 	if err != nil {
-		t.Fatalf("RunSync --scope=workspace error = %v", err)
+		t.Fatalf("RunSync environment workspace scope error = %v", err)
 	}
 
 	if result.FilesChanged == 0 {
 		t.Fatalf("expected workspace files to be created/changed, got 0")
 	}
 
-	claudeWorkspace := filepath.Join(workspace, ".claude", "CLAUDE.md")
-	if _, err := os.Stat(claudeWorkspace); err != nil {
-		t.Errorf("expected workspace CLAUDE.md at %s, err = %v", claudeWorkspace, err)
+	for _, path := range []string{
+		filepath.Join(workspace, ".claude", "CLAUDE.md"),
+		filepath.Join(workspace, ".claude", "mcp", "engram.json"),
+		filepath.Join(workspace, ".config", "opencode", "opencode.json"),
+		filepath.Join(workspace, ".gentle-ai", "backups"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("expected workspace output %s: %v", path, err)
+		}
+	}
+	workspaceSettings, err := os.ReadFile(filepath.Join(workspace, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatalf("read workspace OpenCode settings: %v", err)
+	}
+	if strings.Contains(string(workspaceSettings), "global-profile") {
+		t.Fatal("workspace profile detection read the global OpenCode settings")
+	}
+	for path, seed := range seeded {
+		content, err := os.ReadFile(path)
+		if err != nil || string(content) != seed.content {
+			t.Errorf("global bytes changed for %s: content=%q err=%v", path, content, err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Errorf("stat global seed %s: %v", path, err)
+		} else if info.Mode().Perm() != seed.mode.Perm() {
+			t.Errorf("global mode changed for %s: mode=%v want=%v", path, info.Mode().Perm(), seed.mode.Perm())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".gentle-ai", "backups")); !os.IsNotExist(err) {
+		t.Errorf("workspace sync created global backup path: %v", err)
+	}
+}
+
+func TestRunSyncExplicitScopeOverridesEnvironment(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv(scopeEnvVar, string(ScopeWorkspace))
+
+	restoreDir, _ := os.Getwd()
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir workspace: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(restoreDir) })
+
+	restoreHome := osUserHomeDir
+	osUserHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { osUserHomeDir = restoreHome })
+
+	if _, err := RunSync([]string{"--agent", "claude-code", "--scope", "global"}); err != nil {
+		t.Fatalf("RunSync explicit global override error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "CLAUDE.md")); err != nil {
+		t.Fatalf("explicit global override did not write global target: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".claude", "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Fatalf("explicit global override wrote workspace target: %v", err)
 	}
 }
 

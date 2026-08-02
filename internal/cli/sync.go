@@ -17,6 +17,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	opencodeagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
@@ -106,7 +107,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	fs.BoolVar(&opts.IncludePermissions, "include-permissions", false, "include permissions component in sync")
 	fs.BoolVar(&opts.IncludeTheme, "include-theme", false, "include theme component in sync")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
-	fs.StringVar(&opts.Scope, "scope", string(ScopeGlobal), "target installation scope: global or workspace (default: global)")
+	fs.StringVar(&opts.Scope, "scope", "", "target installation scope: global or workspace (default: $GENTLE_AI_INSTALL_SCOPE or global)")
 	registerListFlag(fs, "profile", &opts.rawProfiles)
 	registerListFlag(fs, "profile-phase", &opts.rawProfilePhases)
 
@@ -469,13 +470,12 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 }
 
 func newSyncRuntimeScoped(homeDir string, scope InstallScope, selection model.Selection) (*syncRuntime, error) {
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	workspaceDir, _ := os.Getwd()
+	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, selection.Agents)
+	backupRoot := filepath.Join(ResolveAgentConfigDir(scope, homeDir, workspaceDir), ".gentle-ai", "backups")
 	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
 	}
-
-	workspaceDir, _ := os.Getwd()
-	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, selection.Agents)
 
 	return &syncRuntime{
 		homeDir:      homeDir,
@@ -512,6 +512,9 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	for _, component := range r.selection.Components {
+		if r.scope == ScopeWorkspace && component == model.ComponentGGA {
+			continue
+		}
 		apply = append(apply, componentSyncStep{
 			id:           "sync:component:" + string(component),
 			component:    component,
@@ -530,6 +533,10 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	// implementation route (issue #1794). It runs after the components so the
 	// refreshed SDD assets are already on disk when guidance is merged.
 	for _, agent := range r.agentIDs {
+		adapter, err := agents.NewAdapter(agent)
+		if r.scope == ScopeWorkspace && err == nil && agentguidance.DeliversThroughOrchestratorPrompt(adapter.Agent()) {
+			continue
+		}
 		apply = append(apply, agentRoutingGuidanceStep{
 			id:           "sync:agent-guidance:" + string(agent),
 			agent:        agent,
@@ -550,13 +557,13 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	if anyAgentReceivesManagedOpenCodePlugins(r.agentIDs) && !r.selection.HasComponent(model.ComponentSDD) {
 		apply = append(apply, openCodePluginRefreshSyncStep{
 			id:           "sync:opencode:managed-plugins",
-			homeDir:      r.homeDir,
+			homeDir:      ResolveAgentConfigDir(r.scope, r.homeDir, r.workspaceDir),
 			agents:       r.agentIDs,
 			changedFiles: &r.changedFiles,
 		})
 	}
 
-	if r.selection.HasCommunityTool(model.CommunityToolCodeGraph) {
+	if r.scope == ScopeGlobal && r.selection.HasCommunityTool(model.CommunityToolCodeGraph) {
 		apply = append(apply, &codeGraphGuidanceSyncStep{
 			id:           "sync:community-tool:codegraph-guidance",
 			homeDir:      r.homeDir,
@@ -583,7 +590,7 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 		for _, path := range syncComponentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
-		if component == model.ComponentEngram {
+		if component == model.ComponentEngram && scope == ScopeGlobal {
 			for _, adapter := range adapters {
 				if adapter.Agent() == model.AgentClaudeCode {
 					paths[adapter.MCPConfigPath(homeDir, "engram")] = struct{}{}
@@ -606,18 +613,21 @@ func syncBackupTargetsScoped(homeDir, workspaceDir string, scope InstallScope, s
 		if !sdd.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 			continue
 		}
-		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+		targetDir := ResolveAgentConfigDir(scope, homeDir, workspaceDir)
+		pluginsDir := filepath.Join(adapter.GlobalConfigDir(targetDir), "plugins")
 		for _, name := range sdd.ManagedOpenCodePluginNames() {
 			paths[filepath.Join(pluginsDir, name)] = struct{}{}
 		}
 	}
-	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
+	if scope == ScopeGlobal && selection.HasCommunityTool(model.CommunityToolCodeGraph) {
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
 			paths[path] = struct{}{}
 		}
 	}
-	for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
-		paths[path] = struct{}{}
+	if scope == ScopeGlobal {
+		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
+			paths[path] = struct{}{}
+		}
 	}
 
 	targets := make([]string, 0, len(paths))
@@ -917,13 +927,20 @@ func (s componentSyncStep) Run() error {
 			Version:                     engramVersion,
 		}
 		for _, adapter := range adapters {
+			if s.scope == ScopeWorkspace && adapter.Agent() == model.AgentOpenClaw {
+				continue
+			}
 			var res engram.InjectionResult
 			var err error
 			if adapter.Agent() == model.AgentOpenClaw {
 				res, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
 			} else {
 				targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
-				res, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+				if s.scope == ScopeWorkspace {
+					res, err = engram.InjectWorkspaceWithOptions(targetDir, adapter, engramOpts)
+				} else {
+					res, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+				}
 			}
 			if err != nil {
 				return fmt.Errorf("sync engram for %q: %w", adapter.Agent(), err)
@@ -934,7 +951,7 @@ func (s componentSyncStep) Run() error {
 
 	case model.ComponentContext7:
 		for _, adapter := range adapters {
-			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 			res, err := mcp.Inject(s.homeDir, targetDir, adapter)
 			if err != nil {
 				return fmt.Errorf("sync context7 for %q: %w", adapter.Agent(), err)
@@ -944,7 +961,8 @@ func (s componentSyncStep) Run() error {
 		return nil
 
 	case model.ComponentSDD:
-		profileStrategy := sdd.ResolveProfileStrategy(s.homeDir, s.selection.SDDProfileStrategy)
+		profileRoot := ResolveAgentConfigDir(s.scope, s.homeDir, s.workspaceDir)
+		profileStrategy := sdd.ResolveProfileStrategy(profileRoot, s.selection.SDDProfileStrategy)
 
 		// Resolve profiles for injection:
 		// - When profiles are explicitly provided (TUI/CLI), use them directly.
@@ -956,7 +974,7 @@ func (s componentSyncStep) Run() error {
 			settingsPath := ""
 			for _, adapter := range adapters {
 				if adapter.Agent() == model.AgentOpenCode {
-					settingsPath = adapter.SettingsPath(s.homeDir)
+					settingsPath = adapter.SettingsPath(profileRoot)
 					break
 				}
 			}
@@ -1018,6 +1036,9 @@ func (s componentSyncStep) Run() error {
 		return nil
 
 	case model.ComponentGGA:
+		if s.scope == ScopeWorkspace {
+			return nil
+		}
 		// Sync: ensure runtime assets are current and inject config.
 		// NO binary install.
 		if err := gga.EnsureRuntimeAssets(s.homeDir); err != nil {
@@ -1047,7 +1068,8 @@ func (s componentSyncStep) Run() error {
 	case model.ComponentPermission:
 		// Opt-in only — reached when --include-permissions is set.
 		for _, adapter := range adapters {
-			res, err := permissions.Inject(s.homeDir, adapter)
+			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
+			res, err := permissions.Inject(targetDir, adapter)
 			if err != nil {
 				return fmt.Errorf("sync permissions for %q: %w", adapter.Agent(), err)
 			}
@@ -1075,7 +1097,8 @@ func (s componentSyncStep) Run() error {
 	case model.ComponentTheme:
 		// Opt-in only — reached when --include-theme is set.
 		for _, adapter := range adapters {
-			res, err := theme.Inject(s.homeDir, adapter)
+			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
+			res, err := theme.Inject(targetDir, adapter)
 			if err != nil {
 				return fmt.Errorf("sync theme for %q: %w", adapter.Agent(), err)
 			}
@@ -1085,7 +1108,8 @@ func (s componentSyncStep) Run() error {
 
 	case model.ComponentClaudeTheme:
 		for _, adapter := range adapters {
-			res, err := theme.InjectClaudeTheme(s.homeDir, adapter)
+			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
+			res, err := theme.InjectClaudeTheme(targetDir, adapter)
 			if err != nil {
 				return fmt.Errorf("sync Claude theme for %q: %w", adapter.Agent(), err)
 			}
@@ -1094,7 +1118,8 @@ func (s componentSyncStep) Run() error {
 		return nil
 
 	case model.ComponentOpenCodeGentleLogo:
-		res, err := opencodeplugin.Install(s.homeDir, model.OpenCodePluginGentleLogo)
+		targetDir := ResolveAgentConfigDir(s.scope, s.homeDir, s.workspaceDir)
+		res, err := opencodeplugin.Install(targetDir, model.OpenCodePluginGentleLogo)
 		if err != nil {
 			return fmt.Errorf("sync OpenCode Gentle Logo plugin: %w", err)
 		}
@@ -1419,7 +1444,7 @@ func RunSyncWithSelectionScoped(homeDir string, scope InstallScope, selection mo
 	if !result.Verify.Ready {
 		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
-	if persistedStateErr == nil && !persistedState.CommunityToolsConfigured && selection.CommunityTools != nil {
+	if scope == ScopeGlobal && persistedStateErr == nil && !persistedState.CommunityToolsConfigured && selection.CommunityTools != nil {
 		persistedState.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
 		persistedState.CommunityToolsConfigured = true
 		if err := state.Write(homeDir, persistedState); err != nil {

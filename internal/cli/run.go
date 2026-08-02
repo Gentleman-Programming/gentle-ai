@@ -1742,6 +1742,9 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
 	paths := []string{}
 	for _, adapter := range adapters {
+		if scope == ScopeWorkspace && agentguidance.DeliversThroughOrchestratorPrompt(adapter.Agent()) {
+			continue
+		}
 		targetDir := routingGuidanceDir(homeDir, workspaceDir, scope, adapter)
 		routing, err := agentguidance.RoutingPaths(targetDir, adapter.Agent())
 		if err != nil {
@@ -1769,6 +1772,9 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 		targetDir := componentPathDirScoped(homeDir, workspaceDir, scope, adapter, component)
 		switch component {
 		case model.ComponentEngram:
+			if scope == ScopeWorkspace && adapter.Agent() == model.AgentOpenClaw {
+				break
+			}
 			switch adapter.MCPStrategy() {
 			case model.StrategySeparateMCPFiles:
 				if adapter.Agent() == model.AgentClaudeCode && scope == ScopeGlobal {
@@ -1790,7 +1796,7 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					paths = append(paths, p)
 				}
 				if adapter.Agent() == model.AgentAntigravity {
-					if p := adapter.SettingsPath(homeDir); p != "" {
+					if p := adapter.SettingsPath(targetDir); p != "" {
 						paths = append(paths, p)
 					}
 				}
@@ -1917,24 +1923,26 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				}
 			}
 		case model.ComponentPermission:
-			if p := permissions.TargetPath(homeDir, adapter); p != "" {
+			if p := permissions.TargetPath(targetDir, adapter); p != "" {
 				paths = append(paths, p)
 			}
 		case model.ComponentGGA:
-			paths = append(paths, gga.ConfigPath(homeDir))
-			paths = append(paths, gga.AgentsTemplatePath(homeDir))
+			if scope == ScopeGlobal {
+				paths = append(paths, gga.ConfigPath(homeDir))
+				paths = append(paths, gga.AgentsTemplatePath(homeDir))
+			}
 		case model.ComponentTheme:
-			if p := adapter.SettingsPath(homeDir); p != "" {
+			if p := adapter.SettingsPath(targetDir); p != "" {
 				paths = append(paths, p)
 			}
 		case model.ComponentClaudeTheme:
 			if adapter.Agent() == model.AgentClaudeCode {
-				paths = append(paths, filepath.Join(homeDir, ".claude", "themes", "gentleman.json"))
+				paths = append(paths, filepath.Join(targetDir, ".claude", "themes", "gentleman.json"))
 			}
 		case model.ComponentOpenCodeGentleLogo:
 			paths = append(paths,
-				filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
-				filepath.Join(homeDir, ".config", "opencode", "tui.json"),
+				filepath.Join(targetDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
+				filepath.Join(targetDir, ".config", "opencode", "tui.json"),
 			)
 		}
 	}
@@ -1945,7 +1953,8 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 	// is bootstrapped but not explicitly owned by any other component path list.
 	for _, adapter := range adapters {
 		if adapter.SystemPromptStrategy() == model.StrategyJinjaModules {
-			paths = append(paths, adapter.SystemPromptFile(homeDir))
+			targetDir := componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
+			paths = append(paths, adapter.SystemPromptFile(targetDir))
 		}
 	}
 
