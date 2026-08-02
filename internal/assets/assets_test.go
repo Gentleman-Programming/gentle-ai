@@ -849,6 +849,35 @@ func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 	}
 }
 
+func TestOpenCodeSDDOrchestratorDelegationVisibility(t *testing.T) {
+	content := MustRead("opencode/sdd-orchestrator.md")
+
+	for _, required := range []string{
+		"<!-- gentle-ai:opencode-desktop-delegation-progress -->",
+		"#### Delegation Visibility (OpenCode Desktop)",
+		"`delegate` or `task`",
+		"assistant-visible status line immediately before the call",
+		"When the call returns",
+		"⏳ Delegating {phase} to {agent}...",
+		"✅ {agent} completed — {status}",
+		"⚠️ {agent} returned {status} — {short reason}",
+		"15 tokens or fewer",
+		"25 tokens or fewer",
+		"executor prompts",
+		"<!-- /gentle-ai:opencode-desktop-delegation-progress -->",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("opencode/sdd-orchestrator.md missing delegation visibility wording %q", required)
+		}
+	}
+
+	visibilityIndex := strings.Index(content, "#### Delegation Visibility (OpenCode Desktop)")
+	workflowIndex := strings.Index(content, "## SDD Workflow")
+	if visibilityIndex < 0 || workflowIndex < 0 || visibilityIndex > workflowIndex {
+		t.Fatal("delegation visibility must appear before the SDD workflow")
+	}
+}
+
 func TestOpenCodeSDDOrchestratorPreflightDoesNotUseVisibleCodesOrCanonicalUIValues(t *testing.T) {
 	content := MustRead("opencode/sdd-orchestrator.md")
 	start := strings.Index(content, "User-facing preflight question format:")

@@ -32,6 +32,8 @@ var reservedProfileNames = func() map[string]bool {
 	return names
 }()
 
+const openCodeDelegationVisibilitySectionID = "opencode-desktop-delegation-progress"
+
 // ValidateProfileName returns an error if the profile name is not a valid
 // slug (lowercase alphanumeric + hyphens, no underscores, no spaces, non-empty,
 // not a reserved word). Profile names are expected to already be lowercased by
@@ -557,6 +559,9 @@ func jdProfileAgentEntry(jd string) map[string]any {
 //     (e.g. sdd-init-{name}) in the prompt text
 func buildProfileOrchestratorPrompt(profile model.Profile) (string, error) {
 	base := renderSDDOrchestratorAsset(model.AgentOpenCode)
+	// Named profiles have their own orchestrator surface and must not inherit
+	// the default OpenCode Desktop progress narration.
+	base = filemerge.InjectMarkdownSection(base, openCodeDelegationVisibilitySectionID, "")
 
 	// Extract section based on model capability (derived from model name).
 	capability := "capable"

@@ -94,6 +94,21 @@ The canonical native bounded-review contract is injected from the shared provide
 - Let the native review and delivery providers select checking and delivery actions; repeated gates reuse exact authority and never reopen review for unchanged content.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
+<!-- gentle-ai:opencode-desktop-delegation-progress -->
+#### Delegation Visibility (OpenCode Desktop)
+
+For every native `delegate` or `task` call, emit exactly one concise, assistant-visible status line immediately before the call:
+
+`⏳ Delegating {phase} to {agent}...`
+
+When the call returns, emit exactly one concise, assistant-visible status line with the returned status:
+
+- Success: `✅ {agent} completed — {status}`
+- Blocked or failure: `⚠️ {agent} returned {status} — {short reason}`
+
+Keep pre-call lines to 15 tokens or fewer and post-call lines to 25 tokens or fewer. Use the actual phase, agent, status, and short reason. Do not emit multi-line narration, structured blocks, or these status lines from executor prompts.
+<!-- /gentle-ai:opencode-desktop-delegation-progress -->
+
 ## SDD Workflow (Spec-Driven Development)
 
 SDD is the structured planning layer for substantial changes.
