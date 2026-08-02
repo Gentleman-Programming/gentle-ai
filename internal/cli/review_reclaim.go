@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 type ReviewReclaimResult struct {
@@ -16,7 +16,7 @@ type ReviewReclaimResult struct {
 }
 
 func RunReviewReclaim(args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review reclaim", stdout, "Quarantine one explicit incomplete compact-v2 store entry with a persisted audit record; entries holding any authoritative artifact are refused — an invalid recovery successor is quarantined with review reconcile-authority instead. On partial failure the prepared audit record JSON is still emitted to stdout and the command exits non-zero.")
+	flags := newReviewFlagSet("review reclaim", stdout, "Quarantine one explicit incomplete compact-v2 store entry with a persisted audit record; entries holding any authoritative artifact are refused, and the refusal names the operation that admits that entry's shape when one exists — review reconcile-authority for a reconcilable recovery edge, review abandon for a pristine entry — or the exact diagnosis to capture when none does. On partial failure the prepared audit record JSON is still emitted to stdout and the command exits non-zero.")
 	cwd := flags.String("cwd", ".", "repository path")
 	lineage := flags.String("lineage", "", "explicit incomplete compact store lineage")
 	reason := flags.String("reason", "", "non-empty reclaim reason")
@@ -33,7 +33,7 @@ func RunReviewReclaim(args []string, stdout io.Writer) error {
 	if strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*reason) == "" || strings.TrimSpace(*actor) == "" {
 		return errors.New("review reclaim requires --lineage, --reason, and --actor")
 	}
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(context.Background())
+	root, err := resolveReviewMutationRoot(context.Background(), *cwd)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
 	}

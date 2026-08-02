@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/failure.schema.json",
+  "title": "Gentle AI negotiated review v2 failure",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "contract", "operation", "phase", "code", "message", "mutation_outcome",
+    "authority_applicability", "retry_safe", "replayability", "required_inputs", "next_action"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.failure/v2"},
+    "contract": {"const": "gentle-ai.review-integration/v2"},
+    "operation": {"$ref": "../../v1/schemas/failure.schema.json#/properties/operation"},
+    "phase": {"$ref": "../../v1/schemas/failure.schema.json#/properties/phase"},
+    "code": {"$ref": "../../v1/schemas/failure.schema.json#/properties/code"},
+    "message": {"$ref": "../../v1/schemas/failure.schema.json#/properties/message"},
+    "mutation_outcome": {"$ref": "../../v1/schemas/failure.schema.json#/properties/mutation_outcome"},
+    "authority_applicability": {"$ref": "../../v1/schemas/failure.schema.json#/properties/authority_applicability"},
+    "retry_safe": {"type": "boolean"},
+    "replayability": {"$ref": "../../v1/schemas/failure.schema.json#/properties/replayability"},
+    "lineage_id": {"$ref": "../../v1/schemas/failure.schema.json#/properties/lineage_id"},
+    "request_digest": {"$ref": "../../v1/schemas/failure.schema.json#/properties/request_digest"},
+    "progress_identity": {"$ref": "../../v1/schemas/failure.schema.json#/properties/progress_identity"},
+    "required_inputs": {"$ref": "../../v1/schemas/failure.schema.json#/properties/required_inputs"},
+    "next_action": {"$ref": "../../v1/schemas/failure.schema.json#/properties/next_action"},
+    "cause_category": {"$ref": "../../v1/schemas/failure.schema.json#/properties/cause_category"},
+    "cause": {"$ref": "../../v1/schemas/failure.schema.json#/properties/cause"},
+    "context": {"$ref": "../../v1/schemas/failure.schema.json#/properties/context"}
+  },
+  "allOf": [
+    {"$ref": "../../v1/schemas/failure.schema.json#/allOf/0"},
+    {"$ref": "../../v1/schemas/failure.schema.json#/allOf/1"}
+  ]
+}

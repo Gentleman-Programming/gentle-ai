@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 // writeApprovedCompactAuthorityWithWarningFinding persists an approved compact
@@ -108,6 +108,11 @@ func TestBoundReviewBindsLedgerAcceptsLegacyEmptyAndRejectsForgedHash(t *testing
 	if _, _, err := validateBoundReview(context.Background(), root, "thin"); err != nil {
 		t.Fatalf("fresh binding validation: %v", err)
 	}
+	// Recreate the pre-native compatibility state. Once a native binding is
+	// present the mutable legacy artifact is intentionally ignored.
+	if err := os.RemoveAll(mustRuntimeStore(t, root, "thin").Dir); err != nil {
+		t.Fatal(err)
+	}
 
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "approved-ledger")
 	if err != nil {
@@ -124,7 +129,11 @@ func TestBoundReviewBindsLedgerAcceptsLegacyEmptyAndRejectsForgedHash(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(bindingPath(store, "thin"), payload, 0o644); err != nil {
+	legacyPath := bindingPath(store, "thin")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, payload, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := validateBoundReview(context.Background(), root, "thin"); err != nil {
@@ -139,7 +148,7 @@ func TestBoundReviewBindsLedgerAcceptsLegacyEmptyAndRejectsForgedHash(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(bindingPath(store, "thin"), payload, 0o644); err != nil {
+	if err := os.WriteFile(legacyPath, payload, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := validateBoundReview(context.Background(), root, "thin"); err == nil {

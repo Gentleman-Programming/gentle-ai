@@ -17,22 +17,22 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
-	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
-	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/opencode"
-	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
-	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agentbuilder"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
 )
 
 // tuiNowFn returns the current time for the update-check cooldown gate.
@@ -95,6 +95,8 @@ func sanitizeAdvisoryURL(raw string) string {
 // osStatModelCache is a package-level variable so tests can override it to
 // simulate a missing or present OpenCode model cache file.
 var osStatModelCache = os.Stat
+var modelPickerCachePath = opencode.DefaultCachePath
+var modelPickerSettingsPath = opencode.DefaultSettingsPath
 var osStatPathFn = os.Stat
 var osGetwdFn = os.Getwd
 var osExecutableFn = os.Executable
@@ -921,6 +923,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.AdvisoryURL = sanitizeAdvisoryURL(msg.Advisory.URL)
 		m.AdvisoryScroll = 0
 		return m, nil
+	case screens.LMStudioDiscoveryMsg:
+		m.ModelPicker = m.ModelPicker.Update(msg)
+		return m, nil
 	case UpgradeDoneMsg:
 		if m.Screen != ScreenUpgrade && m.Screen != ScreenUpdatePrompt {
 			return m, nil
@@ -1306,7 +1311,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
 				} else if next, ok := m.pickerNextScreen(); ok {
-					m.advanceToNextPickerScreen(next)
+					return m, m.advanceToNextPickerScreen(next)
 				}
 			}
 			return m, nil
@@ -1331,7 +1336,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
 				} else if next, ok := m.pickerNextScreen(); ok {
-					m.advanceToNextPickerScreen(next)
+					return m, m.advanceToNextPickerScreen(next)
 				}
 			}
 			return m, nil
@@ -1396,7 +1401,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
 				} else if next, ok := m.pickerNextScreen(); ok {
-					m.advanceToNextPickerScreen(next)
+					return m, m.advanceToNextPickerScreen(next)
 				}
 			}
 			return m, nil
@@ -1531,7 +1536,9 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if _, ok := m.GentleAIUpgradeVersion(); ok {
 			return m, tea.Quit
 		}
-		return m.goBack(), nil
+		var cmd tea.Cmd
+		m = m.goBack(&cmd)
+		return m, cmd
 	case " ":
 		switch m.Screen {
 		case ScreenAgents:
@@ -2010,12 +2017,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenClaudeModelPicker)
 		case 1: // Configure OpenCode models
 			m.ModelConfigMode = true
-			cachePath := opencode.DefaultCachePath()
-			if _, err := osStatModelCache(cachePath); err == nil {
-				m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
-			} else {
-				m.ModelPicker = screens.ModelPickerState{}
-			}
+			discoveryCmd := m.initializeModelPicker()
 			// Pre-populate with existing assignments from opencode.json.
 			// Only when there are no in-session assignments yet — the nil guard
 			// ensures we don't overwrite changes the user already made this session.
@@ -2031,6 +2033,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				}
 			}
 			m.setScreen(ScreenModelPicker)
+			return m, discoveryCmd
 		case 2: // Configure Kiro models
 			m.ModelConfigMode = true
 			m.KiroModelPicker = screens.NewKiroModelPickerStateFromAssignments(m.Selection.KiroModelAssignments)
@@ -2084,8 +2087,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.EditAgentsSelection = nil
 			m = m.withResetOperationState()
 			m.PendingSyncOverrides = &model.SyncOverrides{
-				TargetAgents:     selectedAgents,
-				DeselectedAgents: deselected,
+				TargetAgents:           selectedAgents,
+				PersistInstalledAgents: true,
+				DeselectedAgents:       deselected,
 			}
 			m.setScreen(ScreenSync)
 		case m.Cursor == agentCount+1:
@@ -2116,8 +2120,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			// DependencyTree is the initial component picker for Custom and the
 			// terminal anchor for every other preset.
 			if next, ok := m.pickerNextScreen(); ok && (next != ScreenDependencyTree || m.Selection.Preset == model.PresetCustom) {
-				m.applyPickerEntry(next)
-				return m, nil
+				return m, m.applyPickerEntry(next)
 			}
 			// No picker/SDDMode/StrictTDD applies. CommunityTools and OpenCodePlugins
 			// are NOT in the slice (OpenCode's predicate reads m.Screen); optional
@@ -2180,19 +2183,16 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.Selection.SDDMode = options[m.Cursor]
 			if m.Selection.SDDMode == model.SDDModeMulti {
 				// SDDModeMulti: initialize ModelPicker explicitly and transition to it.
-				// pickerFlowSlice includes ScreenModelPicker only when SDDMode==Multi AND
-				// cache is present; we always show ModelPicker here (even cache-absent)
-				// because the user may have custom providers in opencode.json.
-				m.ModelPicker = screens.NewModelPickerState(opencode.DefaultCachePath(), opencode.DefaultSettingsPath())
+				discoveryCmd := m.initializeModelPicker()
 				m.Selection.ModelAssignments = nil
 				m.setScreen(ScreenModelPicker)
-				return m, nil
+				return m, discoveryCmd
 			}
 			// Clear assignments for single mode.
 			m.Selection.ModelAssignments = nil
 			// Use pickerNextScreen to advance through the remaining slice.
 			if next, ok := m.pickerNextScreen(); ok {
-				m.advanceToNextPickerScreen(next)
+				return m, m.advanceToNextPickerScreen(next)
 			}
 			return m, nil
 		}
@@ -2214,8 +2214,6 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// Continue with OpenCode defaults when no providers are available yet.
-			// ScreenModelPicker may not be in the picker slice when the cache is absent
-			// (pickerFlowSlice gates ModelPicker on SDDMode==Multi AND cache present).
 			// Fall back to explicit predicate checks to find the correct next screen.
 			if m.shouldShowStrictTDDScreen() {
 				m.setScreen(ScreenStrictTDD)
@@ -2270,7 +2268,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			// Continue → advance to next screen in the picker slice.
 			if next, ok := m.pickerNextScreen(); ok {
-				m.advanceToNextPickerScreen(next)
+				return m, m.advanceToNextPickerScreen(next)
 			}
 			return m, nil
 		}
@@ -2310,13 +2308,13 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				// Non-custom: advance to the next screen in the picker slice
 				// (always DependencyTree for StrictTDD, the last non-custom anchor).
 				m.buildDependencyPlan()
-				m.applyPickerEntry(next)
+				return m, m.applyPickerEntry(next)
 			}
 			return m, nil
 		}
 		// Back — use pickerPreviousScreen for unified reverse navigation.
 		if prev, ok := m.pickerPreviousScreen(); ok {
-			m.applyPickerEntry(prev)
+			return m, m.applyPickerEntry(prev)
 		}
 	case ScreenOpenCodePlugins:
 		return m.confirmOpenCodePlugins()
@@ -2429,12 +2427,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.setScreen(ScreenStrictTDD)
 				} else if m.shouldShowSDDModeScreen() {
 					if m.Selection.SDDMode == model.SDDModeMulti {
-						cachePath := opencode.DefaultCachePath()
-						if _, err := osStatModelCache(cachePath); err == nil {
-							m.setScreen(ScreenModelPicker)
-						} else {
-							m.setScreen(ScreenSDDMode)
-						}
+						return m, m.applyPickerEntry(ScreenModelPicker)
 					} else {
 						m.setScreen(ScreenSDDMode)
 					}
@@ -2462,12 +2455,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenStrictTDD)
 			} else if m.shouldShowSDDModeScreen() {
 				if m.Selection.SDDMode == model.SDDModeMulti {
-					cachePath := opencode.DefaultCachePath()
-					if _, err := osStatModelCache(cachePath); err == nil {
-						m.setScreen(ScreenModelPicker)
-					} else {
-						m.setScreen(ScreenSDDMode)
-					}
+					return m, m.applyPickerEntry(ScreenModelPicker)
 				} else {
 					m.setScreen(ScreenSDDMode)
 				}
@@ -3204,7 +3192,7 @@ func buildProgressLabels(resolved planner.ResolvedPlan, communityTools []model.C
 	return labels
 }
 
-func (m Model) goBack() Model {
+func (m Model) goBack(cmd *tea.Cmd) Model {
 	// Block navigation while an operation (upgrade/sync/uninstall) is running.
 	if m.OperationRunning {
 		return m
@@ -3352,12 +3340,7 @@ func (m Model) goBack() Model {
 				m.setScreen(ScreenStrictTDD)
 			} else if m.shouldShowSDDModeScreen() {
 				if m.Selection.SDDMode == model.SDDModeMulti {
-					cachePath := opencode.DefaultCachePath()
-					if _, err := osStatModelCache(cachePath); err == nil {
-						m.setScreen(ScreenModelPicker)
-					} else {
-						m.setScreen(ScreenSDDMode)
-					}
+					*cmd = m.applyPickerEntry(ScreenModelPicker)
 				} else {
 					m.setScreen(ScreenSDDMode)
 				}
@@ -3406,7 +3389,7 @@ func (m Model) goBack() Model {
 	// early-return BEFORE the slice walk.
 	if m.Screen == ScreenStrictTDD {
 		if prev, ok := m.pickerPreviousScreen(); ok {
-			m.applyPickerEntry(prev)
+			*cmd = m.applyPickerEntry(prev)
 			return m
 		}
 	}
@@ -3463,12 +3446,7 @@ func (m Model) goBack() Model {
 		}
 		if m.shouldShowSDDModeScreen() {
 			if m.Selection.SDDMode == model.SDDModeMulti {
-				cachePath := opencode.DefaultCachePath()
-				if _, err := osStatModelCache(cachePath); err == nil {
-					m.setScreen(ScreenModelPicker)
-				} else {
-					m.setScreen(ScreenSDDMode)
-				}
+				*cmd = m.applyPickerEntry(ScreenModelPicker)
 			} else {
 				m.setScreen(ScreenSDDMode)
 			}
@@ -4410,9 +4388,7 @@ func (m Model) pickerFlowSlice() []Screen {
 	if m.shouldShowSDDModeScreen() {
 		s = append(s, ScreenSDDMode)
 		if m.Selection.SDDMode == model.SDDModeMulti {
-			if _, err := osStatModelCache(opencode.DefaultCachePath()); err == nil {
-				s = append(s, ScreenModelPicker)
-			}
+			s = append(s, ScreenModelPicker)
 		}
 	}
 	if m.shouldShowStrictTDDScreen() {
@@ -4451,19 +4427,19 @@ func (m Model) pickerPreviousScreen() (Screen, bool) {
 	return 0, false
 }
 
-func (m *Model) advanceToNextPickerScreen(next Screen) {
+func (m *Model) advanceToNextPickerScreen(next Screen) tea.Cmd {
 	if next == ScreenDependencyTree && m.shouldShowCommunityToolsScreen() {
 		m.setScreen(ScreenCommunityTools)
-		return
+		return nil
 	}
 	if next == ScreenDependencyTree && m.shouldShowOpenCodePluginsScreen() {
 		m.setScreen(ScreenOpenCodePlugins)
-		return
+		return nil
 	}
 	if next == ScreenDependencyTree {
 		m.buildDependencyPlan()
 	}
-	m.applyPickerEntry(next)
+	return m.applyPickerEntry(next)
 }
 
 // applyPickerEntry initializes the target picker's state and transitions to it.
@@ -4471,7 +4447,8 @@ func (m *Model) advanceToNextPickerScreen(next Screen) {
 // presets) before calling setScreen. It handles every target a caller may
 // navigate to, including Kiro-first and Codex-first custom paths where Claude is
 // absent and navigation comes directly from ScreenDependencyTree.
-func (m *Model) applyPickerEntry(next Screen) {
+func (m *Model) applyPickerEntry(next Screen) tea.Cmd {
+	var discoveryCmd tea.Cmd
 	switch next {
 	case ScreenClaudeModelPicker:
 		m.ClaudeModelPicker = screens.NewClaudeModelPickerStateFromPhaseAssignments(
@@ -4482,9 +4459,15 @@ func (m *Model) applyPickerEntry(next Screen) {
 	case ScreenCodexModelPicker:
 		m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
 	case ScreenModelPicker:
-		m.ModelPicker = screens.NewModelPickerState(opencode.DefaultCachePath(), opencode.DefaultSettingsPath())
+		discoveryCmd = m.initializeModelPicker()
 	}
 	m.setScreen(next)
+	return discoveryCmd
+}
+
+func (m *Model) initializeModelPicker() tea.Cmd {
+	m.ModelPicker = screens.NewModelPickerState(modelPickerCachePath(), modelPickerSettingsPath())
+	return m.ModelPicker.DiscoverLMStudioCmd()
 }
 
 func componentsForPreset(preset model.PresetID, persona model.PersonaID) []model.ComponentID {
@@ -4586,15 +4569,10 @@ func (m Model) handleProfileNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.ProfileDraft.Name = name
 		m.ProfileCreateStep = 1
 		// Initialize model picker for orchestrator step.
-		cachePath := opencode.DefaultCachePath()
-		if _, err := osStatModelCache(cachePath); err == nil {
-			m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
-		} else {
-			m.ModelPicker = screens.ModelPickerState{}
-		}
+		discoveryCmd := m.initializeModelPicker()
 		m.ModelPicker.ForProfile = true
 		m.Cursor = 0
-		return m, nil
+		return m, discoveryCmd
 	case tea.KeyEsc:
 		m.ProfileNameCollision = false
 		m.setScreen(ScreenProfiles)
@@ -4644,14 +4622,10 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 		// Edit mode: step 0 shows read-only name, enter advances to step 1.
 		if m.ProfileEditMode {
 			m.ProfileCreateStep = 1
-			cachePath := opencode.DefaultCachePath()
-			if _, err := osStatModelCache(cachePath); err == nil {
-				m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
-			} else {
-				m.ModelPicker = screens.ModelPickerState{}
-			}
+			discoveryCmd := m.initializeModelPicker()
 			m.ModelPicker.ForProfile = true
 			m.Cursor = 0
+			return m, discoveryCmd
 		}
 		return m, nil
 	case 1:

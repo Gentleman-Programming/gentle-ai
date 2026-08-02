@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
 )
 
 func editAgentsModel() Model {
@@ -50,7 +50,7 @@ func TestEditAgents_ConfirmPassesExactAgentSetsToSync(t *testing.T) {
 	}
 	_, cmd := got.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	_ = findSyncDoneMsgInBatch(t, cmd)
-	if captured == nil || !slices.Equal(captured.TargetAgents, []model.AgentID{model.AgentClaudeCode}) || !slices.Equal(captured.DeselectedAgents, []model.AgentID{model.AgentOpenCode}) {
+	if captured == nil || !captured.PersistInstalledAgents || !slices.Equal(captured.TargetAgents, []model.AgentID{model.AgentClaudeCode}) || !slices.Equal(captured.DeselectedAgents, []model.AgentID{model.AgentOpenCode}) {
 		t.Fatalf("sync overrides = %+v, want exact target [claude-code] and deselected [opencode]", captured)
 	}
 }

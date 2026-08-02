@@ -111,6 +111,53 @@ func TestCompactPrePRChainNormalizesDegenerateRecoveryInsideChain(t *testing.T) 
 	}
 }
 
+// A no-op approved review reviews a candidate identical to its own base, so its
+// receipt edge is a self-loop that delivers nothing. It is not a recovery
+// successor, it is never on the selected path, and it must not deny composition
+// for every other lineage in the repository (issue-1563 follow-up).
+func TestCompactPrePRChainIgnoresUnrelatedNoOpSelfLoopAuthority(t *testing.T) {
+	const noOpLineage = "compact-chain-noop"
+	fixture := newCompactPrePRChainFixture(t, 2)
+	addCompactChainNoOpSelfLoop(t, fixture, noOpLineage)
+
+	got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
+
+	if !attempted || got.Result != GateAllow {
+		t.Fatalf("unrelated no-op self-loop authority = %#v, attempted %t", got, attempted)
+	}
+	if got.Context.BaseTree != fixture.receipts[0].BaseTree || got.Context.CandidateTree != fixture.receipts[1].FinalCandidateTree {
+		t.Fatalf("composed proof context = %#v", got.Context)
+	}
+
+	// Excluding the no-op from the delivery graph must not unbind it: it stays
+	// enumerated in proof.Authority with its state and receipt hashes, so any
+	// later mutation of that authority still changes the composed chain
+	// identity. Without this, a regression that dropped the filtered authority
+	// from proof composition would keep passing the assertions above.
+	derived, derivedAttempted, err := deriveCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
+	if err != nil || !derivedAttempted {
+		t.Fatalf("derive composed proof: %v, attempted %t", err, derivedAttempted)
+	}
+	bound := false
+	for _, authority := range derived.proof.Authority {
+		if authority.LineageID != noOpLineage {
+			continue
+		}
+		if authority.StateHash == "" || authority.ReceiptHash == "" {
+			t.Fatalf("filtered no-op authority is unbound in composed proof: %#v", authority)
+		}
+		bound = true
+	}
+	if !bound {
+		t.Fatalf("filtered no-op authority %q is absent from composed proof authority: %#v", noOpLineage, derived.proof.Authority)
+	}
+	for _, member := range derived.proof.Members {
+		if member.LineageID == noOpLineage {
+			t.Fatalf("filtered no-op authority %q reached the delivery members: %#v", noOpLineage, derived.proof.Members)
+		}
+	}
+}
+
 func TestCompactPrePRChainLeavesExactSingleReceiptToDirectEvaluation(t *testing.T) {
 	fixture := newCompactPrePRChainFixture(t, 1)
 	input := fixture.input()
@@ -443,6 +490,37 @@ func TestCompactPrePRChainRejectsMultipleViableChains(t *testing.T) {
 	got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
 	if !attempted || got.Result == GateAllow || !strings.Contains(got.Reason, "multiple viable") {
 		t.Fatalf("multiple viable chains = %#v, attempted %t", got, attempted)
+	}
+}
+
+// TestSelectCompactPrePRChainRootIncomingExemption proves issue-1782:
+// selectCompactPrePRChain must not report a chain convergence when a
+// historical approved receipt merely ends exactly at the currently selected
+// publication base. Fixture inspection (addCompactChainConvergence,
+// compact_chain_test.go:919) confirmed it injects its extra receipt
+// MID-CHAIN (base = fixture.commits[0], the tree after the first segment,
+// not fixture.base) rather than at the chain root, so it already exercises
+// the correct negative regression (TestCompactPrePRChainRejectsForkConvergenceAndCycle/convergence,
+// unmodified) and is not the 1782 repro itself.
+//
+// This test reproduces 1782 directly: receipts X->A, A->B, B->C are a
+// genuinely linear chain (no fork, no real convergence anywhere), but moving
+// the publication tracker to land exactly on A selects A->B->C as the
+// winning chain while the historical X->A receipt (not on the selected
+// path) still has an edge landing on A. Before the fix, the incoming-degree
+// check demanded zero incoming edges at the selected chain's own root and
+// misreported that historical predecessor edge as a convergence.
+func TestSelectCompactPrePRChainRootIncomingExemption(t *testing.T) {
+	fixture := newCompactPrePRChainFixture(t, 3)
+	gitSnapshot(t, fixture.repo, "push", "--force", fixture.remote, fixture.commits[0]+":refs/heads/"+fixture.branch)
+	gitSnapshot(t, fixture.repo, "fetch", "origin", fixture.branch+":refs/remotes/origin/"+fixture.branch)
+
+	got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
+	if !attempted || got.Result != GateAllow {
+		t.Fatalf("linear chain with the publication tracker at its own mid-chain root = %#v, attempted %t", got, attempted)
+	}
+	if got.Context.BaseTree != fixture.receipts[0].FinalCandidateTree || got.Context.CandidateTree != fixture.receipts[2].FinalCandidateTree {
+		t.Fatalf("composed proof context = %#v, want base %s candidate %s", got.Context, fixture.receipts[0].FinalCandidateTree, fixture.receipts[2].FinalCandidateTree)
 	}
 }
 
@@ -936,6 +1014,20 @@ func addCompactChainCycle(t *testing.T, fixture *compactPrePRChainFixture) {
 	})
 	persistApprovedCompactState(t, fixture.repo, state)
 	gitSnapshot(t, fixture.repo, "reset", "--hard", "HEAD")
+}
+
+// addCompactChainNoOpSelfLoop approves a review whose candidate equals its own
+// base: no changed paths, no delivered commit, receipt base tree == final
+// candidate tree.
+func addCompactChainNoOpSelfLoop(t *testing.T, fixture *compactPrePRChainFixture, lineage string) {
+	t.Helper()
+	state := newCompactStartStateForTarget(t, fixture.repo, lineage, Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if state.InitialSnapshot.BaseTree != state.InitialSnapshot.CandidateTree {
+		t.Fatalf("no-op fixture is not a self-loop: %#v", state.InitialSnapshot)
+	}
+	persistApprovedCompactState(t, fixture.repo, state)
 }
 
 func advanceCompactChainRemote(t *testing.T, fixture *compactPrePRChainFixture, path string) string {

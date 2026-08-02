@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestNegotiatedReviewStartMatchesVersionedFixture(t *testing.T) {
@@ -21,9 +21,9 @@ func TestNegotiatedReviewStartMatchesVersionedFixture(t *testing.T) {
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
 
 	var output bytes.Buffer
-	if err := RunReview([]string{
+	if err := RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", "review-start-fixture",
-	}, &output); err != nil {
+	}), &output); err != nil {
 		t.Fatal(err)
 	}
 	result := decodeNegotiatedReviewStart(t, output.Bytes())
@@ -37,7 +37,7 @@ func TestNegotiatedReviewStartMatchesVersionedFixture(t *testing.T) {
 		reviewtransaction.LensRisk, reviewtransaction.LensResilience,
 		reviewtransaction.LensReadability, reviewtransaction.LensReliability,
 	}
-	if result.Schema != ReviewIntegrationStartSchema || result.Contract != ReviewIntegrationContractV1 ||
+	if result.Schema != ReviewIntegrationStartSchemaV2 || result.Contract != ReviewIntegrationContractV1 ||
 		result.Operation != "review.start" || result.Action != "created" || !result.LensesRequired ||
 		result.LineageID != "review-start-fixture" || result.State != reviewtransaction.StateReviewing ||
 		result.RiskLevel != reviewtransaction.RiskHigh || !reflect.DeepEqual(result.SelectedLenses, wantLenses) ||
@@ -46,7 +46,7 @@ func TestNegotiatedReviewStartMatchesVersionedFixture(t *testing.T) {
 		result.RepositoryContext == nil || result.RepositoryContext.Capability != reviewtransaction.ReviewRepositoryContextCapability {
 		t.Fatalf("negotiated START = %#v\n%s", result, output.String())
 	}
-	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "start.fixture.json"))
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "start-v2.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,11 +133,17 @@ func TestNegotiatedReviewStartRiskReasonsUseOnlyImmutableSnapshotEvidence(t *tes
 	})
 }
 
-func TestNegotiatedReviewStartRoutesLargePureDocumentationToReadability(t *testing.T) {
+// TestNegotiatedReviewStartRoutesLargeCandidatesByEvidence pins the negotiated
+// START projection of the evidence-driven tiers: passive documentation is
+// structural readback with zero reviewers at any size, everything else without
+// named evidence is one consolidated review, and only genuine risk evidence
+// reaches focused 4R. The former 401-line escalation is deliberately gone.
+func TestNegotiatedReviewStartRoutesLargeCandidatesByEvidence(t *testing.T) {
 	full4R := []string{
 		reviewtransaction.LensRisk, reviewtransaction.LensResilience,
 		reviewtransaction.LensReadability, reviewtransaction.LensReliability,
 	}
+	consolidated := []string{reviewtransaction.LensReliability}
 	tests := []struct {
 		name       string
 		path       string
@@ -148,18 +154,18 @@ func TestNegotiatedReviewStartRoutesLargePureDocumentationToReadability(t *testi
 		wantLenses []string
 	}{
 		{name: "400 pure doc lines remain low", path: "docs/guide.md", lines: 400, wantRisk: reviewtransaction.RiskLow, wantLenses: []string{}},
-		{name: "401 pure doc lines select readability", path: "docs/guide.md", lines: 401, focus: "risk", wantRisk: reviewtransaction.RiskMedium, wantLenses: []string{reviewtransaction.LensReadability}},
-		{name: "401 static MDX lines select readability", path: "book/chapter.mdx", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: []string{reviewtransaction.LensReadability}},
-		{name: "active MDX keeps high routing", path: "book/chapter.mdx", lines: 400, prefix: "import Widget from './widget'\n", wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "SVG keeps high routing", path: "docs/diagram.svg", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+		{name: "401 pure doc lines remain low", path: "docs/guide.md", lines: 401, focus: "risk", wantRisk: reviewtransaction.RiskLow, wantLenses: []string{}},
+		{name: "401 static MDX lines remain low", path: "book/chapter.mdx", lines: 401, wantRisk: reviewtransaction.RiskLow, wantLenses: []string{}},
+		{name: "active MDX content escalates out of tier 0", path: "book/chapter.mdx", lines: 400, prefix: "import Widget from './widget'\n", wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "SVG is one consolidated review", path: "docs/diagram.svg", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
 		{name: "semantic doc path keeps high routing", path: "docs/security/guide.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "prompt markdown keeps normal large routing", path: "prompts/system.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "compound prompt filename keeps normal large routing", path: "docs/system-prompt.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "agent rules keep normal large routing", path: "AGENTS.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "workflow markdown keeps normal large routing", path: ".github/workflows/release.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "runtime docs keep normal large routing", path: "runtime/README.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "configuration keeps normal large routing", path: "config/settings.yaml", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "code keeps normal large routing", path: "internal/app.go", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+		{name: "prompt markdown is one consolidated review", path: "prompts/system.md", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "compound prompt filename is one consolidated review", path: "docs/system-prompt.md", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "agent rules are one consolidated review", path: "AGENTS.md", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "workflow markdown is one consolidated review", path: ".github/workflows/release.md", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "runtime docs are one consolidated review", path: "runtime/README.md", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "configuration is one consolidated review", path: "config/settings.yaml", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "code is one consolidated review", path: "internal/app.go", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
 	}
 	for index, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -172,6 +178,7 @@ func TestNegotiatedReviewStartRoutesLargePureDocumentationToReadability(t *testi
 			if tt.focus != "" {
 				args = append(args, "--focus", tt.focus)
 			}
+			args = boundNegotiatedStartArgs(t, args)
 			var output bytes.Buffer
 			if err := RunReview(args, &output); err != nil {
 				t.Fatal(err)
@@ -185,10 +192,10 @@ func TestNegotiatedReviewStartRoutesLargePureDocumentationToReadability(t *testi
 	}
 
 	repo := initReviewCLIRepo(t)
-	writeReviewStartCandidate(t, repo, "docs/guide.md", strings.Repeat("line\n", 401), 0o644)
+	writeReviewStartCandidate(t, repo, "internal/app.go", strings.Repeat("line\n", 401), 0o644)
 	err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "large-doc-invalid-focus", "--focus", "unknown"}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "unsupported review focus") {
-		t.Fatalf("large pure documentation invalid focus error = %v", err)
+		t.Fatalf("consolidated review invalid focus error = %v", err)
 	}
 }
 
@@ -235,7 +242,7 @@ func TestNegotiatedReviewStartAndStatusExposeWorkspaceOverlay(t *testing.T) {
 
 	var startOutput bytes.Buffer
 	args := []string{"--contract", ReviewIntegrationContractV1, "--cwd", repo, "--base-ref", base, "--workspace-overlay", "--lineage", "review-overlay"}
-	if err := RunReviewFacadeStart(args, &startOutput); err != nil {
+	if err := RunReviewFacadeStart(boundNegotiatedStartArgs(t, args), &startOutput); err != nil {
 		t.Fatal(err)
 	}
 	start := decodeNegotiatedReviewStart(t, startOutput.Bytes())
@@ -280,9 +287,9 @@ func TestNegotiatedOverlayStatusUsesResolvedStartBaseAfterSymbolicRefAdvances(t 
 
 	lineage := "review-overlay-resolved-base"
 	var startOutput bytes.Buffer
-	if err := RunReviewFacadeStart([]string{
+	if err := RunReviewFacadeStart(boundNegotiatedStartArgs(t, []string{
 		"--contract", ReviewIntegrationContractV1, "--cwd", repo, "--base-ref", "review-base", "--workspace-overlay", "--lineage", lineage,
-	}, &startOutput); err != nil {
+	}), &startOutput); err != nil {
 		t.Fatal(err)
 	}
 	start := decodeNegotiatedReviewStart(t, startOutput.Bytes())
@@ -677,9 +684,14 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 		gotFields = append(gotFields, field)
 	}
 	sortStrings(gotFields)
+	// "hint" is present here (see TestReviewFacadeStartLensesRequiredHintsNegotiatedContract
+	// in review_start_evidence_test.go) because this fixture's tracked.txt
+	// change requires lenses: the unnegotiated response cannot itself carry
+	// the frozen tree/changed_path_manifest/artifact_subjects those
+	// lenses need, so it names the exact negotiated rerun that returns them.
 	wantFields := []string{
-		"action", "changed_files", "changed_lines", "correction_budget", "lens_bindings", "lenses_required",
-		"lineage_id", "operation", "projection", "risk_level", "selected_lenses", "state", "target_identity",
+		"action", "changed_files", "changed_lines", "correction_budget", "hint", "lens_bindings", "lenses_required",
+		"lineage_id", "operation", "projection", "risk_evidence", "risk_level", "selected_lenses", "state", "target_identity",
 	}
 	if !reflect.DeepEqual(gotFields, wantFields) {
 		t.Fatalf("unnegotiated START fields = %v, want %v\n%s", gotFields, wantFields, legacyOutput.String())
@@ -695,9 +707,9 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 	}
 
 	var negotiatedOutput bytes.Buffer
-	if err := RunReview([]string{
+	if err := RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV1, "--cwd", negotiatedRepo, "--lineage", lineage,
-	}, &negotiatedOutput); err != nil {
+	}), &negotiatedOutput); err != nil {
 		t.Fatal(err)
 	}
 	negotiated := decodeNegotiatedReviewStart(t, negotiatedOutput.Bytes())
@@ -732,7 +744,7 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 }
 
 func TestNegotiatedReviewStartRejectsInvalidContractsBeforeAuthorityMutation(t *testing.T) {
-	for _, contract := range []string{"", "gentle-ai.review-integration/v2", " " + ReviewIntegrationContractV1} {
+	for _, contract := range []string{"", "gentle-ai.review-integration/v3", " " + ReviewIntegrationContractV1} {
 		t.Run(strings.ReplaceAll(contract, "/", "_"), func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
@@ -772,7 +784,7 @@ func TestExplicitReviewStartRetriesAcrossSharedCommonDirWithoutReconstruction(t 
 	start := func(root string) ([]byte, ReviewIntegrationStartResult) {
 		t.Helper()
 		var output bytes.Buffer
-		if err := RunReview([]string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", root, "--lineage", lineage}, &output); err != nil {
+		if err := RunReview(boundNegotiatedStartArgs(t, []string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", root, "--lineage", lineage}), &output); err != nil {
 			t.Fatalf("START in %s: %v\n%s", root, err, output.String())
 		}
 		return append([]byte(nil), output.Bytes()...), decodeNegotiatedReviewStart(t, output.Bytes())
@@ -817,7 +829,7 @@ func TestExplicitReviewStartRetriesAcrossSharedCommonDirWithoutReconstruction(t 
 
 func TestNegotiatedReviewStartSchemaAndFixtureAreStrict(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
-	schemaPayload, err := os.ReadFile(filepath.Join(root, "schemas", "start.schema.json"))
+	schemaPayload, err := os.ReadFile(filepath.Join(root, "schemas", "start-v2.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -826,23 +838,19 @@ func TestNegotiatedReviewStartSchemaAndFixtureAreStrict(t *testing.T) {
 		t.Fatal(err)
 	}
 	if schema["$schema"] != "https://json-schema.org/draft/2020-12/schema" ||
-		schema["$id"] != ReviewIntegrationStartSchemaID || schema["additionalProperties"] != false {
+		schema["$id"] != ReviewIntegrationStartSchemaIDV2 || schema["additionalProperties"] != false {
 		t.Fatalf("START schema header = %#v", schema)
 	}
 	properties := schema["properties"].(map[string]any)
-	if properties["candidate_diff"] == nil || properties["changed_path_manifest"] == nil || schema["allOf"] == nil {
+	if properties["candidate_diff"] == nil || properties["base_tree"] == nil || properties["candidate_tree"] == nil || properties["changed_path_manifest"] == nil || schema["allOf"] == nil {
 		t.Fatalf("START schema does not declare conditional frozen context: %#v", schema)
 	}
 	dependencies := schema["dependentRequired"].(map[string]any)
 	if !reflect.DeepEqual(dependencies["candidate_diff"], []any{"changed_path_manifest"}) ||
 		!reflect.DeepEqual(dependencies["changed_path_manifest"], []any{"candidate_diff"}) {
-		t.Fatalf("START schema does not require frozen context fields as a pair: %#v", dependencies)
+		t.Fatalf("START schema does not require frozen tree context fields together: %#v", dependencies)
 	}
-	candidateDiffSchema := properties["candidate_diff"].(map[string]any)
-	if candidateDiffSchema["$ref"] != "#/$defs/frozen_candidate_diff" {
-		t.Fatalf("START candidate_diff schema = %#v", candidateDiffSchema)
-	}
-	fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "start.fixture.json"))
+	fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "start-v2.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -883,9 +891,9 @@ func TestNegotiatedReviewStartSchemaAndFixtureAreStrict(t *testing.T) {
 func runNegotiatedReviewStart(t *testing.T, repo, lineage string) ReviewIntegrationStartResult {
 	t.Helper()
 	var output bytes.Buffer
-	if err := RunReview([]string{
-		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage,
-	}, &output); err != nil {
+	if err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage,
+	}), &output); err != nil {
 		t.Fatal(err)
 	}
 	result := decodeNegotiatedReviewStart(t, output.Bytes())
@@ -893,6 +901,76 @@ func runNegotiatedReviewStart(t *testing.T, repo, lineage string) ReviewIntegrat
 		t.Fatal(err)
 	}
 	return result
+}
+
+func boundNegotiatedStartArgs(t *testing.T, args []string) []string {
+	t.Helper()
+	bound := append([]string(nil), args...)
+	hasV2Contract, hasAgent := false, false
+	for index := 0; index < len(bound); index++ {
+		name, value := bound[index], ""
+		if strings.Contains(name, "=") {
+			name, value, _ = strings.Cut(name, "=")
+		} else if index+1 < len(bound) && !strings.HasPrefix(bound[index+1], "--") {
+			value = bound[index+1]
+		}
+		if name == "--contract" && value == ReviewIntegrationContractV2 {
+			hasV2Contract = true
+		}
+		if name == "--agent" {
+			hasAgent = true
+		}
+	}
+	if hasV2Contract && !hasAgent {
+		bound = append(bound, "--agent", "claude-code")
+	}
+	cwd, projection, baseRef := ".", reviewtransaction.ProjectionWorkspace, ""
+	overlay, projectionProvided := false, false
+	for index := 0; index < len(bound); index++ {
+		name, value := bound[index], ""
+		if strings.Contains(name, "=") {
+			name, value, _ = strings.Cut(name, "=")
+		} else if index+1 < len(bound) && !strings.HasPrefix(bound[index+1], "--") {
+			value = bound[index+1]
+		}
+		switch name {
+		case "--cwd":
+			cwd = value
+		case "--projection":
+			projection, projectionProvided = reviewtransaction.Projection(value), true
+		case "--base-ref":
+			baseRef = value
+		case "--workspace-overlay":
+			overlay = true
+		}
+	}
+	intended := []string{}
+	if projection != reviewtransaction.ProjectionStaged {
+		var err error
+		intended, err = (reviewtransaction.SnapshotBuilder{Repo: cwd}).DiscoverIntendedUntracked(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
+	if baseRef != "" {
+		target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, baseRef
+	}
+	if overlay {
+		target.Kind = reviewtransaction.TargetBaseWorkspaceOverlay
+	}
+	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: cwd}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound = append(bound, "--target", snapshot.Identity)
+	if !projectionProvided {
+		bound = append(bound, "--projection", string(projection))
+	}
+	if baseRef != "" && !overlay {
+		bound = append(bound, "--committed-only")
+	}
+	return bound
 }
 
 func decodeNegotiatedReviewStart(t *testing.T, payload []byte) ReviewIntegrationStartResult {

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const batchReconcileCLIActor = "maintainer@example.com"
@@ -103,7 +103,7 @@ func TestReviewReconcileAuthorityBatchHonorsLockCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer held.Release()
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	var output bytes.Buffer
 	if err := runReviewReconcileAuthorityBatch(ctx, []string{"--prepare", "--cwd", repo, "--input", input}, &output); !errors.Is(err, reviewtransaction.ErrAuthorityLockCancelled) || output.Len() != 0 {

@@ -64,6 +64,9 @@ type SyncOverrides struct {
 	// override, even when persisted install state omits them. This is used by
 	// model/profile configurators, where the user picked a concrete target agent.
 	TargetAgents []AgentID
+	// PersistInstalledAgents marks TargetAgents as the complete final installed set.
+	// It is set only by Edit Agents; targeted model/profile syncs leave it false.
+	PersistInstalledAgents bool
 	// DeselectedAgents is disjoint from TargetAgents. Nil/empty skips cleanup;
 	// otherwise cleanup runs after sync and persistence and removes only managed agent artifacts.
 	DeselectedAgents                 []AgentID

@@ -43,6 +43,7 @@ The orchestrator should provide structured status from `skills/_shared/sdd-statu
 - A spec scenario is compliant only when a covering test passed at runtime.
 - Compare specs first, design second, task completion third.
 - Do not fix issues; report them for the orchestrator/user.
+- Build the complete report as exact candidate bytes, then run `gentle-ai sdd-verify-validate` with authoritative spec counts before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist the same bytes, including a valid `fail`.
 - Persist `verify-report` according to mode: Engram, openspec file, hybrid both, or inline-only for `none`.
 - If Strict TDD is active, load `strict-tdd-verify.md` from this skill directory; if inactive, never load it.
 - Return the Section D envelope from `../_shared/sdd-phase-common.md`.
@@ -151,6 +152,7 @@ You are a VERIFY sub-agent. Your job: check implemented changes match spec accep
 - A contradiction or failing check escalates; never start another review/fix loop.
 - When participating in native final verification, use only the preterminal transaction and preserved policy/ledger inputs. Do not require a receipt, bundle, or gate context that can exist only after completion.
 - Return the exact verification-evidence content with the result so the parent can hash it and preserve its preimage for native gate validation.
+- Build the complete report as exact candidate bytes, then run `gentle-ai sdd-verify-validate` with authoritative spec counts before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist the same bytes, including a valid `fail`.
 - For an authority-only preflight denial, both declared commands must not be executed. Record exit `125`, empty-output hashes, and exactly these five recovery fields in the strict envelope:
 
 ```yaml
