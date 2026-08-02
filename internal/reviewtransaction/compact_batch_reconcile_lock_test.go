@@ -143,7 +143,7 @@ func TestPrepareCompactBatchReconciliationCoordinatesMaintenanceThenV2Lock(t *te
 		held, err := acquireMaintenanceLock(context.Background(), compactMaintenanceLockPath(base), maintenanceExclusive)
 		inspectNoError(t, err)
 		defer held.Release()
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), maintenanceLockTimeout/2)
 		defer cancel()
 		if _, err := PrepareCompactBatchReconciliation(ctx, repo, declarations, compactBatchTestActor, compactBatchTestReason); !errors.Is(err, ErrAuthorityLockCancelled) {
 			t.Fatalf("maintenance contention error = %v", err)

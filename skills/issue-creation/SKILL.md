@@ -4,7 +4,7 @@ description: "Create Gentle AI issues with issue-first checks. Trigger: creating
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "1.0"
+  version: "1.1"
 ---
 
 # Gentle AI — Issue Creation Skill
@@ -23,6 +23,24 @@ Load this skill whenever you need to:
 3. **`status:approved` is REQUIRED before ANY work begins** — a maintainer must label the issue before you or anyone opens a PR.
 4. **Questions go to Discussions** — use [GitHub Discussions](https://github.com/Gentleman-Programming/gentle-ai/discussions), NOT issues, for questions and general conversation.
 5. **No Co-Authored-By trailers** — never add AI attribution to commits.
+6. **Pre-submission privacy review is MANDATORY** — before `gh issue create`, replace private project names, usernames, home paths, hostnames, secrets/credentials, and environment-specific identifiers with explicit placeholders (`<project-name>`, `<user>`, `<hostname>`, `<token>`). Keep reproduction structure with placeholders — never redact an example into nothingness. Do NOT redact intentionally public identifiers like `gentle-ai`, `engram`, `go`. A final body scan happens immediately before publish.
+
+## Pre-submission Privacy Review
+
+Every issue body is scanned immediately before `gh issue create`. The scan replaces — never deletes — environment-specific data with explicit placeholders so the reproduction still teaches:
+
+| Category | Replace with | Example (before → after) |
+|----------|---------------|---------------------------|
+| Private project names | `<project-name>` | `my-private-project-b` → `<project-name>` |
+| Usernames | `<user>` | `C:\Users\my-real-username\go\bin` → `C:\Users\<user>\go\bin` |
+| Hostnames | `<hostname>` | `devbox-macbook.local` → `<hostname>` |
+| Home paths | `/home/<user>` or `C:\Users\<user>` | (covered above) |
+| API keys, tokens, passwords | `<token>` / `<password>` | `ghp_abc123...` → `<token>` |
+| Internal ports / hostnames | `<host>:<port>` | `10.0.0.42:5432` → `<host>:<port>` |
+
+Intentionally public identifiers are NOT redacted: tool names (`gentle-ai`, `engram`, `go`, `node`, `python`), package names, public documentation URLs, generic example domains (`example.com`, `localhost`).
+
+**Rule of thumb:** if the reader can run the reproduction step after you replace every identifier with its placeholder, the sanitization is correct. If a step becomes impossible (because the placeholder consumed a needed value), that step needs the value — and you should mark it `<value-required>` and explain in the body what the user should fill in.
 
 ## Workflow
 

@@ -32,10 +32,9 @@ func TestResolveEmbedsAndRoutesNativeRuntimeAuthority(t *testing.T) {
 		if status.RuntimeStatus.ActiveAttempt == nil || status.RuntimeStatus.ActiveAttempt.Ordinal != 1 {
 			t.Fatalf("runtime status = %#v, want active ordinal 1", status.RuntimeStatus)
 		}
-		assertRuntimeContinuationBlocked(t, status, "sdd-attempt finish")
-		if instructions := strings.Join(status.PhaseInstructions.Apply, "\n"); !strings.Contains(instructions, "gentle-ai sdd-attempt status") ||
-			!strings.Contains(instructions, "gentle-ai sdd-attempt begin") ||
-			!strings.Contains(instructions, "gentle-ai sdd-attempt finish") {
+		assertRuntimeContinuationBlocked(t, status, "blocked(active_attempt)")
+		if instructions := strings.Join(status.PhaseInstructions.Apply, "\n"); !strings.Contains(instructions, "gentle-ai sdd-attempt acquire") ||
+			!strings.Contains(instructions, "gentle-ai sdd-attempt settle") {
 			t.Fatalf("apply instructions omit native runtime commands:\n%s", instructions)
 		}
 	})
@@ -69,7 +68,7 @@ func TestResolveEmbedsAndRoutesNativeRuntimeAuthority(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertRuntimeStatusRevision(t, status, exhausted.Revision)
-		assertRuntimeContinuationBlocked(t, status, "sdd-attempt reset")
+		assertRuntimeContinuationBlocked(t, status, "blocked(maintainer_decision)")
 	})
 
 	t.Run("completed objective remains visible without blocking phase progress", func(t *testing.T) {
@@ -134,7 +133,7 @@ func TestResolveEngramUsesTheSameNativeRuntimeAuthority(t *testing.T) {
 		t.Fatalf("artifact store = %q, want engram", status.ArtifactStore)
 	}
 	assertRuntimeStatusRevision(t, status, active.Revision)
-	assertRuntimeContinuationBlocked(t, status, "sdd-attempt finish")
+	assertRuntimeContinuationBlocked(t, status, "blocked(active_attempt)")
 	payload, err := json.Marshal(status)
 	if err != nil {
 		t.Fatal(err)

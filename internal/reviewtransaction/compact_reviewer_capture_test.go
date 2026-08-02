@@ -169,6 +169,7 @@ func TestCompactStoreCaptureAdmittedReviewerResultPublishesDurableExactReplay(
 		t.Fatalf("canonical provider result = %#v", provider)
 	}
 	reAdmitted, ok := reAdmitCompactReviewerResult(
+		t.Context(),
 		envelope,
 		fixture.request.ArtifactSubject,
 		fixture.request.FrozenContext,
@@ -227,6 +228,39 @@ func TestCompactStoreCaptureAdmittedReviewerResultPublishesDurableExactReplay(
 	if record.Revision != fixture.request.ExpectedRevision ||
 		record.State.State != StateReviewing {
 		t.Fatalf("capture mutated compact authority = %#v", record)
+	}
+}
+
+func TestCompactStoreCaptureAdmittedReviewerResultConvergesAfterExactReplayLockTimeout(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "capture-timeout-replay")
+	want, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := acquireStoreLock(fixture.store.lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.release()
+
+	got, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), fixture.request)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("exact replay behind held store lock = %#v, %v; want %#v", got, err, want)
+	}
+
+	payload, _, err := readCompactReviewerArtifact(fixture.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope compactAdmittedReviewerResult
+	decodeStrictReviewerCaptureJSON(t, payload, &envelope)
+	alternateAdmission := envelope.Admission
+	alternateAdmission.RawSHA256 = payloadSHA256(append([]byte("different transport\n"), fixture.request.RawPayload...))
+	if result, found, err := fixture.store.resolveAdmittedReviewerResult(
+		context.Background(), fixture.request.ExpectedRevision, fixture.request.TargetIdentity,
+		fixture.request.FrozenContext, fixture.request.ArtifactSubject, &alternateAdmission,
+	); err == nil || found || !reflect.DeepEqual(result, LensResult{}) {
+		t.Fatalf("different raw authority resolved as exact replay: result=%#v found=%t err=%v", result, found, err)
 	}
 }
 

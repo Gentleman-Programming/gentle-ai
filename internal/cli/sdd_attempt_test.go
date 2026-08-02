@@ -63,11 +63,11 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "missing operation", args: nil, want: "requires status, begin, finish, or reset"},
+		{name: "missing operation", args: nil, want: "requires status, begin, finish, reset, acquire, or settle"},
 		// The no-args refusal already enumerates every valid operation; the
 		// unknown-operation refusal must do the same instead of naming only
 		// the bad value with no route to the valid set.
-		{name: "unknown operation", args: []string{"begn"}, want: `unknown sdd-attempt operation "begn"; want one of status, begin, finish, or reset`},
+		{name: "unknown operation", args: []string{"begn"}, want: `unknown sdd-attempt operation "begn"; want one of status, begin, finish, reset, acquire, or settle`},
 		{name: "missing change", args: []string{"status", "--cwd", repo}, want: "--change"},
 		{name: "unknown flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--mystery"}, want: "flag provided but not defined"},
 		{name: "irrelevant flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--outcome", "failed"}, want: "flag provided but not defined"},
@@ -94,7 +94,7 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 // all four). Mirrors the reviewIntegrationGatesInOrder /
 // reviewIntegrationGateNames pattern in review_operation_contract.go.
 func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T) {
-	want := []string{"status", "begin", "finish", "reset"}
+	want := []string{"status", "begin", "finish", "reset", "acquire", "settle"}
 	if !reflect.DeepEqual(sddAttemptOperationsInOrder, want) {
 		t.Fatalf("sddAttemptOperationsInOrder = %v, want %v", sddAttemptOperationsInOrder, want)
 	}
@@ -106,8 +106,8 @@ func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T)
 	if validSDDAttemptOperation("begn") {
 		t.Fatal(`validSDDAttemptOperation("begn") = true, want false`)
 	}
-	if got := joinSDDAttemptOperations(); got != "status, begin, finish, or reset" {
-		t.Fatalf("joinSDDAttemptOperations() = %q, want %q", got, "status, begin, finish, or reset")
+	if got := joinSDDAttemptOperations(); got != "status, begin, finish, reset, acquire, or settle" {
+		t.Fatalf("joinSDDAttemptOperations() = %q, want %q", got, "status, begin, finish, reset, acquire, or settle")
 	}
 }
 

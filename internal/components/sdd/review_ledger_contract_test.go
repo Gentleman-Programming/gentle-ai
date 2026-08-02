@@ -1,7 +1,9 @@
 package sdd
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
@@ -24,6 +27,7 @@ func TestBoundedReviewContractLeavesCanonicalizationToNativeGo(t *testing.T) {
 		"Only candidate-caused severe findings block",
 		"OpenCode preflights the opaque binding",
 		"injects only the provider's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered manifest",
+		"Claude Code carries immutable candidate evidence directly in the reviewer task prompt",
 		"read-only native Git commands",
 	} {
 		if !strings.Contains(content, want) {
@@ -145,14 +149,14 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 				t.Fatal(err)
 			}
 			agentsMap := root["agent"].(map[string]any)
-			expandOpenCodeBoundedReviewAgents(agentsMap)
+			expandOpenCodeBoundedReviewAgents(agentsMap, model.AgentOpenCode)
 			for _, name := range []string{"review-risk", "review-readability", "review-reliability", "review-resilience"} {
 				agent := agentsMap[name].(map[string]any)
 				prompt := agent["prompt"].(string)
 				assertTextContainsClauses(t, path+" "+name, prompt, []string{"## Scope", "## Candidate-Causal Admission", "## Severity", "## Evidence", "## Output"})
 				assertNoReviewerLifecycleInstructions(t, path+" "+name, prompt)
-				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any), true)
-				assertOpenCodeReviewerPermission(t, path+" "+name, agent["permission"])
+				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any), false)
+				assertOpenCodeUnsupportedReviewer(t, path+" "+name, agent)
 			}
 			for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
 				agent := agentsMap[name].(map[string]any)
@@ -174,33 +178,72 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 	}
 }
 
-func assertOpenCodeReviewerPermission(t *testing.T, label string, raw any) {
+func assertOpenCodeUnsupportedReviewer(t *testing.T, label string, agent map[string]any) {
 	t.Helper()
-	permission, ok := raw.(map[string]any)
-	if !ok || permission["edit"] != "deny" {
-		t.Fatalf("%s permission = %#v, want edit deny", label, raw)
+	prompt, _ := agent["prompt"].(string)
+	if !strings.Contains(prompt, "unsupported-capability") || strings.Contains(prompt, "inspect-candidate") {
+		t.Fatalf("%s prompt does not stop unsupported inspection: %s", label, prompt)
 	}
-	bash, ok := permission["bash"].(map[string]any)
-	if !ok || bash["*"] != "deny" || len(bash) != len(reviewerGitCommandSuffixes)+1 {
-		t.Fatalf("%s bash permission = %#v", label, permission["bash"])
+	permission, ok := agent["permission"].(map[string]any)
+	if !ok || permission["bash"] != "deny" || permission["edit"] != "deny" || len(permission) != 2 {
+		t.Fatalf("%s permission = %#v, want bash/edit deny only", label, agent["permission"])
 	}
-	for _, suffix := range reviewerGitCommandSuffixes {
-		pattern := reviewerGitCommandPrefix + " " + suffix
-		for _, replacement := range []string{"<base_tree>", "<candidate_tree>", "<tree>", "<path>"} {
-			pattern = strings.ReplaceAll(pattern, replacement, "*")
-		}
-		if bash[pattern] != "allow" {
-			t.Errorf("%s does not allow exact reviewer Git shape %q", label, pattern)
-		}
+}
+
+func TestReviewerInspectionCommandsReturnIndependentValues(t *testing.T) {
+	first := reviewerInspectionCommands()
+	second := reviewerInspectionCommands()
+	if len(first) == 0 || len(second) != len(first) {
+		t.Fatalf("inspection commands = %#v / %#v", first, second)
 	}
+	first[0] = "mutated"
+	if second[0] == "mutated" || reviewerInspectionCommands()[0] == "mutated" {
+		t.Fatal("reviewer inspection commands share mutable backing storage")
+	}
+}
+
+func TestKilocodeReviewInspectionIsNativeAndWindowsPortable(t *testing.T) {
+	prompt, ok := reviewerPrompt("review-reliability")
+	if !ok {
+		t.Fatal("review-reliability prompt missing")
+	}
+	permission := openCodeReviewerPermission()
 	encoded, err := json.Marshal(permission)
 	if err != nil {
 		t.Fatal(err)
 	}
-	deny := strings.Index(string(encoded), `"*":"deny"`)
-	allow := strings.Index(string(encoded), `":"allow"`)
-	if deny < 0 || allow < 0 || deny > allow {
-		t.Fatalf("%s permission order does not put broad deny before narrow allows: %s", label, encoded)
+	for _, forbidden := range []string{"env -i", " git ", "--text", "PowerShell", "cmd /", "Git Bash"} {
+		if strings.Contains(prompt, forbidden) || strings.Contains(string(encoded), forbidden) {
+			t.Errorf("review inspection still depends on %q", forbidden)
+		}
+	}
+	for _, operation := range []string{"name-status", "numstat", "stat", "patch", "object"} {
+		if !strings.Contains(prompt, "gentle-ai review inspect-candidate") || !strings.Contains(prompt, "--operation "+operation) {
+			t.Errorf("review prompt omits native %s inspection recipe", operation)
+		}
+	}
+	bash := permission["bash"].(map[string]any)
+	if bash["*"] != "deny" || bash["gentle-ai review inspect-candidate *"] == "allow" {
+		t.Fatalf("reviewer permission is not deny-by-default and exact: %#v", bash)
+	}
+}
+
+func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
+	home := t.TempDir()
+	if _, err := Inject(home, kilocodeAdapter(), model.SDDModeMulti); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "kilo", "plugins", "review-result-artifacts.ts")); !os.IsNotExist(err) {
+		t.Fatalf("Kilo installed OpenCode-only review plugin: %v", err)
+	}
+	settings, err := os.ReadFile(filepath.Join(home, ".config", "kilo", "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := fmt.Sprintf("%x", sha256.Sum256(settings))
+	const want = "4c39ea1edd9555292a466afc9dcb6df865b78354bf92b8844b34019bd3dc09a3"
+	if got != want {
+		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
 }
 
@@ -341,8 +384,13 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// Deliberately one clause: the standard tier sits close to its 15%
 		// headroom rule, so the reasoning lives in sdd-archive/SKILL.md, which
 		// is loaded per phase rather than always-on.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_762, maxCharacters: 17_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_182, maxCharacters: 35_000},
+		// +457 defines STATUS-mediated recollection without adding retry state.
+		// Native inspect-candidate removes repeated shell hardening prose and operands.
+		// Reviewer prompts no longer expose native Git flags owned by that capability.
+		// +1,190 gives Claude's shell-less reviewer a complete prompt-carried
+		// immutable transport while OpenCode keeps provider-owned injection (#2003).
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 13_855, maxCharacters: 18_500},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 21_613, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

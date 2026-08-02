@@ -18,10 +18,11 @@ const (
 // form is complete, its collect form identifies one externally supplied input,
 // and its stop form intentionally contains no command-shaped data.
 type ReviewNextTransition struct {
-	Kind       string                      `json:"kind"`
-	ReasonCode string                      `json:"reason_code"`
-	Execute    *ReviewTransitionExecution  `json:"execute,omitempty"`
-	Collect    *ReviewTransitionCollection `json:"collect,omitempty"`
+	Kind              string                                   `json:"kind"`
+	ReasonCode        string                                   `json:"reason_code"`
+	Execute           *ReviewTransitionExecution               `json:"execute,omitempty"`
+	Collect           *ReviewTransitionCollection              `json:"collect,omitempty"`
+	CorrectionRequest *reviewtransaction.CorrectionPlanRequest `json:"correction_request,omitempty"`
 }
 
 type ReviewTransitionExecution struct {
@@ -195,12 +196,22 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			})
 		}
 		if input.CorrectionForecasted {
-			return reviewStopTransition("corrected_candidate_unavailable")
+			if input.CorrectionRequest == nil {
+				return reviewStopTransition("corrupted_or_unverifiable_authority")
+			}
+			transition := reviewStopTransition("corrected_candidate_unavailable")
+			transition.CorrectionRequest = input.CorrectionRequest
+			return transition
 		}
-		return reviewCollectTransition("correction_plan_required", ReviewTransitionInput{
+		if input.CorrectionRequest == nil {
+			return reviewStopTransition("corrupted_or_unverifiable_authority")
+		}
+		transition := reviewCollectTransition("correction_plan_required", ReviewTransitionInput{
 			Name: "correction_lines", Schema: "gentle-ai.review-correction-plan/v1", CaptureOperation: "external.plan_correction",
 			Arguments: reviewBindingArguments(binding),
 		})
+		transition.CorrectionRequest = input.CorrectionRequest
+		return transition
 	case reviewtransaction.StateValidating:
 		if input.EvidenceErr != nil && !errors.Is(input.EvidenceErr, reviewtransaction.ErrCapturedVerificationEvidenceMissing) &&
 			!errors.Is(input.EvidenceErr, reviewtransaction.ErrCapturedVerificationEvidenceMetadataMissing) {
@@ -289,6 +300,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 type reviewFinalizeTransitionContext struct {
 	RepositoryContext string
 	ValidationRequest *reviewtransaction.TargetedValidationRequest
+	CorrectionRequest *reviewtransaction.CorrectionPlanRequest
 	CaptureContext    *reviewCaptureContext
 	CapturedEvidence  *reviewtransaction.VerificationEvidenceRecord
 	EvidenceErr       error
@@ -310,6 +322,13 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 	if len(contexts) > 0 {
 		transitionContext = contexts[0]
 	}
+	if state.State == reviewtransaction.StateCorrectionRequired && !state.CorrectionAttemptConsumed() && transitionContext.CorrectionRequest == nil {
+		request, err := reviewtransaction.BuildCorrectionPlanRequest(state, revision)
+		if err != nil {
+			return reviewStopTransition("corrupted_or_unverifiable_authority")
+		}
+		transitionContext.CorrectionRequest = &request
+	}
 	if state.State == reviewtransaction.StateReviewing && artifactErr == nil && len(artifacts) != len(state.SelectedLenses) {
 		return reviewMissingCaptureTransition(reviewTransitionBinding(status.Authority, status.TargetIdentity, transitionContext.RepositoryContext), state.SelectedLenses, artifacts, transitionContext.CaptureContext)
 	}
@@ -318,7 +337,7 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 	}
 	return newReviewNextTransition(status, state.SelectedLenses, artifacts, transitionContext.CapturedEvidence, artifactErr, reviewNextTransitionInput{
 		RepositoryContext: transitionContext.RepositoryContext, ValidationRequest: transitionContext.ValidationRequest,
-		EvidenceErr: transitionContext.EvidenceErr, CorrectionForecasted: state.ProposedCorrectionLines != nil,
+		CorrectionRequest: transitionContext.CorrectionRequest, EvidenceErr: transitionContext.EvidenceErr, CorrectionForecasted: state.ProposedCorrectionLines != nil,
 		CaptureContext: transitionContext.CaptureContext,
 	})
 }
@@ -413,6 +432,7 @@ type reviewNextTransitionInput struct {
 	StartLineage                                   string
 	RepositoryContext                              string
 	ValidationRequest                              *reviewtransaction.TargetedValidationRequest
+	CorrectionRequest                              *reviewtransaction.CorrectionPlanRequest
 	EvidenceErr                                    error
 	CorrectionForecasted                           bool
 	CaptureContext                                 *reviewCaptureContext

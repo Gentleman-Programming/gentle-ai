@@ -264,7 +264,7 @@ func TestRARPlanAuthorityDetectsConflictCorruptionAndDurabilityFailure(t *testin
 		if err := ensurePrivateRARDirectoryTree(fixture.repository.root, fixture.repository.planObjectsRoot(), true); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(fixture.repository.planObjectPath(authority.AuthorityRef), []byte("{}\n"), 0o600); err != nil {
+		if err := publishPrivateRARImmutable(fixture.repository.planObjectPath(authority.AuthorityRef), []byte("{}\n")); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := fixture.repository.PublishPlan(context.Background(), fixture.publication); !errors.Is(err, ErrRARAuthorityConflict) {

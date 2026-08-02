@@ -22,13 +22,15 @@ COMMANDS
                Print native SDD phase status for orchestrators
   sdd-continue [change]
                Print native SDD dispatcher routing output
-  sdd-attempt <status|begin|finish|reset> --cwd <repo> --change <change>
-               Read or mutate the artifact-store-agnostic runtime-attempt ledger
+  sdd-attempt <acquire|settle> --cwd <repo> --change <change>
+               Run bounded normal orchestration without exposing runtime history
   sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>
                Validate exact verification-report bytes without persistence
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>]
   review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>
                Admit one reviewer result; every selected lens needs one
+  review inspect-candidate --repository-context <handle> --expected-revision <rev> --lineage <id> --target <id> --lens <lens> --order <n> --operation <operation>
+               Read one bounded immutable candidate view through provider authority
   review finalize [--cwd <repo>] [--captured-results] [--evidence <path>]
   review validate --gate <gate> [--cwd <repo>]
                Normal review path; ordinary authority is compact state plus receipt
@@ -59,6 +61,8 @@ COMPATIBILITY COMMANDS
   review-validate --cwd <repo> --receipt <path> (--request <path> | --lineage <id> --gate <gate>)
                Validate legacy v1 authority; native mode needs lineage/gate and derives authority
                Bundle, policy, ledger, fix-delta, evidence, CI, and release flags are optional compatibility or exceptional inputs
+  sdd-attempt <status|begin|finish|reset> --cwd <repo> --change <change>
+               Diagnose or explicitly recover the full native runtime-attempt ledger
   update       Check for available updates
   upgrade      Apply updates to managed tools
   restore      Restore a config backup

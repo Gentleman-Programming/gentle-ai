@@ -27,6 +27,22 @@ When a sub-agent or tool returns a user-facing blocking prompt or menu, preserve
 - Fallback: If a native UI is unavailable, denied, the runtime is noninteractive, or the complete envelope is oversized or otherwise unrepresentable because of question-count, option-count, or text-length limits, emit the COMPLETE choice envelope as a plain chat or terminal response. Include the required answer syntax and why the input blocks progress. Then STOP. Do not choose, default, infer, launch dependent work, or continue.
 - Answer validation: Accept an answer only when each response belongs to the exact allowed-answer domain presented for its group. Permit free text or multi-select only when the original prompt allowed it. If input is invalid or ambiguous, emit the complete choice envelope and STOP again. Return a valid answer to the same blocked actor exactly once.
 
+#### Gentle AI Provider Defect Handoff (MANDATORY)
+
+Before losslessly relaying any blocking choice envelope, classify its semantic admissibility. When the consumer workflow appears blocked by a Gentle AI provider or tool defect, never offer to switch to, inspect, modify, or directly repair the Gentle AI repository from that workflow. If an upstream envelope offers direct repair, do not silently mutate it: reject it as semantically inadmissible and issue this separate orchestrator-owned handoff envelope.
+
+- Ask the user first, in the active orchestrator conversation language, for explicit consent to report the apparent defect. Present one single-select blocking envelope with exactly two semantic choices. Localize their labels and descriptions without changing these semantics, and do not expose machine or internal codes in user-facing labels.
+- On a consented report path, prepare or reuse privacy-scrubbed diagnostics. Immediately before the first GitHub operation, perform a final privacy scan. This scan precedes the duplicate search, report creation, and occurrence comment. Exclude raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values.
+  1. **Report the Gentle AI defect**: Only after explicit consent and that final privacy scan, search open and closed issues in `Gentleman-Programming/gentle-ai`.
+     - Only a completed duplicate lookup with a definitive result may branch to a write. If it fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome, STOP with all consumer state preserved. Do not create, comment, update, or label any issue.
+     - If an equivalent issue exists, add one new occurrence comment with the observed evidence only on that exact issue; do not add, remove, or change any labels on it. If no equivalent issue exists, create a new automated provider-defect report. Do not apply `gentle-report` to manual issues, #2211, historical issues, pull requests, or reports created by unrelated workflows.
+     - Confirmed creation is a HARD precondition for labeling: apply `gentle-report` only when the GitHub create operation confirms a newly-created issue identity/URL. Never infer creation from output text alone. If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome, STOP with all consumer state preserved. Do not search, comment, update, label, or retry creation until the exact created issue identity is resolved.
+     - If creation is confirmed but label application fails or has an ambiguous outcome, surface the confirmed created issue identity/URL and the label failure separately. Be honest that report creation succeeded even when label application failed. STOP with all consumer state preserved; do not create or comment again automatically.
+     - On retry, perform a fresh final privacy scan first, then re-resolve that exact created issue identity, inspect whether `gentle-report` is already present, and apply only a missing label idempotently. Never search and label an arbitrary equivalent/pre-existing issue. If the exact created issue identity cannot be proven, STOP and require a human decision, with no label or duplicate issue/comment. Then STOP with all consumer state preserved.
+  2. **Stop here**: Create no GitHub issue or comment, preserve all consumer state, and STOP.
+- Report observed evidence, not an unconfirmed root cause. Include or reuse sanitized version/build, OS/architecture/client, the operation shape without secrets, bounded attempts and outcomes, failure envelopes, mutation outcome, expected and actual behavior, a minimal reproduction, safe opaque reason/revision identifiers, and preserved-state evidence.
+- Resume only after an installed released fix, then re-enter through native status. Never resume against a source checkout or unmerged pull request.
+
 | Action | Inline | Delegate |
 |--------|--------|----------|
 | Read to decide/verify (1-3 files) | Yes | No |
@@ -81,9 +97,12 @@ The canonical native bounded-review contract is injected from the shared provide
 
 ## Capability Check (run once, at session start)
 
-Check `~/.codex/config.toml` for `features.multi_agent`:
+Check `~/.codex/config.toml` for `features.multi_agent` and confirm that the
+session exposes the Codex multi-agent v2 collaboration surface:
 
-- If `features.multi_agent = true` **AND** the tools `spawn_agent`, `wait_agent`, and `close_agent` are available in this session → use the **Delegated Path** below.
+- If `features.multi_agent = true` **AND** the tools `spawn_agent`, `wait_agent`,
+  and `list_agents` are available in this session → use the **Delegated Path**
+  below.
 - Otherwise → use the **Graceful Degradation Path** below.
 
 `features.multi_agent` is enabled by default (gentle-ai writes `multi_agent = true` during installation) so SDD delegates phases and the per-phase reasoning_effort table applies. Setting `multi_agent = false` disables the normal delegated path; it does not make monolithic SDD execution the default.
@@ -95,9 +114,11 @@ Check `~/.codex/config.toml` for `features.multi_agent`:
 When multi-agent tools are available, delegate each SDD phase to a sub-agent using Codex's native tool set:
 
 - `spawn_agent` — launch a phase sub-agent
-- `send_input` — send a message to a running agent
-- `wait_agent` — block until the agent completes and collect its result
-- `close_agent` — terminate a completed or idle agent
+- `wait_agent` — wait for a mailbox update from any live agent
+- `list_agents` — correlate mailbox updates with canonical task names and current states
+- `send_message` — deliver context or guidance to a running agent without starting a new turn
+- `followup_task` — assign follow-up work and trigger a turn when an existing agent is idle
+- `interrupt_agent` — cancel a running turn only when continuing would be unsafe or wasteful
 
 **Thread budget**: `agents.max_threads = 4`, `agents.max_depth = 2` (set in `~/.codex/config.toml`).
 
@@ -106,8 +127,9 @@ When multi-agent tools are available, delegate each SDD phase to a sub-agent usi
 Codex sub-agents MUST be treated as waited handoffs, not fire-and-forget background jobs.
 You MAY launch more than one independent sub-agent when useful, but before reporting
 progress, asking the user a follow-up question, or launching a dependent phase, you MUST
-`wait_agent` for every spawned agent in that batch and then `close_agent` each completed
-agent. Do not tell the user a sub-agent is "running in the background" unless the user
+call `wait_agent` for every spawned agent in that batch. Completed or idle agents remain reusable
+through `followup_task`; use `interrupt_agent` only to cancel an active turn, never as
+cleanup. Do not tell the user a sub-agent is "running in the background" unless the user
 explicitly requested background execution.
 
 ### Phase delegation pattern
@@ -116,15 +138,25 @@ For each phase:
 1. Look up the phase's `reasoning_effort` **AND** `model` values in the **Model Profiles** table below (the values are preset-driven and written by gentle-ai — do not assume fixed tiers). This applies both for preset (per-carril) tables and Custom (per-phase) tables — always pass the model and effort shown in the table for that phase.
 2. `spawn_agent` with `task_name`, the phase prompt as `message`, `reasoning_effort` set to the tier value, and `model` set to the table's Model value for that phase. The `spawn_agent` tool has NO `profile` parameter — tier selection is the `reasoning_effort` argument, not a profile name.
 3. Set `fork_turns: "none"` whenever you override `reasoning_effort` or `model`. A full-history fork (the default) REJECTS these overrides, so the override is silently ignored unless `fork_turns` is `"none"`.
-4. `wait_agent` to collect the result.
-5. `close_agent` to release the thread.
-6. Verify the artifact was persisted before launching the next phase.
+4. Repeat `wait_agent(timeout_ms=<bounded timeout>)` and `list_agents()` until the target agent reaches a terminal state.
+   `wait_agent` returns on any mailbox update, so an update from another agent or a timeout
+   does not prove that the target completed.
+5. After each wait, correlate the notification with the canonical task name returned by
+   `spawn_agent` and inspect that target's current state in `list_agents()`.
+6. If the target reaches a non-success terminal state, stop and surface its final output or status;
+   do not verify artifacts or launch dependent work.
+7. Only after successful terminal completion, verify the artifact was persisted before
+   launching the next phase.
 
 Example — launching `sdd-design` with the values from its generated table row:
 ```
 spawn_agent(task_name="sdd-design", message=<design prompt>, model="<assigned-model>", reasoning_effort="<assigned-effort>", fork_turns="none")
-wait_agent(task_name="sdd-design")
-close_agent(task_name="sdd-design")
+repeat:
+  wait_agent(timeout_ms=300000)
+  list_agents()
+until target reaches a terminal state
+if target terminal state is not successful:
+  stop and surface target final output or status
 ```
 
 Note: the `~/.codex/<tier>.config.toml` profile files apply to whole CLI sessions launched with `codex --profile <name>`. They do NOT apply to spawned sub-agents — for those, pass `reasoning_effort` and `model` directly as shown above.
@@ -133,8 +165,8 @@ Note: the `~/.codex/<tier>.config.toml` profile files apply to whole CLI session
 
 Independent phases such as `sdd-spec` and `sdd-design` MAY be spawned in parallel when the
 thread budget allows. Parallel does not mean background: after launching the batch, call
-`wait_agent` for all spawned agents, then `close_agent` for each completed agent, and only
-then summarize results or continue to the next dependent phase.
+`wait_agent` until every spawned agent has completed, using `list_agents()` to correlate
+updates, and only then summarize results or continue to the next dependent phase.
 
 ### Graceful degradation
 
@@ -275,11 +307,10 @@ The gatekeeper runs in addition to the Review Workload Guard and the Mandatory D
 
 Use the provider-owned Git-common-dir runtime ledger for every runtime-bearing `sdd-apply`, `sdd-verify`, or remediation continuation. It is the single attempt/budget authority for both OpenSpec and Engram; never persist caller-authored counters in OpenSpec files, Engram topics, prompts, or Pi state.
 
-1. Before any actor or harness launch, read `gentle-ai sdd-attempt status --cwd <repo> --change <change>`. Treat its exact `revision`, `active_attempt`, `decision_required`, and `next_action` as authoritative.
-2. If `active_attempt` is populated, do not launch again. Finish that charged ordinal with `gentle-ai sdd-attempt finish --cwd <repo> --change <change> --expected-revision <revision> ...`, recording passed, failed, or interrupted outcome plus evidence revision, diagnosis, harness disposition, cleanup evidence, and process evidence.
-3. If `decision_required` is true, stop execution and report the native diagnosis/budget state. Only an explicit maintainer scope decision may call `gentle-ai sdd-attempt reset --cwd <repo> --change <change> --expected-revision <revision> ...`; a renamed work unit or new process never resets cumulative budgets.
-4. When `next_action` is `begin`, consume the ordinal before launch with `gentle-ai sdd-attempt begin --cwd <repo> --change <change> --expected-revision <revision> ...`. After `next_action: complete`, never rerun the same objective; a genuinely distinct objective requires an explicit reset.
-5. A passing bound remediation MUST add `--expected-binding-revision`, `--successor-lineage`, and `--remediates-evidence-revision` to `gentle-ai sdd-attempt finish`; read their values from `gentle-ai sdd-attempt status --cwd <repo> --change <change>` as `binding_revision`, `binding.lineage`, and `evidence_revision`. When the corrected candidate is already approved on the bound lineage, the lineage the binding already names is itself the successor — do not run `review recover` to mint a distinct one, which is correctly refused for an unchanged approved scope and for a same-lineage successor. The native command charges the attempt, persists evidence, and binds the approved successor in one HEAD CAS; do not publish those steps separately.
+1. Before an actor or harness launch, call `gentle-ai sdd-attempt acquire --cwd <repo> --change <change> --request-id <id> --work-unit <label> --evidence-goal <goal> --max-attempts <count> --max-changed-lines <count>`.
+2. Launch only when acquire returns `state: proceed`, and retain its opaque `token`. `blocked` or `complete` stops the launch.
+3. After the external run, call `gentle-ai sdd-attempt settle --cwd <repo> --change <change> --token <token> --request-id <settle-id> ...` with a request ID distinct from the acquire operation's request ID, outcome, and bounded evidence. Reuse each operation's own ID only for its idempotent replay. Settle derives native binding/remediation inputs; pass `--successor-lineage` only for a distinct approved successor, otherwise the bound lineage remains its own successor.
+4. Route only from settle's `proceed`, `blocked`, or `complete` state. Full `status|begin|finish|reset` operations are diagnostic/compatibility surfaces; reset requires an explicit maintainer scope decision and is never automatic.
 
 ### Artifact Store Mode
 
