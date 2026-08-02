@@ -138,6 +138,28 @@ func TestUnresolvedRuntimeIdentityIsNotReportedAsUnsupportedTransport(t *testing
 			name: "start without runtime identity", operation: "review.start",
 			args: []string{"start", "--contract", ReviewIntegrationContractV2, "--projection", "workspace", "--cwd", missingRepository},
 		},
+		// An empty token satisfies the cardinality check but declares no
+		// identity, so there is nothing to evaluate a transport against.
+		{
+			name: "status with an empty runtime identity", operation: "review.status",
+			args: []string{"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", missingRepository, "--agent", ""},
+		},
+		{
+			name: "status with an inline empty runtime identity", operation: "review.status",
+			args: []string{"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", missingRepository, "--agent="},
+		},
+		{
+			name: "start with an empty runtime identity", operation: "review.start",
+			args: []string{"start", "--contract", ReviewIntegrationContractV2, "--projection", "workspace", "--cwd", missingRepository, "--agent", ""},
+		},
+		{
+			name: "start with an inline empty runtime identity", operation: "review.start",
+			args: []string{"start", "--contract", ReviewIntegrationContractV2, "--projection", "workspace", "--cwd", missingRepository, "--agent="},
+		},
+		{
+			name: "status with a whitespace-only runtime identity", operation: "review.status",
+			args: []string{"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", missingRepository, "--agent", "   "},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer

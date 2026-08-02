@@ -760,9 +760,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		var runtime model.AgentID
 		if *contract == ReviewIntegrationContractV2 {
-			if reviewRuntimeAgentCount(args) != 1 {
+			if reviewRuntimeAgentCount(args) != 1 || strings.TrimSpace(*runtimeAgent) == "" {
 				// Not a by-design world-action: a stale or malformed route has a
-				// runnable exit, and the message names it.
+				// runnable exit, and the message names it. An empty token carries
+				// no identity to evaluate a transport against, so it belongs here
+				// rather than in the unsupported-transport classification.
 				return reviewPreflightRefusal(reviewRuntimeIdentityUnresolvedReason, errors.New("negotiated lifecycle STATUS requires exactly one generated runtime identity; regenerate the route with gentle-ai sync and re-run it unchanged"))
 			}
 			var runtimeErr error
@@ -1476,9 +1478,11 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	runtimeRequested := reviewRuntimeAgentCount(args) > 0
 	if negotiated && (*contract == ReviewIntegrationContractV2 || runtimeRequested) {
-		if reviewRuntimeAgentCount(args) != 1 {
+		if reviewRuntimeAgentCount(args) != 1 || strings.TrimSpace(*runtimeAgent) == "" {
 			// Not a by-design world-action: a stale or malformed route has a
-			// runnable exit, and the message names it.
+			// runnable exit, and the message names it. An empty token carries no
+			// identity to evaluate a transport against, so it belongs here rather
+			// than in the unsupported-transport classification.
 			return reviewPreflightRefusal(reviewRuntimeIdentityUnresolvedReason, errors.New("negotiated START requires exactly one generated runtime identity; regenerate the route with gentle-ai sync and re-run it unchanged"))
 		}
 		if _, err := reviewRuntimeWithImmutableTransport(*runtimeAgent); err != nil {
