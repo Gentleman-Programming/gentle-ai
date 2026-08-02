@@ -1077,3 +1077,93 @@ func writeNegotiatedStatusHistory(t *testing.T, repo string, count int) {
 		}
 	}
 }
+
+// TestCorrectionPlanStatusAcceptsFrozenBindingAfterAppliedFix is the regression
+// guard for issue #2132: after a bounded correction the plan request binds to
+// the FROZEN reviewed candidate, so read-only review status must accept it even
+// when the live workspace identity diverges (the fix applied, uncommitted).
+// Before the fix, Validate() compared the plan request's TargetIdentity against
+// the LIVE identity and failed the whole status operation with
+// "negotiated status correction request binding is invalid".
+func TestCorrectionPlanStatusAcceptsFrozenBindingAfterAppliedFix(t *testing.T) {
+	for _, tt := range []struct {
+		name, reason string
+		forecast     bool
+		change       bool
+	}{
+		{name: "no forecast, changed workspace", reason: "correction_plan_required", change: true},
+		{name: "forecast, request-build error", reason: "corrected_candidate_unavailable", forecast: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			candidatePath := filepath.Join(repo, "candidate.go")
+			if err := os.WriteFile(candidatePath, []byte("package candidate\n\nfunc value() int { return 1 }\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			lineage := "correction-status-frozen-" + strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(tt.name), ",", ""), " ", "-")
+			started := runNegotiatedReviewStart(t, repo, lineage)
+			resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
+			writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
+				Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
+					Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate value is wrong",
+					ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+					CausalDisposition: reviewtransaction.CausalIntroduced,
+				}}, Evidence: []string{"inspected exact candidate"},
+			})
+			if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
+				t.Fatal(err)
+			}
+			if tt.forecast {
+				if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "1"}, &bytes.Buffer{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.change {
+				// The bounded fix lands in the workspace but stays uncommitted,
+				// so the live identity diverges from the reviewed candidate.
+				if err := os.WriteFile(candidatePath, []byte("package candidate\n\nfunc value() int { return 2 }\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(store.StatePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var statusOutput bytes.Buffer
+			if err := RunReview([]string{
+				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition", "--lineage", started.LineageID,
+			}, &statusOutput); err != nil {
+				t.Fatalf("status after applied fix: %v\n%s", err, statusOutput.String())
+			}
+			var status ReviewTargetStatusResult
+			decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+			if err := status.Validate(); err != nil {
+				t.Fatalf("status contract validation: %v\n%s", err, statusOutput.String())
+			}
+			transition, request := status.NextTransition, status.NextTransition.CorrectionRequest
+			if transition == nil || request == nil || transition.ReasonCode != tt.reason {
+				t.Fatalf("status transition = %#v\n%s", transition, statusOutput.String())
+			}
+			if request.LineageID != status.Authority.LineageID || request.ExpectedRevision != status.Authority.Revision ||
+				request.TargetIdentity != reviewAuthorityTargetIdentity(status) {
+				t.Fatalf("correction plan request does not bind to the frozen reviewed candidate: request=%#v status=%#v", request, status)
+			}
+			if tt.change {
+				if status.AuthorityTargetIdentity == "" || request.TargetIdentity != status.AuthorityTargetIdentity ||
+					request.TargetIdentity == status.TargetIdentity {
+					t.Fatalf("changed workspace status did not bind to the frozen authority identity: request=%#v status=%#v", request, status)
+				}
+			} else if status.AuthorityTargetIdentity != "" {
+				t.Fatalf("unchanged workspace status invented an authority identity: %#v", status)
+			}
+			after, err := os.ReadFile(store.StatePath())
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("read-only status after applied fix mutated authority: %v", err)
+			}
+		})
+	}
+}
