@@ -67,6 +67,27 @@ func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 	}
 }
 
+func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
+	want := map[string]string{
+		"fixtures/capabilities-v2.1.fixture.json": "4bbcbaed1b20e6ea8f9c615f35ff17b13ee69b4648784a4906191880751c668d",
+		"fixtures/consent-v3.fixture.json":          "ead7d16aa1dabe9db4b7675d7e3b3de5594d7856f98960d8ec9bba99f91c0e31",
+		"schemas/capabilities-v2.1.schema.json":     "9ede8ebbe3e169cf6ca4f4a6882c9c4e588a6d1073d8e22a155649cd41d38cd0",
+		"schemas/consent-v3.schema.json":             "80915f5f4f43a494826253d1e7251fc463989f41d2cf163a6a52a8b4328c023c",
+		"schemas/status.schema.json":                 "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
+	}
+	for name, expected := range want {
+		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		if actual := hex.EncodeToString(digest[:]); actual != expected {
+			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
+		}
+	}
+}
+
 func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas")
 	tests := []struct {
@@ -164,9 +185,11 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "artifact-subject.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/artifact-subject.schema.json"},
 		{name: "admitted-result.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/admitted-result.schema.json"},
 		{name: "start.schema.json", id: ReviewIntegrationStartSchemaID},
-		{name: "status.schema.json", id: ReviewIntegrationStatusSchemaID},
+		{name: "status.schema.json", id: ReviewIntegrationStatusSchemaIDV3},
+		{name: "status-v4.schema.json", id: ReviewIntegrationStatusSchemaID},
 		{name: "capabilities.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV2},
 		{name: "capabilities-v2.1.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV21},
+		{name: "capabilities-v2.2.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV22},
 		{name: "consent.schema.json", id: ReviewIntegrationConsentSchemaIDV2},
 		{name: "consent-v3.schema.json", id: ReviewIntegrationConsentSchemaIDV3},
 		{name: "failure.schema.json", id: ReviewIntegrationFailureSchemaIDV2},

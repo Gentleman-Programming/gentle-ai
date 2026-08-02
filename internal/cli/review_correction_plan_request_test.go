@@ -135,8 +135,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			validateAgainstPublishedNextTransitionSchema(t, transitionPayload)
-			validateAgainstPublishedNextTransitionSchemaV2(t, transitionPayload)
+			validateAgainstPublishedNextTransitionSchemaV4(t, transitionPayload)
 			after, err := os.ReadFile(store.StatePath())
 			if err != nil || !bytes.Equal(before, after) || len(record.State.CorrectionAttempts) != 0 || record.State.CumulativeCorrectionLines != 0 {
 				t.Fatalf("read-only correction request consumed authority or budget: %v", err)

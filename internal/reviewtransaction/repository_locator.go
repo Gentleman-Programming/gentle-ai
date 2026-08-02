@@ -316,8 +316,26 @@ func validateLiveReviewRepositoryContext(ctx context.Context, repo string, bindi
 	if err != nil {
 		return err
 	}
-	if record.Revision != binding.Revision || record.State.State != StateReviewing ||
-		record.State.LineageID != binding.LineageID || record.State.InitialSnapshot.Identity != binding.TargetIdentity {
+	if record.Revision != binding.Revision || record.State.LineageID != binding.LineageID {
+		return errors.New("review repository context is stale or has no live matching authority")
+	}
+	switch record.State.State {
+	case StateReviewing:
+		if record.State.InitialSnapshot.Identity != binding.TargetIdentity {
+			return errors.New("review repository context is stale or has no live matching authority")
+		}
+	case StateCorrectionRequired:
+		if record.State.ProposedCorrectionLines == nil {
+			if record.State.CurrentSnapshot.Identity != binding.TargetIdentity {
+				return errors.New("review repository context is stale or has no live matching authority")
+			}
+			return nil
+		}
+		correction, err := BuildTargetedValidationRequest(ctx, repo, record.State, record.Revision)
+		if err != nil || correction.CorrectionTargetIdentity != binding.TargetIdentity {
+			return errors.New("review repository context is stale or has no live matching authority")
+		}
+	default:
 		return errors.New("review repository context is stale or has no live matching authority")
 	}
 	return nil

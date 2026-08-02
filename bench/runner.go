@@ -151,8 +151,12 @@ func (s *Sandbox) gitCallsSince() *int {
 
 // invoke runs the product once and returns a full Observation.
 func (s *Sandbox) invoke(args []string) Observation {
+	return s.invokeAt(s.Repo, args)
+}
+
+func (s *Sandbox) invokeAt(dir string, args []string) Observation {
 	cmd := exec.Command(s.Binary, args...)
-	cmd.Dir = s.Repo
+	cmd.Dir = dir
 	cmd.Env = s.env()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -397,7 +401,11 @@ type journeyRun struct {
 // run executes one product invocation inside a journey, folding it into the
 // metrics. Composite steps call it directly.
 func (r *journeyRun) run(args []string, modelRun bool) Observation {
-	observation := r.sandbox.invoke(args)
+	return r.runAt(r.sandbox.Repo, args, modelRun)
+}
+
+func (r *journeyRun) runAt(dir string, args []string, modelRun bool) Observation {
+	observation := r.sandbox.invokeAt(dir, args)
 	record := r.accumulator.observe(r.step, observation, r.sandbox.gitCallsSince(), modelRun)
 	r.accumulator.records = append(r.accumulator.records, record)
 	return observation
