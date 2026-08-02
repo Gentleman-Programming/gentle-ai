@@ -41,6 +41,16 @@ var piCodeGraphEffectiveMCPProbe PiCodeGraphEffectiveMCPProbe = probePiCodeGraph
 // verification remains separate capability evidence.
 var ErrPiCodeGraphAdapterHealthUnavailable = errors.New("Pi MCP adapter health is not machine-verifiable")
 
+type piCodeGraphPendingError struct {
+	cause error
+}
+
+func (err *piCodeGraphPendingError) Error() string { return err.cause.Error() }
+func (err *piCodeGraphPendingError) Unwrap() error { return err.cause }
+func (err *piCodeGraphPendingError) Is(target error) bool {
+	return target == ErrPiCodeGraphAdapterHealthUnavailable
+}
+
 const piCodeGraphPendingAction = "Pi CodeGraph integration remains pending: CodeGraph configuration was installed and preserved, and direct MCP capability was verified. Pi adapter activation health cannot be machine-verified on the detected Pi version."
 
 type PiChildClassification string
@@ -113,9 +123,6 @@ func PreservePiCodeGraphPending(result PiCodeGraphResult, err error) (PiCodeGrap
 }
 
 func isExclusivePiCodeGraphPending(err error) bool {
-	if errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
-		return true
-	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		children := joined.Unwrap()
 		if len(children) == 0 {
@@ -126,6 +133,12 @@ func isExclusivePiCodeGraphPending(err error) bool {
 				return false
 			}
 		}
+		return true
+	}
+	if err == ErrPiCodeGraphAdapterHealthUnavailable {
+		return true
+	}
+	if _, ok := err.(*piCodeGraphPendingError); ok {
 		return true
 	}
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
@@ -488,7 +501,7 @@ func verifyPiMCPWithProbe(mcpPath string, probe PiCodeGraphEffectiveMCPProbe) (P
 	result, err := probe(mcpPath)
 	if err != nil && !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
 		if isPiCodeGraphMCPTransportEOF(err) {
-			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", errors.Join(err, ErrPiCodeGraphAdapterHealthUnavailable))
+			return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", &piCodeGraphPendingError{cause: err})
 		}
 		return PiCodeGraphMCPVerification{}, fmt.Errorf("Pi CodeGraph MCP capability probe failed: %w", err)
 	}

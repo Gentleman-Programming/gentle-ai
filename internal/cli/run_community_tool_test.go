@@ -192,6 +192,7 @@ func TestPiCodeGraphPendingClassification(t *testing.T) {
 		{name: "wrapped", err: fmt.Errorf("verify adapter: %w", communitytool.ErrPiCodeGraphAdapterHealthUnavailable), pending: true},
 		{name: "all pending join", err: errors.Join(communitytool.ErrPiCodeGraphAdapterHealthUnavailable, fmt.Errorf("wrapped: %w", communitytool.ErrPiCodeGraphAdapterHealthUnavailable)), pending: true},
 		{name: "pending plus rollback failure", err: errors.Join(communitytool.ErrPiCodeGraphAdapterHealthUnavailable, realErr)},
+		{name: "nested pending plus rollback failure", err: fmt.Errorf("reconcile: %w", errors.Join(fmt.Errorf("probe: %w", communitytool.ErrPiCodeGraphAdapterHealthUnavailable), realErr))},
 	}
 
 	for _, tc := range tests {
@@ -203,7 +204,7 @@ func TestPiCodeGraphPendingClassification(t *testing.T) {
 				}
 				return
 			}
-			if !errors.Is(err, realErr) || len(result.ManualActions) != 0 {
+			if err == nil || !errors.Is(err, realErr) || len(result.ManualActions) != 0 {
 				t.Fatalf("result=%#v error=%v, want fatal rollback error without pending action", result, err)
 			}
 		})
