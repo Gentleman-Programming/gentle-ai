@@ -64,11 +64,11 @@ func CodeGraphGuidanceMarkdown() string {
 
 // InjectCodeGraphGuidanceIfSelected is the central community-tool hook for
 // agent guidance. It is a no-op unless CodeGraph is among the selected tools.
-func InjectCodeGraphGuidanceIfSelected(homeDir string, selected []model.CommunityToolID) (GuidanceInjectionResult, error) {
+func InjectCodeGraphGuidanceIfSelected(homeDir string, selected []model.CommunityToolID, selectedAgents ...model.AgentID) (GuidanceInjectionResult, error) {
 	if !slices.Contains(selected, model.CommunityToolCodeGraph) {
 		return GuidanceInjectionResult{}, nil
 	}
-	return InjectCodeGraphGuidance(homeDir)
+	return InjectCodeGraphGuidance(homeDir, selectedAgents...)
 }
 
 // RefreshCodeGraphGuidanceIfConfigured refreshes CodeGraph guidance during
@@ -163,7 +163,7 @@ func CleanLegacyCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, erro
 // detected supported agents. Detection is intentionally based on existing agent
 // config directories so standalone Community Tools setup does not create agent
 // configs for tools the user does not use.
-func InjectCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, error) {
+func InjectCodeGraphGuidance(homeDir string, selectedAgents ...model.AgentID) (GuidanceInjectionResult, error) {
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
 		return GuidanceInjectionResult{}, err
@@ -172,6 +172,9 @@ func InjectCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, error) {
 	installed := agents.DiscoverInstalled(reg, homeDir)
 	result := GuidanceInjectionResult{}
 	for _, installedAgent := range installed {
+		if len(selectedAgents) > 0 && !slices.Contains(selectedAgents, installedAgent.ID) {
+			continue
+		}
 		adapter, ok := reg.Get(installedAgent.ID)
 		if !ok || !isCodeGraphCompatibleAgent(installedAgent.ID) || !adapter.SupportsSystemPrompt() || installedAgent.ID == model.AgentPi {
 			continue
@@ -193,7 +196,7 @@ func InjectCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, error) {
 
 // CodeGraphGuidancePaths returns the system prompt files that the CodeGraph
 // guidance injector may touch for currently detected supported agents.
-func CodeGraphGuidancePaths(homeDir string) []string {
+func CodeGraphGuidancePaths(homeDir string, selectedAgents ...model.AgentID) []string {
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
 		return nil
@@ -202,6 +205,9 @@ func CodeGraphGuidancePaths(homeDir string) []string {
 	installed := agents.DiscoverInstalled(reg, homeDir)
 	paths := make([]string, 0, len(installed))
 	for _, installedAgent := range installed {
+		if len(selectedAgents) > 0 && !slices.Contains(selectedAgents, installedAgent.ID) {
+			continue
+		}
 		adapter, ok := reg.Get(installedAgent.ID)
 		if !ok || !isCodeGraphCompatibleAgent(installedAgent.ID) || !adapter.SupportsSystemPrompt() {
 			continue
@@ -217,14 +223,17 @@ func CodeGraphGuidancePaths(homeDir string) []string {
 // CodeGraphManagedPaths returns every detected agent file that CodeGraph setup
 // or managed guidance may update. Sync uses this complete set for backup and
 // changed-file accounting before invoking the upstream installer.
-func CodeGraphManagedPaths(homeDir string) []string {
+func CodeGraphManagedPaths(homeDir string, selectedAgents ...model.AgentID) []string {
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
 		return nil
 	}
 
-	paths := append([]string(nil), CodeGraphGuidancePaths(homeDir)...)
+	paths := append([]string(nil), CodeGraphGuidancePaths(homeDir, selectedAgents...)...)
 	for _, installedAgent := range agents.DiscoverInstalled(reg, homeDir) {
+		if len(selectedAgents) > 0 && !slices.Contains(selectedAgents, installedAgent.ID) {
+			continue
+		}
 		adapter, ok := reg.Get(installedAgent.ID)
 		if !ok || !isCodeGraphCompatibleAgent(installedAgent.ID) {
 			continue
@@ -277,7 +286,7 @@ func ReconcileOpenCodeCodeGraph(homeDir string, runner Runner) (GuidanceInjectio
 		return GuidanceInjectionResult{}, fmt.Errorf("OpenCode CodeGraph reconciliation runner is not configured")
 	}
 
-	paths := CodeGraphManagedPaths(homeDir)
+	paths := CodeGraphManagedPaths(homeDir, model.AgentOpenCode)
 	before := readCodeGraphManagedFiles(paths)
 	if err := runner.Run("codegraph", "install", "--target", "opencode", "--location", "global", "--yes"); err != nil {
 		return GuidanceInjectionResult{}, fmt.Errorf("reconcile OpenCode CodeGraph MCP wiring: %w", err)

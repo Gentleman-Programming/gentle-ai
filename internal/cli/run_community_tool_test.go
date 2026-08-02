@@ -417,20 +417,25 @@ func TestCommunityToolInstallStepUsesInjectableInstaller(t *testing.T) {
 
 	var gotTool model.CommunityToolID
 	var gotWorkspace string
+	var gotAgents []model.AgentID
 	var runner communitytool.Runner
-	installCommunityToolWithHome = func(tool model.CommunityToolID, workspaceDir string, _ string, r communitytool.Runner, _ communitytool.Detector, _ ...model.AgentID) (communitytool.Result, error) {
+	installCommunityToolWithHome = func(tool model.CommunityToolID, workspaceDir string, _ string, r communitytool.Runner, _ communitytool.Detector, agents ...model.AgentID) (communitytool.Result, error) {
 		gotTool = tool
 		gotWorkspace = workspaceDir
+		gotAgents = append([]model.AgentID(nil), agents...)
 		runner = r
 		return communitytool.Result{Tool: tool}, nil
 	}
 
-	step := communityToolInstallStep{id: "community-tool:codegraph", tool: model.CommunityToolCodeGraph, workspaceDir: "/work/project"}
+	step := communityToolInstallStep{id: "community-tool:codegraph", tool: model.CommunityToolCodeGraph, workspaceDir: "/work/project", agents: []model.AgentID{model.AgentCodex, model.AgentClaudeCode}}
 	if err := step.Run(); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if gotTool != model.CommunityToolCodeGraph || gotWorkspace != "/work/project" || runner == nil {
 		t.Fatalf("installer args = (%q, %q, %#v), want CodeGraph, workspace, runner", gotTool, gotWorkspace, runner)
+	}
+	if !reflect.DeepEqual(gotAgents, []model.AgentID{model.AgentCodex, model.AgentClaudeCode}) {
+		t.Fatalf("installer agents = %#v, want exact selected agent IDs", gotAgents)
 	}
 }
 

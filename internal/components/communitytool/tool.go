@@ -131,7 +131,7 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	result := Result{Tool: id}
 	before := DetectStatus(id, homeDir, detector)
 	result.StatusBefore = &before
-	snapshots, err := snapshotCodeGraphPaths(CodeGraphManagedPaths(homeDir))
+	snapshots, err := snapshotCodeGraphPaths(CodeGraphManagedPaths(homeDir, selectedAgents...))
 	if err != nil {
 		return result, err
 	}
@@ -152,7 +152,7 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 				return rollback(err)
 			}
 		}
-		guidanceResult, err := InjectCodeGraphGuidanceIfSelected(homeDir, []model.CommunityToolID{id})
+		guidanceResult, err := InjectCodeGraphGuidanceIfSelected(homeDir, []model.CommunityToolID{id}, selectedAgents...)
 		if err != nil {
 			return rollback(err)
 		}
@@ -168,7 +168,7 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		}
 		after := DetectStatus(id, homeDir, detector)
 		result.StatusAfter = &after
-		if err := validateCodeGraphInstallStatus(after); err != nil {
+		if err := validateCodeGraphInstallStatus(after, selectedAgents...); err != nil {
 			return rollback(err)
 		}
 		if openCodeResult.Changed || guidanceResult.Changed {
@@ -203,23 +203,27 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 			return rollback(fmt.Errorf("run %q: %w", strings.Join(command, " "), err))
 		}
 	}
-	if _, err := ReconcileOpenCodeCodeGraph(homeDir, runner); err != nil {
+	if len(selectedAgents) == 0 || slices.Contains(selectedAgents, model.AgentOpenCode) {
+		if _, err := ReconcileOpenCodeCodeGraph(homeDir, runner); err != nil {
+			return rollback(err)
+		}
+	}
+	if _, err := InjectCodeGraphGuidanceIfSelected(homeDir, []model.CommunityToolID{id}, selectedAgents...); err != nil {
 		return rollback(err)
 	}
-	if _, err := InjectCodeGraphGuidanceIfSelected(homeDir, []model.CommunityToolID{id}); err != nil {
-		return rollback(err)
-	}
-	piResult, err := reconcileDetectedPiCodeGraph(homeDir, workspaceDir)
-	if err != nil {
-		return rollback(err)
-	}
-	result.PiCodeGraph = piResult
-	if piResult != nil {
-		result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
+	if len(selectedAgents) == 0 || slices.Contains(selectedAgents, model.AgentPi) {
+		piResult, err := reconcileDetectedPiCodeGraph(homeDir, workspaceDir)
+		if err != nil {
+			return rollback(err)
+		}
+		result.PiCodeGraph = piResult
+		if piResult != nil {
+			result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
+		}
 	}
 	after := DetectStatus(id, homeDir, detector)
 	result.StatusAfter = &after
-	if err := validateCodeGraphInstallStatus(after); err != nil {
+	if err := validateCodeGraphInstallStatus(after, selectedAgents...); err != nil {
 		return rollback(err)
 	}
 	result.ManualActions = append(result.ManualActions, "CodeGraph CLI was installed and supported agents were connected. Project indexes will be created automatically when an enabled agent opens inside a project.")
@@ -266,7 +270,7 @@ func reconcileDetectedPiCodeGraph(homeDir, workspaceDir string) (*PiCodeGraphRes
 	return &result, err
 }
 
-func validateCodeGraphInstallStatus(status Status) error {
+func validateCodeGraphInstallStatus(status Status, selectedAgents ...model.AgentID) error {
 	if status.Tool != model.CommunityToolCodeGraph {
 		return nil
 	}
@@ -275,6 +279,9 @@ func validateCodeGraphInstallStatus(status Status) error {
 	}
 	missing := make([]string, 0)
 	for _, agent := range status.Agents {
+		if len(selectedAgents) > 0 && !slices.Contains(selectedAgents, agent.Agent) {
+			continue
+		}
 		if agent.Agent == model.AgentPi {
 			continue
 		}

@@ -1038,6 +1038,43 @@ func TestInstallRunsFullReconcileWhenAnotherAgentIsMissing(t *testing.T) {
 	}
 }
 
+func TestInstallFullReconcileLeavesUnselectedDetectedAgentsUnchanged(t *testing.T) {
+	home := t.TempDir()
+	claudeConfig := filepath.Join(home, ".claude.json")
+	openCodeConfig := filepath.Join(home, ".config", "opencode", "opencode.json")
+	piSettings := filepath.Join(home, ".pi", "agent", "settings.json")
+	mustWrite(t, filepath.Join(home, ".claude", "settings.json"), `{}`)
+	mustWrite(t, openCodeConfig, `{"user":"opencode"}`)
+	mustWrite(t, piSettings, `{"user":"pi"}`)
+
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(name string, args ...string) error {
+		command := strings.Join(append([]string{name}, args...), " ")
+		if command != "codegraph install --target claude --location global --yes" {
+			t.Fatalf("command = %q, want selected Claude target only", command)
+		}
+		mustWrite(t, claudeConfig, `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
+		return nil
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }), model.AgentClaudeCode)
+	if err != nil {
+		t.Fatalf("InstallWithHome() error = %v", err)
+	}
+	if !reflect.DeepEqual(result.CommandsRun, []string{"codegraph install --target claude --location global --yes"}) {
+		t.Fatalf("CommandsRun = %#v, want selected Claude target only", result.CommandsRun)
+	}
+	for path, want := range map[string]string{
+		openCodeConfig: `{"user":"opencode"}`,
+		piSettings:     `{"user":"pi"}`,
+	} {
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if string(content) != want {
+			t.Fatalf("unselected config %q = %s, want unchanged %s", path, content, want)
+		}
+	}
+}
+
 func TestDetectStatusReportsCodexMissingWhenConfigHasCodeGraphButGuidanceIsMissing(t *testing.T) {
 	home := t.TempDir()
 	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), strings.Join([]string{
