@@ -3,6 +3,7 @@ package opencodeplugin
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,6 +50,8 @@ var definitions = []Definition{
 }
 
 const gentleLogoPluginFile = "gentle-logo.tsx"
+
+var writeGentleLogoFileAtomic = filemerge.WriteFileAtomic
 
 const gentleLogoPluginSource = `// @ts-nocheck
 /** @jsxImportSource @opentui/solid */
@@ -158,25 +161,37 @@ func installGentleLogo(homeDir string) (Result, error) {
 	pluginPath := filepath.Join(pluginDir, gentleLogoPluginFile)
 	tuiPath := filepath.Join(opencodeDir, "tui.json")
 
-	existed := false
-	var previousContent []byte
-	if data, err := os.ReadFile(pluginPath); err == nil {
-		existed = true
-		previousContent = data
+	previousContent, readErr := os.ReadFile(pluginPath)
+	existed := readErr == nil
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return Result{}, fmt.Errorf("read existing Gentle Logo TUI plugin: %w", readErr)
+	}
+	var previousMode os.FileMode
+	if existed {
+		info, statErr := os.Stat(pluginPath)
+		if statErr != nil {
+			return Result{}, fmt.Errorf("stat existing Gentle Logo TUI plugin: %w", statErr)
+		}
+		previousMode = info.Mode().Perm()
 	}
 
-	pluginWrite, err := filemerge.WriteFileAtomic(pluginPath, []byte(gentleLogoPluginSource), 0o644)
+	pluginWrite, err := writeGentleLogoFileAtomic(pluginPath, []byte(gentleLogoPluginSource), 0o644)
 	if err != nil {
 		return Result{}, fmt.Errorf("write Gentle Logo TUI plugin: %w", err)
 	}
 	tuiChanged, err := ensureTUIPlugin(tuiPath, pluginPath)
 	if err != nil {
+		var rollbackErr error
 		if existed {
-			_ = os.WriteFile(pluginPath, previousContent, 0o644)
+			if _, restoreErr := writeGentleLogoFileAtomic(pluginPath, previousContent, previousMode); restoreErr != nil {
+				rollbackErr = fmt.Errorf("restore Gentle Logo TUI plugin: %w", restoreErr)
+			}
 		} else {
-			_ = os.Remove(pluginPath)
+			if removeErr := os.Remove(pluginPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				rollbackErr = fmt.Errorf("remove new Gentle Logo TUI plugin: %w", removeErr)
+			}
 		}
-		return Result{}, err
+		return Result{}, errors.Join(err, rollbackErr)
 	}
 
 	return Result{

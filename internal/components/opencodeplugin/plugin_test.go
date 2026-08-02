@@ -1,12 +1,16 @@
 package opencodeplugin
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
@@ -185,8 +189,8 @@ func TestInstallGentleLogoRollsBackSourceWhenRegistrationFails(t *testing.T) {
 	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	originalContent := []byte("// previous custom content")
-	if err := os.WriteFile(pluginPath, originalContent, 0o644); err != nil {
+	originalContent := []byte{0x00, 0xff, 'G', 'A', 'I', '\n'}
+	if err := os.WriteFile(pluginPath, originalContent, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -198,7 +202,46 @@ func TestInstallGentleLogoRollsBackSourceWhenRegistrationFails(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("ReadFile(pluginPath) error = %v", readErr)
 	}
-	if string(data) != string(originalContent) {
-		t.Fatalf("pluginPath content = %q, want restored original %q", string(data), string(originalContent))
+	if !bytes.Equal(data, originalContent) {
+		t.Fatalf("pluginPath content = %v, want restored original %v", data, originalContent)
+	}
+	info, statErr := os.Stat(pluginPath)
+	if statErr != nil {
+		t.Fatalf("Stat(pluginPath) error = %v", statErr)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("pluginPath mode = %o, want restored 600", info.Mode().Perm())
+	}
+}
+
+func TestInstallGentleLogoJoinsRegistrationAndRollbackErrors(t *testing.T) {
+	home := t.TempDir()
+	configDir := filepath.Join(home, ".config", "opencode")
+	pluginPath := filepath.Join(configDir, "tui-plugins", gentleLogoPluginFile)
+	if err := os.MkdirAll(filepath.Dir(pluginPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pluginPath, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "tui.json"), []byte("invalid json {{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rollbackErr := errors.New("rollback write failed")
+	originalWrite := writeGentleLogoFileAtomic
+	writes := 0
+	writeGentleLogoFileAtomic = func(path string, content []byte, perm fs.FileMode) (filemerge.WriteResult, error) {
+		writes++
+		if writes == 2 {
+			return filemerge.WriteResult{}, rollbackErr
+		}
+		return originalWrite(path, content, perm)
+	}
+	t.Cleanup(func() { writeGentleLogoFileAtomic = originalWrite })
+
+	_, err := Install(home, model.OpenCodePluginGentleLogo)
+	if err == nil || !strings.Contains(err.Error(), "parse OpenCode TUI config") || !errors.Is(err, rollbackErr) {
+		t.Fatalf("Install(GentleLogo) error = %v, want joined registration and rollback errors", err)
 	}
 }
