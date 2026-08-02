@@ -187,7 +187,11 @@ the squash merge while the reviewed target is still live. Use this order:
 2. Persist the required review transaction, frozen ledger, approved receipt,
    and gate-context artifacts for that exact target.
 3. Run SDD verification and persist a passing `verify-report` plus its required
-   verification evidence.
+   verification evidence as one target-bound proof. The report's evidence
+   revision and the evidence record's authority revision must identify the same
+   reviewed authority; that evidence must also bind the candidate identity,
+   canonical paths, and ledger IDs of that target. A report/evidence pair from a
+   different revision, candidate, path set, or ledger is not admissible.
 4. Re-read structured SDD status and obtain the applicable native live gate
    result. Archive requires `reviewGate.result: allow`; a stale receipt,
    advisory preflight, or copied status is not an allow result.
