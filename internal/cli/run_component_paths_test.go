@@ -917,6 +917,25 @@ func TestBackupTargetsEngramClaudeIncludeRegistryAndLegacyMigrationSource(t *tes
 	}
 }
 
+func TestBackupTargetsEngramAntigravityIncludePluginStagingFiles(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentAntigravity}, Components: []model.ComponentID{model.ComponentEngram}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+
+	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	pluginDir := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram")
+	for _, want := range []string{
+		filepath.Join(pluginDir, "mcp_config.json"),
+		filepath.Join(pluginDir, "hooks.json"),
+		filepath.Join(pluginDir, "plugin.json"),
+		filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"),
+	} {
+		if !containsPath(targets, want) {
+			t.Fatalf("backupTargets missing Antigravity staging path %q; targets=%v", want, targets)
+		}
+	}
+}
+
 func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	home := t.TempDir()
 	agentIDs := []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi}

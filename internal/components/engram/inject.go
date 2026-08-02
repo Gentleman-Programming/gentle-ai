@@ -267,7 +267,17 @@ type fileImage struct {
 	exists bool
 }
 
-var antigravityWriteFile = filemerge.WriteFileAtomic
+type antigravityStagedTarget struct {
+	path             string
+	content          []byte
+	preserveExisting bool
+	before           fileImage
+}
+
+var (
+	antigravityWriteFile            = filemerge.WriteFileAtomic
+	removeManagedLegacyClaudeConfig = RemoveManagedLegacyClaudeConfig
+)
 
 func readImage(path string) (fileImage, error) {
 	b, err := os.ReadFile(path)
@@ -304,21 +314,47 @@ func writeReconciled(path string, before fileImage, desired []byte) (bool, strin
 	return !sameImage(before, after), state, fmt.Errorf("atomic write %q failed; observed %s: %w", path, state, err)
 }
 
+func restoreAntigravityStaging(targets []antigravityStagedTarget) error {
+	var errs []error
+	for _, target := range targets {
+		if target.before.exists {
+			current, err := readImage(target.path)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("read staged plugin file %q before restore: %w", target.path, err))
+				continue
+			}
+			_, state, err := writeReconciled(target.path, current, target.before.data)
+			if err != nil && state != "post-replacement" {
+				errs = append(errs, fmt.Errorf("restore staged plugin file %q: %w", target.path, err))
+			}
+			continue
+		}
+		if err := os.Remove(target.path); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove newly created staged plugin file %q: %w", target.path, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func antigravityConfigs(globalPath string) (fileImage, string, bool, error) {
 	global, err := readImage(globalPath)
 	if err != nil {
 		return global, "", false, fmt.Errorf("read Antigravity global config %q: %w", globalPath, err)
 	}
 	root := map[string]json.RawMessage{}
-	if global.exists && json.Unmarshal(global.data, &root) != nil {
-		return global, "", false, fmt.Errorf("parse Antigravity global config %q", globalPath)
+	if global.exists {
+		if err := json.Unmarshal(global.data, &root); err != nil {
+			return global, "", false, fmt.Errorf("parse Antigravity global config %q: %w", globalPath, err)
+		}
 	}
 	if global.exists && root == nil {
 		return global, "", false, fmt.Errorf("parse Antigravity global config %q: expected object", globalPath)
 	}
 	servers := map[string]json.RawMessage{}
-	if raw, ok := root["mcpServers"]; ok && json.Unmarshal(raw, &servers) != nil {
-		return global, "", false, fmt.Errorf("parse Antigravity global mcpServers %q", globalPath)
+	if raw, ok := root["mcpServers"]; ok {
+		if err := json.Unmarshal(raw, &servers); err != nil {
+			return global, "", false, fmt.Errorf("parse Antigravity global mcpServers %q: %w", globalPath, err)
+		}
 	}
 	if servers == nil {
 		return global, "", false, fmt.Errorf("parse Antigravity global mcpServers %q: expected object", globalPath)
@@ -369,17 +405,24 @@ func installAntigravityEngramPlugin(homeDir string, adapter agents.Adapter) (boo
 			return false, nil, err
 		}
 	}
+	staging := []antigravityStagedTarget{
+		{path: mcpPath, content: engramOverlayJSON(model.AgentAntigravity, engramCommand)},
+		{path: filepath.Join(pluginDir, "hooks.json"), content: antigravityEngramHooksJSON()},
+		{path: settingsPath, content: settingsContent, preserveExisting: true},
+	}
 	files := []string{mcpPath, filepath.Join(pluginDir, "hooks.json"), settingsPath, manifestPath}
 	changed := false
-	for i, content := range [][]byte{engramOverlayJSON(model.AgentAntigravity, engramCommand), antigravityEngramHooksJSON(), settingsContent} {
-		before, readErr := readImage(files[i])
+	for i := range staging {
+		target := &staging[i]
+		before, readErr := readImage(target.path)
 		if readErr != nil {
-			return false, nil, fmt.Errorf("read staging target %q: %w", files[i], readErr)
+			return false, nil, fmt.Errorf("read staging target %q: %w", target.path, readErr)
 		}
-		if i == 2 && before.exists {
+		target.before = before
+		if target.preserveExisting && before.exists {
 			continue
 		}
-		wrote, _, writeErr := writeReconciled(files[i], before, content)
+		wrote, _, writeErr := writeReconciled(target.path, before, target.content)
 		changed = changed || wrote
 		if writeErr != nil {
 			observed := fmt.Errorf("observed global active=%v at %q, manifest active=%v at %q", globalBefore.exists, globalPath, manifestBefore.exists, manifestPath)
@@ -414,14 +457,26 @@ func installAntigravityEngramPlugin(homeDir string, adapter agents.Adapter) (boo
 		return false, nil, errors.Join(primary, fmt.Errorf("plugin-only registration observed at %q", manifestPath))
 	}
 	if !migrate {
+		restoreErr := restoreAntigravityStaging(staging)
+		if restoreErr != nil {
+			return false, nil, errors.Join(primary, restoreErr, fmt.Errorf("staged plugin restore failed; manual recovery required"))
+		}
 		return false, nil, errors.Join(primary, fmt.Errorf("manifest inactive and no prior global registration; manual recovery required"))
 	}
 	currentGlobal, readErr := readImage(globalPath)
 	if readErr != nil {
+		restoreErr := restoreAntigravityStaging(staging)
+		if restoreErr != nil {
+			return false, nil, errors.Join(primary, restoreErr, fmt.Errorf("staged plugin restore failed; manual recovery required"))
+		}
 		return false, nil, errors.Join(primary, fmt.Errorf("observe global %q before rollback: %w; manual recovery required", globalPath, readErr))
 	}
 	_, rollbackState, rollbackErr := writeReconciled(globalPath, currentGlobal, globalBefore.data)
 	if rollbackErr == nil || rollbackState == "post-replacement" {
+		restoreErr := restoreAntigravityStaging(staging)
+		if restoreErr != nil {
+			return false, nil, errors.Join(primary, rollbackErr, restoreErr, fmt.Errorf("staged plugin restore failed; manual recovery required"))
+		}
 		return false, nil, errors.Join(primary, rollbackErr, fmt.Errorf("global registration restored exactly at %q", globalPath))
 	}
 	if rollbackState == "pre-replacement" {
@@ -463,7 +518,7 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		if adapter.Agent() == model.AgentClaudeCode && userScope {
 			result, err := injectClaudeUserConfig(configHomeDir, adapter)
 			if err != nil {
-				return InjectionResult{}, err
+				return result, err
 			}
 			changed = changed || result.Changed
 			files = append(files, result.Files...)
@@ -716,9 +771,10 @@ func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionRe
 	if !legacyManaged {
 		return result, nil
 	}
-	removed, err := RemoveManagedLegacyClaudeConfig(legacyPath)
+	removed, err := removeManagedLegacyClaudeConfig(legacyPath)
 	if err != nil {
-		return InjectionResult{}, err
+		// The supported registry is already updated; legacy cleanup is best-effort.
+		return result, nil
 	}
 	if !removed {
 		return result, nil

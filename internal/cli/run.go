@@ -1790,6 +1790,12 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					paths = append(paths, p)
 				}
 				if adapter.Agent() == model.AgentAntigravity {
+					pluginDir := filepath.Join(filepath.Dir(adapter.MCPConfigPath(targetDir, "engram")), "plugins", "gentle-ai-engram")
+					paths = append(paths,
+						filepath.Join(pluginDir, "mcp_config.json"),
+						filepath.Join(pluginDir, "hooks.json"),
+						filepath.Join(pluginDir, "plugin.json"),
+					)
 					if p := adapter.SettingsPath(homeDir); p != "" {
 						paths = append(paths, p)
 					}

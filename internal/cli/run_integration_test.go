@@ -1189,7 +1189,7 @@ func TestRunInstallEngramDefaultModeAttemptsClaudeSetup(t *testing.T) {
 	}
 }
 
-func TestRunInstallAntigravityInitializesCLISettingsAfterEngramSetup(t *testing.T) {
+func TestRunInstallAntigravityPreservesCLISettingsAfterEngramSetup(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -1231,8 +1231,8 @@ func TestRunInstallAntigravityInitializesCLISettingsAfterEngramSetup(t *testing.
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
 	}
-	if string(got) != "{}\n" {
-		t.Fatalf("antigravity settings = %q, want initialized empty settings", got)
+	if string(got) != "{\"theme\":\"dark\"}\n" {
+		t.Fatalf("antigravity settings = %q, want settings preserved from Engram setup", got)
 	}
 }
 
