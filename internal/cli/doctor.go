@@ -275,15 +275,18 @@ func resolveDoctorTool(tool string) (string, string, error) {
 }
 
 func doctorToolCopies(tool string, pathDirs []string) []string {
-	seenDirs := make(map[string]struct{}, len(pathDirs))
+	seenCopies := make(map[string]struct{}, len(pathDirs))
 	copies := make([]string, 0, len(pathDirs))
 	for _, dir := range pathDirs {
-		cleanDir := filepath.Clean(dir)
-		if _, seen := seenDirs[cleanDir]; seen {
-			continue
-		}
 		if p := toolInDir(dir, tool); p != "" {
-			seenDirs[cleanDir] = struct{}{}
+			resolved, err := filepath.EvalSymlinks(p)
+			if err != nil {
+				resolved = filepath.Clean(p)
+			}
+			if _, seen := seenCopies[resolved]; seen {
+				continue
+			}
+			seenCopies[resolved] = struct{}{}
 			copies = append(copies, p)
 		}
 	}
