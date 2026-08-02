@@ -80,6 +80,130 @@ func TestRetryCompactFinalVerificationCreatesOnlyOneFrozenValidatingSuccessor(t 
 	}
 }
 
+func TestFinalVerificationRetryEdgeAcceptsCompletedSuccessorLifecycle(t *testing.T) {
+	tests := []struct {
+		name, lineage string
+		recorded      bool
+		approved      bool
+		outcome       VerificationOutcome
+	}{
+		{name: "approved", lineage: "approved", approved: true},
+		{name: "escalated", lineage: "escalated"},
+		{name: "passed record", lineage: "passed-record", recorded: true, outcome: VerificationOutcomePassed},
+		{name: "failed record", lineage: "failed-record", recorded: true, outcome: VerificationOutcomeFailed},
+		{name: "procedural record", lineage: "procedural-record", recorded: true, outcome: VerificationOutcomeProceduralFailure},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newFinalVerificationRetryFixture(t, "retry-lifecycle-"+test.lineage+"-source", "retry-lifecycle-"+test.lineage+"-successor")
+			record, err := RetryCompactFinalVerification(context.Background(), fixture.repo, fixture.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			successor := record.State
+			evidence := []byte("completed retry evidence\n")
+			if test.recorded {
+				evidenceRecord, recordErr := NewVerificationEvidenceRecord(successor.LineageID, record.Revision, successor.CurrentSnapshot, evidence, test.outcome)
+				if recordErr != nil {
+					t.Fatal(recordErr)
+				}
+				err = successor.CompleteVerificationRecord(evidenceRecord, evidence)
+			} else {
+				err = successor.CompleteVerification(evidence, test.approved)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := validateCompactRecoveryEdge(fixture.predecessor, successor); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestFinalVerificationRetryEdgeRejectsInvalidCompletedEvidenceAndFrozenDrift(t *testing.T) {
+	fixture := newFinalVerificationRetryFixture(t, "retry-invalid-completion-source", "retry-invalid-completion-successor")
+	record, err := RetryCompactFinalVerification(context.Background(), fixture.repo, fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := []byte("completed retry evidence\n")
+	evidenceRecord, err := NewVerificationEvidenceRecord(record.State.LineageID, record.Revision, record.State.CurrentSnapshot, evidence, VerificationOutcomePassed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := record.State
+	if err := completed.CompleteVerificationRecord(evidenceRecord, evidence); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*CompactState)
+	}{
+		{name: "wrong evidence authority revision", mutate: func(state *CompactState) { state.EvidenceAuthorityRevision = hash("wrong-authority") }},
+		{name: "wrong evidence target", mutate: func(state *CompactState) { state.EvidenceTargetIdentity = hash("wrong-target") }},
+		{name: "wrong evidence outcome", mutate: func(state *CompactState) { state.EvidenceOutcome = VerificationOutcomeFailed }},
+		{name: "wrong evidence digest", mutate: func(state *CompactState) { state.EvidenceRecordDigest = "wrong-digest" }},
+		{name: "frozen policy drift", mutate: func(state *CompactState) { state.PolicyHash = hash("changed-policy") }},
+		{name: "frozen snapshot drift", mutate: func(state *CompactState) { state.CurrentSnapshot.Identity = hash("changed-snapshot") }},
+		{name: "frozen generation drift", mutate: func(state *CompactState) { state.Generation++ }},
+		{name: "frozen correction accounting drift", mutate: func(state *CompactState) { state.CumulativeCorrectionLines++ }},
+		{name: "frozen budget drift", mutate: func(state *CompactState) { state.CorrectionBudget++ }},
+		{name: "frozen recovery authority drift", mutate: func(state *CompactState) { state.Recovery.PredecessorRevision = hash("changed-predecessor") }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated, cloneErr := cloneCompactStateValue(completed)
+			if cloneErr != nil {
+				t.Fatal(cloneErr)
+			}
+			test.mutate(&mutated)
+			if err := validateCompactRecoveryEdge(fixture.predecessor, mutated); err == nil {
+				t.Fatal("mutated completed successor was accepted")
+			}
+		})
+	}
+}
+
+func TestCompletedFinalVerificationRetryRemainsValidInWholeInventory(t *testing.T) {
+	fixture := newFinalVerificationRetryFixture(t, "retry-inventory-source", "retry-inventory-successor")
+	record, err := RetryCompactFinalVerification(context.Background(), fixture.repo, fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	successorStore, err := CompactAuthoritativeStore(context.Background(), fixture.repo, record.State.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := []byte("successful retry evidence\n")
+	captured, err := PublishCapturedVerificationEvidence(CaptureVerificationEvidenceRequest{
+		StoreDir: successorStore.Dir, LineageID: record.State.LineageID, AuthorityRevision: record.Revision,
+		Target: record.State.CurrentSnapshot, Payload: evidence, Outcome: VerificationOutcomePassed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := record.State
+	if err := completed.CompleteVerificationRecord(captured.Record, captured.Payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := successorStore.Replace(record.Revision, "review/complete-verification", completed); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCompactReceiptAtomic(successorStore.ReceiptPath(), stateReceipt(t, completed)); err != nil {
+		t.Fatal(err)
+	}
+	report, err := InventoryAuthority(context.Background(), fixture.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Complete || !report.Authoritative || len(report.Entries) != 2 ||
+		!hasAuthorityInventoryStatus(report.Entries, fixture.predecessor.State.LineageID, AuthorityStatusSuperseded) ||
+		!hasAuthorityInventoryStatus(report.Entries, completed.LineageID, AuthorityStatusRecovered) {
+		t.Fatalf("completed retry inventory = %#v", report)
+	}
+}
+
 func TestRetryCompactFinalVerificationUsesCorrectedCurrentSnapshot(t *testing.T) {
 	fixture := newCorrectedFinalVerificationRetryFixture(t, "retry-corrected-source", "retry-corrected-successor")
 	if snapshotsEqual(fixture.predecessor.State.InitialSnapshot, fixture.predecessor.State.CurrentSnapshot) {
