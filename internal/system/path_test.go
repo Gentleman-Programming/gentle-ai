@@ -2,6 +2,7 @@ package system
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -158,19 +159,57 @@ func TestSanitizeWorkingDir(t *testing.T) {
 	fallbackDir := t.TempDir()
 	nonExistentDir := filepath.Join(validDir, "does-not-exist")
 
-	// 1. Valid target directory is returned as-is
-	if got := SanitizeWorkingDir(validDir); got != validDir {
+	if got, err := SanitizeWorkingDir(validDir); err != nil || got != validDir {
 		t.Errorf("SanitizeWorkingDir(valid) = %q, want %q", got, validDir)
 	}
 
-	// 2. Non-existent target directory falls back to valid fallback
-	if got := SanitizeWorkingDir(nonExistentDir, fallbackDir); got != fallbackDir {
+	if got, err := SanitizeWorkingDir(nonExistentDir, fallbackDir); err != nil || got != fallbackDir {
 		t.Errorf("SanitizeWorkingDir(non-existent, fallback) = %q, want %q", got, fallbackDir)
 	}
 
-	// 3. Non-existent target directory with empty/invalid fallbacks returns valid fallback home/cwd/temp
-	got := SanitizeWorkingDir(nonExistentDir, nonExistentDir)
-	if info, err := os.Stat(got); err != nil || !info.IsDir() {
-		t.Errorf("SanitizeWorkingDir(invalid fallbacks) = %q, expected existing directory", got)
+	file := filepath.Join(validDir, "not-a-directory")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if got, err := SanitizeWorkingDir(file, fallbackDir); err != nil || got != fallbackDir {
+		t.Errorf("SanitizeWorkingDir(file, fallback) = %q, want %q", got, fallbackDir)
+	}
+}
+
+func TestSanitizeWorkingDirDeletedCWD(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not allow removing a process working directory")
+	}
+	if os.Getenv("GENTLE_AI_DELETED_CWD_HELPER") == "1" {
+		parent := os.Getenv("GENTLE_AI_DELETED_CWD_PARENT")
+		workingDir, err := os.MkdirTemp(parent, "deleted-cwd-")
+		if err != nil {
+			t.Fatalf("MkdirTemp() error = %v", err)
+		}
+		if err := os.Chdir(workingDir); err != nil {
+			t.Fatalf("Chdir() error = %v", err)
+		}
+		if err := os.Remove(workingDir); err != nil {
+			t.Fatalf("Remove() error = %v", err)
+		}
+		if got, err := SanitizeWorkingDir("", filepath.Join(parent, "missing-fallback")); err == nil {
+			t.Fatalf("SanitizeWorkingDir() = %q, want error", got)
+		}
+		return
+	}
+
+	parent := t.TempDir()
+	invalid := filepath.Join(parent, "missing")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestSanitizeWorkingDirDeletedCWD$")
+	cmd.Env = []string{
+		"GENTLE_AI_DELETED_CWD_HELPER=1",
+		"GENTLE_AI_DELETED_CWD_PARENT=" + parent,
+		"HOME=" + invalid,
+		"TMPDIR=" + invalid,
+		"TMP=" + invalid,
+		"TEMP=" + invalid,
+	}
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("deleted-CWD helper failed: %v\n%s", err, output)
 	}
 }

@@ -45,7 +45,11 @@ var (
 	// engramGoInstallCmdFn executes `go install <pkg>`. Package-level var for testability.
 	engramGoInstallCmdFn = func(pkg string) error {
 		cmd := exec.Command("go", "install", pkg)
-		cmd.Dir = system.SanitizeWorkingDir(cmd.Dir)
+		workingDir, err := system.SanitizeWorkingDir(cmd.Dir)
+		if err != nil {
+			return fmt.Errorf("resolve go install working directory: %w", err)
+		}
+		cmd.Dir = workingDir
 		cmd.Env = goPrivateModuleEnv(os.Environ(), engramCanonicalModule)
 		cmd.Stdin = nil
 		out, err := cmd.CombinedOutput()
@@ -62,7 +66,11 @@ var (
 	engramGoEnvFn = func(keys ...string) (map[string]string, error) {
 		args := append([]string{"env"}, keys...)
 		cmd := exec.Command("go", args...)
-		cmd.Dir = system.SanitizeWorkingDir(cmd.Dir)
+		workingDir, err := system.SanitizeWorkingDir(cmd.Dir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve go env working directory: %w", err)
+		}
+		cmd.Dir = workingDir
 		out, err := cmd.Output()
 		if err != nil {
 			return nil, err

@@ -441,7 +441,11 @@ func goInstallBinDir() string {
 func defaultGoEnv(keys ...string) (map[string]string, error) {
 	args := append([]string{"env"}, keys...)
 	cmd := exec.Command("go", args...)
-	cmd.Dir = system.SanitizeWorkingDir(cmd.Dir)
+	workingDir, err := system.SanitizeWorkingDir(cmd.Dir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve go env working directory: %w", err)
+	}
+	cmd.Dir = workingDir
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -1666,7 +1670,11 @@ func runCommandSequence(commands [][]string) error {
 
 func executeCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
-	cmd.Dir = system.SanitizeWorkingDir(cmd.Dir)
+	workingDir, err := system.SanitizeWorkingDir(cmd.Dir)
+	if err != nil {
+		return fmt.Errorf("resolve command working directory: %w", err)
+	}
+	cmd.Dir = workingDir
 
 	if streamCommandOutput {
 		cmd.Stdout = os.Stdout

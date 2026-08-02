@@ -157,30 +157,26 @@ func prioritizeProcessPath(dir string) error {
 	return os.Setenv("PATH", strings.Join(entries, string(os.PathListSeparator)))
 }
 
-// SanitizeWorkingDir validates that targetDir exists and is a valid directory.
-// If targetDir does not exist or is empty (e.g. deleted working directory),
-// it falls back to the current process working directory (if valid), provided fallbacks,
-// user home directory, or temp directory to prevent Node.js uv_cwd ENOENT crashes.
-func SanitizeWorkingDir(targetDir string, fallbacks ...string) string {
-	if targetDir != "" {
-		if info, err := os.Stat(targetDir); err == nil && info.IsDir() {
-			return targetDir
+// SanitizeWorkingDir returns the first candidate that exists and is a directory.
+// It fails when targetDir, explicit fallbacks, the process directory, home, and
+// temp are all unusable so callers never pass an invalid cmd.Dir to a child.
+func SanitizeWorkingDir(targetDir string, fallbacks ...string) (string, error) {
+	candidates := append([]string{targetDir}, fallbacks...)
+	if current, err := os.Getwd(); err == nil {
+		candidates = append(candidates, current)
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, home)
+	}
+	candidates = append(candidates, os.TempDir())
+
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate, nil
 		}
 	}
-	for _, fb := range fallbacks {
-		if fb != "" {
-			if info, err := os.Stat(fb); err == nil && info.IsDir() {
-				return fb
-			}
-		}
-	}
-	if current, err := os.Getwd(); err == nil && current != "" {
-		if info, err := os.Stat(current); err == nil && info.IsDir() {
-			return current
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return home
-	}
-	return os.TempDir()
+	return "", fmt.Errorf("no usable working directory found")
 }
