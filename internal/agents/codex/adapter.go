@@ -25,12 +25,6 @@ type Adapter struct {
 	workspacePrompt bool
 }
 
-// NewWorkspaceAdapter resolves Codex instructions through the workspace root.
-// The default adapter resolves them through CODEX_HOME instead.
-func NewWorkspaceAdapter() *Adapter {
-	return NewAdapter().WorkspaceScoped()
-}
-
 // WorkspaceScoped returns a copy whose instruction destination is the supplied
 // workspace root. Other Codex paths retain their normal workspace conventions.
 func (a *Adapter) WorkspaceScoped() *Adapter {

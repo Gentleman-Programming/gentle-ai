@@ -188,7 +188,7 @@ func TestAdapterSystemPromptFile_WorkspaceVsGlobalScope(t *testing.T) {
 	}
 
 	workspace := filepath.Join(t.TempDir(), "home-project")
-	if got, want := NewWorkspaceAdapter().SystemPromptFile(workspace), filepath.Join(workspace, "AGENTS.md"); got != want {
+	if got, want := NewAdapter().WorkspaceScoped().SystemPromptFile(workspace), filepath.Join(workspace, "AGENTS.md"); got != want {
 		t.Errorf("workspace SystemPromptFile() = %q, want %q", got, want)
 	}
 }

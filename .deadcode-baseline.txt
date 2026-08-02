@@ -27,6 +27,8 @@ internal/cli/run.go	ensureGoAvailableAfterInstall
 internal/cli/run.go	windowsGoCandidates
 internal/cli/sync.go	syncComponentPaths
 internal/cli/sync.go	syncPersonaPaths
+internal/components/agentguidance/inject.go	InjectRouting
+internal/components/agentguidance/inject.go	RoutingPaths
 internal/components/communitytool/pi_codegraph.go	ValidatePiCodeGraphRoot
 internal/components/communitytool/pi_codegraph.go	verifyPiMCP
 internal/components/communitytool/tool.go	CodeGraphCommands
@@ -122,12 +124,8 @@ internal/reviewtransaction/rar_plan_authority.go	verificationEffectAuthorization
 internal/reviewtransaction/rar_plan_authority.go	verificationFrozenPlanConsentDigest
 internal/reviewtransaction/rdd_mode.go	AuthorizeRDDCandidate
 internal/reviewtransaction/repository_locator.go	RepositoryIdentityLease.StorageKey
-internal/reviewtransaction/repository_locator.go	RepositoryIdentityLease.Validate
-internal/reviewtransaction/repository_locator.go	RepositoryIdentityLease.validateCapturedIdentity
 internal/reviewtransaction/repository_locator.go	locatorPathStrictlyWithin
-internal/reviewtransaction/repository_locator.go	repositoryIdentityChanged
 internal/reviewtransaction/repository_locator.go	resolveReviewRepositoryDirectory
-internal/reviewtransaction/repository_locator.go	validRepositoryIdentityLease
 internal/reviewtransaction/risk.go	deriveSemanticRiskSignals
 internal/reviewtransaction/snapshot.go	sanitizedGitEnvironment
 internal/reviewtransaction/snapshot.go	snapshotIdentity
