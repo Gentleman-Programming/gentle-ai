@@ -65,6 +65,20 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 			if got := sddOrchestratorAsset(tc.agent); got != tc.want {
 				t.Fatalf("sddOrchestratorAsset(%q) = %q, want %q", tc.agent, got, tc.want)
 			}
+			for _, required := range []string{
+				"Only after explicit consent and that final privacy scan",
+				"search open and closed issues",
+				"confirms a newly-created issue identity/URL",
+				"Only a completed duplicate lookup with a definitive result may branch to a write",
+				"Do not create, comment, update, or label any issue",
+				"do not add, remove, or change any labels on it",
+				"label application fails or has an ambiguous outcome",
+				"re-resolve that exact created issue identity",
+			} {
+				if !strings.Contains(renderSDDOrchestratorAsset(tc.agent), required) {
+					t.Fatalf("rendered %s orchestrator missing provider-defect handoff clause %q", tc.agent, required)
+				}
+			}
 		})
 	}
 }
@@ -4124,7 +4138,7 @@ func TestInjectOpenCodeRemovesLegacyBackgroundAgentsPlugin(t *testing.T) {
 	}
 }
 
-func TestInjectKilocodeKeepsLegacyBackgroundAgentsPlugin(t *testing.T) {
+func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReviewPlugin(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -4136,6 +4150,10 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPlugin(t *testing.T) {
 	legacyContent := []byte("legacy kilo background agent plugin")
 	if err := os.WriteFile(legacyPluginPath, legacyContent, 0o644); err != nil {
 		t.Fatalf("WriteFile(background-agents.ts) error = %v", err)
+	}
+	reviewPluginPath := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+	if err := os.WriteFile(reviewPluginPath, []byte("stale OpenCode-only review plugin"), 0o644); err != nil {
+		t.Fatalf("WriteFile(review-result-artifacts.ts) error = %v", err)
 	}
 
 	result, err := Inject(home, kilocodeAdapter(), "multi")
@@ -4161,6 +4179,9 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPlugin(t *testing.T) {
 		if _, err := os.Stat(pluginPath); err != nil {
 			t.Fatalf("%s plugin should still be installed for Kilo: %v", plugin, err)
 		}
+	}
+	if _, err := os.Stat(reviewPluginPath); !os.IsNotExist(err) {
+		t.Fatalf("OpenCode-only review plugin remains installed for Kilo: %v", err)
 	}
 }
 

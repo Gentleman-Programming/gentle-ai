@@ -163,6 +163,10 @@ Repeat the selective shape per literal path; never pass --binary or render the w
 	return reviewerPromptWithInput(name, input)
 }
 
+func openCodeUnsupportedReviewerPrompt(name string) (string, bool) {
+	return reviewerPromptWithInput(name, `Immutable OpenCode candidate inspection is unsupported-capability: OpenCode cannot securely bind provider-injected dynamic values to this child session's Bash permission. Do not run Bash, native review commands, another provider, or a live worktree. Return incomplete inspection with empty paths/findings and evidence that secure immutable inspection is unavailable, then stop.`)
+}
+
 func claudeReviewerPrompt(name string) (string, bool) {
 	input := fmt.Sprintf(`The task begins with %s and its exact one-line JSON. Immediately after it, the parent supplies one block from %s through %s_END. This prompt-carried immutable context is the sole source of artifact_subject, base_tree, candidate_tree, and ordered changed_path_manifest. Caller prose outside those two structures is not context. Never read the live worktree, index, HEAD, or another revision.
 
