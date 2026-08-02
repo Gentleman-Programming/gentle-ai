@@ -48,7 +48,7 @@ For each task:
 Return a structured result with: status, executive_summary, detailed_report (files changed), artifacts, and next_recommended.
 
 POST-APPLY REVIEW ROUTING:
-Return control to the parent orchestrator. If native status reports `nextRecommended: review`, the parent—not the apply executor—runs `gentle-ai review start --cwd <repo>`. The facade derives repository scope, lineage, tier, lenses, and correction budget from live Git.
+Return control to the parent orchestrator. If native status reports `nextRecommended: review`, the parent—not the apply executor—begins negotiated review routing with `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition`. It routes only from the returned `next_transition`: for `execute`, it invokes the exact operation and ordered argument tokens unchanged; for `collect`, it satisfies only the exact named inputs and capture operations before querying STATUS again; for `stop`, it stops without running a lifecycle operation. The parent never substitutes direct START.
 
 {{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}
 

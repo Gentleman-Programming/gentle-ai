@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const ReviewInspectAuthoritySchema = "gentle-ai.review-authority-inspection/v1"
@@ -19,6 +19,11 @@ type ReviewInspectAuthorityResult struct {
 	Totals           reviewtransaction.CompactRecoveryInspectionTotals  `json:"totals"`
 	Edges            []reviewtransaction.CompactRecoveryEdgeInspection  `json:"edges"`
 	EntryDiagnostics []reviewtransaction.CompactRecoveryEntryDiagnostic `json:"entry_diagnostics"`
+	// SanctionedExits names, per invalid edge, the operation that would accept
+	// it right now. It is reported beside the edges rather than inside them
+	// because the edge shape is the binding identity batch reconciliation
+	// re-derives and compares, while this is derived against the live store.
+	SanctionedExits []reviewtransaction.CompactRecoverySanctionedExit `json:"sanctioned_exits"`
 }
 
 var inspectCompactRecoveryEdges = reviewtransaction.InspectCompactRecoveryEdges
@@ -47,10 +52,15 @@ func runReviewInspectAuthority(ctx context.Context, args []string, stdout io.Wri
 	if err != nil {
 		return fmt.Errorf("inspect review authority: %w", err)
 	}
+	exits, err := reviewtransaction.SanctionedCompactRecoveryExits(ctx, root, report)
+	if err != nil {
+		return fmt.Errorf("resolve review authority exits: %w", err)
+	}
 	return encodeReviewJSON(stdout, ReviewInspectAuthorityResult{
 		Schema: ReviewInspectAuthoritySchema, Operation: "review/inspect-authority", RepositoryRoot: root,
 		Complete: report.Complete, Valid: report.Valid, Totals: report.Totals,
 		Edges:            append([]reviewtransaction.CompactRecoveryEdgeInspection{}, report.Edges...),
 		EntryDiagnostics: append([]reviewtransaction.CompactRecoveryEntryDiagnostic{}, report.EntryDiagnostics...),
+		SanctionedExits:  exits,
 	})
 }

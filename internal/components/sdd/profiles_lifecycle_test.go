@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 // TestProfileLifecycle_FullCRUD exercises the complete profile lifecycle:
@@ -58,7 +58,7 @@ func TestProfileLifecycle_FullCRUD(t *testing.T) {
 		OrchestratorModel: haikuModel,
 	}
 
-	overlayBytes, err := GenerateProfileOverlay(cheapProfile, home, nil, "")
+	overlayBytes, err := GenerateProfileOverlay(cheapProfile, home, settingsPath, nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay(): %v", err)
 	}
@@ -121,7 +121,7 @@ func TestProfileLifecycle_FullCRUD(t *testing.T) {
 		Name:              "cheap",
 		OrchestratorModel: sonnetModel,
 	}
-	editOverlayBytes, err := GenerateProfileOverlay(editedProfile, home, nil, "")
+	editOverlayBytes, err := GenerateProfileOverlay(editedProfile, home, settingsPath, nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay() for edit: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestProfileLifecycle_TwoProfiles(t *testing.T) {
 	cheapOverlay, err := GenerateProfileOverlay(model.Profile{
 		Name:              "cheap",
 		OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"},
-	}, home, nil, "")
+	}, home, settingsPath, nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay(cheap): %v", err)
 	}
@@ -233,7 +233,7 @@ func TestProfileLifecycle_TwoProfiles(t *testing.T) {
 	premiumOverlay, err := GenerateProfileOverlay(model.Profile{
 		Name:              "premium",
 		OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-opus-4-5"},
-	}, home, nil, "")
+	}, home, settingsPath, nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay(premium): %v", err)
 	}

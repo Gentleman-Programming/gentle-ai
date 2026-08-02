@@ -1,0 +1,476 @@
+{
+  "invariants": [
+    {
+      "context": "RAR",
+      "invariant": "real configured-agent journeys cover direct, delegated, optional-SDD, every review tier, one bounded correction, and flexible delivery",
+      "path": "e2e/organicruntime/organic_runtime_test.go",
+      "proof": [
+        "e2e/organicruntime/organic_runtime_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "per-adapter facts stay truthful and unknown agents are rejected instead of assumed",
+      "path": "internal/agents/capabilitymanifest/manifest.go",
+      "proof": [
+        "internal/agents/capabilitymanifest/manifest_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "every declared adapter capability is asserted against the manifest, not against prose",
+      "path": "internal/agents/capabilitymanifest/manifest_test.go",
+      "proof": [
+        "internal/agents/capabilitymanifest/manifest_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "retired remote control-plane commands no longer dispatch",
+      "path": "internal/app/app.go",
+      "proof": [
+        "internal/app/app_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "the dispatch table is asserted command by command rather than by count",
+      "path": "internal/app/app_test.go",
+      "proof": [
+        "internal/app/app_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "help advertises only commands that still exist",
+      "path": "internal/app/help.go",
+      "proof": [
+        "internal/app/help_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "help text and dispatch cannot drift apart unnoticed",
+      "path": "internal/app/help_test.go",
+      "proof": [
+        "internal/app/help_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
+      "path": "internal/assets/antigravity/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the embedded asset assertions match the organic surface, and are rewritten before regeneration rather than after",
+      "path": "internal/assets/assets_test.go",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
+      "path": "internal/assets/claude/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
+      "path": "internal/assets/codex/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
+      "path": "internal/assets/cursor/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
+      "path": "internal/assets/gemini/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
+      "path": "internal/assets/generic/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
+      "path": "internal/assets/hermes/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
+      "path": "internal/assets/kimi/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
+      "path": "internal/assets/kiro/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
+      "path": "internal/assets/opencode/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
+      "path": "internal/assets/qwen/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the embedded key skills/_shared/review-ledger-contract.md is unchanged so existing installs still resolve it",
+      "path": "internal/assets/skills/_shared/review-ledger-contract.md",
+      "proof": [
+        "internal/components/sdd/review_ledger_contract_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "the orchestrator prompt carries organic routing under systemic order and no remote work vocabulary",
+      "path": "internal/assets/windsurf/sdd-orchestrator.md",
+      "proof": [
+        "internal/assets/assets_test.go"
+      ]
+    },
+    {
+      "context": "EPD",
+      "invariant": "Doctor reports routing drift as an actionable diagnostic instead of silently converging",
+      "path": "internal/cli/doctor.go",
+      "proof": [
+        "internal/cli/doctor_test.go"
+      ]
+    },
+    {
+      "context": "EPD",
+      "invariant": "the diagnostic surface is asserted by code, not by its help text",
+      "path": "internal/cli/doctor_test.go",
+      "proof": [
+        "internal/cli/doctor_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "the review command surface is the only route to review authority",
+      "path": "internal/cli/review.go",
+      "proof": [
+        "internal/cli/review_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "the compact facade appends and reads back native authority before materializing artifacts",
+      "path": "internal/cli/review_facade.go",
+      "proof": [
+        "internal/cli/review_facade_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "the review mode command is the only route to the kill switch and status never mutates",
+      "path": "internal/cli/review_mode.go",
+      "proof": [
+        "internal/cli/review_mode_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "every mode transition and its source/effective diagnostics are asserted by code",
+      "path": "internal/cli/review_mode_test.go",
+      "proof": [
+        "internal/cli/review_mode_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "at most one authorized transition is offered, and a stale authorization is refused",
+      "path": "internal/cli/review_next_transition.go",
+      "proof": [
+        "internal/cli/review_next_transition_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "status is read-only and never authors a transition",
+      "path": "internal/cli/review_status_contract.go",
+      "proof": [
+        "internal/cli/review_status_contract_test.go"
+      ]
+    },
+    {
+      "context": "HCR",
+      "invariant": "the install plan schedules routing injection for every agent outside the SDD component",
+      "path": "internal/cli/run.go",
+      "proof": [
+        "internal/cli/run_component_paths_test.go"
+      ]
+    },
+    {
+      "context": "HCR",
+      "invariant": "the staged component paths are asserted per agent rather than assumed uniform",
+      "path": "internal/cli/run_component_paths_test.go",
+      "proof": [
+        "internal/cli/run_component_paths_test.go"
+      ]
+    },
+    {
+      "context": "SDD",
+      "invariant": "the SDD attempt command keeps its own authority and never depends on a WorkRun",
+      "path": "internal/cli/sdd_attempt.go",
+      "proof": [
+        "internal/cli/sdd_attempt_test.go"
+      ]
+    },
+    {
+      "context": "HCR",
+      "invariant": "an explicit sync replaces managed blocks, preserves user content, and converges",
+      "path": "internal/cli/sync.go",
+      "proof": [
+        "internal/cli/sync_test.go"
+      ]
+    },
+    {
+      "context": "HCR",
+      "invariant": "repeated sync is idempotent and never destroys user-authored content",
+      "path": "internal/cli/sync_test.go",
+      "proof": [
+        "internal/cli/sync_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "baseline organic guidance is injected transactionally for every configured agent",
+      "path": "internal/components/agentguidance/inject.go",
+      "proof": [
+        "internal/components/agentguidance/inject_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "injection failure leaves no partially written agent configuration",
+      "path": "internal/components/agentguidance/inject_test.go",
+      "proof": [
+        "internal/components/agentguidance/inject_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "routing guidance renders semantically equal across adapters and omits retired control-plane vocabulary",
+      "path": "internal/components/agentguidance/routing.go",
+      "proof": [
+        "internal/components/agentguidance/routing_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "an unregistered agent is rejected rather than rendered with guessed guidance",
+      "path": "internal/components/agentguidance/routing_test.go",
+      "proof": [
+        "internal/components/agentguidance/routing_test.go"
+      ]
+    },
+    {
+      "context": "ACI",
+      "invariant": "golden projections are compared byte for byte, so a regenerated asset cannot drift unnoticed",
+      "path": "internal/components/golden_test.go",
+      "proof": [
+        "internal/components/golden_test.go"
+      ]
+    },
+    {
+      "context": "SDD",
+      "invariant": "the bounded review contract text is asserted rather than trusted",
+      "path": "internal/components/sdd/bounded_review_contract_test.go",
+      "proof": [
+        "internal/components/sdd/bounded_review_contract_test.go"
+      ]
+    },
+    {
+      "context": "SDD",
+      "invariant": "the bounded review contract is delivered to agents without remote work vocabulary",
+      "path": "internal/components/sdd/boundedreview.go",
+      "proof": [
+        "internal/components/sdd/bounded_review_contract_test.go"
+      ]
+    },
+    {
+      "context": "SDD",
+      "invariant": "SDD injection carries optional SDD assets alone once routing coupling is removed",
+      "path": "internal/components/sdd/inject.go",
+      "proof": [
+        "internal/components/sdd/inject_test.go"
+      ]
+    },
+    {
+      "context": "SDD",
+      "invariant": "the injected SDD surface is asserted section by section, so a removed step cannot pass silently",
+      "path": "internal/components/sdd/inject_test.go",
+      "proof": [
+        "internal/components/sdd/inject_test.go"
+      ]
+    },
+    {
+      "context": "EPD",
+      "invariant": "routing:sync-required is emitted as a typed diagnostic with a bounded remedy",
+      "path": "internal/doctor/doctor.go",
+      "proof": [
+        "internal/doctor/doctor_test.go"
+      ]
+    },
+    {
+      "context": "EPD",
+      "invariant": "every diagnostic code the doctor can emit is covered by an assertion",
+      "path": "internal/doctor/doctor_test.go",
+      "proof": [
+        "internal/doctor/doctor_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "reviewer results are canonicalized and hashed natively; models never construct canonical bytes",
+      "path": "internal/reviewtransaction/compact_reviewer_capture.go",
+      "proof": [
+        "internal/reviewtransaction/compact_reviewer_capture_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "a capture that does not echo the frozen subject hash is refused",
+      "path": "internal/reviewtransaction/compact_reviewer_capture_test.go",
+      "proof": [
+        "internal/reviewtransaction/compact_reviewer_capture_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "the native plan authority binds every verification dimension; adapters never select lenses",
+      "path": "internal/reviewtransaction/rar_plan_authority.go",
+      "proof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "a sensitive effect requires immediate authorization and cannot be pre-authorized",
+      "path": "internal/reviewtransaction/rar_plan_authority_test.go",
+      "proof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "review mode is user-owned and off-only per clone: any off wins, and re-enabling applies to future candidates only",
+      "path": "internal/reviewtransaction/rdd_mode.go",
+      "proof": [
+        "internal/reviewtransaction/rdd_mode_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "disabled review authority stays read-only frozen and delivery reports disabled/unmanaged",
+      "path": "internal/reviewtransaction/rdd_mode_test.go",
+      "proof": [
+        "internal/reviewtransaction/rdd_mode_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "review tier follows authorization, data-loss, mutation, release, and security risk; size alone never escalates",
+      "path": "internal/reviewtransaction/risk.go",
+      "proof": [
+        "internal/reviewtransaction/risk_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "the risk classifier's tier boundaries stay asserted by an untouched test",
+      "path": "internal/reviewtransaction/risk_test.go",
+      "proof": [
+        "internal/reviewtransaction/risk_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "applicability, cost, mutation effect, and permission effect are independent dimensions",
+      "path": "internal/reviewtransaction/verification_contract.go",
+      "proof": [
+        "internal/reviewtransaction/verification_contract_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "every cross-product of the verification dimensions is asserted, including unknown",
+      "path": "internal/reviewtransaction/verification_contract_test.go",
+      "proof": [
+        "internal/reviewtransaction/verification_contract_test.go"
+      ]
+    },
+    {
+      "context": "SDD",
+      "invariant": "attempt authority survives the removal of the WorkRun binding branches",
+      "path": "internal/sddstatus/runtime_ledger.go",
+      "proof": [
+        "internal/sddstatus/runtime_ledger_test.go"
+      ]
+    },
+    {
+      "context": "SDD",
+      "invariant": "attempt transitions stay asserted after the reservation branches are gone",
+      "path": "internal/sddstatus/runtime_ledger_test.go",
+      "proof": [
+        "internal/sddstatus/runtime_ledger_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "global review mode persists in uncommitted user state; any off wins over a repository preference",
+      "path": "internal/state/state.go",
+      "proof": [
+        "internal/state/state_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "a repository cannot force review mode on or share policy with another clone",
+      "path": "internal/state/state_test.go",
+      "proof": [
+        "internal/state/state_test.go"
+      ]
+    }
+  ]
+}

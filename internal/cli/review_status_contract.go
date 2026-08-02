@@ -8,11 +8,15 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-const ReviewIntegrationStatusSchema = "gentle-ai.review-integration.status/v1"
-const ReviewIntegrationStatusSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/status.schema.json"
+const ReviewIntegrationStatusSchemaV1 = "gentle-ai.review-integration.status/v1"
+const ReviewIntegrationStatusSchemaIDV1 = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/status.schema.json"
+const ReviewIntegrationStatusSchemaV2 = "gentle-ai.review-integration.status/v2"
+const ReviewIntegrationStatusSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/status-v2.schema.json"
+const ReviewIntegrationStatusSchema = "gentle-ai.review-integration.status/v3"
+const ReviewIntegrationStatusSchemaID = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status.schema.json"
 const ReviewIntegrationProjectionSchema = "gentle-ai.review-integration.projection/v1"
 const ReviewIntegrationProjectionSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/projection.schema.json"
 
@@ -33,18 +37,22 @@ type ReviewTargetStatusResult struct {
 	Authority     *ReviewTargetStatusAuthority          `json:"authority,omitempty"`
 	Receipt       ReviewTargetStatusReceipt             `json:"receipt"`
 	Action        reviewtransaction.TargetStatusAction  `json:"action"`
-	// ActionDisposition names the `review recover --disposition` value the
-	// recovery rules accept. It is present exactly when Action is recover.
-	ActionDisposition reviewtransaction.RecoveryDisposition        `json:"action_disposition,omitempty"`
-	Replayability     reviewtransaction.Replayability              `json:"replayability"`
-	Frozen            *ReviewTargetStatusFrozen                    `json:"frozen,omitempty"`
-	TargetIdentity    string                                       `json:"target_identity"`
-	Projection        ReviewTargetStatusProjection                 `json:"projection"`
-	Candidates        []string                                     `json:"candidates"`
-	Reconciliation    *ReviewFinalizeReconciliation                `json:"reconciliation,omitempty"`
-	Eligibility       *ReviewActionEligibility                     `json:"eligibility,omitempty"`
-	NextTransition    *ReviewNextTransition                        `json:"next_transition,omitempty"`
-	ValidationRequest *reviewtransaction.TargetedValidationRequest `json:"validation_request,omitempty"`
+	// ActionDisposition names the provider recovery class accepted by the
+	// selected action. Generic recover and final-verification retry remain
+	// distinct operations.
+	ActionDisposition       reviewtransaction.RecoveryDisposition                `json:"action_disposition,omitempty"`
+	Replayability           reviewtransaction.Replayability                      `json:"replayability"`
+	Frozen                  *ReviewTargetStatusFrozen                            `json:"frozen,omitempty"`
+	TargetIdentity          string                                               `json:"target_identity"`
+	AuthorityTargetIdentity string                                               `json:"authority_target_identity,omitempty"`
+	Projection              ReviewTargetStatusProjection                         `json:"projection"`
+	Repair                  reviewtransaction.AuthorityRepairAssessment          `json:"repair"`
+	Candidates              []string                                             `json:"candidates"`
+	Reconciliation          *ReviewFinalizeReconciliation                        `json:"reconciliation,omitempty"`
+	Eligibility             *ReviewActionEligibility                             `json:"eligibility,omitempty"`
+	NextTransition          *ReviewNextTransition                                `json:"next_transition,omitempty"`
+	ValidationRequest       *reviewtransaction.TargetedValidationRequest         `json:"validation_request,omitempty"`
+	FinalVerificationRetry  *reviewtransaction.FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
 }
 
 // ReviewActionEligibility remains an additive compatibility detail for older
@@ -84,24 +92,43 @@ var reviewManagedActions = []string{
 	"review.reconcile-authority",
 	"review.reconcile-authority-batch",
 	"review.recover",
+	"review.repair",
+	ReviewIntegrationOperationRetryFinalVerification,
+	"review.start",
+	"review.validate",
+}
+
+// reviewFinalizeManagedActions preserves the published operation/v1 action
+// eligibility surface. Classified repair is advertised only by status/v2.
+var reviewFinalizeManagedActions = []string{
+	"review.abandon",
+	"review.finalize",
+	"review.invalidate",
+	"review.quarantine-legacy",
+	"review.reclaim",
+	"review.reconcile-authority",
+	"review.reconcile-authority-batch",
+	"review.recover",
 	"review.start",
 	"review.validate",
 }
 
 const (
-	reviewActionEligibleCurrent             = "eligible_current_target"
-	reviewActionEligibleEscalatedRecovery   = "eligible_recovery_escalated"
-	reviewActionEligibleRecovery            = "eligible_recovery"
-	reviewActionForbiddenNotSelected        = "forbidden_not_selected_by_native_status"
-	reviewActionForbiddenAmbiguous          = "forbidden_ambiguous_authority"
-	reviewActionForbiddenCorrupted          = "forbidden_corrupted_authority"
-	reviewActionForbiddenUnrelated          = "forbidden_unrelated_target"
-	reviewActionForbiddenTerminalEscalated  = "forbidden_terminal_escalated_authority"
-	reviewActionForbiddenUnchangedEscalated = "forbidden_unchanged_escalated_candidate"
-	reviewActionForbiddenManualIntervention = "forbidden_manual_intervention_required"
-	reviewActionForbiddenReconciliation     = "forbidden_reconciliation_requires_exact_request"
-	reviewActionForbiddenInputsUnavailable  = "forbidden_required_inputs_unavailable"
-	reviewActionForbiddenFinalizeStatus     = "forbidden_finalize_requires_target_status"
+	reviewActionEligibleCurrent                = "eligible_current_target"
+	reviewActionEligibleEscalatedRecovery      = "eligible_recovery_escalated"
+	reviewActionEligibleRecovery               = "eligible_recovery"
+	reviewActionEligibleClassifiedRepair       = "eligible_classified_authority_repair"
+	reviewActionEligibleFinalVerificationRetry = "eligible_final_verification_retry"
+	reviewActionForbiddenNotSelected           = "forbidden_not_selected_by_native_status"
+	reviewActionForbiddenAmbiguous             = "forbidden_ambiguous_authority"
+	reviewActionForbiddenCorrupted             = "forbidden_corrupted_authority"
+	reviewActionForbiddenUnrelated             = "forbidden_unrelated_target"
+	reviewActionForbiddenTerminalEscalated     = "forbidden_terminal_escalated_authority"
+	reviewActionForbiddenUnchangedEscalated    = "forbidden_unchanged_escalated_candidate"
+	reviewActionForbiddenManualIntervention    = "forbidden_manual_intervention_required"
+	reviewActionForbiddenReconciliation        = "forbidden_reconciliation_requires_exact_request"
+	reviewActionForbiddenInputsUnavailable     = "forbidden_required_inputs_unavailable"
+	reviewActionForbiddenFinalizeStatus        = "forbidden_finalize_requires_target_status"
 )
 
 type ReviewFinalizeReconciliation struct {
@@ -142,12 +169,18 @@ type ReviewTargetStatusProjection struct {
 	CurrentSnapshotIdentity string                       `json:"current_snapshot_identity"`
 }
 
-func newReviewTargetStatusResult(native reviewtransaction.TargetStatusResult) ReviewTargetStatusResult {
+func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatusResult, contract string) ReviewTargetStatusResult {
+	schema := ReviewIntegrationStatusSchema
+	if contract == ReviewIntegrationContractV1 {
+		schema = ReviewIntegrationStatusSchemaV2
+	}
 	result := ReviewTargetStatusResult{
-		Schema: ReviewIntegrationStatusSchema, Contract: ReviewIntegrationContractV1, Operation: "review.status",
+		Schema: schema, Contract: contract, Operation: "review.status",
 		Applicability: native.Applicability, Action: native.Action, ActionDisposition: native.ActionDisposition,
 		Replayability:  native.Replayability,
-		TargetIdentity: native.TargetIdentity, Candidates: append([]string{}, native.CandidateLineageIDs...),
+		TargetIdentity: native.TargetIdentity,
+		Candidates:     append([]string{}, native.CandidateLineageIDs...),
+		Repair:         reviewtransaction.UnsupportedAuthorityRepairAssessment(),
 		Projection: ReviewTargetStatusProjection{
 			Schema: ReviewIntegrationProjectionSchema, Kind: native.Projection.Kind, Projection: facadeProjection(native.Projection.Projection),
 			BaseTree: native.Projection.BaseTree, InitialReviewTree: native.Projection.InitialReviewTree,
@@ -157,6 +190,14 @@ func newReviewTargetStatusResult(native reviewtransaction.TargetStatusResult) Re
 			InitialSnapshotIdentity: native.Projection.InitialSnapshotIdentity, CurrentSnapshotIdentity: native.Projection.CurrentSnapshotIdentity,
 		},
 		Receipt: ReviewTargetStatusReceipt{Status: ReviewReceiptNotApplicable},
+	}
+	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact &&
+		native.AuthorityTargetIdentity != "" && native.AuthorityTargetIdentity != native.TargetIdentity {
+		result.AuthorityTargetIdentity = native.AuthorityTargetIdentity
+	}
+	if native.FinalVerificationRetry != nil {
+		eligibility := *native.FinalVerificationRetry
+		result.FinalVerificationRetry = &eligibility
 	}
 	if native.Applicability != reviewtransaction.TargetApplicabilityCurrent {
 		return result
@@ -187,7 +228,9 @@ func newReviewTargetStatusResult(native reviewtransaction.TargetStatusResult) Re
 func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEligibility {
 	allowed := ReviewEligibleAction{RequiredInputs: []string{}}
 	switch status.Action {
-	case reviewtransaction.TargetStatusActionStart, reviewtransaction.TargetStatusActionValidate:
+	case reviewtransaction.TargetStatusActionStart:
+		allowed.Action, allowed.ReasonCode = "review.start", reviewActionEligibleCurrent
+	case reviewtransaction.TargetStatusActionValidate:
 		allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenInputsUnavailable
 	case reviewtransaction.TargetStatusActionFinalize:
 		if status.Replayability == reviewtransaction.ReplayabilityExactReplaySafe {
@@ -209,6 +252,24 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 				LineageID: status.Authority.LineageID,
 				Revision:  status.Authority.Revision, TargetIdentity: status.TargetIdentity,
 			}
+		}
+	case reviewtransaction.TargetStatusActionRetryFinalVerification:
+		allowed.Action = ReviewIntegrationOperationRetryFinalVerification
+		allowed.ReasonCode = reviewActionEligibleFinalVerificationRetry
+		allowed.Disposition = reviewtransaction.RecoveryFinalVerificationRetry
+		allowed.RequiredInputs = []string{"predecessor_lineage", "expected_predecessor_revision", "successor_lineage", "incident", "actor", "reason", "maintainer_authorization"}
+		if status.Authority != nil {
+			allowed.Binding = &ReviewActionBinding{
+				LineageID: status.Authority.LineageID,
+				Revision:  status.Authority.Revision, TargetIdentity: reviewAuthorityTargetIdentity(status),
+			}
+		}
+	case reviewtransaction.TargetStatusActionRepairAuthority:
+		if status.Repair.Status == reviewtransaction.AuthorityRepairEligible && status.Repair.Candidate != nil {
+			allowed.Action, allowed.ReasonCode = "review.repair", reviewActionEligibleClassifiedRepair
+			allowed.RequiredInputs = []string{"actor", "reason", "maintainer_authorization"}
+		} else {
+			allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenManualIntervention
 		}
 	default:
 		allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenManualIntervention
@@ -240,8 +301,8 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 }
 
 func reviewStopEligibility(reason string, requiredInputs []string) *ReviewActionEligibility {
-	forbidden := make([]ReviewForbiddenAction, len(reviewManagedActions))
-	for index, action := range reviewManagedActions {
+	forbidden := make([]ReviewForbiddenAction, len(reviewFinalizeManagedActions))
+	for index, action := range reviewFinalizeManagedActions {
 		forbidden[index] = ReviewForbiddenAction{Action: action, ReasonCode: reason}
 	}
 	return &ReviewActionEligibility{
@@ -251,17 +312,41 @@ func reviewStopEligibility(reason string, requiredInputs []string) *ReviewAction
 }
 
 func (result ReviewTargetStatusResult) Validate() error {
-	if result.Schema != ReviewIntegrationStatusSchema || result.Contract != ReviewIntegrationContractV1 || result.Operation != "review.status" {
+	legacyTransport := result.Schema == ReviewIntegrationStatusSchemaV2 && result.Contract == ReviewIntegrationContractV1
+	nativeGitTransport := result.Schema == ReviewIntegrationStatusSchema && result.Contract == ReviewIntegrationContractV2
+	if (!legacyTransport && !nativeGitTransport) || result.Operation != "review.status" {
 		return errors.New("invalid negotiated review status identity")
 	}
 	if !validReviewCapabilitySHA256(result.TargetIdentity) || result.Candidates == nil {
 		return errors.New("invalid negotiated review target identity")
+	}
+	if err := result.Repair.Validate(); err != nil {
+		return err
+	}
+	if result.Repair.Status == reviewtransaction.AuthorityRepairEligible &&
+		(result.Applicability != reviewtransaction.TargetApplicabilityCorrupted || result.Action != reviewtransaction.TargetStatusActionRepairAuthority) {
+		return errors.New("eligible authority repair is not bound to corrupted status")
 	}
 	if err := result.Projection.Validate(); err != nil {
 		return err
 	}
 	if result.TargetIdentity != result.Projection.CurrentSnapshotIdentity {
 		return errors.New("negotiated review target identity differs from its current projection")
+	}
+	if retry := result.FinalVerificationRetry; retry != nil {
+		if result.Applicability != reviewtransaction.TargetApplicabilityCurrent || result.Authority == nil ||
+			result.Authority.Version != reviewtransaction.AuthorityVersionCompact || result.Authority.State != reviewtransaction.StateEscalated ||
+			result.Action != reviewtransaction.TargetStatusActionRetryFinalVerification || result.ActionDisposition != reviewtransaction.RecoveryFinalVerificationRetry ||
+			retry.IncidentSchema != reviewtransaction.FinalVerificationIncidentSchema ||
+			retry.IncidentClass != reviewtransaction.FinalVerificationIncidentProceduralToolingFailure ||
+			retry.TargetIdentity != reviewAuthorityTargetIdentity(result) || !validReviewCapabilitySHA256(retry.ValidatingRevision) ||
+			!validReviewCapabilitySHA256(retry.FailedEvidenceHash) ||
+			retry.FailedEvidenceRecordDigest != "" && !validReviewCapabilitySHA256(retry.FailedEvidenceRecordDigest) ||
+			!validReviewCapabilitySHA256(retry.FinalizeRequestDigest) {
+			return errors.New("final-verification retry status metadata is invalid")
+		}
+	} else if result.Action == reviewtransaction.TargetStatusActionRetryFinalVerification {
+		return errors.New("final-verification retry action lacks provider eligibility")
 	}
 	if result.Eligibility != nil {
 		if err := result.Eligibility.Validate(result); err != nil {
@@ -276,9 +361,20 @@ func (result ReviewTargetStatusResult) Validate() error {
 			return err
 		}
 		transitionRequest := reviewTransitionValidationRequest(result.NextTransition)
-		if (transitionRequest == nil) != (result.ValidationRequest == nil) ||
-			transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest) {
+		correctionEvidenceFirst := transitionRequest == nil && result.ValidationRequest != nil &&
+			(result.NextTransition.ReasonCode == "correction_repository_verification_required" ||
+				result.NextTransition.ReasonCode == "correction_repository_tooling_failed")
+		if !correctionEvidenceFirst && ((transitionRequest == nil) != (result.ValidationRequest == nil) ||
+			transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest)) {
 			return errors.New("negotiated status validation request copies differ")
+		}
+		if request := result.NextTransition.CorrectionRequest; request != nil {
+			if result.Authority == nil || result.Frozen == nil || result.Authority.Version != reviewtransaction.AuthorityVersionCompact ||
+				result.Authority.State != reviewtransaction.StateCorrectionRequired || request.LineageID != result.Authority.LineageID ||
+				request.ExpectedRevision != result.Authority.Revision || request.TargetIdentity != result.TargetIdentity ||
+				request.CorrectionBudget != result.Frozen.CorrectionBudget {
+				return errors.New("negotiated status correction request binding is invalid") // refusal:by-design world-action: provider-generated status and request bindings require a code fix when they disagree
+			}
 		}
 	}
 	switch result.Applicability {
@@ -289,7 +385,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 		}
 		switch result.Authority.Version {
 		case reviewtransaction.AuthorityVersionCompact:
-			if result.Frozen == nil {
+			if result.Frozen == nil || result.AuthorityTargetIdentity != "" && !validReviewCapabilitySHA256(result.AuthorityTargetIdentity) {
 				return errors.New("compact current-target status requires frozen inputs")
 			}
 			if result.Frozen.Tier != reviewtransaction.RiskLow && result.Frozen.Tier != reviewtransaction.RiskMedium && result.Frozen.Tier != reviewtransaction.RiskHigh {
@@ -300,7 +396,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 				return errors.New("current-target frozen budget is invalid")
 			}
 		case reviewtransaction.AuthorityVersionLegacy:
-			if result.Frozen != nil {
+			if result.Frozen != nil || result.AuthorityTargetIdentity != "" {
 				return errors.New("legacy current-target status cannot contain compact frozen inputs")
 			}
 			if result.Receipt.Status == ReviewReceiptPublicationPending {
@@ -320,15 +416,21 @@ func (result ReviewTargetStatusResult) Validate() error {
 			return errors.New("current-target receipt status is invalid")
 		}
 	case reviewtransaction.TargetApplicabilityUnrelated:
-		if result.Authority != nil || result.Frozen != nil || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionStart || len(result.Candidates) != 0 {
+		// Candidates is intentionally NOT constrained to empty here: plural
+		// stale (scope-changed) lineages report this exact
+		// applicability/action/replayability shape (organic-dx Phase 3e —
+		// nothing governs, so nothing decides) while still listing those
+		// stale lineages as optional, discoverable recovery candidates. An
+		// unrelated target with zero candidates remains equally valid.
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired) {
 			return errors.New("unrelated target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityAmbiguous:
-		if result.Authority != nil || result.Frozen != nil || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionSelectLineage || len(result.Candidates) < 2 {
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionSelectLineage || len(result.Candidates) < 2 {
 			return errors.New("ambiguous target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityCorrupted:
-		if result.Authority != nil || result.Frozen != nil || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionRepairAuthority {
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionRepairAuthority {
 			return errors.New("corrupted target status is inconsistent")
 		}
 	default:
@@ -364,15 +466,36 @@ func (result ReviewTargetStatusResult) Validate() error {
 	}
 	switch result.ActionDisposition {
 	case "":
-		if result.Action == reviewtransaction.TargetStatusActionRecover {
+		if result.Action == reviewtransaction.TargetStatusActionRecover || result.Action == reviewtransaction.TargetStatusActionRetryFinalVerification {
 			return errors.New("recover status requires the recovery disposition recovery accepts")
 		}
 	case reviewtransaction.RecoveryScopeChanged, reviewtransaction.RecoveryInvalidated, reviewtransaction.RecoveryEscalated:
 		if result.Action != reviewtransaction.TargetStatusActionRecover {
 			return errors.New("only recover status may carry a recovery disposition")
 		}
+	case reviewtransaction.RecoveryFinalVerificationRetry:
+		if result.Action != reviewtransaction.TargetStatusActionRetryFinalVerification {
+			return errors.New("only final-verification retry status may carry its dedicated disposition")
+		}
 	default:
 		return errors.New("unsupported review status recovery disposition")
+	}
+	if result.Applicability == reviewtransaction.TargetApplicabilityCurrent && result.Authority != nil &&
+		result.Authority.State == reviewtransaction.StateApproved && result.Action == reviewtransaction.TargetStatusActionRecover {
+		if result.Receipt.Status != ReviewReceiptPresent || result.ActionDisposition != reviewtransaction.RecoveryScopeChanged {
+			return errors.New("approved recovery status requires a published scope-changed target") // refusal:by-design world-action: this envelope is built and validated by the same product; the exit is a code fix, not a command
+		}
+		stagedScopeExpansion := result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
+			result.Projection.Projection == reviewtransaction.ProjectionStaged
+		// The second approved recovery shape (issue #1826): the live target
+		// keeps the approved delivery scope kind while its candidate tree
+		// changed, so START refuses a fresh lineage and only recovery of this
+		// exact predecessor continues.
+		sameScopeChangedCandidate := result.Projection.Kind == reviewtransaction.TargetCurrentChanges ||
+			result.Projection.Kind == reviewtransaction.TargetBaseDiff
+		if !stagedScopeExpansion && !sameScopeChangedCandidate {
+			return errors.New("approved recovery status requires a published staged scope-expansion or scope-changed target") // refusal:by-design world-action: this envelope is built and validated by the same product; the exit is a code fix, not a command
+		}
 	}
 	return nil
 }
@@ -381,22 +504,264 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if result.NextTransition == nil {
 		return nil
 	}
-	if result.NextTransition.Execute != nil && result.NextTransition.Execute.Binding.TargetIdentity != result.TargetIdentity {
+	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
+		if result.Action == reviewtransaction.TargetStatusActionStop {
+			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "staged_workspace_overlay_recovery_unavailable" {
+				return errors.New("fresh staged workspace-overlay target lacks a STOP transition")
+			}
+			return nil
+		}
+		return result.validateStartNextTransition()
+	}
+	expectedExecutionTarget := result.TargetIdentity
+	if result.Authority != nil && result.Authority.State == reviewtransaction.StateValidating {
+		expectedExecutionTarget = reviewAuthorityTargetIdentity(result)
+	} else if result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired &&
+		result.ValidationRequest != nil && result.NextTransition.ReasonCode == "correction_repository_tooling_failed" {
+		expectedExecutionTarget = result.ValidationRequest.CorrectionTargetIdentity
+	}
+	if result.NextTransition.Execute != nil && result.NextTransition.Execute.Binding.TargetIdentity != expectedExecutionTarget {
 		return errors.New("negotiated status execution target differs from the current target identity")
+	}
+	if err := result.validateSelectorNextTransition(); err != nil {
+		return err
+	}
+	if result.Repair.Status == reviewtransaction.AuthorityRepairEligible {
+		if err := result.validateRepairNextTransition(); err != nil {
+			return err
+		}
+	}
+	if result.FinalVerificationRetry != nil {
+		if err := result.validateFinalVerificationRetryNextTransition(); err != nil {
+			return err
+		}
 	}
 	if result.NextTransition.Collect == nil {
 		return nil
 	}
 	for _, input := range result.NextTransition.Collect.Inputs {
+		if input.CaptureOperation == "review.capture-evidence" {
+			expectedTarget := reviewAuthorityTargetIdentity(result)
+			if result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired && result.ValidationRequest != nil {
+				expectedTarget = result.ValidationRequest.CorrectionTargetIdentity
+			}
+			arguments, err := reviewTransitionArgumentMap(input.Arguments)
+			if err != nil || arguments["target"] != expectedTarget {
+				return errors.New("negotiated status evidence target differs from the frozen authority target identity")
+			}
+			continue
+		}
 		if input.CaptureOperation != "review.capture-result" {
 			continue
 		}
 		arguments, err := reviewTransitionArgumentMap(input.Arguments)
-		if err != nil || arguments["target"] != result.Projection.InitialSnapshotIdentity {
+		if err != nil || arguments["target"] != result.Projection.InitialSnapshotIdentity || input.ArtifactSubject == nil ||
+			input.ArtifactSubject.TargetIdentity != result.Projection.InitialSnapshotIdentity || input.ChangedPathManifest == nil ||
+			!reflect.DeepEqual(manifestPathsForStatus(*input.ChangedPathManifest), result.Projection.Paths) {
 			return errors.New("negotiated status capture target differs from the frozen target identity")
+		}
+		if result.Contract == ReviewIntegrationContractV1 && (input.CandidateDiff == nil || input.BaseTree != "" || input.CandidateTree != "") ||
+			result.Contract == ReviewIntegrationContractV2 && (input.CandidateDiff != nil || input.BaseTree != result.Projection.BaseTree || input.CandidateTree != result.Projection.InitialReviewTree) {
+			return errors.New("negotiated status capture transport differs from its contract") // refusal:by-design world-action: provider-built STATUS mixed negotiated transports and requires a code fix
 		}
 	}
 	return nil
+}
+
+func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
+	execution := result.NextTransition.Execute
+	if execution == nil || (execution.Operation != "review.validate" && execution.Operation != "review.recover") {
+		return nil
+	}
+	arguments, err := reviewTransitionArgumentMap(execution.Arguments)
+	if err != nil {
+		return err
+	}
+	selectorsPresent := execution.SelectorArguments != nil
+	selectors := []ReviewTransitionArgument{}
+	if selectorsPresent {
+		selectors = *execution.SelectorArguments
+	}
+	for _, selector := range selectors {
+		if arguments[selector.Name] != selector.Value {
+			return errors.New("negotiated transition changed its normalized selector")
+		}
+	}
+	base, hasBase := arguments["base-ref"]
+	_, hasCommitted := arguments["committed-only"]
+	projection, hasProjection := arguments["projection"]
+	workspaceOverlay, hasWorkspaceOverlay := arguments["workspace-overlay"]
+	if !selectorsPresent && (hasBase || hasCommitted || hasProjection || hasWorkspaceOverlay) {
+		return errors.New("negotiated transition omitted its normalized selector")
+	}
+	if hasWorkspaceOverlay && workspaceOverlay != "true" {
+		return errors.New("RECOVER transition workspace-overlay selector is invalid")
+	}
+	if execution.Operation == "review.validate" {
+		if result.Projection.Kind == reviewtransaction.TargetCurrentChanges && hasBase ||
+			reviewtransaction.GateKind(arguments["gate"]) == reviewtransaction.GatePrePR && result.Projection.Kind == reviewtransaction.TargetBaseDiff && !hasBase {
+			return errors.New("negotiated VALIDATE transition does not reproduce the selected target")
+		}
+		return nil
+	}
+	switch result.Projection.Kind {
+	case reviewtransaction.TargetCurrentChanges:
+		if hasBase || hasCommitted || hasWorkspaceOverlay {
+			return errors.New("current-changes RECOVER transition invented target selectors")
+		}
+	case reviewtransaction.TargetBaseDiff:
+		if !hasBase || !hasCommitted || hasWorkspaceOverlay {
+			return errors.New("base-diff RECOVER transition lacks exact target selectors")
+		}
+	case reviewtransaction.TargetBaseWorkspaceOverlay:
+		if !hasBase || hasCommitted {
+			return errors.New("workspace-overlay RECOVER transition has incompatible target selectors")
+		}
+		if result.Projection.Projection == reviewtransaction.ProjectionStaged &&
+			(!hasProjection || projection != string(reviewtransaction.ProjectionStaged) || !hasWorkspaceOverlay) {
+			return errors.New("staged workspace-overlay RECOVER transition lacks exact target selectors")
+		}
+		if result.Projection.Projection != reviewtransaction.ProjectionStaged && hasWorkspaceOverlay {
+			return errors.New("workspace-overlay RECOVER transition invented a staged selector")
+		}
+	default:
+		return errors.New("RECOVER transition target kind is unsupported")
+	}
+	if result.Projection.Kind != reviewtransaction.TargetCurrentChanges && base == "" ||
+		hasProjection && projection != string(result.Projection.Projection) {
+		return errors.New("RECOVER transition selectors do not match the selected target")
+	}
+	return nil
+}
+
+func (result ReviewTargetStatusResult) validateStartNextTransition() error {
+	transition := result.NextTransition
+	if result.Projection.Kind != reviewtransaction.TargetCurrentChanges && result.Projection.Kind != reviewtransaction.TargetBaseDiff &&
+		result.Projection.Kind != reviewtransaction.TargetBaseWorkspaceOverlay {
+		return errors.New("fresh target START projection kind is unsupported")
+	}
+	if transition.Kind != reviewNextTransitionExecute || transition.ReasonCode != "fresh_target_ready" || transition.Execute == nil ||
+		transition.Execute.Operation != "review.start" || len(transition.Execute.Artifacts) != 0 {
+		return errors.New("fresh target lacks an executable START transition")
+	}
+	arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments)
+	if err != nil {
+		return err
+	}
+	lineage := arguments["lineage"]
+	if lineage != "" && !validReviewIntegrationLineage(lineage) {
+		return errors.New("fresh target START lineage is not canonical")
+	}
+	wantArguments := reviewStartArguments(result, lineage)
+	for index, argument := range wantArguments {
+		argument.Token = reviewTransitionArgumentToken(argument)
+		wantArguments[index] = argument
+	}
+	wantPreconditions := []ReviewTransitionArgument{{Name: "target_identity", Value: result.TargetIdentity}}
+	wantBinding := ReviewTransitionBinding{LineageID: lineage, TargetIdentity: result.TargetIdentity}
+	if !reflect.DeepEqual(transition.Execute.Arguments, wantArguments) ||
+		!reflect.DeepEqual(transition.Execute.Preconditions, wantPreconditions) || transition.Execute.Binding != wantBinding {
+		return errors.New("fresh target START transition is not exactly bound")
+	}
+	return nil
+}
+
+func reviewAuthorityTargetIdentity(status ReviewTargetStatusResult) string {
+	if status.AuthorityTargetIdentity != "" {
+		return status.AuthorityTargetIdentity
+	}
+	return status.TargetIdentity
+}
+
+func (result ReviewTargetStatusResult) validateFinalVerificationRetryNextTransition() error {
+	transition, retry := result.NextTransition, result.FinalVerificationRetry
+	if transition == nil || retry == nil || result.Authority == nil ||
+		transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != "final_verification_retry_authorization_required" ||
+		transition.Collect == nil || len(transition.Collect.Inputs) != 1 {
+		return errors.New("final-verification retry authorization transition is incomplete")
+	}
+	input := transition.Collect.Inputs[0]
+	arguments, err := reviewTransitionArgumentMap(input.Arguments)
+	want := map[string]string{
+		"predecessor-lineage":           result.Authority.LineageID,
+		"expected-predecessor-revision": result.Authority.Revision,
+		"validating-revision":           retry.ValidatingRevision,
+		"target":                        retry.TargetIdentity,
+		"failed-evidence-hash":          retry.FailedEvidenceHash,
+		"finalize-request-digest":       retry.FinalizeRequestDigest,
+		"incident-schema":               retry.IncidentSchema,
+		"incident-class":                retry.IncidentClass,
+	}
+	if retry.FailedEvidenceRecordDigest != "" {
+		want["failed-evidence-record-digest"] = retry.FailedEvidenceRecordDigest
+	}
+	if err != nil || input.Name != "final_verification_retry_authorization" ||
+		input.Schema != reviewtransaction.FinalVerificationRetryAuthorizationSchema ||
+		input.CaptureOperation != "external.authorize_final_verification_retry" || !reflect.DeepEqual(arguments, want) {
+		return errors.New("final-verification retry authorization transition is not provider-bound")
+	}
+	return nil
+}
+
+func (result ReviewTargetStatusResult) validateRepairNextTransition() error {
+	transition := result.NextTransition
+	assessment, candidate := result.Repair, result.Repair.Candidate
+	if transition == nil || candidate == nil {
+		return errors.New("eligible authority repair lacks a classified transition")
+	}
+	provider := map[string]string{
+		"class": string(assessment.Class), "lineage": candidate.LineageID,
+		"expected-revision": candidate.Revision, "cause": string(assessment.Cause),
+		"disposition": string(assessment.Disposition), "repository-binding": assessment.RepositoryBinding,
+	}
+	switch transition.Kind {
+	case reviewNextTransitionCollect:
+		if transition.ReasonCode != "repair_authorization_required" || transition.Collect == nil || len(transition.Collect.Inputs) != 1 {
+			return errors.New("classified repair authorization transition is incomplete")
+		}
+		input := transition.Collect.Inputs[0]
+		arguments, err := reviewTransitionArgumentMap(input.Arguments)
+		if err != nil || input.Name != "repair_authorization" || input.Schema != assessment.AuthorizationSchema ||
+			input.CaptureOperation != "external.authorize_repair" || !reflect.DeepEqual(arguments, provider) {
+			return errors.New("classified repair authorization transition is not provider-bound")
+		}
+	case reviewNextTransitionExecute:
+		if transition.ReasonCode != "repair_authorized" || transition.Execute == nil || transition.Execute.Operation != "review.repair" ||
+			transition.Execute.Binding.LineageID != candidate.LineageID || transition.Execute.Binding.Revision != candidate.Revision {
+			return errors.New("classified repair execution transition is incomplete")
+		}
+		arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments)
+		if err != nil || len(arguments) != len(provider)+3 {
+			return errors.New("classified repair execution arguments are incomplete")
+		}
+		for name, value := range provider {
+			if arguments[name] != value {
+				return errors.New("classified repair execution arguments differ from provider assessment")
+			}
+		}
+		if strings.TrimSpace(arguments["actor"]) == "" || strings.TrimSpace(arguments["reason"]) == "" || arguments["maintainer-authorization"] != "provided" {
+			return errors.New("classified repair execution exposes or omits authorization state")
+		}
+		preconditions, err := reviewTransitionArgumentMap(transition.Execute.Preconditions)
+		wantPreconditions := map[string]string{
+			"repair_status": string(reviewtransaction.AuthorityRepairEligible), "unique_candidate": "true",
+			"current_head": candidate.Revision, "repair_authorization": "provided",
+		}
+		if err != nil || !reflect.DeepEqual(preconditions, wantPreconditions) {
+			return errors.New("classified repair execution preconditions are incomplete")
+		}
+	default:
+		return errors.New("eligible authority repair may only collect authorization or execute repair")
+	}
+	return nil
+}
+
+func manifestPathsForStatus(entries []reviewtransaction.ChangedPathManifestEntry) []string {
+	paths := make([]string, len(entries))
+	for index, entry := range entries {
+		paths[index] = entry.Path
+	}
+	return paths
 }
 
 func reviewStatusPathsContain(candidate, correction []string) bool {
@@ -423,6 +788,13 @@ func (transition ReviewNextTransition) Validate() error {
 	if strings.TrimSpace(transition.ReasonCode) == "" {
 		return errors.New("review next transition requires a reason code")
 	}
+	correctionRequestRequired := transition.ReasonCode == "correction_plan_required" || transition.ReasonCode == "corrected_candidate_unavailable"
+	if correctionRequestRequired != (transition.CorrectionRequest != nil) {
+		return errors.New("correction transition must carry exactly one provider-owned request") // refusal:by-design world-action: provider-generated routing requires a code fix when its request is missing or misplaced
+	}
+	if transition.CorrectionRequest != nil && reviewtransaction.ValidateCorrectionPlanRequest(*transition.CorrectionRequest) != nil {
+		return errors.New("correction transition request is invalid") // refusal:by-design world-action: malformed provider-owned findings cannot safely authorize planning
+	}
 	switch transition.Kind {
 	case reviewNextTransitionStop:
 		if transition.Execute != nil || transition.Collect != nil {
@@ -447,11 +819,46 @@ func (transition ReviewNextTransition) Validate() error {
 			}
 			if input.CaptureOperation == "review.capture-result" {
 				order, orderErr := strconv.Atoi(arguments["order"])
-				if len(arguments) != 6 || !reviewStartSupportedLens(arguments["lens"]) || orderErr != nil || order < 0 ||
+				legacyTransport := input.ArtifactSubject != nil && input.ArtifactSubject.Schema == reviewtransaction.ArtifactSubjectSchemaV1
+				nativeGitTransport := input.ArtifactSubject != nil && input.ArtifactSubject.Schema == reviewtransaction.ArtifactSubjectSchema
+				argumentCount := 6
+				if nativeGitTransport {
+					argumentCount = 7
+				}
+				if len(arguments) != argumentCount || !reviewStartSupportedLens(arguments["lens"]) || orderErr != nil || order < 0 ||
 					!validReviewCapabilitySHA256(arguments["expected-revision"]) || !validReviewCapabilitySHA256(arguments["target"]) ||
-					strings.TrimSpace(arguments["lineage"]) == "" || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil {
+					strings.TrimSpace(arguments["lineage"]) == "" || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
+					input.ArtifactSubject == nil || input.ChangedPathManifest == nil ||
+					nativeGitTransport && arguments["subject-hash"] != input.ArtifactSubject.SubjectHash ||
+					legacyTransport && input.CandidateDiff == nil || nativeGitTransport && (!validReviewGitTree(input.BaseTree) || !validReviewGitTree(input.CandidateTree)) ||
+					(!legacyTransport && !nativeGitTransport) {
 					return errors.New("review capture transition lacks an exact repository and authority binding")
 				}
+				subject := input.ArtifactSubject
+				manifestDigest, manifestErr := reviewtransaction.ChangedPathManifestDigest(*input.ChangedPathManifest)
+				if reviewtransaction.ValidateArtifactSubject(*subject) != nil || manifestErr != nil ||
+					subject.LineageID != arguments["lineage"] || subject.AuthorityRevision != arguments["expected-revision"] ||
+					subject.TargetIdentity != arguments["target"] || subject.Lens != arguments["lens"] || subject.SelectedOrder != order ||
+					subject.ChangedPathManifestSHA256 != manifestDigest ||
+					legacyTransport && subject.CandidateDiffSHA256 != input.CandidateDiff.SHA256 ||
+					nativeGitTransport && (subject.BaseTree != input.BaseTree || subject.CandidateTree != input.CandidateTree) {
+					return errors.New("review capture transition frozen subject or candidate context is invalid")
+				}
+				if legacyTransport {
+					if _, diffErr := input.CandidateDiff.Bytes(); diffErr != nil || input.BaseTree != "" || input.CandidateTree != "" {
+						return errors.New("review capture transition legacy candidate diff is invalid") // refusal:by-design world-action: provider-built v1 transition contains invalid immutable transport and requires a code fix
+					}
+				} else if input.CandidateDiff != nil {
+					return errors.New("review capture transition native Git context contains a legacy candidate diff") // refusal:by-design world-action: provider-built v2 transition leaked legacy transport and requires a code fix
+				}
+			} else if input.ArtifactSubject != nil || input.CandidateDiff != nil || input.BaseTree != "" || input.CandidateTree != "" || input.ChangedPathManifest != nil {
+				return errors.New("non-reviewer collection transition contains frozen reviewer context")
+			}
+			if input.CaptureOperation == "review.capture-evidence" &&
+				(input.Schema != reviewtransaction.VerificationEvidenceRecordSchema || len(arguments) != 3 ||
+					strings.TrimSpace(arguments["lineage"]) == "" || !validReviewCapabilitySHA256(arguments["expected-revision"]) ||
+					!validReviewCapabilitySHA256(arguments["target"])) {
+				return errors.New("verification evidence capture transition lacks an exact authority and candidate binding") // refusal:by-design world-action: only a producer-code repair can make a malformed machine transition trustworthy
 			}
 			if input.CaptureOperation == "external.run_targeted_validation" && input.ValidationRequest == nil {
 				return errors.New("targeted validation transition lacks its provider-owned request")
@@ -469,7 +876,7 @@ func (transition ReviewNextTransition) Validate() error {
 		if transition.Collect != nil || transition.Execute == nil || transition.Execute.Arguments == nil || len(transition.Execute.Preconditions) == 0 || !validReviewCapabilitySHA256(transition.Execute.Binding.TargetIdentity) {
 			return errors.New("execution transition is incomplete")
 		}
-		if transition.Execute.Operation != "review.start" && transition.Execute.Operation != "review.finalize" && transition.Execute.Operation != "review.recover" && transition.Execute.Operation != "review.validate" || transition.Execute.Operation != "review.start" && (strings.TrimSpace(transition.Execute.Binding.LineageID) == "" || !validReviewCapabilitySHA256(transition.Execute.Binding.Revision)) {
+		if transition.Execute.Operation != "review.start" && transition.Execute.Operation != "review.finalize" && transition.Execute.Operation != "review.recover" && transition.Execute.Operation != "review.repair" && transition.Execute.Operation != "review.validate" || transition.Execute.Operation != "review.start" && (strings.TrimSpace(transition.Execute.Binding.LineageID) == "" || !validReviewCapabilitySHA256(transition.Execute.Binding.Revision)) {
 			return errors.New("execution transition operation or binding is invalid")
 		}
 		if transition.Execute.Binding.RepositoryContext != "" && reviewtransaction.ValidateReviewRepositoryContextHandle(transition.Execute.Binding.RepositoryContext) != nil {
@@ -484,6 +891,13 @@ func (transition ReviewNextTransition) Validate() error {
 			if strings.TrimSpace(precondition.Name) == "" || strings.TrimSpace(precondition.Value) == "" {
 				return errors.New("execution transition has an incomplete precondition")
 			}
+		}
+		arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments)
+		if err != nil {
+			return err
+		}
+		if err := validateReviewTransitionExecution(*transition.Execute, arguments); err != nil {
+			return err
 		}
 	default:
 		return errors.New("unsupported review next transition kind")
@@ -502,6 +916,90 @@ func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument) (map[stri
 	return values, nil
 }
 
+func validateReviewTransitionExecution(execution ReviewTransitionExecution, arguments map[string]string) error {
+	exact := func(required []string, selectors []ReviewTransitionArgument) bool {
+		if len(arguments) != len(required)+len(selectors) {
+			return false
+		}
+		for _, name := range required {
+			if _, present := arguments[name]; !present {
+				return false
+			}
+		}
+		for _, selector := range selectors {
+			if selector.Name != "base-ref" && selector.Name != "committed-only" && selector.Name != "projection" && selector.Name != "workspace-overlay" ||
+				arguments[selector.Name] != selector.Value {
+				return false
+			}
+		}
+		return true
+	}
+	switch execution.Operation {
+	case "review.validate":
+		gate := reviewtransaction.GateKind(arguments["gate"])
+		wantSelectors := []ReviewTransitionArgument{}
+		if base, present := arguments["base-ref"]; present {
+			wantSelectors = append(wantSelectors, ReviewTransitionArgument{Name: "base-ref", Value: base})
+		}
+		if execution.SelectorArguments != nil && !reflect.DeepEqual(*execution.SelectorArguments, wantSelectors) {
+			return errors.New("review validate transition selectors are invalid")
+		}
+		if !exact([]string{"lineage", "gate"}, wantSelectors) ||
+			arguments["lineage"] != execution.Binding.LineageID || !validReviewIntegrationGate(gate) ||
+			arguments["base-ref"] != "" && (gate != reviewtransaction.GatePrePR || !validReviewTransitionSelector(arguments["base-ref"])) {
+			return errors.New("review validate transition selectors are invalid")
+		}
+	case "review.recover":
+		wantSelectors := []ReviewTransitionArgument{}
+		for _, name := range []string{"base-ref", "committed-only", "projection", "workspace-overlay"} {
+			if value, present := arguments[name]; present {
+				wantSelectors = append(wantSelectors, ReviewTransitionArgument{Name: name, Value: value})
+			}
+		}
+		if execution.SelectorArguments != nil && !reflect.DeepEqual(*execution.SelectorArguments, wantSelectors) {
+			return errors.New("review recover transition selectors are invalid")
+		}
+		if !exact([]string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition", "reason", "actor", "maintainer-authorization"}, wantSelectors) ||
+			arguments["predecessor-lineage"] != execution.Binding.LineageID ||
+			arguments["expected-predecessor-revision"] != execution.Binding.Revision ||
+			!validReviewIntegrationLineage(arguments["successor-lineage"]) ||
+			arguments["successor-lineage"] == execution.Binding.LineageID {
+			return errors.New("review recover transition binding is invalid")
+		}
+		disposition := reviewtransaction.RecoveryDisposition(arguments["disposition"])
+		if disposition != reviewtransaction.RecoveryScopeChanged &&
+			disposition != reviewtransaction.RecoveryInvalidated &&
+			disposition != reviewtransaction.RecoveryEscalated {
+			return errors.New("review recover transition disposition is invalid")
+		}
+		authorizationSuccessor := ""
+		if execution.SelectorArguments != nil {
+			authorizationSuccessor = arguments["successor-lineage"]
+		}
+		wantAuthorization := reviewTransitionRecoveryAuthorization(execution.Binding, authorizationSuccessor, arguments["actor"], arguments["reason"])
+		base, hasBase := arguments["base-ref"]
+		committed, hasCommitted := arguments["committed-only"]
+		projection, hasProjection := arguments["projection"]
+		workspaceOverlay, hasWorkspaceOverlay := arguments["workspace-overlay"]
+		if arguments["maintainer-authorization"] != wantAuthorization ||
+			hasBase && !validReviewTransitionSelector(base) ||
+			hasCommitted && (!hasBase || committed != "true") ||
+			hasProjection && projection != string(reviewtransaction.ProjectionWorkspace) &&
+				projection != string(reviewtransaction.ProjectionStaged) ||
+			hasWorkspaceOverlay && (!hasBase || hasCommitted || !hasProjection ||
+				projection != string(reviewtransaction.ProjectionStaged) || workspaceOverlay != "true") {
+			return errors.New("review recover transition selectors are invalid")
+		}
+	}
+	return nil
+}
+
+func validReviewTransitionSelector(value string) bool {
+	fields := strings.Fields(value)
+	return len(fields) == 1 && fields[0] == value && !path.IsAbs(value) &&
+		!strings.HasPrefix(value, "-") && !strings.ContainsRune(value, 0)
+}
+
 func (eligibility ReviewActionEligibility) Validate(status ReviewTargetStatusResult) error {
 	if len(eligibility.AllowedActions) != 1 || eligibility.ForbiddenActions == nil {
 		return errors.New("review action eligibility is incomplete")
@@ -510,15 +1008,23 @@ func (eligibility ReviewActionEligibility) Validate(status ReviewTargetStatusRes
 	if strings.TrimSpace(allowed.Action) == "" || strings.TrimSpace(allowed.ReasonCode) == "" || allowed.RequiredInputs == nil {
 		return errors.New("review action eligibility has an invalid allowed action")
 	}
+	if status.Action == reviewtransaction.TargetStatusActionStart &&
+		(allowed.Action != "review.start" || allowed.ReasonCode != reviewActionEligibleCurrent || len(allowed.RequiredInputs) != 0) {
+		return errors.New("fresh target eligibility does not allow START")
+	}
 	seen := map[string]bool{allowed.Action: true}
-	if allowed.Action == "review.recover" {
+	if allowed.Action == "review.recover" || allowed.Action == ReviewIntegrationOperationRetryFinalVerification {
+		expectedTarget := status.TargetIdentity
+		if allowed.Action == ReviewIntegrationOperationRetryFinalVerification {
+			expectedTarget = reviewAuthorityTargetIdentity(status)
+		}
 		if allowed.Disposition != status.ActionDisposition || allowed.Binding == nil ||
-			allowed.Binding.TargetIdentity != status.TargetIdentity || status.Authority == nil ||
+			allowed.Binding.TargetIdentity != expectedTarget || status.Authority == nil ||
 			allowed.Binding.LineageID != status.Authority.LineageID || allowed.Binding.Revision != status.Authority.Revision {
 			return errors.New("recovery eligibility lacks a current native binding")
 		}
 	} else if allowed.Disposition != "" || allowed.Binding != nil {
-		return errors.New("only recovery eligibility may contain a binding or disposition")
+		return errors.New("only provider recovery eligibility may contain a binding or disposition")
 	}
 	for _, forbidden := range eligibility.ForbiddenActions {
 		if strings.TrimSpace(forbidden.Action) == "" || strings.TrimSpace(forbidden.ReasonCode) == "" || seen[forbidden.Action] {
@@ -553,7 +1059,7 @@ func (eligibility ReviewActionEligibility) ValidateFinalize() error {
 		}
 		seen[forbidden.Action] = true
 	}
-	for _, action := range reviewManagedActions {
+	for _, action := range reviewFinalizeManagedActions {
 		if !seen[action] {
 			return errors.New("finalize action eligibility does not classify every managed action")
 		}

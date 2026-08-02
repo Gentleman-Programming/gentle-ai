@@ -20,6 +20,44 @@ type CompactApprovedInvalidationRequest struct {
 
 var finalCompactInvalidationHook = func() {}
 
+// ErrHealthyApprovedInvalidation refuses to destroy an approved authority the
+// live repository has not made stale. The refusal itself is the point: the
+// approval is something the operator earned over specific bytes, and a command
+// that threw it away on demand would make every approval provisional.
+var ErrHealthyApprovedInvalidation = errors.New("healthy approved authority cannot be invalidated")
+
+// HealthyApprovedInvalidationError states that refusal in terms of the
+// operator's own situation. It deliberately does not say "the native gate
+// result is X": the operator asked to invalidate a lineage, not about an
+// internal evaluation, and an enum from the authority model answers a question
+// they never posed.
+//
+// It carries the re-derived result rather than rendering a continuation,
+// because what to do next differs by result and, like every other refusal in
+// this package, an authority artifact must not carry operator instructions.
+// The command surface reads Result and adds the continuation there.
+type HealthyApprovedInvalidationError struct {
+	LineageID string
+	Gate      GateKind
+	Result    GateResult
+}
+
+func (err *HealthyApprovedInvalidationError) Error() string {
+	switch err.Result {
+	case GateScopeChanged:
+		return fmt.Sprintf("%s: lineage %q is still approved, and the candidate in your working tree is no longer the one it approved — a changed candidate is recovered into a successor, not invalidated",
+			ErrHealthyApprovedInvalidation, err.LineageID)
+	case GateAllow:
+		return fmt.Sprintf("%s: lineage %q still approves exactly the candidate in your working tree, and the %s check you asked for still lets it through, so there is no stale approval here to revoke",
+			ErrHealthyApprovedInvalidation, err.LineageID, err.Gate)
+	default:
+		return fmt.Sprintf("%s: lineage %q is still approved, and the %s check you asked for did not find it out of date",
+			ErrHealthyApprovedInvalidation, err.LineageID, err.Gate)
+	}
+}
+
+func (err *HealthyApprovedInvalidationError) Unwrap() error { return ErrHealthyApprovedInvalidation }
+
 // InvalidateApprovedCompactAuthority terminally revokes an approved lineage
 // only when its requested lifecycle gate natively re-derives an invalidated
 // result while the repository-wide compact authority lock is held. Gate reads
@@ -107,7 +145,9 @@ func InvalidateApprovedCompactAuthority(ctx context.Context, repo string, reques
 		return CompactRecord{}, evaluation, fmt.Errorf("approved invalidation gate infrastructure failure: %w", evaluation.Cause)
 	}
 	if evaluation.Result != GateInvalidated {
-		return CompactRecord{}, evaluation, fmt.Errorf("healthy approved authority cannot be invalidated: native gate result is %q", evaluation.Result)
+		return CompactRecord{}, evaluation, &HealthyApprovedInvalidationError{
+			LineageID: current.State.LineageID, Gate: request.Gate.Gate, Result: evaluation.Result,
+		}
 	}
 	deniedTarget, deniedUntracked, deniedErr := compactInvalidationTarget(ctx, store.repo, current.State, request.Gate)
 	if deniedErr != nil && compactGateInfrastructureFailure(deniedErr) {
@@ -147,7 +187,7 @@ func InvalidateApprovedCompactAuthority(ctx context.Context, repo string, reques
 		return CompactRecord{}, evaluation, err
 	}
 	if store.TracePath != "" {
-		_ = appendCompactTrace(store.TracePath, CompactTraceEntry{
+		recordCompactTrace(store.TracePath, CompactTraceEntry{
 			Operation: "review/invalidate-approved", PreviousRevision: current.Revision,
 			Revision: record.Revision, State: next.State, RecordedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		})

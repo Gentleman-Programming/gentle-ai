@@ -503,31 +503,31 @@ func TestDisposeResultSuccessorNeverAdmitsOrRewritesReviewState(t *testing.T) {
 	legal := previous
 	legal.State = StateEscalated
 	legal.ResultDispositions = []CompactResultDisposition{disposition}
-	if err := validateCompactSuccessor(previous, legal, CompactResultDispositionOperation); err != nil {
+	if err := validateCompactSuccessor("sha256:"+strings.Repeat("a", 64), previous, legal, CompactResultDispositionOperation); err != nil {
 		t.Fatalf("reviewing -> escalated disposition edge rejected: %v", err)
 	}
 
 	admitted := legal
 	admitted.LensResults = []LensResult{{Lens: previous.SelectedLenses[0], Findings: []Finding{}, Evidence: []string{"fabricated"}}}
-	if err := validateCompactSuccessor(previous, admitted, CompactResultDispositionOperation); !errors.Is(err, ErrInvalidSuccessor) {
+	if err := validateCompactSuccessor("sha256:"+strings.Repeat("a", 64), previous, admitted, CompactResultDispositionOperation); !errors.Is(err, ErrInvalidSuccessor) {
 		t.Fatalf("disposition admitting a lens result = %v", err)
 	}
 
 	approved := legal
 	approved.State = StateApproved
-	if err := validateCompactSuccessor(previous, approved, CompactResultDispositionOperation); !errors.Is(err, ErrInvalidSuccessor) {
+	if err := validateCompactSuccessor("sha256:"+strings.Repeat("a", 64), previous, approved, CompactResultDispositionOperation); !errors.Is(err, ErrInvalidSuccessor) {
 		t.Fatalf("disposition approving the lineage = %v", err)
 	}
 
 	none := previous
 	none.State = StateEscalated
-	if err := validateCompactSuccessor(previous, none, CompactResultDispositionOperation); !errors.Is(err, ErrInvalidSuccessor) {
+	if err := validateCompactSuccessor("sha256:"+strings.Repeat("a", 64), previous, none, CompactResultDispositionOperation); !errors.Is(err, ErrInvalidSuccessor) {
 		t.Fatalf("escalation without a recorded disposition = %v", err)
 	}
 
 	terminal := legal
 	terminal.State = StateEscalated
-	if err := validateCompactSuccessor(legal, terminal, CompactResultDispositionOperation); !errors.Is(err, ErrInvalidSuccessor) {
+	if err := validateCompactSuccessor("sha256:"+strings.Repeat("a", 64), legal, terminal, CompactResultDispositionOperation); !errors.Is(err, ErrInvalidSuccessor) {
 		t.Fatalf("disposition from a non-reviewing predecessor = %v", err)
 	}
 }

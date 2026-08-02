@@ -558,3 +558,49 @@ func advanceChainedRecoveryBoundary(t *testing.T, fixture *chainedRecoveryFixtur
 	gitSnapshot(t, fixture.repo, "fetch", "origin")
 	return strings.TrimSpace(gitSnapshot(t, side, "rev-parse", "HEAD"))
 }
+
+// TestCompactFinalRecoveryDeliveryRefusalNamesItsCause locks the second half
+// of the named-continuation defect: when the composed-chain delivery check the
+// evaluation relied on genuinely fails under the final authorization lock, the
+// verifier's specific reason must survive onto the evaluation. Discarding it
+// with `!= nil` left an operator with a generic sentence naming no cause and
+// no continuation, which is a defect even when the refusal itself is right.
+func TestCompactFinalRecoveryDeliveryRefusalNamesItsCause(t *testing.T) {
+	fixture := chainedScopeRecoveryFixture(t)
+	base := strings.TrimSpace(gitSnapshot(t, fixture.repo, "rev-parse", "HEAD~1"))
+	object := filepath.Join(fixture.repo, ".git", "objects", base[:2], base[2:])
+	payload, err := os.ReadFile(object)
+	if err != nil {
+		t.Fatalf("read publication base commit object: %v", err)
+	}
+	original := finalCompactGateAllowHook
+	t.Cleanup(func() {
+		finalCompactGateAllowHook = original
+		_ = os.WriteFile(object, payload, 0o444)
+	})
+	// Everything the evaluation compared under the lock is already proven
+	// unchanged, so the only way this defensive re-verification fails is a
+	// repository read that stops answering. Remove the publication base commit
+	// exactly between the two calls.
+	finalCompactGateAllowHook = func() {
+		finalCompactGateAllowHook = original
+		if err := os.Remove(object); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := EvaluateCompactGate(context.Background(), fixture.repo, fixture.receipt, NativeGateRequestInput{
+		Gate: GatePrePush, LineageID: fixture.leaf.LineageID, BaseRef: fixture.baseRef,
+	})
+	if got.Result != GateInvalidated {
+		t.Fatalf("unreadable publication base at final authorization = %#v", got)
+	}
+	if !strings.HasPrefix(got.Reason, "compact recovery delivery changed during final authorization") {
+		t.Fatalf("final recovery delivery refusal reason = %q", got.Reason)
+	}
+	if got.Cause == nil {
+		t.Fatalf("final recovery delivery refusal discarded its cause: %#v", got)
+	}
+	if !strings.Contains(got.Reason, got.Cause.Error()) {
+		t.Fatalf("final recovery delivery reason %q does not name its cause %q", got.Reason, got.Cause)
+	}
+}

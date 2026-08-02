@@ -15,7 +15,16 @@ func main() {
 }
 
 func run(root string, stdout, stderr io.Writer) int {
-	cmd := exec.Command("git", "ls-files", "-z", "--", "*.go")
+	cmd := exec.Command(
+		"git",
+		"ls-files",
+		"--cached",
+		"--others",
+		"--exclude-standard",
+		"-z",
+		"--",
+		"*.go",
+	)
 	cmd.Dir = root
 	tracked, err := cmd.Output()
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 
 const VerifyResultSchema = "gentle-ai.verify-result/v1"
 const RemediationResultSchema = "gentle-ai.remediation-result/v1"
+const verifyEmptyOutputHash = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 type SpecCounts struct {
 	Requirements int
@@ -31,6 +32,22 @@ type verifyResultEvaluation struct {
 	EvidenceRevision string
 }
 
+// VerifyReportAdmission is the pure, pre-persistence validity decision.
+type VerifyReportAdmission struct {
+	Valid            bool   `json:"valid"`
+	Reason           string `json:"reason,omitempty"`
+	Verdict          string `json:"verdict,omitempty"`
+	EvidenceRevision string `json:"evidence_revision,omitempty"`
+}
+
+type verifyReport struct {
+	Fields                                  map[string]string
+	Verdict, EvidenceRevision               string
+	Blockers, Critical, TestExit, BuildExit int
+	Requirements, Scenarios                 verifyCompletion
+	AuthorityOnly                           bool
+}
+
 var sha256IdentityPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 var requirementHeadingPattern = regexp.MustCompile(`(?m)^### Requirement:\s+\S`)
 var scenarioHeadingPattern = regexp.MustCompile(`(?m)^#### Scenario:\s+\S`)
@@ -45,120 +62,49 @@ func countSpecRequirementsAndScenarios(specs []string) SpecCounts {
 }
 
 func parseVerifyResult(text string, expected SpecCounts) verifyResultEvaluation {
-	lines, end, reason := parseLeadingEnvelope(text)
+	report, reason := parseVerifyReport(text)
 	if reason != "" {
-		return verifyResultEvaluation{Reason: reason}
+		return verifyResultEvaluation{Reason: reason, EvidenceRevision: report.EvidenceRevision}
 	}
-	allowed := map[string]bool{
-		"schema": true, "evidence_revision": true, "verdict": true,
-		"blockers": true, "critical_findings": true, "requirements": true, "scenarios": true,
-		"test_command": true, "test_exit_code": true, "test_output_hash": true,
-		"build_command": true, "build_exit_code": true, "build_output_hash": true,
-	}
-	fields, reason := parseScalarFields(lines[1:end], allowed, "verify result")
-	if reason != "" {
-		return verifyResultEvaluation{Reason: reason}
-	}
-	for _, required := range []string{
-		"schema", "evidence_revision", "verdict", "blockers", "critical_findings",
-		"requirements", "scenarios", "test_command", "test_exit_code", "test_output_hash",
-		"build_command", "build_exit_code", "build_output_hash",
-	} {
-		if _, ok := fields[required]; !ok {
-			return verifyResultEvaluation{Reason: fmt.Sprintf("missing %s in verify result envelope", required)}
-		}
-	}
-
-	evaluation := verifyResultEvaluation{EvidenceRevision: fields["evidence_revision"]}
-	if fields["schema"] != VerifyResultSchema {
-		evaluation.Reason = fmt.Sprintf("unsupported verify result schema %s", fields["schema"])
-		return evaluation
-	}
-	for _, field := range []string{"evidence_revision", "test_output_hash", "build_output_hash"} {
-		if !sha256IdentityPattern.MatchString(fields[field]) {
-			evaluation.Reason = fmt.Sprintf("invalid %s in verify result envelope", field)
-			return evaluation
-		}
-	}
-	if !isConcreteEvidence(fields["test_command"]) || !isConcreteEvidence(fields["build_command"]) {
-		evaluation.Reason = "test_command and build_command require concrete current execution evidence"
-		return evaluation
-	}
-
-	blockers, ok := parseNonnegativeInt(fields["blockers"])
-	if !ok {
-		evaluation.Reason = "invalid blockers in verify result envelope"
-		return evaluation
-	}
-	critical, ok := parseNonnegativeInt(fields["critical_findings"])
-	if !ok {
-		evaluation.Reason = "invalid critical_findings in verify result envelope"
-		return evaluation
-	}
-	testExit, ok := parseNonnegativeInt(fields["test_exit_code"])
-	if !ok {
-		evaluation.Reason = "invalid test_exit_code in verify result envelope"
-		return evaluation
-	}
-	buildExit, ok := parseNonnegativeInt(fields["build_exit_code"])
-	if !ok {
-		evaluation.Reason = "invalid build_exit_code in verify result envelope"
-		return evaluation
-	}
-	requirements, ok := parseVerifyCompletion(fields["requirements"])
-	if !ok {
-		evaluation.Reason = "invalid requirements in verify result envelope"
-		return evaluation
-	}
-	scenarios, ok := parseVerifyCompletion(fields["scenarios"])
-	if !ok {
-		evaluation.Reason = "invalid scenarios in verify result envelope"
-		return evaluation
-	}
-
-	verdict := fields["verdict"]
-	if verdict != "pass" && verdict != "pass_with_warnings" && verdict != "fail" {
-		evaluation.Reason = fmt.Sprintf("invalid verdict %s", verdict)
-		return evaluation
-	}
-	if testExit != 0 {
+	evaluation := verifyResultEvaluation{EvidenceRevision: report.EvidenceRevision}
+	if report.TestExit != 0 {
 		evaluation.Reason = "test_exit_code must be zero for archive readiness"
 		return evaluation
 	}
-	if buildExit != 0 {
+	if report.BuildExit != 0 {
 		evaluation.Reason = "build_exit_code must be zero for archive readiness"
 		return evaluation
 	}
-	internallyComplete := requirements.Completed == requirements.Total && scenarios.Completed == scenarios.Total
-	totalsMatch := requirements.Total == expected.Requirements && scenarios.Total == expected.Scenarios
+	internallyComplete := report.Requirements.Completed == report.Requirements.Total && report.Scenarios.Completed == report.Scenarios.Total
+	totalsMatch := report.Requirements.Total == expected.Requirements && report.Scenarios.Total == expected.Scenarios
 	if !totalsMatch {
-		evaluation.Stale = verdict != "fail" && blockers == 0 && critical == 0 && internallyComplete
+		evaluation.Stale = report.Verdict != "fail" && report.Blockers == 0 && report.Critical == 0 && internallyComplete
 	}
-	if requirements.Total != expected.Requirements {
-		evaluation.Reason = fmt.Sprintf("verify result total %d does not match actual requirement count %d", requirements.Total, expected.Requirements)
+	if report.Requirements.Total != expected.Requirements {
+		evaluation.Reason = fmt.Sprintf("verify result total %d does not match actual requirement count %d", report.Requirements.Total, expected.Requirements)
 		return evaluation
 	}
-	if scenarios.Total != expected.Scenarios {
-		evaluation.Reason = fmt.Sprintf("verify result total %d does not match actual scenario count %d", scenarios.Total, expected.Scenarios)
+	if report.Scenarios.Total != expected.Scenarios {
+		evaluation.Reason = fmt.Sprintf("verify result total %d does not match actual scenario count %d", report.Scenarios.Total, expected.Scenarios)
 		return evaluation
 	}
-	if blockers != 0 {
+	if report.Blockers != 0 {
 		evaluation.Reason = "blockers must be zero for archive readiness"
 		return evaluation
 	}
-	if critical != 0 {
+	if report.Critical != 0 {
 		evaluation.Reason = "critical_findings must be zero for archive readiness"
 		return evaluation
 	}
-	if requirements.Completed != requirements.Total {
+	if report.Requirements.Completed != report.Requirements.Total {
 		evaluation.Reason = "requirements are incomplete"
 		return evaluation
 	}
-	if scenarios.Completed != scenarios.Total {
+	if report.Scenarios.Completed != report.Scenarios.Total {
 		evaluation.Reason = "scenarios are incomplete"
 		return evaluation
 	}
-	if verdict == "fail" {
+	if report.Verdict == "fail" {
 		evaluation.Reason = "verdict requires remediation"
 		return evaluation
 	}
@@ -166,11 +112,132 @@ func parseVerifyResult(text string, expected SpecCounts) verifyResultEvaluation 
 	return evaluation
 }
 
+// ValidateVerifyReportAdmission validates exact report bytes before persistence.
+func ValidateVerifyReportAdmission(text string, expected SpecCounts) VerifyReportAdmission {
+	report, reason := parseVerifyReport(text)
+	result := VerifyReportAdmission{Reason: reason}
+	if reason != "" {
+		return result
+	}
+	result.Verdict, result.EvidenceRevision = report.Verdict, report.EvidenceRevision
+	if expected.Requirements < 0 || expected.Scenarios < 0 {
+		result.Reason = "expected requirement and scenario counts must be nonnegative"
+		return result
+	}
+	if report.Requirements.Total != expected.Requirements {
+		result.Reason = fmt.Sprintf("verify result total %d does not match actual requirement count %d", report.Requirements.Total, expected.Requirements)
+		return result
+	}
+	if report.Scenarios.Total != expected.Scenarios {
+		result.Reason = fmt.Sprintf("verify result total %d does not match actual scenario count %d", report.Scenarios.Total, expected.Scenarios)
+		return result
+	}
+	complete := report.Requirements.Completed == report.Requirements.Total && report.Scenarios.Completed == report.Scenarios.Total
+	if report.Verdict != "fail" {
+		if report.TestExit != 0 || report.BuildExit != 0 || report.Blockers != 0 || report.Critical != 0 || !complete {
+			result.Reason = "passing verdict contradicts failing or incomplete evidence"
+			return result
+		}
+	} else if !report.AuthorityOnly {
+		if report.TestExit == 125 || report.BuildExit == 125 {
+			result.Reason = "exit code 125 requires the exact authority-only extension"
+			return result
+		}
+		if report.TestExit == 0 && report.BuildExit == 0 && report.Blockers == 0 && report.Critical == 0 && complete {
+			result.Reason = "fail verdict is contradictory with all-green evidence"
+			return result
+		}
+	}
+	result.Valid, result.Reason = true, ""
+	return result
+}
+
+func parseVerifyReport(text string) (verifyReport, string) {
+	lines, end, reason := parseLeadingEnvelope(text)
+	if reason != "" {
+		return verifyReport{}, reason
+	}
+	base := []string{"schema", "evidence_revision", "verdict", "blockers", "critical_findings", "requirements", "scenarios", "test_command", "test_exit_code", "test_output_hash", "build_command", "build_exit_code", "build_output_hash"}
+	extension := []string{"authority_only_failure", "missing_review_authority", "substantive_failure", "command_failed", "observed_authority_revision"}
+	allowed := make(map[string]bool, len(base)+len(extension))
+	for _, field := range append(base, extension...) {
+		allowed[field] = true
+	}
+	fields, reason := parseScalarFields(lines[1:end], allowed, "verify result")
+	report := verifyReport{Fields: fields}
+	if fields["schema"] == VerifyResultSchema && sha256IdentityPattern.MatchString(fields["evidence_revision"]) {
+		report.EvidenceRevision = fields["evidence_revision"]
+	}
+	if reason != "" {
+		return report, reason
+	}
+	for _, required := range base {
+		if _, ok := fields[required]; !ok {
+			return report, fmt.Sprintf("missing %s in verify result envelope", required)
+		}
+	}
+	extensionCount := 0
+	for _, field := range extension {
+		if _, ok := fields[field]; ok {
+			extensionCount++
+		}
+	}
+	if extensionCount != 0 && extensionCount != len(extension) {
+		return report, "authority-only extension must contain exactly five fields"
+	}
+	if fields["schema"] != VerifyResultSchema {
+		return report, fmt.Sprintf("unsupported verify result schema %s", fields["schema"])
+	}
+	for _, field := range []string{"evidence_revision", "test_output_hash", "build_output_hash"} {
+		if !sha256IdentityPattern.MatchString(fields[field]) {
+			return report, fmt.Sprintf("invalid %s in verify result envelope", field)
+		}
+	}
+	if !isConcreteEvidence(fields["test_command"]) || !isConcreteEvidence(fields["build_command"]) {
+		return report, "test_command and build_command require concrete current execution evidence"
+	}
+	report.Verdict, report.AuthorityOnly = fields["verdict"], extensionCount != 0
+	for _, target := range []struct {
+		name  string
+		value *int
+	}{{"blockers", &report.Blockers}, {"critical_findings", &report.Critical}, {"test_exit_code", &report.TestExit}, {"build_exit_code", &report.BuildExit}} {
+		value, ok := parseNonnegativeInt(fields[target.name])
+		if !ok {
+			return report, fmt.Sprintf("invalid %s in verify result envelope", target.name)
+		}
+		*target.value = value
+	}
+	var ok bool
+	if report.Requirements, ok = parseVerifyCompletion(fields["requirements"]); !ok {
+		return report, "invalid requirements in verify result envelope"
+	}
+	if report.Scenarios, ok = parseVerifyCompletion(fields["scenarios"]); !ok {
+		return report, "invalid scenarios in verify result envelope"
+	}
+	if report.Verdict != "pass" && report.Verdict != "pass_with_warnings" && report.Verdict != "fail" {
+		return report, fmt.Sprintf("invalid verdict %s", report.Verdict)
+	}
+	if report.AuthorityOnly {
+		for _, pair := range [][2]string{{"authority_only_failure", "true"}, {"missing_review_authority", "true"}, {"substantive_failure", "false"}, {"command_failed", "false"}} {
+			if fields[pair[0]] != pair[1] {
+				return report, "invalid authority-only extension"
+			}
+		}
+		if report.Verdict != "fail" || report.TestExit != 125 || report.BuildExit != 125 || report.Blockers == 0 || report.Critical == 0 || fields["test_output_hash"] != verifyEmptyOutputHash || fields["build_output_hash"] != verifyEmptyOutputHash || !sha256IdentityPattern.MatchString(fields["observed_authority_revision"]) {
+			return report, "invalid authority-only extension"
+		}
+	}
+	return report, ""
+}
+
 func parseLeadingEnvelope(text string) ([]string, int, string) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	lines := strings.Split(strings.TrimSpace(text), "\n")
+	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
+		return nil, -1, "YAML front matter is unsupported; the first non-empty content must be a fenced yaml envelope"
+	}
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "```yaml" {
-		return nil, -1, "missing valid gentle-ai.verify-result/v1 envelope"
+		return nil, -1, "missing valid gentle-ai.verify-result/v1 envelope: the first non-empty content must be fenced yaml"
 	}
 	for index := 1; index < len(lines); index++ {
 		if strings.TrimSpace(lines[index]) == "```" {
@@ -191,13 +258,13 @@ func parseScalarFields(lines []string, allowed map[string]bool, label string) (m
 		key = strings.TrimSpace(key)
 		value = strings.TrimSpace(value)
 		if !ok || key == "" || value == "" {
-			return nil, "malformed " + label + " field"
+			return fields, "malformed " + label + " field"
 		}
 		if !allowed[key] {
-			return nil, fmt.Sprintf("unknown %s field %s", label, key)
+			return fields, fmt.Sprintf("unknown %s field %s", label, key)
 		}
 		if _, duplicate := fields[key]; duplicate {
-			return nil, fmt.Sprintf("duplicate %s field %s", label, key)
+			return fields, fmt.Sprintf("duplicate %s field %s", label, key)
 		}
 		fields[key] = value
 	}

@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 // ProfileAssignment holds the resolved model and reasoning_effort for a
@@ -70,9 +70,9 @@ func SddProfilePaths(codexHomeDir string) []string {
 //
 // When assignments is nil or empty, canonical Recommended defaults are used
 // (derived from model.CodexTierGroups()):
-//   - sdd-strong: model=gpt-5.6-sol, model_reasoning_effort=high
-//   - sdd-mid:    model=gpt-5.6-terra, model_reasoning_effort=medium
-//   - sdd-cheap:  model=gpt-5.6-luna, model_reasoning_effort=low
+//   - sdd-strong: model=gpt-5.6-sol, model_reasoning_effort=medium
+//   - sdd-mid:    model=gpt-5.6-terra, model_reasoning_effort=high
+//   - sdd-cheap:  model=gpt-5.6-luna, model_reasoning_effort=high
 //
 // Profile files are written idempotently using UpsertTopLevelTOMLString +
 // WriteFileAtomic — re-running this function when files already contain the

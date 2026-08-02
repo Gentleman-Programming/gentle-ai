@@ -34,6 +34,14 @@ PRs that are not linked to an approved issue will be **automatically rejected** 
 
 ---
 
+## Looking for something to work on?
+
+Start at the **[Community Roadmap](docs/community-roadmap.md)**.
+
+Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3Aup-for-grabs) is scoped, carries `status:approved` so a PR can be opened, and is unclaimed. Comment that you are taking it and go.
+
+An issue **without** that label is usually waiting on information (`status:needs-info`) or on an architectural decision (`status:needs-design`). Those want discussion first — implementing before the decision lands means the work gets thrown away.
+
 ## Label System
 
 ### Type Labels (applied to PRs)
@@ -131,6 +139,18 @@ chmod +x docker-test.sh
 ```
 
 > ⚠️ E2E tests spin up containers to simulate real installation environments. They may take a few minutes to complete.
+
+### Benchmark Validation
+
+[`bench/`](bench/README.md) is a separate Go module, so root-module tests do not validate it. For benchmark-module changes, run these commands from `bench/`:
+
+```bash
+go build ./...
+go vet ./...
+go test ./...
+```
+
+Benchmark validation applies to review-lifecycle, gate, recovery, delivery, benchmark implementation/corpus/classifier, and benchmark-claim changes. For measured product-behavior changes, use driven mode and report the command, tested binary or commit, selected subset or axes, and result summary. Compare before and after only when claiming a measured friction change. For unrelated changes, mark benchmark validation `N/A` with a brief reason.
 
 ### Windows — Known Test Limitations
 
@@ -281,6 +301,7 @@ Review feedback should be warm, direct, and useful quickly. Start with the actio
 - [ ] Commits are organized by deliverable work unit
 - [ ] All unit tests pass (`go test ./...`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
+- [ ] Benchmark validation completed, or this change is not applicable to the benchmark (explain why in the Test Plan).
 - [ ] Commits follow Conventional Commits format
 - [ ] Code is self-reviewed
 

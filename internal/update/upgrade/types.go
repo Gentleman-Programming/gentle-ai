@@ -3,7 +3,7 @@ package upgrade
 import (
 	"errors"
 
-	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
 // ToolUpgradeStatus describes the outcome of a single tool upgrade attempt.
@@ -45,11 +45,11 @@ type ToolUpgradeResult struct {
 	Status     ToolUpgradeStatus
 	Err        error
 	// ManualHint is set when the tool requires manual intervention instead of
-	// automated upgrade (e.g. Windows self-replace, unsupported binary path).
+	// automated upgrade (e.g. a disabled or unsupported binary path).
 	ManualHint string
 
-	// ExitRequested is set to true if the upgrade strategy requires the parent process
-	// to exit immediately after success (e.g. Windows self-replace via installer).
+	// ExitRequested is reserved for strategies that require the parent process to
+	// exit immediately after success.
 	ExitRequested bool
 }
 
@@ -67,7 +67,7 @@ type UpgradeReport struct {
 	Results []ToolUpgradeResult
 	DryRun  bool
 
-	// ExitRequested is true if any executed tool requested an immediate exit
-	// (e.g. Windows self-replace). The caller is responsible for exiting.
+	// ExitRequested is true if any executed tool requested an immediate exit. The
+	// caller is responsible for exiting.
 	ExitRequested bool
 }

@@ -3,15 +3,19 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *testing.T) {
@@ -74,7 +78,7 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 	if err := status.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if status.Schema != ReviewIntegrationStatusSchema || status.Contract != ReviewIntegrationContractV1 || status.Operation != "review.status" ||
+	if status.Schema != ReviewIntegrationStatusSchemaV2 || status.Contract != ReviewIntegrationContractV1 || status.Operation != "review.status" ||
 		status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
 		status.Authority.State != reviewtransaction.StateReviewing || status.Authority.LineageID != started.LineageID ||
 		status.Receipt.Status != ReviewReceiptExpectedMissing || status.Receipt.Identity != "" ||
@@ -92,11 +96,16 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 	forbidden := map[string]struct{}{
 		"repository": {}, "store_path": {}, "authority_path": {}, "receipt_path": {}, "lock": {}, "locks": {}, "token": {}, "tokens": {}, "directory": {},
 	}
-	if field := findCapabilityForbiddenField(document, forbidden); field != "" || strings.Contains(first.String(), repo) {
+	// "token" stays forbidden by name; it is checked by position rather than
+	// by name alone because the status schemas publish a token property on
+	// transition arguments holding the literal argv a caller pastes. See
+	// negotiatedPrivateFieldPath: everywhere the contract does not declare it,
+	// the key is still a violation.
+	if field := negotiatedPrivateFieldPath(document, forbidden, publishedNegotiatedTransitionTokens()); field != "" || strings.Contains(first.String(), repo) {
 		t.Fatalf("negotiated status exposed provider-private field %q: %s", field, first.String())
 	}
 
-	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "status.fixture.json"))
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "status-v2.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +156,7 @@ func transitionArgumentValue(t *testing.T, transition *ReviewNextTransition, nam
 func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	var output bytes.Buffer
-	err := RunReview([]string{"status", "--contract", "gentle-ai.review-integration/v2", "--cwd", repo}, &output)
+	err := RunReview([]string{"status", "--contract", "gentle-ai.review-integration/v3", "--cwd", repo}, &output)
 	if err == nil {
 		t.Fatalf("unsupported status contract = %q, %v", output.String(), err)
 	}
@@ -159,8 +168,10 @@ func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 		name string
 		id   string
 	}{
-		{name: "status.schema.json", id: ReviewIntegrationStatusSchemaID},
+		{name: "status-v2.schema.json", id: ReviewIntegrationStatusSchemaIDV2},
+		{name: "authority-repair-assessment.schema.json", id: reviewtransaction.AuthorityRepairAssessmentSchemaID},
 		{name: "projection.schema.json", id: ReviewIntegrationProjectionSchemaID},
+		{name: "correction-plan-request.schema.json", id: reviewtransaction.CorrectionPlanRequestSchemaID},
 		{name: "targeted-validation-request.schema.json", id: reviewtransaction.TargetedValidationRequestSchemaID},
 	} {
 		payload, readErr := os.ReadFile(filepath.Join(root, "schemas", item.name))
@@ -179,11 +190,13 @@ func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 		name          string
 		applicability reviewtransaction.TargetApplicability
 	}{
-		{name: "status.fixture.json", applicability: reviewtransaction.TargetApplicabilityCurrent},
-		{name: "status-recover.fixture.json", applicability: reviewtransaction.TargetApplicabilityCurrent},
-		{name: "status-unrelated.fixture.json", applicability: reviewtransaction.TargetApplicabilityUnrelated},
-		{name: "status-ambiguous.fixture.json", applicability: reviewtransaction.TargetApplicabilityAmbiguous},
-		{name: "status-corrupted.fixture.json", applicability: reviewtransaction.TargetApplicabilityCorrupted},
+		{name: "status-v2.fixture.json", applicability: reviewtransaction.TargetApplicabilityCurrent},
+		{name: "status-v2-recover.fixture.json", applicability: reviewtransaction.TargetApplicabilityCurrent},
+		{name: "status-v2-final-verification-retry.fixture.json", applicability: reviewtransaction.TargetApplicabilityCurrent},
+		{name: "status-v2-unrelated.fixture.json", applicability: reviewtransaction.TargetApplicabilityUnrelated},
+		{name: "status-v2-ambiguous.fixture.json", applicability: reviewtransaction.TargetApplicabilityAmbiguous},
+		{name: "status-v2-corrupted.fixture.json", applicability: reviewtransaction.TargetApplicabilityCorrupted},
+		{name: "status-v2-repair.fixture.json", applicability: reviewtransaction.TargetApplicabilityCorrupted},
 	}
 	for _, item := range fixtures {
 		fixture, readErr := os.ReadFile(filepath.Join(root, "fixtures", item.name))
@@ -280,25 +293,26 @@ func TestActionEligibilityIsOptionalForV1Consumers(t *testing.T) {
 		t.Fatal(err)
 	}
 	startFacadeReview(t, repo)
-	type v1Status struct {
-		Schema         string                                `json:"schema"`
-		Contract       string                                `json:"contract"`
-		Operation      string                                `json:"operation"`
-		Applicability  reviewtransaction.TargetApplicability `json:"applicability"`
-		Authority      *ReviewTargetStatusAuthority          `json:"authority,omitempty"`
-		Receipt        ReviewTargetStatusReceipt             `json:"receipt"`
-		Action         reviewtransaction.TargetStatusAction  `json:"action"`
-		Replayability  reviewtransaction.Replayability       `json:"replayability"`
-		Frozen         *ReviewTargetStatusFrozen             `json:"frozen,omitempty"`
-		TargetIdentity string                                `json:"target_identity"`
-		Projection     ReviewTargetStatusProjection          `json:"projection"`
-		Candidates     []string                              `json:"candidates"`
+	type statusWithoutEligibility struct {
+		Schema         string                                      `json:"schema"`
+		Contract       string                                      `json:"contract"`
+		Operation      string                                      `json:"operation"`
+		Applicability  reviewtransaction.TargetApplicability       `json:"applicability"`
+		Authority      *ReviewTargetStatusAuthority                `json:"authority,omitempty"`
+		Receipt        ReviewTargetStatusReceipt                   `json:"receipt"`
+		Action         reviewtransaction.TargetStatusAction        `json:"action"`
+		Replayability  reviewtransaction.Replayability             `json:"replayability"`
+		Frozen         *ReviewTargetStatusFrozen                   `json:"frozen,omitempty"`
+		TargetIdentity string                                      `json:"target_identity"`
+		Projection     ReviewTargetStatusProjection                `json:"projection"`
+		Repair         reviewtransaction.AuthorityRepairAssessment `json:"repair"`
+		Candidates     []string                                    `json:"candidates"`
 	}
 	var legacyOutput bytes.Buffer
 	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo}, &legacyOutput); err != nil {
 		t.Fatal(err)
 	}
-	var legacy v1Status
+	var legacy statusWithoutEligibility
 	decodeStrictReviewJSON(t, legacyOutput.Bytes(), &legacy)
 	var oldPayload ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, legacyOutput.Bytes(), &oldPayload)
@@ -324,7 +338,7 @@ func TestReviewActionEligibilityStopsWithoutCompleteExecutionInputs(t *testing.T
 			Revision: "sha256:" + strings.Repeat("a", 64), OriginalChangedLines: 2, Tier: reviewtransaction.RiskMedium, CorrectionBudget: 1,
 			Action: action, Replayability: replayability,
 		}
-		status := newReviewTargetStatusResult(native)
+		status := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 		status.Projection = publishedStatusFixtureProjection(t)
 		status.TargetIdentity = status.Projection.CurrentSnapshotIdentity
 		status.Eligibility = newReviewActionEligibility(status)
@@ -336,17 +350,18 @@ func TestReviewActionEligibilityStopsWithoutCompleteExecutionInputs(t *testing.T
 		state         reviewtransaction.State
 		action        reviewtransaction.TargetStatusAction
 		replayability reviewtransaction.Replayability
+		allowedAction string
 		allowed       string
 		forbidden     string
 	}{
-		{"unrelated workspace start", reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenUnrelated},
-		{"unrelated staged start", reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenUnrelated},
-		{"unrelated base ref start", reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenUnrelated},
-		{"unrelated overlay start", reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenUnrelated},
-		{"reviewing selected lenses", reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenInputsUnavailable},
-		{"pending finalize journal", reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateValidating, reviewtransaction.TargetStatusActionReconcileFinalize, reviewtransaction.ReplayabilityStatusRequired, reviewActionForbiddenReconciliation, reviewActionForbiddenReconciliation},
-		{"scope changed finalize", reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateCorrectionRequired, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenInputsUnavailable},
-		{"terminal validation", reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateApproved, reviewtransaction.TargetStatusActionValidate, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenInputsUnavailable},
+		{"unrelated workspace start", reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable, "review.start", reviewActionEligibleCurrent, reviewActionForbiddenUnrelated},
+		{"unrelated staged start", reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable, "review.start", reviewActionEligibleCurrent, reviewActionForbiddenUnrelated},
+		{"unrelated base ref start", reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable, "review.start", reviewActionEligibleCurrent, reviewActionForbiddenUnrelated},
+		{"unrelated overlay start", reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable, "review.start", reviewActionEligibleCurrent, reviewActionForbiddenUnrelated},
+		{"reviewing selected lenses", reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable, "stop", reviewActionForbiddenInputsUnavailable, reviewActionForbiddenInputsUnavailable},
+		{"pending finalize journal", reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateValidating, reviewtransaction.TargetStatusActionReconcileFinalize, reviewtransaction.ReplayabilityStatusRequired, "stop", reviewActionForbiddenReconciliation, reviewActionForbiddenReconciliation},
+		{"scope changed finalize", reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateCorrectionRequired, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable, "stop", reviewActionForbiddenInputsUnavailable, reviewActionForbiddenInputsUnavailable},
+		{"terminal validation", reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateApproved, reviewtransaction.TargetStatusActionValidate, reviewtransaction.ReplayabilityNotReplayable, "stop", reviewActionForbiddenInputsUnavailable, reviewActionForbiddenInputsUnavailable},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			status := base(tt.applicability, tt.state, tt.action, tt.replayability)
@@ -354,14 +369,14 @@ func TestReviewActionEligibilityStopsWithoutCompleteExecutionInputs(t *testing.T
 				t.Fatal(err)
 			}
 			allowed := status.Eligibility.AllowedActions
-			if len(allowed) != 1 || allowed[0].Action != "stop" || allowed[0].ReasonCode != tt.allowed || len(allowed[0].RequiredInputs) != 0 {
+			if len(allowed) != 1 || allowed[0].Action != tt.allowedAction || allowed[0].ReasonCode != tt.allowed || len(allowed[0].RequiredInputs) != 0 {
 				t.Fatalf("eligibility = %#v", status.Eligibility)
 			}
 			forbiddenStart := false
 			for _, forbidden := range status.Eligibility.ForbiddenActions {
 				forbiddenStart = forbiddenStart || forbidden.Action == "review.start" && forbidden.ReasonCode == tt.forbidden
 			}
-			if !forbiddenStart {
+			if tt.allowedAction != "review.start" && !forbiddenStart {
 				t.Fatalf("missing expected forbidden guidance: %#v", status.Eligibility)
 			}
 		})
@@ -369,21 +384,36 @@ func TestReviewActionEligibilityStopsWithoutCompleteExecutionInputs(t *testing.T
 }
 
 func TestNegotiatedReviewFinalizeEligibilityRequiresTargetScopedStatus(t *testing.T) {
-	for _, state := range []reviewtransaction.State{
-		reviewtransaction.StateReviewing,
-		reviewtransaction.StateCorrectionRequired,
-		reviewtransaction.StateValidating,
-		reviewtransaction.StateApproved,
+	for _, contract := range []struct {
+		name   string
+		value  string
+		schema string
+	}{
+		{name: "v1", value: ReviewIntegrationContractV1, schema: ReviewIntegrationOperationSchema},
+		{name: "v2", value: ReviewIntegrationContractV2, schema: ReviewIntegrationOperationSchemaV2},
 	} {
-		t.Run(string(state), func(t *testing.T) {
-			var output bytes.Buffer
-			if err := encodeCompactFacadeFinalize(&output, true, true, false, reviewtransaction.CompactState{LineageID: "review-finalize-eligibility", State: state}, "sha256:"+strings.Repeat("a", 64), reviewtransaction.CompactStore{}, "finalize"); err != nil {
-				t.Fatal(err)
-			}
-			var result ReviewIntegrationFinalizeResult
-			decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &result)
-			if result.Eligibility == nil || result.Eligibility.ValidateFinalize() != nil {
-				t.Fatalf("finalize eligibility = %#v", result.Eligibility)
+		t.Run(contract.name, func(t *testing.T) {
+			for _, state := range []reviewtransaction.State{
+				reviewtransaction.StateReviewing,
+				reviewtransaction.StateCorrectionRequired,
+				reviewtransaction.StateValidating,
+				reviewtransaction.StateApproved,
+			} {
+				t.Run(string(state), func(t *testing.T) {
+					var output bytes.Buffer
+					if err := encodeCompactFacadeFinalize(&output, true, contract.value, true, false, reviewtransaction.CompactState{LineageID: "review-finalize-eligibility", State: state}, "sha256:"+strings.Repeat("a", 64), reviewtransaction.CompactStore{}, "finalize"); err != nil {
+						t.Fatal(err)
+					}
+					envelope := decodeReviewOperationEnvelope(t, output.Bytes())
+					if envelope.Contract != contract.value || envelope.Schema != contract.schema {
+						t.Fatalf("finalize operation identity = %q, %q; want %q, %q", envelope.Contract, envelope.Schema, contract.value, contract.schema)
+					}
+					var result ReviewIntegrationFinalizeResult
+					decodeStrictReviewJSON(t, envelope.Result, &result)
+					if result.Eligibility == nil || result.Eligibility.ValidateFinalize() != nil {
+						t.Fatalf("finalize eligibility = %#v", result.Eligibility)
+					}
+				})
 			}
 		})
 	}
@@ -391,7 +421,7 @@ func TestNegotiatedReviewFinalizeEligibilityRequiresTargetScopedStatus(t *testin
 
 func assertStatusPayloadMatchesPublishedSchema(t *testing.T, payload []byte) {
 	t.Helper()
-	schemaPath := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas", "status.schema.json")
+	schemaPath := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas", "status-v2.schema.json")
 	schemaBytes, err := os.ReadFile(schemaPath)
 	if err != nil {
 		t.Fatal(err)
@@ -563,9 +593,12 @@ func TestNegotiatedRuntimeReplaysPublishedV149AuthorityReadOnly(t *testing.T) {
 		t.Fatalf("published v1.49 bind-sdd succeeded: %s", bind.String())
 	}
 	failure := decodeReviewIntegrationFailure(t, bind.Bytes())
+	// organic-dx Phase 3b task 3b.4: negotiated legacy_read_only now names
+	// the same "choose a new lineage for compact authority" route the
+	// non-negotiated START collision already names.
 	if failure.Operation != ReviewIntegrationOperationBindSDD || failure.Code != reviewtransaction.LegacyReadOnlyErrorCode ||
 		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe ||
-		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != "stop" {
+		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != "review.start" {
 		t.Fatalf("published v1.49 bind-sdd failure = %#v\n%s", failure, bind.String())
 	}
 	var typed *reviewtransaction.LegacyReadOnlyError
@@ -585,7 +618,7 @@ func TestNegotiatedStatusPreservesManualRecoveryAuthorityContext(t *testing.T) {
 		Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryEscalated,
 		Replayability: reviewtransaction.ReplayabilityManualActionRequired,
 	}
-	got := newReviewTargetStatusResult(native)
+	got := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 	if got.Action != reviewtransaction.TargetStatusActionRecover || got.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
 		got.ActionDisposition != reviewtransaction.RecoveryEscalated ||
 		got.Authority == nil || got.Authority.LineageID != native.LineageID || got.Authority.Revision != native.Revision {
@@ -605,7 +638,7 @@ func TestNegotiatedStatusBindsRecoveryDispositionToRecoverAction(t *testing.T) {
 			Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryScopeChanged,
 			Replayability: reviewtransaction.ReplayabilityManualActionRequired,
 		}
-		result := newReviewTargetStatusResult(native)
+		result := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 		result.Projection = publishedStatusFixtureProjection(t)
 		result.TargetIdentity = result.Projection.CurrentSnapshotIdentity
 		result.Eligibility = newReviewActionEligibility(result)
@@ -656,7 +689,7 @@ func TestReviewActionEligibilityFailsClosedForEscalatedAuthority(t *testing.T) {
 			Revision: "sha256:" + strings.Repeat("a", 64), OriginalChangedLines: 2, Tier: reviewtransaction.RiskMedium, CorrectionBudget: 1,
 			Action: action, ActionDisposition: disposition, Replayability: replayability,
 		}
-		status := newReviewTargetStatusResult(native)
+		status := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 		status.Projection = publishedStatusFixtureProjection(t)
 		status.TargetIdentity = status.Projection.CurrentSnapshotIdentity
 		status.Eligibility = newReviewActionEligibility(status)
@@ -712,6 +745,40 @@ func TestReviewActionEligibilityFailsClosedForEscalatedAuthority(t *testing.T) {
 	}
 }
 
+// TestNegotiatedStatusOffersRecoveryForAccountingOnlyEscalatedUnchangedTarget
+// pins the routing fix for the accounting-only-escalation dead end: native
+// STATUS now names Recover/RecoveryEscalated for an escalated authority whose
+// target has not changed (the shape reviewtransaction.AssessTargetStatus
+// produces once compactAccountingOnlyEscalation matches), and the negotiated
+// contract must classify it as an ordinary eligible recovery, never as
+// forbidden_terminal_escalated_authority (which keys on action == stop).
+func TestNegotiatedStatusOffersRecoveryForAccountingOnlyEscalatedUnchangedTarget(t *testing.T) {
+	native := reviewtransaction.TargetStatusResult{
+		Applicability: reviewtransaction.TargetApplicabilityCurrent, AuthorityVersion: reviewtransaction.AuthorityVersionCompact,
+		LineageID: "accounting-only-escalated", State: reviewtransaction.StateEscalated, Generation: 1,
+		Revision: "sha256:" + strings.Repeat("a", 64), OriginalChangedLines: 2, Tier: reviewtransaction.RiskMedium, CorrectionBudget: 1,
+		Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryEscalated,
+		Replayability: reviewtransaction.ReplayabilityManualActionRequired,
+	}
+	status := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
+	status.Projection = publishedStatusFixtureProjection(t)
+	status.TargetIdentity = status.Projection.CurrentSnapshotIdentity
+	status.Eligibility = newReviewActionEligibility(status)
+	if err := status.Validate(); err != nil {
+		t.Fatalf("accounting-only escalated recovery status rejected: %v", err)
+	}
+	allowed := status.Eligibility.AllowedActions
+	if len(allowed) != 1 || allowed[0].Action != "review.recover" || allowed[0].ReasonCode != reviewActionEligibleEscalatedRecovery ||
+		allowed[0].Disposition != reviewtransaction.RecoveryEscalated {
+		t.Fatalf("accounting-only escalated recovery allowed action = %#v", allowed)
+	}
+	for _, forbidden := range status.Eligibility.ForbiddenActions {
+		if forbidden.ReasonCode == reviewActionForbiddenTerminalEscalated {
+			t.Fatalf("accounting-only escalated recovery still reads terminal_escalated: %#v", forbidden)
+		}
+	}
+}
+
 func TestReviewFinalizeEligibilityCannotPublishRecoveryBinding(t *testing.T) {
 	eligibility := ReviewActionEligibility{
 		AllowedActions:   []ReviewEligibleAction{{Action: "review.recover", ReasonCode: reviewActionEligibleEscalatedRecovery, RequiredInputs: []string{}, Disposition: reviewtransaction.RecoveryEscalated, Binding: &ReviewActionBinding{}}},
@@ -724,7 +791,7 @@ func TestReviewFinalizeEligibilityCannotPublishRecoveryBinding(t *testing.T) {
 
 func publishedStatusFixtureProjection(t *testing.T) ReviewTargetStatusProjection {
 	t.Helper()
-	payload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "status.fixture.json"))
+	payload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "status-v2.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -742,12 +809,12 @@ func TestNegotiatedLegacyReceiptStatusNeverUsesCompactPublicationPending(t *test
 		State:            reviewtransaction.StateApproved,
 		ReceiptIdentity:  "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
-	present := newReviewTargetStatusResult(native)
+	present := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 	if present.Receipt.Status != ReviewReceiptPresent || present.Receipt.Identity != native.ReceiptIdentity {
 		t.Fatalf("approved legacy receipt = %#v", present.Receipt)
 	}
 	native.ReceiptIdentity = ""
-	missing := newReviewTargetStatusResult(native)
+	missing := newReviewTargetStatusResultForContract(native, ReviewIntegrationContractV2)
 	if missing.Receipt.Status == ReviewReceiptPublicationPending || missing.Receipt.Identity != "" {
 		t.Fatalf("legacy receipt inherited compact publication semantics: %#v", missing.Receipt)
 	}
@@ -814,4 +881,199 @@ func newPublishedV149CLIRepo(t *testing.T) (string, string, string) {
 		}
 	}
 	return repo, authorityRoot, filepath.Join(destination, "artifacts", "receipt.json")
+}
+
+// TestNegotiatedReviewStatusValidateAcceptsOptionalCandidatesForUnrelatedTarget
+// is organic-dx Phase 3e's downstream-consumer proof for
+// ReviewTargetStatusResult.Validate(): plural stale lineages now reuse the
+// TargetApplicabilityUnrelated shape while still listing the stale lineages
+// in Candidates as optional recovery, so Validate() must no longer force
+// Candidates empty for an unrelated target. This is a real production
+// consumer (internal/cli/review_facade.go calls result.Validate() before
+// emitting the negotiated `review status --contract` JSON), not test-only
+// scaffolding — see TestNegotiatedReviewStatusCompletesWithOneHundredHistoricalLeaves
+// below for the end-to-end proof through that exact call site.
+func TestNegotiatedReviewStatusValidateAcceptsOptionalCandidatesForUnrelatedTarget(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
+	payload, err := os.ReadFile(filepath.Join(root, "fixtures", "status-v2-unrelated.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	if err := json.Unmarshal(payload, &status); err != nil {
+		t.Fatal(err)
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("baseline unrelated fixture failed validation: %v", err)
+	}
+	status.Candidates = []string{"stale-status-first", "stale-status-second"}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("unrelated status with optional recovery candidates failed validation: %v", err)
+	}
+}
+
+// TestNegotiatedReviewStatusCompletesWithOneHundredHistoricalLeaves previously
+// asserted status.Applicability == TargetApplicabilityAmbiguous with
+// status.Action == TargetStatusActionSelectLineage for 100 STALE
+// (scope-changed) lineages and zero exactly-governing candidates — that WAS
+// the exact stale-history-decides framing organic-dx Phase 3e corrects (see
+// internal/reviewtransaction/target_status.go), so the expectation is
+// deliberately updated here rather than preserved. 100 stale lineages must
+// never force disambiguation by themselves; they now report the identical
+// "nothing governs, start fresh" shape a zero-candidate target already
+// reports, while still listing all 100 as optional recovery candidates.
+func TestNegotiatedReviewStatusCompletesWithOneHundredHistoricalLeaves(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeNegotiatedStatusHistory(t, repo, 100)
+	if stores, err := reviewtransaction.CompactAuthorityLeaves(context.Background(), repo); err != nil {
+		t.Fatalf("load generated status history: %v", err)
+	} else if len(stores) != 100 {
+		t.Fatalf("generated status history leaves = %d, want 100", len(stores))
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("related follow-up\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	var output bytes.Buffer
+	err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo}, &output)
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("negotiated status exceeded or failed inside %s deadline after %s: %v\n%s", reviewFacadeOperationTimeout, elapsed, err, output.String())
+	}
+	if elapsed >= reviewFacadeOperationTimeout {
+		t.Fatalf("negotiated status took %s, want less than %s", elapsed, reviewFacadeOperationTimeout)
+	}
+	var status ReviewTargetStatusResult
+	if err := json.Unmarshal(output.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Applicability != reviewtransaction.TargetApplicabilityUnrelated ||
+		status.Action != reviewtransaction.TargetStatusActionStart ||
+		status.Replayability != reviewtransaction.ReplayabilityNotReplayable || len(status.Candidates) != 100 {
+		t.Fatalf("negotiated 100-leaf status = %#v", status)
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("negotiated 100-leaf status failed contract validation: %v", err)
+	}
+	t.Logf("negotiated status completed 100 terminal histories in %s within the %s contract deadline", elapsed, reviewFacadeOperationTimeout)
+}
+
+func TestNegotiatedReviewStatusReturnsFailureForUnreadableAuthority(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var startedOutput bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "status-unreadable-authority"}, &startedOutput); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	if err := json.Unmarshal(startedOutput.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.StatePath()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(store.StatePath(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err = RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo}, &output)
+	if err == nil {
+		t.Fatalf("negotiated status converted unreadable authority into semantic output: %s", output.String())
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Code != "operation_failed" || failure.Phase != "pre_native" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability == "corrupted" {
+		t.Fatalf("unreadable authority failure = %#v", failure)
+	}
+}
+
+func writeNegotiatedStatusHistory(t *testing.T, repo string, count int) {
+	t.Helper()
+	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	risk, lines, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ClassifySnapshotRisk(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lenses := []string{}
+	if risk == reviewtransaction.RiskMedium {
+		lenses = []string{reviewtransaction.LensReliability}
+	} else if risk == reviewtransaction.RiskHigh {
+		lenses = []string{
+			reviewtransaction.LensRisk,
+			reviewtransaction.LensResilience,
+			reviewtransaction.LensReadability,
+			reviewtransaction.LensReliability,
+		}
+	}
+	rootStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "status-history-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionRoot := filepath.Dir(rootStore.Dir)
+	stateName, receiptName := filepath.Base(rootStore.StatePath()), filepath.Base(rootStore.ReceiptPath())
+	for index := 0; index < count; index++ {
+		lineage := fmt.Sprintf("status-cli-history-%03d", index)
+		state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+			LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
+			Snapshot: snapshot, PolicyHash: "sha256:" + strings.Repeat("1", 64), RiskLevel: risk,
+			SelectedLenses: append([]string(nil), lenses...), OriginalChangedLines: &lines,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		results := make([]reviewtransaction.LensResult, len(lenses))
+		for lensIndex, lens := range lenses {
+			results[lensIndex] = reviewtransaction.LensResult{Lens: lens, Findings: []reviewtransaction.Finding{}, Evidence: []string{"reviewed"}}
+		}
+		if err := state.CompleteReview(reviewtransaction.CompactReviewInput{
+			LensResults: results, Classifications: []reviewtransaction.FindingEvidence{}, RefuterOutcomes: []reviewtransaction.EvidenceResult{},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.CompleteVerification([]byte("verified\n"), true); err != nil {
+			t.Fatal(err)
+		}
+		statePayload, err := json.Marshal(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(append([]byte("gentle-ai.review-state/v2\x00"), statePayload...))
+		record := reviewtransaction.CompactRecord{
+			Schema: "gentle-ai.review-state-record/v2", Revision: "sha256:" + hex.EncodeToString(sum[:]), State: state,
+		}
+		payload, err := json.MarshalIndent(record, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(versionRoot, lineage)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, stateName), append(payload, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		receipt, err := state.Receipt()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reviewtransaction.WriteCompactReceiptAtomic(filepath.Join(dir, receiptName), receipt); err != nil {
+			t.Fatal(err)
+		}
+	}
 }

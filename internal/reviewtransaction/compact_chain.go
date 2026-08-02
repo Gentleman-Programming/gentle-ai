@@ -96,8 +96,18 @@ func EvaluateCompactPrePRChain(ctx context.Context, repo string, input NativeGat
 	if err != nil {
 		return invalid("compact pre-PR receipt composition denied: "+err.Error(), err), true
 	}
-	lock, err := acquireStoreLock(derived.lockPath)
+	// Same read-only final-authorization window as evaluateCompactGate, and
+	// the same 1861 rule: losing a race for the advisory lock decided nothing
+	// about the composed chain, so wait it out and report a retryable
+	// non-verdict rather than composition damage.
+	lock, err := acquireStoreLockForReadOnlyEvaluation(ctx, derived.lockPath)
 	if err != nil {
+		var contended *AuthorityLockTimeoutError
+		if errors.As(err, &contended) {
+			evaluation := invalid("compact authority lock is held by a concurrent review operation", err)
+			evaluation.Contended = true
+			return evaluation, true
+		}
 		return invalid("compact pre-PR receipt composition changed during final authorization", err), true
 	}
 	defer lock.release()
@@ -383,6 +393,18 @@ func compactDegenerateRecoveryMember(predecessor CompactRecord, successor compac
 func selectCompactPrePRChain(ctx context.Context, repo string, request GateRequest, preimages gateArtifactPreimages, snapshot Snapshot, refs *resolvedPrePRRefs, members []compactPrePRChainMember) ([]compactPrePRChainMember, *BaseAdvanceCompatibility, error) {
 	adjacency := make(map[string][]compactPrePRChainMember)
 	for _, member := range members {
+		// A receipt whose base tree equals its final candidate tree reviewed a
+		// candidate identical to its own base: it delivers no tree transition and
+		// can never lie on a base-through-HEAD path. Admitting it would add a
+		// self-loop edge that trips cycle detection, and inflate the incoming
+		// count of its own node into a false convergence, denying composition for
+		// every unrelated lineage in the repository (issue-1563 follow-up).
+		// Excluding it here does not weaken fail-closed detection of a genuine
+		// multi-node cycle, and never drops it from the composed proof: every
+		// discovered authority is bound by proof.Authority regardless of delivery.
+		if member.receipt.BaseTree == member.receipt.FinalCandidateTree {
+			continue
+		}
 		adjacency[member.receipt.BaseTree] = append(adjacency[member.receipt.BaseTree], member)
 	}
 	for base := range adjacency {
@@ -449,11 +471,14 @@ func selectCompactPrePRChain(ctx context.Context, repo string, request GateReque
 		if len(adjacency[node]) != wantOutgoing {
 			return nil, nil, errors.New("compact receipt chain contains a fork")
 		}
-		wantIncoming := 1
 		if node == path[0].receipt.BaseTree {
-			wantIncoming = 0
+			// A historical approved receipt whose chain merely ends exactly at
+			// the selected chain's own root is a linear predecessor, not a
+			// convergence (issue-1782): it is not part of the selected path, so
+			// its incoming edge into this node must not be counted against it.
+			continue
 		}
-		if incoming[node] != wantIncoming {
+		if incoming[node] != 1 {
 			return nil, nil, errors.New("compact receipt chain contains a convergence")
 		}
 	}

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 )
 
 // skillLabels maps each SkillID to a human-readable display label.
@@ -29,12 +29,13 @@ var skillLabels = map[model.SkillID]string{
 }
 
 var additionalSkillLabels = map[model.SkillID]string{
-	model.SkillImprover:        "Skill Improver",
-	model.SkillSkillRegistry:   "Skill Registry",
-	model.SkillChainedPR:       "Chained PR",
-	model.SkillCognitiveDoc:    "Cognitive Doc Design",
-	model.SkillCommentWriter:   "Comment Writer",
-	model.SkillWorkUnitCommits: "Work Unit Commits",
+	model.SkillImprover:          "Skill Improver",
+	model.SkillSkillRegistry:     "Skill Registry",
+	model.SkillChainedPR:         "Chained PR",
+	model.SkillCognitiveDoc:      "Cognitive Doc Design",
+	model.SkillCommentWriter:     "Comment Writer",
+	model.SkillWorkUnitCommits:   "Work Unit Commits",
+	model.SkillRDDDefectWorkflow: "RDD Defect Workflow",
 }
 
 // SkillPickerOptions returns the action buttons shown after the skill checkboxes.

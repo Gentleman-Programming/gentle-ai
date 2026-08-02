@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 type ReviewDisposeResultResult struct {
@@ -55,7 +55,7 @@ func RunReviewDisposeResult(args []string, stdout io.Writer) error {
 		return errors.New("review dispose-result requires a zero-based --order")
 	}
 	ctx := context.Background()
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
+	root, err := resolveReviewMutationRoot(ctx, *cwd)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
 	}

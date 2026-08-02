@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/audits/data/organic-rdd-recovery/schemas/contribution-ledger.schema.json",
+  "title": "Organic RDD recovery contribution ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contributions"
+  ],
+  "properties": {
+    "contributions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contributor",
+          "path"
+        ],
+        "properties": {
+          "contributor": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

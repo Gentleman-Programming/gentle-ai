@@ -15,12 +15,32 @@ import (
 const CompactReclaimRecordSchema = "gentle-ai.review-reclaim-record/v1"
 
 const (
+	ClassifiedAuthorityRepairAuditSchema = "gentle-ai.review-classified-authority-repair-audit/v1"
+	ClassifiedAuthorityRepairRoute       = "classified_authority_repair"
+)
+
+const (
 	CompactReclaimPrepared  = "prepared"
 	CompactReclaimCommitted = "committed"
 )
 
 var reclaimQuarantineResidue = os.Rename
 var persistReclaimRecord = persistCompactReclaimRecord
+var compactReclaimPhaseHook = func(ctx context.Context, _ string, _ CompactReclaimRecord) error { return ctx.Err() }
+
+const (
+	compactReclaimPhasePrepared  = "prepared"
+	compactReclaimPhaseRenamed   = "renamed"
+	compactReclaimPhaseCommitted = "committed"
+)
+
+type ClassifiedAuthorityRepairAudit struct {
+	Schema           string                    `json:"schema"`
+	Route            string                    `json:"route"`
+	Assessment       AuthorityRepairAssessment `json:"assessment"`
+	AssessmentDigest string                    `json:"assessment_digest"`
+	RequestDigest    string                    `json:"request_digest"`
+}
 
 // CompactReclaimRequest identifies one explicit incomplete compact-v2 store
 // entry to quarantine, together with the maintainer audit inputs.
@@ -60,12 +80,20 @@ type CompactReclaimRecord struct {
 	// it is set only for review-abandon quarantines of pristine reviewing or
 	// pristine invalidated lineages.
 	PristineAbandonment *CompactPristineAbandonmentProof `json:"pristine_abandonment,omitempty"`
+	// IncompleteAbandonment carries the natively re-derived captured/uncaptured
+	// lens partition; it is set only for review-abandon quarantines of a
+	// reviewing lineage whose selected plan never finished reporting.
+	IncompleteAbandonment *CompactIncompleteAbandonmentProof `json:"incomplete_abandonment,omitempty"`
 	// MalformedLegacyFreeze carries the natively re-derived semantic replay
 	// failure for a shipped legacy-v1 findings-freeze event.
 	MalformedLegacyFreeze *LegacyMalformedFreezeProof `json:"malformed_legacy_freeze,omitempty"`
 	// LegacyAliasRepair carries the natively re-derived proof for the narrow
 	// historical v1 operation-alias quarantine.
 	LegacyAliasRepair *LegacyAliasRepairProof `json:"legacy_alias_repair,omitempty"`
+	// ClassifiedAuthorityRepair binds a generic review.repair quarantine to the
+	// exact provider assessment and authorization-free request digest. Records
+	// created by the compatibility command intentionally omit this proof.
+	ClassifiedAuthorityRepair *ClassifiedAuthorityRepairAudit `json:"classified_authority_repair,omitempty"`
 	// LegacyFixScopeQuarantine carries the proof for the narrowly authorized
 	// complete-fix scope-expansion quarantine.
 	LegacyFixScopeQuarantine *LegacyFixScopeQuarantineProof `json:"legacy_fix_scope_quarantine,omitempty"`
@@ -111,7 +139,7 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 	if strings.TrimSpace(request.Reason) == "" || strings.TrimSpace(request.Actor) == "" {
 		return CompactReclaimRecord{}, errors.New("review reclaim requires a non-empty reason and actor")
 	}
-	base, _, err := reviewAuthorityRoot(ctx, repo)
+	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {
 		return CompactReclaimRecord{}, err
 	}
@@ -129,7 +157,7 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 	residue := make([]string, 0, len(items))
 	for _, item := range items {
 		if compactAuthoritativeArtifact(item.Name()) {
-			return CompactReclaimRecord{}, fmt.Errorf("review reclaim refused: store entry %q holds authoritative artifact %q; an invalid recovery successor is quarantined with review reconcile-authority", request.LineageID, item.Name())
+			return CompactReclaimRecord{}, compactReclaimAuthorityRefusal(ctx, root, dir, request.LineageID, item.Name())
 		}
 		residue = append(residue, item.Name())
 	}
@@ -137,11 +165,63 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 	if request.ReclaimedAt.IsZero() {
 		request.ReclaimedAt = time.Now().UTC()
 	}
-	return quarantineCompactStoreEntry(base, dir, CompactReclaimRecord{
+	return quarantineCompactStoreEntry(ctx, base, dir, CompactReclaimRecord{
 		Schema: CompactReclaimRecordSchema, Status: CompactReclaimPrepared, LineageID: request.LineageID,
 		Reason: strings.TrimSpace(request.Reason), Actor: strings.TrimSpace(request.Actor),
 		ReclaimedAt: request.ReclaimedAt.UTC(), SourcePath: dir, Residue: residue,
 	})
+}
+
+// compactReclaimAuthorityRefusal explains why reclaim does not apply to a
+// store entry holding an authoritative artifact, and names the operation that
+// actually admits THIS entry's shape. Reclaim only quarantines entries that
+// never held authority, so the historical one-size pointer at
+// review reconcile-authority named an operation that refuses (a forged
+// binding), or cannot even load its target (a half-written record) — a named
+// dead end, which is worse than naming nothing. The honest continuation is
+// derived read-only from the entry itself:
+//
+//   - a recovery successor whose edge classifies into a reconcilable anomaly
+//     class is admitted by `review reconcile-authority`, rendered runnably
+//     with the exact persisted revisions;
+//   - a pristine entry the abandonment gate's own read-only prediction accepts
+//     is quarantined whole with `review abandon`;
+//   - an unreadable record, and every other shape no advertised operation
+//     admits, gets the precise diagnosis and the inspection to capture, never
+//     a command that would then refuse.
+func compactReclaimAuthorityRefusal(ctx context.Context, repo, dir, lineageID, artifact string) error {
+	refused := fmt.Sprintf("review reclaim refused: store entry %q holds authoritative artifact %q, and reclaim only quarantines entries that never held authority.", lineageID, artifact)
+	record, loadErr := (CompactStore{Dir: dir, lineageID: lineageID}).Load()
+	if loadErr != nil {
+		if os.IsNotExist(loadErr) {
+			return fmt.Errorf("%s The entry holds no readable review-state.json beside that artifact, so nothing can prove the artifact never carried authority, and no advertised operation admits this shape today."+
+				" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %q` and escalate that report", refused, repo)
+		}
+		return fmt.Errorf("%s Its record cannot be loaded (%v) — inspection classifies it %s, which an interrupted write leaves behind — and no advertised operation admits an unreadable record:"+
+			" reconciliation re-derives its proof from readable state, and admitting bytes that can prove nothing is a maintainer policy decision, not a repair."+
+			" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %q` and escalate that report",
+			refused, loadErr, compactRecoveryEntryProblem(loadErr), repo)
+	}
+	if recovery := record.State.Recovery; recovery != nil {
+		predecessor, predecessorErr := (CompactStore{Dir: filepath.Join(filepath.Dir(dir), recovery.PredecessorLineageID), lineageID: recovery.PredecessorLineageID}).Load()
+		if predecessorErr == nil {
+			classification := classifyCompactRecoveryEdgeAnomalies(predecessor, record)
+			if !classification.Valid && len(classification.Anomalies) > 0 {
+				return fmt.Errorf("%s Its recovery edge classifies as %s, which `gentle-ai review reconcile-authority` admits: %s",
+					refused, strings.Join(classification.Anomalies, ","),
+					compactReconcileCommandText(repo, recovery.PredecessorLineageID, predecessor.Revision, record.State.LineageID, record.Revision, classification.Anomalies))
+			}
+		}
+	}
+	eligibility, eligibilityErr := InspectCompactPristineAbandonment(ctx, repo, lineageID)
+	if eligibilityErr == nil && eligibility.Eligible {
+		return fmt.Errorf("%s The entry is pristine, so `gentle-ai review abandon` quarantines it whole: %s",
+			refused, compactAbandonCommandText(repo, lineageID, eligibility))
+	}
+	return fmt.Errorf("%s No advertised operation admits it: reconciliation does not classify it into a supported anomaly class, and `review abandon` refuses because %s."+
+		" Nothing quarantines this shape today; the entry stays exactly as persisted."+
+		" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %q` and escalate that report",
+		refused, compactAbandonBlockerText(record.State), repo)
 }
 
 // quarantineCompactStoreEntry runs the shared two-phase audited move for one
@@ -149,7 +229,10 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 // rename the entry into residue/, then rewrite the record as committed. On
 // partial failure after the prepared record persisted, it returns the
 // populated prepared record alongside a non-nil error.
-func quarantineCompactStoreEntry(base, dir string, record CompactReclaimRecord) (CompactReclaimRecord, error) {
+func quarantineCompactStoreEntry(ctx context.Context, base, dir string, record CompactReclaimRecord) (CompactReclaimRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return CompactReclaimRecord{}, err
+	}
 	quarantineRoot := filepath.Join(base, "quarantine")
 	if err := ensureCanonicalReviewQuarantineRoot(base, quarantineRoot); err != nil {
 		return CompactReclaimRecord{}, err
@@ -183,6 +266,9 @@ func quarantineCompactStoreEntry(base, dir string, record CompactReclaimRecord) 
 	if err := persistReclaimRecord(record); err != nil {
 		return CompactReclaimRecord{}, cleanupUnprepared(err)
 	}
+	if err := compactReclaimPhaseHook(ctx, compactReclaimPhasePrepared, record); err != nil {
+		return record, fmt.Errorf("reclaim prepared before residue mutation: %w", err)
+	}
 	if err := reclaimQuarantineResidue(dir, filepath.Join(quarantineDir, "residue")); err != nil {
 		return record, fmt.Errorf("reclaim was prepared at %s but quarantining the residue failed: %w", quarantineDir, err)
 	}
@@ -192,10 +278,16 @@ func quarantineCompactStoreEntry(base, dir string, record CompactReclaimRecord) 
 	if err := SyncReviewDirectory(quarantineDir); err != nil {
 		return record, fmt.Errorf("residue was quarantined at %s but syncing the quarantine directory failed: %w", quarantineDir, err)
 	}
+	if err := compactReclaimPhaseHook(ctx, compactReclaimPhaseRenamed, record); err != nil {
+		return record, fmt.Errorf("residue was quarantined before audit commit: %w", err)
+	}
 	committed := record
 	committed.Status = CompactReclaimCommitted
 	if err := persistReclaimRecord(committed); err != nil {
 		return record, fmt.Errorf("residue was quarantined at %s but the reclaim audit record could not be marked committed: %w", quarantineDir, err)
+	}
+	if err := compactReclaimPhaseHook(ctx, compactReclaimPhaseCommitted, committed); err != nil {
+		return committed, fmt.Errorf("reclaim audit committed before readback: %w", err)
 	}
 	return committed, nil
 }

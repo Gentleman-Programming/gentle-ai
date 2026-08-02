@@ -5,6 +5,11 @@ on:
   push:
     branches:
       - main
+  # Manual re-run. `gh run rerun` refuses a run whose workflow file has changed
+  # since, which is exactly when a re-run is needed most: a known-flaky failure
+  # on a commit that is otherwise ready to tag, right after the workflow moved.
+  # Without this the only way to re-run CI on main is to push another commit.
+  workflow_dispatch:
   schedule:
     # 03:00 UTC daily — full Tier 1+2+3 across all platforms as a safety net
     - cron: "0 3 * * *"
@@ -14,8 +19,11 @@ jobs:
     name: Go Format
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout exact event candidate
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
@@ -35,8 +43,11 @@ jobs:
         if: needs.go-format.result != 'success'
         run: exit 1
 
-      - name: Checkout
+      - name: Checkout exact event candidate
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
@@ -46,19 +57,77 @@ jobs:
       - name: Run unit tests
         run: go test ./...
 
+      # Lives in this job, not the format job, because only Unit Tests is a
+      # required status check on main. A guard that cannot block a merge is
+      # decoration.
+      # Ratchet, not a clean gate: the repository already carries 230 functions
+      # nothing reaches from main, most of them legitimate. This fails only when
+      # a NEW one appears. It exists because InstallCommandsForDep survived with
+      # no callers while the install docs described the dependency remediation
+      # it would have performed.
+      - name: Check for new unreachable functions
+        run: ./scripts/deadcode-ratchet.sh
+
+  claude-network-none:
+    name: Claude Network-None Runtime (Required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Build pinned Claude runtime proof image
+        run: docker build -f e2e/Dockerfile.claude-network-none -t gentle-ai-claude-network-none:ci .
+      - name: Prove Claude transport without external networking
+        run: |
+          docker run --rm --pull=never --network none --cap-drop=ALL \
+            --security-opt=no-new-privileges --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
+            -e GENTLE_AI_PARENT_NETNS="$(stat -Lc %i /proc/self/ns/net)" \
+            gentle-ai-claude-network-none:ci
+
   windows-runtime:
     name: Windows Runtime
     needs: go-format
     if: always()
     runs-on: windows-latest
-    timeout-minutes: 30
+    # Release blockers only; the full suite moved to windows-full-suite. Must
+    # exceed the sum of its own step budgets, or a step can never reach its
+    # limit -- the previous 30 here killed a 35-minute step at exactly 30m on
+    # every push to main, reporting `cancelled` for the whole run and blocking
+    # the release gate, while pull requests stayed green because the full
+    # suite only ran on push and schedule.
+    timeout-minutes: 20
     steps:
       - name: Require successful Go format
         if: needs.go-format.result != 'success'
         run: exit 1
 
-      - name: Checkout
+      # This suite is process- and filesystem-bound, not CPU-bound: it spawns
+      # git constantly and builds throwaway repositories under TEMP. Defender
+      # scans every one of those writes and every spawned image, which is the
+      # single largest reason the same suite takes ~155s on Linux and over
+      # 30m here. Exclusions are scoped to the two trees the run owns and last
+      # only for the life of the ephemeral runner.
+      #
+      # Deliberately not `if: failure()`-guarded or made required: Defender
+      # policy can refuse the call on a hardened image, and a CI lane must not
+      # go red because an optimisation was unavailable. `-ErrorAction
+      # SilentlyContinue` keeps it best-effort.
+      - name: Exclude runner work and temp trees from Defender
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath $env:RUNNER_TEMP -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess 'git.exe','go.exe','gentle-ai.exe' -ErrorAction SilentlyContinue
+
+      - name: Checkout exact event candidate
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
@@ -76,14 +145,105 @@ jobs:
         timeout-minutes: 10
         env:
           GENTLE_AI_TEST_BINARY: ${{ runner.temp }}\gentle-ai.exe
-        run: go test -v ./internal/cli ./internal/reviewtransaction ./internal/sddstatus -run '^(TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags|TestWindowsSecureOpenDriveFallbackFailsClosed|TestWindowsSecureOpenDoesNotRetryOtherErrors|TestWindowsStoreLockUsesExistingInodeAdvisoryTruth|TestRunGitBoundsLocalAndRemoteCommands|TestRunGitDistinguishesAggregateDeadlineAndTypedExit|TestStoreLockReportsLiveOwnerAndCannotBeStolen|TestStoreLockRecoversCrashAndCorruptOwnerRecords|TestStoreLockIsReleasedWhenOwnerProcessExits|TestConcurrentStoreLockRecoverersCannotBothWin|TestCompactStoresShareRepositoryWriteLock|TestCompactStoreRejectsConcurrentLockedWriter|TestBindingLockRejectsConcurrentWriter|TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState|TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath|TestRejectFacadeCorrectionUntrackedRespectsStagedProjection|TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree|TestWindowsPowerShell51ArtifactManifestFileFinalize)$' -count=1 -timeout=8m
+          GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER: "1"
+        run: go test -v ./internal/cli ./internal/reviewtransaction ./internal/sddstatus -run '^(TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals|TestRARPrivateOwnerRemainsTokenUserOnly|TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags|TestWindowsSecureOpenDriveFallbackFailsClosed|TestWindowsSecureOpenDoesNotRetryOtherErrors|TestWindowsStoreLockUsesExistingInodeAdvisoryTruth|TestRunGitBoundsLocalAndRemoteCommands|TestRunGitDistinguishesAggregateDeadlineAndTypedExit|TestStoreLockReportsLiveOwnerAndCannotBeStolen|TestStoreLockRecoversCrashAndCorruptOwnerRecords|TestStoreLockIsReleasedWhenOwnerProcessExits|TestConcurrentStoreLockRecoverersCannotBothWin|TestCompactStoresShareRepositoryWriteLock|TestCompactStoreRejectsConcurrentLockedWriter|TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline|TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance|TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays|TestRepairClassifiedAuthorityResumesEachDurablePhase|TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState|TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath|TestRejectFacadeCorrectionUntrackedRespectsStagedProjection|TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree|TestWindowsPowerShell51ArtifactManifestFileFinalize)$' -count=1 -timeout=8m
 
       # PR runs the release-blocker subset only; push to main and the nightly
       # schedule run the full Windows suite, mirroring the E2E tier policy.
-      - name: Run full Windows suite
-        shell: pwsh
-        timeout-minutes: 35
-        run: if ($env:GITHUB_EVENT_NAME -eq 'push' -or $env:GITHUB_EVENT_NAME -eq 'schedule') { go test ./... -count=1 -timeout=30m; exit $LASTEXITCODE } else { Write-Host 'Skipping full suite on pull_request; release-blocker tests already ran.' }
+  # Native Darwin release blockers (#1853). Four macOS defects (#1773, #1781,
+  # #1804, #1850) and the #1872 RAR lock convoy shipped because no CI lane
+  # executes Darwin semantics; GOOS=darwin cross-builds prove compilation, not
+  # APFS aliasing, advisory-lock timing, or rename fallbacks. macOS runners
+  # bill ~10x Linux minutes, so this job runs only the curated manifest in
+  # scripts/darwin-release-blockers.manifest — tests whose failure mode is
+  # platform-dependent — never the full suite. The full suite stays on Linux.
+  #
+  # REQUIRED FOR MERGE: the maintainer must add the status check
+  # "Darwin Runtime" to the branch protection required status checks
+  # (repository settings — this cannot be done from the workflow file).
+  darwin-runtime:
+    name: Darwin Runtime
+    needs: go-format
+    if: always()
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - name: Require successful Go format
+        if: needs.go-format.result != 'success'
+        run: exit 1
+
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      # Fails loudly if any manifest entry names a test that no longer exists:
+      # `go test -run` with a pattern matching nothing exits 0, which would rot
+      # the manifest invisibly. Native `go test -list` here is authoritative,
+      # including for //go:build darwin tests no other lane can even list.
+      - name: Verify manifest against existing tests
+        run: ./scripts/darwin-release-blockers.sh verify
+
+      - name: Run Darwin release-blocker tests
+        timeout-minutes: 20
+        run: ./scripts/darwin-release-blockers.sh run
+
+  organic-runtime-e2e:
+    name: Organic Runtime E2E (${{ matrix.os }})
+    needs: go-format
+    if: always()
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    steps:
+      - name: Require successful Go format
+        if: needs.go-format.result != 'success'
+        run: exit 1
+
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6
+        with:
+          node-version: "24"
+
+      - name: Install pinned OpenCode runtime
+        run: npm install --global opencode-ai@1.18.4
+
+      - name: Run organic journeys
+        # No -run filter: a renamed test must fail this job loudly, never let
+        # go test exit 0 having matched nothing. The gated real-agent journey
+        # (TestRealAgentOrganicJourneys) is included via its env switch.
+        env:
+          GENTLE_AI_REAL_AGENT_E2E: "1"
+          # The large-workspace journey spawns one Git subprocess per intended
+          # untracked path, so its cost is dominated by process creation. Linux
+          # absorbs it; Windows does not, and gating it here keeps the real
+          # coverage where it is affordable instead of deleting it outright.
+          GENTLE_AI_LARGE_WORKSPACE_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+        run: go test -v ./e2e/organicruntime -count=1 -timeout=15m
 
   e2e-tests:
     name: E2E Tests (${{ matrix.platform.name }})
@@ -106,8 +266,11 @@ jobs:
         if: needs.go-format.result != 'success'
         run: exit 1
 
-      - name: Checkout
+      - name: Checkout exact event candidate
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
