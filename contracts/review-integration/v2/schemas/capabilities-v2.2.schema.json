@@ -76,23 +76,24 @@
     }
   },
   "$defs": {
+    "feature_name": {
+      "enum": [
+        "base_ref_workspace_overlay", "bounded_process_waits", "classified_authority_repair", "compact_v2_authority",
+        "exact_gate_receipt_discovery", "exact_receipt_replay", "five_delivery_gates", "immutable_snapshot",
+        "legacy_v1_target_scoped_read_only", "native_frozen_candidate_context", "native_low_risk_verification",
+        "native_next_transition", "one_shot_final_verification_retry", "opaque_repository_context",
+        "outcome_bound_verification_evidence", "provider_artifact_admission", "provider_bound_native_git_context",
+        "provider_submission_descriptors", "provider_targeted_validation_request", "recovered_correction_evidence",
+        "repository_independent_capabilities", "restart_safe_projection", "risk_reasons", "scope_change_diagnostics",
+        "sdd_receipt_binding", "target_scoped_status", "uniform_failure_envelope", "validating_result_reopen"
+      ]
+    },
     "feature": {
       "type": "object", "additionalProperties": false, "required": ["name", "supported", "requires"],
       "properties": {
-        "name": {
-          "enum": [
-            "base_ref_workspace_overlay", "bounded_process_waits", "classified_authority_repair", "compact_v2_authority",
-            "exact_gate_receipt_discovery", "exact_receipt_replay", "five_delivery_gates", "immutable_snapshot",
-            "legacy_v1_target_scoped_read_only", "native_frozen_candidate_context", "native_low_risk_verification",
-            "native_next_transition", "one_shot_final_verification_retry", "opaque_repository_context",
-            "outcome_bound_verification_evidence", "provider_artifact_admission", "provider_bound_native_git_context",
-            "provider_submission_descriptors", "provider_targeted_validation_request", "recovered_correction_evidence",
-            "repository_independent_capabilities", "restart_safe_projection", "risk_reasons", "scope_change_diagnostics",
-            "sdd_receipt_binding", "target_scoped_status", "uniform_failure_envelope", "validating_result_reopen"
-          ]
-        },
+        "name": {"$ref": "#/$defs/feature_name"},
         "supported": {"type": "boolean"},
-        "requires": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+        "requires": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/feature_name"}}
       }
     },
     "bootstrap": {

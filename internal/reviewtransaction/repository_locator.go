@@ -332,7 +332,10 @@ func validateLiveReviewRepositoryContext(ctx context.Context, repo string, bindi
 			return nil
 		}
 		correction, err := BuildTargetedValidationRequest(ctx, repo, record.State, record.Revision)
-		if err != nil || correction.CorrectionTargetIdentity != binding.TargetIdentity {
+		if err != nil {
+			return &reviewRepositoryContextTargetedValidationError{cause: err}
+		}
+		if correction.CorrectionTargetIdentity != binding.TargetIdentity {
 			return errors.New("review repository context is stale or has no live matching authority")
 		}
 	default:
@@ -340,6 +343,16 @@ func validateLiveReviewRepositoryContext(ctx context.Context, repo string, bindi
 	}
 	return nil
 }
+
+// reviewRepositoryContextTargetedValidationError keeps a derivation failure
+// inspectable without exposing repository details to provider-facing callers.
+type reviewRepositoryContextTargetedValidationError struct{ cause error }
+
+func (err *reviewRepositoryContextTargetedValidationError) Error() string {
+	return "review repository context is stale or has no live matching authority"
+}
+
+func (err *reviewRepositoryContextTargetedValidationError) Unwrap() error { return err.cause }
 
 func validateReviewRepositoryContextBinding(binding ReviewRepositoryContextBinding) error {
 	if validateLineageID(binding.LineageID) != nil || !validSHA256(binding.TargetIdentity) || !validSHA256(binding.Revision) {

@@ -113,7 +113,17 @@ func TestReviewCapabilitiesV22MatchesConformanceFixture(t *testing.T) {
 		got.Bootstrap == nil || got.Bootstrap.Command != reviewNextTransitionRefreshCommandV21 {
 		t.Fatalf("v2.2 capabilities runtime surface = %#v", got)
 	}
-	validateReviewCapabilitiesSchema(t, "capabilities-v2.2.schema.json", ReviewIntegrationCapabilitiesSchemaIDV22, fixture)
+	schema := validateReviewCapabilitiesSchema(t, "capabilities-v2.2.schema.json", ReviewIntegrationCapabilitiesSchemaIDV22, fixture)
+	var malformed map[string]any
+	if err := json.Unmarshal(fixture, &malformed); err != nil {
+		t.Fatal(err)
+	}
+	features := malformed["features"].(map[string]any)
+	optional := features["optional"].([]any)
+	optional[0].(map[string]any)["requires"] = []any{"unknown_required_feature"}
+	if err := schema.Validate(malformed); err == nil {
+		t.Fatal("v2.2 schema accepted an unknown required feature")
+	}
 }
 
 func TestReviewCapabilitiesV21ArtifactRemainsReadable(t *testing.T) {
@@ -134,7 +144,7 @@ func TestReviewCapabilitiesV21ArtifactRemainsReadable(t *testing.T) {
 	validateReviewCapabilitiesSchema(t, "capabilities-v2.1.schema.json", ReviewIntegrationCapabilitiesSchemaIDV21, fixture)
 }
 
-func validateReviewCapabilitiesSchema(t *testing.T, name, id string, fixture []byte) {
+func validateReviewCapabilitiesSchema(t *testing.T, name, id string, fixture []byte) *jsonschema.Schema {
 	t.Helper()
 	root := filepath.Join("..", "..", "contracts", "review-integration")
 	v14, err := os.ReadFile(filepath.Join(root, "v1", "schemas", "capabilities-v1.4.schema.json"))
@@ -169,6 +179,7 @@ func validateReviewCapabilitiesSchema(t *testing.T, name, id string, fixture []b
 	if err := schema.Validate(document); err != nil {
 		t.Fatalf("%s rejected fixture: %v", name, err)
 	}
+	return schema
 }
 
 func TestReviewCapabilitiesContractValidationIsExactAndReadOnly(t *testing.T) {

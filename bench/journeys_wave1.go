@@ -494,6 +494,9 @@ func correctionSubmissionArguments(r *journeyRun, status waveCorrectionStatus, r
 			}
 		}
 	}
+	if len(descriptor.ArgumentTokens) < 5 {
+		return nil, fmt.Errorf("submission descriptor argv has %d tokens, need at least 5: %v", len(descriptor.ArgumentTokens), descriptor.ArgumentTokens)
+	}
 	if placeholders != 1 || !strings.HasPrefix(descriptor.ArgumentTokens[4], "--request-hash=") {
 		return nil, fmt.Errorf("submission descriptor argv = %v", descriptor.ArgumentTokens)
 	}
