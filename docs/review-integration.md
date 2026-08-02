@@ -177,6 +177,33 @@ An exact no-input FINALIZE is eligible only when the frozen authority is low ris
 
 There is no `archive` gate. An advisory preflight is not delivery authorization; the native live gate result is authoritative.
 
+### Pre-squash SDD archive boundary
+
+For an SDD/OpenSpec change that will be squash-merged, complete archive before
+the squash merge while the reviewed target is still live. Use this order:
+
+1. Finish every source-mutating normalization, then freeze and finalize the
+   candidate through the native review lifecycle.
+2. Persist the required review transaction, frozen ledger, approved receipt,
+   and gate-context artifacts for that exact target.
+3. Run SDD verification and persist a passing `verify-report` plus its required
+   verification evidence.
+4. Re-read structured SDD status and obtain the applicable native live gate
+   result. Archive requires `reviewGate.result: allow`; a stale receipt,
+   advisory preflight, or copied status is not an allow result.
+5. Run archive and confirm that the archive report and final artifact state are
+   persisted while the reviewed target remains live.
+6. Only after archive is complete may the reviewed branch be squash-merged.
+
+If content, paths, modes, base, or other target identity changes before this
+sequence completes, stop and repeat the applicable native lifecycle for the new
+target. Do not carry the old receipt forward.
+
+A clean post-merge workspace with zero changed paths is a new unrelated target
+and remains fail-closed. It must not trigger a synthetic review, copied
+authority, or tree-match recovery, and this workflow provides no historical
+receipt recovery path.
+
 ### Unmanaged delivery windows and re-enabling (v2.2.0 boundary)
 
 Work delivered while the kill switch is off is recorded as unmanaged, and it stays recorded as unmanaged: gates and `sdd-status` report `disabled/unmanaged` at exit 0, the change closes under ordinary repository policy, and nothing — not a stale receipt, not a later empty-candidate approval — may ever make that window read as reviewed. Re-enabling re-validates the current state through one full fresh review, exactly as if receipt-driven development had never run: every downstream stop over unreviewed content names `gentle-ai review start` (with `--base-ref <commit>` when the delivered work is already committed), and completing that review is what unblocks the stop. The fresh review subsumes the unmanaged history; durable retroactive reconciliation — per-delivery dispositions, retroactive receipts, or any ledger that blesses past unmanaged deliveries — is deliberately not part of this release.
