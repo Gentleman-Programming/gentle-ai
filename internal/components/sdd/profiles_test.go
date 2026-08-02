@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 func TestResolveProfileStrategy_ExplicitWins(t *testing.T) {
@@ -403,10 +403,14 @@ func makeHaikuProfile() model.Profile {
 	}
 }
 
+func openCodeSettingsPathForTest(home string) string {
+	return filepath.Join(home, ".config", "opencode", "opencode.json")
+}
+
 func TestGenerateProfileOverlay_Structure(t *testing.T) {
 	home := t.TempDir()
 
-	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, nil, "")
+	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, openCodeSettingsPathForTest(home), nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay() error = %v", err)
 	}
@@ -479,7 +483,7 @@ func TestGenerateProfileOverlay_Structure(t *testing.T) {
 func TestGenerateProfileOverlay_PermissionScoped(t *testing.T) {
 	home := t.TempDir()
 
-	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, nil, "")
+	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, openCodeSettingsPathForTest(home), nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay() error = %v", err)
 	}
@@ -524,7 +528,7 @@ func TestGenerateProfileOverlay_JDAssignmentsGenerateSuffixedAgents(t *testing.T
 	profile.PhaseAssignments["jd-judge-b"] = model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-5.1"}
 	profile.PhaseAssignments["jd-fix-agent"] = model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"}
 
-	overlay, err := GenerateProfileOverlay(profile, home, nil, "")
+	overlay, err := GenerateProfileOverlay(profile, home, openCodeSettingsPathForTest(home), nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay() error = %v", err)
 	}
@@ -597,7 +601,7 @@ func TestGenerateProfileOverlay_JDAssignmentsGenerateSuffixedAgents(t *testing.T
 func TestGenerateProfileOverlay_NoJDAssignmentsUsesGlobalJDAgents(t *testing.T) {
 	home := t.TempDir()
 
-	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, nil, "")
+	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, openCodeSettingsPathForTest(home), nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay() error = %v", err)
 	}
@@ -632,7 +636,7 @@ func TestGenerateProfileOverlay_NoJDAssignmentsUsesGlobalJDAgents(t *testing.T) 
 func TestGenerateProfileOverlay_ToolsUseReplaceSentinel(t *testing.T) {
 	home := t.TempDir()
 
-	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, nil, "")
+	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, openCodeSettingsPathForTest(home), nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay() error = %v", err)
 	}
@@ -733,7 +737,7 @@ func TestDefaultOverlayToolsUseReplaceSentinel(t *testing.T) {
 func TestGenerateProfileOverlay_TaskPermissionsBlockCrossProfileDelegation(t *testing.T) {
 	home := t.TempDir()
 
-	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, nil, "")
+	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, openCodeSettingsPathForTest(home), nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay() error = %v", err)
 	}
@@ -771,12 +775,10 @@ func TestGenerateProfileOverlay_TaskPermissionsBlockCrossProfileDelegation(t *te
 func TestGenerateProfileOverlay_SubAgentFileRefs(t *testing.T) {
 	home := t.TempDir()
 
-	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, nil, "")
+	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, openCodeSettingsPathForTest(home), nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay() error = %v", err)
 	}
-
-	promptDir := SharedPromptDir(home)
 
 	var root map[string]any
 	if err := json.Unmarshal(overlay, &root); err != nil {
@@ -788,7 +790,10 @@ func TestGenerateProfileOverlay_SubAgentFileRefs(t *testing.T) {
 		key := phase + "-cheap"
 		agent := agentMap[key].(map[string]any)
 		prompt, _ := agent["prompt"].(string)
-		expectedRef := "{file:" + filepath.ToSlash(filepath.Join(promptDir, phase+".md")) + "}"
+		expectedRef, err := SharedPromptFileRef(openCodeSettingsPathForTest(home), home, phase)
+		if err != nil {
+			t.Fatalf("SharedPromptFileRef() error = %v", err)
+		}
 		if prompt != expectedRef {
 			t.Errorf("sub-agent %q prompt = %q, want %q", key, prompt, expectedRef)
 		}
@@ -798,7 +803,7 @@ func TestGenerateProfileOverlay_SubAgentFileRefs(t *testing.T) {
 func TestGenerateProfileOverlay_OrchestratorPromptSuffixed(t *testing.T) {
 	home := t.TempDir()
 
-	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, nil, "")
+	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, openCodeSettingsPathForTest(home), nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay() error = %v", err)
 	}
@@ -1106,7 +1111,7 @@ func TestGenerateProfileOverlay_VariantInjected(t *testing.T) {
 		},
 	}
 
-	overlay, err := GenerateProfileOverlay(profile, home, nil, "")
+	overlay, err := GenerateProfileOverlay(profile, home, openCodeSettingsPathForTest(home), nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay() error = %v", err)
 	}
@@ -1138,7 +1143,7 @@ func TestGenerateProfileOverlay_EmptyEffortClearsVariant(t *testing.T) {
 		},
 	}
 
-	overlay, err := GenerateProfileOverlay(profile, home, nil, "")
+	overlay, err := GenerateProfileOverlay(profile, home, openCodeSettingsPathForTest(home), nil, "")
 	if err != nil {
 		t.Fatalf("GenerateProfileOverlay() error = %v", err)
 	}

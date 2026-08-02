@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
 )
 
 // ─── WelcomeOptions ──────────────────────────────────────────────────────────

@@ -64,7 +64,7 @@ func TestWriteCodexProfiles_WritesModelAndEffort(t *testing.T) {
 }
 
 // TestWriteCodexProfiles_DefaultFallback asserts that nil assignments use
-// canonical Recommended defaults: sdd-strong=medium, sdd-mid=medium, sdd-cheap=low.
+// canonical Recommended defaults: sdd-strong=medium, sdd-mid=high, sdd-cheap=high.
 func TestWriteCodexProfiles_DefaultFallback(t *testing.T) {
 	dir := t.TempDir()
 
@@ -89,16 +89,16 @@ func TestWriteCodexProfiles_DefaultFallback(t *testing.T) {
 	if !strings.Contains(string(mid), `"gpt-5.6-terra"`) {
 		t.Errorf("sdd-mid default model: want gpt-5.6-terra; got:\n%s", mid)
 	}
-	if !strings.Contains(string(mid), `"medium"`) {
-		t.Errorf("sdd-mid default effort: want medium; got:\n%s", mid)
+	if !strings.Contains(string(mid), `"high"`) {
+		t.Errorf("sdd-mid default effort: want high; got:\n%s", mid)
 	}
-	// sdd-cheap must have gpt-5.6-luna and effort=low (Recommended default)
+	// sdd-cheap must have gpt-5.6-luna and effort=high (Recommended default)
 	cheap, _ := os.ReadFile(filepath.Join(dir, "sdd-cheap.config.toml"))
 	if !strings.Contains(string(cheap), `"gpt-5.6-luna"`) {
 		t.Errorf("sdd-cheap default model: want gpt-5.6-luna; got:\n%s", cheap)
 	}
-	if !strings.Contains(string(cheap), `"low"`) {
-		t.Errorf("sdd-cheap default effort: want low; got:\n%s", cheap)
+	if !strings.Contains(string(cheap), `"high"`) {
+		t.Errorf("sdd-cheap default effort: want high; got:\n%s", cheap)
 	}
 }
 

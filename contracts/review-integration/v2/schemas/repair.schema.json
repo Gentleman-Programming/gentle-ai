@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/repair.schema.json",
+  "title": "Gentle AI negotiated review v2 repair result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "contract", "operation", "mode", "assessment", "required_inputs"],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.repair/v2"},
+    "contract": {"const": "gentle-ai.review-integration/v2"},
+    "operation": {"$ref": "../../v1/schemas/repair.schema.json#/properties/operation"},
+    "mode": {"$ref": "../../v1/schemas/repair.schema.json#/properties/mode"},
+    "assessment": {"$ref": "../../v1/schemas/repair.schema.json#/properties/assessment"},
+    "provider_inputs": {"$ref": "../../v1/schemas/repair.schema.json#/properties/provider_inputs"},
+    "required_inputs": {"$ref": "../../v1/schemas/repair.schema.json#/properties/required_inputs"},
+    "execution": {"$ref": "../../v1/schemas/repair.schema.json#/properties/execution"}
+  },
+  "allOf": [
+    {"$ref": "../../v1/schemas/repair.schema.json#/allOf/0"},
+    {"$ref": "../../v1/schemas/repair.schema.json#/allOf/1"}
+  ]
+}

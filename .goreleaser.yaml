@@ -2,10 +2,6 @@ version: 2
 
 project_name: gentle-ai
 
-before:
-  hooks:
-    - go mod tidy
-
 builds:
   - main: ./cmd/gentle-ai
     binary: gentle-ai
@@ -14,20 +10,20 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
+    flags:
+      - -trimpath
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - >-
+        -s -w
+        -X main.version={{ .Version }}
+        -X github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
 
 archives:
   - formats:
       - tar.gz
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
@@ -38,6 +34,28 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+  algorithm: sha256
+
+# Sign only the checksum manifest. The signed trusted comment binds the exact
+# repository and tag; the updater rejects a valid signature copied from any
+# other release identity.
+signs:
+  - cmd: minisign
+    artifacts: checksum
+    signature: ${artifact}.minisig
+    args:
+      - "-S"
+      - "-s"
+      - "{{ .Env.MINISIGN_SECRET_KEY_FILE }}"
+      - "-m"
+      - "${artifact}"
+      - "-x"
+      - "${signature}"
+      - "-c"
+      - "signature from gentle-ai release"
+      - "-t"
+      - "repo=Gentleman-Programming/gentle-ai;tag={{ .Tag }}"
+    output: true
 
 changelog:
   sort: asc
@@ -58,14 +76,3 @@ brews:
     description: "Gentle-AI — Ecosystem, Frameworks, Workflows for AI coding agents."
     license: "MIT"
     commit_msg_template: "chore: update gentle-ai formula to {{ .Tag }}"
-
-scoops:
-  - repository:
-      owner: Gentleman-Programming
-      name: scoop-bucket
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    name: gentle-ai
-    homepage: "https://github.com/Gentleman-Programming/gentle-ai"
-    description: "Gentle-AI — Ecosystem, Frameworks, Workflows for AI coding agents."
-    license: MIT
-    commit_msg_template: "chore: update gentle-ai to {{ .Tag }}"

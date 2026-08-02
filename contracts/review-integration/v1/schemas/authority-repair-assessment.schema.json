@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v1/schemas/authority-repair-assessment.schema.json",
+  "title": "Gentle AI classified authority repair assessment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "counts",
+    "supported_operations",
+    "authorization_schema"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gentle-ai.review-authority-repair-assessment/v1"
+    },
+    "status": {
+      "enum": [
+        "eligible",
+        "unsupported",
+        "ambiguous",
+        "conflicting",
+        "truncated"
+      ]
+    },
+    "class": {
+      "const": "legacy_v1_historical_alias"
+    },
+    "cause": {
+      "const": "unsupported_historical_v1_operation_alias"
+    },
+    "disposition": {
+      "const": "quarantine-approved-historical-alias"
+    },
+    "repository_binding": {
+      "$ref": "#/$defs/sha256"
+    },
+    "candidate": {
+      "$ref": "#/$defs/candidate"
+    },
+    "counts": {
+      "$ref": "#/$defs/counts"
+    },
+    "supported_operations": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "const": "review/complete-fix"
+        },
+        {
+          "const": "review/validate-fix"
+        }
+      ],
+      "items": false
+    },
+    "authorization_schema": {
+      "const": "gentle-ai.review-repair-authorization/v1"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "eligible"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "class",
+          "cause",
+          "disposition",
+          "repository_binding",
+          "candidate"
+        ],
+        "properties": {
+          "counts": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/counts"
+              },
+              {
+                "properties": {
+                  "eligible_candidates": {
+                    "const": 1
+                  },
+                  "unsupported_lineages": {
+                    "const": 0
+                  },
+                  "conflicts": {
+                    "const": 0
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "class"
+              ]
+            },
+            {
+              "required": [
+                "cause"
+              ]
+            },
+            {
+              "required": [
+                "disposition"
+              ]
+            },
+            {
+              "required": [
+                "repository_binding"
+              ]
+            },
+            {
+              "required": [
+                "candidate"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lineage_id",
+        "revision",
+        "chain_identity",
+        "event_count",
+        "alias_event_count",
+        "operations"
+      ],
+      "properties": {
+        "lineage_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "chain_identity": {
+          "$ref": "#/$defs/sha256"
+        },
+        "event_count": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1024
+        },
+        "alias_event_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "review/complete-fix",
+              "review/validate-fix"
+            ]
+          }
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lineages",
+        "compact_lineages",
+        "legacy_lineages",
+        "events",
+        "bytes",
+        "eligible_candidates",
+        "unsupported_lineages",
+        "conflicts"
+      ],
+      "properties": {
+        "lineages": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 256
+        },
+        "compact_lineages": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 256
+        },
+        "legacy_lineages": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 256
+        },
+        "events": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8388608
+        },
+        "eligible_candidates": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 256
+        },
+        "unsupported_lineages": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024
+        },
+        "conflicts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024
+        }
+      }
+    }
+  }
+}

@@ -1,9 +1,11 @@
 package communitytool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	piagent "github.com/gentleman-programming/gentle-ai/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	piagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 )
 
 func TestPiCodeGraphUnselectedIsNoOp(t *testing.T) {
@@ -740,40 +742,29 @@ func TestPiCodeGraphProbeVerifiesDirectMCPWithoutPiProcess(t *testing.T) {
 
 func TestPiCodeGraphProbeClassifiesStalledMCPResponsesAsDeadlineExceeded(t *testing.T) {
 	for _, tt := range []struct {
-		name      string
-		script    string
-		wantPhase string
+		name               string
+		stallInitialize    bool
+		responseAtDeadline string
+		wantPhase          string
 	}{
 		{
-			name:      "initialize",
-			script:    `while IFS= read -r request; do while :; do :; done; done`,
-			wantPhase: "MCP initialize: read response",
+			name:            "initialize",
+			stallInitialize: true,
+			wantPhase:       "MCP initialize: read response",
 		},
 		{
-			name: "tools list",
-			script: `while IFS= read -r request; do
-  case "$request" in
-	    *'"id":1'*) printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}' ;;
-    *'"id":2'*) while :; do :; done ;;
-  esac
-done`,
-			wantPhase: "MCP tools/list: read response",
+			name:               "tools list cleanup race",
+			responseAtDeadline: `{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}` + "\n",
+			wantPhase:          "MCP tools/list",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			home := t.TempDir()
-			agentDir := filepath.Join(home, "custom-agent")
-			mcpPath := filepath.Join(home, "project", ".mcp.json")
-			writePiFile(t, filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
-			if runtime.GOOS == "windows" {
-				installFakeCodeGraphHelper(t, "stall-"+strings.ReplaceAll(tt.name, " ", "-"))
-			} else {
-				installFakeCodeGraphScript(t, tt.script)
-			}
-
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
-			_, err := probePiCodeGraphMCPWithAgentDirContext(ctx, mcpPath, agentDir)
+			transport := &piCodeGraphStalledTransport{ctx: ctx, stallInitialize: tt.stallInitialize, responseAtDeadline: []byte(tt.responseAtDeadline)}
+			_, err := probePiCodeGraphMCPWithTransport(ctx, transport, transport, func() (error, error) {
+				return nil, nil
+			})
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("probe error = %v, want context deadline exceeded", err)
 			}
@@ -783,6 +774,38 @@ done`,
 		})
 	}
 }
+
+type piCodeGraphStalledTransport struct {
+	ctx                context.Context
+	response           bytes.Buffer
+	stallInitialize    bool
+	responseAtDeadline []byte
+}
+
+func (t *piCodeGraphStalledTransport) Write(request []byte) (int, error) {
+	if bytes.Contains(request, []byte(`"id":1`)) {
+		if t.stallInitialize {
+			return len(request), nil
+		}
+		t.response.WriteString(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}` + "\n")
+	}
+	return len(request), nil
+}
+
+func (t *piCodeGraphStalledTransport) Read(data []byte) (int, error) {
+	if t.response.Len() != 0 {
+		return t.response.Read(data)
+	}
+	<-t.ctx.Done()
+	if len(t.responseAtDeadline) != 0 {
+		t.response.Write(t.responseAtDeadline)
+		t.responseAtDeadline = nil
+		return t.response.Read(data)
+	}
+	return 0, io.EOF
+}
+
+func (*piCodeGraphStalledTransport) Close() error { return nil }
 
 func TestPiCodeGraphProbeRejectsInvalidInitializeResponses(t *testing.T) {
 	responses := []string{

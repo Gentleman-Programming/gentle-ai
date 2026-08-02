@@ -3,9 +3,9 @@
 // isolated from install, pipeline, planner, and config-sync code paths.
 //
 // Import boundary: this package MUST NOT import:
-//   - github.com/gentleman-programming/gentle-ai/internal/pipeline
-//   - github.com/gentleman-programming/gentle-ai/internal/planner
-//   - github.com/gentleman-programming/gentle-ai/internal/cli
+//   - github.com/gentleman-programming/gentle-ai/v2/internal/pipeline
+//   - github.com/gentleman-programming/gentle-ai/v2/internal/planner
+//   - github.com/gentleman-programming/gentle-ai/v2/internal/cli
 package upgrade
 
 import (
@@ -20,16 +20,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
 // Package-level vars for testability — same pattern as internal/update/detect.go.
@@ -237,7 +238,7 @@ func managedAgentBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 
 	switch adapter.Agent() {
 	case model.AgentClaudeCode:
-		add(filepath.Join(homeDir, ".claude", "themes", "gentleman.json"))
+		add(claude.UserConfigPath(homeDir), filepath.Join(homeDir, ".claude", "themes", "gentleman.json"))
 	case model.AgentOpenCode:
 		add(
 			filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"),
@@ -522,7 +523,7 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 		sp := NewSpinner(pw, msg)
 		toolResult := executeOne(ctx, r, profile, dryRun)
 
-		// Check if the upgrade succeeded but requires immediate exit (Windows self-replace).
+		// Check if the upgrade succeeded but requires immediate exit.
 		// This must be handled BEFORE calling sp.Finish() so the spinner can terminate properly.
 		if toolResult.Status == UpgradeSucceeded && toolResult.ExitRequested {
 			// Finish the spinner with success before exiting.
@@ -600,13 +601,16 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 }
 
 // effectiveMethod resolves the actual upgrade strategy for a tool on a given platform.
-// Priority order matches the documented install hierarchy: plugin → brew-owned package → Windows installer → go-install → declared method.
+// Priority order: plugin → brew-owned package → gentle-ai self-upgrade policy →
+// go-install → declared method.
 //
 //  1. OpenCode plugins are always handled by their own method — never overridden.
 //  2. Homebrew is used only when Homebrew confirms it owns this specific tool.
-//  3. gentle-ai on Windows uses the installer so the running binary can exit before replacement.
-//  4. When Go is available on PATH and the tool has a GoImportPath, go-install is
-//     preferred over a direct binary download.
+//  3. gentle-ai's own upgrade never falls through to the generic rules below; it
+//     is resolved entirely by gentleAISelfUpgradeMethod, which is what keeps
+//     Linux and macOS on the signed release download.
+//  4. For every other tool: when Go is available on PATH and the tool declares a
+//     GoImportPath, go-install is preferred over a direct binary download.
 //  5. Otherwise the tool's declared InstallMethod is used as-is.
 func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
 	if tool.InstallMethod == update.InstallOpenCodePlugin {
@@ -615,12 +619,54 @@ func effectiveMethod(tool update.ToolInfo, profile system.PlatformProfile) updat
 	if profile.PackageManager == "brew" && homebrewPackageInstalled(tool.Name) {
 		return update.InstallBrew
 	}
-	// Use installer method for gentle-ai on Windows (launches PowerShell installer).
-	if profile.OS == "windows" && tool.Name == "gentle-ai" {
-		return update.InstallInstaller
+	if tool.Name == "gentle-ai" {
+		return gentleAISelfUpgradeMethod(tool, profile)
 	}
 	if profile.GoAvailable && tool.GoImportPath != "" {
 		return update.InstallGoInstall
 	}
 	return tool.InstallMethod
+}
+
+// gentleAISelfUpgradeMethod resolves how gentle-ai upgrades itself, once
+// Homebrew ownership has already been ruled out.
+//
+// Trust anchors differ by platform, and that is the whole point of this
+// function:
+//
+//   - Linux and macOS publish signed release binaries. Those are downloaded over
+//     an authenticated connection and verified with minisign, so they always
+//     return InstallBinary. This function is the ONLY place gentle-ai's method is
+//     decided, which is what makes that guarantee structural rather than
+//     incidental: gentle-ai never reaches the generic
+//     `GoAvailable && GoImportPath != ""` rule, so declaring a GoImportPath for
+//     the Windows path below cannot silently move Linux or macOS off minisign.
+//     Regression guards: TestGentleAIOnLinuxNeverRoutesToGoInstall and
+//     TestGentleAIOnMacOSNeverRoutesToGoInstall.
+//
+//   - Windows publishes no official binary and no Scoop manifest while publicly
+//     trusted Authenticode signing is pending, so there is no signed asset to
+//     download and minisign is not an option there. With Go on PATH, a pinned
+//     `go install <importPath>@vX.Y.Z` is the automatic upgrade. That is not an
+//     unverified install: goInstallUpgrade deliberately does not touch cmd.Env,
+//     so the Go checksum database (sum.golang.org) still verifies the module
+//     against its transparency log. The trust anchor moves from our minisign key
+//     to Go's checksum log — a different anchor, not a missing one. (The `@main`
+//     beta path in goInstallMainUpgrade DOES bypass sumdb via goProxyBypassEnv;
+//     that is a separate, opt-in channel and is not this path.)
+//     `go install` can write somewhere the shell does not resolve, which is why
+//     goInstallUpgrade verifies the destination afterwards and warns on mismatch.
+//
+//   - Windows without Go on PATH, or without a declared GoImportPath, returns
+//     InstallBinary, which binaryUpgrade turns into an explicit refusal naming
+//     the runnable source-install command. Nothing is downloaded or executed.
+//
+// Returning InstallBinary in every non-go-install case is also what disables a
+// legacy InstallScript declaration on Windows, where scriptUpgrade has no bash
+// and would point the user at a releases page that publishes no Windows assets.
+func gentleAISelfUpgradeMethod(tool update.ToolInfo, profile system.PlatformProfile) update.InstallMethod {
+	if profile.OS == "windows" && profile.GoAvailable && tool.GoImportPath != "" {
+		return update.InstallGoInstall
+	}
+	return update.InstallBinary
 }

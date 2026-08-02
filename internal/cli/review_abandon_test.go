@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 // pristineInvalidatedCLIFixture persists one pristine invalidated docs-only
@@ -52,11 +52,10 @@ func pristineInvalidatedCLIFixture(t *testing.T, repo string) (revision, snapsho
 	return revision, state.InitialSnapshot.Identity
 }
 
-// TestPristineInvalidatedLineagePoisonsLineagelessGateDiscovery reproduces
-// the #1441 discovery half on the CLI surface: one pristine invalidated
-// compact entry denies lineage-less gate validation for an unrelated approved
-// lineage whose receipt exactly matches the live target.
-func TestPristineInvalidatedLineagePoisonsLineagelessGateDiscovery(t *testing.T) {
+// TestPristineInvalidatedLineageDoesNotPoisonLineagelessGateDiscovery proves
+// invalidated authority remains auditable without blocking an unrelated exact
+// approved receipt. Explicit selection of the invalidated lineage still fails.
+func TestPristineInvalidatedLineageDoesNotPoisonLineagelessGateDiscovery(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-abandon-valid", "docs/valid.md", "valid\n")
 	pristineInvalidatedCLIFixture(t, repo)
@@ -67,21 +66,22 @@ func TestPristineInvalidatedLineagePoisonsLineagelessGateDiscovery(t *testing.T)
 	}
 	var report reviewtransaction.AuthorityStatusReport
 	decodeStrictReviewJSON(t, statusOutput.Bytes(), &report)
-	if report.Complete || report.Authoritative {
-		t.Fatalf("poisoned status = complete %v authoritative %v", report.Complete, report.Authoritative)
+	if !report.Complete || !report.Authoritative {
+		t.Fatalf("invalidated status = complete %v authoritative %v", report.Complete, report.Authoritative)
 	}
 
-	var blockedOutput bytes.Buffer
+	var allowedOutput bytes.Buffer
 	err := RunReview([]string{
 		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
 		"--gate", string(reviewtransaction.GatePostApply),
-	}, &blockedOutput)
-	if err == nil {
-		t.Fatal("pristine invalidated entry did not deny lineage-less gate validation")
+	}, &allowedOutput)
+	if err != nil {
+		t.Fatalf("unrelated invalidated lineage blocked exact approved receipt: %v\n%s", err, allowedOutput.String())
 	}
-	failure := decodeReviewIntegrationFailure(t, blockedOutput.Bytes())
-	if failure.Code != "authority_corrupted" {
-		t.Fatalf("poisoned gate failure = %#v", failure)
+	var validated ReviewValidateResult
+	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, allowedOutput.Bytes()).Result, &validated)
+	if !validated.Allowed || validated.Context.LineageID != "review-abandon-valid" {
+		t.Fatalf("lineage-less validation = %#v", validated)
 	}
 }
 
@@ -100,21 +100,18 @@ func abandonCLIBinding(revision, snapshotIdentity string) string {
 		"\nactor=maintainer@example.com\nreason=retire accidental pristine lineage"
 }
 
-func TestReviewAbandonQuarantinesPristineLineageAndRestoresLifecycle(t *testing.T) {
+func TestReviewAbandonQuarantinesPristineLineageAndPreservesLifecycle(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-abandon-valid", "docs/valid.md", "valid\n")
 	revision, snapshotIdentity := pristineInvalidatedCLIFixture(t, repo)
 
-	var blockedOutput bytes.Buffer
+	var beforeOutput bytes.Buffer
 	err := RunReview([]string{
 		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
 		"--gate", string(reviewtransaction.GatePostApply),
-	}, &blockedOutput)
-	if err == nil {
-		t.Fatal("pristine invalidated entry did not deny lineage-less gate validation")
-	}
-	if failure := decodeReviewIntegrationFailure(t, blockedOutput.Bytes()); failure.Code != "authority_corrupted" {
-		t.Fatalf("pre-abandon gate failure = %#v", failure)
+	}, &beforeOutput)
+	if err != nil {
+		t.Fatalf("valid invalidated authority poisoned pre-abandon validation: %v\n%s", err, beforeOutput.String())
 	}
 
 	var abandonOutput bytes.Buffer

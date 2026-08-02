@@ -1,0 +1,161 @@
+{
+  "schema": "gentle-ai.review-integration.status/v2",
+  "contract": "gentle-ai.review-integration/v1",
+  "operation": "review.status",
+  "applicability": "corrupted",
+  "receipt": {
+    "status": "not_applicable"
+  },
+  "action": "repair_authority",
+  "replayability": "manual_action_required",
+  "target_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+  "projection": {
+    "schema": "gentle-ai.review-integration.projection/v1",
+    "kind": "current-changes",
+    "projection": "workspace",
+    "base_tree": "3e21a205dd9b55021aeae87965092623807e455f",
+    "initial_review_tree": "1c3325617279b38743f073302ba190fc421b5a09",
+    "current_candidate_tree": "1c3325617279b38743f073302ba190fc421b5a09",
+    "paths_digest": "sha256:b93fca961a97d240c2b7023e98772f49ebd2995eda7db07043270b57bed75d71",
+    "paths": [
+      "tracked.txt"
+    ],
+    "intended_untracked": [],
+    "intended_untracked_proof": "sha256:b97229718d4c7fe50a8892eb474ae5aa6491697bccb400e3e31dbaca4894d2f3",
+    "initial_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+    "current_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
+  },
+  "repair": {
+    "schema": "gentle-ai.review-authority-repair-assessment/v1",
+    "status": "eligible",
+    "class": "legacy_v1_historical_alias",
+    "cause": "unsupported_historical_v1_operation_alias",
+    "disposition": "quarantine-approved-historical-alias",
+    "repository_binding": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "candidate": {
+      "lineage_id": "historical-alias",
+      "revision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "chain_identity": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "event_count": 6,
+      "alias_event_count": 2,
+      "operations": [
+        "review/complete-fix",
+        "review/validate-fix"
+      ]
+    },
+    "counts": {
+      "lineages": 1,
+      "compact_lineages": 0,
+      "legacy_lineages": 1,
+      "events": 6,
+      "bytes": 4096,
+      "eligible_candidates": 1,
+      "unsupported_lineages": 0,
+      "conflicts": 0
+    },
+    "supported_operations": [
+      "review/complete-fix",
+      "review/validate-fix"
+    ],
+    "authorization_schema": "gentle-ai.review-repair-authorization/v1"
+  },
+  "candidates": [],
+  "eligibility": {
+    "allowed_actions": [
+      {
+        "action": "review.repair",
+        "reason_code": "eligible_classified_authority_repair",
+        "required_inputs": [
+          "actor",
+          "reason",
+          "maintainer_authorization"
+        ]
+      }
+    ],
+    "forbidden_actions": [
+      {
+        "action": "review.abandon",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.finalize",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.invalidate",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.quarantine-legacy",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.reclaim",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.reconcile-authority",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.reconcile-authority-batch",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.recover",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.start",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.validate",
+        "reason_code": "forbidden_corrupted_authority"
+      },
+      {
+        "action": "review.retry_final_verification",
+        "reason_code": "forbidden_corrupted_authority"
+      }
+    ]
+  },
+  "next_transition": {
+    "kind": "collect",
+    "reason_code": "repair_authorization_required",
+    "collect": {
+      "inputs": [
+        {
+          "name": "repair_authorization",
+          "schema": "gentle-ai.review-repair-authorization/v1",
+          "capture_operation": "external.authorize_repair",
+          "arguments": [
+            {
+              "name": "class",
+              "value": "legacy_v1_historical_alias"
+            },
+            {
+              "name": "lineage",
+              "value": "historical-alias"
+            },
+            {
+              "name": "expected-revision",
+              "value": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            },
+            {
+              "name": "cause",
+              "value": "unsupported_historical_v1_operation_alias"
+            },
+            {
+              "name": "disposition",
+              "value": "quarantine-approved-historical-alias"
+            },
+            {
+              "name": "repository-binding",
+              "value": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

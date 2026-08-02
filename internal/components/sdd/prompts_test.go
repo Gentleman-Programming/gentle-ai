@@ -2,15 +2,16 @@ package sdd
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 // TestSharedPromptDir verifies the expected directory path is returned.
@@ -19,6 +20,76 @@ func TestSharedPromptDir(t *testing.T) {
 	got := SharedPromptDir(filepath.FromSlash("/home/testuser"))
 	if got != want {
 		t.Fatalf("SharedPromptDir(%q) = %q, want %q", "/home/testuser", got, want)
+	}
+}
+
+func TestSharedPromptDirUsesXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	xdgConfigHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
+
+	want := filepath.Join(xdgConfigHome, "opencode", "prompts", "sdd")
+	if got := SharedPromptDir(home); got != want {
+		t.Fatalf("SharedPromptDir() = %q, want %q", got, want)
+	}
+}
+
+func TestSharedPromptFileRefFallsBackToAbsolutePath(t *testing.T) {
+	home := t.TempDir()
+	xdgConfigHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
+
+	got, err := sharedPromptFileRef(
+		filepath.Join(xdgConfigHome, "opencode", "opencode.json"),
+		home,
+		"sdd-apply",
+		func(string, string) (string, error) { return "", errors.New("different volume") },
+	)
+	if err != nil {
+		t.Fatalf("sharedPromptFileRef() error = %v", err)
+	}
+	want := "{file:" + filepath.ToSlash(filepath.Join(xdgConfigHome, "opencode", "prompts", "sdd", "sdd-apply.md")) + "}"
+	if got != want {
+		t.Fatalf("sharedPromptFileRef() = %q, want %q", got, want)
+	}
+}
+
+func TestSharedPromptFileRef(t *testing.T) {
+	home := t.TempDir()
+	tests := []struct {
+		name         string
+		settingsPath string
+		want         string
+	}{
+		{
+			name:         "OpenCode settings",
+			settingsPath: filepath.Join(home, ".config", "opencode", "opencode.json"),
+			want:         "{file:./prompts/sdd/sdd-apply.md}",
+		},
+		{
+			name:         "Kilocode settings",
+			settingsPath: filepath.Join(home, ".config", "kilo", "opencode.json"),
+			want:         "{file:../opencode/prompts/sdd/sdd-apply.md}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := SharedPromptFileRef(tt.settingsPath, home, "sdd-apply")
+			if err != nil {
+				t.Fatalf("SharedPromptFileRef() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("SharedPromptFileRef() = %q, want %q", got, tt.want)
+			}
+			if strings.Contains(got, filepath.ToSlash(home)) {
+				t.Fatalf("SharedPromptFileRef() = %q, contains home path", got)
+			}
+		})
 	}
 }
 
@@ -80,8 +151,7 @@ func sddReviewSubAgentsForCodeGraphTest() []string {
 }
 
 func sddShellDisabledSubAgentsForCodeGraphTest() []string {
-	agents := []string{"jd-judge-a", "jd-judge-b"}
-	return append(agents, sddReviewSubAgentsForCodeGraphTest()...)
+	return []string{"jd-judge-a", "jd-judge-b", "review-refuter"}
 }
 
 func assertOpenCodeSubAgentReadOnlyTools(t *testing.T, agentsMap map[string]any, agentName string) {
@@ -391,15 +461,18 @@ func TestInjectOpenCodeMultiModeSubagentPromptsUseFilePaths(t *testing.T) {
 		t.Fatalf("ReadFile(opencode.json) error = %v", err)
 	}
 
-	promptDir := SharedPromptDir(home)
-
-	text := strings.ReplaceAll(string(content), `\\`, `/`)
+	text := string(content)
 	for _, phase := range []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"} {
-		expectedRef := "{file:" + filepath.Join(promptDir, phase+".md") + "}"
-		expectedRef = strings.ReplaceAll(expectedRef, `\`, `/`)
+		expectedRef, err := SharedPromptFileRef(settingsPath, home, phase)
+		if err != nil {
+			t.Fatalf("SharedPromptFileRef() error = %v", err)
+		}
 		if !strings.Contains(text, expectedRef) {
 			t.Errorf("opencode.json sub-agent %q missing {file:...} reference %q", phase, expectedRef)
 		}
+	}
+	if strings.Contains(text, filepath.ToSlash(home)) {
+		t.Fatalf("opencode.json contains home-specific absolute path %q", filepath.ToSlash(home))
 	}
 }
 

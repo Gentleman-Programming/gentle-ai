@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 // cmdLookPath, osStat, osGetenv, and cmdGoVersion are package-level vars for testability.
@@ -262,22 +262,23 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 		}, nil
 	case "apt", "pacman", "dnf":
 		const tmpDir = "/tmp/gentleman-guardian-angel"
+		tagRef := "refs/tags/v" + versions.GGAVersion
 		return CommandSequence{
 			{"rm", "-rf", tmpDir},
-			{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tmpDir},
+			{"mkdir", "-p", tmpDir},
+			{"git", "init", tmpDir},
+			{"git", "-C", tmpDir, "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tagRef + ":" + tagRef},
+			{"git", "-C", tmpDir, "checkout", "-f", tagRef},
 			{"bash", tmpDir + "/install.sh"},
 		}, nil
 	case "winget":
 		// On Windows, use Git Bash explicitly to avoid bare "bash" resolving to
 		// C:\Windows\System32\bash.exe (WSL), which cannot run the script.
-		// Clean up any leftover directory from a previous run before cloning.
-		// PowerShell is used for cleanup to avoid cmd.exe quoting issues with
-		// embedded double quotes in the "if exist ... rmdir" approach.
+		// Runtime cleanup is handled through system.PowerShellRunner before this
+		// sequence so pwsh launch failures can safely fall back.
 		cloneDst := filepath.Join(os.TempDir(), "gentleman-guardian-angel")
-		safeCloneDst := powerShellSingleQuotedValue(cloneDst)
 		bash := gitBashPath()
 		return CommandSequence{
-			{"powershell", "-NoProfile", "-Command", fmt.Sprintf("$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath '%s') { Remove-Item -Recurse -Force -LiteralPath '%s' }", safeCloneDst, safeCloneDst)},
 			{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", cloneDst},
 			{bash, bashScriptPath(profile, filepath.Join(cloneDst, "install.sh"))},
 		}, nil
@@ -287,10 +288,6 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 			profile.OS, profile.LinuxDistro, profile.PackageManager,
 		)
 	}
-}
-
-func powerShellSingleQuotedValue(value string) string {
-	return strings.ReplaceAll(value, "'", "''")
 }
 
 func bashScriptPath(profile system.PlatformProfile, path string) string {

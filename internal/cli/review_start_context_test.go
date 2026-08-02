@@ -5,14 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *testing.T) {
@@ -49,11 +51,14 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 		t.Fatalf("negotiated replay action = %q, want resumed", resumed.Action)
 	}
 	assertNegotiatedStartFrozenContext(t, repo, resumed)
-	frozenDiff := *resumed.CandidateDiff
+	frozenBase, frozenCandidate := resumed.BaseTree, resumed.CandidateTree
 	frozenManifest := append([]reviewtransaction.ChangedPathManifestEntry(nil), (*resumed.ChangedPathManifest)...)
-	frozenDiffBytes := decodeReviewStartCandidateDiff(t, frozenDiff)
-	if !bytes.Contains(frozenDiffBytes, []byte("+private tracked candidate")) || !bytes.Contains(frozenDiffBytes, []byte("+private intended candidate")) {
-		t.Fatalf("negotiated START omitted frozen candidate bytes:\n%s", frozenDiffBytes)
+	encoded, err := json.Marshal(resumed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("private tracked candidate")) || bytes.Contains(encoded, []byte("private intended candidate")) {
+		t.Fatalf("negotiated START leaked candidate bytes: %s", encoded)
 	}
 	if len(frozenManifest) != 2 || frozenManifest[0].Path != "private.txt" || !frozenManifest[0].IntendedUntracked ||
 		frozenManifest[1].Path != "tracked.txt" || frozenManifest[1].IntendedUntracked {
@@ -71,7 +76,7 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 		t.Fatal(err)
 	}
 	blocked := runNegotiatedReviewStart(t, repo, lineage)
-	if blocked.Action != string(reviewtransaction.CompactStartBlocked) || *blocked.CandidateDiff != frozenDiff ||
+	if blocked.Action != string(reviewtransaction.CompactStartBlocked) || blocked.BaseTree != frozenBase || blocked.CandidateTree != frozenCandidate ||
 		!reflect.DeepEqual(*blocked.ChangedPathManifest, frozenManifest) {
 		t.Fatalf("blocked START did not retain frozen context: %#v", blocked)
 	}
@@ -90,7 +95,7 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 		completeNegotiatedStartReview(t, repo, created, true)
 
 		reused := runNegotiatedReviewStart(t, repo, lineage)
-		if reused.Action != string(reviewtransaction.CompactStartReuseReceipt) || *reused.CandidateDiff != *created.CandidateDiff ||
+		if reused.Action != string(reviewtransaction.CompactStartReuseReceipt) || reused.BaseTree != created.BaseTree || reused.CandidateTree != created.CandidateTree ||
 			!reflect.DeepEqual(*reused.ChangedPathManifest, *created.ChangedPathManifest) {
 			t.Fatalf("receipt replay START = %#v", reused)
 		}
@@ -106,10 +111,58 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 		writeReviewStartCandidate(t, repo, "tracked.txt", "replacement target after escalation\n", 0o644)
 		recovery := runNegotiatedReviewStart(t, repo, lineage)
 		if recovery.Action != string(reviewtransaction.CompactStartBlocked) || recovery.LineageID != lineage ||
-			*recovery.CandidateDiff != *created.CandidateDiff || !reflect.DeepEqual(*recovery.ChangedPathManifest, *created.ChangedPathManifest) {
+			recovery.BaseTree != created.BaseTree || recovery.CandidateTree != created.CandidateTree || !reflect.DeepEqual(*recovery.ChangedPathManifest, *created.ChangedPathManifest) {
 			t.Fatalf("recovery START = %#v", recovery)
 		}
 	})
+}
+
+func TestNegotiatedReviewStartLargeRepositoryUsesBoundedReferenceAdmission(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uses real git commands and a repository tree larger than 4 MiB")
+	}
+	repo := initReviewCLIRepo(t)
+	baseCommit, supportingPath := installLargeReviewRepositoryHistory(t, repo)
+	lineage := "review-start-large-repository"
+	args := boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage, "--base-ref", baseCommit,
+	})
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("START with a repository path inventory larger than 4 MiB: %v", err)
+	}
+	started := decodeNegotiatedReviewStart(t, output.Bytes())
+	if started.Action != string(reviewtransaction.CompactStartCreated) || started.ChangedPathManifest == nil ||
+		len(*started.ChangedPathManifest) != 1 || (*started.ChangedPathManifest)[0].Path != "main.go" {
+		t.Fatalf("large-repository START = %#v", started)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.State.SelectedLenses) == 0 {
+		t.Fatalf("large-repository START selected no reviewer lenses: %#v", record.State)
+	}
+	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+	input := filepath.Join(t.TempDir(), "reviewer.json")
+	captureArgs := []string{
+		"--cwd", repo, "--lineage", lineage, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}
+	result.Evidence = []string{"fabricated proof: missing-inventory.go:1"}
+	writeReviewCLIJSON(t, input, result)
+	if err := RunReviewCaptureResult(captureArgs, io.Discard); err == nil || !strings.Contains(err.Error(), "outside the frozen repository") {
+		t.Fatalf("invalid immutable-tree reference admission error = %v", err)
+	}
+	result.Evidence = []string{"supporting proof: " + supportingPath + ":1"}
+	writeReviewCLIJSON(t, input, result)
+	if err := RunReviewCaptureResult(captureArgs, io.Discard); err != nil {
+		t.Fatalf("valid immutable-tree reference was rejected: %v", err)
+	}
 }
 
 func TestNegotiatedReviewStartContextValidationDistinguishesMissingAndEmpty(t *testing.T) {
@@ -122,30 +175,15 @@ func TestNegotiatedReviewStartContextValidationDistinguishesMissingAndEmpty(t *t
 		name   string
 		mutate func(*ReviewIntegrationStartResult)
 	}{
-		{name: "missing diff", mutate: func(result *ReviewIntegrationStartResult) { result.CandidateDiff = nil }},
+		{name: "missing artifact subjects", mutate: func(result *ReviewIntegrationStartResult) { result.ArtifactSubjects = nil }},
+		{name: "artifact subject mismatch", mutate: func(result *ReviewIntegrationStartResult) {
+			subjects := append([]reviewtransaction.ArtifactSubject(nil), result.ArtifactSubjects...)
+			subjects[0].SubjectHash = "sha256:" + strings.Repeat("0", 64)
+			result.ArtifactSubjects = subjects
+		}},
+		{name: "missing base tree", mutate: func(result *ReviewIntegrationStartResult) { result.BaseTree = "" }},
+		{name: "missing candidate tree", mutate: func(result *ReviewIntegrationStartResult) { result.CandidateTree = "" }},
 		{name: "missing manifest", mutate: func(result *ReviewIntegrationStartResult) { result.ChangedPathManifest = nil }},
-		{name: "empty diff for changed path", mutate: func(result *ReviewIntegrationStartResult) {
-			empty, err := reviewtransaction.NewFrozenCandidateDiff(nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			result.CandidateDiff = &empty
-		}},
-		{name: "noncanonical diff encoding", mutate: func(result *ReviewIntegrationStartResult) {
-			diff := *result.CandidateDiff
-			diff.Encoding = "utf-8"
-			result.CandidateDiff = &diff
-		}},
-		{name: "diff digest mismatch", mutate: func(result *ReviewIntegrationStartResult) {
-			diff := *result.CandidateDiff
-			diff.SHA256 = "sha256:" + strings.Repeat("0", 64)
-			result.CandidateDiff = &diff
-		}},
-		{name: "diff byte size mismatch", mutate: func(result *ReviewIntegrationStartResult) {
-			diff := *result.CandidateDiff
-			diff.ByteSize++
-			result.CandidateDiff = &diff
-		}},
 		{name: "manifest count mismatch", mutate: func(result *ReviewIntegrationStartResult) {
 			empty := []reviewtransaction.ChangedPathManifestEntry{}
 			result.ChangedPathManifest = &empty
@@ -180,16 +218,12 @@ func TestNegotiatedReviewStartContextValidationDistinguishesMissingAndEmpty(t *t
 		})
 	}
 
-	emptyDiff, err := reviewtransaction.NewFrozenCandidateDiff(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	emptyManifest := []reviewtransaction.ChangedPathManifestEntry{}
-	valid.CandidateDiff = &emptyDiff
 	valid.ChangedPathManifest = &emptyManifest
 	valid.LensesRequired = false
 	valid.RiskLevel = reviewtransaction.RiskLow
 	valid.SelectedLenses = []string{}
+	valid.ArtifactSubjects = []reviewtransaction.ArtifactSubject{}
 	valid.ChangedFiles = 0
 	valid.ChangedLines = 0
 	valid.CorrectionBudget = 0
@@ -208,7 +242,7 @@ func TestNegotiatedReviewStartContextFailureReportsTruthfulAuthorityProvenance(t
 		t.Cleanup(restore)
 
 		var output bytes.Buffer
-		if err := RunReview([]string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage}, &output); err == nil {
+		if err := RunReview(boundNegotiatedStartArgs(t, []string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage}), &output); err == nil {
 			t.Fatal("negotiated START unexpectedly succeeded")
 		}
 		failure := decodeReviewIntegrationFailure(t, output.Bytes())
@@ -244,7 +278,7 @@ func TestNegotiatedReviewStartContextFailureReportsTruthfulAuthorityProvenance(t
 		t.Cleanup(restore)
 
 		var output bytes.Buffer
-		if err := RunReview([]string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage}, &output); err == nil {
+		if err := RunReview(boundNegotiatedStartArgs(t, []string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage}), &output); err == nil {
 			t.Fatal("negotiated START unexpectedly succeeded")
 		}
 		failure := decodeReviewIntegrationFailure(t, output.Bytes())
@@ -262,7 +296,7 @@ func TestNegotiatedReviewStartContextFailureReportsTruthfulAuthorityProvenance(t
 
 func assertNegotiatedStartFrozenContext(t *testing.T, repo string, result ReviewIntegrationStartResult) {
 	t.Helper()
-	if result.CandidateDiff == nil || result.ChangedPathManifest == nil {
+	if result.BaseTree == "" || result.CandidateTree == "" || result.ChangedPathManifest == nil {
 		t.Fatalf("negotiated START context is missing: %#v", result)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, result.LineageID)
@@ -277,7 +311,7 @@ func assertNegotiatedStartFrozenContext(t *testing.T, repo string, result Review
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *result.CandidateDiff != want.CandidateDiff || !reflect.DeepEqual(*result.ChangedPathManifest, want.ChangedPathManifest) {
+	if result.BaseTree != want.BaseTree || result.CandidateTree != want.CandidateTree || !reflect.DeepEqual(*result.ChangedPathManifest, want.ChangedPathManifest) {
 		t.Fatalf("START context does not match frozen authority:\ngot=%#v\nwant=%#v", result, want)
 	}
 }
@@ -288,7 +322,7 @@ func completeNegotiatedStartReview(t *testing.T, repo string, started ReviewInte
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 		Lens: started.SelectedLenses[0], Findings: []facadeFinding{}, Evidence: []string{"reviewed frozen candidate context"},
 	})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, io.Discard); err != nil {
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
@@ -318,19 +352,51 @@ func completeNegotiatedStartReview(t *testing.T, repo string, started ReviewInte
 	}
 }
 
-func decodeReviewStartCandidateDiff(t *testing.T, diff reviewtransaction.FrozenCandidateDiff) []byte {
-	t.Helper()
-	payload, err := diff.Bytes()
-	if err != nil {
-		t.Fatalf("candidate diff metadata = %#v: %v", diff, err)
-	}
-	return payload
-}
-
 func forceReviewStartContextFailure(forced error) func() {
 	original := renderReviewStartFrozenCandidateContext
 	renderReviewStartFrozenCandidateContext = func(context.Context, reviewtransaction.SnapshotBuilder, reviewtransaction.Snapshot) (reviewtransaction.FrozenCandidateContext, error) {
 		return reviewtransaction.FrozenCandidateContext{}, forced
 	}
 	return func() { renderReviewStartFrozenCandidateContext = original }
+}
+
+func installLargeReviewRepositoryHistory(t *testing.T, repo string) (string, string) {
+	t.Helper()
+	sharedBlob := strings.TrimSpace(runReviewCLIGitInput(t, repo, []byte("package inventory\n"), "hash-object", "-w", "--stdin"))
+	baseBlob := strings.TrimSpace(runReviewCLIGitInput(t, repo, []byte("package main\n\nfunc value() int { return 1 }\n"), "hash-object", "-w", "--stdin"))
+	candidateBlob := strings.TrimSpace(runReviewCLIGitInput(t, repo, []byte("package main\n\nfunc value() int { return 2 }\n"), "hash-object", "-w", "--stdin"))
+	const inventoryEntries = 24_000
+	padding := strings.Repeat("x", 160)
+	paths := make([]string, inventoryEntries)
+	var baseTreeInput bytes.Buffer
+	var candidateTreeInput bytes.Buffer
+	for index := range paths {
+		paths[index] = fmt.Sprintf("inventory-%05d-%s.go", index, padding)
+		for _, tree := range []*bytes.Buffer{&baseTreeInput, &candidateTreeInput} {
+			fmt.Fprintf(tree, "100644 blob %s\t%s\x00", sharedBlob, paths[index])
+		}
+	}
+	fmt.Fprintf(&baseTreeInput, "100644 blob %s\tmain.go\x00", baseBlob)
+	fmt.Fprintf(&candidateTreeInput, "100644 blob %s\tmain.go\x00", candidateBlob)
+	baseTree := strings.TrimSpace(runReviewCLIGitInput(t, repo, baseTreeInput.Bytes(), "mktree", "-z"))
+	candidateTree := strings.TrimSpace(runReviewCLIGitInput(t, repo, candidateTreeInput.Bytes(), "mktree", "-z"))
+	baseCommit := strings.TrimSpace(runReviewCLIGit(t, repo, "commit-tree", baseTree, "-m", "large base tree"))
+	candidateCommit := strings.TrimSpace(runReviewCLIGit(t, repo, "commit-tree", candidateTree, "-p", baseCommit, "-m", "tiny candidate"))
+	runReviewCLIGit(t, repo, "update-ref", "HEAD", candidateCommit)
+	inventory := runReviewCLIGit(t, repo, "ls-tree", "-r", "-z", "--name-only", "--full-tree", baseTree)
+	if len(inventory) <= 4<<20 {
+		t.Fatalf("repository path inventory = %d bytes, want more than 4 MiB", len(inventory))
+	}
+	return baseCommit, paths[0]
+}
+
+func runReviewCLIGitInput(t *testing.T, repo string, input []byte, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	command.Stdin = bytes.NewReader(input)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
+	}
+	return string(output)
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -14,16 +15,16 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/internal/skillregistry"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/tui"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
-	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/skillregistry"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
 )
 
 func TestRunSkillRegistryLoadGitignoreFailureDoesNotBeginLoad(t *testing.T) {
@@ -41,6 +42,25 @@ func TestRunSkillRegistryLoadGitignoreFailureDoesNotBeginLoad(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cwd, skillregistry.RegistryRelPath)); !os.IsNotExist(err) {
 		t.Fatalf("registry was mutated: %v", err)
+	}
+}
+
+func TestRunSkillRegistryRejectsMissingOrEmptyLoadFlagValue(t *testing.T) {
+	cwd := t.TempDir()
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "empty", args: []string{"refresh", "--cwd", cwd, "--load", ""}, want: "skill-registry load requires a source file path"},
+		{name: "missing", args: []string{"refresh", "--cwd", cwd, "--load"}, want: "--load requires a value"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := runSkillRegistry(tt.args, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("runSkillRegistry() error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 
@@ -344,6 +364,32 @@ func TestRunArgsSDDStatusIsDispatchedBeforePlatformValidation(t *testing.T) {
 	}
 }
 
+func TestRunArgsSDDVerifyValidateIsDispatchedBeforePlatformValidation(t *testing.T) {
+	err := RunArgs([]string{"sdd-verify-validate", "--input", filepath.Join(t.TempDir(), "missing"), "--requirements", "1", "--scenarios", "1"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "read verify report") {
+		t.Fatalf("RunArgs(sdd-verify-validate) error = %v", err)
+	}
+}
+
+func TestRunArgsSDDAttemptIsDispatchedBeforePlatformValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error { return fmt.Errorf("unsupported platform") }
+
+	root := t.TempDir()
+	command := exec.Command("git", "init", "-q", root)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	var buf bytes.Buffer
+	if err := RunArgs([]string{"sdd-attempt", "status", "--cwd", root, "--change", "app-attempt"}, &buf); err != nil {
+		t.Fatalf("RunArgs(sdd-attempt) error = %v", err)
+	}
+	if !strings.Contains(buf.String(), `"schema": "gentle-ai.sdd-runtime-status/v1"`) || !strings.Contains(buf.String(), `"change": "app-attempt"`) {
+		t.Fatalf("sdd-attempt output missing native status:\n%s", buf.String())
+	}
+}
+
 func TestRunArgsSDDContinueIsDispatchedBeforePlatformValidation(t *testing.T) {
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
@@ -415,8 +461,32 @@ func TestRunArgsDispatchesCompactReviewFacadeBeforePlatformValidation(t *testing
 	if err := RunArgs([]string{"review", "--help"}, &output); err != nil {
 		t.Fatalf("RunArgs(review --help) error = %v", err)
 	}
-	if !strings.Contains(output.String(), "review <capabilities|start|finalize|validate|status|invalidate|abandon|recover|reclaim|inspect-authority|reconcile-authority|reconcile-authority-batch|dispose-result|quarantine-legacy|quarantine-legacy-fix-scope|repair-legacy-alias|schema|bind-sdd>") {
+	if !strings.Contains(output.String(), "review <capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|reconcile-authority|reconcile-authority-batch|dispose-result|reopen-results|quarantine-legacy|quarantine-legacy-fix-scope|repair-legacy-alias|schema|bind-sdd>") {
 		t.Fatalf("compact review help missing:\n%s", output.String())
+	}
+	output.Reset()
+	if err := RunArgs([]string{"review", "repair", "--help"}, &output); err != nil || !strings.Contains(output.String(), "provider-owned") {
+		t.Fatalf("RunArgs(review repair --help) = %v\n%s", err, output.String())
+	}
+}
+
+func TestRunArgsDispatchesReviewModeBeforePlatformValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error { return fmt.Errorf("unsupported platform") }
+
+	var output bytes.Buffer
+	if err := RunArgs([]string{"review", "mode", "--help"}, &output); err != nil {
+		t.Fatalf("RunArgs(review mode --help) error = %v", err)
+	}
+	if !strings.Contains(output.String(), "gentle-ai review mode <enable|disable|status>") {
+		t.Fatalf("review mode help missing:\n%s", output.String())
+	}
+
+	output.Reset()
+	err := RunArgs([]string{"review", "mode", "toggle"}, &output)
+	if err == nil || !strings.Contains(err.Error(), "unknown review mode command") {
+		t.Fatalf("RunArgs(review mode toggle) error = %v", err)
 	}
 }
 
@@ -576,105 +646,6 @@ func TestTUIExecutePersistsConfiguredSelection(t *testing.T) {
 	got, err := state.Read(home)
 	if result.Err != nil || err != nil || !got.SelectionConfigured || got.Preset != model.PresetCustom || got.SDDMode != model.SDDModeMulti || !got.StrictTDD || len(got.Components) != 0 || len(got.Skills) != 0 {
 		t.Fatalf("persisted selection = %#v, execute err = %v, read err = %v", got, result.Err, err)
-	}
-}
-
-func TestTuiSyncRemovesCodexGentleDevProfile(t *testing.T) {
-	t.Cleanup(codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil))
-	home := t.TempDir()
-	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentCodex)}}); err != nil {
-		t.Fatalf("state.Write: %v", err)
-	}
-	configPath := filepath.Join(home, ".codex", "config.toml")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	initial := `model = "gpt-5.5"
-default_permissions = "gentle-dev"
-
-[permissions.gentle-dev.filesystem]
-":slash_tmp" = "write"
-":tmpdir" = "write"
-
-[permissions.gentle-dev.filesystem.":workspace_roots"]
-"**/*.key" = "deny"
-"**/*.pem" = "deny"
-`
-	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	changed, err := tuiSync(home)(nil)
-	if err != nil {
-		t.Fatalf("tuiSync Codex permissions error: %v", err)
-	}
-	if len(changed) == 0 {
-		t.Fatal("tuiSync Codex permissions changed 0 files, want config.toml cleaned")
-	}
-
-	body, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", configPath, err)
-	}
-	text := string(body)
-	if strings.Contains(text, "gentle-dev") {
-		t.Fatalf("Codex permissions sync should remove the gentle-dev profile; got:\n%s", text)
-	}
-	if !strings.Contains(text, `model = "gpt-5.5"`) {
-		t.Fatalf("Codex permissions sync should preserve user config; got:\n%s", text)
-	}
-
-	if _, err := tuiSync(home)(nil); err != nil {
-		t.Fatalf("second tuiSync Codex permissions error: %v", err)
-	}
-	second, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s) after second sync: %v", configPath, err)
-	}
-	if string(second) != text {
-		t.Fatalf("second sync modified cleaned config:\nfirst:\n%s\nsecond:\n%s", text, second)
-	}
-}
-
-func TestTuiSyncRemovesCodexGentleDevProfileForTargetedOverrides(t *testing.T) {
-	t.Cleanup(codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil))
-	home := t.TempDir()
-	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentPi)}}); err != nil {
-		t.Fatalf("state.Write: %v", err)
-	}
-	configPath := filepath.Join(home, ".codex", "config.toml")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	initial := `model = "gpt-5.5"
-approval_policy = "on-request"
-
-[permissions.gentle-dev.filesystem]
-":slash_tmp" = "write"
-":tmpdir" = "write"
-
-[permissions.gentle-dev.filesystem.":workspace_roots"]
-"**/*.key" = "deny"
-`
-	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	_, err := tuiSync(home)(&model.SyncOverrides{TargetAgents: []model.AgentID{model.AgentCodex}})
-	if err != nil {
-		t.Fatalf("targeted tuiSync Codex permissions error: %v", err)
-	}
-
-	body, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", configPath, err)
-	}
-	text := string(body)
-	if strings.Contains(text, "gentle-dev") || strings.Contains(text, `approval_policy = "on-request"`) {
-		t.Fatalf("targeted sync should remove the injected Codex permissions profile; got:\n%s", text)
-	}
-	if !strings.Contains(text, `model = "gpt-5.5"`) {
-		t.Fatalf("targeted sync should preserve user config; got:\n%s", text)
 	}
 }
 
@@ -1345,6 +1316,42 @@ func TestUnknownCommandSuggestsHelp(t *testing.T) {
 	}
 }
 
+// TestRunArgsRetiredWorkCommandsNoLongerDispatch proves the remote control
+// plane's command surface is gone: every retired work-* command falls through
+// to the unknown-command error instead of dispatching provider machinery.
+func TestRunArgsRetiredWorkCommandsNoLongerDispatch(t *testing.T) {
+	origSelfUpdate := selfUpdateFn
+	origDetect := detectSystem
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() {
+		selfUpdateFn = origSelfUpdate
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+	})
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
+	selfUpdateFn = func(context.Context, string, system.PlatformProfile, io.Writer) error { return nil }
+
+	retired := []string{
+		"work-capabilities", "work-start", "work-route", "work-advance",
+		"work-verification-decide", "work-reconcile", "work-status", "work-transition",
+	}
+	for _, command := range retired {
+		t.Run(command, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := RunArgs([]string{command}, &buf)
+			if err == nil {
+				t.Fatalf("RunArgs(%q) error = nil, want unknown command", command)
+			}
+			if !strings.Contains(err.Error(), fmt.Sprintf("unknown command %q", command)) {
+				t.Fatalf("RunArgs(%q) error = %v, want unknown command", command, err)
+			}
+		})
+	}
+}
+
 func TestRunArgs_UpdateSkipsSelfUpdate(t *testing.T) {
 	origSelfUpdate := selfUpdateFn
 	origCheckAll := updateCheckAll
@@ -1693,7 +1700,7 @@ func TestTuiSyncMigratesLegacyCodexCarrilDefaults(t *testing.T) {
 	wantProfiles := map[string][]string{
 		"sdd-strong.config.toml": {`model = "gpt-5.6-sol"`, `model_reasoning_effort = "medium"`},
 		"sdd-mid.config.toml":    {`model = "gpt-5.6-terra"`, `model_reasoning_effort = "medium"`},
-		"sdd-cheap.config.toml":  {`model = "gpt-5.6-luna"`, `model_reasoning_effort = "low"`},
+		"sdd-cheap.config.toml":  {`model = "gpt-5.6-luna"`, `model_reasoning_effort = "high"`},
 	}
 	for name, wantContent := range wantProfiles {
 		path := filepath.Join(home, ".codex", name)
@@ -1964,84 +1971,6 @@ func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
 	}
 	if s.PendingSync {
 		t.Errorf("PendingSync = true after successful deferred sync, want false")
-	}
-}
-
-func TestRunArgsPendingSyncCleansCodexPermissions(t *testing.T) {
-	t.Cleanup(codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil))
-	home := t.TempDir()
-	setupMockHome(t, home)
-
-	if err := state.Write(home, state.InstallState{
-		InstalledAgents: []string{string(model.AgentCodex)},
-		PendingSync:     true,
-	}); err != nil {
-		t.Fatalf("state.Write() error = %v", err)
-	}
-	configPath := filepath.Join(home, ".codex", "config.toml")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	initial := `model = "gpt-5.5"
-default_permissions = "gentle-dev"
-
-[permissions.gentle-dev.filesystem]
-":slash_tmp" = "write"
-":tmpdir" = "write"
-
-[permissions.gentle-dev.filesystem.":workspace_roots"]
-"**/*.key" = "deny"
-"**/*.pem" = "deny"
-`
-	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	origSelf := selfUpdateFn
-	origEnsure := ensureCurrentOSSupported
-	origDetect := detectSystem
-	origRunTUI := runTUI
-	t.Cleanup(func() {
-		selfUpdateFn = origSelf
-		ensureCurrentOSSupported = origEnsure
-		detectSystem = origDetect
-		runTUI = origRunTUI
-	})
-
-	selfUpdateFn = func(_ context.Context, _ string, _ system.PlatformProfile, _ io.Writer) error {
-		return nil
-	}
-	ensureCurrentOSSupported = func() error { return nil }
-	detectSystem = func(context.Context) (system.DetectionResult, error) {
-		return system.DetectionResult{System: system.SystemInfo{Supported: true, Profile: system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true}}}, nil
-	}
-	runTUI = func(m tea.Model, _ ...tea.ProgramOption) (tea.Model, error) {
-		return m, nil
-	}
-
-	var buf bytes.Buffer
-	if err := RunArgs(nil, &buf); err != nil {
-		t.Fatalf("RunArgs(nil) error = %v", err)
-	}
-
-	body, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", configPath, err)
-	}
-	text := string(body)
-	if strings.Contains(text, "gentle-dev") {
-		t.Fatalf("deferred sync should remove the gentle-dev profile; got:\n%s", text)
-	}
-	if !strings.Contains(text, `model = "gpt-5.5"`) {
-		t.Fatalf("deferred sync should preserve user config; got:\n%s", text)
-	}
-
-	s, err := state.Read(home)
-	if err != nil {
-		t.Fatalf("state.Read() error = %v", err)
-	}
-	if s.PendingSync {
-		t.Fatal("PendingSync = true after successful Codex deferred sync, want false")
 	}
 }
 

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/admitted-result.schema.json",
+  "title": "Gentle AI provider-admitted native Git reviewer result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "subject", "admission", "result"],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-admitted-result/v2"},
+    "subject": {"$ref": "artifact-subject.schema.json"},
+    "admission": {"$ref": "../../v1/schemas/admitted-result.schema.json#/$defs/admission"},
+    "result": {"type": "object"}
+  }
+}

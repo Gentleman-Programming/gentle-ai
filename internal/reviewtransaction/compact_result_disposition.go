@@ -86,6 +86,17 @@ func CompactResultDispositionAuthorization(repository, lineage, revision, target
 // CompactPreservedResultPath locates the durable incident artifact one
 // preserved reviewer result was written to. The name is fully derived from the
 // selected order, lens, and preserved digest, so no caller supplies a path.
+//
+// preserveIncidentArtifact (internal/cli/review_incident.go) writes one of two
+// filename shapes depending on whether a ResultIncidentClass was supplied:
+// the class-less `%02d-%s-%s.raw` (order-lens-digest12), or the class-suffixed
+// `%02d-%s-%s-%s.raw` (order-lens-class-digest12). Dispose-result callers only
+// ever bind lineage/target/lens/order/digest — never the class an incident was
+// preserved with — so this lookup cannot assume either shape. Both shapes
+// share the exact `%02d-%s-...-<digest12>.raw` prefix and suffix, so a glob
+// over the incidents directory for that prefix, filtered to the exact digest12
+// suffix, resolves either shape without needing the class in advance. Capture
+// is exclusive per order+lens slot, so at most one file can match.
 func CompactPreservedResultPath(ctx context.Context, repo, lineageID, lens string, order int, artifactDigest string) (string, error) {
 	incidents, err := CompactIncidentsDir(ctx, repo, lineageID)
 	if err != nil {
@@ -94,7 +105,27 @@ func CompactPreservedResultPath(ctx context.Context, repo, lineageID, lens strin
 	if !validSHA256(artifactDigest) || order < 0 {
 		return "", errors.New("preserved reviewer result requires a lowercase sha256 digest and a non-negative selected order")
 	}
-	return filepath.Join(incidents, fmt.Sprintf("%02d-%s-%s.raw", order, lens, strings.TrimPrefix(artifactDigest, "sha256:")[:12])), nil
+	digest12 := strings.TrimPrefix(artifactDigest, "sha256:")[:12]
+	classless := filepath.Join(incidents, fmt.Sprintf("%02d-%s-%s.raw", order, lens, digest12))
+	if _, err := os.Stat(classless); err == nil {
+		return classless, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	matches, err := filepath.Glob(filepath.Join(incidents, fmt.Sprintf("%02d-%s-*-%s.raw", order, lens, digest12)))
+	if err != nil {
+		return "", err
+	}
+	switch len(matches) {
+	case 0:
+		// Neither shape exists on disk yet; fall back to the class-less path so
+		// the caller's os.ReadFile produces the ordinary "no such file" error.
+		return classless, nil
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("preserved incident artifact for order %d lens %q is ambiguous: %d candidates matched digest %s", order, lens, len(matches), digest12)
+	}
 }
 
 func compactPreservedPayloadDigest(payload []byte) string {

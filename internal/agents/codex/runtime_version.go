@@ -48,14 +48,39 @@ func ValidateGPT56Runtime() error {
 	return nil
 }
 
+// parseCodexVersion resolves the installed version from `codex --version`
+// output. The output is not guaranteed to be the version alone: Codex prints
+// startup diagnostics (PATH-alias warnings, for instance) on the same combined
+// stream. codexOutputRE is anchored with ^...$ and Go does not enable multiline
+// mode by default, so matching the whole output at once found nothing whenever
+// any extra line was present — even when the version was the first line — and
+// gentle-ai then told users with a satisfying version to downgrade (#1794).
+//
+// Each line is matched on its own instead, and the whole line must be exactly
+// `codex[-cli] [v]<version>`. That keeps the parser closed against a
+// version-shaped substring inside prose: a warning mentioning `codex/0.1.2/bin`
+// carries surrounding text and never matches. The last matching line wins,
+// because Codex emits its diagnostics before the version it was asked for.
 func parseCodexVersion(output string) (semanticVersion, error) {
-	trimmed := strings.TrimSpace(output)
-	if match := codexOutputRE.FindStringSubmatch(trimmed); match != nil {
-		if version, err := parseSemanticVersion(match[1]); err == nil {
-			return version, nil
+	var (
+		resolved semanticVersion
+		found    bool
+	)
+	for _, line := range strings.Split(output, "\n") {
+		match := codexOutputRE.FindStringSubmatch(strings.TrimSpace(line))
+		if match == nil {
+			continue
 		}
+		version, err := parseSemanticVersion(match[1])
+		if err != nil {
+			continue
+		}
+		resolved, found = version, true
 	}
-	return semanticVersion{}, fmt.Errorf("could not parse codex --version output %q", trimmed)
+	if !found {
+		return semanticVersion{}, fmt.Errorf("could not parse codex --version output %q", strings.TrimSpace(output))
+	}
+	return resolved, nil
 }
 
 func parseSemanticVersion(raw string) (semanticVersion, error) {

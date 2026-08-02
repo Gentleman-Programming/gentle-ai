@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 type ReviewLegacyFixScopeQuarantineResult struct {
@@ -42,7 +42,7 @@ func RunReviewLegacyFixScopeQuarantine(args []string, stdout io.Writer) error {
 			return errors.New("review quarantine-legacy-fix-scope requires --lineage, --expected-revision, --diagnostic, --disposition, --anomaly-set, --reason, --actor, and --maintainer-authorization")
 		}
 	}
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(context.Background())
+	root, err := resolveReviewMutationRoot(context.Background(), *cwd)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
 	}

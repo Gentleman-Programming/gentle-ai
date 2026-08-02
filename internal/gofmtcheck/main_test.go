@@ -72,6 +72,43 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestRunChecksUntrackedGoFiles(t *testing.T) {
+	root := t.TempDir()
+	runCommand(t, root, "git", "init", "--quiet")
+	const name = "new_unformatted.go"
+	const content = "package untracked\n\nvar value=1\n"
+	if err := os.WriteFile(
+		filepath.Join(root, name),
+		[]byte(content),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if got := run(root, &stdout, &stderr); got != 1 {
+		t.Fatalf(
+			"run() = %d, want 1; stdout=%q stderr=%q",
+			got,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+	if output := stdout.String() + stderr.String(); !strings.Contains(
+		output,
+		name,
+	) {
+		t.Fatalf("output %q does not contain %q", output, name)
+	}
+	got, err := os.ReadFile(filepath.Join(root, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != content {
+		t.Fatalf("untracked file was modified: %q", got)
+	}
+}
+
 func runCommand(t *testing.T, dir, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)

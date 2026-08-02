@@ -18,7 +18,11 @@ func secureOpenLocalStoreLock(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	parentFD, err := secureOpenLockParent(filepath.Dir(absPath))
+	root, ok := secureLockRoot(absPath)
+	if !ok {
+		root = string(filepath.Separator)
+	}
+	parentFD, err := secureOpenLockParent(root, filepath.Dir(absPath))
 	if err != nil {
 		return nil, err
 	}
@@ -42,13 +46,30 @@ func secureOpenLocalStoreLock(path string) (*os.File, error) {
 	return os.NewFile(uintptr(fd), path), nil
 }
 
-func secureOpenLockParent(path string) (int, error) {
-	fd, err := unix.Open(string(filepath.Separator), secureDirectoryOpenFlags(), 0)
+// secureOpenLockParent walks from root to the parent directory of path,
+// opening every component below root with O_NOFOLLOW to reject symlinked
+// traversal. Anchoring at the repository's Git common directory instead of
+// the filesystem root narrows the walk to repository-owned directories
+// (1781). When path is not under root, this fails safe by falling back to
+// today's root-anchored walk verbatim, so no working configuration regresses.
+func secureOpenLockParent(root, path string) (int, error) {
+	anchor, relative := root, ""
+	if rel, err := filepath.Rel(root, path); err == nil && rel != ".." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+		relative = rel
+	} else {
+		anchor = string(filepath.Separator)
+		relative = strings.TrimPrefix(path, string(filepath.Separator))
+	}
+	fd, err := unix.Open(anchor, secureDirectoryOpenFlags(), 0)
 	if err != nil {
 		return -1, err
 	}
-	for _, component := range strings.Split(strings.TrimPrefix(path, string(filepath.Separator)), string(filepath.Separator)) {
-		if component == "" {
+	if relative == "." {
+		return fd, nil
+	}
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		if component == "" || component == "." {
 			continue
 		}
 		nextFD, err := unix.Openat(fd, component, secureDirectoryOpenFlags()|unix.O_NOFOLLOW, 0)
