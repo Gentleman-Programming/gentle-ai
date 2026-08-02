@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -569,6 +570,13 @@ func TestTuiSyncPersistsFinalEditedAgentSelection(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
 			setupMockHome(t, home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			for _, agent := range tt.selected {
+				if agent == model.AgentCodex {
+					t.Cleanup(installcmd.OverrideLookPath(func(string) (string, error) { return "npm", nil }))
+					t.Cleanup(codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil))
+				}
+			}
 			if err := state.Write(home, state.InstallState{InstalledAgents: tt.initial}); err != nil {
 				t.Fatal(err)
 			}
