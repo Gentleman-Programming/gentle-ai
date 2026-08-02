@@ -568,6 +568,7 @@ func TestTuiSyncPersistsFinalEditedAgentSelection(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
+			setupMockHome(t, home)
 			if err := state.Write(home, state.InstallState{InstalledAgents: tt.initial}); err != nil {
 				t.Fatal(err)
 			}
