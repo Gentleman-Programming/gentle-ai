@@ -116,24 +116,26 @@ If you're working outside a git repo, engram falls back to the directory name.
 > This page shows the one-time setup; the engine itself is maintained upstream.
 >
 > — Useful if you want your memories to follow you between machines you own.
-> — Not needed for team sharing via your repo (`engram sync` does that).
+> — For team sharing via your repo, `engram sync` exports chunks into `.engram/`; commit and push those files so others can receive them.
 > — Skip if you only ever work on one machine — local memory is the default.
 
 ### Pick your env-var carrier (persists across reboots)
 
 | OS / setup | Mechanism |
 |------------|-----------|
-| macOS (LaunchAgents / GUI daemons) | `launchctl setenv KEY VALUE` |
-| Linux (systemd user instance) | `systemctl --user import-environment KEY=VALUE` |
-| Anywhere (only this shell's children) | `export KEY=VALUE` in `~/.zshrc` / `~/.bashrc` |
+| macOS (LaunchAgents / GUI daemons) | `launchctl setenv KEY VALUE` for each variable |
+| Linux (systemd user instance) | Export the variables in the current shell, then run `systemctl --user import-environment ENGRAM_CLOUD_SERVER ENGRAM_CLOUD_TOKEN ENGRAM_CLOUD_AUTOSYNC` |
+| Anywhere (only this shell's children) | Add each `export KEY=VALUE` to `~/.zshrc` / `~/.bashrc` |
 
-### Three commands, one time
+Persist all three variables through your selected OS mechanism:
 
 ```bash
-engram cloud config --server https://your-cloud-server.example
-engram cloud config --token <your-token>     # or paste at the interactive prompt
-launchctl setenv ENGRAM_CLOUD_AUTOSYNC 1     # or your carrier from the table above
+export ENGRAM_CLOUD_SERVER=https://your-cloud-server.example
+export ENGRAM_CLOUD_TOKEN=<your-token>
+export ENGRAM_CLOUD_AUTOSYNC=1
 ```
+
+Start or restart `engram serve` or `engram mcp` after setting the environment. Keep the bearer token in `ENGRAM_CLOUD_TOKEN`; do not pass it as a command-line argument.
 
 ### Verify
 
@@ -147,6 +149,12 @@ engram sync --cloud --project <project-name> # first push (the loop handles the 
 
 ```bash
 engram cloud upgrade doctor --project <project-name>
+engram cloud upgrade repair --project <project-name> --dry-run
+```
+
+Review the dry-run output before applying changes:
+
+```bash
 engram cloud upgrade repair --project <project-name> --apply
 ```
 
