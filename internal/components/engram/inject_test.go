@@ -3,8 +3,10 @@ package engram
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -600,19 +602,6 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 		t.Fatalf("Inject(antigravity) changed = false")
 	}
 
-	cliMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
-	content, err := os.ReadFile(cliMCPPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", cliMCPPath, err)
-	}
-	text := string(content)
-	if !strings.Contains(text, `"args": [`) || !strings.Contains(text, `"mcp"`) {
-		t.Fatalf("Antigravity MCP config must launch Engram MCP; got:\n%s", text)
-	}
-	if strings.Contains(text, `--tools=`) {
-		t.Fatalf("Antigravity should use Engram's default MCP invocation without tool-profile flags; got:\n%s", text)
-	}
-
 	pluginPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "plugin.json")
 	if _, err := os.Stat(pluginPath); err != nil {
 		t.Fatalf("Antigravity Engram plugin manifest missing: %v", err)
@@ -624,8 +613,8 @@ func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 		t.Fatalf("ReadFile(%q) error = %v", pluginMCPPath, err)
 	}
 	pluginMCPText := string(pluginMCPContent)
-	if !strings.Contains(pluginMCPText, `"mcp"`) || strings.Contains(pluginMCPText, `--tools=`) {
-		t.Fatalf("Antigravity Engram plugin MCP config should expose default Engram MCP tools; got:\n%s", pluginMCPText)
+	if !strings.Contains(pluginMCPText, `"args": [`) || !strings.Contains(pluginMCPText, `"mcp"`) || strings.Contains(pluginMCPText, `--tools=`) {
+		t.Fatalf("Antigravity MCP config must launch the default Engram MCP invocation; got:\n%s", pluginMCPText)
 	}
 
 	hooksPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "hooks.json")
@@ -807,7 +796,7 @@ func TestInjectAntigravityRecoversWriteFailures(t *testing.T) {
 				if bytes.Contains(gotGlobal, []byte(`"engram"`)) || manifestErr != nil {
 					t.Fatalf("not plugin-only: global=%s manifest=%v err=%v", gotGlobal, manifestErr, err)
 				}
-			} else if !bytes.Equal(gotGlobal, original) || tt.manifest != "pre-invalid" && !os.IsNotExist(manifestErr) {
+			} else if !bytes.Equal(gotGlobal, original) || (tt.manifest != "pre-invalid" && !os.IsNotExist(manifestErr)) {
 				t.Fatalf("original not restored: global=%s manifest=%v err=%v", gotGlobal, manifestErr, err)
 			}
 			if tt.manifest == "pre-invalid" {
@@ -820,6 +809,223 @@ func TestInjectAntigravityRecoversWriteFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInjectAntigravityActivationFailureRemovesNewStagingFiles(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".gemini", "antigravity-cli")
+	global := filepath.Join(dir, "mcp_config.json")
+	writeFile(t, global, `{"mcpServers":{"engram":{"command":"engram"}}}`)
+	manifest := filepath.Join(dir, "plugins", "gentle-ai-engram", "plugin.json")
+
+	original := antigravityWriteFile
+	antigravityWriteFile = func(path string, content []byte, mode os.FileMode) (filemerge.WriteResult, error) {
+		if path == manifest {
+			return filemerge.WriteResult{}, fmt.Errorf("activation failure")
+		}
+		return original(path, content, mode)
+	}
+	t.Cleanup(func() { antigravityWriteFile = original })
+
+	_, err := Inject(home, antigravityAdapter())
+	if err == nil || !strings.Contains(err.Error(), "global registration restored exactly") {
+		t.Fatalf("Inject() error = %v, want activation failure with restored global registration", err)
+	}
+	for _, path := range []string{
+		filepath.Join(dir, "plugins", "gentle-ai-engram", "mcp_config.json"),
+		filepath.Join(dir, "plugins", "gentle-ai-engram", "hooks.json"),
+		filepath.Join(dir, "settings.json"),
+	} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("new staging file %q was not removed after activation failure: %v", path, statErr)
+		}
+	}
+}
+
+func TestInjectAntigravityActivationFailureReportsStagingRestoreFailure(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".gemini", "antigravity-cli")
+	global := filepath.Join(dir, "mcp_config.json")
+	mcpPath := filepath.Join(dir, "plugins", "gentle-ai-engram", "mcp_config.json")
+	manifest := filepath.Join(dir, "plugins", "gentle-ai-engram", "plugin.json")
+	originalMCP := []byte(`{"original":true}`)
+	writeFile(t, global, `{"mcpServers":{"engram":{"command":"engram"}}}`)
+	writeFile(t, mcpPath, string(originalMCP))
+
+	original := antigravityWriteFile
+	antigravityWriteFile = func(path string, content []byte, mode os.FileMode) (filemerge.WriteResult, error) {
+		if path == manifest || (path == mcpPath && bytes.Equal(content, originalMCP)) {
+			return filemerge.WriteResult{}, fmt.Errorf("write failure")
+		}
+		return original(path, content, mode)
+	}
+	t.Cleanup(func() { antigravityWriteFile = original })
+
+	if _, err := Inject(home, antigravityAdapter()); err == nil || !strings.Contains(err.Error(), "staged plugin restore failed; manual recovery required") {
+		t.Fatalf("Inject() error = %v, want staging restore manual recovery signal", err)
+	}
+}
+
+func TestAntigravityConfigsRetainsJSONUnmarshalErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    any
+	}{
+		{name: "global config", content: `{`, want: &json.SyntaxError{}},
+		{name: "mcpServers", content: `{"mcpServers":[]}`, want: &json.UnmarshalTypeError{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "mcp_config.json")
+			writeFile(t, path, tt.content)
+			_, _, _, err := antigravityConfigs(path)
+			if err == nil {
+				t.Fatal("antigravityConfigs() error = nil")
+			}
+			switch want := tt.want.(type) {
+			case *json.SyntaxError:
+				var got *json.SyntaxError
+				if !errors.As(err, &got) {
+					t.Fatalf("antigravityConfigs() error = %v, want retained %T", err, want)
+				}
+			case *json.UnmarshalTypeError:
+				var got *json.UnmarshalTypeError
+				if !errors.As(err, &got) {
+					t.Fatalf("antigravityConfigs() error = %v, want retained %T", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestInjectAntigravityActivationFailurePreservesGitIndexAndWorktree(t *testing.T) {
+	if testing.Short() {
+		t.Skip("git repository regression is skipped in short mode")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for staged-content regression")
+	}
+	home := t.TempDir()
+	runGit(t, home, "init")
+	runGit(t, home, "config", "user.email", "test@example.com")
+	runGit(t, home, "config", "user.name", "Test")
+
+	dir := filepath.Join(home, ".gemini", "antigravity-cli")
+	global := filepath.Join(dir, "mcp_config.json")
+	pluginDir := filepath.Join(dir, "plugins", "gentle-ai-engram")
+	paths := map[string][]byte{
+		filepath.Join(pluginDir, "mcp_config.json"): []byte(`{"base":"mcp"}`),
+		filepath.Join(pluginDir, "hooks.json"):      []byte(`{"base":"hooks"}`),
+		filepath.Join(dir, "settings.json"):         []byte(`{"base":"settings"}`),
+	}
+	writeFile(t, global, `{"mcpServers":{"engram":{"command":"engram"}}}`)
+	for path, content := range paths {
+		writeFile(t, path, string(content))
+	}
+	runGit(t, home, "add", ".")
+	runGit(t, home, "commit", "-m", "baseline")
+
+	staged := map[string][]byte{}
+	for path := range paths {
+		rel, err := filepath.Rel(home, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		staged[path] = []byte(`{"staged":"` + filepath.Base(path) + `"}`)
+		if err := os.WriteFile(path, staged[path], 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, home, "add", rel)
+		paths[path] = []byte(`{"worktree":"` + filepath.Base(path) + `"}`)
+		if err := os.WriteFile(path, paths[path], 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	manifest := filepath.Join(pluginDir, "plugin.json")
+	original := antigravityWriteFile
+	antigravityWriteFile = func(path string, content []byte, mode os.FileMode) (filemerge.WriteResult, error) {
+		if path == manifest {
+			return filemerge.WriteResult{}, fmt.Errorf("activation failure")
+		}
+		return original(path, content, mode)
+	}
+	t.Cleanup(func() { antigravityWriteFile = original })
+
+	if _, err := Inject(home, antigravityAdapter()); err == nil {
+		t.Fatal("Inject() error = nil, want activation failure")
+	}
+	for path, wantWorktree := range paths {
+		gotWorktree, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(gotWorktree, wantWorktree) {
+			t.Fatalf("worktree %q = %q, %v; want %q", path, gotWorktree, err, wantWorktree)
+		}
+		rel, err := filepath.Rel(home, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotIndex := runGitOutput(t, home, "show", ":"+filepath.ToSlash(rel))
+		if !bytes.Equal([]byte(gotIndex), staged[path]) {
+			t.Fatalf("index %q = %q, want %q", path, gotIndex, staged[path])
+		}
+	}
+}
+
+func TestInjectClaudeLegacyCleanupFailureIsNonFatalAndConverges(t *testing.T) {
+	home := t.TempDir()
+	legacyPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	writeFile(t, legacyPath, `{"command":"engram","args":["mcp","--tools=agent"]}`)
+
+	original := removeManagedLegacyClaudeConfig
+	cleanupCalls := 0
+	removeManagedLegacyClaudeConfig = func(string) (bool, error) {
+		cleanupCalls++
+		return false, fmt.Errorf("legacy cleanup failure")
+	}
+	t.Cleanup(func() { removeManagedLegacyClaudeConfig = original })
+
+	first, err := Inject(home, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed || len(first.Files) == 0 || first.Files[0] != claude.UserConfigPath(home) {
+		t.Fatalf("Inject() first result = %+v, want completed registry migration", first)
+	}
+	if _, statErr := os.Stat(claude.UserConfigPath(home)); statErr != nil {
+		t.Fatalf("user registry missing after successful migration: %v", statErr)
+	}
+
+	second, err := Inject(home, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed || len(second.Files) == 0 || second.Files[0] != claude.UserConfigPath(home) {
+		t.Fatalf("Inject() second result = %+v, want converged registry state", second)
+	}
+	if cleanupCalls != 2 {
+		t.Fatalf("legacy cleanup calls = %d, want 2", cleanupCalls)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+}
+
+func runGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return string(output)
 }
 
 // ─── Codex tests ──────────────────────────────────────────────────────────────
