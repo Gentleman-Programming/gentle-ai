@@ -45,21 +45,27 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 		"        if: needs.go-format.result != 'success'\n" +
 		"        run: exit 1\n"
 
-	jobs := []struct{ id, next string }{
-		{id: "unit-tests", next: "windows-runtime"},
+	jobs := []struct {
+		id, next       string
+		requiresFormat bool
+	}{
+		{id: "unit-tests", next: "claude-network-none", requiresFormat: true},
+		// Claude Network-None is an independent required proof. Its fixture
+		// applicability condition is intentionally unrelated to Go formatting.
+		{id: "claude-network-none", next: "windows-runtime"},
 		// The sharded Windows full suite is deliberately NOT here: it lives in
 		// its own workflow while the pre-existing Windows failures it exposed
 		// are paid down, so it is not one of ci.yml's required checks and owes
 		// no fail-closed contract to a go-format job in another file.
-		{id: "windows-runtime", next: "darwin-runtime"},
+		{id: "windows-runtime", next: "darwin-runtime", requiresFormat: true},
 		// darwin-runtime is a required check like its siblings, so it owes the
 		// same fail-closed contract. Listing it here is also what keeps the
 		// section slicing honest: a job this list does not know about gets
 		// swallowed into its predecessor's section, and its own guard step
 		// then reads as the predecessor bypassing the format gate.
-		{id: "darwin-runtime", next: "organic-runtime-e2e"},
-		{id: "organic-runtime-e2e", next: "e2e-tests"},
-		{id: "e2e-tests"},
+		{id: "darwin-runtime", next: "organic-runtime-e2e", requiresFormat: true},
+		{id: "organic-runtime-e2e", next: "e2e-tests", requiresFormat: true},
+		{id: "e2e-tests", requiresFormat: true},
 	}
 	for _, job := range jobs {
 		t.Run(job.id, func(t *testing.T) {
@@ -76,15 +82,17 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 				}
 				section = section[:end]
 			}
-			for _, required := range []string{"    needs: go-format\n", "    if: always()\n", guard} {
-				if !strings.Contains(section, required) {
-					t.Fatalf("%s missing fail-closed contract %q", job.id, required)
+			if job.requiresFormat {
+				for _, required := range []string{"    needs: go-format\n", "    if: always()\n", guard} {
+					if !strings.Contains(section, required) {
+						t.Fatalf("%s missing fail-closed contract %q", job.id, required)
+					}
 				}
-			}
 
-			expensiveSteps := section[strings.Index(section, guard)+len(guard):]
-			if strings.Contains(expensiveSteps, "\n        if:") || strings.Contains(section, "continue-on-error:") {
-				t.Fatalf("%s can bypass the failed format guard", job.id)
+				expensiveSteps := section[strings.Index(section, guard)+len(guard):]
+				if strings.Contains(expensiveSteps, "\n        if:") || strings.Contains(section, "continue-on-error:") {
+					t.Fatalf("%s can bypass the failed format guard", job.id)
+				}
 			}
 		})
 	}
@@ -98,6 +106,46 @@ func TestOrganicRuntimeE2EUsesInstalledOpenCodePin(t *testing.T) {
 	install := "npm install --global opencode-ai@" + versions.OpenCode
 	if strings.Count(string(data), install) != 1 {
 		t.Fatalf("organic runtime E2E must install exact supported OpenCode pin %q once", install)
+	}
+}
+
+func TestClaudeNetworkNoneRuntimeProofRespectsFixtureApplicability(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(data)
+	start := strings.Index(workflow, "  claude-network-none:\n")
+	if start < 0 {
+		t.Fatal("missing Claude Network-None runtime job")
+	}
+	end := strings.Index(workflow[start:], "\n  windows-runtime:")
+	if end < 0 {
+		t.Fatal("missing Claude Network-None runtime job boundary")
+	}
+	job := workflow[start : start+end]
+
+	for _, required := range []string{
+		"ref: ${{ github.event.pull_request.head.sha || github.sha }}",
+		"id: claude-runtime-proof",
+		"if [[ -f e2e/Dockerfile.claude-network-none ]]; then",
+		`echo "applicable=true" >> "$GITHUB_OUTPUT"`,
+		`echo "applicable=false" >> "$GITHUB_OUTPUT"`,
+		"is not applicable: this exact candidate predates e2e/Dockerfile.claude-network-none.",
+		"run: docker build -f e2e/Dockerfile.claude-network-none -t gentle-ai-claude-network-none:ci .",
+		"docker run --rm --pull=never --network none --cap-drop=ALL",
+	} {
+		if !strings.Contains(job, required) {
+			t.Fatalf("Claude Network-None runtime job missing %q", required)
+		}
+	}
+
+	condition := "if: steps.claude-runtime-proof.outputs.applicable == 'true'"
+	if count := strings.Count(job, condition); count != 2 {
+		t.Fatalf("Claude image build and runtime proof must both require fixture applicability; found %d conditions", count)
+	}
+	if strings.Contains(job, "continue-on-error:") {
+		t.Fatal("Claude Network-None runtime job must not waive fixture, build, or runtime failures")
 	}
 }
 
