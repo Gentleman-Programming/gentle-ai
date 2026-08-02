@@ -68,8 +68,25 @@ jobs:
         run: |
           go build -trimpath -o "$RUNNER_TEMP/gentle-ai" ./cmd/gentle-ai
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --out "$RUNNER_TEMP/bench-portable.json"
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            completed_once("j52-sdd-stale-authority-does-not-shadow-approved-candidate") and
+            completed_once("j53-sdd-ambiguous-authorities-fail-closed") and
+            completed_once("j54-sdd-missing-authority-receipt-fails-closed") and
+            completed_once("j55-sdd-mismatched-authority-receipt-fails-closed") and
+            completed_once("j56-sdd-non-allow-post-apply-gate-fails-closed") and
+            completed_once("j58-sdd-foreign-openspec-path-fails-closed")
+          ' "$RUNNER_TEMP/bench-portable.json"
           go build -tags bench_fixture -trimpath -o "$RUNNER_TEMP/gentle-ai-bench-fixture" ./cmd/gentle-ai
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai-bench-fixture" --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed --out "$RUNNER_TEMP/bench-source-coupled.json"
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            completed_once("j57-sdd-authority-drift-during-discovery-fails-closed")
+          ' "$RUNNER_TEMP/bench-source-coupled.json"
 
       # Lives in this job, not the format job, because only Unit Tests is a
       # required status check on main. A guard that cannot block a merge is

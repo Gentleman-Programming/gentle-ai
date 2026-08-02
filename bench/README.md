@@ -77,11 +77,15 @@ gentle-ai-bench run --binary /path/to/gentle-ai --only \
   j58-sdd-foreign-openspec-path-fails-closed
 ```
 
-Run the source-coupled receipt-drift proof only with its tagged product binary:
+Run the source-coupled receipt-drift proof only with its tagged product binary.
+Build the product from the repository root, then run the benchmark from `bench/`:
 
 ```sh
+# From the repository root.
 go build -tags bench_fixture -o /path/to/gentle-ai ./cmd/gentle-ai
-gentle-ai-bench run --binary /path/to/gentle-ai --axis source-coupled --only \
+
+# From bench/, after building gentle-ai-bench above.
+./gentle-ai-bench run --binary /path/to/gentle-ai --axis source-coupled --only \
   j57-sdd-authority-drift-during-discovery-fails-closed
 ```
 
