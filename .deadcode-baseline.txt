@@ -122,12 +122,8 @@ internal/reviewtransaction/rar_plan_authority.go	verificationEffectAuthorization
 internal/reviewtransaction/rar_plan_authority.go	verificationFrozenPlanConsentDigest
 internal/reviewtransaction/rdd_mode.go	AuthorizeRDDCandidate
 internal/reviewtransaction/repository_locator.go	RepositoryIdentityLease.StorageKey
-internal/reviewtransaction/repository_locator.go	RepositoryIdentityLease.Validate
-internal/reviewtransaction/repository_locator.go	RepositoryIdentityLease.validateCapturedIdentity
 internal/reviewtransaction/repository_locator.go	locatorPathStrictlyWithin
-internal/reviewtransaction/repository_locator.go	repositoryIdentityChanged
 internal/reviewtransaction/repository_locator.go	resolveReviewRepositoryDirectory
-internal/reviewtransaction/repository_locator.go	validRepositoryIdentityLease
 internal/reviewtransaction/risk.go	deriveSemanticRiskSignals
 internal/reviewtransaction/snapshot.go	sanitizedGitEnvironment
 internal/reviewtransaction/snapshot.go	snapshotIdentity
@@ -201,6 +197,7 @@ internal/sddstatus/status.go	reportLineHasPassSignal
 internal/sddstatus/status.go	reportTextIsClearlyPassing
 internal/sddstatus/status.go	reportValueIsBenign
 internal/sddstatus/status.go	stripMarkdownSignal
+internal/skillregistry/registry.go	LoadRegistry
 internal/storage/bytes.go	FormatBytes
 internal/system/install_deps.go	InstallCommandsForDep
 internal/system/install_deps.go	installCommandsBrew
