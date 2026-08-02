@@ -288,11 +288,12 @@ func (s *Service) SetProfileNamesToRemove(profileNames []string) {
 }
 
 func (s *Service) SetEngramUninstallScope(scope model.EngramUninstallScope) {
-	if scope == model.EngramUninstallScopeProject {
-		s.engramUninstallScope = model.EngramUninstallScopeProject
-		return
+	switch scope {
+	case model.EngramUninstallScopeProject, model.EngramUninstallScopeGlobal, model.EngramUninstallScopeNone:
+		s.engramUninstallScope = scope
+	default:
+		s.engramUninstallScope = model.EngramUninstallScopeNone
 	}
-	s.engramUninstallScope = model.EngramUninstallScopeGlobal
 }
 
 func (s *Service) CompleteUninstall() (Result, error) {
@@ -330,6 +331,9 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 		}
 
 		for _, componentID := range componentIDs {
+			if componentID == model.ComponentEngram && s.engramUninstallScope == model.EngramUninstallScopeNone {
+				continue
+			}
 			ops, targets, err := s.componentOperations(adapter, componentID)
 			if err != nil {
 				return plan{}, fmt.Errorf("plan uninstall for %q/%q: %w", agentID, componentID, err)
@@ -511,6 +515,9 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		targets = append(targets, context7Targets(adapter, homeDir)...)
 		ops = append(ops, context7Operations(adapter, homeDir)...)
 	case model.ComponentEngram:
+		if s.engramUninstallScope == model.EngramUninstallScopeNone {
+			break
+		}
 		if s.engramUninstallScope == model.EngramUninstallScopeProject {
 			projectDataPath := filepath.Join(s.workspaceDir, ".engram")
 			if strings.TrimSpace(s.workspaceDir) != "" {
