@@ -79,6 +79,13 @@ jobs:
             completed_once("j56-sdd-non-allow-post-apply-gate-fails-closed") and
             completed_once("j58-sdd-foreign-openspec-path-fails-closed")
           ' "$RUNNER_TEMP/bench-portable.json"
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed --out "$RUNNER_TEMP/bench-source-coupled-untagged.json"
+          jq -e '
+            def unsupported_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "unsupported");
+            unsupported_once("j57-sdd-authority-drift-during-discovery-fails-closed")
+          ' "$RUNNER_TEMP/bench-source-coupled-untagged.json"
           go build -tags bench_fixture -trimpath -o "$RUNNER_TEMP/gentle-ai-bench-fixture" ./cmd/gentle-ai
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai-bench-fixture" --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed --out "$RUNNER_TEMP/bench-source-coupled.json"
           jq -e '

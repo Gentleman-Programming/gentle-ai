@@ -1,6 +1,16 @@
 package main
 
+import (
+	"errors"
+	"fmt"
+	"os"
+)
+
 const sourceCoupledAxis = "source-coupled"
+
+const sourceCoupledReceiptContentKey = "source-coupled-receipt-content"
+
+var errSourceCoupledFixtureUnavailable = errors.New("source-coupled receipt-drift seam unavailable")
 
 func init() {
 	RegisterAxis(Axis{
@@ -25,8 +35,23 @@ func sourceCoupledJourneys() []Journey {
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
 				Step{Name: "fixture: select the sandbox-only receipt drift seam", Fixture: sddInstallDiscoveryDriftFixture},
 				Step{Name: "sdd-status refuses authority drift", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("compact authority changed during discovery")},
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddSourceCoupledStatusFailsClosed},
 			),
 		},
 	}
+}
+
+func sddSourceCoupledStatusFailsClosed(sandbox *Sandbox, observation Observation) error {
+	before, ok := sandbox.Scratch[sourceCoupledReceiptContentKey]
+	if !ok {
+		return fmt.Errorf("source-coupled fixture did not record the receipt contents")
+	}
+	after, err := os.ReadFile(sandbox.BenchReceiptMutationPath)
+	if err != nil {
+		return fmt.Errorf("read source-coupled fixture receipt: %w", err)
+	}
+	if string(after) == before {
+		return errSourceCoupledFixtureUnavailable
+	}
+	return sddStatusFailsClosed("compact authority changed during discovery")(sandbox, observation)
 }

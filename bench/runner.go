@@ -497,6 +497,11 @@ func runJourney(binary string, journey Journey) JourneyResult {
 
 		if step.After != nil {
 			if err := step.After(sandbox, observation); err != nil {
+				if errors.Is(err, errSourceCoupledFixtureUnavailable) {
+					result.Status = StatusUnsupported
+					result.UnsupportedSteps = append(result.UnsupportedSteps, step.Name+" (source-coupled fixture unavailable)")
+					break
+				}
 				result.Status = StatusFailed
 				result.FailureReason = fmt.Sprintf("step %q after: %v", step.Name, err)
 				break

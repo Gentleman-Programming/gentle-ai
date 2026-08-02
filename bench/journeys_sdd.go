@@ -792,7 +792,12 @@ func sddInstallDiscoveryDriftFixture(sandbox *Sandbox) error {
 	if _, err := os.Stat(receipt); err != nil {
 		return fmt.Errorf("fixture expected receipt before discovery drift: %w", err)
 	}
+	content, err := os.ReadFile(receipt)
+	if err != nil {
+		return fmt.Errorf("fixture reads receipt before discovery drift: %w", err)
+	}
 	sandbox.BenchReceiptMutationPath = receipt
+	sandbox.Scratch[sourceCoupledReceiptContentKey] = string(content)
 	return nil
 }
 
