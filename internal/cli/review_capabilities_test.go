@@ -148,7 +148,7 @@ func validateReviewCapabilitiesSchema(t *testing.T, name, id string, fixture []b
 	compiler := jsonschema.NewCompiler()
 	for uri, payload := range map[string][]byte{
 		"https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities-v1.4.schema.json": v14,
-		id:                                                                                              capabilities,
+		id: capabilities,
 	} {
 		var document any
 		if err := json.Unmarshal(payload, &document); err != nil {
