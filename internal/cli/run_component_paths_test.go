@@ -426,6 +426,26 @@ func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
 	}
 }
 
+func TestCodexSystemPromptPathsRespectInstallScope(t *testing.T) {
+	home := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "home-project")
+	customCodexHome := filepath.Join(t.TempDir(), "codex-config")
+	t.Setenv("CODEX_HOME", customCodexHome)
+
+	global := componentPathsWithWorkspaceScoped(home, workspace, ScopeGlobal, model.Selection{}, resolveAdaptersForScope([]model.AgentID{model.AgentCodex}, ScopeGlobal), model.ComponentSDD)
+	if want := filepath.Join(customCodexHome, "AGENTS.md"); !containsPath(global, want) {
+		t.Fatalf("global Codex paths missing %q\npaths=%v", want, global)
+	}
+
+	workspacePaths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{}, resolveAdaptersForScope([]model.AgentID{model.AgentCodex}, ScopeWorkspace), model.ComponentSDD)
+	if want := filepath.Join(workspace, "AGENTS.md"); !containsPath(workspacePaths, want) {
+		t.Fatalf("workspace Codex paths missing %q\npaths=%v", want, workspacePaths)
+	}
+	if unwanted := filepath.Join(workspace, ".codex", "AGENTS.md"); containsPath(workspacePaths, unwanted) {
+		t.Fatalf("workspace Codex paths contain undiscoverable prompt %q\npaths=%v", unwanted, workspacePaths)
+	}
+}
+
 // TestComponentPathsPermissionsCodexContributesNoPaths pins that the
 // Permission component claims nothing under ~/.codex. gentle-ai does not write
 // Codex's permissions config — not a profile, and not the legacy cleanup that

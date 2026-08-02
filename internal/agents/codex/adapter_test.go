@@ -134,8 +134,9 @@ func TestInstallCommand(t *testing.T) {
 }
 
 func TestConfigPathsCrossPlatform(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
 	a := NewAdapter()
-	home := "/tmp/home"
+	home := t.TempDir()
 
 	if got := a.GlobalConfigDir(home); got != filepath.Join(home, ".codex") {
 		t.Fatalf("GlobalConfigDir() = %q, want %q", got, filepath.Join(home, ".codex"))
@@ -170,6 +171,7 @@ func TestConfigPathsCrossPlatform(t *testing.T) {
 // codex CLI expects. Lowercase "agents.md" causes the file to be silently
 // ignored on case-sensitive filesystems (Linux) — regression for #299.
 func TestAdapterSystemPromptFile_UsesUppercaseAGENTSmd(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
 	a := NewAdapter()
 	got := a.SystemPromptFile("/home/user")
 	const want = "AGENTS.md"
@@ -179,23 +181,24 @@ func TestAdapterSystemPromptFile_UsesUppercaseAGENTSmd(t *testing.T) {
 }
 
 func TestAdapterSystemPromptFile_WorkspaceVsGlobalScope(t *testing.T) {
-	a := NewAdapter()
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		// Global home directory scope returns ~/.codex/AGENTS.md
-		gotGlobal := a.SystemPromptFile(home)
-		wantGlobal := filepath.Join(home, ".codex", "AGENTS.md")
-		if gotGlobal != wantGlobal {
-			t.Errorf("SystemPromptFile(home) = %q, want %q", gotGlobal, wantGlobal)
-		}
+	t.Setenv("CODEX_HOME", "")
+	home := t.TempDir()
+	if got, want := NewAdapter().SystemPromptFile(home), filepath.Join(home, ".codex", "AGENTS.md"); got != want {
+		t.Errorf("global SystemPromptFile() = %q, want %q", got, want)
 	}
 
-	// Workspace scope returns root AGENTS.md
-	workspace := t.TempDir()
-	gotWorkspace := a.SystemPromptFile(workspace)
-	wantWorkspace := filepath.Join(workspace, "AGENTS.md")
-	if gotWorkspace != wantWorkspace {
-		t.Errorf("SystemPromptFile(workspace) = %q, want %q", gotWorkspace, wantWorkspace)
+	workspace := filepath.Join(t.TempDir(), "home-project")
+	if got, want := NewWorkspaceAdapter().SystemPromptFile(workspace), filepath.Join(workspace, "AGENTS.md"); got != want {
+		t.Errorf("workspace SystemPromptFile() = %q, want %q", got, want)
+	}
+}
+
+func TestAdapterSystemPromptFile_UsesCustomCodexHome(t *testing.T) {
+	customCodexHome := filepath.Join(t.TempDir(), "custom-codex")
+	t.Setenv("CODEX_HOME", customCodexHome)
+
+	if got, want := NewAdapter().SystemPromptFile(t.TempDir()), filepath.Join(customCodexHome, "AGENTS.md"); got != want {
+		t.Fatalf("SystemPromptFile() = %q, want %q", got, want)
 	}
 }
 

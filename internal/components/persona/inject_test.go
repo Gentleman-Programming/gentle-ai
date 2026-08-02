@@ -2931,6 +2931,7 @@ func TestHermesPersonaAssetsContainIdentitySection(t *testing.T) {
 }
 
 func TestInjectCodexPersonaWrapsInManagedMarkerSection(t *testing.T) {
+	t.Setenv("CODEX_HOME", "")
 	home := t.TempDir()
 	adapter, err := agents.NewAdapter(model.AgentCodex)
 	if err != nil {
@@ -2954,5 +2955,22 @@ func TestInjectCodexPersonaWrapsInManagedMarkerSection(t *testing.T) {
 	content := string(data)
 	if !strings.Contains(content, "<!-- gentle-ai:persona -->") || !strings.Contains(content, "<!-- /gentle-ai:persona -->") {
 		t.Fatalf("Codex prompt file %q does not contain gentle-ai:persona markers:\n%s", promptFile, content)
+	}
+
+	second, err := Inject(home, adapter, model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Inject() result.Changed = true, want false")
+	}
+	data, err = os.ReadFile(promptFile)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) after second inject error = %v", promptFile, err)
+	}
+	for _, marker := range []string{"<!-- gentle-ai:persona -->", "<!-- /gentle-ai:persona -->"} {
+		if count := strings.Count(string(data), marker); count != 1 {
+			t.Fatalf("Codex prompt marker %q count = %d, want 1", marker, count)
+		}
 	}
 }

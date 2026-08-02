@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -21,8 +20,23 @@ type statResult struct {
 }
 
 type Adapter struct {
-	lookPath func(string) (string, error)
-	statPath func(string) statResult
+	lookPath        func(string) (string, error)
+	statPath        func(string) statResult
+	workspacePrompt bool
+}
+
+// NewWorkspaceAdapter resolves Codex instructions through the workspace root.
+// The default adapter resolves them through CODEX_HOME instead.
+func NewWorkspaceAdapter() *Adapter {
+	return NewAdapter().WorkspaceScoped()
+}
+
+// WorkspaceScoped returns a copy whose instruction destination is the supplied
+// workspace root. Other Codex paths retain their normal workspace conventions.
+func (a *Adapter) WorkspaceScoped() *Adapter {
+	workspace := *a
+	workspace.workspacePrompt = true
+	return &workspace
 }
 
 func NewAdapter() *Adapter {
@@ -84,46 +98,21 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 // --- Config paths ---
 
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
+	if codexHome := os.Getenv("CODEX_HOME"); codexHome != "" {
+		return filepath.Clean(codexHome)
+	}
 	return filepath.Join(homeDir, ".codex")
 }
 
 func (a *Adapter) SystemPromptDir(targetDir string) string {
-	if isCodexGlobalTargetDir(targetDir) {
-		if filepath.Base(filepath.Clean(targetDir)) == ".codex" {
-			return targetDir
-		}
-		return filepath.Join(targetDir, ".codex")
+	if a.workspacePrompt {
+		return targetDir
 	}
-	return targetDir
+	return a.GlobalConfigDir(targetDir)
 }
 
 func (a *Adapter) SystemPromptFile(targetDir string) string {
-	if isCodexGlobalTargetDir(targetDir) {
-		if filepath.Base(filepath.Clean(targetDir)) == ".codex" {
-			return filepath.Join(targetDir, "AGENTS.md")
-		}
-		return filepath.Join(targetDir, ".codex", "AGENTS.md")
-	}
-	return filepath.Join(targetDir, "AGENTS.md")
-}
-
-func isCodexGlobalTargetDir(targetDir string) bool {
-	if targetDir == "" {
-		return true
-	}
-	clean := filepath.Clean(targetDir)
-	if filepath.Base(clean) == ".codex" {
-		return true
-	}
-	userHome, err := os.UserHomeDir()
-	if err == nil && userHome != "" && clean == filepath.Clean(userHome) {
-		return true
-	}
-	base := strings.ToLower(filepath.Base(clean))
-	if base == "home" || strings.HasPrefix(base, "home-") || strings.HasPrefix(base, "home_") {
-		return true
-	}
-	return false
+	return filepath.Join(a.SystemPromptDir(targetDir), "AGENTS.md")
 }
 
 func (a *Adapter) SkillsDir(homeDir string) string {

@@ -714,6 +714,7 @@ func (s agentRoutingGuidanceStep) Run() error {
 	if err != nil {
 		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
 	}
+	adapter = adapterForScope(adapter, s.scope)
 	targetDir := routingGuidanceDir(s.homeDir, s.workspaceDir, s.scope, adapter)
 
 	// Strip first: an installation upgraded from an older release still carries
@@ -724,7 +725,7 @@ func (s agentRoutingGuidanceStep) Run() error {
 		return err
 	}
 
-	injected, err := agentguidance.InjectRouting(targetDir, s.agent)
+	injected, err := agentguidance.InjectRoutingWithAdapter(targetDir, adapter)
 	if err != nil {
 		return fmt.Errorf("inject routing guidance for %q: %w", s.agent, err)
 	}
@@ -1144,6 +1145,23 @@ func resolveAdapters(agentIDs []model.AgentID) []agents.Adapter {
 	return adapters
 }
 
+func adapterForScope(adapter agents.Adapter, scope InstallScope) agents.Adapter {
+	if scope == ScopeWorkspace {
+		if codexAdapter, ok := adapter.(*codexagent.Adapter); ok {
+			return codexAdapter.WorkspaceScoped()
+		}
+	}
+	return adapter
+}
+
+func resolveAdaptersForScope(agentIDs []model.AgentID, scope InstallScope) []agents.Adapter {
+	adapters := resolveAdapters(agentIDs)
+	for i, adapter := range adapters {
+		adapters[i] = adapterForScope(adapter, scope)
+	}
+	return adapters
+}
+
 func shouldRefreshWindowsEngram(profile system.PlatformProfile, resolvedPath string, pathEntries []string) bool {
 	if profile.OS != "windows" || profile.PackageManager == "brew" || strings.TrimSpace(resolvedPath) == "" {
 		return false
@@ -1227,7 +1245,7 @@ func splitPathForOS(value, goos string) []string {
 }
 
 func (s componentApplyStep) Run() error {
-	adapters := resolveAdapters(s.agents)
+	adapters := resolveAdaptersForScope(s.agents, s.scope)
 
 	switch s.component {
 	case model.ComponentEngram:
@@ -1694,7 +1712,7 @@ func selectedSkillIDs(selection model.Selection) []model.SkillID {
 
 func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) []string {
 	paths := map[string]struct{}{}
-	adapters := resolveAdapters(resolved.Agents)
+	adapters := resolveAdaptersForScope(resolved.Agents, scope)
 
 	for _, component := range resolved.OrderedComponents {
 		for _, path := range componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component) {
@@ -1743,7 +1761,8 @@ func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adap
 	paths := []string{}
 	for _, adapter := range adapters {
 		targetDir := routingGuidanceDir(homeDir, workspaceDir, scope, adapter)
-		routing, err := agentguidance.RoutingPaths(targetDir, adapter.Agent())
+		adapter = adapterForScope(adapter, scope)
+		routing, err := agentguidance.RoutingPathsWithAdapter(targetDir, adapter)
 		if err != nil {
 			// The guidance step resolves the same delivery and fails loudly when
 			// it runs. Declaring a target we could not resolve would only add a
@@ -1766,6 +1785,7 @@ func componentPathsWithWorkspace(homeDir, workspaceDir string, selection model.S
 func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	paths := []string{}
 	for _, adapter := range adapters {
+		adapter = adapterForScope(adapter, scope)
 		targetDir := componentPathDirScoped(homeDir, workspaceDir, scope, adapter, component)
 		switch component {
 		case model.ComponentEngram:
@@ -2102,7 +2122,7 @@ type postApplyVerificationInput struct {
 
 func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 	checks := make([]verify.Check, 0)
-	adapters := resolveAdapters(input.Resolved.Agents)
+	adapters := resolveAdaptersForScope(input.Resolved.Agents, input.Scope)
 
 	seenPath := make(map[string]struct{})
 	var uniqueFilePaths []string

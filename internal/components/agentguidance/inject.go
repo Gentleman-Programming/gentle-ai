@@ -65,6 +65,17 @@ type templateBootstrapper interface {
 // Only the marked section is owned by Gentle AI: everything a user wrote around
 // it is preserved verbatim, and a second identical injection is a no-op.
 func InjectRouting(targetDir string, agent model.AgentID) (Result, error) {
+	adapter, err := agents.NewAdapter(agent)
+	if err != nil {
+		return Result{}, fmt.Errorf("resolve routing guidance adapter for %q: %w", agent, err)
+	}
+	return InjectRoutingWithAdapter(targetDir, adapter)
+}
+
+// InjectRoutingWithAdapter installs routing with the caller's explicit adapter
+// scope, which matters when an agent has distinct global and workspace prompts.
+func InjectRoutingWithAdapter(targetDir string, adapter agents.Adapter) (Result, error) {
+	agent := adapter.Agent()
 	// Render before resolving the delivery so an unsupported agent is rejected
 	// without having touched the filesystem.
 	rendered, err := RenderRouting(agent)
@@ -72,7 +83,7 @@ func InjectRouting(targetDir string, agent model.AgentID) (Result, error) {
 		return Result{}, err
 	}
 
-	delivery, err := resolveRoutingDelivery(targetDir, agent)
+	delivery, err := resolveRoutingDelivery(targetDir, adapter)
 	if err != nil {
 		return Result{}, err
 	}
@@ -97,7 +108,17 @@ func InjectRouting(targetDir string, agent model.AgentID) (Result, error) {
 // same delivery resolution, so the backup contract cannot drift away from what
 // the injector actually writes.
 func RoutingPaths(targetDir string, agent model.AgentID) ([]string, error) {
-	delivery, err := resolveRoutingDelivery(targetDir, agent)
+	adapter, err := agents.NewAdapter(agent)
+	if err != nil {
+		return nil, fmt.Errorf("resolve routing guidance adapter for %q: %w", agent, err)
+	}
+	return RoutingPathsWithAdapter(targetDir, adapter)
+}
+
+// RoutingPathsWithAdapter reports paths using the same explicit adapter scope
+// that InjectRoutingWithAdapter writes through.
+func RoutingPathsWithAdapter(targetDir string, adapter agents.Adapter) ([]string, error) {
+	delivery, err := resolveRoutingDelivery(targetDir, adapter)
 	if err != nil {
 		return nil, err
 	}
@@ -134,15 +155,11 @@ type routingDelivery struct {
 // an unreachable target is exactly the failure this component exists to
 // prevent — and reporting a path the injector cannot write is the same defect
 // seen from the backup side.
-func resolveRoutingDelivery(targetDir string, agent model.AgentID) (routingDelivery, error) {
+func resolveRoutingDelivery(targetDir string, adapter agents.Adapter) (routingDelivery, error) {
 	if strings.TrimSpace(targetDir) == "" {
 		return routingDelivery{}, fmt.Errorf("%w: %q", ErrInvalidTarget, targetDir)
 	}
-
-	adapter, err := agents.NewAdapter(agent)
-	if err != nil {
-		return routingDelivery{}, fmt.Errorf("resolve routing guidance adapter for %q: %w", agent, err)
-	}
+	agent := adapter.Agent()
 
 	switch {
 	case DeliversThroughOrchestratorPrompt(agent):
