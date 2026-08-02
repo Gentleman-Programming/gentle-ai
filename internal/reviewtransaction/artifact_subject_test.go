@@ -20,10 +20,6 @@ func artifactSubjectFixture(t *testing.T) (CompactState, string, FrozenCandidate
 			{Path: paths[0], Status: CandidatePathModified, OldMode: "100644", NewMode: "100644"},
 			{Path: paths[1], Status: CandidatePathAdded, OldMode: "000000", NewMode: "100644", IntendedUntracked: true},
 		},
-		repositoryPaths: []string{
-			"Dockerfile", "Makefile", "docs/naïve guide.md", "docs/秘密 guide.md", "internal/a.go", "internal/b.go",
-			"internal/secret.go", "main.go", "secret.go", "sha256", "status", "unrelated/old.go",
-		},
 	}
 	return state, "sha256:" + strings.Repeat("2", 64), context
 }
