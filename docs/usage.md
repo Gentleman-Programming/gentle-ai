@@ -147,14 +147,34 @@ If no `--component` flag is provided for a partial uninstall, `gentle-ai` remove
 
 ### update / upgrade
 
-Check for and install new versions of `gentle-ai` itself. The pre-upgrade backup snapshot covers only the agents recorded in `state.InstalledAgents` (`~/.gentle-ai/state.json`) — not every agent config directory that exists on your machine.
+`gentle-ai upgrade` checks and applies updates for the managed-tool cohort. The
+current registry includes `gentle-ai`, `engram`, `gga`, and the registered
+OpenCode plugins `opencode-subagent-statusline` and
+`opencode-sdd-engram-manage`. It attempts entries reported as
+`update-available` or registered OpenCode plugins that are not yet materialized;
+up-to-date, missing, and failed-check entries are not upgraded.
+
+Upgrade uses each tool's effective installation method, such as Homebrew,
+authenticated release download, `go install`, the tool's installer, or npm for
+an OpenCode plugin. By default it snapshots only explicit Gentle AI-managed
+configuration paths for the agents recorded in `state.InstalledAgents`
+(`~/.gentle-ai/state.json`) before an executable upgrade, not every agent
+directory or conversation state on the machine. `--no-backup` skips that
+snapshot for the current invocation.
+
+`upgrade` does not run the `install` or `sync` pipelines. It does not refresh
+managed prompts, skills, MCP configuration, or SDD assets; run `gentle-ai sync`
+separately after the binary/tool upgrade.
 
 ```bash
 # Check if a newer version is available
 gentle-ai update
 
-# Upgrade to the latest release (downloads new binary, replaces current)
+# Upgrade eligible managed tools
 gentle-ai upgrade
+
+# Upgrade only one managed tool
+gentle-ai upgrade engram
 ```
 
 After upgrading, run `gentle-ai sync` to refresh all managed assets to the new version's content.
@@ -185,6 +205,72 @@ brew upgrade engram
 `GENTLE_AI_CONFIRM_UPDATE` was removed in slice 5. It is now ignored if set.
 
 `GENTLE_AI_SELF_UPDATE_DONE` is an internal loop guard and should not be set manually.
+
+### Beta upgrades and the Go module proxy
+
+`GENTLE_AI_CHANNEL=beta` makes update checks compare the Gentle AI binary with
+the current `main` commit instead of only the latest release. Set it in the
+shell where you run the command:
+
+```bash
+# macOS / Linux: check or upgrade the beta-selected managed tools
+GENTLE_AI_CHANNEL=beta gentle-ai upgrade
+```
+
+```powershell
+# Windows PowerShell: the POSIX NAME=value command form is invalid here
+$env:GENTLE_AI_CHANNEL = "beta"; gentle-ai upgrade
+```
+
+The explicit binary refresh path is a source install from `main`, using the v2
+module path:
+
+```bash
+GENTLE_AI_CHANNEL=beta \
+GOPROXY=direct \
+GONOSUMDB=github.com/gentleman-programming/gentle-ai/v2 \
+GOPRIVATE=github.com/gentleman-programming/gentle-ai/v2 \
+GONOPROXY=github.com/gentleman-programming/gentle-ai/v2 \
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
+```
+
+```powershell
+$env:GENTLE_AI_CHANNEL = "beta"
+$env:GOPROXY = "direct"
+$env:GONOSUMDB = "github.com/gentleman-programming/gentle-ai/v2"
+$env:GOPRIVATE = "github.com/gentleman-programming/gentle-ai/v2"
+$env:GONOPROXY = "github.com/gentleman-programming/gentle-ai/v2"
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
+```
+
+Use the direct-proxy settings only for this beta source install. If you have
+existing comma-separated `GONOSUMDB`, `GOPRIVATE`, or `GONOPROXY` patterns,
+append the Gentle AI module instead of replacing unrelated entries. The beta
+installer applies the same module-scoped bypass while preserving existing
+patterns.
+
+`proxy.golang.org` can lag behind a newly published `main`. A successful
+`go install ...@main` may therefore leave an older binary in place. Safe
+workarounds are:
+
+1. Retry after the proxy catches up, then verify with `gentle-ai version`.
+2. Use the module-scoped `GOPROXY=direct` command above for the beta `main`
+   build; do not disable proxy or checksum behavior globally for unrelated
+   modules.
+3. If a released build is sufficient, install an explicit released tag such as
+   `@v2.2.2` with the normal proxy and checksum settings. A release tag is not
+   the current `main` build.
+
+After any `go install`, confirm that the executable your shell resolves is the
+one Go updated:
+
+```bash
+gentle-ai version
+```
+
+On PowerShell, use the same commands. If the reported version is unchanged,
+check whether a stale executable earlier on `PATH` is shadowing the Go install
+destination.
 
 ### model assignment
 
