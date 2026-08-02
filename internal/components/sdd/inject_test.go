@@ -65,6 +65,20 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 			if got := sddOrchestratorAsset(tc.agent); got != tc.want {
 				t.Fatalf("sddOrchestratorAsset(%q) = %q, want %q", tc.agent, got, tc.want)
 			}
+			for _, required := range []string{
+				"Only after explicit consent and that final privacy scan",
+				"search open and closed issues",
+				"confirms a newly-created issue identity/URL",
+				"Only a completed duplicate lookup with a definitive result may branch to a write",
+				"Do not create, comment, update, or label any issue",
+				"do not add, remove, or change any labels on it",
+				"label application fails or has an ambiguous outcome",
+				"re-resolve that exact created issue identity",
+			} {
+				if !strings.Contains(renderSDDOrchestratorAsset(tc.agent), required) {
+					t.Fatalf("rendered %s orchestrator missing provider-defect handoff clause %q", tc.agent, required)
+				}
+			}
 		})
 	}
 }
@@ -4659,6 +4673,31 @@ func TestInjectCodexWritesSDDOrchestratorAndSkills(t *testing.T) {
 	// Codex-specific asset must NOT reference Gemini paths.
 	if strings.Contains(text, "~/.gemini/") {
 		t.Fatal("agents.md contains Gemini-specific paths — wrong asset was injected")
+	}
+
+	for _, want := range []string{
+		"`spawn_agent`",
+		"`wait_agent(timeout_ms=<bounded timeout>)`",
+		"`list_agents()`",
+		"`send_message`",
+		"`followup_task`",
+		"`interrupt_agent`",
+		"Completed or idle agents remain reusable",
+		"Repeat `wait_agent(timeout_ms=<bounded timeout>)` and `list_agents()` until the target agent reaches a terminal state.",
+		"If the target reaches a non-success terminal state, stop and surface its final output or status",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("agents.md missing Codex multi-agent v2 lifecycle fragment %q", want)
+		}
+	}
+	for _, stale := range []string{
+		"`close_agent`",
+		"`send_input`",
+		"`wait_agent(task_name=",
+	} {
+		if strings.Contains(text, stale) {
+			t.Errorf("agents.md retained legacy Codex multi-agent lifecycle fragment %q", stale)
+		}
 	}
 
 	// Should also write SDD skill files.

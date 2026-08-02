@@ -2,9 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -131,6 +133,113 @@ func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.
 	// The recaptured lineage completes normally.
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact", strings.TrimSpace(captured.String())}, io.Discard); err != nil {
 		t.Fatalf("finalize after same-lineage recapture failed: %v", err)
+	}
+}
+
+func TestReviewCaptureResultRecapturesSameLensAfterPreInspectionAccessFailure(t *testing.T) {
+	repo, started, store, record := newArtifactReview(t, false)
+	statusArgs := []string{
+		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
+		"--cwd", repo, "--lineage", started.LineageID,
+	}
+	readStatus := func() ReviewTargetStatusResult {
+		t.Helper()
+		var output bytes.Buffer
+		if err := RunReview(statusArgs, &output); err != nil {
+			t.Fatal(err)
+		}
+		var status ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &status)
+		return status
+	}
+
+	firstStatus := readStatus()
+	if firstStatus.NextTransition == nil || firstStatus.NextTransition.Kind != reviewNextTransitionCollect ||
+		firstStatus.NextTransition.ReasonCode != "reviewer_results_required" || firstStatus.NextTransition.Collect == nil ||
+		len(firstStatus.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("initial reviewer transition = %#v", firstStatus.NextTransition)
+	}
+	offered := firstStatus.NextTransition.Collect.Inputs[0]
+	arguments, err := reviewTransitionArgumentMap(offered.Arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lens := record.State.SelectedLenses[0]
+	for name, want := range map[string]string{
+		"lineage": started.LineageID, "target": record.State.InitialSnapshot.Identity,
+		"expected-revision": record.Revision, "lens": lens, "order": "0",
+	} {
+		if arguments[name] != want {
+			t.Fatalf("initial reviewer argument %q = %q, want %q", name, arguments[name], want)
+		}
+	}
+	if offered.ArtifactSubject == nil || offered.ArtifactSubject.LineageID != started.LineageID ||
+		offered.ArtifactSubject.AuthorityRevision != record.Revision ||
+		offered.ArtifactSubject.TargetIdentity != record.State.InitialSnapshot.Identity ||
+		offered.ArtifactSubject.Lens != lens || offered.ArtifactSubject.SelectedOrder != 0 {
+		t.Fatalf("initial reviewer subject = %#v", offered.ArtifactSubject)
+	}
+
+	incomplete := admittedReviewerResultForTest(t, repo, record, lens, 0)
+	incomplete.Inspection.Status = reviewtransaction.ArtifactInspectionStatus("incomplete")
+	incomplete.Inspection.Paths = []string{}
+	incomplete.Evidence = []string{"provider access failed before candidate inspection"}
+	if incomplete.SubjectHash != offered.ArtifactSubject.SubjectHash {
+		t.Fatalf("incomplete result subject = %q, want %q", incomplete.SubjectHash, offered.ArtifactSubject.SubjectHash)
+	}
+	payload, err := json.Marshal(incomplete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := filepath.Join(t.TempDir(), "incomplete.json")
+	if err := os.WriteFile(failed, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	captureArgs := []string{
+		"--cwd", repo, "--lineage", started.LineageID, "--expected-revision", record.Revision,
+		"--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", "0", "--input", failed,
+	}
+	if err := RunReviewCaptureResult(captureArgs, io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "reviewer did not report completed candidate inspection") {
+		t.Fatalf("incomplete inspection capture error = %v", err)
+	}
+	afterFailure, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterFailure.Revision != record.Revision || len(afterFailure.State.LensResults) != 0 {
+		t.Fatalf("incomplete inspection mutated authority = %#v", afterFailure)
+	}
+	if _, statErr := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir)); !os.IsNotExist(statErr) {
+		t.Fatalf("incomplete inspection consumed the reviewer slot: %v", statErr)
+	}
+
+	reofferedStatus := readStatus()
+	if reofferedStatus.NextTransition == nil || reofferedStatus.NextTransition.Collect == nil ||
+		len(reofferedStatus.NextTransition.Collect.Inputs) != 1 ||
+		!reflect.DeepEqual(reofferedStatus.NextTransition.Collect.Inputs[0], offered) {
+		t.Fatalf("fresh STATUS did not reoffer the exact reviewer slot: %#v", reofferedStatus.NextTransition)
+	}
+
+	corrected := filepath.Join(t.TempDir(), "corrected.json")
+	if err := os.WriteFile(corrected, admittedReviewerPayloadForTest(t, repo, record, lens, 0), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	captureArgs[len(captureArgs)-1] = corrected
+	var captured bytes.Buffer
+	if err := RunReviewCaptureResult(captureArgs, &captured); err != nil {
+		t.Fatalf("corrected capture after STATUS reoffer: %v", err)
+	}
+	var artifact reviewResultArtifact
+	decodeStrictReviewJSON(t, captured.Bytes(), &artifact)
+	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
+		t.Fatalf("corrected capture admission = %q", artifact.AdmissionDecision)
+	}
+	if err := RunReviewFacadeFinalize([]string{
+		"--cwd", repo, "--lineage", started.LineageID,
+		"--result-artifact", strings.TrimSpace(captured.String()),
+	}, io.Discard); err != nil {
+		t.Fatalf("finalize after STATUS-mediated recapture: %v", err)
 	}
 }
 
