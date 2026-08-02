@@ -10,17 +10,21 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 // Package-level vars for testability (swap in tests via t.Cleanup).
 var (
-	execCommand    = exec.Command
-	lookPath       = exec.LookPath
-	userHomeDir    = os.UserHomeDir
-	osStat         = os.Stat
-	osGetenv       = os.Getenv
-	powershellPath = "powershell" // overridable in tests
+	execCommand   = exec.Command
+	lookPath      = exec.LookPath
+	userHomeDir   = os.UserHomeDir
+	osStat        = os.Stat
+	osGetenv      = os.Getenv
+	runPowerShell = system.NewPowerShellRunner().Run
 )
+
+const powerShellCommand = "<PowerShell>"
 
 // versionRegexp extracts a semver-like version from command output.
 // Same pattern as internal/system/deps.go for consistency.
@@ -65,12 +69,15 @@ func detectInstalledVersion(ctx context.Context, tool ToolInfo, currentBuildVers
 	detectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// On Windows, exec.Command (CreateProcess) cannot execute a .ps1 script
-	// directly — it is not an executable image. Wrap via powershell -File so
-	// the OS can launch the PowerShell host and pass the script to it.
-	// Outside Windows, .ps1 files don't exist in fallback paths, so this
-	// branch is unreachable in practice on Linux/macOS.
 	execBinary, execArgs := buildExecCmd(binary, tool.DetectCmd[1:])
+	if execBinary == powerShellCommand {
+		out, err := runPowerShell(detectCtx, execArgs...)
+		if err != nil {
+			return ""
+		}
+		return parseVersionFromOutput(strings.TrimSpace(string(out)))
+	}
+
 	cmd := execCommand(execBinary, execArgs...)
 
 	// Start and wait on the command in this execution path so no goroutine reads
@@ -119,22 +126,12 @@ func findFallbackBinary(tool ToolInfo) string {
 	return ""
 }
 
-// buildExecCmd returns the executable name and arguments to use when running a
-// version-detect command. On Windows, PowerShell scripts (.ps1) cannot be
-// passed as argv[0] to CreateProcess — they must be launched via the
-// PowerShell host. For a .ps1 binary we therefore rewrite:
-//
-//	("C:\Users\...\gga.ps1", ["--version"])
-//	→ ("powershell", ["-NoProfile", "-File", "C:\Users\...\gga.ps1", "--version"])
-//
-// For all other binaries (real PE executables on Windows, any file on
-// Linux/macOS), the arguments are returned unchanged.
+// buildExecCmd marks .ps1 commands for the central PowerShell runner. Other
+// executables pass through unchanged.
 func buildExecCmd(binary string, remainingArgs []string) (string, []string) {
 	if strings.EqualFold(filepath.Ext(binary), ".ps1") {
-		args := make([]string, 0, 3+len(remainingArgs))
-		args = append(args, "-NoProfile", "-File", binary)
-		args = append(args, remainingArgs...)
-		return powershellPath, args
+		args := append([]string{"-NoProfile", "-File", binary}, remainingArgs...)
+		return powerShellCommand, args
 	}
 	return binary, remainingArgs
 }

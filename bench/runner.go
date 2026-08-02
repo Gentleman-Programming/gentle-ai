@@ -414,6 +414,14 @@ func runJourney(binary string, journey Journey) JourneyResult {
 	}
 	defer func() { _ = os.RemoveAll(root) }()
 
+	// The temp root can sit behind a symlink (macOS puts /var/folders behind
+	// /private/var/folders). Git canonicalizes, so every fixture that compares
+	// its own path against git's answer would disagree with itself. Canonicalize
+	// once, here, so the whole journey speaks one spelling of every path.
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+
 	sandbox, err := newSandbox(binary, root)
 	if err != nil {
 		result.Status = StatusFailed
