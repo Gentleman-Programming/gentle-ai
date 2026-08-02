@@ -2906,16 +2906,29 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		input.IntendedUntracked = append([]string(nil), compactRecord.State.InitialSnapshot.IntendedUntracked...)
 		evaluation := reviewtransaction.EvaluateCompactGate(ctx, root, receipt, input)
 		if gateInput.Gate == reviewtransaction.GatePrePR && strings.TrimSpace(*lineage) == "" &&
-			evaluation.Context.Denial != nil && evaluation.Context.Denial.Stage == "receipt-binding" && evaluation.Context.Denial.Code == "base-mismatch" {
+			evaluation.Context.Denial != nil && evaluation.Context.Denial.Stage == "receipt-binding" && evaluation.Context.Denial.Code == "base-mismatch" &&
+			!reviewDrivenDevelopmentDisabled(ctx, root) {
 			if composed, attempted := reviewtransaction.EvaluateCompactPrePRChain(ctx, root, gateInput); attempted {
 				return emitFacadeGateEvaluationNegotiated(stdout, composed, negotiated, *contract)
 			}
 		}
 		return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 	}
+	// Selector-free pre-PR composition traverses provider-owned historical
+	// authority to build a base-through-HEAD receipt chain. That traversal IS
+	// receipt-driven development doing work, so the kill switch has to be
+	// consulted before it runs, not after: composing first means a denial is
+	// emitted and returned before the disabled branch below can ever report
+	// `disabled/unmanaged`, which is what made pre-PR the one gate that vetoed
+	// delivery while reviews were off — pre-commit and pre-push reach that
+	// branch unchanged. Skipping composition here does not relax anything:
+	// reviewDrivenDevelopmentDisabled fails closed to enabled on an unreadable
+	// switch, and with reviews on every composition path is unchanged
+	// (issue-1878).
 	var compactDiscovery *ReviewReceiptDiscoveryError
 	if gateInput.Gate == reviewtransaction.GatePrePR && strings.TrimSpace(*lineage) == "" &&
-		errors.As(compactErr, &compactDiscovery) && compactDiscovery.Kind != ReviewAuthorityCorrupted && compactDiscovery.Kind != ReviewReceiptMissing {
+		errors.As(compactErr, &compactDiscovery) && compactDiscovery.Kind != ReviewAuthorityCorrupted && compactDiscovery.Kind != ReviewReceiptMissing &&
+		!reviewDrivenDevelopmentDisabled(ctx, root) {
 		if evaluation, attempted := reviewtransaction.EvaluateCompactPrePRChain(ctx, root, gateInput); attempted {
 			return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 		}
