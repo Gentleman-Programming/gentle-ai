@@ -1,11 +1,12 @@
 package gga
 
 import (
-	"fmt"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -69,7 +70,10 @@ func TestInstallCommandByProfile(t *testing.T) {
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
 			want: [][]string{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
-				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"mkdir", "-p", "/tmp/gentleman-guardian-angel"},
+				{"git", "init", "/tmp/gentleman-guardian-angel"},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "refs/tags/v" + versions.GGAVersion + ":refs/tags/v" + versions.GGAVersion},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "checkout", "-f", "refs/tags/v" + versions.GGAVersion},
 				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
 		},
@@ -78,15 +82,17 @@ func TestInstallCommandByProfile(t *testing.T) {
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
 			want: [][]string{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
-				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"mkdir", "-p", "/tmp/gentleman-guardian-angel"},
+				{"git", "init", "/tmp/gentleman-guardian-angel"},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "refs/tags/v" + versions.GGAVersion + ":refs/tags/v" + versions.GGAVersion},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "checkout", "-f", "refs/tags/v" + versions.GGAVersion},
 				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
 		},
 		{
-			name:    "windows cleans temp dir and uses git bash",
+			name:    "windows uses git bash after runtime cleanup",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			want: [][]string{
-				{"powershell", "-NoProfile", "-Command", fmt.Sprintf("$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath '%s') { Remove-Item -Recurse -Force -LiteralPath '%s' }", strings.ReplaceAll(cloneDst, "'", "''"), strings.ReplaceAll(cloneDst, "'", "''"))},
 				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", cloneDst},
 				{bash, scriptPath},
 			},
@@ -96,7 +102,10 @@ func TestInstallCommandByProfile(t *testing.T) {
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
 			want: [][]string{
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
-				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"mkdir", "-p", "/tmp/gentleman-guardian-angel"},
+				{"git", "init", "/tmp/gentleman-guardian-angel"},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "refs/tags/v" + versions.GGAVersion + ":refs/tags/v" + versions.GGAVersion},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "checkout", "-f", "refs/tags/v" + versions.GGAVersion},
 				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
 		},
@@ -125,6 +134,33 @@ func TestInstallCommandByProfile(t *testing.T) {
 				t.Fatalf("InstallCommand() = %v, want %v", command, tt.want)
 			}
 		})
+	}
+}
+
+func TestCleanupInstallDirUsesPowerShellResolverAndIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "gentleman-guardian-angel")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	host := "pwsh"
+	if runtime.GOOS == "windows" {
+		host += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, host), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	runner := system.NewPowerShellRunner()
+	runner.RunCommand = func(_ context.Context, _ string, _ ...string) ([]byte, error) { return nil, os.RemoveAll(target) }
+
+	for i := 0; i < 2; i++ {
+		if err := cleanupInstallDirWith(runner, target); err != nil {
+			t.Fatalf("cleanupInstallDir() run %d error = %v", i+1, err)
+		}
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("cleanupInstallDir() left %q behind", target)
 	}
 }
 
