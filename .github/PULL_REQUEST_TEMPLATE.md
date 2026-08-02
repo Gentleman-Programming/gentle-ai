@@ -60,9 +60,19 @@ cd e2e && ./docker-test.sh
 
 See the [benchmark guide](../bench/README.md). Benchmark validation applies to review-lifecycle, gates, recovery, delivery, benchmark implementation/corpus/classifier, and benchmark-claim changes. For unrelated changes, explain `N/A` in the Test Plan.
 
+**Issue Regression Journey**
+
+<!-- Required for every issue-closing PR governed by the prospective policy. Name the journey and briefly state how its fixture recreates the reported failure and which public/runtime observation proves the correction. -->
+
+- Journey ID / title:
+- `Journey.Source` (`#<issue>` or issue URL):
+- Original failure fixture:
+- Public/runtime steps and observable corrected outcome:
+
 - [ ] Unit tests pass (`go test ./...`)
 - [ ] Go format passes (`go run ./internal/gofmtcheck`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
+- [ ] The linked issue has a replayable `bench/` journey in this PR; unit/integration tests remain additional required coverage
 - [ ] Manually tested locally
 
 <!-- Describe any additional manual testing steps if needed. -->
@@ -94,6 +104,7 @@ The following checks run automatically on this PR:
 - [ ] Go format passes (`go run ./internal/gofmtcheck`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
 - [ ] Benchmark validation completed, or this change is not applicable to the benchmark (explain why in the Test Plan).
+- [ ] The issue-derived benchmark journey reconstructs the original failure conditions, exercises the public/runtime boundary, and links the issue through `Journey.Source`
 - [ ] I have updated documentation if necessary
 - [ ] My commits follow [Conventional Commits](https://www.conventionalcommits.org/) format
 - [ ] My commits do not include `Co-Authored-By` trailers

@@ -19,11 +19,12 @@ Load this skill whenever you need to:
 ## Critical Rules
 
 1. **Every PR MUST link an approved issue** — `Closes/Fixes/Resolves #<N>` in the PR body, and that issue MUST have `status:approved`. PRs without this are **automatically rejected** by CI.
-2. **Exactly one `type:*` label** — apply exactly ONE type label to the PR. CI will reject PRs with zero or multiple type labels.
-3. **400-line review budget** — keep PRs within 400 changed lines (`additions + deletions`) or request/obtain maintainer-applied `size:exception` with rationale documented.
-4. **Automated checks must pass** — see the Automated Checks table below.
-5. **No `Co-Authored-By` trailers** — never add AI attribution to commits.
-6. **No force-push to main/master** — protected branch.
+2. **Every issue-closing PR MUST add a replayable benchmark journey** — add at least one `bench/` journey in the same work unit. `Journey.Source` links the issue; fixtures recreate the reported failure; steps cross the public/runtime boundary and expose the corrected outcome. Unit and integration tests remain required.
+3. **Exactly one `type:*` label** — apply exactly ONE type label to the PR. CI will reject PRs with zero or multiple type labels.
+4. **400-line review budget** — keep PRs within 400 changed lines (`additions + deletions`) or request/obtain maintainer-applied `size:exception` with rationale documented.
+5. **Automated checks must pass** — see the Automated Checks table below.
+6. **No `Co-Authored-By` trailers** — never add AI attribution to commits.
+7. **No force-push to main/master** — protected branch.
 
 ## Workflow
 
@@ -35,7 +36,7 @@ Load this skill whenever you need to:
 
 3. Implement changes following specs and design
 
-4. Run checks locally (format + unit + E2E)
+4. Add the issue-derived benchmark journey and run format + focused unit/integration/benchmark checks
 
 5. Commit using Conventional Commits format
 
@@ -134,6 +135,7 @@ cd e2e && ./docker-test.sh
 - [ ] I have added the appropriate `type:*` label to this PR
 - [ ] Unit tests pass (`go test ./...`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
+- [ ] Added a `bench/` journey whose `Journey.Source` links the issue and whose fixture and public/runtime assertions replay the corrected user-visible outcome
 - [ ] I have updated documentation if necessary
 - [ ] My commits follow Conventional Commits format
 - [ ] My commits do not include `Co-Authored-By` trailers

@@ -27,6 +27,7 @@ Use it for:
 | Do not commit by file type | Avoid `models`, then `services`, then `tests` if none works alone. |
 | Keep tests with code | Tests belong in the same commit as the behavior they verify. |
 | Keep docs with the user-visible change | Docs belong with the feature or workflow they explain. |
+| Keep issue journeys with fixes | Every issue-closing work unit includes a `bench/` journey that links the issue through `Journey.Source`, recreates the failure fixture, and exposes the corrected public/runtime outcome. Unit and integration tests remain required. |
 | Tell a story | A reviewer should understand why each commit exists from its diff and message. |
 | Future PR-ready | Each commit should be a candidate chained PR when the change grows. |
 | SDD workload guard | If SDD tasks forecast a >400-line change, group commits into chained PR slices before implementation. |
@@ -38,6 +39,7 @@ Before committing, confirm:
 - [ ] The commit has one clear purpose.
 - [ ] The repo still makes sense after applying only this commit.
 - [ ] Tests or docs for this unit are included when relevant.
+- [ ] For an issue-closing unit, its replayable `bench/` journey is included in the same PR.
 - [ ] Rollback is reasonable without reverting unrelated work.
 - [ ] Focused test command and exact result are recorded.
 - [ ] Runtime harness command/scenario and exact result are recorded, or explicit `N/A` explains why no runtime boundary exists.

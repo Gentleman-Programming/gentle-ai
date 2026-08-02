@@ -19,9 +19,10 @@ Use this skill when:
 ## Critical Rules
 
 1. **Every PR MUST link an approved issue** — no exceptions
-2. **Every PR MUST have exactly one `type:*` label**
-3. **Automated checks must pass** before merge is possible
-4. **Blank PRs without issue linkage will be blocked** by GitHub Actions
+2. **Every issue-closing PR MUST add a replayable benchmark journey** — add at least one `bench/` journey in the same work unit. `Journey.Source` links the issue; fixtures recreate the reported failure; steps cross the public/runtime boundary and expose the corrected outcome. Unit and integration tests remain required.
+3. **Every PR MUST have exactly one `type:*` label**
+4. **Automated checks must pass** before merge is possible
+5. **Blank PRs without issue linkage will be blocked** by GitHub Actions
 
 ---
 
@@ -31,7 +32,7 @@ Use this skill when:
 1. Verify issue has `status:approved` label
 2. Create branch: type/description (see Branch Naming below)
 3. Implement changes with conventional commits
-4. Run shellcheck on modified scripts
+4. Add the issue-derived benchmark journey and run focused tests plus checks for modified files
 5. Open PR using the template
 6. Add exactly one type:* label
 7. Wait for automated checks to pass
@@ -115,6 +116,7 @@ Check exactly ONE in the template and add the matching label:
 
 All boxes must be checked:
 - Linked an approved issue
+- Added a `bench/` journey whose `Journey.Source` links the issue and whose fixture and public/runtime assertions replay the corrected user-visible outcome
 - Added exactly one `type:*` label
 - Ran shellcheck on modified scripts
 - Skills tested in at least one agent

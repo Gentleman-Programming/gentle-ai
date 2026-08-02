@@ -60,6 +60,7 @@ These files evolve. Re-read them at the start of every contribution.
 7. **PR body checkboxes must reflect API state.** If `gh pr view --json labels` shows `labels: []`, do not check the "type:* added" box — write a `## Pending maintainer actions` section instead.
 8. **PR titles follow `^(type)(\(scope\))?!?: <description>`** with exactly **one scope** (no comma). See `skills/branch-pr/SKILL.md` for the regex.
 9. **Pre-existing test failures are named honestly.** This repo has pre-existing failures in `pi_codegraph`, `tui/sync`, and similar packages. Acknowledging them with the verification method (e.g. `git stash` baseline) is mandatory. Claiming "all tests pass" without that context is dishonest.
+10. **Issue completion includes a replayable benchmark journey.** Every issue-closing PR governed by the prospective policy adds at least one `bench/` journey in the same work unit. `Journey.Source` links the issue, fixtures recreate the reported failure, and public/runtime steps expose the corrected outcome. Unit and integration tests remain required.
 
 ---
 
@@ -110,7 +111,7 @@ End-to-end steps once the issue (or chain of sub-issues) is approved.
    ```
    Branch name matches the regex in `CONTRIBUTING.md`. `<short-description>` is kebab-case, max a few words.
 
-2. **Implement.** Work-unit commits: each commit is one deliverable unit with its code + tests + docs. Keep rollback reasonable — reverting one commit should not remove unrelated work.
+2. **Implement.** Work-unit commits: each commit is one deliverable unit with its code + tests + docs. Include the issue-derived benchmark journey in the same PR as the fix. Keep rollback reasonable — reverting one commit should not remove unrelated work.
 
 3. **Local validation.**
    - `go build ./...` clean
@@ -247,6 +248,7 @@ Run this in your head (or print and tick) before requesting review:
 - [ ] No `Co-Authored-By` trailers
 - [ ] Branch name matches the regex in CONTRIBUTING.md
 - [ ] Commits are work-unit-sized (one deliverable per commit)
+- [ ] A `bench/` journey links the issue through `Journey.Source`, reconstructs its failure fixture, and proves the corrected public/runtime outcome
 - [ ] Chained-slice strategy agreed with the maintainer (Stacked vs Feature Branch Chain)
 - [ ] Docstring coverage on exported items in the diff ≥80% (CodeRabbit pre-merge check)
 - [ ] `go build ./...` clean

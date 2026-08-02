@@ -28,7 +28,8 @@ This project follows a strict issue-first workflow:
 1. **Open an issue** using the appropriate template ([Bug Report](https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=bug_report.yml) or [Feature Request](https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=feature_request.yml))
 2. **Wait for approval** — a maintainer will add the `status:approved` label when the issue is ready to be worked on
 3. **Comment on the issue** to let others know you're working on it
-4. **Open a PR** referencing the approved issue
+4. **Implement the issue and its benchmark journey** in the same reviewable work unit
+5. **Open a PR** referencing the approved issue
 
 PRs that are not linked to an approved issue will be **automatically rejected** by CI.
 
@@ -151,6 +152,8 @@ go test ./...
 ```
 
 Benchmark validation applies to review-lifecycle, gate, recovery, delivery, benchmark implementation/corpus/classifier, and benchmark-claim changes. For measured product-behavior changes, use driven mode and report the command, tested binary or commit, selected subset or axes, and result summary. Compare before and after only when claiming a measured friction change. For unrelated changes, mark benchmark validation `N/A` with a brief reason.
+
+Every issue-closing PR must also add at least one journey under `bench/` that reproduces the reported user-visible failure. Set `Journey.Source` to `#<issue>` or the issue URL, reconstruct the original failure conditions in step fixtures, exercise the public/runtime boundary, and assert an observable corrected outcome. Unit and integration tests remain required; this journey is additional replayable regression evidence and belongs in the same PR as the fix. This requirement applies prospectively to issues created after its adoption; do not backfill older issues.
 
 ### Windows — Known Test Limitations
 
@@ -299,6 +302,7 @@ Review feedback should be warm, direct, and useful quickly. Start with the actio
 - [ ] There is a linked approved issue (`Closes #<N>`)
 - [ ] The PR is at or below 400 changed lines, or a maintainer approved `size:exception`
 - [ ] Commits are organized by deliverable work unit
+- [ ] At least one `bench/` journey reproduces the linked issue, with `Journey.Source` linking it and the corrected outcome observable at the public/runtime boundary
 - [ ] All unit tests pass (`go test ./...`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
 - [ ] Benchmark validation completed, or this change is not applicable to the benchmark (explain why in the Test Plan).

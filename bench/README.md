@@ -449,6 +449,20 @@ with `commands_to_completion` unchanged at 16.
 Journeys are data — a slice of `Step` in `journeys.go`. Adding one is
 appending to that slice.
 
+### Issue-derived journeys
+
+Every issue-closing PR governed by the prospective completion policy adds at least one journey in the same reviewable work unit as the fix. This is additional regression replay evidence; it does not replace required unit or integration tests.
+
+An issue-derived journey must:
+
+- define a stable `Journey.ID` and a user-visible `Journey.Title`;
+- set `Journey.Source` to `#<issue>` or the issue URL;
+- use one or more `Step.Fixture` functions to reconstruct the original failure conditions and prove the fixture is truthful before trusting the result;
+- drive the product through its public/runtime boundary, not duplicate an internal unit test; and
+- use step assertions to make the corrected user-visible outcome observable.
+
+Choose the core corpus when the scenario is portable and black-box. Use an opt-in axis only when the original conditions cannot be constructed through the public boundary, and retain that axis's honesty declaration. The policy applies to issues created after its adoption. Historical docs-only and process issues are not backfilled; future issues receive no categorical exception.
+
 | ID | Flow | Source |
 |---|---|---|
 | `j01-docs-happy-path` | docs change: review, approve, commit, push gate | guide flow 3 + 9 |
