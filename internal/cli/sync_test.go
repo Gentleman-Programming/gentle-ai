@@ -2808,7 +2808,9 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 		"orchestrator": settings.Agent["gentle-orchestrator"].Prompt,
 		"post-apply":   string(applyPayload),
 	} {
-		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition") {
+		// The synced route must declare OpenCode, not a borrowed Claude
+		// identity that would walk through the transport gate (issue #2242).
+		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent "+string(model.AgentOpenCode)+" --next-transition") {
 			t.Errorf("synced OpenCode %s controller does not use negotiated STATUS routing", name)
 		}
 		for _, stale := range []string{

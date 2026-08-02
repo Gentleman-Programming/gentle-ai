@@ -10,9 +10,17 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
-var boundedReviewRequiredClauses = []string{
+// boundedReviewRequiredClauses is agent-scoped because the negotiated route
+// the contract embeds names the runtime that must run it. Every runtime is
+// required to declare its own identity there, never a borrowed one.
+func boundedReviewRequiredClauses(agent model.AgentID) []string {
+	return append([]string{
+		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
+	}, boundedReviewRuntimeNeutralClauses...)
+}
+
+var boundedReviewRuntimeNeutralClauses = []string{
 	"Parent orchestrator and native CLI only",
-	"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition",
 	"route only from the returned `next_transition`",
 	"exact operation and ordered argument tokens unchanged",
 	"exact `review.capture-result` collection input once per provider-returned collection attempt",
@@ -117,12 +125,12 @@ func TestBoundedReviewContractRequiresRuntimeBoundReviewerContext(t *testing.T) 
 func TestGeneratedOpenCodeReviewControllersUseNegotiatedStatusRouting(t *testing.T) {
 	controllers := map[string]string{
 		"orchestrator": renderSDDOrchestratorAsset(model.AgentOpenCode),
-		"post-apply":   renderBoundedReviewAsset("opencode/commands/sdd-apply.md"),
+		"post-apply":   renderBoundedReviewAsset("opencode/commands/sdd-apply.md", model.AgentOpenCode),
 	}
 	for name, content := range controllers {
 		t.Run(name, func(t *testing.T) {
 			for _, required := range []string{
-				"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition",
+				"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(model.AgentOpenCode) + " --next-transition",
 				"route only from the returned `next_transition`",
 				"exact operation and ordered argument tokens unchanged",
 				"`execute`", "`collect`", "`stop`",
@@ -152,7 +160,7 @@ func TestBoundedReviewContractRendersForEverySupportedAgent(t *testing.T) {
 	for _, agent := range agents {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			content := renderSDDOrchestratorAsset(agent.ID)
-			assertTextContainsClauses(t, string(agent.ID), content, boundedReviewRequiredClauses)
+			assertTextContainsClauses(t, string(agent.ID), content, boundedReviewRequiredClauses(agent.ID))
 			// The retired WorkRun commands are gone from the assets, so nothing
 			// here may require them. internal/assets/assets_test.go owns the
 			// inverse assertion that they never come back.
@@ -239,7 +247,7 @@ func TestRenderedReviewersAreReadOnlyAndSingleResult(t *testing.T) {
 		for _, lens := range []string{"risk", "readability", "reliability", "resilience"} {
 			path := family + "/agents/review-" + lens + ".md"
 			t.Run(family+"/"+lens, func(t *testing.T) {
-				content := renderBoundedReviewAsset(path)
+				content := renderBoundedReviewAsset(path, model.AgentClaudeCode)
 				for _, want := range []string{"Review once", "changed_path_manifest", "base_tree", "candidate_tree", "incomplete inspection", "Never read the live worktree", "## Candidate-Causal Admission", "Return one JSON object and no prose", `"subject_hash":"<artifact_subject.subject_hash>"`, "GENTLE_AI_REVIEW_BINDING.subject_hash", `"inspection":{"status":"completed","paths":["<every changed_path_manifest.path in exact order>"]}`, "lens triage", "Emit no unknown fields"} {
 					if !strings.Contains(content, want) {
 						t.Errorf("%s missing %q", path, want)
@@ -308,9 +316,11 @@ func TestBoundedReviewContractListsOnlySupportedLifecycleGates(t *testing.T) {
 }
 
 func TestAuthorityFirstTerminalProcedureIsStructuredAndMirrorEligibilityIsClosed(t *testing.T) {
+	// The unrendered procedure carries the placeholder; renderBoundedReviewAsset
+	// resolves it to the runtime that receives the asset.
 	rows := parseAuthorityFirstRows(t, authorityFirstTerminalProcedure())
 	wantOperations := []string{
-		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition",
+		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + runtimeAgentIDPlaceholder + " --next-transition",
 		"provider-returned transition", "repeat 01–02", "reconcile-terminal-mirrors",
 	}
 	if len(rows) != len(wantOperations) {
@@ -331,10 +341,17 @@ func TestAuthorityFirstTerminalProcedureIsStructuredAndMirrorEligibilityIsClosed
 	}
 }
 
+// renderedAuthorityFirstProcedure is the canonical terminal procedure as the
+// named runtime actually receives it, with its own identity resolved into the
+// negotiated route.
+func renderedAuthorityFirstProcedure(agent model.AgentID) string {
+	return strings.ReplaceAll(authorityFirstTerminalProcedure(), runtimeAgentIDPlaceholder, string(agent))
+}
+
 func TestAuthorityFirstLifecycleRendersIdenticallyForEverySupportedAgent(t *testing.T) {
-	procedure := authorityFirstTerminalProcedure()
 	for _, agent := range catalog.AllAgents() {
 		t.Run(string(agent.ID), func(t *testing.T) {
+			procedure := renderedAuthorityFirstProcedure(agent.ID)
 			content := renderSDDOrchestratorAsset(agent.ID)
 			if strings.Count(content, procedure) != 1 {
 				t.Fatal("rendered orchestrator does not contain exactly one canonical terminal procedure")
@@ -344,18 +361,27 @@ func TestAuthorityFirstLifecycleRendersIdenticallyForEverySupportedAgent(t *test
 }
 
 func TestOpenCodeAndClaudeApplyCommandsRequireAuthorityBeforeMirrors(t *testing.T) {
-	for _, path := range []string{"opencode/commands/sdd-apply.md", "claude/commands/sdd-apply.md"} {
+	for path, agent := range map[string]model.AgentID{
+		"opencode/commands/sdd-apply.md": model.AgentOpenCode,
+		"claude/commands/sdd-apply.md":   model.AgentClaudeCode,
+	} {
 		t.Run(path, func(t *testing.T) {
 			raw := assets.MustRead(path)
 			if strings.Count(raw, authorityFirstProcedurePlaceholder) != 1 {
 				t.Fatalf("%s must reference the centralized terminal procedure exactly once", path)
 			}
-			content := renderBoundedReviewAsset(path)
-			if strings.Contains(content, authorityFirstProcedurePlaceholder) || strings.Count(content, authorityFirstTerminalProcedure()) != 1 {
+			content := renderBoundedReviewAsset(path, agent)
+			if strings.Contains(content, authorityFirstProcedurePlaceholder) ||
+				strings.Count(content, renderedAuthorityFirstProcedure(agent)) != 1 {
 				t.Fatalf("%s did not render the centralized terminal procedure", path)
 			}
-			if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition") {
-				t.Fatalf("%s does not begin negotiated review routing with STATUS", path)
+			// The route each runtime is told to run must declare that runtime,
+			// never a borrowed identity (issue #2242).
+			if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent "+string(agent)+" --next-transition") {
+				t.Fatalf("%s does not begin negotiated review routing with its own runtime identity", path)
+			}
+			if strings.Contains(content, runtimeAgentIDPlaceholder) {
+				t.Fatalf("%s retains the runtime agent placeholder", path)
 			}
 			if strings.Contains(content, "runs `gentle-ai review start --cwd <repo>`") {
 				t.Fatalf("%s retains direct post-apply START routing", path)

@@ -1113,7 +1113,7 @@ PRESERVE_THIS_UNRELATED_SECTION exactly as authored.
 	}
 
 	prompt := readGentleOrchestratorPrompt(t, settingsPath)
-	assertTextContainsClauses(t, "migrated preserved OpenCode prompt", prompt, requiredLedgerClauses)
+	assertTextContainsClauses(t, "migrated preserved OpenCode prompt", prompt, requiredLedgerClauses(model.AgentOpenCode))
 	assertTextContainsClauses(t, "migrated preserved OpenCode prompt", prompt, []string{requiredOrchestratorMergeModeClause})
 	for _, preserved := range []string{
 		"Keep this user-authored orchestration policy unchanged.",

@@ -45,7 +45,7 @@ Use only the compact facade; it appends and reads back native authority before m
 
 | Order | Operation | Required result | Terminal mirrors |
 |---|---|---|---|
-| 01 | `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition` | one provider-owned `next_transition` returned | blocked |
+| 01 | `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent opencode --next-transition` | one provider-owned `next_transition` returned | blocked |
 | 02 | `provider-returned transition` | exact `execute` operation/arguments or `collect` inputs completed; `stop` halts | blocked |
 | 03 | repeat 01–02 | exact returned `review.validate` allows the terminal gate | blocked |
 | 04 | `reconcile-terminal-mirrors` | existing mirrors reconciled | allowed |

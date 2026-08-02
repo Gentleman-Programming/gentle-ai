@@ -70,11 +70,22 @@ func boundedReviewContract() string {
 }
 
 func renderSDDOrchestratorAsset(agent model.AgentID) string {
-	content := renderBoundedReviewAsset(sddOrchestratorAsset(agent))
-	return strings.ReplaceAll(content, runtimeAgentIDPlaceholder, string(agent))
+	return renderBoundedReviewAsset(sddOrchestratorAsset(agent), agent)
 }
 
-func renderBoundedReviewAsset(path string) string {
+// renderBoundedReviewAsset resolves the runtime identity for every generated
+// asset, not just the orchestrator. The negotiated route the contract embeds
+// names `--agent <runtime>`, so an asset rendered without this substitution
+// would tell a non-Claude runtime to declare Claude's identity and walk
+// straight through the #2207 transport gate it must fail closed against.
+func renderBoundedReviewAsset(path string, agent model.AgentID) string {
+	// Substitute last: the contract sections spliced in below carry the
+	// placeholder themselves, so resolving it before the splice would leave
+	// the embedded route unresolved.
+	return strings.ReplaceAll(renderBoundedReviewBody(path), runtimeAgentIDPlaceholder, string(agent))
+}
+
+func renderBoundedReviewBody(path string) string {
 	content := assets.MustRead(path)
 	content = strings.ReplaceAll(content, authorityFirstProcedurePlaceholder, authorityFirstTerminalProcedure())
 	if strings.HasSuffix(path, "/sdd-orchestrator.md") {

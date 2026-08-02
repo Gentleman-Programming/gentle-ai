@@ -63,7 +63,7 @@ func TestDedicatedReviewAndJudgmentAssetsRenderRoleContracts(t *testing.T) {
 	for family, paths := range assetsByFamily {
 		for _, path := range paths {
 			t.Run(family+"/"+path, func(t *testing.T) {
-				content := renderBoundedReviewAsset(path)
+				content := renderBoundedReviewAsset(path, model.AgentClaudeCode)
 				assertTextContainsClauses(t, path, content, []string{"candidate", "BLOCKER", "CRITICAL", "causal", "proof"})
 				if !strings.Contains(content, "read-only") && !strings.Contains(content, "Never edit") {
 					t.Errorf("%s does not state its non-mutating role", path)
@@ -118,7 +118,7 @@ func TestDedicatedReviewersAndRefutersAreStructurallyReadOnly(t *testing.T) {
 		"claude/agents/review-refuter.md", "cursor/agents/review-refuter.md",
 		"kimi/agents/review-refuter.md", "kiro/agents/review-refuter.md",
 	} {
-		assertNoReviewerLifecycleInstructions(t, path, renderBoundedReviewAsset(path))
+		assertNoReviewerLifecycleInstructions(t, path, renderBoundedReviewAsset(path, model.AgentClaudeCode))
 	}
 	for _, path := range []string{
 		"kimi/agents/review-risk.yaml", "kimi/agents/review-readability.yaml",
@@ -239,7 +239,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256(settings))
-	const want = "7de1c9318bd3acfe763c2705bb3f03a918c1b2944cfef4984615eb0e1838877c"
+	const want = "fc849de2a20a97cb9f33eb70b515ce86ec2f1610fe05e34062fcd0101864a73a"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -385,11 +385,13 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// +457 defines STATUS-mediated recollection without adding retry state.
 		// Native inspect-candidate removes repeated shell hardening prose and operands.
 		// Reviewer prompts no longer expose native Git flags owned by that capability.
+		// #2242 replaces the hardcoded claude-code identity in the negotiated route
+		// with the runtime placeholder, which is 38 characters larger unrendered.
 		// #2221 removes OpenCode reviewer transport while v2.1 pins Claude Code
 		// as the sole explicit runtime. The combined generated sizes are derived
 		// from the canonical rendered assets below.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 13_729, maxCharacters: 18_500},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 21_487, maxCharacters: 36_000},
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 13_767, maxCharacters: 18_500},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 21_525, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
