@@ -189,18 +189,29 @@ func detectLinuxDistro(linuxOSRelease string) string {
 	id := fields["ID"]
 	idLike := fields["ID_LIKE"]
 
-	if isUbuntuLike(id, idLike) {
-		if id == LinuxDistroDebian || id == "deepin" || id == "uos" {
-			return LinuxDistroDebian
-		}
+	if isUbuntuLike(id, "") {
 		return LinuxDistroUbuntu
 	}
-
-	if isArchLike(id, idLike) {
+	if isDebianLike(id, "") {
+		return LinuxDistroDebian
+	}
+	if isArchLike(id, "") {
 		return LinuxDistroArch
 	}
+	if isFedoraLike(id, "") {
+		return LinuxDistroFedora
+	}
 
-	if isFedoraLike(id, idLike) {
+	if isUbuntuLike("", idLike) {
+		return LinuxDistroUbuntu
+	}
+	if isDebianLike("", idLike) {
+		return LinuxDistroDebian
+	}
+	if isArchLike("", idLike) {
+		return LinuxDistroArch
+	}
+	if isFedoraLike("", idLike) {
 		return LinuxDistroFedora
 	}
 
@@ -208,12 +219,26 @@ func detectLinuxDistro(linuxOSRelease string) string {
 }
 
 func isUbuntuLike(id, idLike string) bool {
-	if id == LinuxDistroUbuntu || id == LinuxDistroDebian || id == "deepin" || id == "uos" {
+	if id == LinuxDistroUbuntu {
 		return true
 	}
 
 	for _, token := range strings.Fields(idLike) {
-		if token == LinuxDistroUbuntu || token == LinuxDistroDebian || token == "deepin" || token == "uos" {
+		if token == LinuxDistroUbuntu {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isDebianLike(id, idLike string) bool {
+	if id == LinuxDistroDebian || id == "deepin" || id == "uos" {
+		return true
+	}
+
+	for _, token := range strings.Fields(idLike) {
+		if token == LinuxDistroDebian || token == "deepin" || token == "uos" {
 			return true
 		}
 	}
