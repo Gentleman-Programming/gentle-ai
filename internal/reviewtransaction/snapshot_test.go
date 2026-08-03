@@ -782,7 +782,7 @@ func TestSnapshotDiffStatsExcludeGeneratedGoldensOnlyFromAuthoredLines(t *testin
 		t.Fatal(err)
 	}
 	budget, err := CorrectionBudget(originalChangedLines)
-	if err != nil || risk != RiskMedium || originalChangedLines != 2 || budget != 1 {
+	if err != nil || risk != RiskMedium || originalChangedLines != 2 || budget != 2 {
 		t.Fatalf("repository risk/original/budget = %q/%d/%d, err %v", risk, originalChangedLines, budget, err)
 	}
 	generated := false

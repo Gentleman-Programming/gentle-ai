@@ -1447,5 +1447,15 @@ func waveOneJourneys() []Journey {
 				{Name: "same two segments still compose after the no-op", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-pr", "--base-ref", "origin/main"), After: requireNoOpChainCompositionUnchanged, AbortOnBlock: true},
 			},
 		},
+		{
+			ID:     "j59-compact-one-line-correction-budget",
+			Title:  "Compact correction budget floor: single-line candidate permits atomic replacement",
+			Source: "issue #2247",
+			Steps: []Step{
+				{Name: "fixture: single line candidate repo", Fixture: baseRepoWithRemote},
+				{Name: "fixture: stage one line file", Fixture: stageDocs("one-line-candidate")},
+				{Name: "review single line candidate", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", "j59-one-line-compact")},
+			},
+		},
 	}
 }

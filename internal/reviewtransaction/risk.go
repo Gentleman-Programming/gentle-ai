@@ -224,11 +224,18 @@ func CountChangedLines(stats []DiffStat) (int, error) {
 
 // CorrectionBudget freezes the maximum correction size from the original
 // authored candidate. Odd line counts round up and the budget is capped at 200.
+// For any positive candidate (originalChangedLines > 0), the floor-two policy
+// guarantees a minimum budget of 2 lines so that atomic single-line replacements
+// (which Git counts as 1 deletion + 1 addition = 2 changed lines) can be completed.
 func CorrectionBudget(originalChangedLines int) (int, error) {
 	if originalChangedLines < 0 {
 		return 0, errors.New("original changed lines cannot be negative")
 	}
-	return min(MaxCorrectionChangedLines, originalChangedLines/2+originalChangedLines%2), nil
+	if originalChangedLines == 0 {
+		return 0, nil
+	}
+	raw := originalChangedLines/2 + originalChangedLines%2
+	return min(MaxCorrectionChangedLines, max(2, raw)), nil
 }
 
 // ClassifySnapshotRisk derives both risk and changed lines from one immutable

@@ -42,7 +42,7 @@ func TestChainBundleRoundTripsFrozenCorrectionBudgetInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Transaction.OriginalChangedLines == nil || *record.Transaction.OriginalChangedLines != 2 || record.Transaction.CorrectionBudget == nil || *record.Transaction.CorrectionBudget != 1 {
+	if record.Transaction.OriginalChangedLines == nil || *record.Transaction.OriginalChangedLines != 2 || record.Transaction.CorrectionBudget == nil || *record.Transaction.CorrectionBudget != 2 {
 		t.Fatalf("round-tripped bundle budget inputs = %#v", record.Transaction)
 	}
 }

@@ -738,7 +738,7 @@ func TestCorrectionBudgetBoundaries(t *testing.T) {
 		original int
 		want     int
 	}{
-		{original: 0, want: 0}, {original: 1, want: 1}, {original: 2, want: 1},
+		{original: 0, want: 0}, {original: 1, want: 2}, {original: 2, want: 2}, {original: 3, want: 2}, {original: 4, want: 2}, {original: 5, want: 3},
 		{original: 196, want: 98}, {original: 399, want: 200}, {original: 400, want: 200},
 		{original: 401, want: 200}, {original: 867, want: 200}, {original: math.MaxInt, want: 200},
 	}
@@ -752,5 +752,17 @@ func TestCorrectionBudgetBoundaries(t *testing.T) {
 	}
 	if _, err := CorrectionBudget(-1); err == nil {
 		t.Fatal("CorrectionBudget() accepted negative original lines")
+	}
+}
+
+func TestCorrectionBudgetFloorTwoForAtomicOneLineReplacement(t *testing.T) {
+	// Issue #2247: A 1-line code candidate must receive a correction budget of at least 2 lines.
+	// Git counts an atomic single-line replacement as 1 deletion + 1 addition (2 changed lines).
+	budget, err := CorrectionBudget(1)
+	if err != nil {
+		t.Fatalf("CorrectionBudget(1) returned error: %v", err)
+	}
+	if budget < 2 {
+		t.Fatalf("CorrectionBudget(1) = %d, want >= 2 (floor-two policy for atomic 1-line replacement)", budget)
 	}
 }
