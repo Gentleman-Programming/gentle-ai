@@ -899,76 +899,89 @@ func TestAntigravityConfigsRetainsJSONUnmarshalErrors(t *testing.T) {
 	}
 }
 
-func TestInjectAntigravityActivationFailurePreservesGitIndexAndWorktree(t *testing.T) {
+func TestInjectAntigravityPreActivationFailuresPreserveGitIndexAndWorktree(t *testing.T) {
 	if testing.Short() {
 		t.Skip("git repository regression is skipped in short mode")
 	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is required for staged-content regression")
 	}
-	home := t.TempDir()
-	runGit(t, home, "init")
-	runGit(t, home, "config", "user.email", "test@example.com")
-	runGit(t, home, "config", "user.name", "Test")
+	for _, tt := range []struct {
+		name string
+		path func(global, manifest, hooks string) string
+	}{
+		{"manifest activation", func(_, manifest, _ string) string { return manifest }},
+		{"global migration", func(global, _, _ string) string { return global }},
+		{"plugin staging", func(_, _, hooks string) string { return hooks }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			runGit(t, home, "init")
+			runGit(t, home, "config", "user.email", "test@example.com")
+			runGit(t, home, "config", "user.name", "Test")
 
-	dir := filepath.Join(home, ".gemini", "antigravity-cli")
-	global := filepath.Join(dir, "mcp_config.json")
-	pluginDir := filepath.Join(dir, "plugins", "gentle-ai-engram")
-	paths := map[string][]byte{
-		filepath.Join(pluginDir, "mcp_config.json"): []byte(`{"base":"mcp"}`),
-		filepath.Join(pluginDir, "hooks.json"):      []byte(`{"base":"hooks"}`),
-		filepath.Join(dir, "settings.json"):         []byte(`{"base":"settings"}`),
-	}
-	writeFile(t, global, `{"mcpServers":{"engram":{"command":"engram"}}}`)
-	for path, content := range paths {
-		writeFile(t, path, string(content))
-	}
-	runGit(t, home, "add", ".")
-	runGit(t, home, "commit", "-m", "baseline")
+			dir := filepath.Join(home, ".gemini", "antigravity-cli")
+			global := filepath.Join(dir, "mcp_config.json")
+			pluginDir := filepath.Join(dir, "plugins", "gentle-ai-engram")
+			paths := map[string][]byte{
+				filepath.Join(pluginDir, "mcp_config.json"): []byte(`{"base":"mcp"}`),
+				filepath.Join(pluginDir, "hooks.json"):      []byte(`{"base":"hooks"}`),
+				filepath.Join(dir, "settings.json"):         []byte(`{"base":"settings"}`),
+			}
+			writeFile(t, global, `{"mcpServers":{"engram":{"command":"engram"}}}`)
+			for path, content := range paths {
+				writeFile(t, path, string(content))
+			}
+			runGit(t, home, "add", ".")
+			runGit(t, home, "commit", "-m", "baseline")
 
-	staged := map[string][]byte{}
-	for path := range paths {
-		rel, err := filepath.Rel(home, path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		staged[path] = []byte(`{"staged":"` + filepath.Base(path) + `"}`)
-		if err := os.WriteFile(path, staged[path], 0o644); err != nil {
-			t.Fatal(err)
-		}
-		runGit(t, home, "add", rel)
-		paths[path] = []byte(`{"worktree":"` + filepath.Base(path) + `"}`)
-		if err := os.WriteFile(path, paths[path], 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+			staged := map[string][]byte{}
+			for path := range paths {
+				rel, err := filepath.Rel(home, path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				staged[path] = []byte(`{"staged":"` + filepath.Base(path) + `"}`)
+				if err := os.WriteFile(path, staged[path], 0o644); err != nil {
+					t.Fatal(err)
+				}
+				runGit(t, home, "add", rel)
+				paths[path] = []byte(`{"worktree":"` + filepath.Base(path) + `"}`)
+				if err := os.WriteFile(path, paths[path], 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	manifest := filepath.Join(pluginDir, "plugin.json")
-	original := antigravityWriteFile
-	antigravityWriteFile = func(path string, content []byte, mode os.FileMode) (filemerge.WriteResult, error) {
-		if path == manifest {
-			return filemerge.WriteResult{}, fmt.Errorf("activation failure")
-		}
-		return original(path, content, mode)
-	}
-	t.Cleanup(func() { antigravityWriteFile = original })
+			manifest := filepath.Join(pluginDir, "plugin.json")
+			hooks := filepath.Join(pluginDir, "hooks.json")
+			failurePath := tt.path(global, manifest, hooks)
+			original := antigravityWriteFile
+			antigravityWriteFile = func(path string, content []byte, mode os.FileMode) (filemerge.WriteResult, error) {
+				if path == failurePath {
+					return filemerge.WriteResult{}, fmt.Errorf("activation failure")
+				}
+				return original(path, content, mode)
+			}
+			t.Cleanup(func() { antigravityWriteFile = original })
 
-	if _, err := Inject(home, antigravityAdapter()); err == nil {
-		t.Fatal("Inject() error = nil, want activation failure")
-	}
-	for path, wantWorktree := range paths {
-		gotWorktree, err := os.ReadFile(path)
-		if err != nil || !bytes.Equal(gotWorktree, wantWorktree) {
-			t.Fatalf("worktree %q = %q, %v; want %q", path, gotWorktree, err, wantWorktree)
-		}
-		rel, err := filepath.Rel(home, path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		gotIndex := runGitOutput(t, home, "show", ":"+filepath.ToSlash(rel))
-		if !bytes.Equal([]byte(gotIndex), staged[path]) {
-			t.Fatalf("index %q = %q, want %q", path, gotIndex, staged[path])
-		}
+			if _, err := Inject(home, antigravityAdapter()); err == nil {
+				t.Fatal("Inject() error = nil, want activation failure")
+			}
+			for path, wantWorktree := range paths {
+				gotWorktree, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(gotWorktree, wantWorktree) {
+					t.Fatalf("worktree %q = %q, %v; want %q", path, gotWorktree, err, wantWorktree)
+				}
+				rel, err := filepath.Rel(home, path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				gotIndex := runGitOutput(t, home, "show", ":"+filepath.ToSlash(rel))
+				if !bytes.Equal([]byte(gotIndex), staged[path]) {
+					t.Fatalf("index %q = %q, want %q", path, gotIndex, staged[path])
+				}
+			}
+		})
 	}
 }
 
