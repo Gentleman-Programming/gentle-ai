@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-var scoopGentleAIOwned = defaultScoopGentleAIOwned
+var scoopGentleAIOwned = sync.OnceValue(defaultScoopGentleAIOwned)
 
 const (
 	scoopCleanupTimeout    = 5 * time.Second
@@ -50,7 +53,7 @@ func scoopRootWithTimeout(timeout time.Duration, getenv func(string) string, use
 func scoopRootWith(getenv func(string) string, userHome func() (string, error), run func(...string) ([]byte, error)) string {
 	if output, err := run("config", "root_path"); err == nil {
 		root := strings.TrimSpace(string(output))
-		if root != "" && !strings.EqualFold(root, "'root_path' is not set") {
+		if root != "" && !scoopSettingUnset(root) {
 			return root
 		}
 	}
@@ -63,6 +66,10 @@ func scoopRootWith(getenv func(string) string, userHome func() (string, error), 
 		return ""
 	}
 	return filepath.Join(homeDir, "scoop")
+}
+
+func scoopSettingUnset(output string) bool {
+	return strings.Contains(strings.ToLower(output), "is not set")
 }
 
 func scoopOwnsExecutableWithResolvers(executable, root string, resolveExecutable, resolveCurrent func(string) (string, error)) bool {
@@ -96,7 +103,7 @@ func scoopUpgrade(ctx context.Context) (err error) {
 	restore := []string{"config", "rm", "IGNORE_RUNNING_PROCESSES"}
 	if previousValue == "true" || previousValue == "false" {
 		restore = []string{"config", "IGNORE_RUNNING_PROCESSES", previousValue}
-	} else if !strings.Contains(previousValue, "is not set") {
+	} else if !scoopSettingUnset(previousValue) {
 		return fmt.Errorf("read Scoop IGNORE_RUNNING_PROCESSES: unexpected output %q", strings.TrimSpace(string(previous)))
 	}
 	defer func() {
@@ -133,7 +140,7 @@ func scoopCommand(ctx context.Context, args ...string) ([]byte, error) {
 	killDone := make(chan struct{})
 	stopKill := context.AfterFunc(ctx, func() {
 		defer close(killDone)
-		_ = process.Kill()
+		killScoopProcessTree(process)
 	})
 	err := cmd.Wait()
 	if !stopKill() {
@@ -145,4 +152,13 @@ func scoopCommand(ctx context.Context, args ...string) ([]byte, error) {
 		return out, fmt.Errorf("scoop %s: %w (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return out, nil
+}
+
+func killScoopProcessTree(process *os.Process) {
+	if runtime.GOOS == "windows" {
+		// taskkill /T reaches descendants that os.Process.Kill leaves alive. A child
+		// that detaches before taskkill starts is outside this process tree.
+		_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(process.Pid)).Run()
+	}
+	_ = process.Kill()
 }

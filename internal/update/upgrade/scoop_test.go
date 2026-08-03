@@ -3,9 +3,11 @@ package upgrade
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -83,6 +85,7 @@ func TestScoopCommandCancelsRunningProcess(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	result := make(chan error, 1)
 	go func() {
 		_, err := scoopCommand(ctx, "update", "gentle-ai")
@@ -106,7 +109,7 @@ func TestScoopCommandCancelsRunningProcess(t *testing.T) {
 		if err == nil {
 			t.Fatal("scoopCommand() error = nil, want canceled command failure")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("scoopCommand() did not return after context cancellation")
 	}
 }
@@ -121,6 +124,30 @@ func TestScoopCommandCancellationHelper(t *testing.T) {
 	for {
 		time.Sleep(time.Second)
 	}
+}
+
+func scoopTestCommand(output string, exitCode int) *exec.Cmd {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestScoopCommandHelper$", "--")
+	cmd.Env = append(os.Environ(),
+		"GENTLE_AI_SCOOP_TEST_HELPER=1",
+		"GENTLE_AI_SCOOP_TEST_OUTPUT="+output,
+		"GENTLE_AI_SCOOP_TEST_EXIT_CODE="+strconv.Itoa(exitCode),
+	)
+	return cmd
+}
+
+func TestScoopCommandHelper(t *testing.T) {
+	if os.Getenv("GENTLE_AI_SCOOP_TEST_HELPER") != "1" {
+		return
+	}
+	if _, err := fmt.Fprint(os.Stdout, os.Getenv("GENTLE_AI_SCOOP_TEST_OUTPUT")); err != nil {
+		os.Exit(2)
+	}
+	exitCode, err := strconv.Atoi(os.Getenv("GENTLE_AI_SCOOP_TEST_EXIT_CODE"))
+	if err != nil {
+		os.Exit(2)
+	}
+	os.Exit(exitCode)
 }
 
 func TestScoopRootWith(t *testing.T) {
@@ -143,6 +170,12 @@ func TestScoopRootWith(t *testing.T) {
 		{
 			name:    "unset root path falls back to SCOOP environment",
 			output:  "'root_path' is not set\n",
+			envRoot: environmentRoot,
+			want:    environmentRoot,
+		},
+		{
+			name:    "unset root path with surrounding text falls back to SCOOP environment",
+			output:  "warning: ROOT_PATH IS NOT SET; using default\n",
 			envRoot: environmentRoot,
 			want:    environmentRoot,
 		},
@@ -267,13 +300,13 @@ func TestRunStrategyUpdatesActiveScoopGentleAI(t *testing.T) {
 		calls = append(calls, args)
 		switch {
 		case sameStrings(args, []string{"config", "IGNORE_RUNNING_PROCESSES"}):
-			return mockCmd("echo", "false")
+			return scoopTestCommand("false", 0)
 		case sameStrings(args, []string{"config", "IGNORE_RUNNING_PROCESSES", "true"}):
-			return mockCmd("true")
+			return scoopTestCommand("", 0)
 		case sameStrings(args, []string{"update", "gentle-ai"}):
-			return mockCmd("true")
+			return scoopTestCommand("", 0)
 		case sameStrings(args, []string{"config", "IGNORE_RUNNING_PROCESSES", "false"}):
-			return mockCmd("true")
+			return scoopTestCommand("", 0)
 		default:
 			t.Fatalf("unexpected Scoop arguments %v", args)
 			return nil
@@ -306,18 +339,20 @@ func TestScoopUpgradeReturnsCommandFailure(t *testing.T) {
 	t.Cleanup(func() { execCommand = origExecCommand })
 	var calls [][]string
 	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name != "scoop" {
+			t.Fatalf("command = %q, want scoop", name)
+			return nil
+		}
 		calls = append(calls, args)
 		switch {
-		case name != "scoop":
-			t.Fatalf("command = %q, want scoop", name)
 		case sameStrings(args, []string{"config", "IGNORE_RUNNING_PROCESSES"}):
-			return mockCmd("echo", "false")
+			return scoopTestCommand("false", 0)
 		case sameStrings(args, []string{"config", "IGNORE_RUNNING_PROCESSES", "true"}):
-			return mockCmd("true")
+			return scoopTestCommand("", 0)
 		case sameStrings(args, []string{"update", "gentle-ai"}):
-			return mockCmd("false")
+			return scoopTestCommand("", 1)
 		case sameStrings(args, []string{"config", "IGNORE_RUNNING_PROCESSES", "false"}):
-			return mockCmd("true")
+			return scoopTestCommand("", 0)
 		}
 		t.Fatalf("unexpected Scoop arguments %v", args)
 		return nil
@@ -357,11 +392,11 @@ func TestScoopUpgradeRemovesTemporarySettingWhenOriginallyUnset(t *testing.T) {
 		calls = append(calls, args)
 		switch {
 		case sameStrings(args, []string{"config", "IGNORE_RUNNING_PROCESSES"}):
-			return mockCmd("echo", "'IGNORE_RUNNING_PROCESSES' is not set")
+			return scoopTestCommand("'IGNORE_RUNNING_PROCESSES' is not set", 0)
 		case sameStrings(args, []string{"config", "IGNORE_RUNNING_PROCESSES", "true"}),
 			sameStrings(args, []string{"update", "gentle-ai"}),
 			sameStrings(args, []string{"config", "rm", "IGNORE_RUNNING_PROCESSES"}):
-			return mockCmd("true")
+			return scoopTestCommand("", 0)
 		default:
 			t.Fatalf("unexpected Scoop arguments %v", args)
 			return nil
