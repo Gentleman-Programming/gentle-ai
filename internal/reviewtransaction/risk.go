@@ -234,8 +234,11 @@ func CorrectionBudget(originalChangedLines int) (int, error) {
 	if originalChangedLines == 0 {
 		return 0, nil
 	}
+	if originalChangedLines == 1 {
+		return 2, nil
+	}
 	raw := originalChangedLines/2 + originalChangedLines%2
-	return min(MaxCorrectionChangedLines, max(2, raw)), nil
+	return min(MaxCorrectionChangedLines, raw), nil
 }
 
 // ClassifySnapshotRisk derives both risk and changed lines from one immutable

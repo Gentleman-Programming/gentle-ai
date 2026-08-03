@@ -216,7 +216,7 @@ func TestReviewFacadeStartResultOmitsAdditiveFieldsWhenAbsent(t *testing.T) {
 	payload, err := json.Marshal(ReviewFacadeStartResult{
 		Operation: "review/start", Action: "created", LineageID: "shape-guard",
 		SelectedLenses: []string{}, LensBindings: []ReviewFacadeLensBinding{},
-		Projection: reviewtransaction.ProjectionWorkspace, ChangedFiles: 1, ChangedLines: 1, CorrectionBudget: 1,
+		Projection: reviewtransaction.ProjectionWorkspace, ChangedFiles: 1, ChangedLines: 1, CorrectionBudget: 2,
 	})
 	if err != nil {
 		t.Fatal(err)

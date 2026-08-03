@@ -18,7 +18,7 @@
   "candidate_tree": "556e838994d4e5669ffafda7b72226598bc38297",
   "changed_files": 1,
   "changed_lines": 1,
-  "correction_budget": 1,
+  "correction_budget": 2,
   "risk_reasons": [
     {"code": "shell_source", "signal": "shell_process", "path": "scripts/deploy.sh"}
   ],

@@ -42,7 +42,7 @@ func TestNegotiatedReviewStartMatchesVersionedFixture(t *testing.T) {
 		result.LineageID != "review-start-fixture" || result.State != reviewtransaction.StateReviewing ||
 		result.RiskLevel != reviewtransaction.RiskHigh || !reflect.DeepEqual(result.SelectedLenses, wantLenses) ||
 		result.Projection != reviewtransaction.ProjectionWorkspace || result.ChangedFiles != 1 ||
-		result.ChangedLines != 1 || result.CorrectionBudget != 1 || !reflect.DeepEqual(result.RiskReasons, wantReasons) ||
+		result.ChangedLines != 1 || result.CorrectionBudget != 2 || !reflect.DeepEqual(result.RiskReasons, wantReasons) ||
 		result.RepositoryContext == nil || result.RepositoryContext.Capability != reviewtransaction.ReviewRepositoryContextCapability {
 		t.Fatalf("negotiated START = %#v\n%s", result, output.String())
 	}

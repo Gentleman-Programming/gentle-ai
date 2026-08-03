@@ -16,7 +16,7 @@
   "projection": "workspace",
   "changed_files": 1,
   "changed_lines": 1,
-  "correction_budget": 1,
+  "correction_budget": 2,
   "risk_reasons": [
     {
       "code": "shell_source",

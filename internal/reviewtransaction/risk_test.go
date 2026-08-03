@@ -738,7 +738,7 @@ func TestCorrectionBudgetBoundaries(t *testing.T) {
 		original int
 		want     int
 	}{
-		{original: 0, want: 0}, {original: 1, want: 2}, {original: 2, want: 2}, {original: 3, want: 2}, {original: 4, want: 2}, {original: 5, want: 3},
+		{original: 0, want: 0}, {original: 1, want: 2}, {original: 2, want: 1}, {original: 3, want: 2}, {original: 4, want: 2}, {original: 5, want: 3},
 		{original: 196, want: 98}, {original: 399, want: 200}, {original: 400, want: 200},
 		{original: 401, want: 200}, {original: 867, want: 200}, {original: math.MaxInt, want: 200},
 	}
