@@ -337,8 +337,8 @@ invents a metric is worse than one that admits a gap.
 7. **The corpus is honest, not exhaustive.** Sixty mandatory portable
    black-box journeys run end to end, weighted toward failure paths because that
    is where friction lives. `j57` is one explicit source-coupled journey that
-   requires a `bench_fixture`-tagged product binary, bringing the registry to 61
-   journey IDs total. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts)
+   requires a `bench_fixture`-tagged product binary, for 61 registered journey
+   IDs total. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts)
    are inspection steps rather than review-lifecycle friction and are not
    modelled.
 
