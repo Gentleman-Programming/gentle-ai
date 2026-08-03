@@ -199,7 +199,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			}
 			switch capturedEvidence.Outcome {
 			case reviewtransaction.VerificationOutcomeFailed:
-				return reviewExecuteTransition("captured_verification_failed", "review.finalize",
+				return reviewExecuteTransition("captured_correction_verification_failed", "review.finalize",
 					[]ReviewTransitionArgument{{Name: "lineage", Value: binding.LineageID}, {Name: "captured_evidence", Value: "true"}},
 					[]ReviewTransitionArgument{{Name: "state", Value: "correction_required"}, {Name: "verification_outcome", Value: string(capturedEvidence.Outcome)}}, validationBinding, nil)
 			case reviewtransaction.VerificationOutcomeProceduralFailure:

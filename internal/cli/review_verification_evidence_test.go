@@ -168,7 +168,7 @@ func TestFailedCorrectionVerificationEscalatesAndRecoversOnlyToFreshCandidate(t 
 	}
 	failedStatus := readCorrectionEvidenceStatus(t, statusArgs)
 	if failedStatus.NextTransition == nil || failedStatus.NextTransition.Kind != reviewNextTransitionExecute || failedStatus.NextTransition.Execute == nil ||
-		failedStatus.NextTransition.ReasonCode != "captured_verification_failed" || failedStatus.NextTransition.Execute.Operation != "review.finalize" {
+		failedStatus.NextTransition.ReasonCode != "captured_correction_verification_failed" || failedStatus.NextTransition.Execute.Operation != "review.finalize" {
 		t.Fatalf("failed correction repository status = %#v", failedStatus.NextTransition)
 	}
 	finalizeArgs := []string{"finalize", "--cwd", repo}
