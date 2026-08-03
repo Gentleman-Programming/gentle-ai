@@ -902,6 +902,41 @@ func TestInjectAntigravityRecoversWriteFailures(t *testing.T) {
 	}
 }
 
+func TestInjectAntigravityRestoresStagedConfigsAfterLaterWriteFailure(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".gemini", "antigravity-cli")
+	pluginDir := filepath.Join(dir, "plugins", "gentle-ai-engram")
+	mcpPath := filepath.Join(pluginDir, "mcp_config.json")
+	hooksPath := filepath.Join(pluginDir, "hooks.json")
+	settingsPath := filepath.Join(dir, "settings.json")
+	mcpBefore := []byte(`{"custom":true}`)
+	hooksBefore := []byte(`{"hooks":"custom"}`)
+	writeFile(t, mcpPath, string(mcpBefore))
+	writeFile(t, hooksPath, string(hooksBefore))
+
+	actual := antigravityWriteFile
+	antigravityWriteFile = func(path string, content []byte, mode os.FileMode) (filemerge.WriteResult, error) {
+		if path == settingsPath {
+			return filemerge.WriteResult{}, fmt.Errorf("settings write failed")
+		}
+		return actual(path, content, mode)
+	}
+	t.Cleanup(func() { antigravityWriteFile = actual })
+
+	if _, err := Inject(home, antigravityAdapter()); err == nil {
+		t.Fatal("Inject() error = nil")
+	}
+	for path, want := range map[string][]byte{mcpPath: mcpBefore, hooksPath: hooksBefore} {
+		got, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("staged config %q = %q, %v; want original %q", path, got, err, want)
+		}
+	}
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+		t.Fatalf("failed settings config %q exists: %v", settingsPath, err)
+	}
+}
+
 // ─── Codex tests ──────────────────────────────────────────────────────────────
 
 func TestInjectCodexWritesTOMLMCP(t *testing.T) {
