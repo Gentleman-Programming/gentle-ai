@@ -219,7 +219,7 @@ func ReopenCompactReviewerResults(ctx context.Context, repo string, request Comp
 		} else if !os.IsNotExist(statErr) {
 			return statErr
 		}
-		quarantined, retained, inspectErr := classifyCompactResultReopenSlots(repository, store.Dir, record.State, frozen, plan.AuthorizedLenses)
+		quarantined, retained, inspectErr := classifyCompactResultReopenSlots(ctx, repository, store.Dir, record.State, frozen, plan.AuthorizedLenses)
 		if inspectErr != nil {
 			return inspectErr
 		}
@@ -301,7 +301,7 @@ func buildCompactResultReopenPlan(ctx context.Context, repository string, store 
 	if err != nil {
 		return CompactResultReopenPlan{}, err
 	}
-	quarantined, retained, err := classifyCompactResultReopenSlots(repository, store.Dir, state, frozen, authorizedLenses)
+	quarantined, retained, err := classifyCompactResultReopenSlots(ctx, repository, store.Dir, state, frozen, authorizedLenses)
 	if err != nil {
 		return CompactResultReopenPlan{}, err
 	}
@@ -322,7 +322,7 @@ func buildCompactResultReopenPlan(ctx context.Context, repository string, store 
 // reporting that candidate inspection was unavailable. authorizedLenses adds
 // the maintainer's explicitly named admitted slots — the one and only path by
 // which a structurally valid, provider-admitted result leaves its slot.
-func classifyCompactResultReopenSlots(repository, storeDir string, state CompactState, frozen FrozenCandidateContext, authorizedLenses []string) ([]CompactResultReopenSlot, []CompactResultReopenSlot, error) {
+func classifyCompactResultReopenSlots(ctx context.Context, repository, storeDir string, state CompactState, frozen FrozenCandidateContext, authorizedLenses []string) ([]CompactResultReopenSlot, []CompactResultReopenSlot, error) {
 	authorized := make(map[string]struct{}, len(authorizedLenses))
 	for _, lens := range authorizedLenses {
 		authorized[lens] = struct{}{}
@@ -330,7 +330,7 @@ func classifyCompactResultReopenSlots(repository, storeDir string, state Compact
 	quarantined := make([]CompactResultReopenSlot, 0)
 	retained := make([]CompactResultReopenSlot, 0)
 	for order, lens := range state.SelectedLenses {
-		slot, trusted, err := inspectCompactResultReopenSlot(repository, storeDir, state, frozen, order, lens)
+		slot, trusted, err := inspectCompactResultReopenSlot(ctx, repository, storeDir, state, frozen, order, lens)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -348,7 +348,7 @@ func classifyCompactResultReopenSlots(repository, storeDir string, state Compact
 	return quarantined, retained, nil
 }
 
-func inspectCompactResultReopenSlot(repository, storeDir string, state CompactState, frozen FrozenCandidateContext, order int, lens string) (CompactResultReopenSlot, bool, error) {
+func inspectCompactResultReopenSlot(ctx context.Context, repository, storeDir string, state CompactState, frozen FrozenCandidateContext, order int, lens string) (CompactResultReopenSlot, bool, error) {
 	if order >= len(state.LensResults) {
 		return CompactResultReopenSlot{}, false, errors.New("validating authority does not contain every selected lens result")
 	}
@@ -370,11 +370,11 @@ func inspectCompactResultReopenSlot(repository, storeDir string, state CompactSt
 	if err := decoder.Decode(&extra); err != io.EOF || envelope.Schema != admittedReviewerResultSchemaForSubject(envelope.Subject) || len(envelope.Result) == 0 {
 		return slot, false, nil
 	}
-	frozen, expected, err := artifactSubjectForSchema(context.Background(), SnapshotBuilder{Repo: repository}, state, envelope.Subject.AuthorityRevision, frozen, lens, order, envelope.Subject.CorrectionTargetIdentity, envelope.Subject.Schema)
+	frozen, expected, err := artifactSubjectForSchema(ctx, SnapshotBuilder{Repo: repository}, state, envelope.Subject.AuthorityRevision, frozen, lens, order, envelope.Subject.CorrectionTargetIdentity, envelope.Subject.Schema)
 	if err != nil || envelope.Subject != expected || envelope.Admission.Validate(expected) != nil {
 		return slot, false, nil
 	}
-	result, admitted := reAdmitCompactReviewerResult(envelope, expected, frozen)
+	result, admitted := reAdmitCompactReviewerResult(ctx, envelope, expected, frozen)
 	if !admitted || result.ResultHash != state.LensResults[order].ResultHash {
 		return slot, false, nil
 	}
@@ -382,7 +382,7 @@ func inspectCompactResultReopenSlot(repository, storeDir string, state CompactSt
 	return slot, true, nil
 }
 
-func reAdmitCompactReviewerResult(envelope compactAdmittedReviewerResult, expected ArtifactSubject, frozen FrozenCandidateContext) (LensResult, bool) {
+func reAdmitCompactReviewerResult(ctx context.Context, envelope compactAdmittedReviewerResult, expected ArtifactSubject, frozen FrozenCandidateContext) (LensResult, bool) {
 	decoder := json.NewDecoder(bytes.NewReader(envelope.Result))
 	decoder.DisallowUnknownFields()
 	var provider compactProviderReviewerResult
@@ -401,7 +401,7 @@ func reAdmitCompactReviewerResult(envelope compactAdmittedReviewerResult, expect
 		return LensResult{}, false
 	}
 	canonicalPayload = append(canonicalPayload, '\n')
-	result, admission, err := AdmitArtifact(ArtifactAdmissionRequest{
+	result, admission, err := AdmitArtifact(ctx, ArtifactAdmissionRequest{
 		ExpectedSubject: expected, FrozenContext: frozen, EchoedSubjectHash: provider.SubjectHash,
 		Inspection:                provider.Inspection,
 		Result:                    LensResult{Lens: expected.Lens, Findings: provider.Findings, Evidence: provider.Evidence},

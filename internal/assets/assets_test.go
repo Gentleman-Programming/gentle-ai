@@ -346,6 +346,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/skill-improver/SKILL.md",
 		"skills/skill-improver/references/skill-style-guide.md",
 		"skills/chained-pr/references/chaining-details.md",
+		"skills/rdd-defect-workflow/SKILL.md",
 	}
 
 	for _, path := range expectedFiles {
@@ -483,7 +484,7 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`artifact_subject`,
 		`GENTLE_AI_REVIEW_CONTEXT`,
 		`validManifest(manifest)`,
-		`output.args.prompt = await injectReviewerContext(`,
+		`REVIEW_OUTCOME.UNSUPPORTED_CAPABILITY`,
 		`"--lineage", binding.lineage`,
 		`"--target", binding.target`,
 		`"--lens", binding.lens`,
@@ -502,11 +503,16 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		// envelope that `review capture-result --input` would reject on replay.
 		`result = reviewerResult(output.output)`,
 		`output.output = await captureResult(cwd, binding, result)`,
-		`throw await preservedCaptureFailure(cwd, binding, result, cause)`,
+		`throw await preservedCaptureFailure(cwd, binding, result, cause, recovery)`,
 		// Envelope extraction itself can fail; only then is the raw envelope
 		// preserved, under a distinct extraction-failure cause.
 		`throw await preservedCaptureFailure(cwd, binding, output.output, cause)`,
-		`function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string): string`,
+		`return JSON.stringify([binding.lineage, binding.target, binding.revision, binding.repository_context, binding.lens, binding.order, binding.subject_hash])`,
+		`const recovery = { sessionID: input.sessionID, store: admissionRecoveries }`,
+		`event.type === "session.deleted"`,
+		`dispose: async () => { admissionRecoveries.clear() }`,
+		`MAX_ADMISSION_RECOVERY_SESSIONS`,
+		`MAX_ADMISSION_RECOVERIES_PER_SESSION`,
 		`sessionErrorMessage(binding, cause, "repository_context_preflight_failed")`,
 		`parsed.reference`,
 		`raw reviewer result preserved for recovery`,
@@ -523,9 +529,7 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		// bounded raw payload in the thrown error so the transcript retains it.
 		`raw reviewer result follows for manual recovery`,
 		`PRESERVE_EMBED_LIMIT`,
-		// Missing native preflight support must fail closed before a bound
-		// reviewer launches without provider-owned frozen context.
-		`The reviewer was not launched`,
+		`REVIEW_OUTCOME.UNSUPPORTED_CAPABILITY`,
 		`export default ReviewResultArtifactsPlugin`,
 	} {
 		if !strings.Contains(source, want) {
@@ -1596,9 +1600,9 @@ func TestEmbeddedAssetCount(t *testing.T) {
 		}
 	}
 
-	// We expect 23 skill directories (10 SDD + judgment-day + 6 foundation + 4 sustainable-review + hermes-ephemeral-delegation + _shared).
-	if skillDirs != 23 {
-		t.Fatalf("expected 23 skill directories, got %d", skillDirs)
+	// We expect 24 skill directories (10 SDD + judgment-day + 6 foundation + 5 sustainable-review + hermes-ephemeral-delegation + _shared).
+	if skillDirs != 24 {
+		t.Fatalf("expected 24 skill directories, got %d", skillDirs)
 	}
 
 	// Verify each skill directory has a SKILL.md.
@@ -1980,29 +1984,24 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 	}
 	required := []string{
 		"Native Runtime Attempt Authority",
-		"gentle-ai sdd-attempt status",
-		"gentle-ai sdd-attempt begin",
-		"gentle-ai sdd-attempt finish",
-		"gentle-ai sdd-attempt reset",
-		"decision_required",
-		"expected-binding-revision",
+		"gentle-ai sdd-attempt acquire",
+		"gentle-ai sdd-attempt settle",
+		"state: proceed",
+		"opaque `token`",
 		"successor-lineage",
-		"remediates-evidence-revision",
-		// Naming the trio without naming where its values come from, or
-		// without naming the bound lineage as an acceptable successor, is what
-		// routed the first reporter of this block (decode2, PR #1801) into
-		// `review recover` — a door that is correctly refused for an unchanged
-		// approved scope, and therefore the first step of a cycle with no exit.
-		"binding_revision`, `binding.lineage`, and `evidence_revision",
-		"the lineage the binding already names is itself the successor",
+		"the bound lineage remains its own successor",
+		"--request-id <settle-id>", "distinct from the acquire operation's request ID", "idempotent replay",
+		"status|begin|finish|reset",
+		"never automatic",
 	}
 	for _, path := range paths {
 		content := MustRead(path)
 		if path == "claude/sdd-orchestrator.md" {
 			content += "\n" + MustRead("claude/sdd-orchestrator-workflow.md")
 		}
+		section := markdownSection(content, "### Native Runtime Attempt Authority")
 		for _, want := range required {
-			if !strings.Contains(content, want) {
+			if !strings.Contains(section, want) {
 				t.Fatalf("%s missing native runtime-attempt authority wording %q", path, want)
 			}
 		}
@@ -2010,8 +2009,12 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 			"gentle-ai.sdd-attempt-ledger/v1",
 			"attempt-ledger-{work-unit}.json",
 			"sdd/{change-name}/attempt-ledger",
+			"gentle-ai sdd-attempt status",
+			"gentle-ai sdd-attempt begin",
+			"gentle-ai sdd-attempt finish",
+			"gentle-ai sdd-attempt reset",
 		} {
-			if strings.Contains(content, forbidden) {
+			if strings.Contains(section, forbidden) {
 				t.Fatalf("%s still delegates native authority to mutable artifact %q", path, forbidden)
 			}
 		}

@@ -1,223 +1,149 @@
 ---
 name: issue-creation
-description: "Create Gentle AI issues with issue-first checks. Trigger: creating GitHub issues, bug reports, or feature requests."
+description: "Create and triage GitHub issues from repository evidence. Trigger: issue creation, bug reports, feature requests, or issue approval."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "1.0"
+  version: "1.2"
 ---
 
-## When to Use
+# Issue Creation
 
-Use this skill when:
-- Creating a GitHub issue (bug report or feature request)
-- Helping a contributor file an issue
-- Triaging or approving issues as a maintainer
+## When To Use
 
----
+Use this skill when creating, drafting, triaging, or approving an issue in the current GitHub repository.
 
-## Critical Rules
+## Core Rule
 
-1. **Blank issues are disabled** — MUST use a template (bug report or feature request)
-2. **Every issue gets `status:needs-review` automatically** on creation
-3. **A maintainer MUST add `status:approved`** before any PR can be opened
-4. **Questions go to [Discussions](https://github.com/Gentleman-Programming/agent-teams-lite/discussions)**, not issues
+Discover the repository's actual contribution workflow before proposing or publishing an issue. Templates, labels, approval gates, and Discussions support are repository policy, not universal GitHub behavior.
 
----
+## Safe Discovery
+
+Run read-only checks first:
+
+```bash
+gh auth status
+REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+REPO_URL="$(gh repo view --json url -q .url)"
+HOST="${REPO_URL#*://}"
+HOST="${HOST%%/*}"
+gh repo view --json nameWithOwner,url,hasDiscussionsEnabled,hasIssuesEnabled,isBlankIssuesEnabled
+git ls-files CONTRIBUTING.md CONTRIBUTING.* .github/CONTRIBUTING.md .github/ISSUE_TEMPLATE
+gh api --hostname "$HOST" --paginate "repos/$REPO/labels?per_page=100" --jq '.[].name'
+```
+
+Also inspect:
+
+- repository instructions such as `CONTRIBUTING.md` and `README.md`;
+- files under `.github/ISSUE_TEMPLATE`;
+- `.github/ISSUE_TEMPLATE/config.yml` when present;
+- issue forms, required fields, and labels declared by each template;
+- existing open and closed issues for duplicates and established wording.
+
+Stop and ask for repository context if authentication, repository resolution, verification that REPO and HOST are non-empty, required metadata is unavailable, hasIssuesEnabled is false, or policy discovery fails. Never continue from failed discovery into issue publication.
+
+A no-template fallback is allowed only when isBlankIssuesEnabled is explicitly true. Otherwise follow discovered contact links or stop and ask; never publish.
+
+After discovery and review, build optional label arguments using only labels that exist and repository policy permits the actor to apply:
+
+```bash
+LABEL_ARGS=()
+# Repeat for each reviewed, permitted discovered label.
+LABEL_ARGS+=(--label "$LABEL")
+```
+
+An empty array applies no label; do not invent labels.
 
 ## Workflow
 
-```
-1. Search existing issues for duplicates
-2. Choose the correct template (Bug Report or Feature Request)
-3. Fill in ALL required fields
-4. Check pre-flight checkboxes
-5. Submit → issue gets status:needs-review automatically
-6. Wait for maintainer to add status:approved
-7. Only then open a PR linking this issue
-```
+1. Describe the problem or request in one sentence and derive a short search query.
+2. Search open and closed issues:
 
----
+   ```bash
+   gh issue list --repo "$HOST/$REPO" --state all --search "$QUERY" --limit 1000
+   ```
 
-## Issue Templates
+   If 1000 results are returned or completeness remains uncertain, narrow the search, use read-only API discovery, or stop and ask before publishing.
 
-### Bug Report
+3. If an issue already covers the same behavior, comment there instead of creating a duplicate.
+4. Choose a repository-provided template only when its purpose matches the report.
+5. Fill every required template field from known evidence. Ask for missing facts rather than inventing them.
+6. Apply labels only when they exist and repository guidance establishes who should apply them.
+7. Publish only after the title, body, target repository, and selected template or fallback have been reviewed, and the pre-submission privacy review below has passed.
 
-Template: `.github/ISSUE_TEMPLATE/bug_report.yml`
-Auto-labels: `bug`, `status:needs-review`
+## Pre-submission Privacy Review
 
-#### Required Fields
+Pre-submission privacy review is mandatory. Scan every issue body immediately before `gh issue create`. The scan replaces — never deletes — environment-specific data with explicit placeholders so the reproduction still teaches:
 
-| Field | Description |
-|-------|-------------|
-| **Pre-flight Checks** | Checkboxes: no duplicate + understands approval workflow |
-| **Bug Description** | Clear description of the bug |
-| **Steps to Reproduce** | Numbered steps to reproduce |
-| **Expected Behavior** | What should have happened |
-| **Actual Behavior** | What happened instead (include errors/logs) |
-| **Operating System** | Dropdown: macOS, Linux variants, Windows, WSL |
-| **Agent / Client** | Dropdown: Claude Code, OpenCode, Gemini CLI, Cursor, Windsurf, Codex, Other |
-| **Shell** | Dropdown: bash, zsh, fish, Other |
+| Category | Replace with | Example (before → after) |
+|----------|---------------|---------------------------|
+| Private project names | `<project-name>` | `my-private-project-b` → `<project-name>` |
+| Usernames | `<user>` | `C:\Users\my-real-username\go\bin` → `C:\Users\<user>\go\bin` |
+| Hostnames | `<hostname>` | `devbox-macbook.local` → `<hostname>` |
+| Home paths | `/home/<user>` or `C:\Users\<user>` | (covered above) |
+| API keys, tokens, passwords | `<token>` / `<password>` | `ghp_abc123...` → `<token>` |
+| Internal ports / hostnames | `<host>:<port>` | `10.0.0.42:5432` → `<host>:<port>` |
 
-#### Optional Fields
+Do NOT redact intentionally public identifiers: tool names (`gentle-ai`, `engram`, `go`, `node`, `python`), package names, public documentation URLs, generic example domains (`example.com`, `localhost`). Keep reproduction structure with placeholders — never redact an example into nothingness.
 
-| Field | Description |
-|-------|-------------|
-| **Relevant Logs** | Log output (auto-formatted as code block) |
-| **Additional Context** | Screenshots, workarounds, extra info |
+**Rule of thumb:** if the reader can run the reproduction step after you replace every identifier with its placeholder, the sanitization is correct. If a step becomes impossible (because the placeholder consumed a needed value), that step needs the value — and you should mark it `<value-required>` and explain in the body what the user should fill in.
 
-#### Example — Bug Report via CLI
+## Template Paths
 
-```bash
-gh issue create --template "bug_report.yml" \
-  --title "fix(scripts): setup.sh fails on zsh with glob error" \
-  --body "
-### Pre-flight Checks
-- [x] I have searched existing issues and this is not a duplicate
-- [x] I understand this issue needs status:approved before a PR can be opened
+Do not guess a template filename. If multiple templates could apply and repository guidance does not distinguish them, stop and ask which one to use.
 
-### Bug Description
-Running setup.sh on zsh throws a glob error when no matching files exist.
+- .yml and .yaml files are GitHub Issue Forms. Do not parse or render their schema. Open the web issue chooser and stop for human completion:
 
-### Steps to Reproduce
-1. Clone the repo
-2. Run \`./scripts/setup.sh\` in zsh
-3. See error: \`zsh: no matches found: skills/*\`
+  ```bash
+  gh issue create --repo "$HOST/$REPO" --web "${LABEL_ARGS[@]}"
+  ```
 
-### Expected Behavior
-The script should handle missing glob matches gracefully.
+- .md files are Markdown templates. Read the matching template, complete it from known evidence into a reviewed BODY_FILE, then publish it:
 
-### Actual Behavior
-Script crashes with glob error.
+  ```bash
+  gh issue create --repo "$HOST/$REPO" --title "$TITLE" --body-file "$BODY_FILE" "${LABEL_ARGS[@]}"
+  ```
 
-### Operating System
-macOS
+## No-Template Fallback
 
-### Agent / Client
-Claude Code
+When the repository permits issue creation, provides no matching template, and isBlankIssuesEnabled is explicitly true, prepare a structured body with these sections:
 
-### Shell
-zsh
+- problem or requested outcome;
+- reproduction or motivating example;
+- expected behavior;
+- actual behavior or current limitation;
+- environment and relevant evidence;
+- alternatives or workarounds, when applicable.
 
-### Relevant Logs
-\`\`\`
-zsh: no matches found: skills/*
-\`\`\`
-"
-```
-
----
-
-### Feature Request
-
-Template: `.github/ISSUE_TEMPLATE/feature_request.yml`
-Auto-labels: `enhancement`, `status:needs-review`
-
-#### Required Fields
-
-| Field | Description |
-|-------|-------------|
-| **Pre-flight Checks** | Checkboxes: no duplicate + understands approval workflow |
-| **Problem Description** | The pain point this feature solves |
-| **Proposed Solution** | How it should work from the user's perspective |
-| **Affected Area** | Dropdown: Scripts, Skills, Examples, Documentation, CI/Workflows, Other |
-
-#### Optional Fields
-
-| Field | Description |
-|-------|-------------|
-| **Alternatives Considered** | Other approaches or workarounds |
-| **Additional Context** | Mockups, examples, references |
-
-#### Example — Feature Request via CLI
+Publish the reviewed fallback explicitly:
 
 ```bash
-gh issue create --template "feature_request.yml" \
-  --title "feat(scripts): add Codex support to setup.sh" \
-  --body "
-### Pre-flight Checks
-- [x] I have searched existing issues and this is not a duplicate
-- [x] I understand this issue needs status:approved before a PR can be opened
-
-### Problem Description
-The setup script only configures Claude Code, Gemini CLI, and OpenCode. Codex users have to manually copy skills.
-
-### Proposed Solution
-Add a Codex option to setup.sh that links skills to the .codex/ directory.
-
-Example:
-\`\`\`bash
-./scripts/setup.sh --agent codex
-\`\`\`
-
-### Affected Area
-Scripts (setup, installation)
-
-### Alternatives Considered
-Manually symlinking, but that defeats the purpose of the setup script.
-"
+gh issue create --repo "$HOST/$REPO" --title "$TITLE" --body "$BODY" "${LABEL_ARGS[@]}"
 ```
 
----
+If blank issues are not explicitly enabled, follow discovered contact links or stop and ask. Never publish a no-template fallback.
 
-## Label System
+## Labels And Approval
 
-### Applied Automatically on Issue Creation
+Treat labels and approval gates as conditional:
 
-| Template | Labels added |
-|----------|-------------|
-| Bug Report | `bug`, `status:needs-review` |
-| Feature Request | `enhancement`, `status:needs-review` |
+- use only labels returned by repository discovery;
+- follow contribution guidance for who may apply each label;
+- wait when repository policy requires maintainer approval before implementation;
+- do not invent a status or priority taxonomy when none is documented.
 
-### Applied by Maintainers
+## Questions And Discussions
 
-| Label | When to apply |
-|-------|--------------|
-| `status:approved` | Issue accepted for implementation — PRs can now be opened |
-| `priority:high` | Critical bug or urgent feature |
-| `priority:medium` | Important but not blocking |
-| `priority:low` | Nice to have |
+Use Discussions only when `hasDiscussionsEnabled` is true and repository guidance routes the question there. Otherwise follow documented support/contact links or ask the user where the question belongs. Never link to another repository's Discussions page.
 
----
+## Triage Decision
 
-## Maintainer Approval Workflow
+Before approving or closing an issue, verify:
 
-```
-1. New issue arrives with status:needs-review
-2. Review the issue — is it valid, clear, and in scope?
-3. If YES → add status:approved label
-4. If NO → comment with reason, close if needed
-5. Contributor can now open a PR linking this issue
-```
+- it describes a concrete bug or scoped improvement rather than an unsupported question;
+- it is not a duplicate;
+- the report contains enough evidence for an implementation decision;
+- the requested behavior is in repository scope;
+- labels and status changes follow the current repository's policy.
 
----
-
-## Decision Tree
-
-```
-Is it a bug?                    → Use Bug Report template
-Is it a new feature/improvement? → Use Feature Request template
-Is it a question?               → Use Discussions, NOT issues
-Is it a duplicate?              → Link to existing issue, close
-```
-
----
-
-## Commands
-
-```bash
-# Search existing issues before creating
-gh issue list --search "keyword"
-
-# Create bug report
-gh issue create --template "bug_report.yml" --title "fix(scope): description"
-
-# Create feature request
-gh issue create --template "feature_request.yml" --title "feat(scope): description"
-
-# Maintainer: approve an issue
-gh issue edit <number> --add-label "status:approved"
-
-# Maintainer: add priority
-gh issue edit <number> --add-label "priority:high"
-```
+If any point is uncertain, keep the issue in the repository's review state and request the smallest missing evidence.

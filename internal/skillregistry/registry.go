@@ -18,7 +18,7 @@ import (
 const (
 	RegistryRelPath = ".atl/skill-registry.md"
 	CacheRelPath    = ".atl/.skill-registry.cache.json"
-	RegistrySchema  = 4
+	RegistrySchema  = 5
 	sectionMarker   = "## Skills"
 	atlIgnoreEntry  = ".atl/"
 )
@@ -226,7 +226,13 @@ func Fingerprint(files []string) string {
 			lines = append(lines, file+":missing")
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("%s:%d:%d", file, info.ModTime().UnixNano(), info.Size()))
+		data, err := os.ReadFile(file)
+		if err != nil {
+			lines = append(lines, file+":unreadable")
+			continue
+		}
+		contentSum := sha1.Sum(data)
+		lines = append(lines, fmt.Sprintf("%s:%d:%d:%x", file, info.ModTime().UnixNano(), info.Size(), contentSum))
 	}
 	sort.Strings(lines)
 	sum := sha1.Sum([]byte(strings.Join(lines, "\n")))

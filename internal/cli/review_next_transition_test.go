@@ -316,7 +316,7 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 	repo, started, _, record := newArtifactReview(t, true)
 	var output bytes.Buffer
 	if err := RunReview([]string{
-		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
+		"status", "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition",
 		"--cwd", repo, "--lineage", started.LineageID,
 	}, &output); err != nil {
 		t.Fatal(err)
@@ -390,7 +390,7 @@ func TestReviewNextTransitionStateTable(t *testing.T) {
 		{"reviewing low partial", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable), []string{reviewtransaction.LensReliability}, nil, reviewNextTransitionCollect, ""},
 		{"reviewing medium all captured", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable), []string{reviewtransaction.LensReliability}, all, reviewNextTransitionExecute, "review.finalize"},
 		{"reviewing high partial", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable), []string{reviewtransaction.LensReliability}, nil, reviewNextTransitionCollect, ""},
-		{"correction required", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateCorrectionRequired, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionCollect, ""},
+		{"correction required without provider request", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateCorrectionRequired, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionStop, ""},
 		{"unchanged corrected authority", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateCorrectionRequired, reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityManualActionRequired), nil, nil, reviewNextTransitionStop, ""},
 		{"validating", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateValidating, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionCollect, ""},
 		{"pending finalize journal", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionReconcileFinalize, reviewtransaction.ReplayabilityStatusRequired), nil, nil, reviewNextTransitionStop, ""},
@@ -759,7 +759,7 @@ func TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedV2Schema(t 
 // reason wholly unrelated to what this test checks.
 func validateAgainstPublishedNextTransitionSchema(t *testing.T, payload []byte) {
 	t.Helper()
-	validateAgainstPublishedStatusNextTransitionSchema(t, "status.schema.json", payload)
+	validateAgainstPublishedStatusNextTransitionSchema(t, "v1", "status.schema.json", payload)
 }
 
 // validateAgainstPublishedNextTransitionSchemaV2 performs the identical
@@ -768,7 +768,12 @@ func validateAgainstPublishedNextTransitionSchema(t *testing.T, payload []byte) 
 // $defs/next_transition subtree, so the v2 wire shape stays pinned too.
 func validateAgainstPublishedNextTransitionSchemaV2(t *testing.T, payload []byte) {
 	t.Helper()
-	validateAgainstPublishedStatusNextTransitionSchema(t, "status-v2.schema.json", payload)
+	validateAgainstPublishedStatusNextTransitionSchema(t, "v1", "status-v2.schema.json", payload)
+}
+
+func validateAgainstPublishedNextTransitionSchemaV4(t *testing.T, payload []byte) {
+	t.Helper()
+	validateAgainstPublishedStatusNextTransitionSchema(t, "v2", "status-v4.schema.json", payload)
 }
 
 // validateAgainstPublishedStatusNextTransitionSchema is the shared engine
@@ -779,13 +784,13 @@ func validateAgainstPublishedNextTransitionSchemaV2(t *testing.T, payload []byte
 // deliberately excluding the top-level schema's "projection" property so
 // compiling never touches projection.schema.json's RE2-incompatible
 // negative-lookahead regex (see the comment above the v1 wrapper).
-func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, schemaFile string, payload []byte) {
+func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, schemaFile string, payload []byte) {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas"))
+	root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	statusSchemaBytes, err := os.ReadFile(filepath.Join(root, schemaFile))
+	statusSchemaBytes, err := os.ReadFile(filepath.Join(root, version, "schemas", schemaFile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -802,15 +807,28 @@ func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, schemaFile
 		t.Fatalf("%s $defs.next_transition is missing or not an object: %#v", schemaFile, defs["next_transition"])
 	}
 
-	const location = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/_test-next-transition.schema.json"
+	location := "https://gentle-ai.dev/contracts/review-integration/" + version + "/schemas/_test-next-transition.schema.json"
 	synthetic := map[string]any{"$schema": statusSchema["$schema"], "$id": location, "$defs": defs}
 	for key, value := range nextTransition {
 		synthetic[key] = value
 	}
 
 	compiler := jsonschema.NewCompiler()
-	for _, ref := range []string{"targeted-validation-request.schema.json", "artifact-subject.schema.json", "start-v2.schema.json"} {
-		refBytes, err := os.ReadFile(filepath.Join(root, ref))
+	resources := []struct{ version, name string }{
+		{"v1", "status-v2.schema.json"},
+		{"v1", "targeted-validation-request.schema.json"},
+		{"v1", "correction-plan-request.schema.json"},
+		{"v1", "artifact-subject.schema.json"},
+		{"v1", "start-v2.schema.json"},
+	}
+	if version == "v2" {
+		resources = append(resources,
+			struct{ version, name string }{"v2", "artifact-subject.schema.json"},
+			struct{ version, name string }{"v2", "start.schema.json"},
+		)
+	}
+	for _, resource := range resources {
+		refBytes, err := os.ReadFile(filepath.Join(root, resource.version, "schemas", resource.name))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -818,7 +836,11 @@ func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, schemaFile
 		if err := json.Unmarshal(refBytes, &refSchema); err != nil {
 			t.Fatal(err)
 		}
-		if err := compiler.AddResource("https://gentle-ai.dev/contracts/review-integration/v1/schemas/"+ref, refSchema); err != nil {
+		if resource.version == "v1" && resource.name == "status-v2.schema.json" {
+			document := refSchema.(map[string]any)
+			refSchema = map[string]any{"$schema": document["$schema"], "$id": document["$id"], "$defs": document["$defs"]}
+		}
+		if err := compiler.AddResource("https://gentle-ai.dev/contracts/review-integration/"+resource.version+"/schemas/"+resource.name, refSchema); err != nil {
 			t.Fatal(err)
 		}
 	}

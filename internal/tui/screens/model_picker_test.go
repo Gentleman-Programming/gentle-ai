@@ -1,6 +1,10 @@
 package screens
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1109,6 +1113,13 @@ func TestNewModelPickerState(t *testing.T) {
 	}
 }
 
+func TestNewModelPickerStateCacheErrorStillDiscovers(t *testing.T) {
+	state := NewModelPickerState(writeTempFile(t, "models.json", `{`), writeTempFile(t, "opencode.json", `{"provider":{"lmstudio":{"url":"http://gateway:1234/v1","models":{"model":{"tool_call":true}}}}}`))
+	if state.Providers == nil || state.lmStudioURL != "http://gateway:1234/v1" || len(state.AvailableIDs) != 1 || !strings.Contains(state.ConfigWarning, "model cache") || state.DiscoverLMStudioCmd() == nil {
+		t.Fatalf("cache fallback state = %+v", state)
+	}
+}
+
 // TestNewModelPickerStateCollisionCustomWins verifies that when a model ID exists
 // in both the catalog cache and opencode.json, the custom entry takes precedence.
 func TestNewModelPickerStateCollisionCustomWins(t *testing.T) {
@@ -1136,6 +1147,62 @@ func TestNewModelPickerStateCollisionCustomWins(t *testing.T) {
 	}
 	if m.Name != "Custom Override Name" {
 		t.Errorf("model name = %q, want %q (custom should win on collision)", m.Name, "Custom Override Name")
+	}
+}
+
+func lmStudioState(t *testing.T, catalog, settings string) ModelPickerState {
+	t.Helper()
+	return NewModelPickerState(writeTempFile(t, "models.json", catalog), writeTempFile(t, "opencode.json", settings))
+}
+
+func TestLMStudioDiscovery(t *testing.T) {
+	for name, tt := range map[string]struct{ settings, url string }{
+		"default URL":    {`{}`, "http://127.0.0.1:1234/v1"},
+		"configured URL": {`{"provider":{"lmstudio":{"url":"http://gateway:1234/v1"}}}`, "http://gateway:1234/v1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls, gotURL, original := 0, "", fetchDynamicModels
+			fetchDynamicModels = func(ctx context.Context, url string) ([]opencode.ConfigModel, error) {
+				calls++
+				gotURL = url
+				return nil, nil
+			}
+			t.Cleanup(func() { fetchDynamicModels = original })
+			state := lmStudioState(t, catalogJSON, tt.settings)
+			if calls != 0 {
+				t.Fatalf("NewModelPickerState made %d discovery calls", calls)
+			}
+			msg := state.DiscoverLMStudioCmd()().(LMStudioDiscoveryMsg)
+			if calls != 1 || gotURL != tt.url || msg.BaseURL != tt.url {
+				t.Fatalf("discovery = calls:%d URL:%q message:%q", calls, gotURL, msg.BaseURL)
+			}
+		})
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"data":[{"id":"model"}]}`)) }))
+	defer server.Close()
+	fetched := lmStudioState(t, `{}`, `{"provider":{"lmstudio":{"url":"`+server.URL+`"}}}`).DiscoverLMStudioCmd()().(LMStudioDiscoveryMsg)
+	if len(fetched.Models) != 1 || fetched.Models[0].Name != "model" || fetched.Models[0].ToolCall {
+		t.Fatalf("unexpected fetched models: %+v", fetched.Models)
+	}
+	state := lmStudioState(t, `{"lmstudio":{"models":{"unloaded":{"id":"unloaded","tool_call":true},"static":{"id":"static","name":"Static","tool_call":true},"configured":{"id":"configured"}}}}`, `{"provider":{"lmstudio":{"models":{"configured":{"name":"User","tool_call":true}}}}}`)
+	state = state.Update(LMStudioDiscoveryMsg{BaseURL: state.lmStudioURL, Models: []opencode.ConfigModel{{Name: "configured"}, {Name: "static"}, {Name: "unknown"}}})
+	lm := state.Providers["lmstudio"]
+	if _, ok := lm.Models["unloaded"]; ok || lm.Models["configured"].Name != "User" || !lm.Models["configured"].ToolCall || lm.Models["static"].Name != "Static" || lm.Models["unknown"].ToolCall || len(state.SDDModels["lmstudio"]) != 2 {
+		t.Fatalf("unexpected models: %+v", lm.Models)
+	}
+	state = lmStudioState(t, `{}`, `{}`).Update(LMStudioDiscoveryMsg{BaseURL: "http://127.0.0.1:1234/v1", Models: []opencode.ConfigModel{{Name: "unknown"}}})
+	if len(state.AvailableIDs) != 0 || !strings.Contains(state.ConfigWarning, "tool_call: true") {
+		t.Fatalf("unsafe unknown model state: %+v", state)
+	}
+	state = lmStudioState(t, `{"lmstudio":{"models":{"catalog":{"id":"catalog","tool_call":true}}}}`, `{"provider":{"lmstudio":{"models":{"configured":{"tool_call":true}}}}}`)
+	state = state.Update(LMStudioDiscoveryMsg{BaseURL: state.lmStudioURL, Err: errors.New("connection refused")})
+	if _, ok := state.Providers["lmstudio"].Models["catalog"]; !ok || !state.Providers["lmstudio"].Models["configured"].ToolCall || !strings.Contains(state.ConfigWarning, "discovery failed") {
+		t.Fatalf("fallback lost: %+v", state)
+	}
+	state = lmStudioState(t, `{}`, `{"provider":{"lmstudio":{"url":"http://gateway:1234/v1"}}}`)
+	state = state.Update(LMStudioDiscoveryMsg{BaseURL: "http://127.0.0.1:1234/v1", Models: []opencode.ConfigModel{{Name: "stale"}}})
+	if _, ok := state.Providers["lmstudio"].Models["stale"]; ok || state.ConfigWarning != "" {
+		t.Fatalf("stale response changed state: %+v", state)
 	}
 }
 

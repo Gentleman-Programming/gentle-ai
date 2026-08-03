@@ -974,3 +974,57 @@ func TestFixOpenRouterModels(t *testing.T) {
 		}
 	})
 }
+
+func TestEnrichWithVariantsFallbackProviderMismatch(t *testing.T) {
+	dir := t.TempDir()
+	variantsPath := filepath.Join(dir, "model-variants.json")
+	// Plugin cached variants under provider "openai"
+	variantsData := `{
+		"openai": {
+			"gpt-5.6-luna": ["low", "medium", "high", "max"]
+		}
+	}`
+	if err := os.WriteFile(variantsPath, []byte(variantsData), 0o644); err != nil {
+		t.Fatalf("write variants fixture: %v", err)
+	}
+
+	// Cached providers in gentle-ai has both "openai" (exact match) and "opencode" (built-in/custom alias)
+	cached := map[string]Provider{
+		"openai": {
+			ID:   "openai",
+			Name: "OpenAI",
+			Models: map[string]Model{
+				"gpt-5.6-luna": {
+					ID:       "gpt-5.6-luna",
+					Name:     "GPT-5.6 Luna",
+					ToolCall: true,
+				},
+			},
+		},
+		"opencode": {
+			ID:   "opencode",
+			Name: "OpenCode",
+			Models: map[string]Model{
+				"gpt-5.6-luna": {
+					ID:       "gpt-5.6-luna",
+					Name:     "GPT-5.6 Luna",
+					ToolCall: true,
+				},
+			},
+		},
+	}
+
+	EnrichWithVariants(cached, variantsPath)
+
+	wantLevels := []string{"low", "medium", "high", "max"}
+
+	modelOpenAI := cached["openai"].Models["gpt-5.6-luna"]
+	if !reflect.DeepEqual(modelOpenAI.Variants, wantLevels) {
+		t.Fatalf("exact match openai model variants = %v, want %v", modelOpenAI.Variants, wantLevels)
+	}
+
+	modelOpenCode := cached["opencode"].Models["gpt-5.6-luna"]
+	if !reflect.DeepEqual(modelOpenCode.Variants, wantLevels) {
+		t.Fatalf("fallback opencode model variants = %v, want %v", modelOpenCode.Variants, wantLevels)
+	}
+}

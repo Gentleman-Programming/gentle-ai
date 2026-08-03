@@ -784,16 +784,28 @@ func ggaScriptUpgradeForOS(ctx context.Context, r update.UpdateResult, osName st
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Clone the full repository at the target release tag so the install.sh
+	// Fetch and check out the exact release tag so the install.sh
 	// executed here matches the version the user is upgrading TO, not whatever
-	// is on main at the moment of the upgrade. This prevents a race where a
-	// commit lands on main between the release and the user's upgrade run.
-	targetTag := "v" + r.LatestVersion
+	// is on main at the moment of the upgrade or a homonymous branch ref.
+	targetTagRef := "refs/tags/v" + r.LatestVersion
 	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", r.Tool.Owner, r.Tool.Repo)
-	cloneCmd := execCommand("git", "clone", "--depth=1", "--branch", targetTag, repoURL, tmpDir)
-	cloneCmd.Stdin = nil
-	if out, err := cloneCmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git clone %s: %w (output: %s)", r.Tool.Repo, err, strings.TrimSpace(string(out)))
+
+	initCmd := execCommand("git", "init", tmpDir)
+	initCmd.Stdin = nil
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git init %s: %w (output: %s)", r.Tool.Repo, err, strings.TrimSpace(string(out)))
+	}
+
+	fetchCmd := execCommand("git", "-C", tmpDir, "fetch", "--depth=1", repoURL, targetTagRef+":"+targetTagRef)
+	fetchCmd.Stdin = nil
+	if out, err := fetchCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch %s: %w (output: %s)", r.Tool.Repo, err, strings.TrimSpace(string(out)))
+	}
+
+	checkoutCmd := execCommand("git", "-C", tmpDir, "checkout", "-f", targetTagRef)
+	checkoutCmd.Stdin = nil
+	if out, err := checkoutCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git checkout %s: %w (output: %s)", r.Tool.Repo, err, strings.TrimSpace(string(out)))
 	}
 
 	// Execute install.sh from within the cloned repo (non-interactive).

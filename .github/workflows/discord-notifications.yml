@@ -1,0 +1,91 @@
+name: Discord Notifications
+
+on:
+  release:
+    types: [published]
+  issues:
+    # Keep issue notifications focused on lifecycle changes.
+    types: [opened, closed, reopened]
+
+permissions: {}
+
+jobs:
+  release:
+    name: Notify Discord of release
+    if: ${{ github.event_name == 'release' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send stable release event
+        if: ${{ !github.event.release.prerelease }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_GENTLE_AI_RELEASES_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          webhook_pattern='^https://discord\.com/api/webhooks/[0-9]+/[^/?#]+(/github)?$'
+          if [[ ! "$DISCORD_WEBHOOK_URL" =~ $webhook_pattern ]]; then
+            printf 'Discord webhook endpoint is invalid\n' >&2
+            exit 1
+          fi
+          [[ "$DISCORD_WEBHOOK_URL" == */github ]] || DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL}/github"
+          printf '::add-mask::%s\n' "$DISCORD_WEBHOOK_URL"
+          printf 'url = "%s"\n' "$DISCORD_WEBHOOK_URL" | curl --config - \
+            --silent --show-error --fail \
+            --proto '=https' \
+            --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 60 \
+            --connect-timeout 10 --max-time 30 \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --header 'X-GitHub-Event: release' \
+            --data-binary @"$GITHUB_EVENT_PATH"
+
+      - name: Send prerelease event
+        if: ${{ github.event.release.prerelease }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_GENTLE_AI_BETA_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          webhook_pattern='^https://discord\.com/api/webhooks/[0-9]+/[^/?#]+(/github)?$'
+          if [[ ! "$DISCORD_WEBHOOK_URL" =~ $webhook_pattern ]]; then
+            printf 'Discord webhook endpoint is invalid\n' >&2
+            exit 1
+          fi
+          [[ "$DISCORD_WEBHOOK_URL" == */github ]] || DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL}/github"
+          printf '::add-mask::%s\n' "$DISCORD_WEBHOOK_URL"
+          printf 'url = "%s"\n' "$DISCORD_WEBHOOK_URL" | curl --config - \
+            --silent --show-error --fail \
+            --proto '=https' \
+            --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 60 \
+            --connect-timeout 10 --max-time 30 \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --header 'X-GitHub-Event: release' \
+            --data-binary @"$GITHUB_EVENT_PATH"
+
+  issues:
+    name: Notify Discord of issue event
+    if: ${{ github.event_name == 'issues' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send issue event
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_GENTLE_AI_ISSUES_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          webhook_pattern='^https://discord\.com/api/webhooks/[0-9]+/[^/?#]+(/github)?$'
+          if [[ ! "$DISCORD_WEBHOOK_URL" =~ $webhook_pattern ]]; then
+            printf 'Discord webhook endpoint is invalid\n' >&2
+            exit 1
+          fi
+          [[ "$DISCORD_WEBHOOK_URL" == */github ]] || DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL}/github"
+          printf '::add-mask::%s\n' "$DISCORD_WEBHOOK_URL"
+          printf 'url = "%s"\n' "$DISCORD_WEBHOOK_URL" | curl --config - \
+            --silent --show-error --fail \
+            --proto '=https' \
+            --retry 4 --retry-all-errors --retry-delay 2 --retry-max-time 60 \
+            --connect-timeout 10 --max-time 30 \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --header 'X-GitHub-Event: issues' \
+            --data-binary @"$GITHUB_EVENT_PATH"

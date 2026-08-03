@@ -13,6 +13,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -32,6 +33,10 @@ const ReviewIntegrationCapabilitiesSchema = "gentle-ai.review-integration.capabi
 const ReviewIntegrationCapabilitiesSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities-v1.5.schema.json"
 const ReviewIntegrationCapabilitiesSchemaV2 = "gentle-ai.review-integration.capabilities/v2"
 const ReviewIntegrationCapabilitiesSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities.schema.json"
+const ReviewIntegrationCapabilitiesSchemaV21 = "gentle-ai.review-integration.capabilities/v2.1"
+const ReviewIntegrationCapabilitiesSchemaIDV21 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.1.schema.json"
+const ReviewIntegrationCapabilitiesSchemaV22 = "gentle-ai.review-integration.capabilities/v2.2"
+const ReviewIntegrationCapabilitiesSchemaIDV22 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/capabilities-v2.2.schema.json"
 
 const (
 	reviewRefuterSchemaID   = "https://gentle-ai.dev/schema/review/refuter/v1"
@@ -46,7 +51,7 @@ const (
 // both name this same runnable command instead of only describing the
 // concept, so they cannot drift from each other.
 const reviewNextTransitionRefreshCommand = "gentle-ai review status --cwd <repo> --contract " + ReviewIntegrationContractV1 + " --next-transition"
-const reviewNextTransitionRefreshCommandV2 = "gentle-ai review status --cwd <repo> --contract " + ReviewIntegrationContractV2 + " --next-transition"
+const reviewNextTransitionRefreshCommandV21 = "gentle-ai review status --cwd <repo> --contract " + ReviewIntegrationContractV2 + " --agent " + string(model.AgentClaudeCode) + " --next-transition"
 
 var reviewCapabilitiesBuildInfoReader = debug.ReadBuildInfo
 var reviewCapabilitiesExecutablePath = os.Executable
@@ -288,8 +293,8 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 		},
 	}
 	if contract == ReviewIntegrationContractV2 {
-		result.Schema, result.Contract = ReviewIntegrationCapabilitiesSchemaV2, ReviewIntegrationContractV2
-		result.Protocol = ReviewCapabilitiesProtocol{Major: 2, Minor: 0}
+		result.Schema, result.Contract = ReviewIntegrationCapabilitiesSchemaV22, ReviewIntegrationContractV2
+		result.Protocol = ReviewCapabilitiesProtocol{Major: 2, Minor: 2}
 		for index, schema := range result.Schemas {
 			switch schema {
 			case reviewtransaction.AdmittedReviewerResultSchemaV1:
@@ -297,11 +302,11 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 			case reviewtransaction.ArtifactSubjectSchemaV1:
 				result.Schemas[index] = reviewtransaction.ArtifactSubjectSchema
 			case ReviewIntegrationCapabilitiesSchema:
-				result.Schemas[index] = ReviewIntegrationCapabilitiesSchemaV2
+				result.Schemas[index] = ReviewIntegrationCapabilitiesSchemaV22
 			case ReviewIntegrationFailureSchema:
 				result.Schemas[index] = ReviewIntegrationFailureSchemaV2
 			case ReviewIntegrationConsentSchema:
-				result.Schemas[index] = ReviewIntegrationConsentSchemaV2
+				result.Schemas[index] = ReviewIntegrationConsentSchemaV3
 			case ReviewIntegrationOperationSchema:
 				result.Schemas[index] = ReviewIntegrationOperationSchemaV2
 			case ReviewIntegrationRepairSchema:
@@ -312,12 +317,16 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 				result.Schemas[index] = ReviewIntegrationStatusSchema
 			}
 		}
-		result.Schemas = append(result.Schemas, ReviewIntegrationConsentSchemaV2)
+		result.Schemas = append(result.Schemas, ReviewIntegrationConsentSchemaV3)
 		result.Features.Optional = append(result.Features.Optional, ReviewCapabilityFeature{
 			Name: "provider_bound_native_git_context", Supported: true,
 			Requires: []string{"native_frozen_candidate_context", "opaque_repository_context", "provider_artifact_admission"},
 		})
-		result.Bootstrap.Command = reviewNextTransitionRefreshCommandV2
+		result.Features.Optional = append(result.Features.Optional, ReviewCapabilityFeature{
+			Name: "provider_submission_descriptors", Supported: true,
+			Requires: []string{"native_next_transition", "opaque_repository_context", "provider_targeted_validation_request"},
+		})
+		result.Bootstrap.Command = reviewNextTransitionRefreshCommandV21
 		result.Compatibility.MinimumProtocolMajor, result.Compatibility.MaximumProtocolMajor = 2, 2
 		result.Compatibility.AdditiveMinorPolicy = "optional-fields-only"
 	}

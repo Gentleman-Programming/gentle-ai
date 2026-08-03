@@ -75,6 +75,35 @@ func TestCheckOneTool_ShadowedBinary(t *testing.T) {
 	}
 }
 
+func TestDoctorToolCopies_DeduplicatesSymlinkedPathDirectories(t *testing.T) {
+	origExts := executableExtsFn
+	defer func() { executableExtsFn = origExts }()
+	executableExtsFn = func() []string { return []string{""} }
+
+	root := t.TempDir()
+	usrBin := filepath.Join(root, "usr", "bin")
+	if err := os.MkdirAll(usrBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	code := filepath.Join(usrBin, "code")
+	if err := os.WriteFile(code, []byte("fake"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	bin := filepath.Join(root, "bin")
+	if err := os.Symlink(usrBin, bin); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+
+	got := doctorToolCopies("code", []string{bin, usrBin})
+	if len(got) != 1 {
+		t.Fatalf("copies = %v, want one copy", got)
+	}
+	if want := filepath.Join(bin, "code"); got[0] != want {
+		t.Fatalf("copies[0] = %q, want first PATH entry %q", got[0], want)
+	}
+}
+
 func TestCheckOneTool_OK(t *testing.T) {
 	orig := lookPathFn
 	defer func() { lookPathFn = orig }()
