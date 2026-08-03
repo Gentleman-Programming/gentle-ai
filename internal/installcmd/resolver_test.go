@@ -451,6 +451,36 @@ func TestUVInstallHint(t *testing.T) {
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
 			want:    "apk add --no-cache uv (requires community); otherwise: apk add --no-cache curl && curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\"",
 		},
+		{
+			name:    "brew hint is unchanged",
+			profile: system.PlatformProfile{PackageManager: "brew"},
+			want:    "brew install uv",
+		},
+		{
+			name:    "apt hint is unchanged",
+			profile: system.PlatformProfile{PackageManager: "apt"},
+			want:    "sudo apt-get install -y uv (or see https://docs.astral.sh/uv/getting-started/installation/)",
+		},
+		{
+			name:    "pacman hint is unchanged",
+			profile: system.PlatformProfile{PackageManager: "pacman"},
+			want:    "sudo pacman -S --noconfirm uv",
+		},
+		{
+			name:    "dnf hint is unchanged",
+			profile: system.PlatformProfile{PackageManager: "dnf"},
+			want:    "sudo dnf install -y uv",
+		},
+		{
+			name:    "winget hint is unchanged",
+			profile: system.PlatformProfile{PackageManager: "winget"},
+			want:    "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements",
+		},
+		{
+			name:    "unsupported package manager uses documentation",
+			profile: system.PlatformProfile{PackageManager: "zypper"},
+			want:    "https://docs.astral.sh/uv/getting-started/installation/",
+		},
 	}
 
 	for _, tt := range tests {
