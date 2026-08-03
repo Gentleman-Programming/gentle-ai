@@ -187,70 +187,13 @@ func TestReviewPluginRejectsInvalidBindingBeforeReviewerLaunch(t *testing.T) {
 	}
 }
 
-func TestReviewPluginBindsProviderOwnedCandidateContext(t *testing.T) {
-	baseTree := strings.Repeat("1", 40)
-	candidateTree := strings.Repeat("2", 40)
-	preflight := reviewPluginPreflight(baseTree, candidateTree)
-	prompt := runReviewPluginScenarioWithNative(t, "before-valid", preflight, "")
-	if !strings.HasPrefix(prompt, "GENTLE_AI_REVIEW_BINDING {") {
-		t.Fatalf("injected prompt does not begin with the exact binding prefix: %q", prompt)
+func TestReviewPluginRejectsUnsupportedInspectionBeforeReviewerLaunch(t *testing.T) {
+	message := runReviewPluginScenario(t, "before-valid", "NATIVE-PROCESS-MUST-NOT-RUN")
+	if message != "unsupported-capability" {
+		t.Fatalf("unsupported inspection did not stop before reviewer launch: %s", message)
 	}
-	if !strings.Contains(prompt, `"subject_hash":"sha256:`+strings.Repeat("c", 64)+`"`) {
-		t.Fatalf("bound prompt is missing the preflight subject hash: %q", prompt)
-	}
-	for _, want := range []string{"GENTLE_AI_REVIEW_CONTEXT ", baseTree, candidateTree, "internal/example.go"} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("plugin omitted provider context %q: %q", want, prompt)
-		}
-	}
-	if strings.Contains(prompt, "candidate_diff") {
-		t.Fatalf("injected prompt contains obsolete candidate diff payload: %q", prompt)
-	}
-}
-
-func TestReviewPluginRejectsNonCanonicalProviderManifest(t *testing.T) {
-	entry := `{"path":"internal/example.go","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false}`
-	unsorted := `{"path":"z.go","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false},` + entry
-	preflight := strings.Replace(reviewPluginPreflight(strings.Repeat("1", 40), strings.Repeat("2", 40)), entry, unsorted, 1)
-	message := runReviewPluginScenarioWithNative(t, "before-valid", preflight, "")
-	if !strings.Contains(message, "review capture preflight failed") || !strings.Contains(message, "The reviewer was not launched") {
-		t.Fatalf("non-canonical provider manifest was accepted: %s", message)
-	}
-	if strings.Contains(message, "incomplete artifact subject") {
-		t.Fatalf("opaque preflight exposed native validation detail: %s", message)
-	}
-}
-
-func TestReviewPluginReplacesCallerAuthoredCandidateContext(t *testing.T) {
-	baseTree := strings.Repeat("1", 40)
-	candidateTree := strings.Repeat("2", 40)
-	prompt := runReviewPluginScenarioWithNative(t, "before-substitute", reviewPluginPreflight(baseTree, candidateTree), "")
-	for _, callerValue := range []string{strings.Repeat("9", 40), strings.Repeat("8", 40), "caller.txt", "review the frozen candidate"} {
-		if strings.Contains(prompt, callerValue) {
-			t.Fatalf("provider injection retained caller-authored context %q: %q", callerValue, prompt)
-		}
-	}
-	for _, providerValue := range []string{baseTree, candidateTree, "internal/example.go"} {
-		if !strings.Contains(prompt, providerValue) {
-			t.Fatalf("provider injection omitted preflight context %q: %q", providerValue, prompt)
-		}
-	}
-}
-
-func reviewPluginPreflight(baseTree, candidateTree string) string {
-	return `{"schema":"gentle-ai.review-capture-preflight/v1","capability":"review.native_capture_preflight",` +
-		`"lineage_id":"trust-check","target_identity":"sha256:` + strings.Repeat("d", 64) + `","lens":"review-risk","selected_order":0,` +
-		`"artifact_subject":{"schema":"gentle-ai.review-artifact-subject/v2","subject_hash":"sha256:` + strings.Repeat("c", 64) + `",` +
-		`"lineage_id":"trust-check","authority_revision":"sha256:` + strings.Repeat("b", 64) + `","target_identity":"sha256:` + strings.Repeat("d", 64) + `",` +
-		`"base_tree":"` + baseTree + `","candidate_tree":"` + candidateTree + `","changed_path_manifest_sha256":"sha256:` + strings.Repeat("e", 64) + `",` +
-		`"lens":"review-risk","selected_order":0},"base_tree":"` + baseTree + `","candidate_tree":"` + candidateTree + `",` +
-		`"changed_path_manifest":[{"path":"internal/example.go","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false}]}`
-}
-
-func TestReviewPluginRejectsLegacyBinaryWithoutPreflightBeforeReviewerLaunch(t *testing.T) {
-	message := runReviewPluginScenario(t, "before-legacy", "flag provided but not defined: -preflight")
-	if !strings.Contains(message, "review capture preflight failed") || !strings.Contains(message, "The reviewer was not launched") {
-		t.Fatalf("unsupported preflight did not fail closed before reviewer launch: %s", message)
+	if strings.Contains(message, "NATIVE-PROCESS-MUST-NOT-RUN") {
+		t.Fatalf("unsupported inspection started a native process: %s", message)
 	}
 }
 
@@ -294,26 +237,13 @@ func TestReviewPluginPostLaunchTrustRefusalStaysActionable(t *testing.T) {
 	}
 }
 
-// TestReviewPluginSurfacesNativeGitTrustRefusal pins the other half of finding
-// 1: the plugin must stop collapsing a native Git trust refusal into
-// "refresh the exact native next_transition", which cannot change the Git trust
-// context of an already-running host process.
-func TestReviewPluginSurfacesNativeGitTrustRefusal(t *testing.T) {
+func TestReviewPluginStopsBeforeNativeGitTrustPreflight(t *testing.T) {
 	message := runReviewPluginScenario(t, "before-opaque", reviewPluginNativeTrustFailure)
-	if message == "NO_ERROR" {
-		t.Fatal("preflight did not fail despite an always-failing native binary")
+	if message != "unsupported-capability" {
+		t.Fatalf("plugin did not stop before native trust preflight: %s", message)
 	}
-	if !strings.Contains(message, "git_repository_untrusted") {
-		t.Fatalf("plugin suppressed the native Git trust refusal: %s", message)
-	}
-	if strings.Contains(message, "next_transition") {
-		t.Fatalf("plugin still advises refreshing the transition for a Git trust refusal: %s", message)
-	}
-	if !strings.Contains(message, "Restart the host process") {
-		t.Fatalf("plugin carries no instruction the caller can carry out: %s", message)
-	}
-	if !strings.Contains(message, "The reviewer was not launched") {
-		t.Fatalf("plugin lost its pre-launch exactly-once guarantee: %s", message)
+	if strings.Contains(message, "git_repository_untrusted") {
+		t.Fatalf("plugin ran the native trust preflight: %s", message)
 	}
 }
 
@@ -478,17 +408,11 @@ func TestReviewPluginBoundsRecoveryWithoutLifecycleEvents(t *testing.T) {
 	}
 }
 
-// TestReviewPluginKeepsGenericOpaqueFailureOpaque proves the trust pass-through
-// is not a hole in the opaque path's path-safety rule: any other native failure
-// still collapses into the generic provider-owned message.
-func TestReviewPluginKeepsGenericOpaqueFailureOpaque(t *testing.T) {
+func TestReviewPluginStopsBeforeOpaquePreflight(t *testing.T) {
 	leak := "repository_context_unavailable: provider-issued review repository context operation failed; " +
 		"failed under /home/someone/private/repo"
 	message := runReviewPluginScenario(t, "before-opaque", leak)
-	if strings.Contains(message, "/home/someone/private/repo") {
-		t.Fatalf("plugin forwarded a native path through an opaque binding: %s", message)
-	}
-	if !strings.Contains(message, "repository_context_preflight_failed") {
-		t.Fatalf("generic opaque failure lost its provider-owned code: %s", message)
+	if message != "unsupported-capability" {
+		t.Fatalf("plugin did not stop before opaque preflight: %s", message)
 	}
 }
