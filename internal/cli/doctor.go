@@ -110,6 +110,7 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		doctor.Check{ID: doctor.CheckStateJSON, Run: func(context.Context) doctor.Result { return checkStateJSON(homeDir) }},
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(context.Context) doctor.Result { return checkEngramReachable() }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
+		doctor.Check{ID: doctor.CheckManagedAssets, Run: func(context.Context) doctor.Result { return checkManagedAssets(homeDir) }},
 	)
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
 
@@ -515,6 +516,45 @@ func checkDiskSpace(homeDir string) CheckResult {
 			Status: CheckStatusPass,
 			Detail: fmt.Sprintf("%d MB free on %s filesystem", freeMB, dir),
 		}
+	}
+}
+
+// checkManagedAssets verifies whether installed managed assets align with the running executable version.
+func checkManagedAssets(homeDir string) CheckResult {
+	const id = doctor.CheckManagedAssets
+	s, err := state.Read(homeDir)
+	if err != nil {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: "managed assets manifest unknown (state file unreadable)",
+			Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to align managed skills with executable"),
+		}
+	}
+
+	if s.ManagedAssetsProducerVersion == "" && s.ManagedAssetsProducerCommit == "" {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: "no managed assets version recorded in state.json (run 'gentle-ai sync' to generate manifest)",
+			Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to record managed assets version"),
+		}
+	}
+
+	exeVersion, exeCommit := reviewGentleAIVersionAndCommit()
+	if s.ManagedAssetsProducerVersion == exeVersion || (exeCommit != "unknown" && s.ManagedAssetsProducerCommit == exeCommit) {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusPass,
+			Detail: fmt.Sprintf("managed assets aligned with binary (producer version %s)", s.ManagedAssetsProducerVersion),
+		}
+	}
+
+	return CheckResult{
+		Name:   id,
+		Status: CheckStatusWarn,
+		Detail: fmt.Sprintf("managed assets producer version (%s) differs from executable version (%s) — mixed-version control plane", s.ManagedAssetsProducerVersion, exeVersion),
+		Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to align managed skills and configs with current binary"),
 	}
 }
 

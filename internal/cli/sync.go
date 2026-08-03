@@ -1382,11 +1382,16 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	if !result.Verify.Ready {
 		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
-	if persistedStateErr == nil && !persistedState.CommunityToolsConfigured && selection.CommunityTools != nil {
-		persistedState.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
-		persistedState.CommunityToolsConfigured = true
+	if persistedStateErr == nil {
+		exeVersion, exeCommit := reviewGentleAIVersionAndCommit()
+		persistedState.ManagedAssetsProducerVersion = exeVersion
+		persistedState.ManagedAssetsProducerCommit = exeCommit
+		if !persistedState.CommunityToolsConfigured && selection.CommunityTools != nil {
+			persistedState.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
+			persistedState.CommunityToolsConfigured = true
+		}
 		if err := state.Write(homeDir, persistedState); err != nil {
-			return result, fmt.Errorf("persist migrated community tool selection: %w", err)
+			return result, fmt.Errorf("persist sync state: %w", err)
 		}
 	}
 

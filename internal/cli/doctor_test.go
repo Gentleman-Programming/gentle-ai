@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 // --- checkOneTool ---
@@ -821,5 +822,39 @@ func TestRenderDoctorReportDoesNotRenderRemedyMetadata(t *testing.T) {
 	want := "gentle-ai doctor — system health check\n=======================================\n\n  [xx]  disk:space                     cleanup needed\n       Remedy: Free disk space\n\nSummary: 0 passed, 1 failed, 0 warnings\nStatus:  unhealthy\n"
 	if got := buf.String(); got != want {
 		t.Fatalf("rendered report mismatch\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestCheckManagedAssets(t *testing.T) {
+	homeDir := t.TempDir()
+
+	// 1. Unrecorded state
+	_ = state.Write(homeDir, state.InstallState{InstalledAgents: []string{"codex"}})
+	resUnrecorded := checkManagedAssets(homeDir)
+	if resUnrecorded.Status != CheckStatusWarn || !strings.Contains(resUnrecorded.Detail, "no managed assets version recorded") {
+		t.Fatalf("expected warn for unrecorded managed assets, got status=%v detail=%q", resUnrecorded.Status, resUnrecorded.Detail)
+	}
+
+	// 2. Aligned state
+	exeVersion, exeCommit := reviewGentleAIVersionAndCommit()
+	_ = state.Write(homeDir, state.InstallState{
+		InstalledAgents:              []string{"codex"},
+		ManagedAssetsProducerVersion: exeVersion,
+		ManagedAssetsProducerCommit:  exeCommit,
+	})
+	resAligned := checkManagedAssets(homeDir)
+	if resAligned.Status != CheckStatusPass || !strings.Contains(resAligned.Detail, "aligned") {
+		t.Fatalf("expected pass for aligned managed assets, got status=%v detail=%q", resAligned.Status, resAligned.Detail)
+	}
+
+	// 3. Mismatched / mixed state
+	_ = state.Write(homeDir, state.InstallState{
+		InstalledAgents:              []string{"codex"},
+		ManagedAssetsProducerVersion: "2.1.10",
+		ManagedAssetsProducerCommit:  "oldcommit123",
+	})
+	resMismatched := checkManagedAssets(homeDir)
+	if resMismatched.Status != CheckStatusWarn || !strings.Contains(resMismatched.Detail, "differs") {
+		t.Fatalf("expected warn for mismatched managed assets, got status=%v detail=%q", resMismatched.Status, resMismatched.Detail)
 	}
 }

@@ -129,6 +129,13 @@ type InstallState struct {
 	// recorded is authority, not a cosmetic audit field. Nil for state files
 	// written before the switch existed.
 	RDDModeRecordedAt *time.Time `json:"rdd_mode_recorded_at,omitempty"`
+
+	// ManagedAssetsProducerVersion records the version string of the binary that
+	// last generated/synced managed skills and configs.
+	ManagedAssetsProducerVersion string `json:"managed_assets_producer_version,omitempty"`
+	// ManagedAssetsProducerCommit records the commit hash of the binary that
+	// last generated/synced managed skills and configs.
+	ManagedAssetsProducerCommit string `json:"managed_assets_producer_commit,omitempty"`
 }
 
 // Path returns the absolute path to the state file for the given home directory.
@@ -215,6 +222,8 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		PendingSync:                 existing.PendingSync,
 		RDDMode:                     existing.RDDMode,
 		RDDModeRecordedAt:           existing.RDDModeRecordedAt,
+		ManagedAssetsProducerVersion: existing.ManagedAssetsProducerVersion,
+		ManagedAssetsProducerCommit:  existing.ManagedAssetsProducerCommit,
 	}
 }
 
