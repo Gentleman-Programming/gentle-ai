@@ -58,14 +58,19 @@ func forgedRecoveryPair(t *testing.T, repo, suffix, target string, mutate ...fun
 	return predecessor, successor, successorStore
 }
 
-// TestForgedRecoveryAuthorizationOnNonPristineSuccessorStaysBlocked pins the
-// one shape that remains unrecoverable. Reconciliation refuses it as
+// TestForgedRecoveryAuthorizationOnNonPristineSuccessorHasSanctionedRepairExit
+// pins the shape #2014 named as a dead end: reconciliation refuses it as
 // corruption and the abandonment gate refuses to discard captured review
-// results, so no advertised operation clears it. Admitting it would mean
-// making the corruption class quarantinable, which is a maintainer decision,
-// not a repair. What this test does require is that the refusal say so
-// precisely and never name a command that would not resolve the block.
-func TestForgedRecoveryAuthorizationOnNonPristineSuccessorStaysBlocked(t *testing.T) {
+// results — but Wave 2's leaf authority disposition plan closes exactly this
+// content_mismatched_recovery_authorization class, and quarantine byte-
+// preserves the entry (nothing is discarded the way `review abandon` would
+// discard captured review results), so the successor's pristine state does
+// not gate admission (rdd-leaf-disposition-execution: cardinality is the only
+// admission predicate). SanctionedCompactRecoveryExits (Wave 2 Slice S3) now
+// names `review repair` for this edge. ReconcileInvalidRecoveryEdge itself
+// still independently refuses this edge as corruption — its own refusal
+// continuation is a separate, unmodified code path this slice.
+func TestForgedRecoveryAuthorizationOnNonPristineSuccessorHasSanctionedRepairExit(t *testing.T) {
 	ctx := context.Background()
 	repo := initSnapshotRepo(t)
 	predecessor, successor, successorStore := forgedRecoveryPair(t, repo, "captured", "forged captured target\n", func(state *CompactState) {
@@ -95,8 +100,8 @@ func TestForgedRecoveryAuthorizationOnNonPristineSuccessorStaysBlocked(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(exits) != 1 || exits[0].Operation != "" || !strings.Contains(exits[0].Blocked, "no advertised operation admits this edge") {
-		t.Fatalf("blocked exit = %#v", exits)
+	if len(exits) != 1 || exits[0].Operation != CompactRecoveryEdgeExitRepair || exits[0].Blocked != "" {
+		t.Fatalf("disposition-eligible sanctioned exit = %#v", exits)
 	}
 
 	_, err = ReconcileInvalidRecoveryEdge(ctx, repo, forgedReconcileRequest(predecessor, successor))
