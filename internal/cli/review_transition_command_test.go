@@ -295,6 +295,10 @@ func TestReviewTransitionCommandQuotesFreeTextValues(t *testing.T) {
 // the emitted line and reports each argv entry, which must be byte-identical
 // to the payload's own tokens.
 func TestReviewTransitionCommandQuotedTokensSurviveShellWordSplitting(t *testing.T) {
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("POSIX shell is unavailable")
+	}
 	arguments := []ReviewTransitionArgument{
 		{Name: "lineage", Value: "review-quote", Token: "--lineage=review-quote"},
 		{Name: "reason", Value: "historical alias repair", Token: "--reason=historical alias repair"},
@@ -302,7 +306,7 @@ func TestReviewTransitionCommandQuotedTokensSurviveShellWordSplitting(t *testing
 	}
 	command := reviewTransitionCommandLine("review.repair", arguments)
 	script := "set -- " + strings.TrimPrefix(command, "gentle-ai review repair ") + "\nfor argument in \"$@\"; do printf '%s\\n' \"$argument\"; done"
-	output, err := exec.Command("/bin/sh", "-c", script).Output()
+	output, err := exec.Command(shell, "-c", script).Output()
 	if err != nil {
 		t.Fatalf("shell rejected the emitted command %q: %v", command, err)
 	}

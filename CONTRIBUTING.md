@@ -150,6 +150,18 @@ go vet ./...
 go test ./...
 ```
 
+The portable core includes `j52` through `j56` and `j58` under a normal product
+binary. `j57` is source-coupled, so build its tagged product binary from the
+repository root, then run it from `bench/`:
+
+```bash
+# From the repository root.
+go build -tags bench_fixture -o /path/to/gentle-ai ./cmd/gentle-ai
+
+# From bench/, after building gentle-ai-bench above.
+./gentle-ai-bench run --binary /path/to/gentle-ai --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed
+```
+
 Benchmark validation applies to review-lifecycle, gate, recovery, delivery, benchmark implementation/corpus/classifier, and benchmark-claim changes. For measured product-behavior changes, use driven mode and report the command, tested binary or commit, selected subset or axes, and result summary. Compare before and after only when claiming a measured friction change. For unrelated changes, mark benchmark validation `N/A` with a brief reason.
 
 ### Windows — Known Test Limitations

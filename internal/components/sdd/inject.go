@@ -803,7 +803,7 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 	if !ok {
 		return overlayBytes, nil
 	}
-	expandOpenCodeBoundedReviewAgents(agentsMap)
+	expandOpenCodeBoundedReviewAgents(agentsMap, agent)
 
 	// Inline the orchestrator prompt (always inlined, not a file reference),
 	// unless an external strategy requested preserving the existing prompt.
@@ -943,10 +943,17 @@ func extractManagedSection(content, sectionID string) string {
 	return strings.Trim(content[start+len(open):end], "\n")
 }
 
-func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
+func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any, agentID model.AgentID) {
 	for _, name := range opencode.ReviewLensPhases() {
 		agent, ok := agentsMap[name].(map[string]any)
 		if !ok {
+			continue
+		}
+		if agentID == model.AgentOpenCode {
+			prompt, _ := openCodeUnsupportedReviewerPrompt(name)
+			agent["prompt"] = prompt
+			agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+			agent["permission"] = map[string]any{"edit": "deny", "bash": "deny"}
 			continue
 		}
 		prompt, _ := reviewerPrompt(name)
@@ -1610,12 +1617,23 @@ func claudeHookListContains(hookEntries []any, command string) bool {
 	return false
 }
 
-// ManagedOpenCodePluginNames lists the OpenCode plugin files gentle-ai manages
-// as versioned runtime artifacts. Their content is tied to the installed binary
+// ManagedOpenCodePluginNames lists every OpenCode plugin gentle-ai manages as
+// versioned runtime artifacts. Their content is tied to the installed binary
 // version: install writes them and sync must keep already-installed copies
 // byte-equal to the embedded assets (issue #1440).
 func ManagedOpenCodePluginNames() []string {
-	return []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"}
+	return managedOpenCodePluginNames(model.AgentOpenCode)
+}
+
+func managedOpenCodePluginNames(agent model.AgentID) []string {
+	switch agent {
+	case model.AgentOpenCode:
+		return []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"}
+	case model.AgentKilocode:
+		return []string{"model-variants.ts", "skill-registry.ts"}
+	default:
+		return nil
+	}
 }
 
 // AgentReceivesManagedOpenCodePlugins reports whether the SDD injector
@@ -1637,8 +1655,18 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 
 	var files []string
 	var changed bool
+	if adapter.Agent() == model.AgentKilocode {
+		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		if removed {
+			changed = true
+			files = append(files, path)
+		}
+	}
 
-	for _, name := range ManagedOpenCodePluginNames() {
+	for _, name := range managedOpenCodePluginNames(adapter.Agent()) {
 		pluginPath := filepath.Join(pluginsDir, name)
 		info, err := os.Lstat(pluginPath)
 		if err != nil {
@@ -1663,6 +1691,24 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+func removeOpenCodeOnlyReviewPlugin(pluginsDir string) (string, bool, error) {
+	path := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return path, false, nil
+		}
+		return path, false, fmt.Errorf("stat OpenCode-only review plugin %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return path, false, nil
+	}
+	if err := os.Remove(path); err != nil {
+		return path, false, fmt.Errorf("remove OpenCode-only review plugin %s: %w", path, err)
+	}
+	return path, true, nil
 }
 
 // installOpenCodePlugins copies the OpenCode-compatible plugins that gentle-ai
@@ -1691,7 +1737,18 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 		}
 	}
 
-	for _, name := range ManagedOpenCodePluginNames() {
+	if adapter.Agent() == model.AgentKilocode {
+		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		if removed {
+			changed = true
+			files = append(files, path)
+		}
+	}
+
+	for _, name := range managedOpenCodePluginNames(adapter.Agent()) {
 		content := assets.MustRead("opencode/plugins/" + name)
 		pluginPath := filepath.Join(pluginsDir, name)
 

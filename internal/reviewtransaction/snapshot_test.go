@@ -584,17 +584,17 @@ func TestBaseDiffPreservesIntendedAuthorityAfterTrackedTransition(t *testing.T) 
 // pins the contract behind issue 1778: a large intended-untracked set must
 // reach `git add` without expanding one ":(literal)<path>" pathspec per file
 // into argv, because Windows caps a process command line at 32767
-// characters. 2000 paths of ~30 literal-pathspec characters each produce
-// ~60000 characters, comfortably over that limit, so any regression back to
-// per-path argv entries fails this test even on Linux.
+// characters. 600 paths of 65 literal-pathspec characters each produce 39000
+// characters before separators, comfortably over that limit, while keeping
+// the hosted-Windows Git fixture bounded.
 func TestSnapshotBuilderCurrentChangesStagesLargeIntendedUntrackedWithoutExceedingArgv(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
 
-	const count = 2000
+	const count = 600
 	intended := make([]string, count)
 	for index := 0; index < count; index++ {
-		name := fmt.Sprintf("bulk/headroom-%05d.txt", index)
+		name := fmt.Sprintf("bulk/windows-command-line-headroom-regression-%05d.txt", index)
 		writeSnapshotFile(t, repo, name, fmt.Sprintf("bulk-%05d\n", index))
 		intended[index] = name
 	}
@@ -1634,7 +1634,7 @@ func snapshotRepoTemplate() (string, error) {
 			snapshotRepoTemplateErr = fmt.Errorf("create template directory: %w", err)
 			return
 		}
-		for _, args := range [][]string{{"init"}, {"config", "user.email", "snapshot@example.com"}, {"config", "user.name", "Snapshot Test"}} {
+		for _, args := range [][]string{{"init"}, {"config", "user.email", "snapshot@example.com"}, {"config", "user.name", "Snapshot Test"}, {"config", "core.autocrlf", "false"}} {
 			if snapshotRepoTemplateErr = runSnapshotGit(template, args...); snapshotRepoTemplateErr != nil {
 				_ = os.RemoveAll(template)
 				return
