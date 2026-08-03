@@ -1,64 +1,27 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-const fakeBinaryScriptEnv = "GENTLE_AI_BENCH_FAKE_BINARY_SCRIPT"
-
-func TestMain(m *testing.M) {
-	if script := os.Getenv(fakeBinaryScriptEnv); script != "" {
-		runFakeBinary(script, os.Args[1:])
-	}
-	os.Exit(m.Run())
-}
-
-func runFakeBinary(script string, args []string) {
-	if strings.Contains(script, `case "$*"`) {
-		if strings.Contains(strings.Join(args, " "), "--help") {
-			fmt.Fprintln(os.Stderr, "Error: flag provided but not defined: -help")
-		} else {
-			fmt.Fprintln(os.Stderr, "Error: sdd-attempt requires --cwd")
-		}
-		os.Exit(1)
-	}
-	if strings.Contains(script, "GIT_TRACE=[$GIT_TRACE]") {
-		fmt.Fprintf(os.Stdout, "GIT_TRACE=[%s]\n", os.Getenv("GIT_TRACE"))
-		os.Exit(0)
-	}
-	if strings.Contains(script, `{"next_transition":{"kind":"complete"}}`) {
-		fmt.Fprintln(os.Stdout, `{"next_transition":{"kind":"complete"}}`)
-		os.Exit(0)
-	}
-	if strings.Contains(script, "flag provided but not defined") {
-		fmt.Fprintln(os.Stderr, "Error: flag provided but not defined: -expected-binding-revision")
-		os.Exit(1)
-	}
-	fmt.Fprintln(os.Stderr, "Error: sdd-attempt requires --cwd")
-	os.Exit(1)
-}
-
-// fakeBinary uses the current test executable so the probe cases work on every
-// supported platform without relying on a Unix shell script.
+// fakeBinary writes an executable that answers a fixed argv with a fixed
+// message, so the capability probe can be tested without a real gentle-ai.
 func fakeBinary(t *testing.T, script string) *Sandbox {
 	t.Helper()
 	root := t.TempDir()
-	binary, err := os.Executable()
-	if err != nil {
-		t.Fatalf("test executable: %v", err)
-	}
-	sandbox, err := newSandbox(binary, root)
+	sandbox, err := newSandbox(filepath.Join(root, "fake"), root)
 	if err != nil {
 		t.Fatalf("newSandbox: %v", err)
 	}
 	if err := os.MkdirAll(sandbox.Repo, 0o755); err != nil {
 		t.Fatalf("mkdir repo: %v", err)
 	}
-	sandbox.extraEnv = []string{fakeBinaryScriptEnv + "=" + script}
+	if err := os.WriteFile(sandbox.Binary, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
 	return sandbox
 }
 
