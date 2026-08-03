@@ -518,6 +518,13 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 			return invalid("release evidence changed during final authorization", cause)
 		}
 	}
+	// Wave 1 shadow observation (rdd-shadow-evaluation): outcome-neutral,
+	// advisory-only, and a true no-op unless GENTLE_AI_RDD_SHADOW is set —
+	// see shadow_observer.go. compatibility is already-derived Amendment A
+	// evidence for this exact allow, reused rather than re-derived.
+	ObserveShadowRelation(ctx, repo, request.Gate,
+		receipt.BaseTree, receipt.FinalCandidateTree, receipt.PathsDigest, receipt.PolicyHash,
+		snapshot, record.State.PolicyHash, GateAllow, resolvedPrePR, compatibility)
 	return NativeGateEvaluation{Result: GateAllow, Reason: nativeGateReason(GateAllow), Context: gateContext}
 }
 

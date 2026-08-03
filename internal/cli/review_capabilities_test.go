@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 const capabilityFixtureExecutable = "gentle-ai capability fixture\n"
@@ -83,8 +84,8 @@ func TestReviewCapabilitiesMatchesConformanceFixtureOutsideRepository(t *testing
 	}
 }
 
-func TestReviewCapabilitiesV2MatchesConformanceFixture(t *testing.T) {
-	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities.fixture.json"))
+func TestReviewCapabilitiesV22MatchesConformanceFixture(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.2.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,8 +107,79 @@ func TestReviewCapabilitiesV2MatchesConformanceFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("v2 capabilities do not match conformance fixture:\ngot=%#v\nwant=%#v", got, want)
+		t.Fatalf("v2.2 capabilities do not match conformance fixture:\ngot=%#v\nwant=%#v", got, want)
 	}
+	if got.Schema != ReviewIntegrationCapabilitiesSchemaV22 || got.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 2}) ||
+		got.Bootstrap == nil || got.Bootstrap.Command != reviewNextTransitionRefreshCommandV21 {
+		t.Fatalf("v2.2 capabilities runtime surface = %#v", got)
+	}
+	schema := validateReviewCapabilitiesSchema(t, "capabilities-v2.2.schema.json", ReviewIntegrationCapabilitiesSchemaIDV22, fixture)
+	var malformed map[string]any
+	if err := json.Unmarshal(fixture, &malformed); err != nil {
+		t.Fatal(err)
+	}
+	features := malformed["features"].(map[string]any)
+	optional := features["optional"].([]any)
+	optional[0].(map[string]any)["requires"] = []any{"unknown_required_feature"}
+	if err := schema.Validate(malformed); err == nil {
+		t.Fatal("v2.2 schema accepted an unknown required feature")
+	}
+}
+
+func TestReviewCapabilitiesV21ArtifactRemainsReadable(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capabilities-v2.1.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identity struct {
+		Schema   string                     `json:"schema"`
+		Protocol ReviewCapabilitiesProtocol `json:"protocol"`
+	}
+	if err := json.Unmarshal(fixture, &identity); err != nil {
+		t.Fatal(err)
+	}
+	if identity.Schema != ReviewIntegrationCapabilitiesSchemaV21 || identity.Protocol != (ReviewCapabilitiesProtocol{Major: 2, Minor: 1}) {
+		t.Fatalf("v2.1 capabilities identity = %#v", identity)
+	}
+	validateReviewCapabilitiesSchema(t, "capabilities-v2.1.schema.json", ReviewIntegrationCapabilitiesSchemaIDV21, fixture)
+}
+
+func validateReviewCapabilitiesSchema(t *testing.T, name, id string, fixture []byte) *jsonschema.Schema {
+	t.Helper()
+	root := filepath.Join("..", "..", "contracts", "review-integration")
+	v14, err := os.ReadFile(filepath.Join(root, "v1", "schemas", "capabilities-v1.4.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := os.ReadFile(filepath.Join(root, "v2", "schemas", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	for uri, payload := range map[string][]byte{
+		"https://gentle-ai.dev/contracts/review-integration/v1/schemas/capabilities-v1.4.schema.json": v14,
+		id: capabilities,
+	} {
+		var document any
+		if err := json.Unmarshal(payload, &document); err != nil {
+			t.Fatal(err)
+		}
+		if err := compiler.AddResource(uri, document); err != nil {
+			t.Fatal(err)
+		}
+	}
+	schema, err := compiler.Compile(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document any
+	if err := json.Unmarshal(fixture, &document); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(document); err != nil {
+		t.Fatalf("%s rejected fixture: %v", name, err)
+	}
+	return schema
 }
 
 func TestReviewCapabilitiesContractValidationIsExactAndReadOnly(t *testing.T) {
@@ -136,7 +208,7 @@ func TestReviewCapabilitiesContractValidationIsExactAndReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var nativeGit ReviewCapabilitiesResult
-	if err := json.Unmarshal(output.Bytes(), &nativeGit); err != nil || nativeGit.Contract != ReviewIntegrationContractV2 || nativeGit.Schema != ReviewIntegrationCapabilitiesSchemaV2 {
+	if err := json.Unmarshal(output.Bytes(), &nativeGit); err != nil || nativeGit.Contract != ReviewIntegrationContractV2 || nativeGit.Schema != ReviewIntegrationCapabilitiesSchemaV22 {
 		t.Fatalf("native Git capabilities = %#v, %v", nativeGit, err)
 	}
 	entries, readErr := os.ReadDir(outside)
