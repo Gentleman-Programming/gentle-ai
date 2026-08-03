@@ -25,8 +25,6 @@ func TestBoundedReviewContractLeavesCanonicalizationToNativeGo(t *testing.T) {
 	for _, want := range []string{
 		"Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding",
 		"Only candidate-caused severe findings block",
-		"OpenCode preflights the opaque binding",
-		"injects only the provider's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered manifest",
 		"Claude Code carries immutable candidate evidence directly in the reviewer task prompt",
 		"read-only native Git commands",
 	} {
@@ -241,7 +239,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256(settings))
-	const want = "4c39ea1edd9555292a466afc9dcb6df865b78354bf92b8844b34019bd3dc09a3"
+	const want = "7de1c9318bd3acfe763c2705bb3f03a918c1b2944cfef4984615eb0e1838877c"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -387,10 +385,11 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// +457 defines STATUS-mediated recollection without adding retry state.
 		// Native inspect-candidate removes repeated shell hardening prose and operands.
 		// Reviewer prompts no longer expose native Git flags owned by that capability.
-		// +1,190 gives Claude's shell-less reviewer a complete prompt-carried
-		// immutable transport while OpenCode keeps provider-owned injection (#2003).
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 13_855, maxCharacters: 18_500},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 21_613, maxCharacters: 36_000},
+		// #2221 removes OpenCode reviewer transport while v2.1 pins Claude Code
+		// as the sole explicit runtime. The combined generated sizes are derived
+		// from the canonical rendered assets below.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 13_729, maxCharacters: 18_500},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 21_487, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

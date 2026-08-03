@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -100,5 +101,93 @@ func TestReadBackBlanksGitTrace(t *testing.T) {
 	counted := sandbox.invoke([]string{"sdd-attempt", "status"})
 	if counted.Stdout == "GIT_TRACE=[]\n" {
 		t.Fatal("a counted invocation lost GIT_TRACE, so git_subprocesses would stop being observable")
+	}
+}
+
+func TestSandboxEnvIncludesBenchReceiptMutationPath(t *testing.T) {
+	sandbox, err := newSandbox("gentle-ai", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox.BenchReceiptMutationPath = filepath.Join(sandbox.Root, "receipt.json")
+	for _, entry := range sandbox.env() {
+		if entry == "GENTLE_AI_BENCH_MUTATE_RECEIPT="+sandbox.BenchReceiptMutationPath {
+			return
+		}
+	}
+	t.Fatal("sandbox environment has no benchmark receipt mutation path")
+}
+
+func TestSandboxEnvKeepsTempFilesInsideTheSandbox(t *testing.T) {
+	sandbox, err := newSandbox("gentle-ai", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(sandbox.Root, "tmp")
+	found := map[string]bool{}
+	for _, entry := range sandbox.env() {
+		if entry == "TMP="+want {
+			found["TMP"] = true
+			continue
+		}
+		if entry == "TEMP="+want {
+			found["TEMP"] = true
+			continue
+		}
+		if entry == "TMPDIR="+want {
+			found["TMPDIR"] = true
+			continue
+		}
+		if strings.HasPrefix(entry, "TMP=") || strings.HasPrefix(entry, "TEMP=") || strings.HasPrefix(entry, "TMPDIR=") {
+			t.Fatalf("temporary directory = %q, want %q", entry, want)
+		}
+	}
+	if info, err := os.Stat(want); err != nil || !info.IsDir() {
+		t.Fatalf("sandbox temp directory %q: %v", want, err)
+	}
+	if !found["TMP"] || !found["TEMP"] || !found["TMPDIR"] {
+		t.Fatalf("sandbox temp variables = %v, want TMP, TEMP and TMPDIR", found)
+	}
+}
+
+func TestSandboxEnvKeepsWindowsHomeInsideTheSandbox(t *testing.T) {
+	sandbox, err := newSandbox("gentle-ai", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range sandbox.env() {
+		if entry == "USERPROFILE="+sandbox.Home {
+			return
+		}
+	}
+	t.Fatalf("sandbox environment has no USERPROFILE=%q", sandbox.Home)
+}
+
+func TestSelectedAuthorityCaptureHelpersSelectTheSandboxLineage(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*journeyRun) error
+	}{
+		{name: "results", run: sddCaptureSelectedAuthorityLenses},
+		{name: "evidence", run: sddCaptureSelectedAuthorityEvidence},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sandbox := fakeBinary(t, `printf '%s\n' '{"next_transition":{"kind":"complete"}}'`)
+			sandbox.Lineage = "review-sdd-newer"
+			run := &journeyRun{sandbox: sandbox, accumulator: newAccumulator(), step: tt.name}
+
+			if err := tt.run(run); err != nil {
+				t.Fatalf("capture helper: %v", err)
+			}
+			if len(run.accumulator.records) != 1 {
+				t.Fatalf("invocations = %d, want 1", len(run.accumulator.records))
+			}
+			args := run.accumulator.records[0].Args
+			if len(args) < 2 || args[len(args)-2] != "--lineage" || args[len(args)-1] != sandbox.Lineage {
+				t.Fatalf("status args = %q, want selected lineage %q", args, sandbox.Lineage)
+			}
+		})
 	}
 }
