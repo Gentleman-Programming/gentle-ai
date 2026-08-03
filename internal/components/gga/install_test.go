@@ -110,12 +110,13 @@ func TestInstallCommandByProfile(t *testing.T) {
 			},
 		},
 		{
-			name: "unsupported package manager returns error",
-			profile: system.PlatformProfile{
-				OS:             "linux",
-				PackageManager: "zypper",
+			name:    "opensuse uses git clone and install.sh",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroOpenSUSE, PackageManager: "zypper"},
+			want: [][]string{
+				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
+				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "/tmp/gentleman-guardian-angel"},
+				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
-			wantErr: true,
 		},
 	}
 

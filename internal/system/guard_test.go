@@ -57,7 +57,7 @@ func TestEnsureSupportedPlatformRejectsUnsupportedLinuxDistro(t *testing.T) {
 		t.Fatalf("expected ErrUnsupportedLinuxDistro, got %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "Linux support is limited to Ubuntu/Debian, Arch, and Fedora/RHEL family") {
+	if !strings.Contains(err.Error(), "Linux support is limited to Ubuntu/Debian, Arch, Fedora/RHEL, and openSUSE/SUSE family") {
 		t.Fatalf("expected distro guard message, got %q", err.Error())
 	}
 }

@@ -1104,6 +1104,9 @@ func organicEnvironment(home string) []string {
 		// CI makes the one-time consent question deterministically unanswerable,
 		// which is exactly the non-interactive path this suite asserts on.
 		"CI=1",
+		// Make npm prefix writable under the temp HOME so NpmWritable=true and
+		// the binary does not attempt sudo (which has no TTY in the test runner).
+		"npm_config_prefix=" + filepath.Join(home, ".npm-global"),
 	}
 	if value := os.Getenv("SYSTEMROOT"); value != "" {
 		environment = append(environment, "SYSTEMROOT="+value)

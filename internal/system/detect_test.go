@@ -169,6 +169,21 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			wantDistro: LinuxDistroFedora,
 		},
 		{
+			name:       "opensuse tumbleweed",
+			osRelease:  "ID=opensuse-tumbleweed\nID_LIKE=\"opensuse suse\"\n",
+			wantDistro: LinuxDistroOpenSUSE,
+		},
+		{
+			name:       "opensuse leap",
+			osRelease:  "ID=opensuse-leap\nID_LIKE=\"suse opensuse\"\n",
+			wantDistro: LinuxDistroOpenSUSE,
+		},
+		{
+			name:       "sles",
+			osRelease:  "ID=sles\nID_LIKE=\"suse\"\n",
+			wantDistro: LinuxDistroSLES,
+		},
+		{
 			name:       "empty os-release",
 			osRelease:  "",
 			wantDistro: LinuxDistroUnknown,
@@ -187,6 +202,11 @@ func TestDetectLinuxDistroMatrix(t *testing.T) {
 			name:       "malformed lines are ignored",
 			osRelease:  "no-equals-sign\nID=ubuntu\n",
 			wantDistro: LinuxDistroUbuntu,
+		},
+		{
+			name:       "microos is NOT classified as opensuse (transactional variant)",
+			osRelease:  "ID=opensuse-microos\nID_LIKE=\"opensuse suse\"\n",
+			wantDistro: LinuxDistroUnknown,
 		},
 		{
 			name:       "quoted values are handled",
@@ -267,6 +287,15 @@ func TestResolvePlatformProfileMatrix(t *testing.T) {
 			wantOS:        "linux",
 			wantPM:        "dnf",
 			wantDistro:    LinuxDistroFedora,
+			wantSupported: true,
+		},
+		{
+			name:          "opensuse profile",
+			goos:          "linux",
+			osRelease:     "ID=opensuse-tumbleweed\n",
+			wantOS:        "linux",
+			wantPM:        "zypper",
+			wantDistro:    LinuxDistroOpenSUSE,
 			wantSupported: true,
 		},
 		{

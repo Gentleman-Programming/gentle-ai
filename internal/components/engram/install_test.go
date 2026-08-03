@@ -37,7 +37,7 @@ func TestInstallCommandByProfile(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "unsupported package manager returns error",
+			name:    "opensuse returns error (engram only supports brew)",
 			profile: system.PlatformProfile{OS: "linux", PackageManager: "zypper"},
 			wantErr: true,
 		},
