@@ -15,8 +15,11 @@ const ReviewIntegrationConsentSchemaIDV2 = "https://gentle-ai.dev/contracts/revi
 const ReviewIntegrationConsentSchemaV3 = "gentle-ai.review-integration.consent/v3"
 const ReviewIntegrationConsentSchemaIDV3 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/consent-v3.schema.json"
 
-// The frozen v1 artifact retains its original command, but live v1 guidance
-// must name the explicit scope required by the current mutation contract.
+// Frozen v1 and v2 artifacts retain the original command byte-for-byte.
+const reviewConsentOffPathHistoricalCommand = "gentle-ai review mode disable"
+
+// Live v1 guidance must name the explicit scope required by the current
+// mutation contract.
 const reviewConsentOffPathLegacyCommand = "gentle-ai review mode disable --scope=global"
 
 // ReviewIntegrationConsentResult is the typed per-candidate consent question a
@@ -352,6 +355,9 @@ func (result ReviewIntegrationConsentResult) Validate() error {
 		}
 	}
 	expectedOffPathCommand := reviewConsentOffPathLegacyCommand
+	if historicalNativeGitContract {
+		expectedOffPathCommand = reviewConsentOffPathHistoricalCommand
+	}
 	if currentNativeGitContract {
 		expectedOffPathCommand = reviewConsentOffPathCommand
 	}
