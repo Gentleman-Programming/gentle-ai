@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -50,12 +51,30 @@ type ReviewTransitionInput struct {
 	Schema              string                                        `json:"schema"`
 	CaptureOperation    string                                        `json:"capture_operation"`
 	Arguments           []ReviewTransitionArgument                    `json:"arguments"`
+	Submission          *ReviewTransitionSubmission                   `json:"submission,omitempty"`
 	ArtifactSubject     *reviewtransaction.ArtifactSubject            `json:"artifact_subject,omitempty"`
 	CandidateDiff       *reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff,omitempty"`
 	BaseTree            string                                        `json:"base_tree,omitempty"`
 	CandidateTree       string                                        `json:"candidate_tree,omitempty"`
 	ChangedPathManifest *[]reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest,omitempty"`
 	ValidationRequest   *reviewtransaction.TargetedValidationRequest  `json:"validation_request,omitempty"`
+}
+
+// ReviewTransitionSubmission is the provider-owned argv template for one
+// externally collected value. Consumers substitute only Value's one slot.
+type ReviewTransitionSubmission struct {
+	OperationToken string                          `json:"operation_token"`
+	ArgumentTokens []string                        `json:"argument_tokens"`
+	Value          ReviewTransitionSubmissionValue `json:"value"`
+}
+
+type ReviewTransitionSubmissionValue struct {
+	Slot                 string `json:"slot"`
+	Domain               string `json:"domain"`
+	Schema               string `json:"schema,omitempty"`
+	Minimum              int    `json:"minimum,omitempty"`
+	Maximum              int    `json:"maximum,omitempty"`
+	SubstitutionLocation int    `json:"substitution_location"`
 }
 
 type reviewCaptureContext struct {
@@ -109,7 +128,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 				input.Selector.Projection == reviewtransaction.ProjectionStaged {
 				return reviewStopTransition("staged_workspace_overlay_recovery_unavailable")
 			}
-			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
+			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage, input.RuntimeAgent), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
 		case reviewtransaction.TargetApplicabilityAmbiguous:
 			return reviewCollectTransition("lineage_selection_required", ReviewTransitionInput{
 				Name: "lineage_selection", Schema: "gentle-ai.review-lineage-selection/v1", CaptureOperation: "external.select_lineage",
@@ -193,6 +212,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 				Name: "targeted_validation", Schema: reviewtransaction.TargetedValidationRequestSchema,
 				CaptureOperation: "external.run_targeted_validation", Arguments: reviewBindingArguments(validationBinding),
 				ValidationRequest: input.ValidationRequest,
+				Submission:        reviewTargetedValidationSubmission(input.Contract, validationBinding, *input.ValidationRequest),
 			})
 		}
 		if input.CorrectionForecasted {
@@ -208,7 +228,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		}
 		transition := reviewCollectTransition("correction_plan_required", ReviewTransitionInput{
 			Name: "correction_lines", Schema: "gentle-ai.review-correction-plan/v1", CaptureOperation: "external.plan_correction",
-			Arguments: reviewBindingArguments(binding),
+			Arguments: reviewBindingArguments(binding), Submission: reviewCorrectionPlanSubmission(input.Contract, binding, *input.CorrectionRequest),
 		})
 		transition.CorrectionRequest = input.CorrectionRequest
 		return transition
@@ -298,6 +318,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 }
 
 type reviewFinalizeTransitionContext struct {
+	Contract          string
 	RepositoryContext string
 	ValidationRequest *reviewtransaction.TargetedValidationRequest
 	CorrectionRequest *reviewtransaction.CorrectionPlanRequest
@@ -336,7 +357,7 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 		return reviewExecuteTransition("captured_results_ready", "review.finalize", []ReviewTransitionArgument{{Name: "lineage", Value: state.LineageID}, {Name: "captured_results", Value: "true"}}, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, reviewTransitionBinding(status.Authority, status.TargetIdentity), artifacts)
 	}
 	return newReviewNextTransition(status, state.SelectedLenses, artifacts, transitionContext.CapturedEvidence, artifactErr, reviewNextTransitionInput{
-		RepositoryContext: transitionContext.RepositoryContext, ValidationRequest: transitionContext.ValidationRequest,
+		Contract: transitionContext.Contract, RepositoryContext: transitionContext.RepositoryContext, ValidationRequest: transitionContext.ValidationRequest,
 		CorrectionRequest: transitionContext.CorrectionRequest, EvidenceErr: transitionContext.EvidenceErr, CorrectionForecasted: state.ProposedCorrectionLines != nil,
 		CaptureContext: transitionContext.CaptureContext,
 	})
@@ -430,6 +451,8 @@ type reviewNextTransitionInput struct {
 	Successor, Reason, Actor, Authorization        string
 	RepairActor, RepairReason, RepairAuthorization string
 	StartLineage                                   string
+	RuntimeAgent                                   model.AgentID
+	Contract                                       string
 	RepositoryContext                              string
 	ValidationRequest                              *reviewtransaction.TargetedValidationRequest
 	CorrectionRequest                              *reviewtransaction.CorrectionPlanRequest
@@ -437,6 +460,49 @@ type reviewNextTransitionInput struct {
 	CorrectionForecasted                           bool
 	CaptureContext                                 *reviewCaptureContext
 	Selector                                       *reviewTransitionSelector
+}
+
+const reviewSubmissionValuePlaceholder = "{{value}}"
+
+func reviewCorrectionPlanSubmission(contract string, binding ReviewTransitionBinding, request reviewtransaction.CorrectionPlanRequest) *ReviewTransitionSubmission {
+	if contract != ReviewIntegrationContractV2 || binding.RepositoryContext == "" {
+		return nil
+	}
+	return reviewFinalizeSubmission([]string{
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "contract", Value: contract}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "lineage", Value: binding.LineageID}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "expected-revision", Value: binding.Revision}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "target", Value: binding.TargetIdentity}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "request-hash", Value: request.RequestHash}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext}),
+		"--correction-lines=" + reviewSubmissionValuePlaceholder,
+	}, ReviewTransitionSubmissionValue{
+		Slot: "correction_lines", Domain: "positive_correction_lines", Minimum: 1,
+		Maximum: request.CorrectionBudget, SubstitutionLocation: 6,
+	})
+}
+
+func reviewTargetedValidationSubmission(contract string, binding ReviewTransitionBinding, request reviewtransaction.TargetedValidationRequest) *ReviewTransitionSubmission {
+	if contract != ReviewIntegrationContractV2 || binding.RepositoryContext == "" {
+		return nil
+	}
+	return reviewFinalizeSubmission([]string{
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "contract", Value: contract}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "lineage", Value: binding.LineageID}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "expected-revision", Value: binding.Revision}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "target", Value: binding.TargetIdentity}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "request-hash", Value: request.RequestHash}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext}),
+		"--validation=" + reviewSubmissionValuePlaceholder,
+		"--captured-evidence=true",
+	}, ReviewTransitionSubmissionValue{
+		Slot: "validation", Domain: "artifact_path_or_stdin", Schema: reviewValidatorSchemaID,
+		SubstitutionLocation: 6,
+	})
+}
+
+func reviewFinalizeSubmission(argumentTokens []string, value ReviewTransitionSubmissionValue) *ReviewTransitionSubmission {
+	return &ReviewTransitionSubmission{OperationToken: "finalize", ArgumentTokens: argumentTokens, Value: value}
 }
 
 type reviewTransitionSelector struct {
@@ -449,7 +515,7 @@ type reviewTransitionSelector struct {
 	PrePRRepresentable    bool
 }
 
-func reviewStartArguments(status ReviewTargetStatusResult, lineage string) []ReviewTransitionArgument {
+func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runtime model.AgentID) []ReviewTransitionArgument {
 	contract := status.Contract
 	if contract == "" {
 		contract = ReviewIntegrationContractV1
@@ -467,6 +533,9 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string) []Rev
 	}
 	if strings.TrimSpace(lineage) != "" {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "lineage", Value: lineage})
+	}
+	if runtime != "" {
+		arguments = append(arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime)})
 	}
 	if contract == ReviewIntegrationContractV2 {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "consent", Value: string(reviewConsentModeRelay)})

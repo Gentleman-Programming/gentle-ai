@@ -1004,3 +1004,30 @@ func stringInSlice(values []string, target string) bool {
 	}
 	return false
 }
+
+// repairAuthorityDispositionAtRepo is the production seam that ties
+// disposition plan derivation (authority_disposition_plan.go) to leaf
+// executor admission and mutation (authority_disposition_execute.go) behind
+// the shape a future `review repair` CLI wiring (Slice S3) calls: derive the
+// current plan, stamp the caller-supplied maintainer authorization, and
+// execute it. It stays unexported and unwired from any CLI entrypoint this
+// slice — no new public repair verb (rdd-authority-disposition-plan / "No
+// New Public Repair Verb") — Slice S3 wires it behind the existing
+// `review repair` verb.
+func repairAuthorityDispositionAtRepo(ctx context.Context, repo, actor, reason, authorization string) (CompactReclaimRecord, error) {
+	plan, err := deriveAuthorityDispositionPlanAtRepo(ctx, repo, actor, reason)
+	if err != nil {
+		return CompactReclaimRecord{}, err
+	}
+	plan.Authorization = authorization
+	return executeAuthorityDisposition(ctx, repo, plan)
+}
+
+// RepairAuthorityDisposition is the exported form of
+// repairAuthorityDispositionAtRepo — the one public entrypoint Slice S3's
+// `review repair` CLI wiring calls to execute a leaf authority disposition
+// plan (rdd-authority-disposition-plan / "No New Public Repair Verb": an
+// exported Go seam behind the existing verb, not a new CLI command).
+func RepairAuthorityDisposition(ctx context.Context, repo, actor, reason, authorization string) (CompactReclaimRecord, error) {
+	return repairAuthorityDispositionAtRepo(ctx, repo, actor, reason, authorization)
+}

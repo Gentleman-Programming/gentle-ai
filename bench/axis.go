@@ -78,7 +78,7 @@ func axisNames() []string {
 // default: a run that says nothing about axes is a core run.
 //
 // An unknown name is a hard error rather than a warning. The whole point of the
-// flag is that "43 journeys" and "43 journeys plus a damaged-store axis" must
+// flag is that "45 journeys" and "45 journeys plus a damaged-store axis" must
 // never look alike, and a typo that silently produced the first while the caller
 // asked for the second would defeat it.
 func selectAxes(value string) ([]Axis, error) {

@@ -146,8 +146,8 @@ func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
 		"--lineage", "review-consent-grant", "--consent", "relay",
 	}))
 	question := decodeConsentQuestion(t, output.Bytes())
-	if question.Contract != ReviewIntegrationContractV2 || question.Schema != ReviewIntegrationConsentSchemaV2 {
-		t.Fatalf("v2 relay question identity = %#v", question)
+	if question.Contract != ReviewIntegrationContractV2 || question.Schema != ReviewIntegrationConsentSchemaV3 || question.Agent != "claude-code" {
+		t.Fatalf("v2.1 relay question identity = %#v", question)
 	}
 
 	grantArgs := invocationArgs(t, question.Choices[0].Invocation)
@@ -228,7 +228,11 @@ func TestGlobalReviewModeOffRefusesBeforeV2Consent(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	err := RunReview(transitionStartArgs(repo, status), &output)
+	startArgs := transitionStartArgs(repo, status)
+	if !strings.Contains(strings.Join(startArgs, " "), "--agent=claude-code") {
+		t.Fatalf("v2 disabled START lost its runtime identity: %v", startArgs)
+	}
+	err := RunReview(startArgs, &output)
 	if err == nil || strings.Contains(output.String(), reviewConsentActionRequired) {
 		t.Fatalf("global off did not refuse before consent: err=%v\n%s", err, output.String())
 	}
@@ -416,10 +420,10 @@ func TestHeadlessSkipNoticeNamesDefaultProvenance(t *testing.T) {
 // /repo placeholder.
 func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
 	for _, tt := range []struct {
-		name, contract, version, schemaID string
+		name, contract, fixture, schema string
 	}{
-		{name: "v1", contract: ReviewIntegrationContractV1, version: "v1", schemaID: ReviewIntegrationConsentSchemaID},
-		{name: "v2", contract: ReviewIntegrationContractV2, version: "v2", schemaID: ReviewIntegrationConsentSchemaIDV2},
+		{name: "v1", contract: ReviewIntegrationContractV1, fixture: filepath.Join("v1", "fixtures", "consent.fixture.json"), schema: filepath.Join("v1", "schemas", "consent.schema.json")},
+		{name: "v2.1", contract: ReviewIntegrationContractV2, fixture: filepath.Join("v2", "fixtures", "consent-v3.fixture.json"), schema: filepath.Join("v2", "schemas", "consent-v3.schema.json")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			reviewModeHome(t)
@@ -444,7 +448,7 @@ func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
 				t.Fatalf("encode fixture repository root: %v", err)
 			}
 			normalized := bytes.ReplaceAll(output.Bytes(), encodedRoot[1:len(encodedRoot)-1], []byte("/repo"))
-			fixturePath := filepath.Join("..", "..", "contracts", "review-integration", tt.version, "fixtures", "consent.fixture.json")
+			fixturePath := filepath.Join("..", "..", "contracts", "review-integration", tt.fixture)
 			if os.Getenv("GENTLE_AI_CONSENT_FIXTURE_UPDATE") == "1" {
 				if err := os.WriteFile(fixturePath, normalized, 0o644); err != nil {
 					t.Fatal(err)
@@ -458,7 +462,7 @@ func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
 				t.Fatalf("consent fixture mismatch:\ngot=%s\nwant=%s", normalized, fixture)
 			}
 
-			schemaPayload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", tt.version, "schemas", "consent.schema.json"))
+			schemaPayload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", tt.schema))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -466,7 +470,11 @@ func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
 			if err := json.Unmarshal(schemaPayload, &schema); err != nil {
 				t.Fatal(err)
 			}
-			if schema["$id"] != tt.schemaID || schema["additionalProperties"] != false {
+			wantSchemaID := ReviewIntegrationConsentSchemaID
+			if tt.contract == ReviewIntegrationContractV2 {
+				wantSchemaID = ReviewIntegrationConsentSchemaIDV3
+			}
+			if schema["$id"] != wantSchemaID || schema["additionalProperties"] != false {
 				t.Fatalf("consent schema identity = %v additionalProperties = %v", schema["$id"], schema["additionalProperties"])
 			}
 			var fixtureFields map[string]any
@@ -485,6 +493,40 @@ func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
 			}
 			if len(requiredNames) != len(fixtureFields) {
 				t.Fatalf("consent schema requires %d fields, fixture carries %d", len(requiredNames), len(fixtureFields))
+			}
+		})
+	}
+}
+
+func TestV21ConsentInvocationMustMatchProviderOwnedRequest(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "consent-v3.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var question ReviewIntegrationConsentResult
+	if err := json.Unmarshal(fixture, &question); err != nil {
+		t.Fatal(err)
+	}
+	base := reviewConsentFollowUpBase("/repo", question.TargetIdentity, question.Projection, "review-consent-fixture", "", "", "reliability", "", false, false, ReviewIntegrationContractV2, "claude-code", "")
+	if err := validateReviewConsentInvocations(question, base); err != nil {
+		t.Fatalf("canonical v2.1 consent invocation: %v", err)
+	}
+
+	for _, test := range []struct {
+		name       string
+		invocation string
+	}{
+		{name: "missing agent", invocation: strings.Replace(question.Choices[0].Invocation, " --agent claude-code", "", 1)},
+		{name: "alternate agent", invocation: strings.Replace(question.Choices[0].Invocation, "--agent claude-code", "--agent opencode", 1)},
+		{name: "duplicate supported agent", invocation: strings.Replace(question.Choices[0].Invocation, "--agent claude-code", "--agent claude-code --agent claude-code", 1)},
+		{name: "duplicate alternate agent", invocation: strings.Replace(question.Choices[0].Invocation, "--agent claude-code", "--agent claude-code --agent opencode", 1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := question
+			mutated.Choices = append([]ReviewIntegrationConsentChoice(nil), question.Choices...)
+			mutated.Choices[0].Invocation = test.invocation
+			if err := validateReviewConsentInvocations(mutated, base); err == nil {
+				t.Fatalf("accepted non-canonical invocation %q", test.invocation)
 			}
 		})
 	}

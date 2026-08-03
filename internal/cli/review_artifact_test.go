@@ -261,6 +261,33 @@ func TestReviewCaptureResultIDLessCandidateCausalFinding(t *testing.T) {
 	}
 }
 
+func TestReviewCaptureResultRejectsInvalidLocationWithActionableDiagnostic(t *testing.T) {
+	repo, started, _, record := newArtifactReview(t, false)
+	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+	result.Findings = []facadeFinding{{
+		ID: "R3-001", Location: "tracked.txt:1-2", Severity: "CRITICAL", Claim: "candidate failure",
+		ProofRefs: []string{"tracked.txt changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+		CausalDisposition: reviewtransaction.CausalIntroduced,
+	}}
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+
+	err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}, io.Discard)
+	var admissionErr *reviewtransaction.ArtifactAdmissionError
+	var locationErr *reviewtransaction.FindingLocationError
+	if !errors.As(err, &admissionErr) || !errors.As(err, &locationErr) {
+		t.Fatalf("capture-result error = %v; want typed admission and location errors", err)
+	}
+	if admissionErr.Diagnostic == nil || admissionErr.Diagnostic.FindingID != "R3-001" ||
+		admissionErr.Diagnostic.Location != "tracked.txt:1-2" ||
+		admissionErr.Diagnostic.Reason != "line_suffix_not_integer" {
+		t.Fatalf("capture diagnostic = %#v", admissionErr.Diagnostic)
+	}
+}
+
 func TestReviewCaptureResultFinalizePreservesCausalClassification(t *testing.T) {
 	tests := []struct {
 		name        string

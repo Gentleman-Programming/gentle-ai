@@ -1,10 +1,10 @@
 package system
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -56,8 +56,8 @@ func AddToUserPath(dir string) error {
 			`[Environment]::SetEnvironmentVariable('PATH', '%s;' + $current, 'User') }`,
 		safeDir, safeDir,
 	)
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
-	return cmd.Run()
+	_, err := NewPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command", script)
+	return err
 }
 
 // PrioritizeUserPath moves dir to the front of PATH for the current process and,
@@ -85,8 +85,8 @@ func PrioritizeUserPath(dir string) error {
 			`[Environment]::SetEnvironmentVariable('PATH', ($dir + ';' + ($entries -join ';')).TrimEnd(';'), 'User')`,
 		safeDir,
 	)
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
-	return cmd.Run()
+	_, err := NewPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command", script)
+	return err
 }
 
 // UserPathEntries returns the persistent user-scoped PATH entries for the given
@@ -97,8 +97,7 @@ func UserPathEntries(goos string) ([]string, error) {
 		return filepath.SplitList(os.Getenv("PATH")), nil
 	}
 
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", `[Environment]::GetEnvironmentVariable('PATH', 'User')`)
-	output, err := cmd.Output()
+	output, err := NewPowerShellRunner().Run(context.Background(), "-NoProfile", "-NonInteractive", "-Command", `[Environment]::GetEnvironmentVariable('PATH', 'User')`)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +119,7 @@ func runningInGoTest() bool {
 // single-quoted string literal by replacing each ' with ” (PowerShell's escape
 // sequence for a literal single quote within single-quoted strings).
 func escapePowerShellString(s string) string {
-	return strings.ReplaceAll(s, "'", "''")
+	return PowerShellSingleQuoted(s)
 }
 
 // addToProcessPath prepends dir to the current process PATH if it is not already
