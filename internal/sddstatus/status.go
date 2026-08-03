@@ -615,10 +615,7 @@ func applyNativeRuntimeRouting(status *Status) {
 	var reason string
 	switch {
 	case runtimeStatus.DecisionRequired:
-		reason = fmt.Sprintf(
-			"native SDD runtime execution requires an explicit maintainer scope decision; compact acquire reports blocked(maintainer_decision). Reset remains exceptional and may be run only after explicit maintainer authorization; full status is diagnostic only for %q in %q",
-			change, status.ActionContext.WorkspaceRoot,
-		)
+		reason = nativeRuntimeMaintainerDecisionReason(status)
 	case runtimeStatus.ActiveAttempt != nil:
 		reason = fmt.Sprintf(
 			"native SDD runtime attempt %d is active; compact acquire reports blocked(active_attempt) with its opaque settle token. Do not launch another continuation; settle only the external execution already associated with that token for %q in %q",
@@ -636,6 +633,28 @@ func applyNativeRuntimeRouting(status *Status) {
 	}
 }
 
+func nativeRuntimeMaintainerDecisionReason(status *Status) string {
+	change := status.RuntimeStatus.Change
+	if status.ChangeName != nil {
+		change = *status.ChangeName
+	}
+	return fmt.Sprintf(
+		"native SDD runtime execution requires an explicit maintainer scope decision; compact acquire reports blocked(maintainer_decision). Reset remains exceptional and may be run only after explicit maintainer authorization; full status is diagnostic only for %q in %q",
+		change, status.ActionContext.WorkspaceRoot,
+	)
+}
+
+func withoutNativeRuntimeMaintainerDecisionReason(reasons []string, status *Status) []string {
+	decisionReason := nativeRuntimeMaintainerDecisionReason(status)
+	filtered := reasons[:0]
+	for _, reason := range reasons {
+		if reason != decisionReason {
+			filtered = append(filtered, reason)
+		}
+	}
+	return filtered
+}
+
 func applyNativeUnmanagedRemediationRouting(status *Status, verify verifyResultEvaluation, admitted bool) {
 	if status == nil || status.RuntimeStatus == nil || status.ReviewGate == nil ||
 		status.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
@@ -651,6 +670,7 @@ func applyNativeUnmanagedRemediationRouting(status *Status, verify verifyResultE
 		status.Dependencies.Archive = DependencyBlocked
 		status.NextRecommended = RuntimeActionAuthorizeRemediation
 		status.RemediationState = RemediationState{}
+		status.BlockedReasons = withoutNativeRuntimeMaintainerDecisionReason(status.BlockedReasons, status)
 		return
 	}
 

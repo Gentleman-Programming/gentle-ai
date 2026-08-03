@@ -1398,7 +1398,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 		}
 		if replay.Status.UnmanagedRemediation != nil {
 			if event.BeginCandidateIdentity != objective.InitialCandidateIdentity || event.BeginCandidateTree != objective.InitialCandidateTree {
-				return errors.New("begin record does not continue the authorized remediation candidate")
+				return errors.New("begin record does not continue the authorized remediation candidate") // refusal:by-design world-action: an immutable replay record cannot retarget the maintainer-authorized candidate; restore the Git-common-dir authority rather than issuing another command.
 			}
 		} else if len(replay.Status.Attempts) == 0 ||
 			event.BeginCandidateTree != replay.Status.Attempts[len(replay.Status.Attempts)-1].FinishCandidateTree {
@@ -1819,7 +1819,7 @@ func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjecti
 		{name: "maintainer_authorization", present: request.MaintainerAuthorization != ""},
 	} {
 		if field.present {
-			return ResetObjectiveRequest{}, fmt.Errorf("reset carries %s without disposition %q", field.name, ResetDispositionFailedEvidenceRemediation)
+			return ResetObjectiveRequest{}, fmt.Errorf("reset carries %s without disposition %q", field.name, ResetDispositionFailedEvidenceRemediation) // refusal:by-design operator-knowledge: remediation-only inputs require the named disposition; remove the stray field or provide the complete failed-evidence remediation request.
 		}
 	}
 	if err := validateRuntimeText(request.Reason, 500); err != nil {
@@ -1846,28 +1846,28 @@ type unmanagedRemediationAuthorization struct {
 	Reason                  string
 }
 
+// UnmanagedRemediationAuthorizationInput names every value bound by a
+// maintainer authorization for one disabled/unmanaged correction.
+type UnmanagedRemediationAuthorizationInput = unmanagedRemediationAuthorization
+
 // RenderUnmanagedRemediationAuthorization returns the exact canonical binding
 // that a maintainer may authorize for one disabled/unmanaged correction.
-func RenderUnmanagedRemediationAuthorization(
-	runtimeRevision, change, previousObjectiveID string, previousGeneration int,
-	failedEvidenceRevision, failedCandidateIdentity, failedCandidateTree,
-	workUnit, evidenceGoal string, maxChangedLines int, actor, reason string,
-) string {
+func RenderUnmanagedRemediationAuthorization(binding UnmanagedRemediationAuthorizationInput) string {
 	return strings.Join([]string{
 		"schema: gentle-ai.unmanaged-remediation-authorization/v1",
-		"runtime_revision: " + runtimeRevision,
-		"change: " + change,
-		"predecessor_objective_id: " + previousObjectiveID,
-		"predecessor_generation: " + strconv.Itoa(previousGeneration),
-		"failed_evidence_revision: " + failedEvidenceRevision,
-		"failed_candidate_identity: " + failedCandidateIdentity,
-		"failed_candidate_tree: " + failedCandidateTree,
+		"runtime_revision: " + binding.RuntimeRevision,
+		"change: " + binding.Change,
+		"predecessor_objective_id: " + binding.PreviousObjectiveID,
+		"predecessor_generation: " + strconv.Itoa(binding.PreviousGeneration),
+		"failed_evidence_revision: " + binding.FailedEvidenceRevision,
+		"failed_candidate_identity: " + binding.FailedCandidateIdentity,
+		"failed_candidate_tree: " + binding.FailedCandidateTree,
 		"delivery: disabled/unmanaged",
-		"work_unit: " + workUnit,
-		"evidence_goal: " + evidenceGoal,
-		"max_changed_lines: " + strconv.Itoa(maxChangedLines),
-		"actor: " + actor,
-		"reason: " + reason,
+		"work_unit: " + binding.WorkUnit,
+		"evidence_goal: " + binding.EvidenceGoal,
+		"max_changed_lines: " + strconv.Itoa(binding.MaxChangedLines),
+		"actor: " + binding.Actor,
+		"reason: " + binding.Reason,
 	}, "\n")
 }
 
@@ -1902,10 +1902,7 @@ func parseUnmanagedRemediationAuthorization(value string) (unmanagedRemediationA
 		WorkUnit: fields["work_unit"], EvidenceGoal: fields["evidence_goal"], MaxChangedLines: lines,
 		Actor: fields["actor"], Reason: fields["reason"],
 	}
-	canonical := RenderUnmanagedRemediationAuthorization(authorization.RuntimeRevision, authorization.Change,
-		authorization.PreviousObjectiveID, authorization.PreviousGeneration, authorization.FailedEvidenceRevision,
-		authorization.FailedCandidateIdentity, authorization.FailedCandidateTree, authorization.WorkUnit,
-		authorization.EvidenceGoal, authorization.MaxChangedLines, authorization.Actor, authorization.Reason)
+	canonical := RenderUnmanagedRemediationAuthorization(authorization)
 	if generationErr != nil || linesErr != nil || value != canonical || !runtimeRevisionPattern.MatchString(authorization.RuntimeRevision) ||
 		!validReviewBindingChange(authorization.Change) || !runtimeRevisionPattern.MatchString(authorization.PreviousObjectiveID) ||
 		authorization.PreviousGeneration < 1 || !runtimeRevisionPattern.MatchString(authorization.FailedEvidenceRevision) ||

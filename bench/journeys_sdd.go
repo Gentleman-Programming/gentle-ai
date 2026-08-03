@@ -1512,7 +1512,7 @@ var sddAttemptRemediationCapability = &Capability{
 }
 var sddAttemptResetCapability = &Capability{
 	Verb:  []string{"sdd-attempt", "reset"},
-	Probe: []string{"sdd-attempt", "reset", "--reason=probe", "--actor=probe"},
+	Probe: []string{"sdd-attempt", "reset", "--reason=probe", "--actor=probe", "--disposition=failed-evidence-remediation", "--remediates-evidence-revision=probe", "--work-unit=probe", "--evidence-goal=probe", "--max-changed-lines=1", "--maintainer-authorization=probe"},
 }
 
 // sdd-status parses its own arguments too, so it gets a probe rather than a

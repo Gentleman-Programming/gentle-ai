@@ -33,11 +33,13 @@ func TestRuntimeLedgerUnmanagedFailedEvidenceRemediationIsOneExactAttempt(t *tes
 		t.Fatal(err)
 	}
 	last := failed.Attempts[len(failed.Attempts)-1]
-	authorization := RenderUnmanagedRemediationAuthorization(
-		failed.Revision, store.Change, failed.Objective.ID, failed.Objective.Generation, failedEvidence,
-		last.FinishCandidateIdentity, last.FinishCandidateTree, "correct-verification", "prove corrected runtime", 20,
-		"maintainer@example.com", "one bounded correction is authorized",
-	)
+	authorization := RenderUnmanagedRemediationAuthorization(UnmanagedRemediationAuthorizationInput{
+		RuntimeRevision: failed.Revision, Change: store.Change, PreviousObjectiveID: failed.Objective.ID,
+		PreviousGeneration: failed.Objective.Generation, FailedEvidenceRevision: failedEvidence,
+		FailedCandidateIdentity: last.FinishCandidateIdentity, FailedCandidateTree: last.FinishCandidateTree,
+		WorkUnit: "correct-verification", EvidenceGoal: "prove corrected runtime", MaxChangedLines: 20,
+		Actor: "maintainer@example.com", Reason: "one bounded correction is authorized",
+	})
 	store.ReviewDisabled = true
 	request := ResetObjectiveRequest{
 		ExpectedRevision: failed.Revision, RequestID: "authorize-unmanaged-correction", Disposition: ResetDispositionFailedEvidenceRemediation,
@@ -149,11 +151,13 @@ func TestUnmanagedRemediationAuthorizationRejectsMalformedBindings(t *testing.T)
 		t.Fatal(err)
 	}
 	last := failed.Attempts[len(failed.Attempts)-1]
-	authorization := RenderUnmanagedRemediationAuthorization(
-		failed.Revision, store.Change, failed.Objective.ID, failed.Objective.Generation, failedEvidence,
-		last.FinishCandidateIdentity, last.FinishCandidateTree, "correct-verification", "prove corrected runtime", 20,
-		"maintainer@example.com", "one bounded correction is authorized",
-	)
+	authorization := RenderUnmanagedRemediationAuthorization(UnmanagedRemediationAuthorizationInput{
+		RuntimeRevision: failed.Revision, Change: store.Change, PreviousObjectiveID: failed.Objective.ID,
+		PreviousGeneration: failed.Objective.Generation, FailedEvidenceRevision: failedEvidence,
+		FailedCandidateIdentity: last.FinishCandidateIdentity, FailedCandidateTree: last.FinishCandidateTree,
+		WorkUnit: "correct-verification", EvidenceGoal: "prove corrected runtime", MaxChangedLines: 20,
+		Actor: "maintainer@example.com", Reason: "one bounded correction is authorized",
+	})
 	store.ReviewDisabled = true
 	request := ResetObjectiveRequest{
 		ExpectedRevision: failed.Revision, Disposition: ResetDispositionFailedEvidenceRemediation,
@@ -215,7 +219,13 @@ func TestUnmanagedRemediationSharesOneAuthorizationAcrossLinkedWorktrees(t *test
 		t.Fatal(err)
 	}
 	last := failed.Attempts[0]
-	authorization := RenderUnmanagedRemediationAuthorization(failed.Revision, store.Change, failed.Objective.ID, failed.Objective.Generation, failedEvidence, last.FinishCandidateIdentity, last.FinishCandidateTree, "linked-correction", "prove one correction", 20, "maintainer@example.com", "one correction")
+	authorization := RenderUnmanagedRemediationAuthorization(UnmanagedRemediationAuthorizationInput{
+		RuntimeRevision: failed.Revision, Change: store.Change, PreviousObjectiveID: failed.Objective.ID,
+		PreviousGeneration: failed.Objective.Generation, FailedEvidenceRevision: failedEvidence,
+		FailedCandidateIdentity: last.FinishCandidateIdentity, FailedCandidateTree: last.FinishCandidateTree,
+		WorkUnit: "linked-correction", EvidenceGoal: "prove one correction", MaxChangedLines: 20,
+		Actor: "maintainer@example.com", Reason: "one correction",
+	})
 	request := ResetObjectiveRequest{ExpectedRevision: failed.Revision, RequestID: "linked-authorize", Disposition: ResetDispositionFailedEvidenceRemediation, RemediatesEvidenceRevision: failedEvidence, WorkUnit: "linked-correction", EvidenceGoal: "prove one correction", MaxChangedLines: 20, MaintainerAuthorization: authorization}
 	linked := filepath.Join(t.TempDir(), "linked")
 	runRuntimeLedgerGit(t, repo, "worktree", "add", "-q", "--detach", linked)
@@ -269,14 +279,22 @@ func TestResolveRoutesDisabledSubstantiveFailToUnmanagedAuthorization(t *testing
 		status.ReviewGate.Delivery != "disabled/unmanaged" || status.RuntimeStatus == nil || status.RuntimeStatus.Revision != failed.Revision {
 		t.Fatalf("disabled failure routing = %#v", status)
 	}
+	decisionReason := nativeRuntimeMaintainerDecisionReason(&status)
+	if contains(status.BlockedReasons, decisionReason) {
+		t.Fatalf("unmanaged authorization retained superseded maintainer decision: %#v", status.BlockedReasons)
+	}
 	last := failed.Attempts[len(failed.Attempts)-1]
 	store.ReviewDisabled = true
 	authorized, err := store.Reset(context.Background(), ResetObjectiveRequest{
 		ExpectedRevision: failed.Revision, RequestID: "disabled-authorize", Disposition: ResetDispositionFailedEvidenceRemediation,
 		RemediatesEvidenceRevision: failedEvidence, WorkUnit: "correct-failed-verify", EvidenceGoal: "prove fixed verification", MaxChangedLines: 20,
-		MaintainerAuthorization: RenderUnmanagedRemediationAuthorization(failed.Revision, store.Change, failed.Objective.ID, failed.Objective.Generation,
-			failedEvidence, last.FinishCandidateIdentity, last.FinishCandidateTree, "correct-failed-verify", "prove fixed verification", 20,
-			"maintainer@example.com", "one bounded correction is authorized"),
+		MaintainerAuthorization: RenderUnmanagedRemediationAuthorization(UnmanagedRemediationAuthorizationInput{
+			RuntimeRevision: failed.Revision, Change: store.Change, PreviousObjectiveID: failed.Objective.ID,
+			PreviousGeneration: failed.Objective.Generation, FailedEvidenceRevision: failedEvidence,
+			FailedCandidateIdentity: last.FinishCandidateIdentity, FailedCandidateTree: last.FinishCandidateTree,
+			WorkUnit: "correct-failed-verify", EvidenceGoal: "prove fixed verification", MaxChangedLines: 20,
+			Actor: "maintainer@example.com", Reason: "one bounded correction is authorized",
+		}),
 	})
 	if err != nil {
 		t.Fatal(err)
