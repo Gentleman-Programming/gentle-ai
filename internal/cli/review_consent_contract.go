@@ -15,6 +15,13 @@ const ReviewIntegrationConsentSchemaIDV2 = "https://gentle-ai.dev/contracts/revi
 const ReviewIntegrationConsentSchemaV3 = "gentle-ai.review-integration.consent/v3"
 const ReviewIntegrationConsentSchemaIDV3 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/consent-v3.schema.json"
 
+// Frozen v1 and v2 artifacts retain the original command byte-for-byte.
+const reviewConsentOffPathHistoricalCommand = "gentle-ai review mode disable"
+
+// Live v1 guidance must name the explicit scope required by the current
+// mutation contract.
+const reviewConsentOffPathLegacyCommand = "gentle-ai review mode disable --scope=global"
+
 // ReviewIntegrationConsentResult is the typed per-candidate consent question a
 // relay-declared negotiated START answers with instead of proceeding. It is a
 // blocking decision envelope in the sense of the orchestrator contract's
@@ -88,6 +95,10 @@ type reviewConsentEnvelopeText struct {
 }
 
 func reviewConsentEnvelopeTextFor(locale reviewConsentLocale, assessment reviewtransaction.RiskAssessment, contract string) reviewConsentEnvelopeText {
+	offPathCommand := reviewConsentOffPathLegacyCommand
+	if contract == ReviewIntegrationContractV2 {
+		offPathCommand = reviewConsentOffPathCommand
+	}
 	if locale != reviewConsentLocaleSpanish {
 		declinedEffect := reviewConsentDeclinedEffect
 		if contract == ReviewIntegrationContractV2 {
@@ -97,7 +108,7 @@ func reviewConsentEnvelopeTextFor(locale reviewConsentLocale, assessment reviewt
 			headline: reviewConsentHeadline, reason: reviewConsentReason(assessment), value: reviewConsentValue,
 			evidence: reviewConsentRiskEvidence(assessment), grantedLabel: reviewConsentAnswerRunLabel,
 			grantedEffect: reviewConsentGrantedEffect, declinedLabel: reviewConsentAnswerNotNowLabel,
-			declinedEffect: declinedEffect, offPathNote: reviewConsentOffPathNote,
+			declinedEffect: declinedEffect, offPathNote: reviewConsentOffPathNoteFor(offPathCommand),
 		}
 	}
 	return reviewConsentEnvelopeText{
@@ -109,8 +120,12 @@ func reviewConsentEnvelopeTextFor(locale reviewConsentLocale, assessment reviewt
 		grantedEffect:  "Revisa ahora este candidato congelado exacto; no se otorga nada para candidatos posteriores, por lo que cada candidato posterior de riesgo medio o alto vuelve a pedir confirmación.",
 		declinedLabel:  "Ahora no, solo esta vez",
 		declinedEffect: "Omite la revisión solo para este candidato exacto; no se crea ninguna línea de revisión ni recibo, y la entrega ordinaria queda sin administrar por elección del candidato. El siguiente candidato vuelve a pedir confirmación. No es el interruptor de apagado.",
-		offPathNote:    "Para desactivar las revisiones de forma permanente, ejecuta '" + reviewConsentOffPathCommand + "'.",
+		offPathNote:    "Para desactivar las revisiones de forma permanente, ejecuta '" + offPathCommand + "'.",
 	}
+}
+
+func reviewConsentOffPathNoteFor(command string) string {
+	return "To turn reviews off for good, run '" + command + "'."
 }
 
 func reviewConsentSpanishReason(assessment reviewtransaction.RiskAssessment) string {
@@ -238,6 +253,10 @@ func newReviewIntegrationConsentResult(
 	if copy.evidence == nil {
 		copy.evidence = []string{}
 	}
+	offPathCommand := reviewConsentOffPathLegacyCommand
+	if contract == ReviewIntegrationContractV2 {
+		offPathCommand = reviewConsentOffPathCommand
+	}
 	result := ReviewIntegrationConsentResult{
 		Schema:         ReviewIntegrationConsentSchema,
 		Contract:       ReviewIntegrationContractV1,
@@ -269,7 +288,7 @@ func newReviewIntegrationConsentResult(
 		},
 		OffPath: ReviewIntegrationConsentOffPath{
 			Note:    copy.offPathNote,
-			Command: reviewConsentOffPathCommand,
+			Command: offPathCommand,
 		},
 	}
 	if contract == ReviewIntegrationContractV2 {
@@ -335,7 +354,14 @@ func (result ReviewIntegrationConsentResult) Validate() error {
 			return fmt.Errorf("consent choice %q does not name a runnable candidate-scoped invocation", choice.Answer) // refusal:by-design world-action: this envelope is built and validated by the same file; the exit is a code fix, not a command
 		}
 	}
-	if result.OffPath.Note == "" || result.OffPath.Command != reviewConsentOffPathCommand {
+	expectedOffPathCommand := reviewConsentOffPathLegacyCommand
+	if historicalNativeGitContract {
+		expectedOffPathCommand = reviewConsentOffPathHistoricalCommand
+	}
+	if currentNativeGitContract {
+		expectedOffPathCommand = reviewConsentOffPathCommand
+	}
+	if result.OffPath.Note == "" || result.OffPath.Command != expectedOffPathCommand {
 		return errors.New("consent question must document the deliberate off path") // refusal:by-design world-action: this envelope is built and validated by the same file; the exit is a code fix, not a command
 	}
 	return nil

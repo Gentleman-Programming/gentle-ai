@@ -697,7 +697,8 @@ func TestOrganicKillSwitchStopsAtTheDeliveryBoundary(t *testing.T) {
 	harness.runActor(organicActorRoleDirect, "docs/killed.md", organicLines("killed line", 8), "docs: implement before the switch", organicDirectActorMarker)
 
 	mode := harness.disableReview()
-	if mode.Schema != organicModeSchema || mode.Status.Effective != organicModeOff || mode.Status.Source != "clone_local" {
+	if mode.Schema != organicModeSchema || mode.Status.Effective != organicModeOff || mode.Status.Source != "clone_local" ||
+		mode.BlastRadius == nil || mode.BlastRadius.WorktreeCount != 1 || mode.BlastRadius.LinkedWorktreeCount != 0 || !strings.Contains(mode.BlastRadius.Affects, "only this worktree") {
 		t.Fatalf("kill switch produced no typed outcome: %#v", mode)
 	}
 	generationsAfterDisable := harness.reviewModeGenerations()
@@ -1745,10 +1746,15 @@ type organicGateDenial struct {
 }
 
 type organicModeResult struct {
-	Schema    string `json:"schema"`
-	Operation string `json:"operation"`
-	Scope     string `json:"scope"`
-	Status    struct {
+	Schema      string `json:"schema"`
+	Operation   string `json:"operation"`
+	Scope       string `json:"scope"`
+	BlastRadius *struct {
+		Affects             string `json:"affects"`
+		WorktreeCount       int    `json:"worktree_count"`
+		LinkedWorktreeCount int    `json:"linked_worktree_count"`
+	} `json:"blast_radius"`
+	Status struct {
 		Schema     string `json:"schema"`
 		Global     string `json:"global"`
 		CloneLocal string `json:"clone_local"`

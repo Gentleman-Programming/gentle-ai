@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -96,7 +97,11 @@ func TestCloneLocalRDDOverrideStaysInsideItsClone(t *testing.T) {
 		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
 	}
 
-	overridePath := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	identity, err := OpenRepositoryIdentityLease(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("OpenRepositoryIdentityLease error = %v", err)
+	}
+	overridePath := filepath.Join(identity.Identity().GitCommonDir, "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
 	if _, err := os.Stat(overridePath); err != nil {
 		t.Fatalf("clone-local override is not stored under the Git common directory: %v", err)
 	}
@@ -109,6 +114,139 @@ func TestCloneLocalRDDOverrideStaysInsideItsClone(t *testing.T) {
 	}
 	if status.Effective != RDDModeOn || status.CloneLocal != RDDModeUnset {
 		t.Fatalf("second clone inherited the override: %#v", status)
+	}
+}
+
+func TestResolveRDDModeHonorsWorktreeOffPrecedence(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	ctx := context.Background()
+	globalOff := RDDGlobalMode{Value: "off"}
+	globalOn := RDDGlobalMode{Value: "on"}
+
+	status, err := ResolveRDDMode(ctx, repo, globalOff)
+	if err != nil || status.Source != RDDModeSourceGlobal {
+		t.Fatalf("global off status = %#v, %v", status, err)
+	}
+	cloneOff, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", globalOff)
+	if err != nil || cloneOff.Source != RDDModeSourceCloneLocal {
+		t.Fatalf("clone off status = %#v, %v", cloneOff, err)
+	}
+	worktreeOff, err := SetWorktreeLocalRDDMode(ctx, repo, RDDModeOff, "", globalOff)
+	if err != nil || worktreeOff.Source != RDDModeSourceWorktreeLocal {
+		t.Fatalf("worktree off status = %#v, %v", worktreeOff, err)
+	}
+	if worktreeOff.Revision != worktreeOff.WorktreeRevision {
+		t.Fatalf("deciding worktree revision = %q, want %q", worktreeOff.Revision, worktreeOff.WorktreeRevision)
+	}
+	worktreeInherit, err := SetWorktreeLocalRDDMode(ctx, repo, RDDModeUnset, worktreeOff.WorktreeRevision, globalOff)
+	if err != nil || worktreeInherit.Source != RDDModeSourceCloneLocal {
+		t.Fatalf("worktree inherit status = %#v, %v", worktreeInherit, err)
+	}
+	cloneInherit, err := SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, cloneOff.CloneLocalRevision, globalOff)
+	if err != nil || cloneInherit.Source != RDDModeSourceGlobal {
+		t.Fatalf("clone inherit status = %#v, %v", cloneInherit, err)
+	}
+	if cloneInherit.Revision != "" {
+		t.Fatalf("global decision leaked clone-local revision %q", cloneInherit.Revision)
+	}
+	status, err = ResolveRDDMode(ctx, repo, globalOn)
+	if err != nil || !status.Enabled() || status.Source != RDDModeSourceGlobal {
+		t.Fatalf("narrower inherit forced a mode: %#v, %v", status, err)
+	}
+}
+
+func TestWorktreeRDDModeUsesDistinctMainWorktreeNamespace(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	ctx := context.Background()
+	identity, err := OpenRepositoryIdentityLease(ctx, repo)
+	if err != nil {
+		t.Fatalf("OpenRepositoryIdentityLease error = %v", err)
+	}
+	if identity.Identity().GitDir != identity.Identity().GitCommonDir {
+		t.Fatal("main worktree identity did not use its common Git directory")
+	}
+	if _, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", RDDGlobalMode{Value: "on"}); err != nil {
+		t.Fatalf("SetCloneLocalRDDMode error = %v", err)
+	}
+	if _, err := SetWorktreeLocalRDDMode(ctx, repo, RDDModeOff, "", RDDGlobalMode{Value: "on"}); err != nil {
+		t.Fatalf("SetWorktreeLocalRDDMode error = %v", err)
+	}
+	clonePath, err := CloneLocalRDDModeRecordPath(ctx, repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath error = %v", err)
+	}
+	worktreePath, err := WorktreeLocalRDDModeRecordPath(ctx, repo)
+	if err != nil {
+		t.Fatalf("WorktreeLocalRDDModeRecordPath error = %v", err)
+	}
+	if clonePath == worktreePath {
+		t.Fatalf("main worktree policy collided with clone policy: clone=%q worktree=%q", clonePath, worktreePath)
+	}
+	if filepath.Dir(clonePath) != filepath.Join(identity.Identity().GitCommonDir, "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode") ||
+		filepath.Dir(worktreePath) != filepath.Join(identity.Identity().GitDir, "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode-worktree") {
+		t.Fatalf("mode paths use unexpected namespaces: clone=%q worktree=%q", clonePath, worktreePath)
+	}
+}
+
+func TestWorktreeRDDModeIsolatedAcrossLinkedWorktrees(t *testing.T) {
+	primary, linked := initRepositoryIdentityLeaseWorktree(t)
+	ctx := context.Background()
+	linkedStatus, err := SetWorktreeLocalRDDMode(ctx, linked, RDDModeOff, "", RDDGlobalMode{Value: "on"})
+	if err != nil {
+		t.Fatalf("SetWorktreeLocalRDDMode(linked worktree) error = %v", err)
+	}
+	mainStatus, err := ResolveRDDMode(ctx, primary, RDDGlobalMode{Value: "on"})
+	if err != nil {
+		t.Fatalf("ResolveRDDMode(primary) error = %v", err)
+	}
+	if !mainStatus.Enabled() || linkedStatus.Source != RDDModeSourceWorktreeLocal {
+		t.Fatalf("linked worktree policy leaked: main=%#v linked=%#v", mainStatus, linkedStatus)
+	}
+	mainPath, err := WorktreeLocalRDDModeRecordPath(ctx, primary)
+	if err != nil || mainPath != "" {
+		t.Fatalf("primary WorktreeLocalRDDModeRecordPath = %q, %v", mainPath, err)
+	}
+	linkedPath, err := WorktreeLocalRDDModeRecordPath(ctx, linked)
+	if err != nil || linkedPath == "" {
+		t.Fatalf("linked WorktreeLocalRDDModeRecordPath = %q, %v", linkedPath, err)
+	}
+	mainIdentity, err := OpenRepositoryIdentityLease(ctx, primary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkedIdentity, err := OpenRepositoryIdentityLease(ctx, linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mainIdentity.Identity().GitCommonDir != linkedIdentity.Identity().GitCommonDir ||
+		mainIdentity.Identity().GitDir == linkedIdentity.Identity().GitDir ||
+		filepath.Dir(linkedPath) != filepath.Join(linkedIdentity.Identity().GitDir, "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode-worktree") {
+		t.Fatalf("linked worktree storage identity is invalid: main=%#v linked=%#v path=%q", mainIdentity.Identity(), linkedIdentity.Identity(), linkedPath)
+	}
+}
+
+func TestLocalRDDModeCompareAndSwapIsPerScope(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	ctx := context.Background()
+	global := RDDGlobalMode{Value: "on"}
+	clone, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", global)
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode error = %v", err)
+	}
+	worktree, err := SetWorktreeLocalRDDMode(ctx, repo, RDDModeOff, "", global)
+	if err != nil {
+		t.Fatalf("SetWorktreeLocalRDDMode error = %v", err)
+	}
+	if clone.CloneLocalRevision == "" || worktree.WorktreeRevision == "" {
+		t.Fatalf("scope revisions are not independent: clone=%#v worktree=%#v", clone, worktree)
+	}
+	if _, err := SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, "", global); !errors.Is(err, ErrRDDModeRevisionMismatch) {
+		t.Fatalf("stale clone CAS error = %v, want ErrRDDModeRevisionMismatch", err)
+	}
+	if _, err := SetWorktreeLocalRDDMode(ctx, repo, RDDModeUnset, "", global); !errors.Is(err, ErrRDDModeRevisionMismatch) {
+		t.Fatalf("stale worktree CAS error = %v, want ErrRDDModeRevisionMismatch", err)
+	} else if strings.Contains(err.Error(), "clone-local review mode revision mismatch") || !strings.Contains(err.Error(), "worktree-local head") {
+		t.Fatalf("worktree CAS error names the wrong scope: %v", err)
 	}
 }
 

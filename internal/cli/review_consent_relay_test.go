@@ -117,8 +117,12 @@ func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion
 	if !strings.Contains(granted.Effect, "exact frozen candidate") || !strings.Contains(granted.Effect, "asks again") {
 		t.Fatalf("grant effect must remain candidate-scoped: %q", granted.Effect)
 	}
-	if question.OffPath.Command != reviewConsentOffPathCommand || !strings.Contains(question.OffPath.Note, "for good") {
+	if question.OffPath.Command != reviewConsentOffPathLegacyCommand || !strings.Contains(question.OffPath.Note, "for good") {
 		t.Fatalf("consent off path = %#v", question.OffPath)
+	}
+	var disabled bytes.Buffer
+	if err := RunReviewMode(append(strings.Fields(question.OffPath.Command)[3:], "--cwd", repo), &disabled); err != nil {
+		t.Fatalf("consent off path is not runnable: %v\n%s", err, disabled.String())
 	}
 
 	// Asking is not persisting: no authority, no latch, and no skip notice.
@@ -201,7 +205,7 @@ func TestGlobalReviewModeEnabledPermitsButDoesNotGrantV2Consent(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	var modeOutput bytes.Buffer
-	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--json"}, &modeOutput); err != nil {
+	if err := RunReviewMode([]string{"enable", "--scope=global", "--cwd", repo, "--json"}, &modeOutput); err != nil {
 		t.Fatal(err)
 	}
 	if mode := decodeReviewModeResult(t, modeOutput.Bytes()).Status; mode.Effective != reviewtransaction.RDDModeOn {
@@ -223,7 +227,7 @@ func TestGlobalReviewModeOffRefusesBeforeV2Consent(t *testing.T) {
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
 	status := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV2, "--lineage", "review-consent-global-off")
 	var modeOutput bytes.Buffer
-	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--json"}, &modeOutput); err != nil {
+	if err := RunReviewMode([]string{"disable", "--scope=global", "--cwd", repo, "--json"}, &modeOutput); err != nil {
 		t.Fatal(err)
 	}
 
@@ -395,7 +399,7 @@ func TestHeadlessSkipNoticeNamesDefaultProvenance(t *testing.T) {
 	_ = explicitHome
 	repoExplicit := initReviewCLIRepo(t)
 	var modeOutput bytes.Buffer
-	if err := RunReviewMode([]string{"enable", "--cwd", repoExplicit, "--json"}, &modeOutput); err != nil {
+	if err := RunReviewMode([]string{"enable", "--scope=global", "--cwd", repoExplicit, "--json"}, &modeOutput); err != nil {
 		t.Fatalf("review mode enable: %v", err)
 	}
 	consoleExplicit := stubReviewConsole(t, false, "")
@@ -413,16 +417,14 @@ func TestHeadlessSkipNoticeNamesDefaultProvenance(t *testing.T) {
 	}
 }
 
-// TestConsentQuestionMatchesVersionedFixture pins the consent question to the
-// versioned contract artifact, the same way the negotiated START response is
-// pinned to start-v2.fixture.json. The repository path inside the runnable
-// invocations is the one caller-relative value, normalized to the fixture's
-// /repo placeholder.
-func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
+// TestCurrentConsentQuestionMatchesVersionedFixture pins the current consent
+// question to its versioned artifact. The legacy v1 artifact remains frozen and
+// is hash-checked separately; its live off-path guidance follows the current
+// explicit-scope mutation contract.
+func TestCurrentConsentQuestionMatchesVersionedFixture(t *testing.T) {
 	for _, tt := range []struct {
 		name, contract, fixture, schema string
 	}{
-		{name: "v1", contract: ReviewIntegrationContractV1, fixture: filepath.Join("v1", "fixtures", "consent.fixture.json"), schema: filepath.Join("v1", "schemas", "consent.schema.json")},
 		{name: "v2.1", contract: ReviewIntegrationContractV2, fixture: filepath.Join("v2", "fixtures", "consent-v3.fixture.json"), schema: filepath.Join("v2", "schemas", "consent-v3.schema.json")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

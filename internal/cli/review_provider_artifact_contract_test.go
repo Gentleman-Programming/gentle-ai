@@ -16,6 +16,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
 	want := map[string]string{
 		"fixtures/capabilities-v1.4.fixture.json": "84e0db457b76b97b35c2be772dfc647f9eab66810ea98f64fed85645c3c266ba",
+		"fixtures/consent.fixture.json":           "b2ff4809b9eb75a54206800dca13f96396976aca7387e45f765ac6ec98029cd1",
 		"fixtures/start.fixture.json":             "f369160ac26eb3427b57de2dd01c9d8c81e51c8a2bd546446780129d31b1945b",
 		"fixtures/start-v2.fixture.json":          "388c7c21374b89afe2d42d64bd1987d17ec0e2c7151cab1c56a08969ffb2ea0e",
 		"fixtures/status.fixture.json":            "555054d8046a896162995dcb117752f9cd1ef903fb9ebaad29af1b7e7f319bb3",
@@ -27,6 +28,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"schemas/admitted-result.schema.json":     "7796e8dbba331434594108c902dfab7ec46f691fa447a9259a78f2448111b0de",
 		"schemas/artifact-subject.schema.json":    "f7dcd934e27e8f3735a37f3d0ec8048dd8ccc1811b9df61124a1dcbf8a03f40e",
 		"schemas/capabilities-v1.4.schema.json":   "926b61c8ac0f870f09214f6bd8af1b035c5b72f14f0b83c0d4a7bdbb277f5447",
+		"schemas/consent.schema.json":             "f8f2edec17568124488482c2aee399909111fe0cce2cba426fb29efd2c7c1cd0",
 		"schemas/result-artifact.schema.json":     "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
 		"schemas/start.schema.json":               "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
 		"schemas/start-v2.schema.json":            "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
@@ -71,9 +73,9 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/capabilities-v2.1.fixture.json": "4bbcbaed1b20e6ea8f9c615f35ff17b13ee69b4648784a4906191880751c668d",
-		"fixtures/consent-v3.fixture.json":        "ead7d16aa1dabe9db4b7675d7e3b3de5594d7856f98960d8ec9bba99f91c0e31",
+		"fixtures/consent-v3.fixture.json":        "22fa1f9c2dfd1a69f6565ac2b9a66fece7bd846f27820a92dca812a9ee7c4442",
 		"schemas/capabilities-v2.1.schema.json":   "9ede8ebbe3e169cf6ca4f4a6882c9c4e588a6d1073d8e22a155649cd41d38cd0",
-		"schemas/consent-v3.schema.json":          "80915f5f4f43a494826253d1e7251fc463989f41d2cf163a6a52a8b4328c023c",
+		"schemas/consent-v3.schema.json":          "19b5b8390a933d2357d0f155fba2f16de263f6b17a49480ab3c615bcec4da20c",
 		"schemas/status.schema.json":              "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
 	}
 	for name, expected := range want {
