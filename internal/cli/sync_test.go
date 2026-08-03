@@ -949,7 +949,7 @@ func TestRunSyncRemovesOpenCodeOnlyReviewPluginFromKilocode(t *testing.T) {
 
 	pluginsDir := filepath.Join(home, ".config", "kilo", "plugins")
 	reviewPlugin := filepath.Join(pluginsDir, "review-result-artifacts.ts")
-	mustWriteFile(t, reviewPlugin, []byte("// stale v2.1.7 managed plugin"))
+	mustWriteFile(t, reviewPlugin, []byte(assets.MustRead("opencode/plugins/review-result-artifacts.ts")))
 
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
@@ -976,6 +976,50 @@ func TestRunSyncRemovesOpenCodeOnlyReviewPluginFromKilocode(t *testing.T) {
 	skillRegistry := filepath.Join(pluginsDir, "skill-registry.ts")
 	if _, err := os.Stat(skillRegistry); !os.IsNotExist(err) {
 		t.Errorf("sync must not create never-installed plugin %q; stat err = %v", skillRegistry, err)
+	}
+}
+
+// TestRunSyncPreservesUserOwnedOpenCodeOnlyReviewPluginFromKilocode ensures
+// Kilo sync does not delete a same-named plugin with arbitrary user content.
+func TestRunSyncPreservesUserOwnedOpenCodeOnlyReviewPluginFromKilocode(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents:     []string{"kilocode"},
+		SelectionConfigured: true,
+		Components:          []model.ComponentID{model.ComponentEngram},
+		Persona:             "neutral",
+	}); err != nil {
+		t.Fatalf("state.Write() error = %v", err)
+	}
+
+	pluginsDir := filepath.Join(home, ".config", "kilo", "plugins")
+	reviewPlugin := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+	userContent := []byte("// user-owned Kilo review plugin")
+	mustWriteFile(t, reviewPlugin, userContent)
+
+	restoreHome := osUserHomeDir
+	restoreBackupHome := backup.UserHomeDirFn
+	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		backup.UserHomeDirFn = restoreBackupHome
+	})
+
+	result, err := RunSync(nil)
+	if err != nil {
+		t.Fatalf("RunSync() error = %v", err)
+	}
+
+	got, readErr := os.ReadFile(reviewPlugin)
+	if readErr != nil {
+		t.Fatalf("sync removed user-owned Kilo review plugin: %v", readErr)
+	}
+	if !bytes.Equal(got, userContent) {
+		t.Errorf("sync changed user-owned Kilo review plugin content = %q, want %q", got, userContent)
+	}
+	if containsPath(result.ChangedFiles, reviewPlugin) {
+		t.Errorf("ChangedFiles unexpectedly includes preserved Kilocode plugin path %q\nchanged = %#v", reviewPlugin, result.ChangedFiles)
 	}
 }
 
