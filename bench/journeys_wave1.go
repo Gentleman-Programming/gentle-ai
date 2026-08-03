@@ -1426,5 +1426,51 @@ func waveOneJourneys() []Journey {
 				{Name: "same two segments still compose after the no-op", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-pr", "--base-ref", "origin/main"), After: requireNoOpChainCompositionUnchanged, AbortOnBlock: true},
 			},
 		},
+		{
+			ID:     "j52-backup-list-and-clean",
+			Title:  "CLI backup management: list stored backups and prune stale snapshots via clean",
+			Source: "issue #2304",
+			Steps: []Step{
+				{
+					Name:     "backup list on fresh environment returns zero backups",
+					Requires: &Capability{Verb: []string{"backup", "list"}},
+					Args:     productArgs("backup", "list"),
+					After: func(_ *Sandbox, observation Observation) error {
+						if !strings.Contains(observation.Stdout, "No safety backups found") {
+							return fmt.Errorf("expected no backups message, got %q", observation.Stdout)
+						}
+						return nil
+					},
+				},
+				{
+					Name:     "backup list --json returns valid json structure",
+					Requires: &Capability{Verb: []string{"backup", "list"}, Flags: []string{"--json"}},
+					Args:     productArgs("backup", "list", "--json"),
+					After: func(_ *Sandbox, observation Observation) error {
+						var report struct {
+							TotalCount int `json:"total_count"`
+						}
+						if err := json.Unmarshal([]byte(observation.Stdout), &report); err != nil {
+							return fmt.Errorf("invalid json output: %w", err)
+						}
+						if report.TotalCount != 0 {
+							return fmt.Errorf("expected 0 backups in JSON, got %d", report.TotalCount)
+						}
+						return nil
+					},
+				},
+				{
+					Name:     "backup clean on empty directory reports no stale backups",
+					Requires: &Capability{Verb: []string{"backup", "clean"}},
+					Args:     productArgs("backup", "clean", "--keep", "5"),
+					After: func(_ *Sandbox, observation Observation) error {
+						if !strings.Contains(observation.Stdout, "No stale backups to clean") {
+							return fmt.Errorf("expected no stale backups message, got %q", observation.Stdout)
+						}
+						return nil
+					},
+				},
+			},
+		},
 	}
 }

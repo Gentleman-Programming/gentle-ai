@@ -535,10 +535,11 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [ok]  state:json                     state file OK — 1 agent(s) installed: claude-code
   [ok]  engram:reachable               engram health endpoint OK at http://localhost:7437/health (HTTP 200)
   [ok]  disk:space                     1024 MB free on %s filesystem
+  [ok]  backup:footprint               no backups found in %s
 
-Summary: 7 passed, 0 failed, 0 warnings
+Summary: 8 passed, 0 failed, 0 warnings
 Status:  healthy
-`, filepath.Join(homeDir, ".gentle-ai"))
+`, filepath.Join(homeDir, ".gentle-ai"), filepath.Join(homeDir, ".gentle-ai", "backups"))
 	if got := buf.String(); got != want {
 		t.Fatalf("RunDoctor output mismatch\ngot:\n%s\nwant:\n%s", got, want)
 	}

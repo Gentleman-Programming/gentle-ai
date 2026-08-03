@@ -579,6 +579,7 @@ and every native authority state is reached through the measured binary.
 | `j49-status-without-cwd-honors-kill-switch` | clone-local mode disabled, explicit-CWD control, omitted-CWD status using the same repository identity, disabled/unmanaged archive without approval | issue #2129 |
 | `j50-candidate-decline-preserves-frozen-delivery-identity` | status-derived v2 consent relay and decline, exact non-authorizing delivery identity, clean authority inventory, release and byte/path drift controls | issue #2045 |
 | `j51-unrelated-noop-authority-keeps-composed-delivery` | two approved delivered segments, recorded composed pre-PR span, unrelated clean approved no-op, identical composed span afterward | issue #2125 |
+| `j52-backup-list-and-clean` | CLI backup management: list stored backups with human and JSON output, and prune stale snapshots via clean --keep | issue #2304 |
 
 `j44` proves the linked checkout/common-dir topology and remote baseline before
 review starts, then proves the staged delivery tree equals the corrected receipt

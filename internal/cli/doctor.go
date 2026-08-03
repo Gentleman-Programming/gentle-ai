@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/storage"
@@ -110,6 +111,7 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		doctor.Check{ID: doctor.CheckStateJSON, Run: func(context.Context) doctor.Result { return checkStateJSON(homeDir) }},
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(context.Context) doctor.Result { return checkEngramReachable() }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
+		doctor.Check{ID: doctor.CheckBackupFootprint, Run: func(context.Context) doctor.Result { return checkBackupFootprint(homeDir) }},
 	)
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
 
@@ -565,5 +567,38 @@ func statusIcon(s CheckStatus) string {
 		return "[xx]"
 	default:
 		return "[??]"
+	}
+}
+
+const backupWarnThreshold = int64(500 * 1024 * 1024) // 500 MB
+
+func checkBackupFootprint(homeDir string) CheckResult {
+	const id = doctor.CheckBackupFootprint
+	backupDir := filepath.Join(homeDir, ".gentle-ai", "backups")
+
+	report, err := backup.ListBackups(backupDir)
+	if err != nil || report.TotalCount == 0 {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusPass,
+			Detail: "no backups found in " + backupDir,
+		}
+	}
+
+	detail := fmt.Sprintf("%d backup(s) occupying %s in %s", report.TotalCount, report.TotalHuman, backupDir)
+
+	if report.TotalBytes > backupWarnThreshold {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: detail + " (exceeds 500 MB threshold)",
+			Remedy: doctor.NewRemedy(doctor.RemedyCleanBackups, "Run 'gentle-ai backup clean' to purge stale backups"),
+		}
+	}
+
+	return CheckResult{
+		Name:   id,
+		Status: CheckStatusPass,
+		Detail: detail,
 	}
 }
