@@ -55,8 +55,8 @@ func TestInjectMergesThemeOverlayIntoAdapterSettings(t *testing.T) {
 	if err := json.Unmarshal(data, &root); err != nil {
 		t.Fatalf("Unmarshal(settings) error = %v", err)
 	}
-	if root.Theme != "gentleman-kanagawa" {
-		t.Fatalf("theme = %q, want gentleman-kanagawa", root.Theme)
+	if root.Theme != "gentleman" {
+		t.Fatalf("theme = %q, want gentleman", root.Theme)
 	}
 	if got := root.Permissions["allow"]; len(got) != 1 || got[0] != "Bash(go test ./...)" {
 		t.Fatalf("permissions.allow = %#v, want preserved existing permission", got)
@@ -92,8 +92,8 @@ func TestInjectCreatesAdapterSettingsWhenMissing(t *testing.T) {
 	if err := json.Unmarshal(data, &root); err != nil {
 		t.Fatalf("Unmarshal(settings) error = %v", err)
 	}
-	if root.Theme != "gentleman-kanagawa" {
-		t.Fatalf("theme = %q, want gentleman-kanagawa", root.Theme)
+	if root.Theme != "gentleman" {
+		t.Fatalf("theme = %q, want gentleman", root.Theme)
 	}
 }
 
@@ -164,8 +164,8 @@ func TestInjectClaudeThemeWritesGentlemanThemeFile(t *testing.T) {
 		t.Fatalf("Unmarshal(theme) error = %v", err)
 	}
 
-	if root.Name != "Gentleman" || root.Base != "dark" {
-		t.Fatalf("theme identity = %q/%q, want Gentleman/dark", root.Name, root.Base)
+	if root.Name != "gentleman" || root.Base != "dark" {
+		t.Fatalf("theme identity = %q/%q, want gentleman/dark", root.Name, root.Base)
 	}
 	expected := map[string]string{
 		"diffAdded":                 "#3F4A2D",

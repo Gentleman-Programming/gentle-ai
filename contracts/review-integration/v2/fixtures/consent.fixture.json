@@ -25,7 +25,7 @@
     {
       "answer": "declined",
       "label": "Not now, just this once",
-      "effect": "Skips the review for this candidate only; nothing is persisted and the next candidate is asked again. This is not the kill switch.",
+      "effect": "Skips the review for this exact candidate only; no review lineage or receipt is created, and ordinary delivery is unmanaged by candidate choice. The next candidate is asked again. This is not the kill switch.",
       "invocation": "gentle-ai review start --contract gentle-ai.review-integration/v2 --cwd /repo --target sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5 --projection workspace --lineage review-consent-fixture --consent declined"
     }
   ],

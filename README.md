@@ -202,6 +202,86 @@ The managed installer tracks the channel's latest version and does not accept an
    gentle-ai sync
    ```
 
+### The flow at a glance
+
+Both implementation routes converge on RDD: a bounded native review freezes the candidate and issues the one receipt that every delivery gate validates — review is never reopened for unchanged content.
+
+**Organic route (no SDD)** — the agent picks the smallest useful route and RDD enters at the end, over the frozen candidate:
+
+```mermaid
+flowchart TD
+    A["User requests a change<br/>(Claude Code · OpenCode · Codex...)"] --> B{"Implementation<br/>route"}
+    B -->|"decide/verify<br/>1–3 files"| C["Direct inline"]
+    B -->|"4+ file exploration<br/>or 2+ non-trivial writes"| D["Delegated direct<br/>(one bounded worker)"]
+    C --> E["Implementation + tests"]
+    D --> E
+    E --> F{"RDD enabled?<br/>(user-owned kill switch)"}
+    F -->|"off"| Z["Ordinary delivery<br/>reports disabled/unmanaged"]
+    F -->|"on"| G["review status --next-transition<br/>(provider-owned negotiated route)"]
+    G --> H{"Risk frozen<br/>at START"}
+    H -->|"low"| I["Structural readback<br/>0 lenses · silent"]
+    H -->|"standard"| J["1 focus lens<br/>+ consent"]
+    H -->|"high"| K["Canonical 4R + consent + forecast<br/>Risk · Readability · Reliability · Resilience"]
+    J --> L["Reviewers inspect the immutable candidate<br/>(review inspect-candidate)"]
+    K --> L
+    L --> M{"Severe candidate-caused<br/>findings?"}
+    I --> N["Receipt: approved"]
+    M -->|"no"| N
+    M -->|"yes"| O["One bounded correction<br/>(frozen budget)"]
+    O --> P["Fix validator<br/>(read-only, immutable trees)"]
+    P -->|"passes"| N
+    P -->|"fails with evidence"| Q["Escalated"]
+    P -->|"no access to the diff"| R["Inconclusive: attempt not<br/>consumed, capture again"]
+    R --> P
+    Q --> S["review recover<br/>(authorized successor)"]
+    N --> T["Delivery gates<br/>pre-commit → pre-push → pre-pr<br/>validate the SAME receipt"]
+    T --> U["Commit → Push → PR"]
+    Z --> U
+
+    style N fill:#2D4F67,color:#fff
+    style Q fill:#B8860B,color:#fff
+    style U fill:#2D4F67,color:#fff
+```
+
+**SDD route** — durable planning artifacts first, then apply, with RDD reviewing the candidate before verify and archive requiring the receipt:
+
+```mermaid
+flowchart TD
+    A["User: sdd-new / sdd-explore<br/>(or sdd-ff to fast-forward planning)"] --> B["Explore<br/>investigate codebase and approaches"]
+    B --> C["Propose<br/>intent · scope · approach"]
+    C --> D{"User approves<br/>the proposal?"}
+    D -->|"no"| B
+    D -->|"yes"| E["Spec<br/>requirements + scenarios"]
+    E --> F["Design<br/>architecture decisions"]
+    F --> G["Tasks<br/>ordered deliverable checklist"]
+    G --> H["Apply<br/>sub-agent implements against specs<br/>(sdd-attempt acquire/settle · CAS · budgets)"]
+    H --> I["RDD over the frozen candidate"]
+
+    subgraph RDD["RDD — same machine as the organic route"]
+        I --> J{"Risk"}
+        J -->|"low"| K["Structural readback"]
+        J -->|"standard / high"| L["1 lens or 4R + consent"]
+        L --> M{"Severe findings?"}
+        M -->|"yes"| N["One bounded correction<br/>+ fix validator"]
+        M -->|"no"| O["Receipt: approved"]
+        K --> O
+        N -->|"validates"| O
+        N -->|"fails"| P["Escalated → recover"]
+    end
+
+    O --> Q["Verify<br/>independent verification against<br/>spec · design · tasks"]
+    Q -->|"passes"| R["Archive<br/>merge delta-specs · close the cycle<br/>(requires reviewGate allow or disabled)"]
+    Q -->|"fails"| H
+    R --> S["Delivery gates<br/>validate the same receipt"]
+    S --> T["Commit → Push → PR"]
+
+    style O fill:#2D4F67,color:#fff
+    style P fill:#B8860B,color:#fff
+    style T fill:#2D4F67,color:#fff
+```
+
+Size, file count, or perceived risk never select SDD on their own — only an explicit request or an accepted proposal does. Either way, one candidate gets one review, one possible correction, and one receipt.
+
 ### Control receipt-driven development
 
 Review mode is user-owned and available independently of the review lifecycle:
