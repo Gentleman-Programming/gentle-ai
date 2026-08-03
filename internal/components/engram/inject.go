@@ -314,15 +314,19 @@ func antigravityConfigs(globalPath string) (fileImage, string, bool, error) {
 		globalData = []byte("{}")
 	}
 	root := map[string]json.RawMessage{}
-	if global.exists && json.Unmarshal(globalData, &root) != nil {
-		return global, "", false, fmt.Errorf("parse Antigravity global config %q", globalPath)
+	if global.exists {
+		if err := json.Unmarshal(globalData, &root); err != nil {
+			return global, "", false, fmt.Errorf("parse Antigravity global config %q: %w", globalPath, err)
+		}
 	}
 	if global.exists && root == nil {
 		return global, "", false, fmt.Errorf("parse Antigravity global config %q: expected object", globalPath)
 	}
 	servers := map[string]json.RawMessage{}
-	if raw, ok := root["mcpServers"]; ok && json.Unmarshal(raw, &servers) != nil {
-		return global, "", false, fmt.Errorf("parse Antigravity global mcpServers %q", globalPath)
+	if raw, ok := root["mcpServers"]; ok {
+		if err := json.Unmarshal(raw, &servers); err != nil {
+			return global, "", false, fmt.Errorf("parse Antigravity global mcpServers %q: %w", globalPath, err)
+		}
 	}
 	if servers == nil {
 		return global, "", false, fmt.Errorf("parse Antigravity global mcpServers %q: expected object", globalPath)
@@ -373,17 +377,27 @@ func installAntigravityEngramPlugin(homeDir string, adapter agents.Adapter) (boo
 			return false, nil, err
 		}
 	}
-	files := []string{mcpPath, filepath.Join(pluginDir, "hooks.json"), settingsPath, manifestPath}
+	hooksPath := filepath.Join(pluginDir, "hooks.json")
+	files := []string{mcpPath, hooksPath, settingsPath, manifestPath}
+	staged := []struct {
+		path             string
+		content          []byte
+		preserveExisting bool
+	}{
+		{path: mcpPath, content: engramOverlayJSON(model.AgentAntigravity, engramCommand)},
+		{path: hooksPath, content: antigravityEngramHooksJSON()},
+		{path: settingsPath, content: settingsContent, preserveExisting: true},
+	}
 	changed := false
-	for i, content := range [][]byte{engramOverlayJSON(model.AgentAntigravity, engramCommand), antigravityEngramHooksJSON(), settingsContent} {
-		before, readErr := readImage(files[i])
+	for _, target := range staged {
+		before, readErr := readImage(target.path)
 		if readErr != nil {
-			return false, nil, fmt.Errorf("read staging target %q: %w", files[i], readErr)
+			return false, nil, fmt.Errorf("read staging target %q: %w", target.path, readErr)
 		}
-		if i == 2 && before.exists {
+		if target.preserveExisting && before.exists {
 			continue
 		}
-		wrote, _, writeErr := writeReconciled(files[i], before, content)
+		wrote, _, writeErr := writeReconciled(target.path, before, target.content)
 		changed = changed || wrote
 		if writeErr != nil {
 			observed := fmt.Errorf("observed global active=%v at %q, manifest active=%v at %q", globalBefore.exists, globalPath, manifestBefore.exists, manifestPath)
@@ -722,7 +736,7 @@ func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionRe
 	}
 	removed, err := RemoveManagedLegacyClaudeConfig(legacyPath)
 	if err != nil {
-		return InjectionResult{}, err
+		return result, nil
 	}
 	if !removed {
 		return result, nil
