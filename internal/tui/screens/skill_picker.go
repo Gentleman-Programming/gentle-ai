@@ -29,12 +29,13 @@ var skillLabels = map[model.SkillID]string{
 }
 
 var additionalSkillLabels = map[model.SkillID]string{
-	model.SkillImprover:        "Skill Improver",
-	model.SkillSkillRegistry:   "Skill Registry",
-	model.SkillChainedPR:       "Chained PR",
-	model.SkillCognitiveDoc:    "Cognitive Doc Design",
-	model.SkillCommentWriter:   "Comment Writer",
-	model.SkillWorkUnitCommits: "Work Unit Commits",
+	model.SkillImprover:          "Skill Improver",
+	model.SkillSkillRegistry:     "Skill Registry",
+	model.SkillChainedPR:         "Chained PR",
+	model.SkillCognitiveDoc:      "Cognitive Doc Design",
+	model.SkillCommentWriter:     "Comment Writer",
+	model.SkillWorkUnitCommits:   "Work Unit Commits",
+	model.SkillRDDDefectWorkflow: "RDD Defect Workflow",
 }
 
 // SkillPickerOptions returns the action buttons shown after the skill checkboxes.

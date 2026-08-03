@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -118,6 +119,108 @@ func TestCompleteCorrectionVerificationIsAtomicAndCandidateBound(t *testing.T) {
 	}
 	if _, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetFixDiff, BaseRef: before.CurrentSnapshot.CandidateTree, IntendedUntracked: before.InitialSnapshot.IntendedUntracked, LedgerIDs: before.FixFindingIDs}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCompleteCorrectionVerificationPreservesFullCandidateScope(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "base\nwrong\n")
+	writeSnapshotFile(t, repo, "deleted.txt", "reviewed companion\n")
+	state := newCompactTestState(t, repo, "full-candidate-correction")
+	if !reflect.DeepEqual(state.GenesisPaths, []string{"deleted.txt", "tracked.txt"}) {
+		t.Fatalf("genesis paths = %v", state.GenesisPaths)
+	}
+	finding := Finding{ID: "R3-001", Lens: strings.TrimPrefix(state.SelectedLenses[0], "review-"), Location: "tracked.txt:2", Severity: "CRITICAL", Claim: "wrong value", ProofRefs: []string{"candidate-only failure"}}
+	results := make([]LensResult, len(state.SelectedLenses))
+	for index, lens := range state.SelectedLenses {
+		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
+		if index == 0 {
+			results[index].Findings = []Finding{finding}
+		}
+	}
+	if err := state.CompleteReview(CompactReviewInput{
+		LensResults:     results,
+		Classifications: []FindingEvidence{{FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk causes failure"}},
+		RefuterOutcomes: []EvidenceResult{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.BeginCorrection(1); err != nil {
+		t.Fatal(err)
+	}
+	writeSnapshotFile(t, repo, "tracked.txt", "base\nfixed\n")
+	builder := SnapshotBuilder{Repo: repo}
+	fix, err := builder.Build(context.Background(), Target{Kind: TargetFixDiff, BaseRef: state.CurrentSnapshot.CandidateTree, IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := builder.BuildCorrectedCandidate(context.Background(), state.InitialSnapshot, fix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(fix.Paths, []string{"tracked.txt"}) || !reflect.DeepEqual(full.Paths, state.GenesisPaths) || fix.PathsDigest == full.PathsDigest {
+		t.Fatalf("correction paths = %v (%s), full paths = %v (%s)", fix.Paths, fix.PathsDigest, full.Paths, full.PathsDigest)
+	}
+	fixHash := FixDeltaHashForSnapshot(fix)
+	validation := bindTargetedValidationForTest(ScopedValidationResult{
+		LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
+		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true},
+		CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true},
+	}, fix)
+	payload := []byte("full candidate verification passed\n")
+	evidence, err := NewVerificationEvidenceRecord(state.LineageID, hash("a"), fix, payload, VerificationOutcomePassed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.CompleteCorrectionVerification(fix, 1, validation, evidence, payload, full); err != nil {
+		t.Fatal(err)
+	}
+	if !snapshotsEqual(state.CurrentSnapshot, full) || !snapshotsEqual(state.CorrectionAttempts[0].Snapshot, fix) || state.EvidenceTargetIdentity != fix.Identity {
+		t.Fatalf("terminal authority = %#v, correction = %#v", state.CurrentSnapshot, state.CorrectionAttempts[0].Snapshot)
+	}
+	receipt, err := state.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.FinalCandidateTree != full.CandidateTree || receipt.PathsDigest != full.PathsDigest {
+		t.Fatalf("receipt tree/paths = %s/%s, want %s/%s", receipt.FinalCandidateTree, receipt.PathsDigest, full.CandidateTree, full.PathsDigest)
+	}
+	tampered := state
+	tampered.CorrectionAttempts = append([]CompactCorrectionAttempt(nil), state.CorrectionAttempts...)
+	tampered.CorrectionAttempts[0].Snapshot.PathsDigest = hash("b")
+	if _, err := tampered.Receipt(); err != nil {
+		t.Fatalf("full candidate receipt changed with correction metadata: %v", err)
+	}
+	_, tamperedPayload, err := makeCompactRecord(tampered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseCompactRecord(tamperedPayload, tampered.LineageID); err == nil {
+		t.Fatal("persisted record accepted tampered correction path metadata")
+	}
+	store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	_, encoded, err := makeCompactRecord(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), encoded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+		t.Fatal(err)
+	}
+	gitSnapshot(t, repo, "add", "tracked.txt", "deleted.txt")
+	gate := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePreCommit, LineageID: state.LineageID})
+	if gate.Result != GateAllow {
+		t.Fatalf("unchanged full candidate pre-commit = %#v", gate)
+	}
+	writeSnapshotFile(t, repo, "deleted.txt", "unreviewed drift\n")
+	gitSnapshot(t, repo, "add", "deleted.txt")
+	if drift := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePreCommit, LineageID: state.LineageID}); drift.Result == GateAllow {
+		t.Fatalf("changed companion path was allowed: %#v", drift)
 	}
 }
 

@@ -35,6 +35,12 @@ func TestRelayedCandidateDeclineAllowsOnlyExactPreCommitDelivery(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "v2", "review-candidate-decline", "receipt.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("declined candidate created receipt: %v", err)
 	}
+	declinedSnapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{"scripts/deploy.sh"},
+	})
+	if err != nil {
+		t.Fatalf("rebuild declined candidate: %v", err)
+	}
 
 	runReviewCLIGit(t, repo, "add", "scripts/deploy.sh")
 	var allowed bytes.Buffer
@@ -48,6 +54,11 @@ func TestRelayedCandidateDeclineAllowsOnlyExactPreCommitDelivery(t *testing.T) {
 	}
 	if result.Context.Denial == nil || result.Context.Denial.Stage != "candidate-decline" {
 		t.Fatalf("candidate-declined delivery did not expose its unmanaged choice: %#v", result.Context)
+	}
+	if result.Context.BaseTree != declinedSnapshot.BaseTree ||
+		result.Context.CandidateTree != declinedSnapshot.CandidateTree ||
+		result.Context.PathsDigest != declinedSnapshot.PathsDigest {
+		t.Fatalf("candidate-declined delivery lost frozen candidate identity:\ncontext=%#v\nwant=%#v", result.Context, declinedSnapshot)
 	}
 
 	if err := os.WriteFile(filepath.Join(repo, "scripts", "deploy.sh"), []byte("echo drift\n"), 0o644); err != nil {

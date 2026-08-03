@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -53,17 +54,36 @@ func seedArchiveGatedSDDChange(t *testing.T, root string) {
 	runReviewCLIGit(t, root, "commit", "-qm", "base")
 }
 
-func resolveSDDStatusJSON(t *testing.T, root string) sddstatus.Status {
+func runSDDCommandJSON(t *testing.T, run func([]string, io.Writer) error, args ...string) sddstatus.Status {
 	t.Helper()
 	var stdout bytes.Buffer
-	if err := RunSDDStatus([]string{"thin", "--cwd", root, "--json"}, &stdout); err != nil {
-		t.Fatalf("RunSDDStatus() error = %v\n%s", err, stdout.String())
+	if err := run(args, &stdout); err != nil {
+		t.Fatalf("SDD command error = %v\n%s", err, stdout.String())
 	}
 	var status sddstatus.Status
 	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
 		t.Fatalf("decode sdd status: %v\n%s", err, stdout.String())
 	}
 	return status
+}
+
+func resolveSDDStatusJSON(t *testing.T, root string) sddstatus.Status {
+	t.Helper()
+	return runSDDCommandJSON(t, RunSDDStatus, "thin", "--cwd", root, "--json")
+}
+
+func requireDisabledUnmanagedSDDStatus(t *testing.T, status sddstatus.Status) {
+	t.Helper()
+	if status.Dependencies.Archive == sddstatus.DependencyBlocked || status.NextRecommended == "resolve-review" {
+		t.Fatalf("disabled archive=%q next=%q blocked=%v, want an unmanaged route to archive",
+			status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
+	}
+	if status.ReviewGate == nil || status.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
+		t.Fatalf("disabled reviewGate = %#v, want disabled/unmanaged", status.ReviewGate)
+	}
+	if status.ReviewGate.Result == reviewtransaction.GateAllow || status.ReviewTransaction != nil {
+		t.Fatalf("disabled status fabricated review authority: gate=%#v transaction=%#v", status.ReviewGate, status.ReviewTransaction)
+	}
 }
 
 // corruptCloneLocalReviewMode damages the clone-local override head record.
@@ -126,21 +146,47 @@ func TestSDDStatusArchiveGateCarriesOnWhileReviewIsDisabled(t *testing.T) {
 	disableReviewForClone(t, root)
 
 	status := resolveSDDStatusJSON(t, root)
-	if status.Dependencies.Archive == sddstatus.DependencyBlocked {
-		t.Fatalf("disabled archive = %q, want unblocked; blocked reasons = %v", status.Dependencies.Archive, status.BlockedReasons)
+	requireDisabledUnmanagedSDDStatus(t, status)
+}
+
+func TestSDDCommandsWithoutCWDHonorDisabledReviewMode(t *testing.T) {
+	reviewModeHome(t)
+	root := t.TempDir()
+	seedArchiveGatedSDDChange(t, root)
+	disableReviewForClone(t, root)
+	t.Chdir(root)
+
+	commands := []struct {
+		name string
+		run  func([]string, io.Writer) error
+	}{
+		{name: "status", run: RunSDDStatus},
+		{name: "continue", run: RunSDDContinue},
 	}
-	if status.NextRecommended == "resolve-review" {
-		t.Fatalf("disabled next = %q, want a route out of the resolve-review loop", status.NextRecommended)
+	for _, command := range commands {
+		t.Run(command.name, func(t *testing.T) {
+			status := runSDDCommandJSON(t, command.run, "thin", "--json")
+			requireDisabledUnmanagedSDDStatus(t, status)
+			if status.ActionContext.WorkspaceRoot != root {
+				t.Fatalf("workspace root = %q, want %q", status.ActionContext.WorkspaceRoot, root)
+			}
+		})
 	}
-	if status.ReviewGate == nil || status.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
-		t.Fatalf("disabled reviewGate = %#v, want the disabled/unmanaged disposition on the wire", status.ReviewGate)
-	}
-	// A disabled run declines to manage. It never approves.
-	if status.ReviewGate.Result == reviewtransaction.GateAllow {
-		t.Fatalf("disabled reviewGate fabricated an approval: %#v", status.ReviewGate)
-	}
-	if status.ReviewTransaction != nil {
-		t.Fatalf("disabled run invented review authority: %#v", status.ReviewTransaction)
+}
+
+func TestSDDStatusWithoutCWDUsesLinkedWorktreeCommonDirMode(t *testing.T) {
+	reviewModeHome(t)
+	root := t.TempDir()
+	seedArchiveGatedSDDChange(t, root)
+	disableReviewForClone(t, root)
+	linked := filepath.Join(t.TempDir(), "linked")
+	runReviewCLIGit(t, root, "worktree", "add", "-q", "-b", "linked-status", linked)
+	t.Chdir(linked)
+
+	status := runSDDCommandJSON(t, RunSDDStatus, "thin", "--json")
+	requireDisabledUnmanagedSDDStatus(t, status)
+	if status.ActionContext.WorkspaceRoot != linked {
+		t.Fatalf("workspace root = %q, want linked worktree %q", status.ActionContext.WorkspaceRoot, linked)
 	}
 }
 
@@ -157,11 +203,17 @@ func TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable(t *testing.T) {
 	if reviewDrivenDevelopmentDisabled(context.Background(), root) {
 		t.Fatal("an unreadable switch resolved to disabled; it must fail closed to enabled")
 	}
-	status := resolveSDDStatusJSON(t, root)
-	if status.ReviewGate == nil || status.ReviewGate.Delivery != "" {
-		t.Fatalf("unreadable-switch reviewGate = %#v, want the enforcing shape", status.ReviewGate)
-	}
-	if status.Dependencies.Archive != sddstatus.DependencyBlocked || status.NextRecommended != "resolve-review" {
-		t.Fatalf("unreadable-switch archive=%q next=%q, want blocked/resolve-review", status.Dependencies.Archive, status.NextRecommended)
+	t.Chdir(root)
+	for _, args := range [][]string{
+		{"thin", "--cwd", root, "--json"},
+		{"thin", "--json"},
+	} {
+		status := runSDDCommandJSON(t, RunSDDStatus, args...)
+		if status.ReviewGate == nil || status.ReviewGate.Delivery != "" {
+			t.Fatalf("unreadable-switch reviewGate = %#v, want the enforcing shape", status.ReviewGate)
+		}
+		if status.Dependencies.Archive != sddstatus.DependencyBlocked || status.NextRecommended != "resolve-review" {
+			t.Fatalf("unreadable-switch archive=%q next=%q, want blocked/resolve-review", status.Dependencies.Archive, status.NextRecommended)
+		}
 	}
 }

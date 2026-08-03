@@ -199,21 +199,24 @@ func declaredLensTools(t *testing.T, path string) (tools []string, readOnlyAsser
 }
 
 // TestLensAgentPromptsStateWhereTheirInputComesFrom is the input-side twin of
-// the envelope guard. Every runtime receives the same provider-owned immutable
-// inspection contract and must never substitute mutable workspace files.
+// the envelope guard. Claude Code receives immutable prompt context, while
+// unsupported runtimes stop before they can inspect mutable workspace files.
 func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 	envelope := reviewtransaction.NewReviewerResultEnvelope()
 
-	// The orchestrator contract is the source for the one native inspection
-	// recipe every managed runtime must give reviewers.
+	// The orchestrator contract is the source for the current immutable
+	// inspection route that rendered reviewer prompts must preserve.
 	contract := assets.MustRead(boundedReviewContractAsset)
-	if !strings.Contains(contract, "injects only the provider's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered manifest") ||
+	if !strings.Contains(contract, "Claude Code carries immutable candidate evidence only in its provider-built prompt") ||
 		!strings.Contains(contract, "read-only native Git commands") {
 		t.Fatalf("%s no longer requires native-Git frozen-tree inspection; update the guard's derivation", boundedReviewContractAsset)
 	}
 
 	for _, paths := range lensAgentAssetPaths(t, envelope.LensAgentNames) {
 		for _, path := range paths {
+			if strings.HasPrefix(path, "claude/agents/") {
+				continue // Claude's separate prompt transport is pinned in bounded_review_contract_test.go.
+			}
 			prompt := strings.ToLower(renderBoundedReviewAsset(path))
 			for claim, why := range map[string]string{
 				"artifact_subject":      "does not name the bound artifact subject",

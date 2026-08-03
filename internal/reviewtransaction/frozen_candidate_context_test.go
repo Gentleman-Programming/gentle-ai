@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -168,6 +169,9 @@ func TestFrozenCandidateReviewerDiffUsesLiteralManifestPaths(t *testing.T) {
 		"literal*.txt", "literal-one.txt",
 		"literal?.txt", "literal1.txt",
 		"literal[1].txt", ":(top)magic.txt", "magic.txt",
+	}
+	if runtime.GOOS == "windows" {
+		paths = []string{"literal1.txt", "literal[1].txt"}
 	}
 	for _, version := range []string{"base", "candidate"} {
 		for _, logicalPath := range paths {

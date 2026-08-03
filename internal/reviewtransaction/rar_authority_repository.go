@@ -310,6 +310,20 @@ func (repository *RARAuthorityRepository) Publish(
 		request.ReceiptRef,
 	)
 	if err != nil {
+		// Bounded lock exhaustion converges only when a winner published this
+		// caller's exact immutable pair and it still matches live native authority.
+		if errors.Is(err, ErrAuthorityLockTimeout) {
+			if _, readErr := readPrivateRARFile(repository.pairIndexPath(request.ReceiptRef, request.Result.ResultRef)); readErr == nil {
+				replay, resolveErr := repository.ResolveReceiptResult(ctx, request.ReceiptRef, request.Result.ResultRef)
+				if resolveErr == nil && replay.Receipt.lineageID() == request.LineageID &&
+					reflect.DeepEqual(replay.Applicability, request.Applicability) &&
+					reflect.DeepEqual(replay.Registry, request.Registry) &&
+					reflect.DeepEqual(replay.Plan, request.Plan) &&
+					reflect.DeepEqual(replay.Result, request.Result) {
+					return replay, nil
+				}
+			}
+		}
 		return RARVerificationAuthority{}, err
 	}
 	defer release()
