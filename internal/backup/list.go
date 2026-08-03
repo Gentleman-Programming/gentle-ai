@@ -89,8 +89,7 @@ func ListBackups(backupDir string) (BackupListReport, error) {
 }
 
 // DirSizeBytes computes the cumulative size of all regular files under dirPath.
-// If dirPath does not exist, it returns (0, nil). Non-fatal read errors for individual
-// files are skipped without failing the entire walk.
+// If dirPath does not exist, it returns (0, nil).
 func DirSizeBytes(dirPath string) (int64, error) {
 	info, err := os.Stat(dirPath)
 	if err != nil {
@@ -104,15 +103,18 @@ func DirSizeBytes(dirPath string) (int64, error) {
 	}
 
 	var total int64
+	var walkErrOccurred error
 	err = filepath.WalkDir(dirPath, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return nil // Skip unreadable entries
+			walkErrOccurred = walkErr
+			return nil // Skip unreadable entries but record error
 		}
 		if d.IsDir() {
 			return nil
 		}
 		fi, statErr := d.Info()
 		if statErr != nil {
+			walkErrOccurred = statErr
 			return nil
 		}
 		if fi.Mode().IsRegular() {
@@ -122,6 +124,9 @@ func DirSizeBytes(dirPath string) (int64, error) {
 	})
 	if err != nil {
 		return 0, fmt.Errorf("walk dir %q: %w", dirPath, err)
+	}
+	if walkErrOccurred != nil {
+		return total, walkErrOccurred
 	}
 	return total, nil
 }

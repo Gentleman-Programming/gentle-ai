@@ -107,7 +107,7 @@ func TestRunBackupListAndClean(t *testing.T) {
 
 	// Test list human table
 	var bufHuman bytes.Buffer
-	if err := RunBackup([]string{"list"}, &bufHuman); err != nil {
+	if err := RunBackup([]string{"list"}, nil, &bufHuman); err != nil {
 		t.Fatalf("RunBackup(list) error = %v", err)
 	}
 	outHuman := bufHuman.String()
@@ -117,7 +117,7 @@ func TestRunBackupListAndClean(t *testing.T) {
 
 	// Test list JSON
 	var bufJSON bytes.Buffer
-	if err := RunBackup([]string{"list", "--json"}, &bufJSON); err != nil {
+	if err := RunBackup([]string{"list", "--json"}, nil, &bufJSON); err != nil {
 		t.Fatalf("RunBackup(list --json) error = %v", err)
 	}
 	var report backup.BackupListReport
@@ -128,9 +128,18 @@ func TestRunBackupListAndClean(t *testing.T) {
 		t.Errorf("JSON report total_count = %d; want 1", report.TotalCount)
 	}
 
-	// Test clean
+	// Test clean cancellation
+	var bufCancel bytes.Buffer
+	if err := RunBackup([]string{"clean", "--keep", "5"}, strings.NewReader("n\n"), &bufCancel); err != nil {
+		t.Fatalf("RunBackup(clean cancel) error = %v", err)
+	}
+	if !strings.Contains(bufCancel.String(), "Clean operation cancelled") {
+		t.Errorf("RunBackup(clean cancel) output unexpected: %s", bufCancel.String())
+	}
+
+	// Test clean confirmed
 	var bufClean bytes.Buffer
-	if err := RunBackup([]string{"clean", "--keep", "5"}, &bufClean); err != nil {
+	if err := RunBackup([]string{"clean", "--keep", "5"}, strings.NewReader("y\n"), &bufClean); err != nil {
 		t.Fatalf("RunBackup(clean) error = %v", err)
 	}
 	if !strings.Contains(bufClean.String(), "No stale backups to clean") {

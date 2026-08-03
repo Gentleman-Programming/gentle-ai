@@ -255,7 +255,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 	case "restore":
 		return cli.RunRestore(args[1:], stdout)
 	case "backup":
-		return cli.RunBackup(args[1:], stdout)
+		return cli.RunBackup(args[1:], os.Stdin, stdout)
 	case "doctor":
 		return cli.RunDoctor(context.Background(), stdout)
 	default:

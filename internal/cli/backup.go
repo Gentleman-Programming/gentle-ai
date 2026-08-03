@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -79,7 +80,7 @@ func ParseBackupFlags(args []string) (BackupFlags, error) {
 }
 
 // RunBackup dispatches and executes gentle-ai backup subcommands.
-func RunBackup(args []string, stdout io.Writer) error {
+func RunBackup(args []string, stdin io.Reader, stdout io.Writer) error {
 	flags, err := ParseBackupFlags(args)
 	if err != nil {
 		return err
@@ -117,6 +118,21 @@ func RunBackup(args []string, stdout io.Writer) error {
 		return nil
 
 	case "clean":
+		if !flags.Force {
+			if stdin == nil {
+				stdin = os.Stdin
+			}
+			fmt.Fprintf(stdout, "This will purge stale backups (retaining up to %d). Continue? [y/N]: ", flags.KeepCount)
+			var answer string
+			if scanner := bufio.NewScanner(stdin); scanner.Scan() {
+				answer = strings.TrimSpace(scanner.Text())
+			}
+			if !strings.EqualFold(answer, "y") && !strings.EqualFold(answer, "yes") {
+				fmt.Fprintln(stdout, "Clean operation cancelled.")
+				return nil
+			}
+		}
+
 		deleted, err := backup.CleanBackups(backupDir, flags.KeepCount)
 		if err != nil {
 			return fmt.Errorf("clean backups: %w", err)
@@ -151,8 +167,8 @@ func RenderBackupListReport(report backup.BackupListReport) string {
 	for _, b := range report.Backups {
 		tsStr := b.Timestamp.Local().Format("2006-01-02 15:04:05")
 		reason := b.ShortReason()
-		if len(reason) > 32 {
-			reason = reason[:29] + "..."
+		if runes := []rune(reason); len(runes) > 32 {
+			reason = string(runes[:29]) + "..."
 		}
 		pinnedStr := ""
 		if b.Pinned {
