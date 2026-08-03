@@ -210,6 +210,8 @@ internal/sddstatus/status.go	reportLineHasPassSignal
 internal/sddstatus/status.go	reportTextIsClearlyPassing
 internal/sddstatus/status.go	reportValueIsBenign
 internal/sddstatus/status.go	stripMarkdownSignal
+internal/state/lock_unix.go	tryLockFile
+internal/state/lock_unix.go	unlockFile
 internal/storage/bytes.go	FormatBytes
 internal/system/install_deps.go	InstallCommandsForDep
 internal/system/install_deps.go	installCommandsBrew
