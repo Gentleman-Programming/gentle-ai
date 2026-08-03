@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -627,7 +626,7 @@ func TestRunInstallBetaEngramUsesMainGoInstallAndInstalledBinary(t *testing.T) {
 			return "/usr/local/bin/engram", nil
 		}
 		if name == "go" {
-			return exec.LookPath(name)
+			return "/usr/local/bin/go", nil
 		}
 		return missingBinaryLookPath(name)
 	}
