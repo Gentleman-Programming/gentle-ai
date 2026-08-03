@@ -253,7 +253,8 @@ func validateUnmanagedRemediationReset(ctx context.Context, cwd, change, expecte
 	if err != nil {
 		return fmt.Errorf("resolve failed-evidence remediation eligibility: %w", err)
 	}
-	if status.RuntimeStatus == nil || status.RuntimeStatus.Revision != expected || status.NextRecommended != sddstatus.RuntimeActionAuthorizeRemediation {
+	if status.RuntimeStatus == nil || status.RuntimeStatus.Revision != expected ||
+		(status.NextRecommended != sddstatus.RuntimeActionAuthorizeRemediation && status.RuntimeStatus.UnmanagedRemediation == nil) {
 		return fmt.Errorf("failed-evidence remediation is not currently authorized by admitted disabled/unmanaged status; inspect the current route with `gentle-ai sdd-status %q --cwd %q`", change, cwd)
 	}
 	return nil
