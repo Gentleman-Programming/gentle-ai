@@ -2,7 +2,7 @@
 
 ← [Back to README](../README.md)
 
-Gentle AI exposes two negotiated review contracts. `gentle-ai.review-integration/v1` preserves the published Base64 candidate-diff transport byte for byte. `gentle-ai.review-integration/v2` is the native-Git contract: it carries immutable base/candidate tree IDs and an ordered changed-path manifest, never an inline patch. Both let a consumer reconstruct one target after restart, drive explicit review operations, and validate the resulting receipt without reading provider-private authority files.
+Gentle AI exposes two negotiated review contracts. `gentle-ai.review-integration/v1` preserves the published Base64 candidate-diff transport byte for byte. `gentle-ai.review-integration/v2` is the native-Git contract: it carries immutable base/candidate tree IDs and an ordered changed-path manifest, never an inline patch. Its current minor is v2.1, which selects the immutable review runtime explicitly. Both let a consumer reconstruct one target after restart, drive explicit review operations, and validate the resulting receipt without reading provider-private authority files.
 
 ## Negotiate the provider first
 
@@ -15,7 +15,7 @@ gentle-ai review capabilities \
 
 The response identifies the protocol major, package and build identity, executable SHA-256, operations, five gates, projections, schemas, mandatory and optional features, and compatibility window. The executable digest is self-reported evidence; compare it with the published release manifest before trusting the binary.
 
-New integrations SHOULD negotiate `gentle-ai.review-integration/v2`. Existing v1 consumers remain valid and MUST continue validating the published v1 schemas and fixture bytes; they do not gain tree-only fields additively.
+New integrations SHOULD negotiate `gentle-ai.review-integration/v2`. The current response is capabilities v2.1 and requires `--agent claude-code` for negotiated STATUS and START. Capabilities v2.0, status v3, and consent v2 remain historical byte-pinned artifacts; they are not rewritten or emitted as the current response. Existing v1 consumers remain valid and MUST continue validating the published v1 schemas and fixture bytes; they do not gain tree-only fields additively.
 
 Protocol v1.5 advertises `gentle-ai.review-integration.capabilities/v1.5` and adds `outcome_bound_verification_evidence` without changing the preserved v1.4 identity or its `one_shot_final_verification_retry` feature. `review capture-evidence` requires one closed `--outcome` (`passed`, `verification_failed`, or `procedural_tooling_failed`) and persists `gentle-ai.review-verification-evidence/v2` beside immutable candidate-addressed raw bytes. The record binds lineage, authority revision, target tree, canonical paths and ledger IDs, raw SHA-256 and size, outcome, and its own canonical digest. FINALIZE derives captured approval or escalation from that record; a caller-supplied `--failed` may agree with it but cannot override it.
 
@@ -32,8 +32,8 @@ Consumers MUST reject an incompatible protocol major, an unsupported mandatory f
 Pass the same contract explicitly to negotiated repository operations:
 
 ```bash
-gentle-ai review start --contract gentle-ai.review-integration/v2 --cwd .
-gentle-ai review status --contract gentle-ai.review-integration/v2 --cwd .
+gentle-ai review start --contract gentle-ai.review-integration/v2 --agent claude-code --cwd .
+gentle-ai review status --contract gentle-ai.review-integration/v2 --agent claude-code --cwd .
 gentle-ai review finalize --contract gentle-ai.review-integration/v2 --cwd . --lineage <lineage> ...
 gentle-ai review validate --contract gentle-ai.review-integration/v2 --cwd . --gate pre-commit
 gentle-ai review bind-sdd --contract gentle-ai.review-integration/v2 --cwd . --change <change> --lineage <lineage> --expected-binding-revision=<revision>
@@ -44,14 +44,14 @@ gentle-ai review bind-sdd --contract gentle-ai.review-integration/v2 --cwd . --c
 When capabilities advertise `native_next_transition`, the parent orchestrator starts lifecycle routing exactly once with:
 
 ```bash
-gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition
+gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition
 ```
 
 Append a target selector only when its type is already known: `--projection staged`, `--base-ref <ref>`, `--workspace-overlay --base-ref <ref>`, or `--workspace-overlay --base-tree <tree>`. If the feature is unavailable, query exactly once `gentle-ai review capabilities --contract gentle-ai.review-integration/v2` and stop with `unsupported-capability`; do not explore commands or consult help. After bootstrap, only the parent executes the exact native `next_transition`. Reviewers, validators, executors, and refuters receive role inputs and return artifacts; they never invoke review lifecycle commands.
 
 ### Per-candidate consent relay
 
-A session that can relay a blocking question to a human declares it on negotiated START with `--consent relay`. When the frozen candidate's tier would ask the per-candidate consent question (medium or high risk), START responds with the consent envelope matching the negotiated contract: `consent/v1` for integration v1 or `consent/v2` for integration v2. It carries why input is required, the complete choice set, and one runnable follow-up invocation per choice scoped to the exact `--target` identity. Nothing is persisted while the question is outstanding, and no console notice is printed. Pass `--locale en` or `--locale es` to localize every human envelope field; omitting it preserves the established English projection. Answer tokens, commands, target IDs, projections, and invocations remain machine-stable.
+A session that can relay a blocking question to a human declares it on negotiated START with `--consent relay`. When the frozen candidate's tier would ask the per-candidate consent question (medium or high risk), START responds with the consent envelope matching the negotiated contract: `consent/v1` for integration v1 or current `consent/v3` for integration v2.1. The v2.1 envelope requires `agent: claude-code` and carries why input is required, the complete choice set, and one runnable follow-up invocation per choice scoped to the exact `--target` identity. Nothing is persisted while the question is outstanding, and no console notice is printed. Pass `--locale en` or `--locale es` to localize every human envelope field; omitting it preserves the established English projection. Answer tokens, commands, target IDs, projections, and invocations remain machine-stable.
 
 The orchestrator relays the complete envelope losslessly and answers with exactly one named invocation. `--consent granted` revalidates the exact target before creating compact review authority; it is replay-safe and a rerun resumes that authority. `--consent declined` reports the typed declined START outcome (`consent: declined_this_candidate`) without creating a review lineage or receipt, then atomically records a canonical native candidate-decline authorization in the Git common directory. That authorization permits only exact `pre-commit`, `pre-push`, and `pre-pr` delivery to proceed under ordinary repository policy, reported as `candidate_declined/unmanaged`; it is never an approval and never permits release. Content, path, mode, base, untracked, publication-range, or advertised-head drift rejects it. Replay recovers lost output only for the same canonical decline, corrupted or ambiguous decline records fail closed, and a later candidate asks again. A decline is deliberately not the kill switch; the permanent disable remains `gentle-ai review mode disable`, documented in the envelope's `off_path` and never offered as a choice. Without the declaration, START behavior is unchanged: low risk asks nothing, a resolved question asks nothing, and a headless undeclared session keeps the skip-and-notice fallback.
 
@@ -134,27 +134,7 @@ Under v2, selected lenses require both valid tree IDs and the manifest. An empty
 
 Reviewer results must echo the exact `subject_hash` and report structured `inspection: {status: "completed", paths: [...]}` for the complete frozen manifest, including root-level paths. Finding IDs use the ASCII form `R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*`. Proof and evidence recognize `path:positive-line` only for canonical paths present in the immutable base/candidate tree union: bare root references contain a dot, while quoted references support extensionless, Unicode, and space-containing paths. Digests, timestamps, status labels, URLs, and arbitrary colon-delimited prose are not path references. The provider accepts transport prose around exactly one complete JSON object, but rejects zero, multiple, or unterminated objects. Missing inspection, access-denied or unavailable-inspection evidence, paths or locations outside the frozen candidate, repeated finding IDs, wrong lens prefixes, binding mismatch, and unsupported causal metadata are classified and rejected before publication. Severe findings must retain a supported `evidence_class` and `causal_disposition`; `introduced`, `behavior-activated`, and `worsened` claims are admitted only when repository-derived changed-line evidence supports the claimed location. Reviewer results may omit the top-level `lens`; when present, it must match the selected-lens position returned by START.
 
-The managed OpenCode result-artifact plugin replaces caller-authored task prose with the provider-issued binding and preflight context. It validates the subject, trees, lens slot, and canonical ordered manifest before launching the reviewer; it never transports a patch or candidate bytes. OpenCode reviewers receive only the narrow read-only Git allowlist above. Managed runtimes that cannot enforce that per-command boundary receive no shell and must report incomplete inspection rather than substitute live files or receive an inline patch fallback.
-
-### Restart OpenCode after a readonly task-argument failure
-
-If OpenCode reports `Attempted to assign to readonly property` while launching a Gentle AI reviewer, fully quit OpenCode and restart it with the parent experimental flag disabled:
-
-```bash
-OPENCODE_EXPERIMENTAL=false opencode
-```
-
-You may reopen the same persisted OpenCode session. Then refresh native review authority:
-
-```bash
-gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition
-```
-
-Follow only the refreshed `next_transition` and relaunch only the exact pending slot it reoffers. With `OPENCODE_EXPERIMENTAL=true`, OpenCode's v2 event system can freeze task arguments before Gentle AI's `tool.execute.before` hook injects the reviewer prompt. The launch then produces no reviewer result, so the native slot remains pending.
-
-Setting only `OPENCODE_EXPERIMENTAL_EVENT_SYSTEM=false` is insufficient while the parent `OPENCODE_EXPERIMENTAL` flag remains true. Do not use `OPENCODE_PURE=1` for this recovery: it disables the Gentle AI plugin required for reviewer capture.
-
-The behavior is tracked in [upstream issue #25873](https://github.com/anomalyco/opencode/issues/25873). [Proposed fix PR #25867](https://github.com/anomalyco/opencode/pull/25867) closed without merge, so it does not establish that OpenCode has fixed the issue.
+Claude Code is the only supported v2.1 immutable receipt-review transport. OpenCode and Codex are eligible but transport-disabled; Pi, Kilo, unknown, alias, and casing variants are ineligible. STATUS and START stop with `immutable_review_transport_unsupported` before repository, target, authority, collection, or process work when the exact supported `--agent claude-code` identity is absent.
 
 Durable controllers capture each result with exact lineage, target, lens, selected order, authority revision, and provider-issued repository context. Current captures emit pathless manifests with opaque references; the provider can discover every canonical result with `--captured-results`, or controllers can write each emitted manifest to its own file and pass those files to FINALIZE in selected-lens order with repeatable `--result-artifact-file <path>` flags. A `--result-artifact-file -` occurrence reads exactly one manifest from stdin; because FINALIZE has one shared stdin, `-` may appear only once across reviewer results, artifact manifests, validation, refuter outcomes, and evidence.
 

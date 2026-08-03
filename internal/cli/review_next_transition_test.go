@@ -332,7 +332,7 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 	repo, started, _, record := newArtifactReview(t, true)
 	var output bytes.Buffer
 	if err := RunReview([]string{
-		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
+		"status", "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition",
 		"--cwd", repo, "--lineage", started.LineageID,
 	}, &output); err != nil {
 		t.Fatal(err)
@@ -775,7 +775,7 @@ func TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedV2Schema(t 
 // reason wholly unrelated to what this test checks.
 func validateAgainstPublishedNextTransitionSchema(t *testing.T, payload []byte) {
 	t.Helper()
-	validateAgainstPublishedStatusNextTransitionSchema(t, "status.schema.json", payload)
+	validateAgainstPublishedStatusNextTransitionSchema(t, "v1", "status.schema.json", payload)
 }
 
 // validateAgainstPublishedNextTransitionSchemaV2 performs the identical
@@ -784,7 +784,12 @@ func validateAgainstPublishedNextTransitionSchema(t *testing.T, payload []byte) 
 // $defs/next_transition subtree, so the v2 wire shape stays pinned too.
 func validateAgainstPublishedNextTransitionSchemaV2(t *testing.T, payload []byte) {
 	t.Helper()
-	validateAgainstPublishedStatusNextTransitionSchema(t, "status-v2.schema.json", payload)
+	validateAgainstPublishedStatusNextTransitionSchema(t, "v1", "status-v2.schema.json", payload)
+}
+
+func validateAgainstPublishedNextTransitionSchemaV4(t *testing.T, payload []byte) {
+	t.Helper()
+	validateAgainstPublishedStatusNextTransitionSchema(t, "v2", "status-v4.schema.json", payload)
 }
 
 // validateAgainstPublishedNativeNextTransitionSchema keeps the native Git v2
@@ -798,9 +803,10 @@ func validateAgainstPublishedNativeNextTransitionSchema(t *testing.T, payload []
 func rejectByPublishedNextTransitionSchemas(t *testing.T, payload []byte) {
 	t.Helper()
 	for name, schema := range map[string]*jsonschema.Schema{
-		"status.schema.json":    publishedStatusNextTransitionSchema(t, "status.schema.json"),
-		"status-v2.schema.json": publishedStatusNextTransitionSchema(t, "status-v2.schema.json"),
-		"v2/status.schema.json": publishedNativeNextTransitionSchema(t),
+		"status.schema.json":       publishedStatusNextTransitionSchema(t, "status.schema.json"),
+		"status-v2.schema.json":    publishedStatusNextTransitionSchema(t, "status-v2.schema.json"),
+		"v2/status.schema.json":    publishedNativeNextTransitionSchema(t),
+		"v2/status-v4.schema.json": publishedStatusNextTransitionSchemaV4(t),
 	} {
 		var document any
 		if err := json.Unmarshal(payload, &document); err != nil {
@@ -820,9 +826,16 @@ func rejectByPublishedNextTransitionSchemas(t *testing.T, payload []byte) {
 // deliberately excluding the top-level schema's "projection" property so
 // compiling never touches projection.schema.json's RE2-incompatible
 // negative-lookahead regex (see the comment above the v1 wrapper).
-func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, schemaFile string, payload []byte) {
+func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, schemaFile string, payload []byte) {
 	t.Helper()
-	schema := publishedStatusNextTransitionSchema(t, schemaFile)
+	var schema *jsonschema.Schema
+	if version == "v1" {
+		schema = publishedStatusNextTransitionSchema(t, schemaFile)
+	} else if version == "v2" {
+		schema = publishedStatusNextTransitionSchemaV4(t)
+	} else {
+		t.Fatalf("unknown status schema version %q", version)
+	}
 	validatePublishedNextTransitionSchema(t, schema, payload, schemaFile)
 }
 
@@ -854,6 +867,28 @@ func publishedStatusNextTransitionSchema(t *testing.T, schemaFile string) *jsons
 		{Root: root, Name: "correction-plan-request.schema.json"},
 		{Root: root, Name: "artifact-subject.schema.json"},
 		{Root: root, Name: "start-v2.schema.json"},
+	})
+}
+
+func publishedStatusNextTransitionSchemaV4(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+	v1Root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2Root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v2", "schemas"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return publishedNextTransitionSchema(t, v2Root, "status-v4.schema.json", []publishedNextTransitionSchemaResource{
+		{Root: v1Root, Name: "status-v2.schema.json", DefinitionsOnly: true},
+		{Root: v1Root, Name: "targeted-validation-request.schema.json"},
+		{Root: v1Root, Name: "correction-plan-request.schema.json"},
+		{Root: v1Root, Name: "artifact-subject.schema.json"},
+		{Root: v1Root, Name: "start-v2.schema.json"},
+		{Root: v1Root, Name: "authority-repair-assessment.schema.json"},
+		{Root: v2Root, Name: "artifact-subject.schema.json"},
+		{Root: v2Root, Name: "start.schema.json"},
 	})
 }
 
