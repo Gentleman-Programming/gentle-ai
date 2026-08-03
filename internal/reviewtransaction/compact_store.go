@@ -625,8 +625,13 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 		if predecessor.State.State != StateEscalated && !historicalFailedValidator {
 			return errors.New("recovery requires an escalated predecessor")
 		}
-		if !compactEscalatedRecoveryTargetChanged(predecessor.State.CurrentSnapshot, successor.InitialSnapshot) {
-			return errCompactRecoveryTargetUnchanged
+		// Accounting-only escalation (correction passed but budget exceeded) does not
+		// require the target to have changed; it is a valid recovery edge even when
+		// the candidate is byte-identical. Skip the target-changed check for this case.
+		if !compactAccountingOnlyEscalation(predecessor.State) {
+			if !compactEscalatedRecoveryTargetChanged(predecessor.State.CurrentSnapshot, successor.InitialSnapshot) {
+				return errCompactRecoveryTargetUnchanged
+			}
 		}
 		if recovery.MaintainerAuthorization != compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
 			return compactRecoveryAuthorizationError(successor.InitialSnapshot)
