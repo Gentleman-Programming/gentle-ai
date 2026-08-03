@@ -304,6 +304,34 @@ func writeReconciled(path string, before fileImage, desired []byte) (bool, strin
 	return !sameImage(before, after), state, fmt.Errorf("atomic write %q failed; observed %s: %w", path, state, err)
 }
 
+type stagedConfigWrite struct {
+	path   string
+	before fileImage
+}
+
+func restoreStagedConfigs(writes []stagedConfigWrite) error {
+	var restoreErr error
+	for i := len(writes) - 1; i >= 0; i-- {
+		write := writes[i]
+		if !write.before.exists {
+			if err := os.Remove(write.path); err != nil && !os.IsNotExist(err) {
+				restoreErr = errors.Join(restoreErr, fmt.Errorf("remove staged config %q: %w", write.path, err))
+			}
+			continue
+		}
+
+		current, err := readImage(write.path)
+		if err != nil {
+			restoreErr = errors.Join(restoreErr, fmt.Errorf("read staged config %q before restore: %w", write.path, err))
+			continue
+		}
+		if _, _, err := writeReconciled(write.path, current, write.before.data); err != nil {
+			restoreErr = errors.Join(restoreErr, fmt.Errorf("restore staged config %q: %w", write.path, err))
+		}
+	}
+	return restoreErr
+}
+
 func antigravityConfigs(globalPath string) (fileImage, string, bool, error) {
 	global, err := readImage(globalPath)
 	if err != nil {
@@ -389,6 +417,7 @@ func installAntigravityEngramPlugin(homeDir string, adapter agents.Adapter) (boo
 		{path: settingsPath, content: settingsContent, preserveExisting: true},
 	}
 	changed := false
+	written := make([]stagedConfigWrite, 0, len(staged))
 	for _, target := range staged {
 		before, readErr := readImage(target.path)
 		if readErr != nil {
@@ -397,14 +426,20 @@ func installAntigravityEngramPlugin(homeDir string, adapter agents.Adapter) (boo
 		if target.preserveExisting && before.exists {
 			continue
 		}
-		wrote, _, writeErr := writeReconciled(target.path, before, target.content)
+		wrote, state, writeErr := writeReconciled(target.path, before, target.content)
 		changed = changed || wrote
 		if writeErr != nil {
+			if state == "post-replacement" {
+				written = append(written, stagedConfigWrite{path: target.path, before: before})
+			}
 			observed := fmt.Errorf("observed global active=%v at %q, manifest active=%v at %q", globalBefore.exists, globalPath, manifestBefore.exists, manifestPath)
 			if !globalBefore.exists && !manifestBefore.exists {
 				observed = errors.Join(observed, fmt.Errorf("no active registration; manual recovery required"))
 			}
-			return false, nil, errors.Join(writeErr, observed)
+			return false, nil, errors.Join(writeErr, restoreStagedConfigs(written), observed)
+		}
+		if wrote {
+			written = append(written, stagedConfigWrite{path: target.path, before: before})
 		}
 	}
 
