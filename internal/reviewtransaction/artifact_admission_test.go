@@ -1,6 +1,7 @@
 package reviewtransaction
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -277,7 +278,74 @@ func TestArtifactAdmissionCandidateCausalCanonicalization(t *testing.T) {
 		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope || admission.Diagnostic != wantMessage {
 			t.Fatalf("AdmitArtifact() = %q, %q, %v; want out-of-scope %q", admission.Decision, admission.Diagnostic, err, wantMessage)
 		}
+		var admissionErr *ArtifactAdmissionError
+		if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil {
+			t.Fatalf("candidate-causal error = %v; want structured diagnostic", err)
+		}
+		if admissionErr.Diagnostic.FindingID != "R3-001" ||
+			admissionErr.Diagnostic.Location != "internal/a.go:7" ||
+			admissionErr.Diagnostic.Reason != "line_not_changed_by_candidate" {
+			t.Fatalf("candidate-causal diagnostic = %#v", admissionErr.Diagnostic)
+		}
 	})
+}
+
+func TestAdmitArtifactReturnsStructuredInvalidLocationDiagnostic(t *testing.T) {
+	request := admittedCandidateCausalArtifactFixture(t)
+	request.Result.Findings[0].Location = "internal/a.go:7-9"
+
+	_, admission, err := AdmitArtifact(t.Context(), request)
+	var admissionErr *ArtifactAdmissionError
+	var locationErr *FindingLocationError
+	if admission.Decision != ArtifactAdmissionOutOfScope ||
+		!errors.As(err, &admissionErr) || !errors.As(err, &locationErr) {
+		t.Fatalf("AdmitArtifact() = %#v, %v; want typed location refusal", admission, err)
+	}
+	if admissionErr.Diagnostic == nil ||
+		admissionErr.Diagnostic.Code != "invalid_finding_location" ||
+		admissionErr.Diagnostic.FindingID != "R3-001" ||
+		admissionErr.Diagnostic.Location != "internal/a.go:7-9" ||
+		admissionErr.Diagnostic.Reason != "line_suffix_not_integer" {
+		t.Fatalf("structured diagnostic = %#v", admissionErr.Diagnostic)
+	}
+
+	for _, unsafe := range []string{
+		"internal:../private/a.go:7-9", "internal/a.go:7:/home/private/repo.go",
+		"internal/a.go:7:https://private.example/repo", `internal/a.go:7:C:\Users\private\repo.go`,
+	} {
+		request.Result.Findings[0].Location = unsafe
+		_, _, err = AdmitArtifact(t.Context(), request)
+		if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil ||
+			admissionErr.Diagnostic.Location != "" || strings.Contains(err.Error(), unsafe) {
+			t.Fatalf("unsafe location escaped structured diagnostic: %#v, %v", admissionErr.Diagnostic, err)
+		}
+	}
+
+	err = NewArtifactLocationAdmissionError("R3-001", "internal/a.go:bad", errors.New("untyped cause"))
+	if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil || admissionErr.Diagnostic.Reason != "invalid_location" || admissionErr.Diagnostic.Location != "" {
+		t.Fatalf("untyped location cause was not handled safely: %v", err)
+	}
+}
+
+func TestFindingAdmissionDiagnosticRequiresCompatibleLocation(t *testing.T) {
+	tests := []struct {
+		name, code, location, reason string
+		wantLocation                 bool
+	}{
+		{"invalid range", "invalid_finding_location", "internal/a.go:7-9", "line_suffix_not_integer", true},
+		{"candidate line", "candidate_causality_unproven", "internal/a.go:7", "line_not_changed_by_candidate", true},
+		{"candidate range", "candidate_causality_unproven", "internal/a.go:7-9", "line_not_changed_by_candidate", false},
+		{"invalid valid line", "invalid_finding_location", "internal/a.go:7", "line_suffix_not_integer", false},
+		{"invalid reason mismatch", "invalid_finding_location", "internal/a.go:7-9", "line_must_be_positive", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diagnostic := findingAdmissionDiagnostic(tt.code, "R3-001", tt.location, tt.reason)
+			if (diagnostic.Location != "") != tt.wantLocation {
+				t.Fatalf("findingAdmissionDiagnostic() = %#v", diagnostic)
+			}
+		})
+	}
 }
 
 // TestAdmitArtifactOmittedSubjectDiagnosticNamesContinuation pins the

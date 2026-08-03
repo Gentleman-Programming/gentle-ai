@@ -2628,11 +2628,18 @@ func TestSnapshotCandidateLocationSupportsStructuredCausality(t *testing.T) {
 		location  string
 		causality CausalDisposition
 		want      bool
-	}{{"introduced replacement", "tracked.txt:2", CausalIntroduced, true}, {"introduced addition", "tracked.txt:5", CausalIntroduced, true}, {"introduced deletion", "deleted.txt:1", CausalIntroduced, false}, {"old-side deletion collision", "tracked.txt:4", CausalIntroduced, false}, {"introduced unchanged", "tracked.txt:1", CausalIntroduced, false}, {"worsened changed", "tracked.txt:2", CausalWorsened, true}, {"worsened unchanged", "tracked.txt:1", CausalWorsened, false}, {"activated unchanged", "tracked.txt:1", CausalBehaviorActivated, true}, {"activated deletion", "deleted.txt:1", CausalBehaviorActivated, false}, {"activated out of range", "tracked.txt:99", CausalBehaviorActivated, false}, {"outside genesis", "other.txt:1", CausalBehaviorActivated, false}, {"zero", "tracked.txt:0", CausalIntroduced, false}, {"malformed", "tracked.txt", CausalWorsened, false}} {
+		wantError FindingLocationErrorReason
+	}{{"introduced replacement", "tracked.txt:2", CausalIntroduced, true, ""}, {"introduced addition", "tracked.txt:5", CausalIntroduced, true, ""}, {"introduced deletion", "deleted.txt:1", CausalIntroduced, false, ""}, {"old-side deletion collision", "tracked.txt:4", CausalIntroduced, false, ""}, {"introduced unchanged", "tracked.txt:1", CausalIntroduced, false, ""}, {"worsened changed", "tracked.txt:2", CausalWorsened, true, ""}, {"worsened unchanged", "tracked.txt:1", CausalWorsened, false, ""}, {"activated unchanged", "tracked.txt:1", CausalBehaviorActivated, true, ""}, {"activated deletion", "deleted.txt:1", CausalBehaviorActivated, false, ""}, {"activated out of range", "tracked.txt:99", CausalBehaviorActivated, false, ""}, {"outside genesis", "other.txt:1", CausalBehaviorActivated, false, ""}, {"range", "tracked.txt:1-2", CausalIntroduced, false, "line_suffix_not_integer"}, {"non-numeric", "tracked.txt:one", CausalIntroduced, false, "line_suffix_not_integer"}, {"overflow", "tracked.txt:" + strings.Repeat("9", 64), CausalIntroduced, false, "line_suffix_not_integer"}, {"leading plus", "tracked.txt:+1", CausalIntroduced, false, "line_suffix_not_integer"}, {"zero", "tracked.txt:0", CausalIntroduced, false, "line_must_be_positive"}, {"negative", "tracked.txt:-1", CausalIntroduced, false, "line_must_be_positive"}, {"colon traversal", "internal:../tracked.txt:1", CausalIntroduced, false, "path_must_be_canonical"}, {"missing suffix", "tracked.txt:", CausalWorsened, false, "expected_path_and_line"}, {"malformed", "tracked.txt", CausalWorsened, false, "expected_path_and_line"}} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := (SnapshotBuilder{Repo: repo}).CandidateLocationSupportsCausality(context.Background(), snapshot, tt.location, tt.causality)
-			if err != nil || got != tt.want {
+			if tt.wantError == "" && (err != nil || got != tt.want) {
 				t.Fatalf("CandidateLocationSupportsCausality(%q, %q) = %t, %v", tt.location, tt.causality, got, err)
+			}
+			if tt.wantError != "" {
+				var locationErr *FindingLocationError
+				if got || !errors.Is(err, ErrInvalidFindingLocation) || !errors.As(err, &locationErr) || locationErr.Reason != tt.wantError {
+					t.Fatalf("CandidateLocationSupportsCausality(%q) = %t, %v; want typed %q", tt.location, got, err, tt.wantError)
+				}
 			}
 		})
 	}
