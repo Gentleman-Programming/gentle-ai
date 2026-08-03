@@ -140,9 +140,18 @@ func TestClaudeNetworkNoneRuntimeProofRespectsFixtureApplicability(t *testing.T)
 		}
 	}
 
-	condition := "if: steps.claude-runtime-proof.outputs.applicable == 'true'"
-	if count := strings.Count(job, condition); count != 2 {
-		t.Fatalf("Claude image build and runtime proof must both require fixture applicability; found %d conditions", count)
+	for _, requiredStep := range []string{
+		"      - name: Build pinned Claude runtime proof image\n" +
+			"        if: steps.claude-runtime-proof.outputs.applicable == 'true'\n" +
+			"        run: docker build -f e2e/Dockerfile.claude-network-none -t gentle-ai-claude-network-none:ci .",
+		"      - name: Prove Claude transport without external networking\n" +
+			"        if: steps.claude-runtime-proof.outputs.applicable == 'true'\n" +
+			"        run: |\n" +
+			"          docker run --rm --pull=never --network none --cap-drop=ALL",
+	} {
+		if !strings.Contains(job, requiredStep) {
+			t.Fatalf("Claude Network-None runtime job missing guarded step %q", requiredStep)
+		}
 	}
 	if strings.Contains(job, "continue-on-error:") {
 		t.Fatal("Claude Network-None runtime job must not waive fixture, build, or runtime failures")
