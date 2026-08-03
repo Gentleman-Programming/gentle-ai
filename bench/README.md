@@ -597,9 +597,9 @@ cannot silently decay into the already-covered corrupt-record case.
 
 ### Wave 1 integration regressions (`journeys_wave1.go`)
 
-Journeys 44 to 51 and 59 pin fixes that internal tests already covered below the
-user boundary. All remain core black-box journeys: fixtures create repository
-inputs, and every native authority state is reached through the measured binary.
+Journeys 44 to 51 pin fixes that internal tests already covered below the user
+boundary. All remain core black-box journeys: fixtures create repository inputs,
+and every native authority state is reached through the measured binary.
 
 | ID | Flow | Shape |
 |---|---|---|
