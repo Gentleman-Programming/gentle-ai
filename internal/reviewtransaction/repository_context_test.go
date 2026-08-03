@@ -48,6 +48,25 @@ func TestReviewRepositoryContextPublishesOpaquePrivateBinding(t *testing.T) {
 	}
 }
 
+func TestReviewRepositoryContextRedactsTargetedValidationDerivationCause(t *testing.T) {
+	repo := t.TempDir()
+	cause := &GitCommandError{
+		Args: []string{"-C", repo, "diff"}, ExitCode: 128,
+		Cause: errors.New("targeted validation derivation failed"), Output: repo,
+	}
+	err := &reviewRepositoryContextTargetedValidationError{cause: cause}
+	if strings.Contains(err.Error(), repo) || err.Error() != "review repository context is stale or has no live matching authority" {
+		t.Fatalf("public derivation error = %q", err)
+	}
+	if !errors.Is(err, cause.Cause) {
+		t.Fatal("targeted validation derivation cause is not reachable with errors.Is")
+	}
+	var gitError *GitCommandError
+	if !errors.As(err, &gitError) || gitError != cause {
+		t.Fatalf("targeted validation derivation cause = %#v", gitError)
+	}
+}
+
 func TestReviewRepositoryContextRejectsTamperedExpiredAndWrongBindings(t *testing.T) {
 	repo, binding := reviewRepositoryContextFixture(t, "repository-context-bindings")
 	handle, err := PublishReviewRepositoryContext(context.Background(), repo, binding)

@@ -10,20 +10,29 @@ import (
 	"testing"
 )
 
-func TestListActiveOpenSpecChanges(t *testing.T) {
+func TestResolveSharesOneNormalizedWorkspaceWithReviewMode(t *testing.T) {
 	root := t.TempDir()
-	mkdir(t, filepath.Join(root, "openspec", "changes", "z-change"))
-	mkdir(t, filepath.Join(root, "openspec", "changes", "a-change"))
-	mkdir(t, filepath.Join(root, "openspec", "changes", "archive", "2026-01-01-old"))
+	mkdir(t, filepath.Join(root, "openspec", "changes"))
+	t.Chdir(root)
 
-	changes, err := ListActiveOpenSpecChanges(root)
+	modeLookups := 0
+	status, err := Resolve(ResolveOptions{
+		ReviewDisabledForWorkspace: func(workspaceRoot string) bool {
+			modeLookups++
+			if workspaceRoot != root {
+				t.Fatalf("review mode workspace = %q, want %q", workspaceRoot, root)
+			}
+			return true
+		},
+	})
 	if err != nil {
-		t.Fatalf("ListActiveOpenSpecChanges() error = %v", err)
+		t.Fatalf("Resolve() error = %v", err)
 	}
-
-	want := []string{"a-change", "z-change"}
-	if !reflect.DeepEqual(changes, want) {
-		t.Fatalf("ListActiveOpenSpecChanges() = %v, want %v", changes, want)
+	if modeLookups != 1 {
+		t.Fatalf("review mode lookups = %d, want 1", modeLookups)
+	}
+	if status.ActionContext.WorkspaceRoot != root {
+		t.Fatalf("status workspace = %q, want shared root %q", status.ActionContext.WorkspaceRoot, root)
 	}
 }
 
