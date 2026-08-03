@@ -45,13 +45,13 @@ func TestParseBackupFlags(t *testing.T) {
 			want: BackupFlags{Subcommand: "clean", KeepCount: 3, Force: true},
 		},
 		{
-			name: "clean with invalid keep count",
-			args: []string{"clean", "--keep", "-1"},
+			name:    "clean with invalid keep count",
+			args:    []string{"clean", "--keep", "-1"},
 			wantErr: true,
 		},
 		{
-			name: "unknown subcommand",
-			args: []string{"invalid"},
+			name:    "unknown subcommand",
+			args:    []string{"invalid"},
 			wantErr: true,
 		},
 	}
