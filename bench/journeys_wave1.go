@@ -1461,8 +1461,17 @@ func waveOneJourneys() []Journey {
 }
 
 func proveCorrectionBudgetFloorTwo(_ *Sandbox, observation Observation) error {
-	if strings.Contains(observation.Output, "\"correction_budget\": 1") {
-		return errors.New("expected correction budget >= 2 for single-line candidate, got 1")
+	var payload struct {
+		CorrectionBudget int `json:"correction_budget"`
+	}
+	if err := json.Unmarshal([]byte(observation.Output), &payload); err == nil && payload.CorrectionBudget > 0 {
+		if payload.CorrectionBudget < 2 {
+			return fmt.Errorf("expected correction_budget >= 2 for single-line candidate, got %d", payload.CorrectionBudget)
+		}
+		return nil
+	}
+	if strings.Contains(observation.Output, "\"correction_budget\": 1") || strings.Contains(observation.Output, "correction_budget: 1") {
+		return errors.New("expected correction_budget >= 2 for single-line candidate, got 1")
 	}
 	return nil
 }
