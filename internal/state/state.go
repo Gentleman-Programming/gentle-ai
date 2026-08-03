@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"time"
@@ -12,6 +13,15 @@ import (
 
 const stateDir = ".gentle-ai"
 const stateFile = "state.json"
+
+// ErrLockTimeout is returned when the state lock cannot be acquired in time.
+var ErrLockTimeout = errors.New("state: timed out acquiring install state lock")
+
+const (
+	lockFile       = "INSTALL-STATE.lock"
+	lockRetryDelay = 100 * time.Millisecond
+	lockTimeout    = 5 * time.Second
+)
 
 // ModelAssignmentState is the JSON-serialisable form of a provider+model pair
 // used by OpenCode-style model assignments. It mirrors model.ModelAssignment
@@ -136,6 +146,74 @@ func Path(homeDir string) string {
 	return filepath.Join(homeDir, stateDir, stateFile)
 }
 
+// acquireStateLock creates the state directory when missing and takes an
+// exclusive advisory lock on the sidecar lockfile. The returned release
+// function unlocks and closes the handle.
+func acquireStateLock(homeDir string) (func(), error) {
+	dir := filepath.Join(homeDir, stateDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, lockFile), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(lockTimeout)
+	for {
+		locked, err := tryLockFile(f)
+		if err != nil {
+			_ = f.Close()
+			return nil, err
+		}
+		if locked {
+			return func() {
+				_ = unlockFile(f)
+				_ = f.Close()
+			}, nil
+		}
+		if time.Now().After(deadline) {
+			_ = f.Close()
+			return nil, ErrLockTimeout
+		}
+		time.Sleep(lockRetryDelay)
+	}
+}
+
+// writeLocked marshals and persists s. The caller must already hold the lock.
+func writeLocked(homeDir string, s InstallState) error {
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = filemerge.WriteFileAtomic(Path(homeDir), append(data, '\n'), 0o644)
+	return err
+}
+
+// Update serializes a read-modify-write window on the install state file. It
+// takes an exclusive lock, re-reads the latest state from disk, invokes mutate
+// on that fresh copy, and persists the result. The lock covers the whole
+// interval and is released on every exit path, including panic.
+//
+// A missing state file starts from the zero value and is created. A file that
+// exists but cannot be decoded is never overwritten: mutate is not called and
+// the decode error is returned. An error from mutate aborts the write.
+func Update(homeDir string, mutate func(*InstallState) error) error {
+	release, err := acquireStateLock(homeDir)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	s, err := Read(homeDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := mutate(&s); err != nil {
+		return err
+	}
+	return writeLocked(homeDir, s)
+}
+
 // Read reads and unmarshals the state file from the given home directory.
 // Returns an error if the file does not exist or cannot be decoded.
 func Read(homeDir string) (InstallState, error) {
@@ -218,17 +296,13 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 	}
 }
 
-// Write persists the full install state to disk under the given home directory.
-// It creates the .gentle-ai directory if it does not already exist.
+// Write persists a caller-owned whole document. It takes the same lock as
+// Update so the two cannot interleave.
 func Write(homeDir string, s InstallState) error {
-	dir := filepath.Join(homeDir, stateDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(s, "", "  ")
+	release, err := acquireStateLock(homeDir)
 	if err != nil {
 		return err
 	}
-	_, err = filemerge.WriteFileAtomic(Path(homeDir), append(data, '\n'), 0o644)
-	return err
+	defer release()
+	return writeLocked(homeDir, s)
 }
