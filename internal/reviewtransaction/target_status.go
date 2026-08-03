@@ -282,23 +282,8 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 	// mirroring START's precedence (compact_store.go:1095-1099):
 	// recoveryCandidates (approved) govern over claimants (correction-required).
 	// Only promote when it's the sole governing authority.
-	if len(approvedScopeRecovery) == 1 {
-		onlyCorrectionRecovery := true
-		for _, c := range candidates {
-			// A candidate is "governing" if it's not purely a correction-required recovery
-			if !c.correctionRecovery || c.finalVerificationRetry != nil {
-				onlyCorrectionRecovery = false
-				break
-			}
-			// Escalated recovery is also governing
-			if c.recoveryDisposition == RecoveryEscalated {
-				onlyCorrectionRecovery = false
-				break
-			}
-		}
-		if onlyCorrectionRecovery {
-			candidates = approvedScopeRecovery
-		}
+	if len(approvedScopeRecovery) == 1 && len(candidates) > 0 && isSoleCorrectionRecoveryGoverning(candidates) {
+		candidates = approvedScopeRecovery
 	}
 	// Also consider scope-changed approved deliveries with canonical receipts
 	// that were committed to HEAD (live.BaseTree == CurrentSnapshot.CandidateTree).
@@ -308,32 +293,13 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 	if len(candidates) > 0 && len(approvedScopeRecovery) == 0 && len(scopeChangedCandidates) == 1 {
 		sc := scopeChangedCandidates[0]
 		if sc.receiptPublished && sc.receiptCanonical && (sc.compact == nil || sc.compact.State.State == StateApproved) {
-			onlyCorrectionRecovery := true
-			for _, c := range candidates {
-				if !c.correctionRecovery || c.finalVerificationRetry != nil {
-					onlyCorrectionRecovery = false
-					break
-				}
-				if c.recoveryDisposition == RecoveryEscalated {
-					onlyCorrectionRecovery = false
-					break
-				}
-			}
-			if onlyCorrectionRecovery {
-				promoted := scopeChangedCandidates[:1]
+			if isSoleCorrectionRecoveryGoverning(candidates) {
+				promoted := []targetStatusCandidate{sc}
 				promoted[0].correctionRecovery = true
 				promoted[0].recoveryDisposition = RecoveryScopeChanged
 				candidates = promoted
 			}
 		}
-	}
-	// Fallback: if no candidates at all, and exactly one approved recovery, use it (issue #1826)
-	if len(candidates) == 0 && len(approvedScopeRecovery) == 1 {
-		// START answers recover for exactly one approved delivery-scope
-		// predecessor with no other claimant, so status must bind that same
-		// predecessor for recovery instead of routing to a START the store
-		// refuses (issue #1826). Plural matches stay stale listings below.
-		candidates = approvedScopeRecovery
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].lineage != candidates[j].lineage {
@@ -592,4 +558,20 @@ func targetProjectionFromCompact(state CompactState, projection TargetProjection
 func targetProjectionFromLegacy(transaction Transaction, projection TargetProjectionStatus) TargetProjectionStatus {
 	projection.InitialReviewTree = transaction.InitialReviewTree
 	return projection
+}
+
+// isSoleCorrectionRecoveryGoverning reports whether all candidates in the slice
+// are purely correction-required recoveries (no finalVerificationRetry, no RecoveryEscalated).
+// This mirrors START's "claimants" check: only correction-required claimants
+// yield to an approved recovery candidate.
+func isSoleCorrectionRecoveryGoverning(candidates []targetStatusCandidate) bool {
+	for _, c := range candidates {
+		if !c.correctionRecovery || c.finalVerificationRetry != nil {
+			return false
+		}
+		if c.recoveryDisposition == RecoveryEscalated {
+			return false
+		}
+	}
+	return true
 }
