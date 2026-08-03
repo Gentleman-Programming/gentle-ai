@@ -113,7 +113,6 @@
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/0"},
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/1"},
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/2"},
-    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/3"},
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/4"},
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/5"},
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/6"}
