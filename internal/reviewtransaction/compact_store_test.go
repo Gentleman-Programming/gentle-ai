@@ -2425,6 +2425,14 @@ func TestReplaceContextGuardedReportsTraceWriteFailureInsteadOfSwallowingIt(t *t
 	if gotPath != store.TracePath {
 		t.Fatalf("wrong path reported for the lost trace: %q", gotPath)
 	}
+	degradation, err := store.TraceDegradation(revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if degradation == nil || degradation.FailureCode != CompactTraceFailureMkdir || degradation.LineageID != state.LineageID ||
+		degradation.StoreRevision != revision || degradation.Event.Operation != "review/start" || degradation.RetrySafe || degradation.NextAction != "review.status" {
+		t.Fatalf("trace degradation = %#v", degradation)
+	}
 }
 
 // TestStartCompactAuthorityReportsTraceWriteFailureInsteadOfSwallowingIt
@@ -2465,6 +2473,200 @@ func TestStartCompactAuthorityReportsTraceWriteFailureInsteadOfSwallowingIt(t *t
 	}
 	if gotPath != tracePath {
 		t.Fatalf("wrong path reported for the lost trace: %q", gotPath)
+	}
+	if result.TraceDegradation == nil || result.TraceDegradation.FailureCode != CompactTraceFailureMkdir ||
+		result.TraceDegradation.StoreRevision != result.Record.Revision {
+		t.Fatalf("start trace degradation = %#v", result.TraceDegradation)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(store.traceDegradationPath(result.Record.Revision)); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("trace degradation sidecar is not a regular file: info=%#v err=%v", info, err)
+	}
+}
+
+func TestStartCompactAuthorityOmitsTraceDegradationWithoutTraceFailure(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+
+	for _, tt := range []struct {
+		name      string
+		lineage   string
+		tracePath string
+	}{
+		{name: "trace not requested", lineage: "compact-no-trace"},
+		{name: "trace persisted", lineage: "compact-trace-success", tracePath: filepath.Join(t.TempDir(), "trace.jsonl")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			state := newCompactTestState(t, repo, tt.lineage)
+			result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state, TracePath: tt.tracePath})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.TraceDegradation != nil {
+				t.Fatalf("unexpected trace degradation = %#v", result.TraceDegradation)
+			}
+		})
+	}
+}
+
+func TestInventoryAuthorityOmitsTraceGapsAfterLaterRevisions(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "compact-trace-history")
+	started, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state, TracePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := started.Record.State
+	if err := next.Invalidate("operator requested invalidation"); err != nil {
+		t.Fatal(err)
+	}
+	laterRevision, err := store.Replace(started.Record.Revision, "review/invalidate", next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := InventoryAuthority(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Entries) != 1 || report.Entries[0].Revision != laterRevision || report.Entries[0].TraceDegradation != nil {
+		t.Fatalf("STATUS retained historical trace gap: %#v", report.Entries)
+	}
+}
+
+func TestInventoryAuthorityIgnoresForgedHistoricalTraceGap(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "compact-trace-forged-history")
+	started, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedRevision := "sha256:" + strings.Repeat("a", 64)
+	forged := CompactTraceDegradation{
+		Schema: "gentle-ai.review-trace-gap/v1", MutationOutcome: "committed", LineageID: state.LineageID,
+		StoreRevision: forgedRevision, Event: CompactTraceEntry{Operation: "review/start", Revision: forgedRevision, State: started.Record.State.State, RecordedAt: time.Now().UTC().Format(time.RFC3339Nano)},
+		TraceRequested: true, TraceFailed: true, FailureCode: CompactTraceFailureOpen, NextAction: "review.status",
+	}
+	if err := store.writeTraceDegradation(forged); err != nil {
+		t.Fatal(err)
+	}
+	report, err := InventoryAuthority(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Entries) != 1 || report.Entries[0].Revision != started.Record.Revision || report.Entries[0].TraceDegradation != nil {
+		t.Fatalf("STATUS accepted forged historical trace gap: %#v", report.Entries)
+	}
+}
+
+func TestTraceDegradationRefusesSymlinkParent(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "compact-trace-symlink")
+	started, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(store.Dir, compactTraceGapsDir)); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	if _, err := store.TraceDegradation(started.Record.Revision); err == nil {
+		t.Fatal("read accepted a symlinked trace-gaps parent")
+	}
+	degradation := CompactTraceDegradation{
+		Schema: "gentle-ai.review-trace-gap/v1", MutationOutcome: "committed", LineageID: state.LineageID,
+		StoreRevision: started.Record.Revision, Event: CompactTraceEntry{Operation: "review/start", Revision: started.Record.Revision, State: started.Record.State.State, RecordedAt: time.Now().UTC().Format(time.RFC3339Nano)},
+		TraceRequested: true, TraceFailed: true, FailureCode: CompactTraceFailureOpen, NextAction: "review.status",
+	}
+	if err := store.writeTraceDegradation(degradation); err == nil {
+		t.Fatal("write accepted a symlinked trace-gaps parent")
+	}
+}
+
+type compactTraceTestFile struct {
+	writeErr error
+	syncErr  error
+	closeErr error
+}
+
+func (file *compactTraceTestFile) Write(payload []byte) (int, error) {
+	if file.writeErr != nil {
+		return 0, file.writeErr
+	}
+	return len(payload), nil
+}
+
+func (file *compactTraceTestFile) Sync() error  { return file.syncErr }
+func (file *compactTraceTestFile) Close() error { return file.closeErr }
+
+func TestAppendCompactTraceClassifiesPersistenceFailures(t *testing.T) {
+	boom := errors.New("trace persistence failed")
+	for _, tt := range []struct {
+		name      string
+		code      CompactTraceFailureCode
+		configure func(*compactTraceOperations, *compactTraceTestFile)
+	}{
+		{
+			name: "mkdir", code: CompactTraceFailureMkdir,
+			configure: func(operations *compactTraceOperations, _ *compactTraceTestFile) {
+				operations.mkdirAll = func(string, os.FileMode) error { return boom }
+			},
+		},
+		{
+			name: "open", code: CompactTraceFailureOpen,
+			configure: func(operations *compactTraceOperations, _ *compactTraceTestFile) {
+				operations.openFile = func(string, int, os.FileMode) (compactTraceFile, error) { return nil, boom }
+			},
+		},
+		{
+			name: "marshal", code: CompactTraceFailureMarshal,
+			configure: func(operations *compactTraceOperations, _ *compactTraceTestFile) {
+				operations.marshal = func(any) ([]byte, error) { return nil, boom }
+			},
+		},
+		{
+			name: "write", code: CompactTraceFailureWrite,
+			configure: func(_ *compactTraceOperations, file *compactTraceTestFile) { file.writeErr = boom },
+		},
+		{
+			name: "fsync", code: CompactTraceFailureSync,
+			configure: func(_ *compactTraceOperations, file *compactTraceTestFile) { file.syncErr = boom },
+		},
+		{
+			name: "close", code: CompactTraceFailureClose,
+			configure: func(_ *compactTraceOperations, file *compactTraceTestFile) { file.closeErr = boom },
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			file := &compactTraceTestFile{}
+			operations := compactTraceOperations{
+				mkdirAll: func(string, os.FileMode) error { return nil },
+				openFile: func(string, int, os.FileMode) (compactTraceFile, error) { return file, nil },
+				marshal:  func(any) ([]byte, error) { return []byte(`{"operation":"review/start"}`), nil },
+			}
+			tt.configure(&operations, file)
+			err := appendCompactTraceWith("trace.jsonl", CompactTraceEntry{Operation: "review/start"}, operations)
+			var traceErr *compactTraceError
+			if !errors.As(err, &traceErr) || traceErr.Code != tt.code || !errors.Is(err, boom) {
+				t.Fatalf("trace error = %#v, want code %q wrapping %v", err, tt.code, boom)
+			}
+		})
 	}
 }
 
