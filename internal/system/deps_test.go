@@ -2,6 +2,8 @@ package system
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 )
@@ -311,6 +313,23 @@ func TestDetectSingleDepEmptyDetectCmd(t *testing.T) {
 	result := detectSingleDep(context.Background(), dep)
 	if result.Installed {
 		t.Fatalf("expected dep with empty DetectCmd to not be installed")
+	}
+}
+
+func TestIsExecutablePathResolvesVirtualenvSymlinks(t *testing.T) {
+	tempDir := t.TempDir()
+	realExe := filepath.Join(tempDir, "real_python")
+	if err := os.WriteFile(realExe, []byte("#!/bin/sh\necho Python 3.11.0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	symlinkExe := filepath.Join(tempDir, "python")
+	if err := os.Symlink(realExe, symlinkExe); err != nil {
+		t.Skip("symlinks not supported on this platform")
+	}
+
+	if !isExecutablePath(symlinkExe) {
+		t.Fatalf("isExecutablePath(%q) = false, want true for valid virtualenv symlink", symlinkExe)
 	}
 }
 

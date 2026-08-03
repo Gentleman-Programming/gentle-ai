@@ -3,8 +3,11 @@ package system
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -127,15 +130,37 @@ func detectDeps(ctx context.Context, deps []Dependency) DependencyReport {
 	return report
 }
 
+// isExecutablePath checks whether a binary exists and is executable, resolving symlinks for virtualenvs.
+func isExecutablePath(binary string) bool {
+	if _, err := exec.LookPath(binary); err == nil {
+		return true
+	}
+	resolved, err := filepath.EvalSymlinks(binary)
+	if err != nil {
+		resolved = binary
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return false
+	}
+	if info.IsDir() {
+		return false
+	}
+	if runtime.GOOS != "windows" {
+		return info.Mode()&0111 != 0 || info.Mode().IsRegular()
+	}
+	return true
+}
+
 // detectSingleDep probes a single dependency using exec.LookPath + version command.
 func detectSingleDep(ctx context.Context, dep Dependency) Dependency {
 	if len(dep.DetectCmd) == 0 {
 		return dep
 	}
 
-	// First check if binary exists on PATH.
+	// First check if binary exists on PATH or filesystem (resolving virtualenv symlinks).
 	binary := dep.DetectCmd[0]
-	if _, err := exec.LookPath(binary); err != nil {
+	if !isExecutablePath(binary) {
 		return dep
 	}
 
