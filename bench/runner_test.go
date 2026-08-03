@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -189,5 +190,33 @@ func TestSelectedAuthorityCaptureHelpersSelectTheSandboxLineage(t *testing.T) {
 				t.Fatalf("status args = %q, want selected lineage %q", args, sandbox.Lineage)
 			}
 		})
+	}
+}
+
+func TestExecutableForOS(t *testing.T) {
+	root := t.TempDir()
+	windowsBinary := filepath.Join(root, "gentle-ai.exe")
+	unixBinary := filepath.Join(root, "gentle-ai")
+	if err := os.WriteFile(windowsBinary, []byte("binary"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unixBinary, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if !executableForOS("windows", windowsBinary) {
+		t.Fatal("Windows executable was rejected")
+	}
+	if executableForOS("windows", unixBinary) {
+		t.Fatal("Windows accepted a binary without the .exe extension")
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if !executableForOS("linux", unixBinary) {
+		t.Fatal("Unix executable was rejected")
+	}
+	if executableForOS("linux", windowsBinary) {
+		t.Fatal("Unix accepted a binary without execute permission")
 	}
 }
