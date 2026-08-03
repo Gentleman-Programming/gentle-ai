@@ -224,7 +224,7 @@ func TestAssessTargetStatusRetainsApprovedReceiptForExactStagedIntendedTransitio
 	}
 }
 
-func TestAssessTargetStatusRejectsStagedCandidateChangedBeforeGateAssessment(t *testing.T) {
+func TestAssessTargetStatusRejectsStagedCandidateChangedDuringAuthorityRead(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "reviewed tracked change\n")
@@ -259,8 +259,8 @@ func TestAssessTargetStatusRejectsStagedCandidateChangedBeforeGateAssessment(t *
 	if result.TargetIdentity != live.Identity || current.Identity == live.Identity {
 		t.Fatalf("status did not retain the pre-interleaving staged snapshot: result %#v, live %#v, current %#v", result, live, current)
 	}
-	if result.Applicability == TargetApplicabilityCurrent || result.Action == TargetStatusActionValidate {
-		t.Fatalf("staged candidate accepted after assessment drift: %#v", result)
+	if result.Applicability != TargetApplicabilityCorrupted || result.Action != TargetStatusActionRepairAuthority {
+		t.Fatalf("staged candidate did not fail closed after authority-read drift: %#v", result)
 	}
 }
 

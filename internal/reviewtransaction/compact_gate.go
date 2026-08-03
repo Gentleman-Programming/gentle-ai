@@ -129,6 +129,33 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	return assessment, nil
 }
 
+// assessCompactPreCommitTargetSnapshot classifies the staged target already
+// captured by STATUS without rereading the mutable index.
+func assessCompactPreCommitTargetSnapshot(state CompactState, actual Snapshot) (CompactGateTargetAssessment, error) {
+	assessment := CompactGateTargetAssessment{Expected: state.CurrentSnapshot, Actual: actual}
+	if err := state.Validate(); err != nil {
+		return assessment, fmt.Errorf("validate compact gate target authority: %w", err)
+	}
+	if actual.Projection != ProjectionStaged {
+		assessment.Applicability = CompactGateTargetUnrelated
+		return assessment, nil
+	}
+	if actual.CandidateTree == state.CurrentSnapshot.CandidateTree &&
+		actual.PathsDigest == state.CurrentSnapshot.PathsDigest &&
+		actual.BaseTree == state.CurrentSnapshot.BaseTree {
+		assessment.Applicability = CompactGateTargetExact
+		return assessment, nil
+	}
+	relationExpected := state.CurrentSnapshot
+	relationExpected.Projection = actual.Projection
+	if relation := classifyCompactTargetRelation(relationExpected, actual, state.GenesisPaths, compactTargetRelationEvidence{}); relation.Kind != compactTargetUnsafe {
+		assessment.Applicability = CompactGateTargetScopeChanged
+		return assessment, nil
+	}
+	assessment.Applicability = CompactGateTargetUnrelated
+	return assessment, nil
+}
+
 func compactSquashedFixDelivery(gate GateKind, state CompactState, snapshot Snapshot, refs *resolvedPrePRRefs, finalCandidateTree string) bool {
 	return gate == GatePrePush && state.CurrentSnapshot.Kind == TargetFixDiff && refs != nil && refs.DeliveredCommitCount == 1 &&
 		snapshot.CandidateTree == finalCandidateTree && snapshot.BaseTree == state.InitialSnapshot.BaseTree &&

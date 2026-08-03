@@ -144,6 +144,9 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 	if err != nil {
 		return targetStatusFailure(base, err)
 	}
+	if err := validateTargetStatusLiveSnapshot(ctx, repo, live); err != nil {
+		return targetStatusFailure(base, err)
+	}
 
 	candidates := []targetStatusCandidate{}
 	scopeChangedCandidates := []targetStatusCandidate{}
@@ -253,16 +256,13 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		} else if state.State == StateApproved && candidate.receiptPublished && candidate.receiptCanonical &&
 			(state.CurrentSnapshot.Projection == "" || state.CurrentSnapshot.Projection == ProjectionWorkspace) && live.Projection == ProjectionStaged {
 			// PRE-COMMIT represents reviewed intended-untracked files in the index.
-			// Reuse its exact target assessment instead of weakening STATUS matching:
-			// it accepts only the identical candidate, base, and complete path digest.
-			assessment, assessmentErr := AssessCompactGateTarget(ctx, repo, state, NativeGateRequestInput{
-				Gate: GatePreCommit, LineageID: state.LineageID,
-			})
+			// Assess the snapshot STATUS captured rather than rebuilding the mutable
+			// index. The surrounding live-snapshot checks keep every classification
+			// branch bound to that same target.
+			assessment, assessmentErr := assessCompactPreCommitTargetSnapshot(state, live)
 			if assessmentErr != nil {
 				return targetStatusFailure(base, assessmentErr)
 			}
-			// The gate rebuilds from the mutable index, so it can only support this
-			// status result when it assessed the snapshot STATUS already captured.
 			if assessment.Applicability == CompactGateTargetExact && assessment.Actual.Identity == live.Identity {
 				candidates = append(candidates, candidate)
 				continue
@@ -301,6 +301,9 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		// predecessor for recovery instead of routing to a START the store
 		// refuses (issue #1826). Plural matches stay stale listings below.
 		candidates = approvedScopeRecovery
+	}
+	if err := validateTargetStatusLiveSnapshot(ctx, repo, live); err != nil {
+		return targetStatusFailure(base, err)
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].lineage != candidates[j].lineage {
@@ -350,6 +353,13 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		}
 		return base, nil
 	}
+}
+
+func validateTargetStatusLiveSnapshot(ctx context.Context, repo string, live Snapshot) error {
+	if err := (SnapshotBuilder{Repo: repo}).ValidateLiveSnapshot(ctx, live); err != nil {
+		return fmt.Errorf("validate captured target status snapshot: %w", err)
+	}
+	return nil
 }
 
 func corruptedTargetStatus(result TargetStatusResult) TargetStatusResult {
