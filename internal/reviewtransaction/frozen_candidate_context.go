@@ -284,12 +284,31 @@ func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func(
 		cleanup()
 		return nil, func() {}, err
 	}
+	systemConfig, err := os.CreateTemp(gitDir, "git-iso-system-*")
+	if err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	systemConfigPath := systemConfig.Name()
+	_ = systemConfig.Close()
+	globalConfig, err := os.CreateTemp(gitDir, "git-iso-global-*")
+	if err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	globalConfigPath := globalConfig.Name()
+	_ = globalConfig.Close()
+	cleanup = func() {
+		_ = os.Remove(systemConfigPath)
+		_ = os.Remove(globalConfigPath)
+		_ = os.RemoveAll(gitDir)
+	}
 	return []string{
 		"GIT_DIR=" + gitDir,
 		"GIT_OBJECT_DIRECTORY=" + filepath.Join(identity.GitCommonDir, "objects"),
 		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_SYSTEM=" + os.DevNull,
-		"GIT_CONFIG_GLOBAL=" + os.DevNull,
+		"GIT_CONFIG_SYSTEM=" + systemConfigPath,
+		"GIT_CONFIG_GLOBAL=" + globalConfigPath,
 		"GIT_CONFIG_COUNT=0",
 		"GIT_ATTR_NOSYSTEM=1",
 		"LANG=C",

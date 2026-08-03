@@ -404,6 +404,60 @@ func TestGitAuthorityPathHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
+func TestIsolatedImmutableTreeGitUsesEmptyTempConfigFiles(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+
+	isolation, cleanup, err := isolatedImmutableTreeGit(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Parse GIT_CONFIG_SYSTEM and GIT_CONFIG_GLOBAL from the returned env slice.
+	var systemPath, globalPath string
+	for _, env := range isolation {
+		if strings.HasPrefix(env, "GIT_CONFIG_SYSTEM=") {
+			systemPath = strings.TrimPrefix(env, "GIT_CONFIG_SYSTEM=")
+		}
+		if strings.HasPrefix(env, "GIT_CONFIG_GLOBAL=") {
+			globalPath = strings.TrimPrefix(env, "GIT_CONFIG_GLOBAL=")
+		}
+	}
+
+	if systemPath == os.DevNull || globalPath == os.DevNull {
+		t.Fatalf("GIT_CONFIG_SYSTEM=%q or GIT_CONFIG_GLOBAL=%q is still os.DevNull", systemPath, globalPath)
+	}
+
+	// The paths must point to existing files at the moment of return.
+	for _, path := range []string{systemPath, globalPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("os.Stat(%q): %v", path, err)
+		}
+	}
+
+	// The files must be empty (size 0).
+	for _, path := range []string{systemPath, globalPath} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Size() != 0 {
+			t.Fatalf("config file %q is not empty: size=%d", path, info.Size())
+		}
+	}
+
+	// After calling cleanup, the files no longer exist.
+	cleanup()
+	for _, path := range []string{systemPath, globalPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("after cleanup, config file %q still exists: %v", path, err)
+		}
+	}
+
+	// Cleanup is idempotent: calling twice must not error.
+	cleanup()
+}
+
 func slicesContain(values []string, target string) bool {
 	for _, value := range values {
 		if strings.EqualFold(value, target) {
