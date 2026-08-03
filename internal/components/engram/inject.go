@@ -419,15 +419,23 @@ func installAntigravityEngramPlugin(homeDir string, adapter agents.Adapter) (boo
 			return false, nil, fmt.Errorf("read staging target %q: %w", target.path, readErr)
 		}
 		target.before = before
+	}
+	for i := range staging {
+		target := &staging[i]
+		before := target.before
 		if target.preserveExisting && before.exists {
 			continue
 		}
 		wrote, _, writeErr := writeReconciled(target.path, before, target.content)
 		changed = changed || wrote
 		if writeErr != nil {
+			restoreErr := restoreAntigravityStaging(staging)
 			observed := fmt.Errorf("observed global active=%v at %q, manifest active=%v at %q", globalBefore.exists, globalPath, manifestBefore.exists, manifestPath)
 			if !globalBefore.exists && !manifestBefore.exists {
 				observed = errors.Join(observed, fmt.Errorf("no active registration; manual recovery required"))
+			}
+			if restoreErr != nil {
+				observed = errors.Join(observed, restoreErr, fmt.Errorf("staged plugin restore failed; manual recovery required"))
 			}
 			return false, nil, errors.Join(writeErr, observed)
 		}
@@ -439,7 +447,12 @@ func installAntigravityEngramPlugin(homeDir string, adapter agents.Adapter) (boo
 		changed = changed || wrote
 		if writeErr != nil {
 			if state != "post-replacement" {
-				return false, nil, errors.Join(writeErr, fmt.Errorf("manifest %q active=%v", manifestPath, manifestBefore.exists))
+				restoreErr := restoreAntigravityStaging(staging)
+				observed := fmt.Errorf("manifest %q active=%v", manifestPath, manifestBefore.exists)
+				if restoreErr != nil {
+					observed = errors.Join(observed, restoreErr, fmt.Errorf("staged plugin restore failed; manual recovery required"))
+				}
+				return false, nil, errors.Join(writeErr, observed)
 			}
 			primary = writeErr
 		}
