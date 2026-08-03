@@ -1,12 +1,15 @@
 package claude
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
@@ -82,6 +85,61 @@ func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, er
 }
 
 // --- Config paths ---
+
+// UserConfigPath returns ~/.claude.json, the only user-scope file Claude Code
+// reads MCP servers from; it also carries the OAuth session — never reset it.
+func UserConfigPath(homeDir string) string {
+	return filepath.Join(homeDir, ".claude.json")
+}
+
+// MergeUserConfig merges overlayJSON into ~/.claude.json: an unparsable base
+// aborts instead of being reset to {}, the file always ends at 0600, and a
+// base that moves underneath the merge is re-read and retried (issue #1868).
+func MergeUserConfig(homeDir string, overlayJSON []byte) (filemerge.WriteResult, string, error) {
+	configPath := UserConfigPath(homeDir)
+	const maxAttempts = 4
+	for attempt := 1; ; attempt++ {
+		raw, err := readUserConfigBase(configPath)
+		if err != nil {
+			return filemerge.WriteResult{}, configPath, err
+		}
+		if _, parseErr := filemerge.UnmarshalJSONObject(raw); parseErr != nil {
+			return filemerge.WriteResult{}, configPath, fmt.Errorf("refusing to modify %q: it holds the Claude Code session and could not be parsed as JSON: %w", configPath, parseErr)
+		}
+		merged, err := filemerge.MergeJSONObjects(raw, overlayJSON)
+		if err != nil {
+			return filemerge.WriteResult{}, configPath, err
+		}
+		current, err := readUserConfigBase(configPath)
+		if err != nil {
+			return filemerge.WriteResult{}, configPath, err
+		}
+		if !bytes.Equal(current, raw) {
+			if attempt < maxAttempts {
+				continue
+			}
+			return filemerge.WriteResult{}, configPath, fmt.Errorf("gave up merging into %q after %d attempts: the file kept changing underneath the merge", configPath, maxAttempts)
+		}
+		writeResult, err := filemerge.WriteFileAtomic(configPath, merged, 0o600)
+		if err != nil {
+			return filemerge.WriteResult{}, configPath, err
+		}
+		// WriteFileAtomic skips byte-identical writes (and their mode);
+		// the OAuth-bearing file must end at 0600 regardless.
+		if chmodErr := os.Chmod(configPath, 0o600); chmodErr != nil {
+			return writeResult, configPath, fmt.Errorf("tighten mode of %q: %w", configPath, chmodErr)
+		}
+		return writeResult, configPath, nil
+	}
+}
+
+func readUserConfigBase(configPath string) ([]byte, error) {
+	raw, err := os.ReadFile(configPath)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read %q: %w", configPath, err)
+	}
+	return raw, nil
+}
 
 func (a *Adapter) GlobalConfigDir(homeDir string) string {
 	return filepath.Join(homeDir, ".claude")

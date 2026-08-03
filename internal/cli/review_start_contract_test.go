@@ -906,6 +906,24 @@ func runNegotiatedReviewStart(t *testing.T, repo, lineage string) ReviewIntegrat
 func boundNegotiatedStartArgs(t *testing.T, args []string) []string {
 	t.Helper()
 	bound := append([]string(nil), args...)
+	hasV2Contract, hasAgent := false, false
+	for index := 0; index < len(bound); index++ {
+		name, value := bound[index], ""
+		if strings.Contains(name, "=") {
+			name, value, _ = strings.Cut(name, "=")
+		} else if index+1 < len(bound) && !strings.HasPrefix(bound[index+1], "--") {
+			value = bound[index+1]
+		}
+		if name == "--contract" && value == ReviewIntegrationContractV2 {
+			hasV2Contract = true
+		}
+		if name == "--agent" {
+			hasAgent = true
+		}
+	}
+	if hasV2Contract && !hasAgent {
+		bound = append(bound, "--agent", "claude-code")
+	}
 	cwd, projection, baseRef := ".", reviewtransaction.ProjectionWorkspace, ""
 	overlay, projectionProvided := false, false
 	for index := 0; index < len(bound); index++ {

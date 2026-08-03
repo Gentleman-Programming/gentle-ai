@@ -107,6 +107,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - Multi-mode prerequisite: connect your AI providers first, then run `opencode models --refresh`
 - Gentle AI sets OpenCode SDD agent sharing to `disabled` by default for privacy; existing user-managed `share` values such as `manual` or `auto` are preserved.
 - OpenCode Desktop SDD commands resolve the project with `git rev-parse --show-toplevel || pwd` before acting, avoiding Electron current-working-directory drift.
+- If review launch fails with `Attempted to assign to readonly property`, follow the [OpenCode readonly task-argument recovery](review-integration.md#restart-opencode-after-a-readonly-task-argument-failure).
 
 ### Kilo Code
 
@@ -157,7 +158,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 
 - Explicit saved Codex model assignments are preserved on sync, including older pinned IDs such as `gpt-5.5` or `gpt-5.4-mini`. The narrow exception is the exact former implicit-default tuple (`sdd-strong=gpt-5.5`, `sdd-mid=gpt-5.5`, `sdd-cheap=gpt-5.4-mini`), which sync treats as Recommended and upgrades to the current GPT-5.6 tuple; partial, extended, or otherwise different maps remain custom and unchanged.
 - GPT-5.6 `max` reasoning effort and `ultra` mode are intentionally not enabled by this default update. `max` requires confirmed Codex support; `ultra` changes orchestration semantics and needs separate design.
-- Multi-agent SDD delegation is available as an **experimental opt-in** (default off). gentle-ai writes `features.multi_agent = false` and `agents.max_threads = 4` / `agents.max_depth = 2` into `~/.codex/config.toml`. To enable, set `multi_agent = true` in the `[features]` section. When enabled, the `sdd-orchestrator` asset uses Codex's native `spawn_agent` / `wait_agent` / `close_agent` tools to delegate SDD phases; otherwise it falls back to solo-agent inline execution.
+- Multi-agent SDD delegation is available as an **experimental opt-in** (default off). gentle-ai writes `features.multi_agent = false` and `agents.max_threads = 4` / `agents.max_depth = 2` into `~/.codex/config.toml`. To enable, set `multi_agent = true` in the `[features]` section. When enabled, the `sdd-orchestrator` asset targets Codex's multi-agent v2 collaboration surface: it spawns agents with `spawn_agent`, loops `wait_agent(timeout_ms=...)` plus `list_agents` correlation until the target reaches a terminal state, stops on non-success, and reuses completed or idle agents through `followup_task`. `send_message` provides in-flight guidance, while `interrupt_agent` is reserved for cancelling an active turn rather than cleaning up a completed agent. If the surface is unavailable, orchestration falls back to solo-agent inline execution.
 - **Delegation**: Solo-agent (multi-agent opt-in, experimental)
 
 ### Windsurf

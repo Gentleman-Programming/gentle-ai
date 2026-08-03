@@ -73,6 +73,10 @@ It does not measure wall-clock time, real model tokens, or a composite score.
 }
 
 func commandRun(args []string) int {
+	return commandRunWith(args, executable, Journeys)
+}
+
+func commandRunWith(args []string, isExecutable func(string) bool, journeys func() []Journey) int {
 	flags := flag.NewFlagSet("run", flag.ExitOnError)
 	binary := flags.String("binary", "", "path to the gentle-ai binary to drive")
 	out := flags.String("out", "results.json", "where to write the machine-readable results")
@@ -87,7 +91,7 @@ func commandRun(args []string) int {
 		return 2
 	}
 	resolved, err := filepath.Abs(*binary)
-	if err != nil || !executable(resolved) {
+	if err != nil || !isExecutable(resolved) {
 		fmt.Fprintf(os.Stderr, "cannot execute binary %q\n", *binary)
 		return 2
 	}
@@ -103,7 +107,7 @@ func commandRun(args []string) int {
 	// would have quietly reported a number based on it must not start. The same
 	// applies to an axis, whose declaration is a claim about how its numbers
 	// were obtained.
-	core := Journeys()
+	core := journeys()
 	planned := append([]Journey{}, core...)
 	for _, axis := range axes {
 		planned = append(planned, axis.Journeys()...)
@@ -117,10 +121,15 @@ func commandRun(args []string) int {
 		return 2
 	}
 
+	requested := requestedJourneyIDs(*only)
 	selected := map[string]bool{}
-	for _, id := range strings.Split(*only, ",") {
-		if id = strings.TrimSpace(id); id != "" {
-			selected[id] = true
+	for _, id := range requested {
+		selected[id] = true
+	}
+	resolvedIDs := []string{}
+	for _, journey := range planned {
+		if selected[journey.ID] {
+			resolvedIDs = append(resolvedIDs, journey.ID)
 		}
 	}
 
@@ -129,6 +138,18 @@ func commandRun(args []string) int {
 		Mode:          ModeDriven,
 		Binary:        resolved,
 		BinaryVersion: binaryVersion(resolved),
+	}
+	if len(requested) > 0 && len(resolvedIDs) == 0 {
+		results.RequestedSelectors = requested
+		results.ResolvedIDs = &resolvedIDs
+		results.RunStatus = "failed"
+		results.FailureReason = "empty_selected_population"
+		if err := writeJSON(*out, results); err != nil {
+			fmt.Fprintf(os.Stderr, "write results: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "no journeys matched --only selectors: %s\n", strings.Join(requested, ", "))
+		return runExitCode(results)
 	}
 	run := func(journey Journey, axis string) bool {
 		if len(selected) > 0 && !selected[journey.ID] {
@@ -183,6 +204,16 @@ func commandRun(args []string) int {
 	return 0
 }
 
+func requestedJourneyIDs(value string) []string {
+	requested := []string{}
+	for _, id := range strings.Split(value, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			requested = append(requested, id)
+		}
+	}
+	return requested
+}
+
 // runExitCode is the fail-closed rule for `run`, pinned because community
 // issue #1883 found the opposite: a corpus run with failed journeys exited 0,
 // and a CI gate reading that exit saw success in a run that measured nothing
@@ -200,7 +231,7 @@ func commandRun(args []string) int {
 // comparison — the tool's whole reason to exist — impossible to script. The
 // summary line and the per-journey table keep the two impossible to conflate.
 func runExitCode(results Results) int {
-	if results.JourneysFailed > 0 {
+	if results.RunStatus == "failed" || results.JourneysFailed > 0 {
 		return 1
 	}
 	return 0

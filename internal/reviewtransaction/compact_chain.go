@@ -393,6 +393,18 @@ func compactDegenerateRecoveryMember(predecessor CompactRecord, successor compac
 func selectCompactPrePRChain(ctx context.Context, repo string, request GateRequest, preimages gateArtifactPreimages, snapshot Snapshot, refs *resolvedPrePRRefs, members []compactPrePRChainMember) ([]compactPrePRChainMember, *BaseAdvanceCompatibility, error) {
 	adjacency := make(map[string][]compactPrePRChainMember)
 	for _, member := range members {
+		// A receipt whose base tree equals its final candidate tree reviewed a
+		// candidate identical to its own base: it delivers no tree transition and
+		// can never lie on a base-through-HEAD path. Admitting it would add a
+		// self-loop edge that trips cycle detection, and inflate the incoming
+		// count of its own node into a false convergence, denying composition for
+		// every unrelated lineage in the repository (issue-1563 follow-up).
+		// Excluding it here does not weaken fail-closed detection of a genuine
+		// multi-node cycle, and never drops it from the composed proof: every
+		// discovered authority is bound by proof.Authority regardless of delivery.
+		if member.receipt.BaseTree == member.receipt.FinalCandidateTree {
+			continue
+		}
 		adjacency[member.receipt.BaseTree] = append(adjacency[member.receipt.BaseTree], member)
 	}
 	for base := range adjacency {

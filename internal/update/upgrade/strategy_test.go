@@ -1344,45 +1344,55 @@ func TestGGAScriptUpgradeUsesGitClone(t *testing.T) {
 		t.Fatalf("ggaScriptUpgrade: unexpected error: %v", err)
 	}
 
-	// Must have at least 2 exec calls.
-	if len(calls) < 2 {
-		t.Fatalf("expected at least 2 exec calls (git clone + bash install.sh), got %d: %v", len(calls), calls)
+	// Must have at least 4 exec calls (git init, git fetch, git checkout, bash install.sh).
+	if len(calls) < 4 {
+		t.Fatalf("expected at least 4 exec calls (git init + fetch + checkout + bash install.sh), got %d: %v", len(calls), calls)
 	}
 
-	// First call must be `git clone`.
-	if calls[0].name != "git" {
-		t.Errorf("first exec call name = %q, want %q", calls[0].name, "git")
+	// First call: git init
+	if calls[0].name != "git" || len(calls[0].args) == 0 || calls[0].args[0] != "init" {
+		t.Errorf("first exec call = %v, want git init", calls[0])
 	}
-	if len(calls[0].args) == 0 || calls[0].args[0] != "clone" {
-		t.Errorf("first exec args[0] = %q, want %q", calls[0].args[0], "clone")
-	}
-	// The clone args must include the target tag via --branch.
-	cloneArgs := calls[0].args
+
+	// Second call: git -C <dir> fetch --depth=1 <repoURL> refs/tags/v2.8.0:refs/tags/v2.8.0
+	fetchArgs := calls[1].args
 	foundRepoURL := false
-	foundTag := false
-	for i, a := range cloneArgs {
+	foundTagRef := false
+	for _, a := range fetchArgs {
 		if containsAny(a, "gentleman-guardian-angel") {
 			foundRepoURL = true
 		}
-		if a == "--branch" && i+1 < len(cloneArgs) && cloneArgs[i+1] == "v2.8.0" {
-			foundTag = true
+		if a == "refs/tags/v2.8.0:refs/tags/v2.8.0" {
+			foundTagRef = true
 		}
 	}
 	if !foundRepoURL {
-		t.Errorf("git clone args %v should include the repo URL (gentleman-guardian-angel)", cloneArgs)
+		t.Errorf("git fetch args %v should include the repo URL (gentleman-guardian-angel)", fetchArgs)
 	}
-	if !foundTag {
-		t.Errorf("git clone args %v should include --branch v2.8.0 to pin to the release tag", cloneArgs)
+	if !foundTagRef {
+		t.Errorf("git fetch args %v should include refs/tags/v2.8.0:refs/tags/v2.8.0 to pin to the release tag", fetchArgs)
 	}
 
-	// Second call must be `bash <path-to-install.sh>` (not bash -c <content>).
-	if calls[1].name != "bash" {
-		t.Errorf("second exec call name = %q, want %q", calls[1].name, "bash")
+	// Third call: git -C <dir> checkout -f refs/tags/v2.8.0
+	checkoutArgs := calls[2].args
+	foundCheckoutTag := false
+	for _, a := range checkoutArgs {
+		if a == "refs/tags/v2.8.0" {
+			foundCheckoutTag = true
+		}
 	}
-	if len(calls[1].args) == 0 {
-		t.Fatalf("second exec call has no args")
+	if !foundCheckoutTag {
+		t.Errorf("git checkout args %v should include refs/tags/v2.8.0", checkoutArgs)
 	}
-	installScriptArg := calls[1].args[0]
+
+	// Fourth call must be `bash <path-to-install.sh>` (not bash -c <content>).
+	if calls[3].name != "bash" {
+		t.Errorf("fourth exec call name = %q, want %q", calls[3].name, "bash")
+	}
+	if len(calls[3].args) == 0 {
+		t.Fatalf("fourth exec call has no args")
+	}
+	installScriptArg := calls[3].args[0]
 	if !containsAny(installScriptArg, "install.sh") {
 		t.Errorf("bash arg = %q, want path containing install.sh", installScriptArg)
 	}
@@ -1470,12 +1480,12 @@ func TestRunStrategy_GGAUsesGitClone(t *testing.T) {
 		t.Fatalf("runStrategy GGA: unexpected error: %v", err)
 	}
 
-	// Must have used git clone (not bash -c).
-	if len(calls) < 2 {
-		t.Fatalf("expected at least 2 calls (git clone + bash), got %d: %v", len(calls), calls)
+	// Must have used git init + fetch (not bash -c).
+	if len(calls) < 4 {
+		t.Fatalf("expected at least 4 calls (git init + fetch + checkout + bash), got %d: %v", len(calls), calls)
 	}
-	if calls[0].name != "git" || (len(calls[0].args) > 0 && calls[0].args[0] != "clone") {
-		t.Errorf("expected first call to be `git clone`, got: %q %v", calls[0].name, calls[0].args)
+	if calls[0].name != "git" || (len(calls[0].args) > 0 && calls[0].args[0] != "init") {
+		t.Errorf("expected first call to be `git init`, got: %q %v", calls[0].name, calls[0].args)
 	}
 }
 

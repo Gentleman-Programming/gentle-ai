@@ -92,7 +92,7 @@ Three invariants hold while disabled:
 - **It never destroys information.** An outcome the gate could not decide says so and carries its typed cause.
 - **An unreadable switch is not a disabled switch.** It resolves to managed, so a damaged or tampered mode record can never manufacture an unmanaged result.
 
-Declining consent deliberately does *not* suppress the gate. The prompt's own off-path text says a decline is not the kill switch, and each decline is scoped to one candidate; making it suppress delivery would silently turn "skip once" into "off".
+Declining relayed consent creates no review lineage or receipt. Instead, it atomically records one canonical native candidate-decline authorization in the Git common directory, bound to the frozen candidate identity, trees, paths, modes, base, and untracked proof. With RDD still enabled, that record permits only exact `pre-commit`, `pre-push`, and `pre-pr` delivery under ordinary repository policy and reports `candidate_declined/unmanaged`; it never reports approval and never authorizes release. A changed candidate, base, path, mode, untracked set, publication range, or advertised head cannot inherit the choice. Replaying the exact decline recovers lost output, while corruption or multiple matching records fail closed. The prompt's off-path text still matters: decline is one candidate's unmanaged delivery choice, not the global kill switch, and every later candidate asks again.
 
 ## 6. Platform work
 

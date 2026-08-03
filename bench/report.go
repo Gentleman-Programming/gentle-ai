@@ -143,7 +143,7 @@ func axisColumn(name string) string {
 // writeCorpusProvenance states, in the first six lines of the report, which
 // populations produced the numbers below it.
 //
-// "43 journeys" and "43 journeys plus a damaged-store axis" are different
+// "45 journeys" and "45 journeys plus a damaged-store axis" are different
 // measurements. They must never render alike, and the difference must be
 // visible without opening the JSON or counting rows — so this prints even when
 // no axis was selected, and says so by name.

@@ -174,6 +174,17 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				continue
 			}
 		}
+		if state.State == StateCorrectionRequired {
+			_, eligible, eligibilityErr := compactCorrectionRequiredStagedScopeRecovery(ctx, repo, state, live)
+			if eligibilityErr != nil {
+				return targetStatusFailure(base, eligibilityErr)
+			}
+			if eligible {
+				candidate.correctionRecovery, candidate.recoveryDisposition = true, RecoveryScopeChanged
+				candidates = append(candidates, candidate)
+				continue
+			}
+		}
 		// The same predicates START uses to refuse a fresh lineage against an
 		// approved predecessor: either the frozen delivery scope has a changed
 		// candidate, or a disjoint base advance preserves the exact feature patch.

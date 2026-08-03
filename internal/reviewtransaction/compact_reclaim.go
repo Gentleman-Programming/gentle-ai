@@ -97,6 +97,11 @@ type CompactReclaimRecord struct {
 	// LegacyFixScopeQuarantine carries the proof for the narrowly authorized
 	// complete-fix scope-expansion quarantine.
 	LegacyFixScopeQuarantine *LegacyFixScopeQuarantineProof `json:"legacy_fix_scope_quarantine,omitempty"`
+	// AuthorityDisposition binds a leaf disposition-plan quarantine
+	// (authority_disposition_execute.go) to the exact digest-bound
+	// AuthorityDispositionPlan it executed. It is set only for quarantines
+	// executeAuthorityDisposition creates.
+	AuthorityDisposition *AuthorityDispositionProof `json:"authority_disposition,omitempty"`
 }
 
 // compactAuthoritativeArtifact reports whether a store-entry name carries

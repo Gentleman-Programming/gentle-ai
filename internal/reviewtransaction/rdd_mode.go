@@ -126,6 +126,10 @@ const (
 	RDDDeliveryDisabledUnmanaged RDDDelivery = "disabled/unmanaged"
 	// RDDDeliveryUnmanaged is delivery with the switch on but no receipt yet.
 	RDDDeliveryUnmanaged RDDDelivery = "unmanaged"
+	// RDDDeliveryCandidateDeclinedUnmanaged is delivery the operator explicitly
+	// chose to leave outside RDD for one exact candidate. It is not a receipt,
+	// approval, or global mode change.
+	RDDDeliveryCandidateDeclinedUnmanaged RDDDelivery = "candidate_declined/unmanaged"
 )
 
 // RDDGlobalMode is the raw global user mode read from uncommitted user state.

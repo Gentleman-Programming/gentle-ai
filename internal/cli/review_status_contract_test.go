@@ -171,6 +171,7 @@ func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 		{name: "status-v2.schema.json", id: ReviewIntegrationStatusSchemaIDV2},
 		{name: "authority-repair-assessment.schema.json", id: reviewtransaction.AuthorityRepairAssessmentSchemaID},
 		{name: "projection.schema.json", id: ReviewIntegrationProjectionSchemaID},
+		{name: "correction-plan-request.schema.json", id: reviewtransaction.CorrectionPlanRequestSchemaID},
 		{name: "targeted-validation-request.schema.json", id: reviewtransaction.TargetedValidationRequestSchemaID},
 	} {
 		payload, readErr := os.ReadFile(filepath.Join(root, "schemas", item.name))

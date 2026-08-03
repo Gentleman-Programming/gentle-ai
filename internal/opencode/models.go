@@ -1,12 +1,16 @@
 package opencode
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+	"time"
 )
 
 // DefaultCachePath returns the default path to the OpenCode models cache file.
@@ -304,6 +308,8 @@ func EnrichWithVariants(cached map[string]Provider, variantsPath string) {
 	if err != nil {
 		return
 	}
+
+	// Pass 1: Process exact provider matches first.
 	for provID, models := range variants {
 		cachedProv, ok := cached[provID]
 		if !ok {
@@ -317,6 +323,41 @@ func EnrichWithVariants(cached map[string]Provider, variantsPath string) {
 		}
 		cached[provID] = cachedProv
 	}
+
+	// Pass 2: Deterministic fallback for models that remain unassigned.
+	// Sort keys to eliminate Go map iteration nondeterminism.
+	variantKeys := make([]string, 0, len(variants))
+	for provID := range variants {
+		variantKeys = append(variantKeys, provID)
+	}
+	sort.Strings(variantKeys)
+
+	cachedKeys := make([]string, 0, len(cached))
+	for cachedID := range cached {
+		cachedKeys = append(cachedKeys, cachedID)
+	}
+	sort.Strings(cachedKeys)
+
+	for _, provID := range variantKeys {
+		models := variants[provID]
+		modelKeys := make([]string, 0, len(models))
+		for modelID := range models {
+			modelKeys = append(modelKeys, modelID)
+		}
+		sort.Strings(modelKeys)
+
+		for _, modelID := range modelKeys {
+			levels := models[modelID]
+			for _, cachedID := range cachedKeys {
+				p := cached[cachedID]
+				if cachedModel, ok := p.Models[modelID]; ok && len(cachedModel.Variants) == 0 {
+					cachedModel.Variants = levels
+					p.Models[modelID] = cachedModel
+					cached[cachedID] = p
+				}
+			}
+		}
+	}
 }
 
 // ConfigModel represents a model entry in the opencode.json provider section.
@@ -328,7 +369,43 @@ type ConfigModel struct {
 // ConfigProvider represents a custom provider defined in opencode.json.
 type ConfigProvider struct {
 	Name   string                 `json:"name"`
+	URL    string                 `json:"url"`
 	Models map[string]ConfigModel `json:"models"`
+}
+
+func FetchDynamicModels(ctx context.Context, baseURL string) ([]ConfigModel, error) {
+	if baseURL == "" {
+		return nil, errors.New("empty baseURL")
+	}
+	client := &http.Client{Timeout: 1 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	var res struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+
+	models := make([]ConfigModel, 0, len(res.Data))
+	for _, m := range res.Data {
+		models = append(models, ConfigModel{Name: m.ID})
+	}
+	return models, nil
 }
 
 // LoadConfigProviders reads the provider section from an opencode.json settings file.

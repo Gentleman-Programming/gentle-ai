@@ -38,8 +38,32 @@ func TestReviewRepositoryContextPublishesOpaquePrivateBinding(t *testing.T) {
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("context record mode = %o, want 600", info.Mode().Perm())
 	}
-	if payload, err := os.ReadFile(path); err != nil || !strings.Contains(string(payload), repo) {
-		t.Fatalf("private record does not retain the repository root: %v", err)
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record reviewRepositoryContextFile
+	if err := json.Unmarshal(payload, &record); err != nil || record.RepositoryRoot != repo {
+		t.Fatalf("private record repository root = %q, %v; want %q", record.RepositoryRoot, err, repo)
+	}
+}
+
+func TestReviewRepositoryContextRedactsTargetedValidationDerivationCause(t *testing.T) {
+	repo := t.TempDir()
+	cause := &GitCommandError{
+		Args: []string{"-C", repo, "diff"}, ExitCode: 128,
+		Cause: errors.New("targeted validation derivation failed"), Output: repo,
+	}
+	err := &reviewRepositoryContextTargetedValidationError{cause: cause}
+	if strings.Contains(err.Error(), repo) || err.Error() != "review repository context is stale or has no live matching authority" {
+		t.Fatalf("public derivation error = %q", err)
+	}
+	if !errors.Is(err, cause.Cause) {
+		t.Fatal("targeted validation derivation cause is not reachable with errors.Is")
+	}
+	var gitError *GitCommandError
+	if !errors.As(err, &gitError) || gitError != cause {
+		t.Fatalf("targeted validation derivation cause = %#v", gitError)
 	}
 }
 

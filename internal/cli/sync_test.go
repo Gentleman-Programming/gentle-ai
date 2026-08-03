@@ -588,12 +588,17 @@ func TestComponentSyncStepPreservesSlimEngramProtocol(t *testing.T) {
 		t.Fatalf("install-path InjectWithOptions error = %v", err)
 	}
 	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
+	registryPath := filepath.Join(home, ".claude.json")
 	installed, err := os.ReadFile(claudeMD)
 	if err != nil {
 		t.Fatalf("ReadFile(CLAUDE.md) after install error = %v", err)
 	}
 	if strings.Contains(string(installed), "needs_review") || !strings.Contains(string(installed), "SessionStart hook") {
 		t.Fatalf("precondition failed: install did not write the SLIM section:\n%s", installed)
+	}
+	installedRegistry, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(user registry) after install error = %v", err)
 	}
 
 	// Sync over the installed state must preserve the slim section.
@@ -618,11 +623,25 @@ func TestComponentSyncStepPreservesSlimEngramProtocol(t *testing.T) {
 	if !bytes.Equal(installed, afterSync) {
 		t.Fatalf("sync must leave the installed CLAUDE.md byte-identical\ninstalled:\n%s\nafter sync:\n%s", installed, afterSync)
 	}
+	afterSyncRegistry, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(user registry) after sync error = %v", err)
+	}
+	if !bytes.Equal(installedRegistry, afterSyncRegistry) {
+		t.Fatal("sync must leave Claude's user registry byte-identical")
+	}
 
 	// Idempotency guard: a second sync must not report the section changed.
 	changed = nil
 	if err := step.Run(); err != nil {
 		t.Fatalf("second componentSyncStep.Run() error = %v", err)
+	}
+	afterSecondSync, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(user registry) after second sync error = %v", err)
+	}
+	if !bytes.Equal(installedRegistry, afterSecondSync) {
+		t.Fatal("repeated sync must leave Claude's user registry byte-identical")
 	}
 	for _, f := range changed {
 		if f == claudeMD {
@@ -915,12 +934,9 @@ func TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent(t *tes
 	}
 }
 
-// TestRunSyncRefreshesInstalledKilocodePluginsWithoutSDDComponent covers the
-// Kilocode variant of issue #1440: the SDD injector installs the managed
-// OpenCode-compatible plugins for Kilocode too (under ~/.config/kilo/plugins),
-// so sync must refresh installed copies there as well — and still never create
-// plugins that were never installed.
-func TestRunSyncRefreshesInstalledKilocodePluginsWithoutSDDComponent(t *testing.T) {
+// TestRunSyncRemovesOpenCodeOnlyReviewPluginFromKilocode ensures a stale
+// OpenCode review interception plugin cannot keep affecting Kilo after sync.
+func TestRunSyncRemovesOpenCodeOnlyReviewPluginFromKilocode(t *testing.T) {
 	home := t.TempDir()
 	if err := state.Write(home, state.InstallState{
 		InstalledAgents:     []string{"kilocode"},
@@ -949,15 +965,11 @@ func TestRunSyncRefreshesInstalledKilocodePluginsWithoutSDDComponent(t *testing.
 		t.Fatalf("RunSync() error = %v", err)
 	}
 
-	got, readErr := os.ReadFile(reviewPlugin)
-	if readErr != nil {
-		t.Fatalf("ReadFile(%q) error = %v", reviewPlugin, readErr)
-	}
-	if string(got) != assets.MustRead("opencode/plugins/review-result-artifacts.ts") {
-		t.Errorf("sync left installed managed Kilocode plugin stale; content must be byte-equal to the embedded asset")
+	if _, statErr := os.Stat(reviewPlugin); !os.IsNotExist(statErr) {
+		t.Fatalf("sync left OpenCode-only review plugin installed for Kilo: %v", statErr)
 	}
 	if !containsPath(result.ChangedFiles, reviewPlugin) {
-		t.Errorf("ChangedFiles missing refreshed Kilocode plugin path %q\nchanged = %#v", reviewPlugin, result.ChangedFiles)
+		t.Errorf("ChangedFiles missing removed Kilocode plugin path %q\nchanged = %#v", reviewPlugin, result.ChangedFiles)
 	}
 
 	// skill-registry.ts was never installed — sync must not create it.
@@ -1019,6 +1031,96 @@ func TestSyncBackupTargetsIncludeManagedOpenCodePluginsWithoutSDD(t *testing.T) 
 				t.Errorf("syncBackupTargets missing managed plugin path %q\ntargets = %v", want, targets)
 			}
 		}
+	}
+}
+
+func TestSyncBackupTargetsIncludeClaudeEngramLegacyMigrationSource(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Components: []model.ComponentID{model.ComponentEngram}}
+	targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	want := filepath.Join(home, ".claude", "mcp", "engram.json")
+	if !containsPath(targets, want) {
+		t.Fatalf("sync backup targets missing legacy migration source %q: %v", want, targets)
+	}
+}
+
+type failingSyncStep struct{}
+
+func (failingSyncStep) ID() string { return "sync:test:fail-after-engram" }
+func (failingSyncStep) Run() error { return errors.New("forced failure after Engram migration") }
+
+func TestRunSyncRollbackRestoresClaudeEngramMigrationSource(t *testing.T) {
+	home := t.TempDir()
+	registryPath := filepath.Join(home, ".claude.json")
+	legacyPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	registryBefore := []byte(`{"oauthAccount":{"emailAddress":"user@example.com"},"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
+	legacyBefore := []byte("{\n  \"command\": \"/usr/local/bin/engram\",\n  \"args\": [\"mcp\", \"--tools=agent\"]\n}\n")
+	if err := os.WriteFile(registryPath, registryBefore, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, legacyBefore, 0o604); err != nil {
+		t.Fatal(err)
+	}
+	registryInfo, _ := os.Stat(registryPath)
+	legacyInfo, _ := os.Stat(legacyPath)
+	promptPath := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.WriteFile(promptPath, []byte("original prompt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	restoreBackupHome := backup.UserHomeDirFn
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() { backup.UserHomeDirFn = restoreBackupHome })
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentEngram},
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		rt, err := newSyncRuntime(home, selection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan := rt.stagePlan()
+		plan.Apply = append(plan.Apply, failingSyncStep{})
+		result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+		if result.Err == nil {
+			t.Fatalf("sync transaction attempt %d error = nil; want forced post-migration failure", attempt)
+		}
+		if len(result.Apply.Steps) < 3 || result.Apply.Steps[1].StepID != "sync:component:engram" || result.Apply.Steps[1].Status != pipeline.StepStatusSucceeded {
+			t.Fatalf("attempt %d Engram migration did not complete before failure: error=%v steps=%#v", attempt, result.Err, result.Apply.Steps)
+		}
+		if !result.Rollback.Success {
+			t.Fatalf("sync rollback attempt %d failed: error=%v steps=%#v", attempt, result.Rollback.Err, result.Rollback.Steps)
+		}
+		if rt.state.rollbackSnapshotDir != "" {
+			t.Fatalf("sync rollback attempt %d left transaction snapshot %q", attempt, rt.state.rollbackSnapshotDir)
+		}
+		for _, file := range []struct {
+			path string
+			data []byte
+			mode os.FileMode
+		}{{registryPath, registryBefore, registryInfo.Mode().Perm()}, {legacyPath, legacyBefore, legacyInfo.Mode().Perm()}} {
+			got, err := os.ReadFile(file.path)
+			if err != nil || !bytes.Equal(got, file.data) {
+				t.Fatalf("rollback attempt %d did not restore %q bytes: got=%q error=%v", attempt, file.path, got, err)
+			}
+			if runtime.GOOS != "windows" {
+				info, err := os.Stat(file.path)
+				if err != nil || info.Mode().Perm() != file.mode {
+					t.Fatalf("rollback attempt %d did not restore %q mode: got=%v error=%v want=%v", attempt, file.path, info, err, file.mode)
+				}
+			}
+		}
+	}
+	backups, err := os.ReadDir(filepath.Join(home, ".gentle-ai", "backups"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("persistent backup count = %d, want 1 after duplicate transaction", len(backups))
 	}
 }
 
@@ -2706,7 +2808,7 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 		"orchestrator": settings.Agent["gentle-orchestrator"].Prompt,
 		"post-apply":   string(applyPayload),
 	} {
-		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition") {
+		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition") {
 			t.Errorf("synced OpenCode %s controller does not use negotiated STATUS routing", name)
 		}
 		for _, stale := range []string{
