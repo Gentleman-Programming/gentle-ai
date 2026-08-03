@@ -1382,10 +1382,19 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	if !result.Verify.Ready {
 		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
-	if persistedStateErr == nil && !persistedState.CommunityToolsConfigured && selection.CommunityTools != nil {
-		persistedState.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
-		persistedState.CommunityToolsConfigured = true
-		if err := state.Write(homeDir, persistedState); err != nil {
+	// The closure owns CommunityTools and CommunityToolsConfigured. Re-reading
+	// inside the lock evaluates the "already configured" half of the guard against
+	// the current file rather than the snapshot taken before the pipeline ran.
+	// persistedStateErr still gates the whole block: an absent or undecodable
+	// state file is left alone here, exactly as before.
+	if persistedStateErr == nil && selection.CommunityTools != nil {
+		if err := state.Update(homeDir, func(s *state.InstallState) error {
+			if !s.CommunityToolsConfigured {
+				s.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
+				s.CommunityToolsConfigured = true
+			}
+			return nil
+		}); err != nil {
 			return result, fmt.Errorf("persist migrated community tool selection: %w", err)
 		}
 	}

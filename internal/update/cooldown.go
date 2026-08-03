@@ -2,8 +2,6 @@ package update
 
 import (
 	"context"
-	"errors"
-	"os"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -68,19 +66,12 @@ func CheckAllWithCooldown(
 	// Also skip write when homeDir is empty.
 	if homeDir != "" && checkSucceeded(results) {
 		// Re-read state to avoid clobbering unrelated fields written concurrently.
-		current, readErr := state.Read(homeDir)
-		if readErr != nil {
-			if !errors.Is(readErr, os.ErrNotExist) {
-				// File exists but is unreadable/corrupt — do not overwrite; skip
-				// persisting the timestamp this round to avoid data loss.
-				return results
-			}
-			// File genuinely missing (first run) — start fresh.
-			current = state.InstallState{}
-		}
-		current.LastUpdateCheck = &now
+		// Update owns LastUpdateCheck field only. Re-read inside lock ensures fresh state.
 		// Ignore write errors — non-fatal; next launch will retry.
-		_ = state.Write(homeDir, current)
+		_ = state.Update(homeDir, func(s *state.InstallState) error {
+			s.LastUpdateCheck = &now
+			return nil
+		})
 	}
 
 	return results

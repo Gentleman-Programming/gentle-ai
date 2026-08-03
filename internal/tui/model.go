@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -3049,13 +3048,12 @@ func (m Model) startUpgradeSync() tea.Cmd {
 			// present — skip writing to avoid dropping installed_agents, model
 			// assignments, and other persisted fields.
 			if h := homeDir(); h != "" {
-				s, readErr := state.Read(h)
-				if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-					// File exists but unreadable/corrupt — skip to avoid clobber.
-				} else {
+				// Update owns PendingSync field only. Re-read inside lock ensures fresh state.
+				// Ignore errors; non-fatal.
+				_ = state.Update(h, func(s *state.InstallState) error {
 					s.PendingSync = true
-					_ = state.Write(h, s)
-				}
+					return nil
+				})
 			}
 			return SyncDoneMsg{}
 		}

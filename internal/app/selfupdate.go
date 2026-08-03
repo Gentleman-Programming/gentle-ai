@@ -3,7 +3,6 @@ package app
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -176,14 +175,12 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 	// JSON, permission denied) means an existing file is present — do not
 	// overwrite it and risk dropping unrelated persisted fields.
 	if homeDir != "" {
-		s, readErr := state.Read(homeDir)
-		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-			// File exists but is unreadable/corrupt — skip this round to avoid
-			// clobbering installed_agents, model assignments, etc.
-		} else {
+		// Update owns PendingSync field only. Re-read inside lock ensures fresh state.
+		// Ignore errors; non-fatal.
+		_ = state.Update(homeDir, func(s *state.InstallState) error {
 			s.PendingSync = true
-			_ = state.Write(homeDir, s)
-		}
+			return nil
+		})
 	}
 
 	return restartAfterGentleAIUpgrade(target.LatestVersion, stdout)

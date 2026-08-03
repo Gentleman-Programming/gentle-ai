@@ -2,6 +2,7 @@ package uninstall
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -1367,36 +1368,43 @@ func updateStateAfterUninstall(homeDir string, toRemove []model.AgentID) ([]mode
 		return nil, nil
 	}
 
-	current, err := state.Read(homeDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+	// The closure owns InstalledAgents; removed is captured for the caller.
+	// errNoMatchingAgents aborts the write so that a run which removes nothing
+	// leaves the file untouched, and in particular does not create a state file
+	// that did not exist before.
+	errNoMatchingAgents := errors.New("no matching installed agents")
+	var removed []model.AgentID
+	err := state.Update(homeDir, func(s *state.InstallState) error {
+		removeSet := make(map[string]struct{}, len(toRemove))
+		for _, agentID := range toRemove {
+			removeSet[string(agentID)] = struct{}{}
 		}
-		return nil, fmt.Errorf("read install state: %w", err)
-	}
 
-	removeSet := make(map[string]struct{}, len(toRemove))
-	for _, agentID := range toRemove {
-		removeSet[string(agentID)] = struct{}{}
-	}
-
-	kept := make([]string, 0, len(current.InstalledAgents))
-	removed := make([]model.AgentID, 0, len(toRemove))
-	for _, installed := range current.InstalledAgents {
-		if _, ok := removeSet[installed]; ok {
-			removed = append(removed, model.AgentID(installed))
-			continue
+		kept := make([]string, 0, len(s.InstalledAgents))
+		removed = make([]model.AgentID, 0, len(toRemove))
+		for _, installed := range s.InstalledAgents {
+			if _, ok := removeSet[installed]; ok {
+				removed = append(removed, model.AgentID(installed))
+				continue
+			}
+			kept = append(kept, installed)
 		}
-		kept = append(kept, installed)
-	}
-	if len(removed) == 0 {
+
+		if len(removed) == 0 {
+			return errNoMatchingAgents
+		}
+
+		s.InstalledAgents = kept
+		return nil
+	})
+	switch {
+	case errors.Is(err, errNoMatchingAgents), errors.Is(err, os.ErrNotExist):
 		return nil, nil
-	}
-
-	updated := current
-	updated.InstalledAgents = kept
-	if err := state.Write(homeDir, updated); err != nil {
-		return nil, fmt.Errorf("write install state: %w", err)
+	case err != nil:
+		// Update folds the read and the write into one call, so this message
+		// covers both. It stays worded as a read failure because an undecodable
+		// state file is the case callers and tests actually pin.
+		return nil, fmt.Errorf("read install state: %w", err)
 	}
 	return removed, nil
 }

@@ -321,18 +321,18 @@ func writeGlobalRDDMode(operation string) error {
 	if err != nil {
 		return fmt.Errorf("resolve user home directory: %w", err)
 	}
-	persisted, err := state.Read(home)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read global review mode: %w", err)
-	}
-	mode := reviewtransaction.RDDModeOff
-	if operation == "enable" {
-		mode = reviewtransaction.RDDModeOn
-	}
-	recorded := time.Now().UTC()
-	persisted.RDDMode = string(mode)
-	persisted.RDDModeRecordedAt = &recorded
-	if err := state.Write(home, persisted); err != nil {
+	// Update owns RDDMode and RDDModeRecordedAt fields. Re-read inside lock
+	// ensures fresh state and prevents concurrent writes from clobbering the kill switch.
+	if err := state.Update(home, func(s *state.InstallState) error {
+		mode := reviewtransaction.RDDModeOff
+		if operation == "enable" {
+			mode = reviewtransaction.RDDModeOn
+		}
+		recorded := time.Now().UTC()
+		s.RDDMode = string(mode)
+		s.RDDModeRecordedAt = &recorded
+		return nil
+	}); err != nil {
 		return fmt.Errorf("persist global review mode: %w", err)
 	}
 	return nil
