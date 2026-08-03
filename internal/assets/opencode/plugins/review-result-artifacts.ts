@@ -5,6 +5,7 @@ const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-reada
 const BINDING = /^GENTLE_AI_REVIEW_BINDING (\{[^\n]+\})(?:\n|$)/
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
+const REVIEW_OUTCOME = { UNSUPPORTED_CAPABILITY: "unsupported-capability" } as const
 
 type ReviewBinding = {
   lineage: string
@@ -286,19 +287,118 @@ function gitTrustRefusal(binding: ReviewBinding, cause: unknown): boolean {
 // binding", advice that deterministically fails: recapturing identical bytes
 // can never satisfy admission, only a relaunched reviewer can.
 const ADMISSION_REJECTION = /\breviewer artifact admission ([a-z_]+):/
-
-function admissionRejection(cause: unknown): string | undefined {
-  const match = ADMISSION_REJECTION.exec(errorMessage(cause))
-  return match ? match[1] : undefined
+const ADMISSION_DIAGNOSTIC = /; admission_diagnostic=(\{[^\r\n]{1,1024}\})$/
+const ADMISSION_DIAGNOSTIC_REASONS = new Set([
+  "expected_path_and_line", "line_suffix_not_integer", "line_must_be_positive",
+  "path_must_be_repository_relative", "path_must_be_canonical", "line_not_changed_by_candidate",
+])
+const ADMISSION_DIAGNOSTIC_CODE = { INVALID_FINDING_LOCATION: "invalid_finding_location", CANDIDATE_CAUSALITY_UNPROVEN: "candidate_causality_unproven" } as const
+interface AdmissionDiagnostic {
+  code: (typeof ADMISSION_DIAGNOSTIC_CODE)[keyof typeof ADMISSION_DIAGNOSTIC_CODE]
+  finding_id: string
+  location: string
+  reason: string
+}
+function safeAdmissionLocation(value: unknown, code: unknown, reason: unknown): value is string {
+  if (typeof value !== "string" || value.length > 256 || /[\u0000-\u001f\u007f\\]/.test(value) || /^(?:[A-Za-z]:[\\/]|[\\/])/.test(value)) return false
+  const parts = value.split(":")
+  if (parts.length !== 2 || !/^[A-Za-z0-9+.-]{0,64}$/.test(parts[1]) ||
+      !parts[0].split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..")) return false
+  if (code === ADMISSION_DIAGNOSTIC_CODE.CANDIDATE_CAUSALITY_UNPROVEN) {
+    return reason === "line_not_changed_by_candidate" && /^\d+$/.test(parts[1]) && /[1-9]/.test(parts[1])
+  }
+  if (code !== ADMISSION_DIAGNOSTIC_CODE.INVALID_FINDING_LOCATION) return false
+  if (reason === "expected_path_and_line") return parts[1] === ""
+  if (reason === "line_must_be_positive") return /^(?:-\d+|\+?0+)$/.test(parts[1])
+  return reason === "line_suffix_not_integer" && parts[1] !== "" &&
+    !/^\d+$/.test(parts[1]) && !/^(?:-\d+|\+?0+)$/.test(parts[1])
 }
 
-function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string): string {
+function admissionRejection(cause: unknown): { decision: string, diagnostic?: AdmissionDiagnostic } | undefined {
+  const message = errorMessage(cause)
+  const match = ADMISSION_REJECTION.exec(message)
+  if (!match) return undefined
+  const detail = ADMISSION_DIAGNOSTIC.exec(message)
+  if (!detail) return { decision: match[1] }
+  try {
+    const parsed = JSON.parse(detail[1]) as Partial<AdmissionDiagnostic>
+    const safeLocation = safeAdmissionLocation(parsed.location, parsed.code, parsed.reason)
+    const safeID = typeof parsed.finding_id === "string" && /^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(parsed.finding_id)
+    const safeCode = Object.values(ADMISSION_DIAGNOSTIC_CODE).includes(parsed.code as AdmissionDiagnostic["code"])
+    const safeReason = typeof parsed.reason === "string" && ADMISSION_DIAGNOSTIC_REASONS.has(parsed.reason)
+    return safeLocation && safeID && safeCode && safeReason
+      ? { decision: match[1], diagnostic: parsed as AdmissionDiagnostic }
+      : { decision: match[1] }
+  } catch {
+    return { decision: match[1] }
+  }
+}
+
+function admissionRecoveryKey(binding: ReviewBinding): string | undefined {
+  if (!binding.revision || !binding.repository_context || !binding.subject_hash) return undefined
+  return JSON.stringify([binding.lineage, binding.target, binding.revision, binding.repository_context, binding.lens, binding.order, binding.subject_hash])
+}
+
+const MAX_ADMISSION_RECOVERY_SESSIONS = 64
+const MAX_ADMISSION_RECOVERIES_PER_SESSION = 8
+const ADMISSION_RECOVERY_STATUS = { RELAUNCH: "relaunch", EXHAUSTED: "exhausted", UNAVAILABLE: "unavailable" } as const
+type AdmissionRecoveryStatus = (typeof ADMISSION_RECOVERY_STATUS)[keyof typeof ADMISSION_RECOVERY_STATUS]
+type AdmissionRecoveryStore = Map<string, Set<string>>
+interface AdmissionRecoveryContext {
+  sessionID: string
+  store: AdmissionRecoveryStore
+}
+
+function clearAdmissionRecovery(store: AdmissionRecoveryStore, sessionID: string, binding: ReviewBinding): void {
+  const key = admissionRecoveryKey(binding)
+  const session = store.get(sessionID)
+  if (!key || !session) return
+  session.delete(key)
+  if (session.size === 0) store.delete(sessionID)
+}
+
+function claimAdmissionRecovery(store: AdmissionRecoveryStore, sessionID: string, binding: ReviewBinding): AdmissionRecoveryStatus {
+  const key = admissionRecoveryKey(binding)
+  if (!key || sessionID === "") return ADMISSION_RECOVERY_STATUS.UNAVAILABLE
+  const existing = store.get(sessionID)
+  if (existing?.delete(key)) {
+    if (existing.size === 0) store.delete(sessionID)
+    return ADMISSION_RECOVERY_STATUS.EXHAUSTED
+  }
+  if (!existing && store.size >= MAX_ADMISSION_RECOVERY_SESSIONS) return ADMISSION_RECOVERY_STATUS.UNAVAILABLE
+  const session = existing ?? new Set<string>()
+  if (session.size >= MAX_ADMISSION_RECOVERIES_PER_SESSION) return ADMISSION_RECOVERY_STATUS.UNAVAILABLE
+  session.add(key)
+  if (!existing) store.set(sessionID, session)
+  return ADMISSION_RECOVERY_STATUS.RELAUNCH
+}
+
+function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string, recovery?: AdmissionRecoveryContext): string {
   if (!binding.repository_context) return errorMessage(cause)
   if (gitTrustRefusal(binding, cause)) return GIT_TRUST_REFUSAL_MESSAGE
   const admission = admissionRejection(cause)
   if (admission) {
-    return `${code}: native admission rejected the reviewer result as ${admission}; ` +
-      "retrying capture with the same result cannot succeed; relaunch this lens reviewer to produce a corrected result"
+    if (!admission.diagnostic) {
+      if (recovery) clearAdmissionRecovery(recovery.store, recovery.sessionID, binding)
+      return `reviewer_admission_recovery_unavailable: native admission rejected the reviewer result as ${admission.decision} without a safe actionable diagnostic; ` +
+        "stop relaunching this lens and surface the terminal failure to the maintainer"
+    }
+    const status = recovery
+      ? claimAdmissionRecovery(recovery.store, recovery.sessionID, binding)
+      : ADMISSION_RECOVERY_STATUS.UNAVAILABLE
+    if (status !== ADMISSION_RECOVERY_STATUS.RELAUNCH) {
+      const terminalCode = status === ADMISSION_RECOVERY_STATUS.EXHAUSTED
+        ? "reviewer_admission_recovery_exhausted"
+        : "reviewer_admission_recovery_unavailable"
+      return `${terminalCode}: corrected reviewer result was rejected as ${admission.decision}; ` +
+        "stop relaunching this lens and surface the terminal failure to the maintainer"
+    }
+    const detail = `; finding ${admission.diagnostic.finding_id} at ${JSON.stringify(admission.diagnostic.location)}: ${admission.diagnostic.reason}`
+    const correction = admission.diagnostic?.code === ADMISSION_DIAGNOSTIC_CODE.CANDIDATE_CAUSALITY_UNPROVEN
+      ? "; anchor the finding to a candidate-changed line that proves the claimed causality"
+      : "; use one repository-relative path followed by one positive integer line"
+    return `${code}: native admission rejected the reviewer result as ${admission.decision}${detail}; ` +
+      `retrying capture with the same result cannot succeed${correction}; relaunch this lens reviewer exactly once to produce a corrected result`
   }
   return `${code}: provider-owned review operation failed; refresh the exact native next_transition or retry the same opaque binding`
 }
@@ -325,8 +425,10 @@ function embeddedRawPayload(raw: string): string {
   return `${raw.slice(0, PRESERVE_EMBED_LIMIT)}\n[truncated: first ${PRESERVE_EMBED_LIMIT} of ${raw.length} characters embedded]`
 }
 
-async function preservedCaptureFailure(cwd: string, binding: ReviewBinding, raw: unknown, cause: unknown): Promise<Error> {
-  const captureFailure = sessionErrorMessage(binding, cause, "repository_context_capture_failed")
+async function preservedCaptureFailure(
+  cwd: string, binding: ReviewBinding, raw: unknown, cause: unknown, recovery?: AdmissionRecoveryContext,
+): Promise<Error> {
+  const captureFailure = sessionErrorMessage(binding, cause, "repository_context_capture_failed", recovery)
   if (typeof raw !== "string" || raw.trim() === "") {
     return new Error(`${captureFailure}; no raw reviewer result was available to preserve`)
   }
@@ -349,7 +451,13 @@ async function preservedCaptureFailure(cwd: string, binding: ReviewBinding, raw:
   }
 }
 
-const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => ({
+const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
+  const admissionRecoveries: AdmissionRecoveryStore = new Map()
+  return {
+  dispose: async () => { admissionRecoveries.clear() },
+  event: async ({ event }) => {
+    if (event.type === "session.deleted") admissionRecoveries.delete(event.properties.info.id)
+  },
   "tool.execute.before": async (input, output) => {
     if (input.tool !== "task" || typeof output.args?.subagent_type !== "string" ||
         !REVIEW_AGENTS.has(output.args.subagent_type)) return
@@ -359,11 +467,8 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => (
     if (output.args.background === true) {
       throw new Error("bound review tasks must run in the foreground for native result capture")
     }
-    output.args.prompt = await injectReviewerContext(
-      output.args.prompt,
-      output.args.subagent_type,
-      captureCwd(worktree, directory),
-    )
+    parseBinding(output.args.prompt, output.args.subagent_type)
+    throw new Error(REVIEW_OUTCOME.UNSUPPORTED_CAPABILITY)
   },
   "tool.execute.after": async (input, output) => {
     if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
@@ -371,6 +476,7 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => (
     const lens = input.args.subagent_type
     const binding = parseBinding(input.args.prompt, lens)
     const cwd = captureCwd(worktree, directory)
+    const recovery = { sessionID: input.sessionID, store: admissionRecoveries }
     // Extract the replayable payload exactly once, BEFORE capture: recovery
     // re-runs `review capture-result --input <preserved file>`, whose strict
     // decoder rejects the task envelope, so a capture failure must preserve
@@ -382,14 +488,17 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => (
       // Extraction itself failed (malformed envelope): there is no extracted
       // payload, so preserve the raw envelope under the distinct extraction
       // cause for manual inspection.
+      clearAdmissionRecovery(admissionRecoveries, input.sessionID, binding)
       throw await preservedCaptureFailure(cwd, binding, output.output, cause)
     }
     try {
       output.output = await captureResult(cwd, binding, result)
+      clearAdmissionRecovery(admissionRecoveries, input.sessionID, binding)
     } catch (cause) {
-      throw await preservedCaptureFailure(cwd, binding, result, cause)
+      throw await preservedCaptureFailure(cwd, binding, result, cause, recovery)
     }
   },
-})
+  }
+}
 
 export default ReviewResultArtifactsPlugin

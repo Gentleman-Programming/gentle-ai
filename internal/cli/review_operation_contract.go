@@ -57,11 +57,11 @@ var reviewIntegrationOperationRegistry = []reviewIntegrationOperationMetadata{
 	// from the failure envelope. Only "result" was ever listed, so every
 	// negotiated finalize failure on the admitted routes reported less than the
 	// unsafe one did.
-	{Command: "finalize", Operation: ReviewIntegrationOperationFinalize, Label: "Review FINALIZE", ValueFlags: []string{"cwd", "lineage", "validation", "refuter", "evidence", "trace", "result", "result-artifact", "result-artifact-file"}, BoolFlags: []string{"failed", "captured-results", "captured-evidence"}, IntFlags: []string{"correction-lines"}, MutatesAuthority: true},
+	{Command: "finalize", Operation: ReviewIntegrationOperationFinalize, Label: "Review FINALIZE", ValueFlags: []string{"cwd", "lineage", "expected-revision", "target", "request-hash", "repository-context", "validation", "refuter", "evidence", "trace", "result", "result-artifact", "result-artifact-file"}, BoolFlags: []string{"failed", "captured-results", "captured-evidence"}, IntFlags: []string{"correction-lines"}, MutatesAuthority: true},
 	{Command: "repair", Operation: "review.repair", Label: "Review REPAIR", ValueFlags: []string{"cwd", "class", "lineage", "expected-revision", "cause", "disposition", "repository-binding", "actor", "reason", "maintainer-authorization"}, BoolFlags: []string{"preflight"}, MutatesAuthority: true, JoinOnTimeout: true, ReadOnlyFlag: "preflight"},
 	{Command: "retry-final-verification", Operation: ReviewIntegrationOperationRetryFinalVerification, Label: "Review RETRY-FINAL-VERIFICATION", ValueFlags: []string{"cwd", "predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "incident", "actor", "reason", "maintainer-authorization"}, MutatesAuthority: true, JoinOnTimeout: true},
-	{Command: "start", Operation: "review.start", Label: "Review START", ValueFlags: []string{"cwd", "target", "lineage", "policy", "focus", "base-ref", "projection", "trace", "consent", "locale"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
-	{Command: "status", Operation: "review.status", Label: "Review STATUS", ValueFlags: []string{"cwd", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization"}, BoolFlags: []string{"workspace-overlay", "action-eligibility", "next-transition"}},
+	{Command: "start", Operation: "review.start", Label: "Review START", ValueFlags: []string{"cwd", "agent", "target", "lineage", "policy", "focus", "base-ref", "projection", "trace", "consent", "locale"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
+	{Command: "status", Operation: "review.status", Label: "Review STATUS", ValueFlags: []string{"cwd", "agent", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization"}, BoolFlags: []string{"workspace-overlay", "action-eligibility", "next-transition"}},
 	{Command: "validate", Operation: ReviewIntegrationOperationValidate, Label: "Review VALIDATE", ValueFlags: []string{"cwd", "lineage", "gate", "base-ref", "pre-pr-ci-attestation", "policy", "release-configuration", "release-generated", "release-provenance", "release-publication-boundary", "release-evidence-freshness"}},
 }
 
@@ -533,6 +533,16 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		case errors.Is(runErr, context.DeadlineExceeded):
 			failure.Code = "operation_timeout"
 			failure.Message = "The negotiated review operation timed out after review authority committed a native transition."
+		default:
+			// The classification above is deliberate and stays: 1861 requires a
+			// failure arriving after a committed native transition to keep
+			// reporting an unknown outcome, because retrying a maybe-committed
+			// mutation can double-apply it. Only the reason was being dropped.
+			// This branch returns before the general default assigns Cause, so
+			// without this the caller reads "failed without authoritative
+			// mutation evidence" with nothing to act on or report, for a state
+			// whose native reason the tool already holds.
+			failure.Cause = reviewIntegrationFailureCause(runErr)
 		}
 		return failure
 	}
@@ -713,6 +723,9 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		preflightFailure.LineageID = failure.LineageID
 		preflightFailure.RequiredInputs = append([]string{}, reason.RequiredInputs...)
 		preflightFailure.NextAction = reason.NextAction
+		if reason.Code == reviewImmutableTransportUnsupportedCode {
+			preflightFailure.RetrySafe = false
+		}
 		preflightFailure.Cause = reviewIntegrationFailureCause(preflight)
 		return preflightFailure
 	}
@@ -1350,6 +1363,12 @@ func (result ReviewIntegrationOperationResult) Validate() error {
 			if !correctionEvidenceFirst && ((transitionRequest == nil) != (finalized.ValidationRequest == nil) ||
 				transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *finalized.ValidationRequest)) {
 				return errors.New("negotiated finalize validation request copies differ")
+			}
+			if request := finalized.NextTransition.CorrectionRequest; request != nil {
+				if finalized.State != reviewtransaction.StateCorrectionRequired || request.LineageID != finalized.LineageID ||
+					request.ExpectedRevision != finalized.StoreRevision {
+					return errors.New("negotiated finalize correction request binding is invalid") // refusal:by-design world-action: provider-generated finalize output requires a code fix when its bindings disagree
+				}
 			}
 		}
 		if finalized.ValidationRequest != nil {

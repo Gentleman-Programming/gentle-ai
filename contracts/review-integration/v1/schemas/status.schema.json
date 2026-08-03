@@ -82,12 +82,14 @@
         "kind": { "enum": ["execute", "collect", "stop"] },
         "reason_code": { "type": "string", "pattern": "^[a-z0-9_]+$" },
         "execute": { "$ref": "#/$defs/transition_execution" },
-        "collect": { "$ref": "#/$defs/transition_collection" }
+        "collect": { "$ref": "#/$defs/transition_collection" },
+        "correction_request": { "$ref": "correction-plan-request.schema.json" }
       },
       "allOf": [
         { "if": { "properties": { "kind": { "const": "execute" } }, "required": ["kind"] }, "then": { "required": ["execute"], "not": { "required": ["collect"] } } },
         { "if": { "properties": { "kind": { "const": "collect" } }, "required": ["kind"] }, "then": { "required": ["collect"], "not": { "required": ["execute"] } } },
-        { "if": { "properties": { "kind": { "const": "stop" } }, "required": ["kind"] }, "then": { "not": { "anyOf": [{ "required": ["execute"] }, { "required": ["collect"] }] } } }
+        { "if": { "properties": { "kind": { "const": "stop" } }, "required": ["kind"] }, "then": { "not": { "anyOf": [{ "required": ["execute"] }, { "required": ["collect"] }] } } },
+        { "if": { "properties": { "reason_code": { "enum": ["correction_plan_required", "corrected_candidate_unavailable"] } }, "required": ["reason_code"] }, "then": { "required": ["correction_request"] }, "else": { "not": { "required": ["correction_request"] } } }
       ]
     },
     "transition_argument": {

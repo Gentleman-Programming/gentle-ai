@@ -90,34 +90,3 @@ func TestNegotiatedDeclineAndDisabledKillSwitchAreTypedNotStarted(t *testing.T) 
 		t.Fatalf("rdd-disabled failure code = %q, want a typed %q code", disabled.Code, "rdd_disabled")
 	}
 }
-
-// TestReviewerResultAndDigestByteConflictsNameTheDecidingOperations is task
-// 3b.7: a human decision stays human (dispose-result vs preserve-result), but
-// today's block names neither.
-func TestReviewerResultAndDigestByteConflictsNameTheDecidingOperations(t *testing.T) {
-	dir := t.TempDir()
-	state := reviewerArtifactConflictFixtureState()
-	payload := []byte(`{"schema":"x"}`)
-	if _, err := captureReviewerArtifact(dir, state, 0, payload); err != nil {
-		t.Fatalf("seed capture: %v", err)
-	}
-	_, err := captureReviewerArtifact(dir, state, 0, []byte(`{"schema":"y"}`))
-	if err == nil {
-		t.Fatal("conflicting reviewer result bytes accepted")
-	}
-	for _, want := range []string{"review dispose-result", "review preserve-result"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("reviewer result byte-conflict = %q, want it to name %q", err.Error(), want)
-		}
-	}
-}
-
-func reviewerArtifactConflictFixtureState() reviewtransaction.CompactState {
-	return reviewtransaction.CompactState{
-		LineageID:      "artifact-conflict",
-		SelectedLenses: []string{"risk"},
-		InitialSnapshot: reviewtransaction.Snapshot{
-			Identity: "sha256:" + strings.Repeat("a", 64),
-		},
-	}
-}

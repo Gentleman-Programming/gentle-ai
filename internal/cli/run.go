@@ -66,9 +66,10 @@ var (
 	pathEnvEntries               = func(profile system.PlatformProfile) []string {
 		return splitPathForOS(os.Getenv("PATH"), profile.OS)
 	}
-	addUserPath         = system.AddToUserPath
-	ensureUserPathFirst = system.PrioritizeUserPath
-	userPathEntries     = system.UserPathEntries
+	addUserPath          = system.AddToUserPath
+	ensureUserPathFirst  = system.PrioritizeUserPath
+	userPathEntries      = system.UserPathEntries
+	cleanupGGAInstallDir = gga.CleanupInstallDir
 
 	// ggaAvailableCheck is an optional override for ggaAvailable behavior.
 	// When set, it is called instead of the default filesystem check.
@@ -178,6 +179,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy())
 	result.Execution = orchestrator.Execute(stagePlan)
+	runtime.state.cleanupRollbackSnapshot()
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute install pipeline: %w", result.Execution.Err)
 	}
@@ -549,8 +551,9 @@ type installRuntime struct {
 }
 
 type runtimeState struct {
-	manifest    backup.Manifest
-	piCodeGraph *communitytool.PiCodeGraphResult
+	manifest            backup.Manifest
+	rollbackSnapshotDir string
+	piCodeGraph         *communitytool.PiCodeGraphResult
 
 	// engramVersionResolved, engramVersion, and engramVersionErr cache the
 	// single `engram version` invocation performed by componentApplyStep.Run
@@ -560,6 +563,17 @@ type runtimeState struct {
 	engramVersionResolved bool
 	engramVersion         string
 	engramVersionErr      error
+}
+
+func (s *runtimeState) cleanupRollbackSnapshot() {
+	if s == nil || s.rollbackSnapshotDir == "" {
+		return
+	}
+	if err := os.RemoveAll(s.rollbackSnapshotDir); err != nil {
+		log.Printf("backup: remove transaction snapshot: %v", err)
+		return
+	}
+	s.rollbackSnapshotDir = ""
 }
 
 func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChannel, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (*installRuntime, error) {
@@ -914,8 +928,17 @@ func (s prepareBackupStep) Run() error {
 			if dup, dupErr := backup.IsDuplicate(s.backupRoot, checksum); dupErr != nil {
 				log.Printf("backup: check duplicate: %v", dupErr)
 			} else if dup {
-				// Content is identical to the most recent backup — skip creation.
-				// state.manifest is left at its zero value; rollback is a no-op.
+				rollbackDir, err := os.MkdirTemp("", "gentle-ai-rollback-*")
+				if err != nil {
+					return fmt.Errorf("create transaction snapshot directory: %w", err)
+				}
+				manifest, err := s.snapshotter.Create(rollbackDir, s.targets)
+				if err != nil {
+					_ = os.RemoveAll(rollbackDir)
+					return fmt.Errorf("create transaction snapshot: %w", err)
+				}
+				s.state.manifest = manifest
+				s.state.rollbackSnapshotDir = rollbackDir
 				return nil
 			}
 		}
@@ -967,6 +990,7 @@ func (s rollbackRestoreStep) Run() error {
 }
 
 func (s rollbackRestoreStep) Rollback() error {
+	defer s.state.cleanupRollbackSnapshot()
 	if len(s.state.manifest.Entries) == 0 {
 		return nil
 	}
@@ -1340,7 +1364,11 @@ func (s componentApplyStep) Run() error {
 				_, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
 			} else {
 				targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
-				_, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+				if s.scope == ScopeWorkspace {
+					_, err = engram.InjectWorkspaceWithOptions(targetDir, adapter, engramOpts)
+				} else {
+					_, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+				}
 			}
 			if err != nil {
 				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
@@ -1405,6 +1433,11 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentGGA:
 		if !ggaAvailable(s.profile) {
 			// GGA not found on any known PATH — install it.
+			if s.profile.OS == "windows" {
+				if err := cleanupGGAInstallDir(); err != nil {
+					return err
+				}
+			}
 			commands, err := gga.InstallCommand(s.profile)
 			if err != nil {
 				return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
@@ -1539,6 +1572,7 @@ func ExecuteTUIInstall(homeDir string, selection model.Selection, resolved plann
 	}
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress))
 	result := orchestrator.Execute(runtime.stagePlan())
+	runtime.state.cleanupRollbackSnapshot()
 	if runtime.state.piCodeGraph != nil {
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
 	}
@@ -1666,6 +1700,13 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		for _, path := range componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
+		if component == model.ComponentEngram && scope == ScopeGlobal {
+			for _, adapter := range adapters {
+				if adapter.Agent() == model.AgentClaudeCode {
+					paths[adapter.MCPConfigPath(homeDir, "engram")] = struct{}{}
+				}
+			}
+		}
 	}
 	// Routing guidance is delivered per agent outside the component loop, so a
 	// selection whose components do not happen to cover the same file would be
@@ -1730,7 +1771,11 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 		case model.ComponentEngram:
 			switch adapter.MCPStrategy() {
 			case model.StrategySeparateMCPFiles:
-				paths = append(paths, adapter.MCPConfigPath(targetDir, "engram"))
+				if adapter.Agent() == model.AgentClaudeCode && scope == ScopeGlobal {
+					paths = append(paths, claude.UserConfigPath(homeDir))
+				} else {
+					paths = append(paths, adapter.MCPConfigPath(targetDir, "engram"))
+				}
 			case model.StrategyMergeIntoSettings:
 				// MCP settings are always merged into the global config file, not the
 				// workspace-scoped directory. For OpenClaw, SettingsPath(targetDir)

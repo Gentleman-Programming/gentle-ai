@@ -78,22 +78,22 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 		}
 		if _, err := store.Begin(ctx, begin); err != nil {
-			return store.compactMutationFailure(err, false), nil
+			return store.compactMutationFailure(err, false, begin), nil
 		}
 		current, loadErr := store.load()
 		if loadErr != nil {
 			return compactBlocked(CompactBlockCorruptAuthority, ""), nil
 		}
-		return compactAcquireResult(current, receipt.Revision), nil
+		return compactAcquireResult(current, begin, receipt.Revision), nil
 	}
 
-	if result, terminal := compactAcquireBlock(replay); terminal {
+	if result, terminal := compactAcquireBlock(replay, begin); terminal {
 		return result, nil
 	}
 	begin.ExpectedRevision = replay.Status.Revision
 	started, err := store.Begin(ctx, begin)
 	if err != nil {
-		return store.compactMutationFailure(err, false), nil
+		return store.compactMutationFailure(err, false, begin), nil
 	}
 	return CompactAttemptResult{State: CompactStateProceed, Token: started.Revision}, nil
 }
@@ -120,7 +120,7 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 		}
 		if _, err := store.Finish(ctx, finish); err != nil {
-			return store.compactMutationFailure(err, true), nil
+			return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
 		}
 		return store.compactSettleResult()
 	}
@@ -165,7 +165,7 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}
 	if _, err := store.Finish(ctx, finish); err != nil {
-		return store.compactMutationFailure(err, true), nil
+		return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
 	}
 	return store.compactSettleResult()
 }
@@ -190,7 +190,7 @@ func normalizeCompactSettleRequest(request CompactSettleRequest) error {
 }
 
 func compactAcquireMatches(record runtimeRecord, request BeginAttemptRequest) bool {
-	if record.Operation != runtimeOperationBegin || record.Begin == nil {
+	if (record.Operation != runtimeOperationBegin && record.Operation != runtimeOperationAdvance) || record.Begin == nil {
 		return false
 	}
 	event := record.Begin
@@ -228,10 +228,16 @@ func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, requ
 	return finish, matches
 }
 
-func compactAcquireBlock(replay runtimeReplay) (CompactAttemptResult, bool) {
+// compactAcquireBlock needs the request because completion is scoped to one
+// objective: a passed apply is terminal for its own work unit while remaining an
+// ordinary predecessor for the distinct verification the SDD graph still owes.
+func compactAcquireBlock(replay runtimeReplay, request BeginAttemptRequest) (CompactAttemptResult, bool) {
 	status := replay.Status
 	switch {
 	case status.Complete:
+		if runtimeObjectiveAdvanceAdmissible(status, request) {
+			return CompactAttemptResult{}, false
+		}
 		return CompactAttemptResult{State: CompactStateComplete}, true
 	case status.DecisionRequired:
 		return compactBlocked(CompactBlockMaintainerDecision, ""), true
@@ -242,8 +248,8 @@ func compactAcquireBlock(replay runtimeReplay) (CompactAttemptResult, bool) {
 	}
 }
 
-func compactAcquireResult(replay runtimeReplay, ownedToken string) CompactAttemptResult {
-	if result, terminal := compactAcquireBlock(replay); terminal {
+func compactAcquireResult(replay runtimeReplay, request BeginAttemptRequest, ownedToken string) CompactAttemptResult {
+	if result, terminal := compactAcquireBlock(replay, request); terminal {
 		if result.Reason == CompactBlockActiveAttempt && result.Token == ownedToken {
 			return CompactAttemptResult{State: CompactStateProceed, Token: ownedToken}
 		}
@@ -273,7 +279,7 @@ func (store RuntimeStore) compactSettleResult(expected ...string) (CompactAttemp
 	}
 }
 
-func (store RuntimeStore) compactMutationFailure(err error, settle bool) CompactAttemptResult {
+func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin BeginAttemptRequest) CompactAttemptResult {
 	var publication *RuntimePublicationError
 	if errors.As(err, &publication) && publication.Committed {
 		if settle {
@@ -284,7 +290,7 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool) Compact
 		if loadErr != nil {
 			return compactBlocked(CompactBlockCorruptAuthority, "")
 		}
-		return compactAcquireResult(replay, publication.Revision)
+		return compactAcquireResult(replay, begin, publication.Revision)
 	}
 	switch {
 	case errors.Is(err, ErrRuntimeObjectiveDone):

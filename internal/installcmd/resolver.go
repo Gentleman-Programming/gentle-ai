@@ -274,14 +274,11 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 	case "winget":
 		// On Windows, use Git Bash explicitly to avoid bare "bash" resolving to
 		// C:\Windows\System32\bash.exe (WSL), which cannot run the script.
-		// Clean up any leftover directory from a previous run before cloning.
-		// PowerShell is used for cleanup to avoid cmd.exe quoting issues with
-		// embedded double quotes in the "if exist ... rmdir" approach.
+		// Runtime cleanup is handled through system.PowerShellRunner before this
+		// sequence so pwsh launch failures can safely fall back.
 		cloneDst := filepath.Join(os.TempDir(), "gentleman-guardian-angel")
-		safeCloneDst := powerShellSingleQuotedValue(cloneDst)
 		bash := gitBashPath()
 		return CommandSequence{
-			{"powershell", "-NoProfile", "-Command", fmt.Sprintf("$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath '%s') { Remove-Item -Recurse -Force -LiteralPath '%s' }", safeCloneDst, safeCloneDst)},
 			{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", cloneDst},
 			{bash, bashScriptPath(profile, filepath.Join(cloneDst, "install.sh"))},
 		}, nil
@@ -291,10 +288,6 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 			profile.OS, profile.LinuxDistro, profile.PackageManager,
 		)
 	}
-}
-
-func powerShellSingleQuotedValue(value string) string {
-	return strings.ReplaceAll(value, "'", "''")
 }
 
 func bashScriptPath(profile system.PlatformProfile, path string) string {

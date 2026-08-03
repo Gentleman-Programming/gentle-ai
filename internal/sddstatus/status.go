@@ -240,6 +240,10 @@ type ResolveOptions struct {
 	// owns the single source of truth for both of its sources; an unreadable
 	// switch is not a disabled switch and resolves to false.
 	ReviewDisabled bool
+	// ReviewDisabledForWorkspace lets the composition root resolve the switch
+	// against the exact workspace normalized by Resolve. When set, it is called
+	// once and its result replaces ReviewDisabled for the whole status decision.
+	ReviewDisabledForWorkspace func(workspaceRoot string) bool
 }
 
 type CommandArgs struct {
@@ -311,12 +315,8 @@ func validateStatusContract(contract string) error {
 	return fmt.Errorf("unsupported sdd-status contract %q; supported contract is %s", contract, StatusContractV1)
 }
 
-func ListActiveOpenSpecChanges(cwd string) ([]string, error) {
-	root, err := absOrCWD(cwd)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(filepath.Join(root, "openspec", "changes"))
+func listActiveOpenSpecChanges(workspaceRoot string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(workspaceRoot, "openspec", "changes"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []string{}, nil
@@ -339,9 +339,13 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
+	reviewDisabled := options.ReviewDisabled
+	if options.ReviewDisabledForWorkspace != nil {
+		reviewDisabled = options.ReviewDisabledForWorkspace(workspaceRoot)
+	}
 	planningHome := filepath.Join(workspaceRoot, "openspec")
 	changesDir := filepath.Join(planningHome, "changes")
-	activeChanges, err := ListActiveOpenSpecChanges(workspaceRoot)
+	activeChanges, err := listActiveOpenSpecChanges(workspaceRoot)
 	if err != nil {
 		return Status{}, err
 	}
@@ -350,7 +354,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if changeName == "" {
 		switch len(activeChanges) {
 		case 0:
-			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, options.ReviewDisabled); ok || err != nil {
+			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 				return status, err
 			}
 			return blockedStatus(workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
@@ -362,7 +366,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 
 	if !contains(activeChanges, changeName) {
-		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, options.ReviewDisabled); ok || err != nil {
+		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 			return status, err
 		}
 		return blockedStatus(workspaceRoot, &changeName, nil, "sdd-new", []string{fmt.Sprintf("Active OpenSpec change not found: %s.", changeName)}, options.IncludeInstructions), nil
@@ -483,7 +487,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 		applyPreVerifyCompactBridgeRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, bridge)
 	}
 	if !bindingPresent && !bridge.Eligible && !bridge.Relevant {
-		applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason, options.ReviewDisabled)
+		applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason, reviewDisabled)
 	}
 
 	status := baseStatus(workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
@@ -505,7 +509,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 				workspaceRoot,
 				firstPath(artifactPaths.ReviewReceipt),
 				"",
-				options.ReviewDisabled,
+				reviewDisabled,
 			)
 		}
 	}
