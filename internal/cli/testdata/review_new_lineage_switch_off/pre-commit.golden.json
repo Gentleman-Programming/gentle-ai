@@ -1,0 +1,24 @@
+{
+  "schema": "gentle-ai.review-gate-result/v1",
+  "result": "invalidated",
+  "allowed": false,
+  "action": "explicit-maintainer-action",
+  "reason": "no terminal review receipt exists for gate validation",
+  "context": {
+    "gate": "pre-commit",
+    "lineage_id": "",
+    "generation": 0,
+    "base_tree": "",
+    "candidate_tree": "",
+    "paths_digest": "",
+    "fix_delta_hash": "",
+    "policy_hash": "",
+    "ledger_hash": "",
+    "evidence_hash": "",
+    "base_relationship_valid": false,
+    "denial": {
+      "stage": "receipt-discovery",
+      "code": "receipt_missing"
+    }
+  }
+}

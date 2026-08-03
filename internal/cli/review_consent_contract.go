@@ -12,6 +12,8 @@ const ReviewIntegrationConsentSchema = "gentle-ai.review-integration.consent/v1"
 const ReviewIntegrationConsentSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/consent.schema.json"
 const ReviewIntegrationConsentSchemaV2 = "gentle-ai.review-integration.consent/v2"
 const ReviewIntegrationConsentSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/consent.schema.json"
+const ReviewIntegrationConsentSchemaV3 = "gentle-ai.review-integration.consent/v3"
+const ReviewIntegrationConsentSchemaIDV3 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/consent-v3.schema.json"
 
 // ReviewIntegrationConsentResult is the typed per-candidate consent question a
 // relay-declared negotiated START answers with instead of proceeding. It is a
@@ -28,6 +30,7 @@ type ReviewIntegrationConsentResult struct {
 	Contract  string `json:"contract"`
 	Operation string `json:"operation"`
 	Action    string `json:"action"`
+	Agent     string `json:"agent,omitempty"`
 	// Blocking marks this envelope as a decision the caller must relay before
 	// any review work starts; nothing has been persisted.
 	Blocking       bool                             `json:"blocking"`
@@ -270,18 +273,35 @@ func newReviewIntegrationConsentResult(
 		},
 	}
 	if contract == ReviewIntegrationContractV2 {
-		result.Schema, result.Contract = ReviewIntegrationConsentSchemaV2, ReviewIntegrationContractV2
+		result.Schema, result.Contract, result.Agent = ReviewIntegrationConsentSchemaV3, ReviewIntegrationContractV2, "claude-code"
 	}
 	if err := result.Validate(); err != nil {
 		return ReviewIntegrationConsentResult{}, fmt.Errorf("validate consent question: %w", err)
 	}
+	if err := validateReviewConsentInvocations(result, followUpBase); err != nil {
+		return ReviewIntegrationConsentResult{}, fmt.Errorf("validate consent invocations: %w", err)
+	}
 	return result, nil
+}
+
+// validateReviewConsentInvocations compares provider-owned command bytes with
+// the same renderer that created the consent request. It never parses a command
+// supplied by a caller, so duplicate or substituted runtime flags cannot pass.
+func validateReviewConsentInvocations(result ReviewIntegrationConsentResult, followUpBase string) error {
+	for _, choice := range result.Choices {
+		expected := followUpBase + " --consent " + choice.Answer
+		if choice.Invocation != expected {
+			return fmt.Errorf("consent choice %q invocation does not match the provider-owned request", choice.Answer) // refusal:by-design world-action: provider-owned bytes are an internal invariant; the exit is a code fix, not a command
+		}
+	}
+	return nil
 }
 
 func (result ReviewIntegrationConsentResult) Validate() error {
 	legacyContract := result.Schema == ReviewIntegrationConsentSchema && result.Contract == ReviewIntegrationContractV1
-	nativeGitContract := result.Schema == ReviewIntegrationConsentSchemaV2 && result.Contract == ReviewIntegrationContractV2
-	if (!legacyContract && !nativeGitContract) ||
+	historicalNativeGitContract := result.Schema == ReviewIntegrationConsentSchemaV2 && result.Contract == ReviewIntegrationContractV2 && result.Agent == ""
+	currentNativeGitContract := result.Schema == ReviewIntegrationConsentSchemaV3 && result.Contract == ReviewIntegrationContractV2 && result.Agent == "claude-code"
+	if (!legacyContract && !historicalNativeGitContract && !currentNativeGitContract) ||
 		result.Operation != "review.start" || result.Action != reviewConsentActionRequired || !result.Blocking {
 		return errors.New("invalid consent question identity") // refusal:by-design world-action: this envelope is built and validated by the same file; the exit is a code fix, not a command
 	}
