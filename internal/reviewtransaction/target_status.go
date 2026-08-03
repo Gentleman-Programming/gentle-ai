@@ -572,6 +572,9 @@ func isSoleCorrectionRecoveryGoverning(candidates []targetStatusCandidate) bool 
 		if c.recoveryDisposition == RecoveryEscalated {
 			return false
 		}
+		if c.compact != nil && c.compact.State.State != StateCorrectionRequired {
+			return false
+		}
 	}
 	return true
 }
