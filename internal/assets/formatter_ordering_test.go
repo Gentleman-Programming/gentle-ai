@@ -125,33 +125,63 @@ func TestClaudeNetworkNoneRuntimeProofRespectsFixtureApplicability(t *testing.T)
 	}
 	job := workflow[start : start+end]
 
-	for _, required := range []string{
-		"ref: ${{ github.event.pull_request.head.sha || github.sha }}",
-		"id: claude-runtime-proof",
-		"if [[ -f e2e/Dockerfile.claude-network-none ]]; then",
-		`echo "applicable=true" >> "$GITHUB_OUTPUT"`,
-		`echo "applicable=false" >> "$GITHUB_OUTPUT"`,
-		"is not applicable: this exact candidate predates e2e/Dockerfile.claude-network-none.",
-		"run: docker build -f e2e/Dockerfile.claude-network-none -t gentle-ai-claude-network-none:ci .",
-		"docker run --rm --pull=never --network none --cap-drop=ALL",
-	} {
-		if !strings.Contains(job, required) {
-			t.Fatalf("Claude Network-None runtime job missing %q", required)
+	steps := []struct {
+		name, block string
+	}{
+		{
+			name: "exact candidate checkout",
+			block: "      - name: Checkout exact event candidate\n" +
+				"        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1\n" +
+				"        with:\n" +
+				"          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}\n" +
+				"          ref: ${{ github.event.pull_request.head.sha || github.sha }}",
+		},
+		{
+			name: "fixture applicability",
+			block: "      - name: Determine Claude runtime proof applicability\n" +
+				"        id: claude-runtime-proof\n" +
+				"        shell: bash\n" +
+				"        run: |\n" +
+				"          if [[ -f e2e/Dockerfile.claude-network-none ]]; then",
+		},
+		{
+			name: "guarded image build",
+			block: "      - name: Build pinned Claude runtime proof image\n" +
+				"        if: steps.claude-runtime-proof.outputs.applicable == 'true'\n" +
+				"        run: docker build -f e2e/Dockerfile.claude-network-none -t gentle-ai-claude-network-none:ci .",
+		},
+		{
+			name: "guarded non-skippable runtime proof",
+			block: "      - name: Prove Claude transport without external networking\n" +
+				"        if: steps.claude-runtime-proof.outputs.applicable == 'true'\n" +
+				"        run: |\n" +
+				"          docker run --rm --pull=never --network none --cap-drop=ALL \\\n" +
+				"            --security-opt=no-new-privileges --read-only \\\n" +
+				"            --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \\\n" +
+				"            -e GENTLE_AI_CLAUDE_RUNTIME_E2E=1 \\\n" +
+				"            -e GENTLE_AI_CLAUDE_RUNTIME_REQUIRED=1 \\\n" +
+				"            -e GENTLE_AI_PARENT_NETNS=\"$(stat -Lc %i /proc/self/ns/net)\" \\\n" +
+				"            gentle-ai-claude-network-none:ci",
+		},
+	}
+	previous := -1
+	for _, step := range steps {
+		index := strings.Index(job, step.block)
+		if index < 0 {
+			t.Fatalf("Claude Network-None runtime job missing %s step", step.name)
 		}
+		if index <= previous {
+			t.Fatalf("Claude Network-None runtime job runs %s out of order", step.name)
+		}
+		previous = index
 	}
 
-	for _, requiredStep := range []string{
-		"      - name: Build pinned Claude runtime proof image\n" +
-			"        if: steps.claude-runtime-proof.outputs.applicable == 'true'\n" +
-			"        run: docker build -f e2e/Dockerfile.claude-network-none -t gentle-ai-claude-network-none:ci .",
-		"      - name: Prove Claude transport without external networking\n" +
-			"        if: steps.claude-runtime-proof.outputs.applicable == 'true'\n" +
-			"        run: |\n" +
-			"          docker run --rm --pull=never --network none --cap-drop=ALL",
-	} {
-		if !strings.Contains(job, requiredStep) {
-			t.Fatalf("Claude Network-None runtime job missing guarded step %q", requiredStep)
-		}
+	dockerfile, err := os.ReadFile(filepath.Join("..", "..", "e2e", "Dockerfile.claude-network-none"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(dockerfile), `ENTRYPOINT ["/usr/local/bin/claude-review-e2e", "-test.v", "-test.run=^TestClaudeReviewerTransportInNetworkNone$", "-test.count=1", "-test.timeout=6m"]`) {
+		t.Fatal("Claude runtime image must execute the required network-none E2E target")
 	}
 	if strings.Contains(job, "continue-on-error:") {
 		t.Fatal("Claude Network-None runtime job must not waive fixture, build, or runtime failures")

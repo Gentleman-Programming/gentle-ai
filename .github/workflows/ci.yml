@@ -136,6 +136,8 @@ jobs:
           docker run --rm --pull=never --network none --cap-drop=ALL \
             --security-opt=no-new-privileges --read-only \
             --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
+            -e GENTLE_AI_CLAUDE_RUNTIME_E2E=1 \
+            -e GENTLE_AI_CLAUDE_RUNTIME_REQUIRED=1 \
             -e GENTLE_AI_PARENT_NETNS="$(stat -Lc %i /proc/self/ns/net)" \
             gentle-ai-claude-network-none:ci
 
