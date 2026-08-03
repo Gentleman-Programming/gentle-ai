@@ -279,7 +279,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if state.State != reviewtransaction.StateReviewing || state.LineageID != *lineage || state.InitialSnapshot.Identity != *target ||
 		(strings.TrimSpace(*revision) != "" && record.Revision != *revision) || *order >= len(state.SelectedLenses) || state.SelectedLenses[*order] != *lens {
 		if contextHandle != "" {
-			return reviewPreflightError(fmt.Errorf("capture binding does not match the current reviewing authority under the provider-issued repository context; ask the parent orchestrator to refresh the exact native next transition by running %s", reviewNextTransitionRefreshCommandV2))
+			return reviewPreflightError(fmt.Errorf("capture binding does not match the current reviewing authority under the provider-issued repository context; ask the parent orchestrator to refresh the exact native next transition by running %s", reviewNextTransitionRefreshCommandV21))
 		}
 		return reviewPreflightError(fmt.Errorf("capture binding does not match the current reviewing authority under repository %q; verify the frozen lineage, target, lens, and order for that repository, or re-run with --cwd set to the repository where the review was started", root))
 	}

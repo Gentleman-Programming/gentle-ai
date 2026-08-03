@@ -19,27 +19,29 @@ import (
 )
 
 const (
-	RuntimeStatusSchema               = "gentle-ai.sdd-runtime-status/v1"
-	runtimeRecordSchema               = "gentle-ai.sdd-runtime-record/v1"
-	runtimeObjectiveSchema            = "gentle-ai.sdd-runtime-objective/v1"
-	runtimeObjectiveSchemaV2          = "gentle-ai.sdd-runtime-objective/v2"
-	DefaultRuntimeAttemptLimit        = 2
-	DefaultRuntimeChangedLines        = 200
-	maximumRuntimeAttemptLimit        = 100
-	maximumRuntimeChangedLines        = 1_000_000
-	maximumRuntimeRecordBytes         = 1 << 20
-	maximumRuntimeChainRecords        = 10_000
-	RuntimeActionBegin                = "begin"
-	RuntimeActionFinish               = "finish"
-	RuntimeActionReset                = "reset"
-	RuntimeActionAuthorizeRemediation = "authorize-remediation"
-	RuntimeActionComplete             = "complete"
-	runtimeOperationBegin             = "attempt/begin"
-	runtimeOperationFinish            = "attempt/finish"
-	runtimeOperationFinishRemediation = "attempt/finish-remediation"
-	runtimeOperationReset             = "objective/reset"
-	runtimeOperationBind              = "binding/set"
-	runtimeLockAcquireAttempts        = 3
+	RuntimeStatusSchema                       = "gentle-ai.sdd-runtime-status/v1"
+	runtimeRecordSchema                       = "gentle-ai.sdd-runtime-record/v1"
+	runtimeObjectiveSchema                    = "gentle-ai.sdd-runtime-objective/v1"
+	runtimeObjectiveSchemaV2                  = "gentle-ai.sdd-runtime-objective/v2"
+	DefaultRuntimeAttemptLimit                = 2
+	DefaultRuntimeChangedLines                = 200
+	maximumRuntimeAttemptLimit                = 100
+	maximumRuntimeChangedLines                = 1_000_000
+	maximumRuntimeRecordBytes                 = 1 << 20
+	maximumRuntimeChainRecords                = 10_000
+	RuntimeActionBegin                        = "begin"
+	RuntimeActionFinish                       = "finish"
+	RuntimeActionReset                        = "reset"
+	RuntimeActionAuthorizeRemediation         = "authorize-remediation"
+	RuntimeActionComplete                     = "complete"
+	ResetDispositionFailedEvidenceRemediation = "failed-evidence-remediation"
+	runtimeOperationBegin                     = "attempt/begin"
+	runtimeOperationFinish                    = "attempt/finish"
+	runtimeOperationFinishRemediation         = "attempt/finish-remediation"
+	runtimeOperationReset                     = "objective/reset"
+	runtimeOperationAdvance                   = "objective/advance"
+	runtimeOperationBind                      = "binding/set"
+	runtimeLockAcquireAttempts                = 3
 
 	// runtimeLedgerStatusPointer suffixes every ledger refusal an ordinary
 	// caller can hit (budget exhausted, active attempt, no active attempt,
@@ -217,6 +219,20 @@ type UnmanagedRemediationAuthorization struct {
 	Reason                   string `json:"reason"`
 }
 
+// RuntimeAdvance records that a passed objective handed the change to a
+// distinct downstream work unit. It is deliberately not a RuntimeReset: reset
+// means a maintainer abandoned or re-scoped a terminal objective, while an
+// advance means the previous scope succeeded and its successor is the ordinary
+// next phase. It retains the completed objective's evidence revision because
+// the live per-objective field belongs to the successor from here on.
+type RuntimeAdvance struct {
+	Revision                 string `json:"revision"`
+	PreviousObjectiveID      string `json:"previous_objective_id"`
+	PreviousGeneration       int    `json:"previous_generation"`
+	PreviousWorkUnit         string `json:"previous_work_unit"`
+	PreviousEvidenceRevision string `json:"previous_evidence_revision"`
+}
+
 type RuntimeStatus struct {
 	Schema                 string                             `json:"schema"`
 	Change                 string                             `json:"change"`
@@ -235,6 +251,7 @@ type RuntimeStatus struct {
 	Complete               bool                               `json:"complete"`
 	NextAction             string                             `json:"next_action"`
 	LastReset              *RuntimeReset                      `json:"last_reset,omitempty"`
+	LastAdvance            *RuntimeAdvance                    `json:"last_advance,omitempty"`
 	BindingRevision        string                             `json:"binding_revision"`
 	Binding                *ReviewBinding                     `json:"binding,omitempty"`
 	UnmanagedRemediation   *UnmanagedRemediationAuthorization `json:"unmanaged_remediation,omitempty"`
@@ -322,7 +339,17 @@ type runtimeRecord struct {
 	Begin            *runtimeBeginEvent   `json:"begin,omitempty"`
 	Finish           *runtimeFinishEvent  `json:"finish,omitempty"`
 	Reset            *runtimeResetEvent   `json:"reset,omitempty"`
+	Advance          *runtimeAdvanceEvent `json:"advance,omitempty"`
 	Binding          *runtimeBindingEvent `json:"binding,omitempty"`
+}
+
+// runtimeAdvanceEvent accompanies the successor's begin event in one atomic
+// record, so closing the passed objective and opening its successor can never
+// be observed apart.
+type runtimeAdvanceEvent struct {
+	PreviousObjectiveID string `json:"previous_objective_id"`
+	PreviousGeneration  int    `json:"previous_generation"`
+	PreviousWorkUnit    string `json:"previous_work_unit"`
 }
 
 type runtimeBeginEvent struct {
@@ -432,8 +459,16 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		if status.ActiveAttempt != nil {
 			return runtimeRecord{}, ErrRuntimeAttemptActive
 		}
+		// A passed objective terminates its own scope, not the change. When the
+		// request names a distinct work unit, the ordinary continuation is the
+		// successor objective, not a maintainer reset that would discard the
+		// completed apply authority along with its evidence.
+		advancing := false
 		if status.Complete {
-			return runtimeRecord{}, ErrRuntimeObjectiveDone
+			if !runtimeObjectiveAdvanceAdmissible(status, request) {
+				return runtimeRecord{}, ErrRuntimeObjectiveDone
+			}
+			advancing = true
 		}
 		if status.DecisionRequired {
 			return runtimeRecord{}, ErrRuntimeBudgetExhausted
@@ -447,7 +482,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		generation := status.ObjectiveGeneration + 1
 		var snapshot reviewtransaction.Snapshot
 		var err error
-		if status.Objective != nil {
+		if status.Objective != nil && !advancing {
 			generation = status.Objective.Generation
 			if request.WorkUnit != status.Objective.WorkUnit || request.EvidenceGoal != status.Objective.EvidenceGoal ||
 				request.MaxAttempts != status.Objective.MaxAttempts ||
@@ -481,16 +516,24 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate before launch: %w", err)
 		}
 		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, snapshot.Identity, generation)
-		if status.Objective != nil {
+		if status.Objective != nil && !advancing {
 			objectiveID = status.Objective.ID
 		}
-		if status.CumulativeAttempts >= request.MaxAttempts || status.CumulativeChangedLines >= request.MaxChangedLines {
+		// The successor opens a fresh per-objective budget, so the charges the
+		// completed scope accrued cannot exhaust it before its first attempt.
+		if !advancing && (status.CumulativeAttempts >= request.MaxAttempts || status.CumulativeChangedLines >= request.MaxChangedLines) {
 			return runtimeRecord{}, ErrRuntimeBudgetExhausted
 		}
 		event := &runtimeBeginEvent{
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
+		}
+		if advancing {
+			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
+				PreviousObjectiveID: status.Objective.ID, PreviousGeneration: status.Objective.Generation,
+				PreviousWorkUnit: status.Objective.WorkUnit,
+			}}, nil
 		}
 		return runtimeRecord{Operation: runtimeOperationBegin, Begin: event}, nil
 	})
@@ -786,6 +829,30 @@ func (store RuntimeStore) runtimeObjectiveResetAdmissible(ctx context.Context, s
 	return candidate.Identity != last.FinishCandidateIdentity || candidate.CandidateTree != last.FinishCandidateTree
 }
 
+// runtimeObjectiveAdvanceAdmissible answers whether a passed objective may hand
+// the change to the requested successor scope. It is deliberately narrower than
+// reset, which reopens any structurally terminal objective: advance requires the
+// previous objective to have PASSED and the request to name a different work
+// unit. Restating the settled work unit — even under a reworded evidence goal —
+// stays complete, because that objective really is done and a fresh budget for
+// it would be exactly the laundering the reset guard already refuses.
+//
+// It is read-only and fail-closed, and it applies the same rule the replay
+// validator re-checks, so an admitted advance can only be one the ledger
+// accepts.
+func runtimeObjectiveAdvanceAdmissible(status RuntimeStatus, request BeginAttemptRequest) bool {
+	if !status.Complete || status.DecisionRequired || status.ActiveAttempt != nil ||
+		status.Objective == nil || len(status.Attempts) == 0 {
+		return false
+	}
+	if request.WorkUnit == status.Objective.WorkUnit {
+		return false
+	}
+	last := status.Attempts[len(status.Attempts)-1]
+	return last.ObjectiveID == status.Objective.ID && last.Outcome == AttemptPassed &&
+		!last.ChangedLineBudgetExceeded && last.FinishCandidateIdentity != "" && last.FinishCandidateTree != ""
+}
+
 // Reset closes a terminal objective scope without deleting its immutable
 // attempts. The next Begin receives a new generation and budget while global
 // ordinals and lifetime charges continue monotonically.
@@ -795,13 +862,13 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 		return RuntimeStatus{}, err
 	}
 	domain := "gentle-ai.sdd-runtime-reset-request/v1"
-	if request.Disposition == "failed-evidence-remediation" {
+	if request.Disposition == ResetDispositionFailedEvidenceRemediation {
 		domain = "gentle-ai.sdd-runtime-unmanaged-remediation-request/v1"
 	}
 	digest := runtimeValueHash(domain, request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
-		if request.Disposition == "failed-evidence-remediation" {
+		if request.Disposition == ResetDispositionFailedEvidenceRemediation {
 			return store.authorizeUnmanagedRemediation(ctx, status, request)
 		}
 		if status.ActiveAttempt != nil {
@@ -1176,69 +1243,14 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 	remediationPredecessorLineage := ""
 	switch record.Operation {
 	case runtimeOperationBegin:
-		event := record.Begin
-		generation := event.ObjectiveGeneration
-		if generation == 0 {
-			generation = replay.Status.ObjectiveGeneration + 1
-			if replay.Status.Objective != nil {
-				generation = replay.Status.Objective.Generation
-			}
+		if err := applyRuntimeBeginEvent(replay, revision, record); err != nil {
+			return err
 		}
-		if replay.Status.ActiveAttempt != nil || replay.Status.Complete || replay.Status.DecisionRequired {
-			return errors.New("begin record is not a valid successor")
+
+	case runtimeOperationAdvance:
+		if err := applyRuntimeAdvanceEvent(replay, revision, record); err != nil {
+			return err
 		}
-		if replay.Status.Objective == nil {
-			expectedObjectiveID := runtimeObjectiveID(record.Change, event.WorkUnit, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
-			if event.ObjectiveGeneration == 0 {
-				expectedObjectiveID = legacyRuntimeObjectiveID(record.Change, event.EvidenceGoal)
-			}
-			legacyGeneratedID := runtimeObjectiveIDV1(record.Change, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
-			validObjectiveID := event.ObjectiveID == expectedObjectiveID ||
-				event.ObjectiveGeneration != 0 && event.ObjectiveID == legacyGeneratedID
-			if event.Ordinal != replay.Status.NextOrdinal || generation != replay.Status.ObjectiveGeneration+1 || !validObjectiveID {
-				return errors.New("initial objective identity or ordinal is invalid")
-			}
-			replay.Status.Objective = &RuntimeObjective{
-				ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
-				InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree,
-				MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
-			}
-			replay.Status.ObjectiveGeneration = generation
-		} else {
-			objective := replay.Status.Objective
-			if event.ObjectiveID != objective.ID || generation != objective.Generation || event.EvidenceGoal != objective.EvidenceGoal ||
-				event.WorkUnit != objective.WorkUnit ||
-				event.MaxAttempts != objective.MaxAttempts || event.MaxChangedLines != objective.MaxChangedLines ||
-				event.Ordinal != replay.Status.NextOrdinal {
-				return errors.New("begin record changes the active objective or ordinal")
-			}
-			if replay.Status.UnmanagedRemediation != nil {
-				if event.BeginCandidateIdentity != objective.InitialCandidateIdentity || event.BeginCandidateTree != objective.InitialCandidateTree {
-					// refusal:by-design operator-knowledge: replay must reject an immutable record that does not reproduce its authorized target.
-					return errors.New("begin record does not continue the authorized remediation candidate")
-				}
-			} else if len(replay.Status.Attempts) == 0 {
-				return errors.New("begin record does not continue the terminal candidate")
-			} else if event.BeginCandidateTree != replay.Status.Attempts[len(replay.Status.Attempts)-1].FinishCandidateTree {
-				return errors.New("begin record does not continue the terminal candidate")
-			}
-		}
-		if replay.Status.CumulativeAttempts >= event.MaxAttempts || replay.Status.CumulativeChangedLines >= event.MaxChangedLines {
-			return errors.New("begin record exceeds the persisted objective budget")
-		}
-		attempt := RuntimeAttempt{
-			Ordinal: event.Ordinal, ObjectiveID: event.ObjectiveID, ObjectiveGeneration: generation,
-			WorkUnit: event.WorkUnit, BeginCandidateIdentity: event.BeginCandidateIdentity,
-			BeginCandidateTree: event.BeginCandidateTree, Outcome: AttemptRunning,
-		}
-		replay.Status.Attempts = append(replay.Status.Attempts, attempt)
-		replay.AttemptTokens[event.Ordinal] = revision
-		active := attempt
-		replay.Status.ActiveAttempt = &active
-		replay.Status.CumulativeAttempts++
-		replay.Status.LifetimeAttempts++
-		replay.Status.NextOrdinal = event.Ordinal + 1
-		replay.Status.NextAction = RuntimeActionFinish
 
 	case runtimeOperationFinish:
 		if err := applyRuntimeFinishEvent(replay, record.Finish); err != nil {
@@ -1283,7 +1295,7 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 			event.PreviousGeneration != replay.Status.ObjectiveGeneration {
 			return errors.New("objective reset does not match the terminal objective")
 		}
-		if event.Disposition == "failed-evidence-remediation" {
+		if event.Disposition == ResetDispositionFailedEvidenceRemediation {
 			if replay.Status.UnmanagedRemediation != nil || len(replay.Status.Attempts) == 0 {
 				// refusal:by-design operator-knowledge: replay cannot create a second correction successor from immutable history.
 				return errors.New("unmanaged remediation reset is not a valid successor")
@@ -1347,6 +1359,111 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 	return nil
 }
 
+func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runtimeRecord) error {
+	event := record.Begin
+	generation := event.ObjectiveGeneration
+	if generation == 0 {
+		generation = replay.Status.ObjectiveGeneration + 1
+		if replay.Status.Objective != nil {
+			generation = replay.Status.Objective.Generation
+		}
+	}
+	if replay.Status.ActiveAttempt != nil || replay.Status.Complete || replay.Status.DecisionRequired {
+		return errors.New("begin record is not a valid successor")
+	}
+	if replay.Status.Objective == nil {
+		expectedObjectiveID := runtimeObjectiveID(record.Change, event.WorkUnit, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
+		if event.ObjectiveGeneration == 0 {
+			expectedObjectiveID = legacyRuntimeObjectiveID(record.Change, event.EvidenceGoal)
+		}
+		legacyGeneratedID := runtimeObjectiveIDV1(record.Change, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
+		validObjectiveID := event.ObjectiveID == expectedObjectiveID ||
+			event.ObjectiveGeneration != 0 && event.ObjectiveID == legacyGeneratedID
+		if event.Ordinal != replay.Status.NextOrdinal || generation != replay.Status.ObjectiveGeneration+1 || !validObjectiveID {
+			return errors.New("initial objective identity or ordinal is invalid")
+		}
+		replay.Status.Objective = &RuntimeObjective{
+			ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
+			InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree,
+			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+		}
+		replay.Status.ObjectiveGeneration = generation
+	} else {
+		objective := replay.Status.Objective
+		if event.ObjectiveID != objective.ID || generation != objective.Generation || event.EvidenceGoal != objective.EvidenceGoal ||
+			event.WorkUnit != objective.WorkUnit ||
+			event.MaxAttempts != objective.MaxAttempts || event.MaxChangedLines != objective.MaxChangedLines ||
+			event.Ordinal != replay.Status.NextOrdinal {
+			return errors.New("begin record changes the active objective or ordinal")
+		}
+		if replay.Status.UnmanagedRemediation != nil {
+			if event.BeginCandidateIdentity != objective.InitialCandidateIdentity || event.BeginCandidateTree != objective.InitialCandidateTree {
+				return errors.New("begin record does not continue the authorized remediation candidate")
+			}
+		} else if len(replay.Status.Attempts) == 0 ||
+			event.BeginCandidateTree != replay.Status.Attempts[len(replay.Status.Attempts)-1].FinishCandidateTree {
+			return errors.New("begin record does not continue the terminal candidate")
+		}
+	}
+	if replay.Status.CumulativeAttempts >= event.MaxAttempts || replay.Status.CumulativeChangedLines >= event.MaxChangedLines {
+		return errors.New("begin record exceeds the persisted objective budget")
+	}
+	attempt := RuntimeAttempt{
+		Ordinal: event.Ordinal, ObjectiveID: event.ObjectiveID, ObjectiveGeneration: generation,
+		WorkUnit: event.WorkUnit, BeginCandidateIdentity: event.BeginCandidateIdentity,
+		BeginCandidateTree: event.BeginCandidateTree, Outcome: AttemptRunning,
+	}
+	replay.Status.Attempts = append(replay.Status.Attempts, attempt)
+	replay.AttemptTokens[event.Ordinal] = revision
+	active := attempt
+	replay.Status.ActiveAttempt = &active
+	replay.Status.CumulativeAttempts++
+	replay.Status.LifetimeAttempts++
+	replay.Status.NextOrdinal = event.Ordinal + 1
+	replay.Status.NextAction = RuntimeActionFinish
+	return nil
+}
+
+// applyRuntimeAdvanceEvent closes a passed objective and opens its distinct
+// successor inside one record. It re-derives the same rule
+// runtimeObjectiveAdvanceAdmissible applied at write time, so a replayed chain
+// can never admit an advance the authority would have refused.
+func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record runtimeRecord) error {
+	event := record.Advance
+	objective := replay.Status.Objective
+	// Every refusal below re-checks an invariant the authority already enforced
+	// before publishing this record, so reaching one means the persisted chain
+	// was damaged or forged after the fact.
+	if replay.Status.ActiveAttempt != nil || objective == nil || !replay.Status.Complete || replay.Status.DecisionRequired {
+		return errors.New("objective advance is not a valid successor") // refusal:by-design world-action: a replayed chain that contradicts its own write-time state is damaged authority; the exit is restoring the Git-common-dir store, not a command
+	}
+	if event.PreviousObjectiveID != objective.ID || event.PreviousGeneration != objective.Generation ||
+		event.PreviousGeneration != replay.Status.ObjectiveGeneration || event.PreviousWorkUnit != objective.WorkUnit {
+		return errors.New("objective advance does not match the terminal objective") // refusal:by-design world-action: the predecessor identity was frozen at publication, so a mismatch is a mutated record and the exit is restoring the store
+	}
+	if len(replay.Status.Attempts) == 0 {
+		return errors.New("objective advance has no terminal candidate provenance") // refusal:by-design world-action: an advance can only follow a settled attempt, so an empty history is a truncated chain and the exit is restoring the store
+	}
+	last := replay.Status.Attempts[len(replay.Status.Attempts)-1]
+	if last.ObjectiveID != objective.ID || last.Outcome != AttemptPassed || last.ChangedLineBudgetExceeded ||
+		last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
+		return errors.New("objective advance does not follow a passed terminal objective") // refusal:by-design world-action: the passed predecessor was verified before publication, so this is a mutated record and the exit is restoring the store
+	}
+	if record.Begin.WorkUnit == objective.WorkUnit {
+		return errors.New("objective advance does not select a distinct work unit") // refusal:by-design world-action: same-scope advance is refused at write time, so observing one on replay is a forged record and the exit is restoring the store
+	}
+	replay.Status.LastAdvance = &RuntimeAdvance{
+		Revision: revision, PreviousObjectiveID: objective.ID, PreviousGeneration: objective.Generation,
+		PreviousWorkUnit: objective.WorkUnit, PreviousEvidenceRevision: replay.Status.EvidenceRevision,
+	}
+	replay.Status.Objective = nil
+	replay.Status.CumulativeAttempts = 0
+	replay.Status.CumulativeChangedLines = 0
+	replay.Status.EvidenceRevision = ""
+	replay.Status.Complete = false
+	return applyRuntimeBeginEvent(replay, revision, record)
+}
+
 func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent) error {
 	active := replay.Status.ActiveAttempt
 	if active == nil || active.Ordinal != event.Ordinal || len(replay.Status.Attempts) == 0 ||
@@ -1405,6 +1522,24 @@ func applyRuntimeBindingEvent(replay *runtimeReplay, event *runtimeBindingEvent)
 	return nil
 }
 
+func validateRuntimeBeginEvent(record runtimeRecord) error {
+	event := record.Begin
+	if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, 160) != nil ||
+		validateRuntimeText(event.EvidenceGoal, 240) != nil || event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
+		event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines || event.Ordinal < 1 ||
+		!runtimeRevisionPattern.MatchString(event.BeginCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.BeginCandidateTree) {
+		return errors.New("invalid SDD runtime begin event")
+	}
+	request := BeginAttemptRequest{
+		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
+		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+	}
+	if runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request) != record.RequestDigest {
+		return errors.New("SDD runtime begin request digest does not match record")
+	}
+	return nil
+}
+
 func validateRuntimeRecordShape(record runtimeRecord) error {
 	if record.Schema != runtimeRecordSchema || !validReviewBindingChange(record.Change) ||
 		(record.PreviousRevision != "" && !runtimeRevisionPattern.MatchString(record.PreviousRevision)) ||
@@ -1413,25 +1548,28 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 	}
 	switch record.Operation {
 	case runtimeOperationBegin:
-		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Binding != nil {
+		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil {
 			return errors.New("invalid SDD runtime begin record shape")
 		}
-		event := record.Begin
-		if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, 160) != nil ||
-			validateRuntimeText(event.EvidenceGoal, 240) != nil || event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
-			event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines || event.Ordinal < 1 ||
-			!runtimeRevisionPattern.MatchString(event.BeginCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.BeginCandidateTree) {
-			return errors.New("invalid SDD runtime begin event")
+		if err := validateRuntimeBeginEvent(record); err != nil {
+			return err
 		}
-		request := BeginAttemptRequest{
-			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
-			EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+	case runtimeOperationAdvance:
+		if record.Begin == nil || record.Advance == nil || record.Finish != nil || record.Reset != nil || record.Binding != nil {
+			return errors.New("invalid SDD runtime objective advance record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
-		if runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request) != record.RequestDigest {
-			return errors.New("SDD runtime begin request digest does not match record")
+		advance := record.Advance
+		if !runtimeRevisionPattern.MatchString(advance.PreviousObjectiveID) || advance.PreviousGeneration < 1 ||
+			validateRuntimeText(advance.PreviousWorkUnit, 160) != nil || advance.PreviousWorkUnit == record.Begin.WorkUnit {
+			return errors.New("invalid SDD runtime objective advance event") // refusal:by-design world-action: the advance event is derived from validated status, so a violation is a mutated record and the exit is restoring the store
+		}
+		// The successor carries an ordinary begin request, so its digest binds
+		// the same caller-visible request an ordinary begin would have bound.
+		if err := validateRuntimeBeginEvent(record); err != nil {
+			return err
 		}
 	case runtimeOperationFinish:
-		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Binding != nil {
+		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil {
 			return errors.New("invalid SDD runtime finish record shape")
 		}
 		event := record.Finish
@@ -1452,7 +1590,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime finish request digest does not match record")
 		}
 	case runtimeOperationFinishRemediation:
-		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil {
+		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil || record.Advance != nil {
 			return errors.New("invalid atomic SDD runtime remediation record shape")
 		}
 		finish, binding := record.Finish, record.Binding
@@ -1491,7 +1629,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("atomic SDD runtime remediation request digest does not match record")
 		}
 	case runtimeOperationReset:
-		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Binding != nil {
+		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Advance != nil || record.Binding != nil {
 			return errors.New("invalid SDD runtime reset record shape")
 		}
 		event := record.Reset
@@ -1500,7 +1638,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
 			return errors.New("invalid SDD runtime reset event")
 		}
-		if event.Disposition == "failed-evidence-remediation" {
+		if event.Disposition == ResetDispositionFailedEvidenceRemediation {
 			if !runtimeRevisionPattern.MatchString(event.RemediatesEvidenceRevision) || validateRuntimeText(event.WorkUnit, 160) != nil ||
 				validateRuntimeText(event.EvidenceGoal, 240) != nil || event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines ||
 				!runtimeGitTreePattern.MatchString(event.FailedBeginCandidateTree) {
@@ -1532,7 +1670,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime reset request digest does not match record")
 		}
 	case runtimeOperationBind:
-		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil {
+		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Advance != nil {
 			return errors.New("invalid SDD runtime binding record shape")
 		}
 		event := record.Binding
@@ -1654,7 +1792,7 @@ func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjecti
 	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
 		return ResetObjectiveRequest{}, errors.New("request_id must be a canonical lowercase identifier")
 	}
-	if request.Disposition == "failed-evidence-remediation" {
+	if request.Disposition == ResetDispositionFailedEvidenceRemediation {
 		if request.Reason != "" || request.Actor != "" || !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) ||
 			validateRuntimeText(request.WorkUnit, 160) != nil || validateRuntimeText(request.EvidenceGoal, 240) != nil ||
 			request.MaxChangedLines < 1 || request.MaxChangedLines > maximumRuntimeChangedLines {
@@ -1666,9 +1804,23 @@ func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjecti
 		}
 		return request, nil
 	}
-	if request.Disposition != "" || request.RemediatesEvidenceRevision != "" || request.WorkUnit != "" || request.EvidenceGoal != "" || request.MaxChangedLines != 0 || request.MaintainerAuthorization != "" {
+	if request.Disposition != "" {
 		// refusal:by-design operator-knowledge: unrecognized typed reset inputs cannot be interpreted as legacy resets.
 		return ResetObjectiveRequest{}, errors.New("unknown reset disposition")
+	}
+	for _, field := range []struct {
+		name    string
+		present bool
+	}{
+		{name: "remediates_evidence_revision", present: request.RemediatesEvidenceRevision != ""},
+		{name: "work_unit", present: request.WorkUnit != ""},
+		{name: "evidence_goal", present: request.EvidenceGoal != ""},
+		{name: "max_changed_lines", present: request.MaxChangedLines != 0},
+		{name: "maintainer_authorization", present: request.MaintainerAuthorization != ""},
+	} {
+		if field.present {
+			return ResetObjectiveRequest{}, fmt.Errorf("reset carries %s without disposition %q", field.name, ResetDispositionFailedEvidenceRemediation)
+		}
 	}
 	if err := validateRuntimeText(request.Reason, 500); err != nil {
 		return ResetObjectiveRequest{}, fmt.Errorf("invalid reset reason: %w", err)

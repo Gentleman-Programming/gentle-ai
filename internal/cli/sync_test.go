@@ -934,12 +934,9 @@ func TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent(t *tes
 	}
 }
 
-// TestRunSyncRefreshesInstalledKilocodePluginsWithoutSDDComponent covers the
-// Kilocode variant of issue #1440: the SDD injector installs the managed
-// OpenCode-compatible plugins for Kilocode too (under ~/.config/kilo/plugins),
-// so sync must refresh installed copies there as well — and still never create
-// plugins that were never installed.
-func TestRunSyncRefreshesInstalledKilocodePluginsWithoutSDDComponent(t *testing.T) {
+// TestRunSyncRemovesOpenCodeOnlyReviewPluginFromKilocode ensures a stale
+// OpenCode review interception plugin cannot keep affecting Kilo after sync.
+func TestRunSyncRemovesOpenCodeOnlyReviewPluginFromKilocode(t *testing.T) {
 	home := t.TempDir()
 	if err := state.Write(home, state.InstallState{
 		InstalledAgents:     []string{"kilocode"},
@@ -968,15 +965,11 @@ func TestRunSyncRefreshesInstalledKilocodePluginsWithoutSDDComponent(t *testing.
 		t.Fatalf("RunSync() error = %v", err)
 	}
 
-	got, readErr := os.ReadFile(reviewPlugin)
-	if readErr != nil {
-		t.Fatalf("ReadFile(%q) error = %v", reviewPlugin, readErr)
-	}
-	if string(got) != assets.MustRead("opencode/plugins/review-result-artifacts.ts") {
-		t.Errorf("sync left installed managed Kilocode plugin stale; content must be byte-equal to the embedded asset")
+	if _, statErr := os.Stat(reviewPlugin); !os.IsNotExist(statErr) {
+		t.Fatalf("sync left OpenCode-only review plugin installed for Kilo: %v", statErr)
 	}
 	if !containsPath(result.ChangedFiles, reviewPlugin) {
-		t.Errorf("ChangedFiles missing refreshed Kilocode plugin path %q\nchanged = %#v", reviewPlugin, result.ChangedFiles)
+		t.Errorf("ChangedFiles missing removed Kilocode plugin path %q\nchanged = %#v", reviewPlugin, result.ChangedFiles)
 	}
 
 	// skill-registry.ts was never installed — sync must not create it.
@@ -2815,7 +2808,7 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 		"orchestrator": settings.Agent["gentle-orchestrator"].Prompt,
 		"post-apply":   string(applyPayload),
 	} {
-		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition") {
+		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition") {
 			t.Errorf("synced OpenCode %s controller does not use negotiated STATUS routing", name)
 		}
 		for _, stale := range []string{

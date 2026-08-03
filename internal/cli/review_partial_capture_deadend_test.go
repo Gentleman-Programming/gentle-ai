@@ -47,7 +47,7 @@ func TestPartialCaptureCollectTransitionNeverTerminates(t *testing.T) {
 	repo, lineage, _, _, missing := partiallyCapturedReview(t)
 	var out bytes.Buffer
 	if err := RunReview([]string{
-		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
+		"status", "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition",
 		"--cwd", repo, "--lineage", lineage,
 	}, &out); err != nil {
 		t.Fatal(err)

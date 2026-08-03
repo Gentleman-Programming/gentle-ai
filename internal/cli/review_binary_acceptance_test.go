@@ -230,6 +230,113 @@ func TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree(t *testing.T) {
 	}
 }
 
+func TestMainBinaryExecutesSubmissionDescriptorsFromArbitraryCWD(t *testing.T) {
+	binary := os.Getenv("GENTLE_AI_TEST_BINARY")
+	if binary == "" {
+		t.Skip("requires GENTLE_AI_TEST_BINARY built from the branch under test")
+	}
+	if _, err := os.Stat(binary); err != nil {
+		t.Fatalf("GENTLE_AI_TEST_BINARY: %v", err)
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "candidate.go"), []byte("package candidate\n\nfunc value() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeBinaryJSON(t, runReviewBinary(t, binary, true, "start", "--cwd", repo, "--lineage", "binary-submission-descriptor"), &started)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewer := filepath.Join(t.TempDir(), "reviewer.json")
+	writeReviewCLIJSON(t, reviewer, facadeReviewerResult{Findings: []facadeFinding{{
+		Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate returns the wrong terminal value",
+		ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+		CausalDisposition: reviewtransaction.CausalIntroduced,
+	}}, Evidence: []string{"focused differential test failed"}})
+	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, []string{reviewer}); err != nil {
+		t.Fatalf("capture blocking reviewer result: %v", err)
+	}
+	runReviewBinary(t, binary, true, "finalize", "--cwd", repo, "--lineage", started.LineageID, "--captured-results=true")
+
+	outside := t.TempDir()
+	status := binarySubmissionDescriptorStatus(t, binary, outside, repo, started.LineageID)
+	correction := submissionDescriptorInput(t, status).Submission
+	assertBinarySubmissionDescriptor(t, *correction, repo, outside)
+	runReviewBinaryAt(t, binary, outside, true, submissionDescriptorArguments(t, *correction, "1")...)
+
+	if err := os.WriteFile(filepath.Join(repo, "candidate.go"), []byte("package candidate\n\nfunc value() int { return 2 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	forecasted, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, forecasted.State, forecasted.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := filepath.Join(t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(evidence, []byte("repository verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runReviewBinary(t, binary, true, "capture-evidence", "--cwd", repo, "--lineage", started.LineageID,
+		"--target", request.CorrectionTargetIdentity, "--expected-revision", forecasted.Revision,
+		"--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidence)
+
+	ready := binarySubmissionDescriptorStatus(t, binary, outside, repo, started.LineageID)
+	validation := submissionDescriptorInput(t, ready).Submission
+	assertBinarySubmissionDescriptor(t, *validation, repo, outside)
+	validationPath := filepath.Join(t.TempDir(), "validation.json")
+	writeReviewCLIJSON(t, validationPath, facadeValidationResult{
+		TargetedValidationRequestHash: ready.ValidationRequest.RequestHash,
+		CorrectionTargetIdentity:      ready.ValidationRequest.CorrectionTargetIdentity,
+		OriginalCriteria:              facadeValidationCheck{Passed: true, Evidence: []string{"acceptance passed"}},
+		CorrectionRegression:          facadeValidationCheck{Passed: true, Evidence: []string{"regression passed"}},
+		FollowUps:                     []reviewtransaction.FollowUp{},
+	})
+	var operation ReviewIntegrationOperationResult
+	decodeBinaryJSON(t, runReviewBinaryAt(t, binary, outside, true, submissionDescriptorArguments(t, *validation, validationPath)...), &operation)
+	if err := operation.Validate(); err != nil {
+		t.Fatalf("validate negotiated binary submission result: %v", err)
+	}
+	var finalized ReviewIntegrationFinalizeResult
+	decodeBinaryJSON(t, operation.Result, &finalized)
+	if finalized.State != reviewtransaction.StateApproved {
+		t.Fatalf("binary validation descriptor finalized as %#v", finalized)
+	}
+}
+
+func binarySubmissionDescriptorStatus(t *testing.T, binary, outside, repo, lineage string) ReviewTargetStatusResult {
+	t.Helper()
+	var status ReviewTargetStatusResult
+	decodeBinaryJSON(t, runReviewBinaryAt(t, binary, outside, true,
+		"status", "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition", "--cwd", repo, "--lineage", lineage), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return status
+}
+
+func assertBinarySubmissionDescriptor(t *testing.T, descriptor ReviewTransitionSubmission, paths ...string) {
+	t.Helper()
+	if descriptor.OperationToken != "finalize" || descriptor.Value.SubstitutionLocation != 6 {
+		t.Fatalf("binary submission descriptor = %#v", descriptor)
+	}
+	for _, token := range descriptor.ArgumentTokens {
+		if strings.HasPrefix(token, "--cwd=") {
+			t.Fatalf("binary descriptor contains cwd token %q", token)
+		}
+		for _, path := range paths {
+			if strings.Contains(token, path) {
+				t.Fatalf("binary descriptor leaks path %q in %q", path, token)
+			}
+		}
+	}
+}
+
 func prepareBinaryCorrection(t *testing.T, binary string) (string, string, ReviewFacadeStartResult) {
 	t.Helper()
 	repo := initReviewCLIRepo(t)
@@ -293,6 +400,20 @@ func runReviewBinary(t *testing.T, binary string, wantSuccess bool, args ...stri
 	t.Helper()
 	stdout, _ := runReviewBinaryStreams(t, binary, wantSuccess, args...)
 	return stdout
+}
+
+func runReviewBinaryAt(t *testing.T, binary, dir string, wantSuccess bool, args ...string) []byte {
+	t.Helper()
+	command := exec.Command(binary, append([]string{"review"}, args...)...)
+	command.Dir = dir
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	if (err == nil) != wantSuccess {
+		t.Fatalf("gentle-ai review from %s %v: %v\nstdout:\n%s\nstderr:\n%s", dir, args, err, stdout.String(), stderr.String())
+	}
+	return stdout.Bytes()
 }
 
 // runReviewBinaryStreams captures stdout and stderr separately. Stdout carries

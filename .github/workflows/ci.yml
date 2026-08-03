@@ -57,6 +57,44 @@ jobs:
       - name: Run unit tests
         run: go test ./...
 
+      - name: Build, vet, and test benchmark module
+        working-directory: bench
+        run: |
+          go build -o "$RUNNER_TEMP/gentle-ai-bench" .
+          go vet ./...
+          go test ./...
+
+      - name: Run benchmark evidence
+        run: |
+          go build -trimpath -o "$RUNNER_TEMP/gentle-ai" ./cmd/gentle-ai
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --out "$RUNNER_TEMP/bench-portable.json"
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            completed_once("j52-sdd-stale-authority-does-not-shadow-approved-candidate") and
+            completed_once("j53-sdd-ambiguous-authorities-fail-closed") and
+            completed_once("j54-sdd-missing-authority-receipt-fails-closed") and
+            completed_once("j55-sdd-mismatched-authority-receipt-fails-closed") and
+            completed_once("j56-sdd-non-allow-post-apply-gate-fails-closed") and
+            completed_once("j58-sdd-foreign-openspec-path-fails-closed")
+          ' "$RUNNER_TEMP/bench-portable.json"
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed --out "$RUNNER_TEMP/bench-source-coupled-untagged.json"
+          jq -e '
+            def unsupported_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "unsupported");
+            unsupported_once("j57-sdd-authority-drift-during-discovery-fails-closed")
+          ' "$RUNNER_TEMP/bench-source-coupled-untagged.json"
+          go build -tags bench_fixture -trimpath -o "$RUNNER_TEMP/gentle-ai-bench-fixture" ./cmd/gentle-ai
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai-bench-fixture" --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed --out "$RUNNER_TEMP/bench-source-coupled.json"
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            completed_once("j57-sdd-authority-drift-during-discovery-fails-closed")
+          ' "$RUNNER_TEMP/bench-source-coupled.json"
+
       # Lives in this job, not the format job, because only Unit Tests is a
       # required status check on main. A guard that cannot block a merge is
       # decoration.
@@ -230,7 +268,15 @@ jobs:
           node-version: "24"
 
       - name: Install pinned OpenCode runtime
-        run: npm install --global opencode-ai@1.18.4
+        run: npm install --global opencode-ai@1.18.10
+
+      - name: Verify Windows OpenCode reviewer rejection E2E is registered
+        shell: pwsh
+        run: |
+          $tests = go test -list '^TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash$' ./e2e/organicruntime
+          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash') {
+            throw 'Windows OpenCode reviewer rejection E2E is missing'
+          }
 
       - name: Run organic journeys
         # No -run filter: a renamed test must fail this job loudly, never let
