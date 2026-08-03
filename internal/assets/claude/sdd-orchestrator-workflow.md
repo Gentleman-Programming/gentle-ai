@@ -27,9 +27,17 @@ Meta-commands are handled by the orchestrator directly and do not appear in auto
 - `/sdd-continue [change]` → run the next dependency-ready phase.
 - `/sdd-ff <name>` → fast-forward proposal → specs → design → tasks.
 
+### Engram Project Resolution (MANDATORY)
+
+Before any project-scoped `mem_context` or `mem_search`, call `engram_mem_current_project` and wait for it to complete, even when the user named no repository; this strict dependency MUST NOT run in parallel with scoped calls. Use its returned canonical project key, never a cwd/worktree-basename guess.
+
+- Unique project: use the returned canonical project for context/search.
+- Ambiguous project: STOP and ask the user to choose only from the returned alternatives before any scoped search.
+- No project: do not run ANY project-scoped Engram operation, including status/continuation lookups, `sdd-init` checks, TDD/apply-progress searches, artifact reads/writes, or persistence. Continue only with valid OpenSpec/file behavior until a project is selected; do not invent a key or run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.
+
 ### Native SDD Dispatcher Guard
 
-Before routing, continuing, applying, verifying, or archiving an SDD change, first determine this session's artifact store. The native dispatcher (`gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`) reads only OpenSpec file artifacts and always emits `artifactStore: openspec`; it cannot observe Engram-backed changes.
+Before routing, continuing, applying, verifying, or archiving an SDD change, first determine this session's artifact store. **First resolve the canonical project as required above. If no project is resolved, continue without project-scoped Engram persistence and do not look up `sdd-init/{project}`. Only when a canonical project exists and the artifact-store decision permits Engram may you check `sdd-init/{project}` in Engram; when no OpenSpec store was selected, treat the change as `engram`-backed.** The native dispatcher (`gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`) reads only OpenSpec file artifacts and always emits `artifactStore: openspec`; it cannot observe Engram-backed changes.
 
 - For `engram`, do NOT invoke the dispatcher. Resolve status from Engram topic keys with `mem_search` followed by `mem_get_observation`.
 - For `openspec` or `hybrid`, use the dispatcher when available and treat its JSON as authoritative over prompt inference.
@@ -102,7 +110,7 @@ If any dependency is missing, STOP and propose `/sdd-new` or `/sdd-ff`; do not i
 
 ### SDD Init Guard (MANDATORY)
 
-Before executing any SDD command or meta-command, check whether `sdd-init` has run for this project:
+Before executing any SDD command or meta-command, check whether `sdd-init` has run for this project. If no project was resolved, skip ALL project-scoped Engram operations and continue only with valid OpenSpec/file behavior until a project is selected. Otherwise:
 
 1. Search Engram: `mem_search(query: "sdd-init/{project}", project: "{project}")`.
 2. If found, proceed normally.
@@ -257,6 +265,7 @@ Sub-agents start with fresh context. The orchestrator controls what context they
 
 For non-SDD delegation:
 
+- Only after a canonical project resolves may non-SDD work search or persist Engram. Without one, skip Engram and continue only with valid OpenSpec/file behavior; do not invent a key or run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.
 - Orchestrator searches Engram for relevant prior context and passes it in the prompt.
 - Sub-agent saves significant discoveries, decisions, and bug fixes to Engram before returning.
 - Orchestrator forwards exact skill paths.
@@ -276,11 +285,11 @@ For SDD phases, sub-agents read/write the active backend directly using artifact
 
 ### Strict TDD Forwarding (MANDATORY)
 
-When launching `sdd-apply` or `sdd-verify`, search for testing capabilities (`sdd-init/{project}`). If `strict_tdd: true`, add: `STRICT TDD MODE IS ACTIVE. Test runner: {test_command}. You MUST follow strict-tdd.md. Do NOT fall back to Standard Mode.`
+Only after a canonical project resolves may `sdd-apply` or `sdd-verify` search for testing capabilities (`sdd-init/{project}`). If no project resolves, skip this and all other project-scoped Engram persistence; continue only with valid OpenSpec/file artifacts until a project is selected. If `strict_tdd: true`, add: `STRICT TDD MODE IS ACTIVE. Test runner: {test_command}. You MUST follow strict-tdd.md. Do NOT fall back to Standard Mode.`
 
 ### Apply-Progress Continuity (MANDATORY)
 
-When launching `sdd-apply` after prior batches, search for `sdd/{change-name}/apply-progress`. If it exists, tell the sub-agent to read it first, merge new progress into it, and save the combined result. Do not overwrite.
+Only after a canonical project resolves may `sdd-apply` search for `sdd/{change-name}/apply-progress` after prior batches. If no project resolves, skip this and all other project-scoped Engram persistence; continue only with valid OpenSpec/file artifacts until a project is selected. If it exists, tell the sub-agent to read it first, merge new progress into it, and save the combined result. Do not overwrite.
 
 ### Archive Final-State Handoff (MANDATORY)
 

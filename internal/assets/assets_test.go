@@ -50,6 +50,158 @@ func TestSDDOrchestratorsCarryNoRetiredWorkRunCeremony(t *testing.T) {
 	}
 }
 
+func TestCoordinatorEngramProjectResolutionPrecedesScopedCalls(t *testing.T) {
+	const projectResolutionInstruction = "Before any project-scoped `mem_context` or `mem_search`, call `engram_mem_current_project` and wait for it to complete, even when the user named no repository; this strict dependency MUST NOT run in parallel with scoped calls. Use its returned canonical project key, never a cwd/worktree-basename guess."
+	const noProjectTerminalPolicy = "- No project: do not run ANY project-scoped Engram operation, including status/continuation lookups, `sdd-init` checks, TDD/apply-progress searches, artifact reads/writes, or persistence. Continue only with valid OpenSpec/file behavior until a project is selected; do not invent a key or run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall.\n"
+	const nonSDDEngramProjectGate = "Only after a canonical project resolves may non-SDD work search or persist Engram. Without one, skip Engram and continue only with valid OpenSpec/file behavior; do not invent a key or run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall."
+	const contract = "Engram Project Resolution (MANDATORY)\n\n" +
+		projectResolutionInstruction + "\n\n" +
+		"- Unique project: use the returned canonical project for context/search.\n" +
+		"- Ambiguous project: STOP and ask the user to choose only from the returned alternatives before any scoped search.\n" +
+		noProjectTerminalPolicy
+	const dispatcherProjectGate = "If no project is resolved, continue without project-scoped Engram persistence and do not look up `sdd-init/{project}`. Only when a canonical project exists and the artifact-store decision permits Engram may you check `sdd-init/{project}` in Engram"
+	const dispatcherMarker = "Native SDD Dispatcher Guard"
+	dispatcherHeading := regexp.MustCompile(`(?m)^#{1,6}\s+` + regexp.QuoteMeta(dispatcherMarker) + `\s*$`)
+	markdownHeading := regexp.MustCompile(`(?m)^#{1,6}\s+`)
+	scopedEngramInvocation := regexp.MustCompile(`(?:engram_)?mem_[a-z_]+\s*\([^\n]*project:\s*"\{project\}"`)
+	anyEngramInvocation := regexp.MustCompile(`(?:engram_)?mem_[a-z_]+\s*\(`)
+	orchestratorPaths := allSDDOrchestratorAssetPaths(t)
+	if len(orchestratorPaths) != 12 {
+		t.Fatalf("project-resolution discovery sees %d SDD orchestrator assets, want 12", len(orchestratorPaths))
+	}
+	paths := make([]string, 0, len(orchestratorPaths))
+	for _, path := range orchestratorPaths {
+		// Claude's installed orchestrator references its separate workflow asset,
+		// which carries the coordinator contract shared by the other providers.
+		if path == "claude/sdd-orchestrator.md" {
+			path = "claude/sdd-orchestrator-workflow.md"
+		}
+		paths = append(paths, path)
+	}
+	if len(paths) != 12 {
+		t.Fatalf("project-resolution coverage sees %d coordinator surfaces, want 12", len(paths))
+	}
+
+	for _, path := range paths {
+		content := MustRead(path)
+		want := 1
+		if path == "generic/sdd-orchestrator.md" {
+			// Generic renders capable and small-model sections that can both
+			// initiate Engram access.
+			want = 2
+		}
+		if count := strings.Count(content, contract); count != want {
+			t.Fatalf("%s has %d project-resolution contracts, want %d", path, count, want)
+		}
+		nonSDDFallbackCount := 0
+		for _, marker := range []string{
+			"When executing general (non-SDD) work:",
+			"Read context: orchestrator searches engram",
+			"Orchestrator searches Engram for relevant prior context",
+			"Sub-agents must `mem_save` important discoveries before returning.",
+		} {
+			nonSDDFallbackCount += strings.Count(content, marker)
+		}
+		if count := strings.Count(content, nonSDDEngramProjectGate); count != nonSDDFallbackCount {
+			t.Fatalf("%s has %d non-SDD Engram project gates for %d fallback paths", path, count, nonSDDFallbackCount)
+		}
+
+		remaining := content
+		for occurrence := 1; occurrence <= want; occurrence++ {
+			contractOffset := strings.Index(remaining, contract)
+			if contractOffset < 0 {
+				t.Fatalf("%s cannot locate project-resolution contract occurrence %d", path, occurrence)
+			}
+			sectionStart := strings.LastIndex(remaining[:contractOffset], "<!-- section:model-")
+			if sectionStart < 0 {
+				sectionStart = 0
+			}
+			sectionEnd := len(remaining)
+			if nextSection := strings.Index(remaining[contractOffset+len(contract):], "<!-- section:model-"); nextSection >= 0 {
+				sectionEnd = contractOffset + len(contract) + nextSection
+			}
+			section := remaining[sectionStart:sectionEnd]
+			localContractOffset := contractOffset - sectionStart
+			prefix := section[:localContractOffset]
+			if invocation := anyEngramInvocation.FindString(prefix); invocation != "" {
+				t.Fatalf("%s coordinator section for project-resolution contract occurrence %d invokes %q before the contract", path, occurrence, invocation)
+			}
+			for _, invocation := range scopedEngramInvocation.FindAllStringIndex(section, -1) {
+				if invocation[0] < localContractOffset+len(contract) {
+					t.Fatalf("%s coordinator section for project-resolution contract occurrence %d invokes project-scoped Engram before the contract", path, occurrence)
+				}
+				if strings.LastIndex(section[:invocation[0]], noProjectTerminalPolicy) < localContractOffset {
+					t.Fatalf("%s coordinator section for project-resolution contract occurrence %d invokes project-scoped Engram without its local terminal no-project policy", path, occurrence)
+				}
+			}
+
+			remaining = remaining[contractOffset+len(contract):]
+		}
+
+		dispatcherMatch := dispatcherHeading.FindStringIndex(content)
+		if dispatcherMatch == nil {
+			t.Fatalf("%s missing dispatcher guard marker %q", path, dispatcherMarker)
+		}
+		dispatcher := content[dispatcherMatch[0]:]
+		if nextHeading := markdownHeading.FindStringIndex(content[dispatcherMatch[1]:]); nextHeading != nil {
+			dispatcher = content[dispatcherMatch[0] : dispatcherMatch[1]+nextHeading[0]]
+		}
+		if !strings.Contains(dispatcher, dispatcherProjectGate) {
+			t.Fatalf("%s dispatcher guard must skip unresolved sdd-init lookup and require a canonical project plus an Engram-permitting artifact store", path)
+		}
+	}
+
+	for _, path := range []string{
+		"claude/agents/sdd-apply.md",
+		"cursor/agents/sdd-apply.md",
+		"kimi/agents/sdd-apply.md",
+		"skills/sdd-apply/SKILL.md",
+	} {
+		if strings.Contains(MustRead(path), projectResolutionInstruction) {
+			t.Fatalf("%s must not carry coordinator project-resolution instructions", path)
+		}
+	}
+}
+
+func TestOpenCodeSDDCommandsUseCanonicalEngramProject(t *testing.T) {
+	const projectResolutionInstruction = "Before any project-scoped `mem_context` or `mem_search`, call `engram_mem_current_project` and wait for it to complete, even when the user named no repository; this strict dependency MUST NOT run in parallel with scoped calls. Use its returned canonical project key, never a cwd/worktree-basename guess."
+	const noProjectTerminalPolicy = "- No project: do not run ANY project-scoped Engram operation, including status/continuation lookups, `sdd-init` checks, TDD/apply-progress searches, artifact reads/writes, or persistence. Continue only with valid OpenSpec/file behavior until a project is selected; do not invent a key or run broad/unscoped search. Broad/all-project search is only for explicit cross-project recall."
+	const contract = "ENGRAM PROJECT RESOLUTION:\n\n" + projectResolutionInstruction + "\n\n" +
+		"- Unique project: use the returned canonical project for context/search.\n" +
+		"- Ambiguous project: STOP and ask the user to choose only from the returned alternatives before any scoped search.\n" +
+		noProjectTerminalPolicy
+
+	commands := []struct {
+		path            string
+		engramOperation string
+	}{
+		{
+			path:            "opencode/commands/sdd-continue.md",
+			engramOperation: "mem_search(query: \"sdd/$ARGUMENTS/\", project: \"{project}\")",
+		},
+		{
+			path:            "opencode/commands/sdd-status.md",
+			engramOperation: "resolve status entirely from Engram",
+		},
+	}
+
+	for _, command := range commands {
+		t.Run(command.path, func(t *testing.T) {
+			content := MustRead(command.path)
+			contractOffset := strings.Index(content, contract)
+			if contractOffset < 0 {
+				t.Fatalf("%s missing canonical Engram project-resolution contract", command.path)
+			}
+			if strings.Contains(content, "the `basename` of the detected workspace") {
+				t.Fatalf("%s derives its Engram project key from the workspace basename", command.path)
+			}
+			if operationOffset := strings.Index(content, command.engramOperation); operationOffset < contractOffset+len(contract) {
+				t.Fatalf("%s reaches Engram status/artifact resolution before canonical project resolution", command.path)
+			}
+		})
+	}
+}
+
 func TestOrchestratorsProjectOrganicRouting(t *testing.T) {
 	paths := allSDDOrchestratorAssetPaths(t)
 	if len(paths) != 12 {
