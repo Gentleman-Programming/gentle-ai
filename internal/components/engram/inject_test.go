@@ -1,10 +1,12 @@
 package engram
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -54,8 +56,14 @@ func assertArgsHaveToolsAgent(t *testing.T, path string) {
 	}
 }
 
-func TestInjectClaudeWritesMCPConfig(t *testing.T) {
+func TestInjectClaudeWritesUserRegistryPreservingUnrelatedData(t *testing.T) {
 	home := t.TempDir()
+	mockEngramLookPath(t, "/opt/homebrew/bin/engram", "")
+	registryPath := claude.UserConfigPath(home)
+	seed := []byte(`{"oauthAccount":{"emailAddress":"user@example.com"},"projects":{"/repo":{"allowedTools":[]}},"mcpServers":{"codegraph":{"command":"codegraph"}}}`)
+	if err := os.WriteFile(registryPath, seed, 0o644); err != nil {
+		t.Fatalf("WriteFile(user registry) error = %v", err)
+	}
 
 	result, err := Inject(home, claudeAdapter())
 	if err != nil {
@@ -65,34 +73,40 @@ func TestInjectClaudeWritesMCPConfig(t *testing.T) {
 		t.Fatalf("Inject() changed = false")
 	}
 
-	// Check MCP JSON file was created.
-	mcpPath := filepath.Join(home, ".claude", "mcp", "engram.json")
-	mcpContent, err := os.ReadFile(mcpPath)
-	if err != nil {
-		t.Fatalf("ReadFile(engram.json) error = %v", err)
+	registry := readJSONFile(t, registryPath)
+	assertNestedString(t, registry, "user@example.com", "oauthAccount", "emailAddress")
+	assertNestedString(t, registry, "codegraph", "mcpServers", "codegraph", "command")
+	assertNestedString(t, registry, "/opt/homebrew/bin/engram", "mcpServers", "engram", "command")
+	assertNestedStrings(t, registry, []string{"mcp", "--tools=agent"}, "mcpServers", "engram", "args")
+	if info, statErr := os.Stat(registryPath); statErr != nil {
+		t.Fatalf("Stat(user registry) error = %v", statErr)
+	} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("user registry mode = %o; want 0600", info.Mode().Perm())
+	}
+	legacyPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+	if _, statErr := os.Stat(legacyPath); !os.IsNotExist(statErr) {
+		t.Fatalf("fresh injection must not create legacy config %q; stat error = %v", legacyPath, statErr)
+	}
+}
+
+func TestInjectClaudeRefusesCorruptUserRegistryWithoutMutation(t *testing.T) {
+	home := t.TempDir()
+	registryPath := claude.UserConfigPath(home)
+	corrupt := []byte("{ not json")
+	if err := os.WriteFile(registryPath, corrupt, 0o600); err != nil {
+		t.Fatalf("WriteFile(corrupt registry) error = %v", err)
 	}
 
-	// Parse the JSON and validate the "command" key exists and references engram.
-	// The command may be an absolute path (if engram is on PATH) or the relative
-	// string "engram" (if not found). Both are valid.
-	var parsed map[string]any
-	if err := json.Unmarshal(mcpContent, &parsed); err != nil {
-		t.Fatalf("Unmarshal(engram.json) error = %v", err)
+	if _, err := Inject(home, claudeAdapter()); err == nil {
+		t.Fatal("Inject() error = nil; want corrupt registry refusal")
 	}
-	cmd, ok := parsed["command"].(string)
-	if !ok || cmd == "" {
-		t.Fatalf("engram.json missing or empty command field; got: %s", mcpContent)
+	after, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(corrupt registry) error = %v", err)
 	}
-	// Command must either be the literal "engram" or an absolute path ending in "engram".
-	base := filepath.Base(cmd)
-	if base != "engram" && base != "engram.exe" {
-		t.Fatalf("engram.json command %q does not reference engram binary; got: %s", cmd, mcpContent)
+	if !bytes.Equal(after, corrupt) {
+		t.Fatalf("corrupt registry mutated: got %q, want %q", after, corrupt)
 	}
-	if _, ok := parsed["args"]; !ok {
-		t.Fatal("engram.json missing args field")
-	}
-	// RED: must include --tools=agent
-	assertArgsHaveToolsAgent(t, mcpPath)
 }
 
 func TestInjectClaudeWritesProtocolSection(t *testing.T) {
@@ -135,6 +149,11 @@ func TestInjectClaudeIsIdempotent(t *testing.T) {
 	if !first.Changed {
 		t.Fatalf("Inject() first changed = false")
 	}
+	registryPath := claude.UserConfigPath(home)
+	afterFirst, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(user registry after first injection) error = %v", err)
+	}
 
 	second, err := Inject(home, claudeAdapter())
 	if err != nil {
@@ -142,6 +161,13 @@ func TestInjectClaudeIsIdempotent(t *testing.T) {
 	}
 	if second.Changed {
 		t.Fatalf("Inject() second changed = true")
+	}
+	afterSecond, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(user registry after second injection) error = %v", err)
+	}
+	if !bytes.Equal(afterFirst, afterSecond) {
+		t.Fatal("second injection must leave the user registry byte-identical")
 	}
 }
 
@@ -781,8 +807,7 @@ func TestInjectCodexInjectsTOMLKeys(t *testing.T) {
 
 // TestInjectClaudePreservesAbsoluteCommandFromEngramSetup verifies that when
 // `engram setup claude-code` has already written an absolute-path command to
-// ~/.claude/mcp/engram.json (Engram v1.10.3+ behaviour), a subsequent call to
-// Inject() does NOT overwrite the absolute path with the relative "engram".
+// the managed legacy file, Inject() migrates it into Claude's user registry.
 func TestInjectClaudePreservesAbsoluteCommandFromEngramSetup(t *testing.T) {
 	home := t.TempDir()
 
@@ -808,17 +833,68 @@ func TestInjectClaudePreservesAbsoluteCommandFromEngramSetup(t *testing.T) {
 		t.Fatalf("Inject() error = %v", err)
 	}
 
-	content, err := os.ReadFile(mcpPath)
+	registryPath := claude.UserConfigPath(home)
+	content, err := os.ReadFile(registryPath)
 	if err != nil {
-		t.Fatalf("ReadFile(engram.json) error = %v", err)
+		t.Fatalf("ReadFile(user registry) error = %v", err)
 	}
 
 	text := string(content)
 	if !strings.Contains(text, absPath) {
 		t.Fatalf("Inject() overwrote absolute command path; want %q preserved, got:\n%s", absPath, text)
 	}
-	// Still must have --tools=agent.
-	assertArgsHaveToolsAgent(t, mcpPath)
+	assertArgsHaveToolsAgent(t, registryPath)
+	if _, statErr := os.Stat(mcpPath); !os.IsNotExist(statErr) {
+		t.Fatalf("managed legacy file must be removed after migration; stat error = %v", statErr)
+	}
+	if _, statErr := os.Lstat(filepath.Dir(mcpPath)); !os.IsNotExist(statErr) {
+		t.Fatalf("empty managed legacy directory must be removed; stat error = %v", statErr)
+	}
+}
+
+func TestInjectClaudePreservesManagedLegacyParentLayouts(t *testing.T) {
+	for _, symlinkParent := range []bool{true, false} {
+		name := "non-empty real parent"
+		if symlinkParent {
+			name = "symlink parent"
+		}
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			parent := filepath.Join(home, ".claude", "mcp")
+			actualParent := parent
+			if symlinkParent {
+				actualParent = t.TempDir()
+				if err := os.MkdirAll(filepath.Dir(parent), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(actualParent, parent); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.MkdirAll(parent, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			legacy := filepath.Join(actualParent, "engram.json")
+			custom := filepath.Join(actualParent, "custom.json")
+			customBytes := []byte(`{"command":"custom"}`)
+			if err := os.WriteFile(legacy, []byte(`{"command":"/usr/local/bin/engram","args":["mcp","--tools=agent"]}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(custom, customBytes, 0o640); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := Inject(home, claudeAdapter()); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+			info, err := os.Lstat(parent)
+			if err != nil || symlinkParent != (info.Mode()&os.ModeSymlink != 0) {
+				t.Fatalf("legacy parent changed unsafely: info=%v error=%v", info, err)
+			}
+			if got, err := os.ReadFile(custom); err != nil || !bytes.Equal(got, customBytes) {
+				t.Fatalf("custom sibling changed: got=%q error=%v", got, err)
+			}
+		})
+	}
 }
 
 // TestInjectClaudePreservesAbsoluteCommandIsIdempotent verifies that calling
@@ -854,10 +930,10 @@ func TestInjectClaudePreservesAbsoluteCommandIsIdempotent(t *testing.T) {
 		t.Fatalf("Inject() second changed = true after absolute-path setup; want idempotent (no change)")
 	}
 
-	// Absolute path must still be present.
-	content, err := os.ReadFile(mcpPath)
+	// Absolute path must still be present in the supported registry.
+	content, err := os.ReadFile(claude.UserConfigPath(home))
 	if err != nil {
-		t.Fatalf("ReadFile(engram.json) error = %v", err)
+		t.Fatalf("ReadFile(user registry) error = %v", err)
 	}
 	if !strings.Contains(string(content), absPath) {
 		t.Fatalf("absolute command path %q was lost after second Inject(); got:\n%s", absPath, string(content))
@@ -865,44 +941,35 @@ func TestInjectClaudePreservesAbsoluteCommandIsIdempotent(t *testing.T) {
 	_ = first // first result not the focus of this test
 }
 
-// TestInjectClaudeAddsToolsAgentWhenSetupWritesBareArgs verifies that if
-// `engram setup` wrote an absolute command but with bare args (no --tools=agent),
-// Inject() adds --tools=agent while preserving the absolute path.
-func TestInjectClaudeAddsToolsAgentWhenSetupWritesBareArgs(t *testing.T) {
-	home := t.TempDir()
-
-	absPath := "/home/user/go/bin/engram"
-	mcpPath := filepath.Join(home, ".claude", "mcp", "engram.json")
-	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll error = %v", err)
+func TestInjectClaudePreservesUnmanagedLegacyShapes(t *testing.T) {
+	tests := []struct {
+		name    string
+		content []byte
+	}{
+		{"command array", []byte(`{"command":["/usr/local/bin/engram"],"args":["mcp","--tools=agent"]}`)},
+		{"bare args", []byte(`{"command":"/usr/local/bin/engram","args":["mcp"]}`)},
+		{"extra semantics", []byte(`{"command":"/usr/local/bin/engram","args":["mcp","--tools=agent"],"env":{"CUSTOM":"1"}}`)},
+		{"custom command", []byte(`{"command":"custom-engram","args":["mcp","--tools=agent"]}`)},
 	}
-	// Bare mcp arg without --tools=agent — older engram setup format.
-	setupContent := []byte(`{
-  "command": "/home/user/go/bin/engram",
-  "args": ["mcp"]
-}
-`)
-	if err := os.WriteFile(mcpPath, setupContent, 0o644); err != nil {
-		t.Fatalf("WriteFile(engram.json) error = %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			legacyPath := filepath.Join(home, ".claude", "mcp", "engram.json")
+			if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(legacyPath, tt.content, 0o640); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Inject(home, claudeAdapter()); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+			got, err := os.ReadFile(legacyPath)
+			if err != nil || !bytes.Equal(got, tt.content) {
+				t.Fatalf("unmanaged legacy config changed: got=%q error=%v", got, err)
+			}
+		})
 	}
-
-	_, err := Inject(home, claudeAdapter())
-	if err != nil {
-		t.Fatalf("Inject() error = %v", err)
-	}
-
-	content, err := os.ReadFile(mcpPath)
-	if err != nil {
-		t.Fatalf("ReadFile(engram.json) error = %v", err)
-	}
-	text := string(content)
-
-	// Absolute path must be preserved.
-	if !strings.Contains(text, absPath) {
-		t.Fatalf("absolute path %q was lost; got:\n%s", absPath, text)
-	}
-	// --tools=agent must be added.
-	assertArgsHaveToolsAgent(t, mcpPath)
 }
 
 func TestInjectClaudeMigratesCellarCommandToStablePath(t *testing.T) {
@@ -931,9 +998,10 @@ func TestInjectClaudeMigratesCellarCommandToStablePath(t *testing.T) {
 		t.Fatalf("Inject() changed = false; expected Cellar command migration")
 	}
 
-	content, err := os.ReadFile(mcpPath)
+	registryPath := claude.UserConfigPath(home)
+	content, err := os.ReadFile(registryPath)
 	if err != nil {
-		t.Fatalf("ReadFile(engram.json) error = %v", err)
+		t.Fatalf("ReadFile(user registry) error = %v", err)
 	}
 	text := string(content)
 	if strings.Contains(text, "/Cellar/") {
@@ -942,7 +1010,7 @@ func TestInjectClaudeMigratesCellarCommandToStablePath(t *testing.T) {
 	if !strings.Contains(text, "/usr/local/bin/engram") {
 		t.Fatalf("engram.json did not migrate to stable Homebrew symlink; got:\n%s", text)
 	}
-	assertArgsHaveToolsAgent(t, mcpPath)
+	assertArgsHaveToolsAgent(t, registryPath)
 }
 
 func TestInjectCodexIsIdempotent(t *testing.T) {

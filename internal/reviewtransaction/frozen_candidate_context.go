@@ -1,7 +1,6 @@
 package reviewtransaction
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -10,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 )
 
@@ -87,12 +85,13 @@ type ChangedPathManifestEntry struct {
 
 // FrozenCandidateContext is the deterministic reviewer input derived only
 // from the immutable Git trees and metadata persisted in a Snapshot.
+// Its repositoryRoot is provider-only local state, not reviewer-visible input.
 type FrozenCandidateContext struct {
 	BaseTree            string
 	CandidateTree       string
 	LegacyCandidateDiff *FrozenCandidateDiff
 	ChangedPathManifest []ChangedPathManifestEntry
-	repositoryPaths     []string
+	repositoryRoot      string
 }
 
 // WithLegacyCandidateDiff adds the exact published v1 candidate transport.
@@ -188,13 +187,9 @@ func (builder SnapshotBuilder) FrozenCandidateContext(ctx context.Context, snaps
 		}
 		manifest = append(manifest, entry)
 	}
-	repositoryPaths, err := frozenRepositoryPathManifest(ctx, repo, isolation, snapshot.BaseTree, snapshot.CandidateTree)
-	if err != nil {
-		return FrozenCandidateContext{}, err
-	}
 	return FrozenCandidateContext{
 		BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree,
-		ChangedPathManifest: manifest, repositoryPaths: repositoryPaths,
+		ChangedPathManifest: manifest, repositoryRoot: repo,
 	}, nil
 }
 
@@ -246,44 +241,6 @@ func (builder SnapshotBuilder) InspectCandidate(ctx context.Context, snapshot Sn
 		return nil, fmt.Errorf("unknown candidate inspection operation %q", operation) // refusal:by-design operator-knowledge: the native CLI validates the closed operation enum before calling this boundary
 	}
 	return runGitLimited(ctx, repo, isolation, nil, MaxFrozenCandidateDiffBytes, args...)
-}
-
-// frozenRepositoryPathManifest returns the canonical logical paths present in
-// either immutable side of the review. Admission uses this private universe to
-// distinguish real repository path:line references from hashes, timestamps,
-// status labels, URLs, and other arbitrary colon-delimited prose.
-func frozenRepositoryPathManifest(ctx context.Context, repo string, isolation []string, trees ...string) ([]string, error) {
-	seen := make(map[string]struct{})
-	seenTrees := make(map[string]struct{}, len(trees))
-	for _, tree := range trees {
-		if _, duplicate := seenTrees[tree]; duplicate {
-			continue
-		}
-		seenTrees[tree] = struct{}{}
-		output, err := runGitLimited(ctx, repo, isolation, nil, maxFrozenCandidateManifestBytes,
-			"ls-tree", "-r", "-z", "--name-only", "--full-tree", tree)
-		if err != nil {
-			return nil, fmt.Errorf("render frozen repository path manifest: %w", err)
-		}
-		for _, rawPath := range bytes.Split(output, []byte{0}) {
-			if len(rawPath) == 0 {
-				continue
-			}
-			logicalPath, err := normalizeLogicalPath(string(rawPath))
-			if err != nil {
-				// Unsupported unchanged Git names cannot be emitted by the native
-				// changed-path manifest, so they are not valid reviewer references.
-				continue
-			}
-			seen[logicalPath] = struct{}{}
-		}
-	}
-	paths := make([]string, 0, len(seen))
-	for logicalPath := range seen {
-		paths = append(paths, logicalPath)
-	}
-	sort.Strings(paths)
-	return paths, nil
 }
 
 func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func(), error) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -23,10 +24,10 @@ type inspectionCase struct {
 
 func TestReviewInspectCandidateReadsOnlyBoundFrozenTrees(t *testing.T) {
 	repo, args, _, index := newCandidateInspectionReview(t, "candidate\n", true)
-	attributes := repo + "/hostile attributes"
+	attributes := filepath.Join(repo, "hostile attributes")
 	writeReviewStartCandidate(t, repo, "hostile attributes", "tracked.txt binary\n", 0o644)
-	config := repo + "/hostile.gitconfig"
-	writeReviewStartCandidate(t, repo, "hostile.gitconfig", "[core]\n\tattributesFile = "+attributes+"\n[diff]\n\texternal = false\n\talgorithm = patience\n\tcontext = 0\n", 0o644)
+	config := filepath.Join(repo, "hostile.gitconfig")
+	writeReviewStartCandidate(t, repo, "hostile.gitconfig", "[core]\n\tattributesFile = "+filepath.ToSlash(attributes)+"\n[diff]\n\texternal = false\n\talgorithm = patience\n\tcontext = 0\n", 0o644)
 	t.Setenv("GIT_CONFIG_GLOBAL", config)
 	t.Setenv("GIT_CONFIG_SYSTEM", config)
 	t.Setenv("GIT_CONFIG_COUNT", "1")
@@ -34,7 +35,7 @@ func TestReviewInspectCandidateReadsOnlyBoundFrozenTrees(t *testing.T) {
 	t.Setenv("GIT_CONFIG_VALUE_0", "true")
 	t.Setenv("GIT_DIFF_OPTS", "--unified=0")
 	t.Setenv("GIT_ATTR_SOURCE", "HEAD")
-	runReviewCLIGit(t, repo, "config", "core.attributesFile", attributes)
+	runReviewCLIGit(t, repo, "config", "core.attributesFile", filepath.ToSlash(attributes))
 	runReviewCLIGit(t, repo, "config", "diff.external", "false")
 	before := [2]string{runReviewCLIGit(t, repo, "status", "--porcelain=v2", "--untracked-files=all"), runReviewCLIGit(t, repo, "rev-parse", "HEAD")}
 

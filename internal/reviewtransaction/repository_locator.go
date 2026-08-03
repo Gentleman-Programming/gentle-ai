@@ -316,12 +316,43 @@ func validateLiveReviewRepositoryContext(ctx context.Context, repo string, bindi
 	if err != nil {
 		return err
 	}
-	if record.Revision != binding.Revision || record.State.State != StateReviewing ||
-		record.State.LineageID != binding.LineageID || record.State.InitialSnapshot.Identity != binding.TargetIdentity {
+	if record.Revision != binding.Revision || record.State.LineageID != binding.LineageID {
+		return errors.New("review repository context is stale or has no live matching authority")
+	}
+	switch record.State.State {
+	case StateReviewing:
+		if record.State.InitialSnapshot.Identity != binding.TargetIdentity {
+			return errors.New("review repository context is stale or has no live matching authority")
+		}
+	case StateCorrectionRequired:
+		if record.State.ProposedCorrectionLines == nil {
+			if record.State.CurrentSnapshot.Identity != binding.TargetIdentity {
+				return errors.New("review repository context is stale or has no live matching authority")
+			}
+			return nil
+		}
+		correction, err := BuildTargetedValidationRequest(ctx, repo, record.State, record.Revision)
+		if err != nil {
+			return &reviewRepositoryContextTargetedValidationError{cause: err}
+		}
+		if correction.CorrectionTargetIdentity != binding.TargetIdentity {
+			return errors.New("review repository context is stale or has no live matching authority")
+		}
+	default:
 		return errors.New("review repository context is stale or has no live matching authority")
 	}
 	return nil
 }
+
+// reviewRepositoryContextTargetedValidationError keeps a derivation failure
+// inspectable without exposing repository details to provider-facing callers.
+type reviewRepositoryContextTargetedValidationError struct{ cause error }
+
+func (err *reviewRepositoryContextTargetedValidationError) Error() string {
+	return "review repository context is stale or has no live matching authority"
+}
+
+func (err *reviewRepositoryContextTargetedValidationError) Unwrap() error { return err.cause }
 
 func validateReviewRepositoryContextBinding(binding ReviewRepositoryContextBinding) error {
 	if validateLineageID(binding.LineageID) != nil || !validSHA256(binding.TargetIdentity) || !validSHA256(binding.Revision) {

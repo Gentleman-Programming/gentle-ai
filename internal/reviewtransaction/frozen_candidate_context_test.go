@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -72,11 +73,6 @@ func TestFrozenCandidateContextUsesImmutableTreesAndCanonicalManifest(t *testing
 	}
 	if !reflect.DeepEqual(manifestPaths(baseline.ChangedPathManifest), snapshot.Paths) {
 		t.Fatalf("manifest paths = %v, snapshot paths = %v", manifestPaths(baseline.ChangedPathManifest), snapshot.Paths)
-	}
-	for _, logicalPath := range []string{"added.txt", "deleted.txt", "docs/naïve guide.md", "tracked.txt"} {
-		if stringIndex(baseline.repositoryPaths, logicalPath) < 0 {
-			t.Fatalf("frozen repository path manifest omits %q: %v", logicalPath, baseline.repositoryPaths)
-		}
 	}
 	for _, marker := range []string{
 		"diff --git a/added.txt b/added.txt",
@@ -173,6 +169,9 @@ func TestFrozenCandidateReviewerDiffUsesLiteralManifestPaths(t *testing.T) {
 		"literal*.txt", "literal-one.txt",
 		"literal?.txt", "literal1.txt",
 		"literal[1].txt", ":(top)magic.txt", "magic.txt",
+	}
+	if runtime.GOOS == "windows" {
+		paths = []string{"literal1.txt", "literal[1].txt"}
 	}
 	for _, version := range []string{"base", "candidate"} {
 		for _, logicalPath := range paths {

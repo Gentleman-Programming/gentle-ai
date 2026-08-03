@@ -15,12 +15,13 @@ import (
 // repository, and (when the journey needs one) a local bare remote. Nothing
 // here ever touches the user's real config or repositories.
 type Sandbox struct {
-	Binary    string
-	Root      string
-	Home      string
-	Repo      string
-	Remote    string
-	TracePath string
+	Binary                   string
+	Root                     string
+	Home                     string
+	Repo                     string
+	Remote                   string
+	TracePath                string
+	BenchReceiptMutationPath string
 
 	// Journey state carried between steps.
 	Lineage  string
@@ -33,7 +34,7 @@ type Sandbox struct {
 
 func newSandbox(binary, root string) (*Sandbox, error) {
 	home := filepath.Join(root, "home")
-	for _, dir := range []string{home, filepath.Join(home, ".config"), filepath.Join(home, ".cache"), filepath.Join(home, ".local", "share"), filepath.Join(home, ".local", "state")} {
+	for _, dir := range []string{home, filepath.Join(root, "tmp"), filepath.Join(home, ".config"), filepath.Join(home, ".cache"), filepath.Join(home, ".local", "share"), filepath.Join(home, ".local", "state")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, err
 		}
@@ -52,13 +53,17 @@ func newSandbox(binary, root string) (*Sandbox, error) {
 // env is a closed environment: only what the product legitimately needs.
 // PATH is inherited because the product shells out to git.
 func (s *Sandbox) env() []string {
-	return []string{
+	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + s.Home,
+		"USERPROFILE=" + s.Home,
 		"XDG_CONFIG_HOME=" + filepath.Join(s.Home, ".config"),
 		"XDG_CACHE_HOME=" + filepath.Join(s.Home, ".cache"),
 		"XDG_DATA_HOME=" + filepath.Join(s.Home, ".local", "share"),
 		"XDG_STATE_HOME=" + filepath.Join(s.Home, ".local", "state"),
+		"TMP=" + filepath.Join(s.Root, "tmp"),
+		"TEMP=" + filepath.Join(s.Root, "tmp"),
+		"TMPDIR=" + filepath.Join(s.Root, "tmp"),
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_TRACE=" + s.TracePath,
@@ -66,6 +71,10 @@ func (s *Sandbox) env() []string {
 		"TERM=dumb",
 		"LANG=C",
 	}
+	if s.BenchReceiptMutationPath != "" {
+		env = append(env, "GENTLE_AI_BENCH_MUTATE_RECEIPT="+s.BenchReceiptMutationPath)
+	}
+	return env
 }
 
 // git runs a fixture git command. Fixture commands are sandbox setup, not user
@@ -151,8 +160,12 @@ func (s *Sandbox) gitCallsSince() *int {
 
 // invoke runs the product once and returns a full Observation.
 func (s *Sandbox) invoke(args []string) Observation {
+	return s.invokeAt(s.Repo, args)
+}
+
+func (s *Sandbox) invokeAt(dir string, args []string) Observation {
 	cmd := exec.Command(s.Binary, args...)
-	cmd.Dir = s.Repo
+	cmd.Dir = dir
 	cmd.Env = s.env()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -397,7 +410,11 @@ type journeyRun struct {
 // run executes one product invocation inside a journey, folding it into the
 // metrics. Composite steps call it directly.
 func (r *journeyRun) run(args []string, modelRun bool) Observation {
-	observation := r.sandbox.invoke(args)
+	return r.runAt(r.sandbox.Repo, args, modelRun)
+}
+
+func (r *journeyRun) runAt(dir string, args []string, modelRun bool) Observation {
+	observation := r.sandbox.invokeAt(dir, args)
 	record := r.accumulator.observe(r.step, observation, r.sandbox.gitCallsSince(), modelRun)
 	r.accumulator.records = append(r.accumulator.records, record)
 	return observation
@@ -488,6 +505,11 @@ func runJourney(binary string, journey Journey) JourneyResult {
 
 		if step.After != nil {
 			if err := step.After(sandbox, observation); err != nil {
+				if errors.Is(err, errSourceCoupledFixtureUnavailable) {
+					result.Status = StatusUnsupported
+					result.UnsupportedSteps = append(result.UnsupportedSteps, step.Name+" (source-coupled fixture unavailable)")
+					break
+				}
 				result.Status = StatusFailed
 				result.FailureReason = fmt.Sprintf("step %q after: %v", step.Name, err)
 				break

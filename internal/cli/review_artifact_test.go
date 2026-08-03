@@ -62,6 +62,12 @@ func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
 	}
 	if err := RunReviewCaptureResult(validArgs, io.Discard); err == nil {
 		t.Fatal("mismatched replay accepted")
+	} else {
+		for _, want := range []string{"review dispose-result", "review preserve-result"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("reviewer result byte-conflict = %q, want it to name %q", err.Error(), want)
+			}
+		}
 	}
 	manifest := strings.TrimSpace(first.String())
 	for _, finalize := range [][]string{
@@ -252,6 +258,33 @@ func TestReviewCaptureResultIDLessCandidateCausalFinding(t *testing.T) {
 	decodeStrictReviewJSON(t, captured.Bytes(), &artifact)
 	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
 		t.Fatalf("id-less candidate-causal admission = %q, want completed", artifact.AdmissionDecision)
+	}
+}
+
+func TestReviewCaptureResultRejectsInvalidLocationWithActionableDiagnostic(t *testing.T) {
+	repo, started, _, record := newArtifactReview(t, false)
+	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+	result.Findings = []facadeFinding{{
+		ID: "R3-001", Location: "tracked.txt:1-2", Severity: "CRITICAL", Claim: "candidate failure",
+		ProofRefs: []string{"tracked.txt changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+		CausalDisposition: reviewtransaction.CausalIntroduced,
+	}}
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+
+	err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}, io.Discard)
+	var admissionErr *reviewtransaction.ArtifactAdmissionError
+	var locationErr *reviewtransaction.FindingLocationError
+	if !errors.As(err, &admissionErr) || !errors.As(err, &locationErr) {
+		t.Fatalf("capture-result error = %v; want typed admission and location errors", err)
+	}
+	if admissionErr.Diagnostic == nil || admissionErr.Diagnostic.FindingID != "R3-001" ||
+		admissionErr.Diagnostic.Location != "tracked.txt:1-2" ||
+		admissionErr.Diagnostic.Reason != "line_suffix_not_integer" {
+		t.Fatalf("capture diagnostic = %#v", admissionErr.Diagnostic)
 	}
 }
 
@@ -666,10 +699,9 @@ func TestReviewCaptureResultConcurrentSelectedLenses(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func TestCaptureReviewerArtifactDirectorySync(t *testing.T) {
+func TestReviewerArtifactDirectorySyncCompatibility(t *testing.T) {
 	originalGOOS, originalSync := reviewArtifactRuntimeGOOS, syncReviewerArtifactDirectory
 	t.Cleanup(func() { reviewArtifactRuntimeGOOS, syncReviewerArtifactDirectory = originalGOOS, originalSync })
-	warning := []byte(`{"findings":[{"severity":"WARNING"}],"evidence":["unchanged"]}` + "\n")
 	cases := []struct {
 		name, goos string
 		err        error
@@ -682,21 +714,11 @@ func TestCaptureReviewerArtifactDirectorySync(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			storeDir := t.TempDir()
-			state := reviewtransaction.CompactState{LineageID: "lineage", InitialSnapshot: reviewtransaction.Snapshot{Identity: "target"}, SelectedLenses: []string{"review-correctness"}}
 			reviewArtifactRuntimeGOOS = func() string { return tt.goos }
 			syncReviewerArtifactDirectory = func(string) error { return tt.err }
-			artifact, err := captureReviewerArtifact(storeDir, state, 0, warning)
-			path := filepath.Join(storeDir, "reviewer-results", "00-review-correctness.json")
-			if !tt.wantOK {
-				if _, statErr := os.Stat(path); err == nil || artifact != (reviewResultArtifact{}) || !os.IsNotExist(statErr) {
-					t.Fatalf("fatal sync returned artifact or retained publication: artifact=%+v err=%v", artifact, err)
-				}
-				return
-			}
-			got, readErr := os.ReadFile(path)
-			if err != nil || readErr != nil || !bytes.Equal(got, warning) {
-				t.Fatalf("compatible sync changed WARNING result: capture=%v read=%v got=%q", err, readErr, got)
+			err := syncReviewerArtifactDirectoryCompatible(t.TempDir())
+			if (err == nil) != tt.wantOK {
+				t.Fatalf("sync compatibility error = %v, want success %v", err, tt.wantOK)
 			}
 		})
 	}

@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -113,6 +115,54 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 			t.Fatalf("recovery START = %#v", recovery)
 		}
 	})
+}
+
+func TestNegotiatedReviewStartLargeRepositoryUsesBoundedReferenceAdmission(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uses real git commands and a repository tree larger than 4 MiB")
+	}
+	repo := initReviewCLIRepo(t)
+	baseCommit, supportingPath := installLargeReviewRepositoryHistory(t, repo)
+	lineage := "review-start-large-repository"
+	args := boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage, "--base-ref", baseCommit,
+	})
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("START with a repository path inventory larger than 4 MiB: %v", err)
+	}
+	started := decodeNegotiatedReviewStart(t, output.Bytes())
+	if started.Action != string(reviewtransaction.CompactStartCreated) || started.ChangedPathManifest == nil ||
+		len(*started.ChangedPathManifest) != 1 || (*started.ChangedPathManifest)[0].Path != "main.go" {
+		t.Fatalf("large-repository START = %#v", started)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.State.SelectedLenses) == 0 {
+		t.Fatalf("large-repository START selected no reviewer lenses: %#v", record.State)
+	}
+	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+	input := filepath.Join(t.TempDir(), "reviewer.json")
+	captureArgs := []string{
+		"--cwd", repo, "--lineage", lineage, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}
+	result.Evidence = []string{"fabricated proof: missing-inventory.go:1"}
+	writeReviewCLIJSON(t, input, result)
+	if err := RunReviewCaptureResult(captureArgs, io.Discard); err == nil || !strings.Contains(err.Error(), "outside the frozen repository") {
+		t.Fatalf("invalid immutable-tree reference admission error = %v", err)
+	}
+	result.Evidence = []string{"supporting proof: " + supportingPath + ":1"}
+	writeReviewCLIJSON(t, input, result)
+	if err := RunReviewCaptureResult(captureArgs, io.Discard); err != nil {
+		t.Fatalf("valid immutable-tree reference was rejected: %v", err)
+	}
 }
 
 func TestNegotiatedReviewStartContextValidationDistinguishesMissingAndEmpty(t *testing.T) {
@@ -308,4 +358,45 @@ func forceReviewStartContextFailure(forced error) func() {
 		return reviewtransaction.FrozenCandidateContext{}, forced
 	}
 	return func() { renderReviewStartFrozenCandidateContext = original }
+}
+
+func installLargeReviewRepositoryHistory(t *testing.T, repo string) (string, string) {
+	t.Helper()
+	sharedBlob := strings.TrimSpace(runReviewCLIGitInput(t, repo, []byte("package inventory\n"), "hash-object", "-w", "--stdin"))
+	baseBlob := strings.TrimSpace(runReviewCLIGitInput(t, repo, []byte("package main\n\nfunc value() int { return 1 }\n"), "hash-object", "-w", "--stdin"))
+	candidateBlob := strings.TrimSpace(runReviewCLIGitInput(t, repo, []byte("package main\n\nfunc value() int { return 2 }\n"), "hash-object", "-w", "--stdin"))
+	const inventoryEntries = 24_000
+	padding := strings.Repeat("x", 160)
+	paths := make([]string, inventoryEntries)
+	var baseTreeInput bytes.Buffer
+	var candidateTreeInput bytes.Buffer
+	for index := range paths {
+		paths[index] = fmt.Sprintf("inventory-%05d-%s.go", index, padding)
+		for _, tree := range []*bytes.Buffer{&baseTreeInput, &candidateTreeInput} {
+			fmt.Fprintf(tree, "100644 blob %s\t%s\x00", sharedBlob, paths[index])
+		}
+	}
+	fmt.Fprintf(&baseTreeInput, "100644 blob %s\tmain.go\x00", baseBlob)
+	fmt.Fprintf(&candidateTreeInput, "100644 blob %s\tmain.go\x00", candidateBlob)
+	baseTree := strings.TrimSpace(runReviewCLIGitInput(t, repo, baseTreeInput.Bytes(), "mktree", "-z"))
+	candidateTree := strings.TrimSpace(runReviewCLIGitInput(t, repo, candidateTreeInput.Bytes(), "mktree", "-z"))
+	baseCommit := strings.TrimSpace(runReviewCLIGit(t, repo, "commit-tree", baseTree, "-m", "large base tree"))
+	candidateCommit := strings.TrimSpace(runReviewCLIGit(t, repo, "commit-tree", candidateTree, "-p", baseCommit, "-m", "tiny candidate"))
+	runReviewCLIGit(t, repo, "update-ref", "HEAD", candidateCommit)
+	inventory := runReviewCLIGit(t, repo, "ls-tree", "-r", "-z", "--name-only", "--full-tree", baseTree)
+	if len(inventory) <= 4<<20 {
+		t.Fatalf("repository path inventory = %d bytes, want more than 4 MiB", len(inventory))
+	}
+	return baseCommit, paths[0]
+}
+
+func runReviewCLIGitInput(t *testing.T, repo string, input []byte, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	command.Stdin = bytes.NewReader(input)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, output)
+	}
+	return string(output)
 }

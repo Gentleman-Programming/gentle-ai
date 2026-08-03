@@ -2,6 +2,7 @@ package reviewtransaction
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -66,11 +67,82 @@ type ArtifactAdmissionRequest struct {
 // ArtifactAdmissionError exposes the stable native decision without requiring
 // callers to parse diagnostic prose.
 type ArtifactAdmissionError struct {
-	Admission ArtifactAdmission
+	Admission  ArtifactAdmission
+	Diagnostic *ArtifactAdmissionDiagnostic
+	cause      error
 }
 
 func (err *ArtifactAdmissionError) Error() string {
-	return fmt.Sprintf("reviewer artifact admission %s: %s", err.Admission.Decision, err.Admission.Diagnostic)
+	message := fmt.Sprintf("reviewer artifact admission %s: %s", err.Admission.Decision, err.Admission.Diagnostic)
+	if err.Diagnostic != nil {
+		encoded, _ := json.Marshal(err.Diagnostic)
+		message += "; admission_diagnostic=" + string(encoded)
+	}
+	return message
+}
+
+func (err *ArtifactAdmissionError) Unwrap() error { return err.cause }
+
+// ArtifactAdmissionDiagnostic contains bounded, non-sensitive recovery fields.
+type ArtifactAdmissionDiagnostic struct {
+	Code      string `json:"code"`
+	FindingID string `json:"finding_id,omitempty"`
+	Location  string `json:"location,omitempty"`
+	Reason    string `json:"reason"`
+}
+
+func safeAdmissionLocation(code, value, reason string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 256 || !utf8.ValidString(value) || strings.IndexFunc(value, unicode.IsControl) >= 0 || strings.Count(value, ":") != 1 {
+		return ""
+	}
+	separator := strings.IndexByte(value, ':')
+	logicalPath, suffix := value[:separator], value[separator+1:]
+	if _, err := normalizeLogicalPath(logicalPath); err != nil {
+		return ""
+	}
+	if !artifactAdmissionLocationSuffix.MatchString(suffix) {
+		return ""
+	}
+	_, _, locationErr := parseFindingLocation(value)
+	if code == "candidate_causality_unproven" {
+		if reason != "line_not_changed_by_candidate" || locationErr != nil {
+			return ""
+		}
+		return value
+	}
+	var typedLocationErr *FindingLocationError
+	if code != "invalid_finding_location" || !errors.As(locationErr, &typedLocationErr) ||
+		typedLocationErr == nil || reason != string(typedLocationErr.Reason) {
+		return ""
+	}
+	return value
+}
+
+func findingAdmissionDiagnostic(code, findingID, location, reason string) *ArtifactAdmissionDiagnostic {
+	findingID = strings.TrimSpace(findingID)
+	if len(findingID) > 128 || !artifactFindingID.MatchString(findingID) {
+		findingID = ""
+	}
+	return &ArtifactAdmissionDiagnostic{
+		Code: code, FindingID: findingID, Location: safeAdmissionLocation(code, location, reason), Reason: reason,
+	}
+}
+
+// NewArtifactLocationAdmissionError preserves a typed location cause while
+// exposing the stable admission decision and bounded recovery details.
+func NewArtifactLocationAdmissionError(findingID, location string, cause error) error {
+	var locationErr *FindingLocationError
+	reason := "invalid_location"
+	if errors.As(cause, &locationErr) {
+		reason = string(locationErr.Reason)
+	}
+	admission := ArtifactAdmission{Decision: ArtifactAdmissionOutOfScope, Diagnostic: "reviewer finding location is invalid"}
+	return &ArtifactAdmissionError{
+		Admission:  admission,
+		Diagnostic: findingAdmissionDiagnostic("invalid_finding_location", findingID, location, reason),
+		cause:      cause,
+	}
 }
 
 func (admission ArtifactAdmission) Validate(subject ArtifactSubject) error {
@@ -106,7 +178,7 @@ const artifactRecaptureContinuation = "the rejected admission did not consume th
 // AdmitArtifact performs the single provider-owned admission decision. It
 // validates subject echo, completed full-manifest inspection, result shape,
 // and candidate scope before returning a canonical lens result.
-func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmission, error) {
+func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensResult, ArtifactAdmission, error) {
 	admission := ArtifactAdmission{
 		Schema: ArtifactAdmissionSchema, SubjectHash: request.ExpectedSubject.SubjectHash,
 		RawSHA256: payloadSHA256(request.RawPayload), CanonicalSHA256: payloadSHA256(request.CanonicalPayload),
@@ -114,6 +186,10 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 	fail := func(decision ArtifactAdmissionDecision, diagnostic string) (LensResult, ArtifactAdmission, error) {
 		admission.Decision, admission.Diagnostic = decision, diagnostic
 		return LensResult{}, admission, &ArtifactAdmissionError{Admission: admission}
+	}
+	failFinding := func(decision ArtifactAdmissionDecision, diagnostic string, detail *ArtifactAdmissionDiagnostic, cause error) (LensResult, ArtifactAdmission, error) {
+		admission.Decision, admission.Diagnostic = decision, diagnostic
+		return LensResult{}, admission, &ArtifactAdmissionError{Admission: admission, Diagnostic: detail, cause: cause}
 	}
 	if err := ValidateArtifactSubject(request.ExpectedSubject); err != nil {
 		return fail(ArtifactAdmissionBindingMismatch, err.Error())
@@ -176,19 +252,6 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 		wantPaths[index] = entry.Path
 		allowed[entry.Path] = struct{}{}
 	}
-	repositoryPaths, err := canonicalPaths(request.FrozenContext.repositoryPaths)
-	if err != nil || request.FrozenContext.repositoryPaths == nil || !equalStrings(repositoryPaths, request.FrozenContext.repositoryPaths) {
-		return fail(ArtifactAdmissionBindingMismatch, "frozen repository path manifest is missing or non-canonical")
-	}
-	repository := make(map[string]struct{}, len(repositoryPaths))
-	for _, logicalPath := range repositoryPaths {
-		repository[logicalPath] = struct{}{}
-	}
-	for _, logicalPath := range wantPaths {
-		if _, ok := repository[logicalPath]; !ok {
-			return fail(ArtifactAdmissionBindingMismatch, "frozen changed path is absent from the repository path manifest")
-		}
-	}
 	if request.Inspection.Status != ArtifactInspectionCompleted {
 		return fail(ArtifactAdmissionIncomplete, "reviewer did not report completed candidate inspection")
 	}
@@ -208,6 +271,11 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 	if err != nil {
 		return fail(ArtifactAdmissionIncomplete, err.Error())
 	}
+	repository, cleanup, err := newFrozenRepositoryPathLookup(ctx, request.FrozenContext)
+	if err != nil {
+		return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup is unavailable")
+	}
+	defer cleanup()
 	wantPrefix := map[string]string{LensRisk: "R1-", LensReadability: "R2-", LensReliability: "R3-", LensResilience: "R4-"}[canonical.Lens]
 	seenFindingIDs := make(map[string]struct{}, len(canonical.Findings))
 	wantCandidateCausalIDs := make([]string, 0)
@@ -215,7 +283,11 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 		if evidenceReportsUnavailableInspection(evidence) {
 			return fail(ArtifactAdmissionIncomplete, "reviewer evidence reports that candidate inspection was unavailable")
 		}
-		if referenceOutsideRepository(evidence, repository) {
+		outside, lookupErr := referenceOutsideRepository(evidence, repository.contains)
+		if lookupErr != nil {
+			return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup failed")
+		}
+		if outside {
 			return fail(ArtifactAdmissionOutOfScope, "reviewer evidence references a path outside the frozen repository")
 		}
 	}
@@ -230,11 +302,25 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 			return fail(ArtifactAdmissionAmbiguous, "reviewer result repeats a finding ID")
 		}
 		seenFindingIDs[finding.ID] = struct{}{}
-		if !findingLocationInGenesis(finding.Location, wantPaths) {
+		logicalPath, _, locationErr := parseFindingLocation(finding.Location)
+		if locationErr != nil {
+			var typedLocationErr *FindingLocationError
+			reason := "invalid_location"
+			if errors.As(locationErr, &typedLocationErr) && typedLocationErr != nil {
+				reason = string(typedLocationErr.Reason)
+			}
+			return failFinding(ArtifactAdmissionOutOfScope, "reviewer finding location is invalid",
+				findingAdmissionDiagnostic("invalid_finding_location", finding.ID, finding.Location, reason), locationErr)
+		}
+		if stringIndex(wantPaths, logicalPath) < 0 {
 			return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
 		}
 		for _, proof := range finding.ProofRefs {
-			if referenceOutsideRepository(proof, repository) {
+			outside, lookupErr := referenceOutsideRepository(proof, repository.contains)
+			if lookupErr != nil {
+				return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup failed")
+			}
+			if outside {
 				return fail(ArtifactAdmissionOutOfScope, "reviewer proof references a path outside the frozen repository")
 			}
 		}
@@ -262,7 +348,16 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 	// non-canonical formatting must still admit, since admission persists the
 	// canonical form below rather than the caller's raw bytes.
 	if !equalStrings(verifiedIDs, wantCandidateCausalIDs) {
-		return fail(ArtifactAdmissionOutOfScope, "candidate-causal findings are not proven by repository-derived changed-line evidence")
+		var findingID, location string
+		for _, finding := range canonical.Findings {
+			if stringIndex(wantCandidateCausalIDs, finding.ID) >= 0 && stringIndex(verifiedIDs, finding.ID) < 0 {
+				findingID, location = finding.ID, finding.Location
+				break
+			}
+		}
+		return failFinding(ArtifactAdmissionOutOfScope,
+			"candidate-causal findings are not proven by repository-derived changed-line evidence",
+			findingAdmissionDiagnostic("candidate_causality_unproven", findingID, location, "line_not_changed_by_candidate"), nil)
 	}
 	admission.Decision, admission.ResultHash = ArtifactAdmissionCompleted, canonical.ResultHash
 	admission.CandidateCausalFindingIDs = verifiedIDs
@@ -333,10 +428,72 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 }
 
 var artifactFindingID = regexp.MustCompile(`^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*$`)
+var artifactAdmissionLocationSuffix = regexp.MustCompile(`^[A-Za-z0-9+.-]*$`)
 
 type artifactReferenceToken struct {
 	value  string
 	quoted bool
+}
+
+type frozenRepositoryPathLookup struct {
+	ctx       context.Context
+	repo      string
+	isolation []string
+	trees     []string
+	cache     map[string]bool
+}
+
+func newFrozenRepositoryPathLookup(ctx context.Context, frozen FrozenCandidateContext) (*frozenRepositoryPathLookup, func(), error) {
+	if ctx == nil || frozen.repositoryRoot == "" || !validGitTree(frozen.BaseTree) || !validGitTree(frozen.CandidateTree) {
+		return nil, func() {}, errors.New("frozen repository identity is incomplete") // refusal:by-design world-action: provider-owned immutable context is incomplete and must be reconstructed from authority
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, func() {}, err
+	}
+	isolation, cleanup, err := isolatedImmutableTreeGit(ctx, frozen.repositoryRoot)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	trees := []string{frozen.BaseTree}
+	if frozen.CandidateTree != frozen.BaseTree {
+		trees = append(trees, frozen.CandidateTree)
+	}
+	return &frozenRepositoryPathLookup{
+		ctx: ctx, repo: frozen.repositoryRoot, isolation: isolation, trees: trees, cache: make(map[string]bool),
+	}, cleanup, nil
+}
+
+func (lookup *frozenRepositoryPathLookup) contains(logicalPath string) (bool, error) {
+	if known, ok := lookup.cache[logicalPath]; ok {
+		return known, nil
+	}
+	want := []byte(logicalPath + "\x00")
+	for _, tree := range lookup.trees {
+		output, err := runGitLimited(lookup.ctx, lookup.repo, lookup.isolation, nil, len(logicalPath)+len("160000 commit ")+64+2,
+			"ls-tree", "-z", "--full-tree", tree, "--", ":(literal)"+logicalPath)
+		if err != nil {
+			return false, err
+		}
+		if len(output) == 0 {
+			continue
+		}
+		header, path, found := bytes.Cut(output, []byte{'\t'})
+		fields := bytes.Split(header, []byte{' '})
+		if !found || !bytes.Equal(path, want) || len(fields) != 3 || !validGitTree(string(fields[2])) {
+			return false, errors.New("literal repository path lookup returned a non-exact result") // refusal:by-design world-action: contradictory Git plumbing output cannot establish immutable path authority
+		}
+		kind := string(fields[0]) + " " + string(fields[1])
+		if kind == "040000 tree" {
+			continue
+		}
+		if kind != "100644 blob" && kind != "100755 blob" && kind != "120000 blob" && kind != "160000 commit" {
+			return false, errors.New("literal repository path lookup returned an invalid file entry") // refusal:by-design world-action: contradictory Git mode and type cannot establish immutable path authority
+		}
+		lookup.cache[logicalPath] = true
+		return true, nil
+	}
+	lookup.cache[logicalPath] = false
+	return false, nil
 }
 
 // referenceOutsideRepository recognizes canonical path:positive-line tokens
@@ -344,20 +501,27 @@ type artifactReferenceToken struct {
 // universe. Bare root names need a dot; extensionless root paths remain
 // available through quoting. This keeps status:500 and digest/timestamp labels
 // out of the path grammar while rejecting malformed or unknown path claims.
-func referenceOutsideRepository(value string, repository map[string]struct{}) bool {
+func referenceOutsideRepository(value string, lookup func(string) (bool, error)) (bool, error) {
 	for _, token := range artifactReferenceTokens(value) {
-		path, known, malformed := artifactRepositoryPathReference(token, repository)
+		path, malformed := artifactRepositoryPathReference(token)
 		if malformed {
-			return true
+			return true, nil
 		}
-		if path != "" && !known {
-			return true
+		if path == "" {
+			continue
+		}
+		known, err := lookup(path)
+		if err != nil {
+			return false, err
+		}
+		if !known {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
-func artifactRepositoryPathReference(token artifactReferenceToken, repository map[string]struct{}) (string, bool, bool) {
+func artifactRepositoryPathReference(token artifactReferenceToken) (string, bool) {
 	value := token.value
 	if !token.quoted {
 		value = strings.TrimLeft(value, "([{<")
@@ -365,33 +529,32 @@ func artifactRepositoryPathReference(token artifactReferenceToken, repository ma
 	}
 	separator := strings.LastIndexByte(value, ':')
 	if separator <= 0 || separator == len(value)-1 {
-		return "", false, false
+		return "", false
 	}
 	line := value[separator+1:]
 	nonzero := false
 	for index := range line {
 		if line[index] < '0' || line[index] > '9' {
-			return "", false, false
+			return "", false
 		}
 		nonzero = nonzero || line[index] != '0'
 	}
 	if !nonzero {
-		return "", false, false
+		return "", false
 	}
 	logicalPath := value[:separator]
 	if strings.Contains(logicalPath, "://") {
-		return "", false, false
+		return "", false
 	}
 	pathLike := token.quoted || strings.Contains(logicalPath, "/") || strings.Contains(logicalPath, ".")
 	if !pathLike {
-		return "", false, false
+		return "", false
 	}
 	canonical, err := normalizeLogicalPath(logicalPath)
 	if err != nil || canonical != logicalPath {
-		return "", false, true
+		return "", true
 	}
-	_, known := repository[canonical]
-	return canonical, known, false
+	return canonical, false
 }
 
 func artifactReferenceTokens(value string) []artifactReferenceToken {

@@ -21,13 +21,21 @@ type compactPreVerifyBridge struct {
 	Revision string
 }
 
+type compactPreVerifyInspection struct {
+	store   reviewtransaction.CompactStore
+	record  reviewtransaction.CompactRecord
+	receipt []byte
+}
+
+var afterCompactPreVerifyAuthorityInitialRead = func() error { return nil }
+
 func discoverCompactPreVerifyAuthority(ctx context.Context, repo, changeName, observedRevision string) compactPreVerifyBridge {
 	stores, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
 	if err != nil {
 		return compactPreVerifyBridge{Reason: "no eligible path-bound compact authority found"}
 	}
-	eligible := 0
-	candidateRevision := ""
+	approved := []compactPreVerifyInspection{}
+	nonApproved := []compactPreVerifyInspection{}
 	for _, store := range stores {
 		record, err := store.Load()
 		if err != nil {
@@ -40,26 +48,32 @@ func discoverCompactPreVerifyAuthority(ctx context.Context, repo, changeName, ob
 			}
 			continue
 		}
-		if record.State.State != reviewtransaction.StateApproved {
-			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority is not approved"}
+		inspection := compactPreVerifyInspection{store: store, record: record}
+		if record.State.State == reviewtransaction.StateApproved {
+			approved = append(approved, inspection)
+		} else {
+			nonApproved = append(nonApproved, inspection)
 		}
-		payload, err := os.ReadFile(store.ReceiptPath())
+	}
+
+	eligible := 0
+	candidateRevision := ""
+	candidateTree := ""
+	for index := range approved {
+		inspection := &approved[index]
+		payload, err := os.ReadFile(inspection.store.ReceiptPath())
 		if err != nil {
 			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority receipt is missing"}
 		}
 		receipt, err := reviewtransaction.ParseCompactReceipt(payload)
-		authoritative, receiptErr := record.State.Receipt()
+		authoritative, receiptErr := inspection.record.State.Receipt()
 		if err != nil || receiptErr != nil || !reflect.DeepEqual(receipt, authoritative) {
 			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority receipt does not equal approved state"}
 		}
+		inspection.receipt = payload
 		evaluation := reviewtransaction.EvaluateCompactGate(ctx, repo, receipt, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: receipt.LineageID})
-		finalRecord, finalErr := store.Load()
-		finalPayload, finalReadErr := os.ReadFile(store.ReceiptPath())
-		if finalErr != nil || finalReadErr != nil || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalPayload, payload) {
-			return compactPreVerifyBridge{Relevant: true, Reason: "compact authority changed during discovery"}
-		}
 		if evaluation.Result != reviewtransaction.GateAllow {
-			if skipsObservedStalePredecessor(observedRevision, record.Revision, evaluation.Result) {
+			if skipsObservedStalePredecessor(observedRevision, inspection.record.Revision, evaluation.Result) {
 				continue
 			}
 			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority post-apply gate is not allow"}
@@ -68,17 +82,37 @@ func discoverCompactPreVerifyAuthority(ctx context.Context, repo, changeName, ob
 		if eligible == 1 {
 			// The revision is immutable store evidence used only for retry routing.
 			// It never authorizes a receipt by itself.
-			candidateRevision = record.Revision
+			candidateRevision = inspection.record.Revision
+			candidateTree = receipt.FinalCandidateTree
 		}
 	}
-	switch eligible {
-	case 1:
-		return compactPreVerifyBridge{Eligible: true, Revision: candidateRevision}
-	case 0:
+	if eligible == 0 {
 		return compactPreVerifyBridge{Reason: "no eligible path-bound compact authority found"}
-	default:
+	}
+	if eligible > 1 {
 		return compactPreVerifyBridge{Relevant: true, Reason: "multiple eligible path-bound compact authorities found"}
 	}
+	for _, inspection := range nonApproved {
+		if inspection.record.State.CurrentSnapshot.CandidateTree == "" || inspection.record.State.CurrentSnapshot.CandidateTree == candidateTree {
+			return compactPreVerifyBridge{Relevant: true, Reason: "path-bound compact authority is not approved"}
+		}
+	}
+	if err := afterCompactPreVerifyAuthorityInitialRead(); err != nil {
+		return compactPreVerifyBridge{Relevant: true, Reason: fmt.Sprintf("compact authority mutation hook failed: %v", err)}
+	}
+	for _, inspection := range append(approved, nonApproved...) {
+		finalRecord, finalErr := inspection.store.Load()
+		if finalErr != nil || finalRecord.Revision != inspection.record.Revision {
+			return compactPreVerifyBridge{Relevant: true, Reason: "compact authority changed during discovery"}
+		}
+		if inspection.receipt != nil {
+			finalPayload, finalReadErr := os.ReadFile(inspection.store.ReceiptPath())
+			if finalReadErr != nil || !reflect.DeepEqual(finalPayload, inspection.receipt) {
+				return compactPreVerifyBridge{Relevant: true, Reason: "compact authority changed during discovery"}
+			}
+		}
+	}
+	return compactPreVerifyBridge{Eligible: true, Revision: candidateRevision}
 }
 
 func skipsObservedStalePredecessor(observedRevision, revision string, result reviewtransaction.GateResult) bool {
@@ -287,9 +321,9 @@ type reviewAuthorityEvaluation struct {
 	Reason       string
 	CompactState *reviewtransaction.CompactState
 	// Absent reports that no review authority GOVERNS this change: the change
-	// supplied no review artifact, and discovery found either no terminal
-	// native receipt at all or only receipts that verifiably stopped covering
-	// the current repository state. That is the implicit demand the kill
+	// supplied no review artifact, and discovery found either no terminal native
+	// receipt or only receipts whose terminal evaluation cannot govern the
+	// current change. That is the implicit demand the kill
 	// switch removes — issue #1877's disabled window delivers under ordinary
 	// repository policy and is recorded as unmanaged, never blocked on a
 	// review the switch refuses to run. An explicit change-bound artifact that
@@ -324,10 +358,9 @@ func resolveCompactRemediationAuthority(ctx context.Context, repo, change string
 	return evaluation.CompactState
 }
 
-// errTerminalReceiptMissing is the one discovery outcome that means "no review
-// authority exists", as opposed to "a review authority exists and does not
-// govern these bytes". Only the first is the implicit demand the kill switch
-// removes, so it is a sentinel rather than a message to match on.
+// errTerminalReceiptMissing distinguishes an empty terminal inventory from
+// discovery failures that must remain fail-closed. It is a sentinel rather than
+// a message to match on so the empty-inventory reason can name a fresh review.
 var errTerminalReceiptMissing = errors.New("terminal review receipt is missing")
 
 // reviewGateDisabledUnmanagedReason names the situation before the mechanism:
@@ -433,11 +466,12 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 			Absent: !explicit,
 		}
 	}
-	// Escalations and validation failures block regardless of provenance: an
-	// artifact that asked receipt-driven development to act is validated in
-	// full even while the switch is off.
+	// Escalations and validation failures still block while review is enabled.
+	// While disabled, only an explicit artifact continues to govern the change.
 	if len(blockers) > 0 {
-		return blockers[0]
+		selected := blockers[0]
+		selected.Absent = !explicit
+		return selected
 	}
 	selected := stale[0]
 	// An empty-candidate receipt means the operator already ran the plain
