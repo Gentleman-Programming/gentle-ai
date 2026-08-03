@@ -249,7 +249,7 @@ func awkwardPath(sandbox *Sandbox) error {
 	if err != nil {
 		return err
 	}
-	if toplevel != repo {
+	if filepath.Clean(toplevel) != filepath.Clean(repo) {
 		return fmt.Errorf("fixture claims path %q but git reports %q", repo, toplevel)
 	}
 	sandbox.Repo = repo
@@ -348,10 +348,9 @@ func modeOnlyChange(sandbox *Sandbox) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Chmod(script, 0o755); err != nil {
-		return err
-	}
-	if err := sandbox.git(sandbox.Repo, "add", "-A"); err != nil {
+	// Filesystems such as NTFS do not expose Unix executable bits. Set the Git
+	// index entry directly so this fixture represents the same mode-only diff.
+	if err := sandbox.git(sandbox.Repo, "update-index", "--chmod=+x", "tool.sh"); err != nil {
 		return err
 	}
 	after, err := gitOut(sandbox, sandbox.Repo, "ls-files", "-s", "tool.sh")
