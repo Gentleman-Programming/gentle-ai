@@ -28,7 +28,7 @@ import (
 // runReviewFacadeFinalize emit it so the two call sites cannot drift, and it
 // names the exact contract value the caller must pass rather than only
 // describing the requirement.
-const reviewContractRequiredForActionEligibilityReason = "--action-eligibility and --next-transition require --contract " + ReviewIntegrationContractV1
+const reviewContractRequiredForActionEligibilityReason = "--action-eligibility and --next-transition require --contract " + ReviewIntegrationContractV1 + " or " + ReviewIntegrationContractV2
 
 // reviewStatusTargetSelectorsRequireContractReason is the sibling of
 // reviewContractRequiredForActionEligibilityReason above: it names the same
@@ -2133,8 +2133,8 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	if err != nil {
 		return err
 	}
-	if (*actionEligibility || *nextTransition) && !negotiated {
-		return errors.New(reviewContractRequiredForActionEligibilityReason)
+	if (*actionEligibility || *nextTransition) && *contract != ReviewIntegrationContractV2 {
+		return reviewPreflightError(errors.New(reviewContractRequiredForActionEligibilityReason))
 	}
 	submissionBindingProvided := reviewFinalizeFlagProvided(args, "expected-revision") || reviewFinalizeFlagProvided(args, "target") ||
 		reviewFinalizeFlagProvided(args, "request-hash") || reviewFinalizeFlagProvided(args, "repository-context")

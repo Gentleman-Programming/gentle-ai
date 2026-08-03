@@ -79,7 +79,7 @@ func TestReviewFacadeStartStagedProjectionFreezesOnlyIndex(t *testing.T) {
 // review finalize).
 func TestReviewStatusActionEligibilityWithoutContractNamesContractValue(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	wantContract := "--contract " + ReviewIntegrationContractV1
+	wantContract := "--contract " + ReviewIntegrationContractV1 + " or " + ReviewIntegrationContractV2
 
 	statusErr := RunReviewStatus([]string{"--cwd", repo, "--next-transition"}, io.Discard)
 	if statusErr == nil || !strings.Contains(statusErr.Error(), wantContract) {
