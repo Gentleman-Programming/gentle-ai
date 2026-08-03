@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -209,7 +210,7 @@ func TestInstallGentleLogoRollsBackSourceWhenRegistrationFails(t *testing.T) {
 	if statErr != nil {
 		t.Fatalf("Stat(pluginPath) error = %v", statErr)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("pluginPath mode = %o, want restored 600", info.Mode().Perm())
 	}
 }
