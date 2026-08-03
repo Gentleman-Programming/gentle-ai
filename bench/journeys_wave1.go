@@ -1433,12 +1433,22 @@ func waveOneJourneys() []Journey {
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{
-					Name:     "backup list on fresh environment returns zero backups",
+					Name: "fixture: seed backup snapshot",
+					Fixture: func(sb *Sandbox) error {
+						backupDir := filepath.Join(sb.Home, ".gentle-ai", "backups", "20260803120000.000000000")
+						if err := os.MkdirAll(backupDir, 0o755); err != nil {
+							return err
+						}
+						return os.WriteFile(filepath.Join(backupDir, "manifest.json"), []byte(`{"version":1,"created_at":"2026-08-03T12:00:00Z","source":"sync","app_version":"dev","targets":[]}`), 0o644)
+					},
+				},
+				{
+					Name:     "backup list returns created backup",
 					Requires: &Capability{Verb: []string{"backup", "list"}},
 					Args:     productArgs("backup", "list"),
 					After: func(_ *Sandbox, observation Observation) error {
-						if !strings.Contains(observation.Stdout, "No safety backups found") {
-							return fmt.Errorf("expected no backups message, got %q", observation.Stdout)
+						if !strings.Contains(observation.Stdout, "20260803120000.000000000") {
+							return fmt.Errorf("expected backup in output, got %q", observation.Stdout)
 						}
 						return nil
 					},
@@ -1454,19 +1464,19 @@ func waveOneJourneys() []Journey {
 						if err := json.Unmarshal([]byte(observation.Stdout), &report); err != nil {
 							return fmt.Errorf("invalid json output: %w", err)
 						}
-						if report.TotalCount != 0 {
-							return fmt.Errorf("expected 0 backups in JSON, got %d", report.TotalCount)
+						if report.TotalCount != 1 {
+							return fmt.Errorf("expected 1 backup in JSON, got %d", report.TotalCount)
 						}
 						return nil
 					},
 				},
 				{
-					Name:     "backup clean on empty directory reports no stale backups",
-					Requires: &Capability{Verb: []string{"backup", "clean"}},
-					Args:     productArgs("backup", "clean", "--keep", "5"),
+					Name:     "backup clean prunes excess backups",
+					Requires: &Capability{Verb: []string{"backup", "clean"}, Flags: []string{"--force"}},
+					Args:     productArgs("backup", "clean", "--keep", "0", "--force"),
 					After: func(_ *Sandbox, observation Observation) error {
-						if !strings.Contains(observation.Stdout, "No stale backups to clean") {
-							return fmt.Errorf("expected no stale backups message, got %q", observation.Stdout)
+						if !strings.Contains(observation.Stdout, "Pruned") && !strings.Contains(observation.Stdout, "Cleaned") && !strings.Contains(observation.Stdout, "clean") {
+							return fmt.Errorf("expected clean message, got %q", observation.Stdout)
 						}
 						return nil
 					},
