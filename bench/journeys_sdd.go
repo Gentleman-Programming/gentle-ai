@@ -1798,5 +1798,20 @@ func sddJourneys() []Journey {
 					Requires: recoverCapability, Composite: recoverScopeChangeRoundTrip("review-guardrail-successor")},
 			},
 		},
+
+		// ------------------------------------------------ sdd attempt settle normalization
+		{
+			ID:     "j53-sdd-attempt-settle-normalization",
+			Title:  "sdd-attempt settle accepts uppercase and raw hex evidence_revision formats without deadlock",
+			Source: "Issue #2294",
+			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
+				{Name: "sdd-attempt begin", Requires: Capability{Operation: "sdd-attempt"},
+					Args: productArgs("sdd-attempt", "begin", "--cwd", "{dir}", "--change", sddChange, "--expected-revision", "", "--request-id", "req-j53-1", "--work-unit", "wu-j53", "--evidence-goal", "goal-j53")},
+				{Name: "sdd-attempt settle with raw uppercase hex", Requires: Capability{Operation: "sdd-attempt"},
+					Args: productArgs("sdd-attempt", "settle", "--cwd", "{dir}", "--change", sddChange, "--token", "", "--request-id", "req-j53-2", "--outcome", "passed", "--evidence-revision", "A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1", "--diagnosis", "passed normalization test", "--harness-disposition", "reused", "--cleanup-evidence", "clean", "--process-evidence", "proc")},
+			},
+		},
 	}
 }
+

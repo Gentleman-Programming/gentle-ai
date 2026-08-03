@@ -495,7 +495,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 }
 
 func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptRequest) (RuntimeStatus, error) {
-	request, err := normalizeFinishAttemptRequest(request)
+	request, err := validateFinishAttemptRequest(request)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -1542,7 +1542,41 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	return request, nil
 }
 
-func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptRequest, error) {
+var hex64Pattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+
+func normalizeRuntimeRevision(revision string) string {
+	trimmed := strings.TrimSpace(revision)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(trimmed), "sha256:") {
+		raw := trimmed[7:]
+		if hex64Pattern.MatchString(raw) {
+			return "sha256:" + strings.ToLower(raw)
+		}
+	}
+	if hex64Pattern.MatchString(trimmed) {
+		return "sha256:" + strings.ToLower(trimmed)
+	}
+	return trimmed
+}
+
+func normalizeFinishAttemptRequest(request FinishAttemptRequest) FinishAttemptRequest {
+	request.RequestID = strings.TrimSpace(strings.ToLower(request.RequestID))
+	request.Outcome = AttemptOutcome(strings.TrimSpace(strings.ToLower(string(request.Outcome))))
+	request.EvidenceRevision = normalizeRuntimeRevision(request.EvidenceRevision)
+	request.Diagnosis = strings.TrimSpace(request.Diagnosis)
+	request.HarnessDisposition = HarnessDisposition(strings.TrimSpace(strings.ToLower(string(request.HarnessDisposition))))
+	request.CleanupEvidence = strings.TrimSpace(request.CleanupEvidence)
+	request.ProcessEvidence = strings.TrimSpace(request.ProcessEvidence)
+	request.ExpectedBindingRevision = normalizeRuntimeRevision(request.ExpectedBindingRevision)
+	request.SuccessorLineageID = strings.TrimSpace(strings.ToLower(request.SuccessorLineageID))
+	request.RemediatesEvidenceRevision = normalizeRuntimeRevision(request.RemediatesEvidenceRevision)
+	return request
+}
+
+func validateFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptRequest, error) {
+	request = normalizeFinishAttemptRequest(request)
 	if request.ExpectedRevision == "" || !runtimeRevisionPattern.MatchString(request.ExpectedRevision) {
 		return FinishAttemptRequest{}, errors.New("finish requires an exact expected runtime revision")
 	}
@@ -1553,7 +1587,7 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 		return FinishAttemptRequest{}, errors.New("outcome must be failed, interrupted, or passed")
 	}
 	if !runtimeRevisionPattern.MatchString(request.EvidenceRevision) {
-		return FinishAttemptRequest{}, errors.New("evidence_revision must be sha256")
+		return FinishAttemptRequest{}, errors.New("evidence_revision must be sha256; rerun `gentle-ai sdd-attempt finish` or `settle` with --evidence-revision sha256:<64-lowercase-hex>")
 	}
 	if err := validateRuntimeText(request.Diagnosis, 500); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid diagnosis: %w", err)

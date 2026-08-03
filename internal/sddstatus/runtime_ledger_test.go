@@ -604,6 +604,38 @@ func countRuntimeRecords(t *testing.T, dir string) int {
 	return count
 }
 
+func TestRuntimeLedgerNormalizesEvidenceRevisionFormats(t *testing.T) {
+	ctx := context.Background()
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(ctx, repo, "ch-test-normalization")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	begin, err := store.Begin(ctx, BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "req-1", WorkUnit: "wu-1", EvidenceGoal: "goal-1",
+		MaxAttempts: 3, MaxChangedLines: 50,
+	})
+	if err != nil {
+		t.Fatalf("Begin() error = %v", err)
+	}
+
+	rawHex := strings.Repeat("A1", 32)
+	finish, err := store.Finish(ctx, FinishAttemptRequest{
+		ExpectedRevision: begin.Revision, RequestID: "req-2", Outcome: AttemptPassed,
+		EvidenceRevision: rawHex, Diagnosis: "passed with uppercase hex",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "clean", ProcessEvidence: "proc",
+	})
+	if err != nil {
+		t.Fatalf("Finish() with raw uppercase hex evidence_revision error = %v", err)
+	}
+	wantRevision := "sha256:" + strings.ToLower(rawHex)
+	if finish.EvidenceRevision != wantRevision {
+		t.Fatalf("Finish() EvidenceRevision = %q, want %q", finish.EvidenceRevision, wantRevision)
+	}
+}
+
+
 func runtimeTestHash(char byte) string {
 	return "sha256:" + strings.Repeat(string(char), 64)
 }
