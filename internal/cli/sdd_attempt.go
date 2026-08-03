@@ -106,7 +106,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
 		})
 	case "reset":
-		if *disposition == "failed-evidence-remediation" {
+		if *disposition == sddstatus.ResetDispositionFailedEvidenceRemediation {
 			if missing := missingSDDAttemptFlags(args[1:], "expected-revision", "request-id", "remediates-evidence-revision", "work-unit", "evidence-goal", "max-changed-lines", "maintainer-authorization"); len(missing) != 0 {
 				return fmt.Errorf("failed-evidence remediation reset requires %s; inspect the admitted failure with `gentle-ai sdd-status %q --cwd %q`", strings.Join(missing, ", "), *change, *cwd)
 			}
@@ -253,7 +253,7 @@ func validateUnmanagedRemediationReset(ctx context.Context, cwd, change, expecte
 	if err != nil {
 		return fmt.Errorf("resolve failed-evidence remediation eligibility: %w", err)
 	}
-	if status.RuntimeStatus == nil || status.RuntimeStatus.Revision != expected || status.NextRecommended != "authorize-remediation" {
+	if status.RuntimeStatus == nil || status.RuntimeStatus.Revision != expected || status.NextRecommended != sddstatus.RuntimeActionAuthorizeRemediation {
 		return fmt.Errorf("failed-evidence remediation is not currently authorized by admitted disabled/unmanaged status; inspect the current route with `gentle-ai sdd-status %q --cwd %q`", change, cwd)
 	}
 	return nil

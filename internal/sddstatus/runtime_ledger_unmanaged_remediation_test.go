@@ -40,13 +40,13 @@ func TestRuntimeLedgerUnmanagedFailedEvidenceRemediationIsOneExactAttempt(t *tes
 	)
 	store.ReviewDisabled = true
 	request := ResetObjectiveRequest{
-		ExpectedRevision: failed.Revision, RequestID: "authorize-unmanaged-correction", Disposition: "failed-evidence-remediation",
+		ExpectedRevision: failed.Revision, RequestID: "authorize-unmanaged-correction", Disposition: ResetDispositionFailedEvidenceRemediation,
 		RemediatesEvidenceRevision: failedEvidence, WorkUnit: "correct-verification", EvidenceGoal: "prove corrected runtime",
 		MaxChangedLines: 20, MaintainerAuthorization: authorization,
 	}
 	for _, mismatch := range []ResetObjectiveRequest{
-		{ExpectedRevision: failed.Revision, RequestID: "wrong-failed-evidence", Disposition: "failed-evidence-remediation", RemediatesEvidenceRevision: runtimeTestHash('f'), WorkUnit: "correct-verification", EvidenceGoal: "prove corrected runtime", MaxChangedLines: 20, MaintainerAuthorization: authorization},
-		{ExpectedRevision: failed.Revision, RequestID: "wrong-scope", Disposition: "failed-evidence-remediation", RemediatesEvidenceRevision: failedEvidence, WorkUnit: "renamed-correction", EvidenceGoal: "prove corrected runtime", MaxChangedLines: 20, MaintainerAuthorization: authorization},
+		{ExpectedRevision: failed.Revision, RequestID: "wrong-failed-evidence", Disposition: ResetDispositionFailedEvidenceRemediation, RemediatesEvidenceRevision: runtimeTestHash('f'), WorkUnit: "correct-verification", EvidenceGoal: "prove corrected runtime", MaxChangedLines: 20, MaintainerAuthorization: authorization},
+		{ExpectedRevision: failed.Revision, RequestID: "wrong-scope", Disposition: ResetDispositionFailedEvidenceRemediation, RemediatesEvidenceRevision: failedEvidence, WorkUnit: "renamed-correction", EvidenceGoal: "prove corrected runtime", MaxChangedLines: 20, MaintainerAuthorization: authorization},
 	} {
 		if _, err := store.Reset(context.Background(), mismatch); err == nil {
 			t.Fatalf("mismatched authorization %+v unexpectedly succeeded", mismatch)
@@ -120,11 +120,85 @@ func TestRuntimeLedgerUnmanagedFailedEvidenceRemediationIsOneExactAttempt(t *tes
 		t.Fatalf("unmanaged correction created a native review receipt or approval: %v", err)
 	}
 	if _, err := store.Reset(context.Background(), ResetObjectiveRequest{
-		ExpectedRevision: completed.Revision, RequestID: "rename-consumed-correction", Disposition: "failed-evidence-remediation",
+		ExpectedRevision: completed.Revision, RequestID: "rename-consumed-correction", Disposition: ResetDispositionFailedEvidenceRemediation,
 		RemediatesEvidenceRevision: failedEvidence, WorkUnit: "second-correction", EvidenceGoal: "prove another correction", MaxChangedLines: 20,
 		MaintainerAuthorization: authorization,
 	}); err == nil {
 		t.Fatal("consumed unmanaged authorization unexpectedly opened another correction")
+	}
+}
+
+func TestUnmanagedRemediationAuthorizationRejectsMalformedBindings(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "unmanaged-auth-parser")
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "parser-begin", WorkUnit: "verify-runtime",
+		EvidenceGoal: "prove failed runtime", MaxAttempts: 1, MaxChangedLines: 40,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedEvidence := runtimeTestHash('c')
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "parser-finish", Outcome: AttemptFailed,
+		EvidenceRevision: failedEvidence, Diagnosis: "admitted substantive verification failure",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "failed verification cleanup completed",
+		ProcessEvidence: "failed verification process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := failed.Attempts[len(failed.Attempts)-1]
+	authorization := RenderUnmanagedRemediationAuthorization(
+		failed.Revision, store.Change, failed.Objective.ID, failed.Objective.Generation, failedEvidence,
+		last.FinishCandidateIdentity, last.FinishCandidateTree, "correct-verification", "prove corrected runtime", 20,
+		"maintainer@example.com", "one bounded correction is authorized",
+	)
+	store.ReviewDisabled = true
+	request := ResetObjectiveRequest{
+		ExpectedRevision: failed.Revision, Disposition: ResetDispositionFailedEvidenceRemediation,
+		RemediatesEvidenceRevision: failedEvidence, WorkUnit: "correct-verification", EvidenceGoal: "prove corrected runtime",
+		MaxChangedLines: 20,
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(string) string
+	}{
+		{name: "carriage-return", mutate: func(value string) string { return strings.Replace(value, "\n", "\r\n", 1) }},
+		{name: "nul-byte", mutate: func(value string) string { return value + "\x00" }},
+		{name: "oversized", mutate: func(string) string { return strings.Repeat("x", 4097) }},
+		{name: "duplicate-field", mutate: func(value string) string { return value + "\nactor: maintainer@example.com" }},
+		{name: "missing-field", mutate: func(value string) string { return strings.Replace(value, "actor: maintainer@example.com\n", "", 1) }},
+		{name: "wrong-field-count", mutate: func(value string) string { return value + "\nextra: field" }},
+		{name: "wrong-schema", mutate: func(value string) string { return strings.Replace(value, "/v1", "/v2", 1) }},
+		{name: "enabled-delivery", mutate: func(value string) string { return strings.Replace(value, "disabled/unmanaged", "enabled", 1) }},
+		{name: "signed-number", mutate: func(value string) string {
+			return strings.Replace(value, "max_changed_lines: 20", "max_changed_lines: +20", 1)
+		}},
+		{name: "padded-number", mutate: func(value string) string {
+			return strings.Replace(value, "max_changed_lines: 20", "max_changed_lines: 020", 1)
+		}},
+		{name: "out-of-range-lines", mutate: func(value string) string {
+			return strings.Replace(value, "max_changed_lines: 20", "max_changed_lines: 1000001", 1)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bad := request
+			bad.RequestID = "reject-" + test.name
+			bad.MaintainerAuthorization = test.mutate(authorization)
+			if _, err := store.Reset(context.Background(), bad); err == nil {
+				t.Fatalf("%s authorization was accepted", test.name)
+			}
+		})
+	}
+}
+
+func TestNormalizeResetObjectiveRequestNamesStrayRemediationField(t *testing.T) {
+	_, err := normalizeResetObjectiveRequest(ResetObjectiveRequest{
+		ExpectedRevision: runtimeTestHash('d'), RequestID: "stray-remediation-field", WorkUnit: "correct-verification",
+	})
+	if err == nil || !strings.Contains(err.Error(), "work_unit") {
+		t.Fatalf("stray remediation field error = %v, want work_unit diagnostic", err)
 	}
 }
 
@@ -142,7 +216,7 @@ func TestUnmanagedRemediationSharesOneAuthorizationAcrossLinkedWorktrees(t *test
 	}
 	last := failed.Attempts[0]
 	authorization := RenderUnmanagedRemediationAuthorization(failed.Revision, store.Change, failed.Objective.ID, failed.Objective.Generation, failedEvidence, last.FinishCandidateIdentity, last.FinishCandidateTree, "linked-correction", "prove one correction", 20, "maintainer@example.com", "one correction")
-	request := ResetObjectiveRequest{ExpectedRevision: failed.Revision, RequestID: "linked-authorize", Disposition: "failed-evidence-remediation", RemediatesEvidenceRevision: failedEvidence, WorkUnit: "linked-correction", EvidenceGoal: "prove one correction", MaxChangedLines: 20, MaintainerAuthorization: authorization}
+	request := ResetObjectiveRequest{ExpectedRevision: failed.Revision, RequestID: "linked-authorize", Disposition: ResetDispositionFailedEvidenceRemediation, RemediatesEvidenceRevision: failedEvidence, WorkUnit: "linked-correction", EvidenceGoal: "prove one correction", MaxChangedLines: 20, MaintainerAuthorization: authorization}
 	linked := filepath.Join(t.TempDir(), "linked")
 	runRuntimeLedgerGit(t, repo, "worktree", "add", "-q", "--detach", linked)
 	t.Cleanup(func() { runRuntimeLedgerGit(t, repo, "worktree", "remove", "--force", linked) })
@@ -198,7 +272,7 @@ func TestResolveRoutesDisabledSubstantiveFailToUnmanagedAuthorization(t *testing
 	last := failed.Attempts[len(failed.Attempts)-1]
 	store.ReviewDisabled = true
 	authorized, err := store.Reset(context.Background(), ResetObjectiveRequest{
-		ExpectedRevision: failed.Revision, RequestID: "disabled-authorize", Disposition: "failed-evidence-remediation",
+		ExpectedRevision: failed.Revision, RequestID: "disabled-authorize", Disposition: ResetDispositionFailedEvidenceRemediation,
 		RemediatesEvidenceRevision: failedEvidence, WorkUnit: "correct-failed-verify", EvidenceGoal: "prove fixed verification", MaxChangedLines: 20,
 		MaintainerAuthorization: RenderUnmanagedRemediationAuthorization(failed.Revision, store.Change, failed.Objective.ID, failed.Objective.Generation,
 			failedEvidence, last.FinishCandidateIdentity, last.FinishCandidateTree, "correct-failed-verify", "prove fixed verification", 20,
