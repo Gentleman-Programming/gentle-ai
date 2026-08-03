@@ -111,7 +111,7 @@ type CompactReclaimRecord struct {
 // directory; the shared names live beside CompactStore in compact_store.go.
 func compactAuthoritativeArtifact(name string) bool {
 	switch name {
-	case compactStateFileName, compactReceiptFileName, compactFinalizeJournalFileName, CompactReviewerResultsDir:
+	case compactStateFileName, compactReceiptFileName, compactFinalizeJournalFileName, compactTraceGapsDir, CompactReviewerResultsDir:
 		return true
 	}
 	return strings.HasPrefix(name, ".atomic-")

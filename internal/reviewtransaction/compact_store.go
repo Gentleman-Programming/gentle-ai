@@ -26,6 +26,7 @@ const (
 	compactStateFileName           = "review-state.json"
 	compactReceiptFileName         = "review-receipt.json"
 	compactFinalizeJournalFileName = "finalize-attempt-journal.json"
+	compactTraceGapsDir            = "trace-gaps"
 	// CompactReviewerResultsDir holds captured reviewer result artifacts.
 	CompactReviewerResultsDir = "reviewer-results"
 )
@@ -166,9 +167,10 @@ type CompactStartRequest struct {
 }
 
 type CompactStartResult struct {
-	Record         CompactRecord
-	Action         CompactStartAction
-	LensesRequired bool
+	Record           CompactRecord
+	Action           CompactStartAction
+	LensesRequired   bool
+	TraceDegradation *CompactTraceDegradation
 }
 
 type CompactTraceEntry struct {
@@ -178,6 +180,76 @@ type CompactTraceEntry struct {
 	State            State  `json:"state"`
 	RecordedAt       string `json:"recorded_at"`
 }
+
+// CompactTraceFailureCode identifies the persistence stage that prevented a
+// requested compact trace from being recorded after authority committed.
+type CompactTraceFailureCode string
+
+const (
+	// CompactTraceFailureMkdir reports failure to create the trace parent directory.
+	CompactTraceFailureMkdir CompactTraceFailureCode = "compact_trace_mkdir_failed"
+	// CompactTraceFailureOpen reports failure to open the trace file for append.
+	CompactTraceFailureOpen CompactTraceFailureCode = "compact_trace_open_failed"
+	// CompactTraceFailureMarshal reports failure to encode the committed trace event.
+	CompactTraceFailureMarshal CompactTraceFailureCode = "compact_trace_marshal_failed"
+	// CompactTraceFailureWrite reports failure to append the encoded trace event.
+	CompactTraceFailureWrite CompactTraceFailureCode = "compact_trace_write_failed"
+	// CompactTraceFailureSync reports failure to durably synchronize the trace event.
+	CompactTraceFailureSync CompactTraceFailureCode = "compact_trace_fsync_failed"
+	// CompactTraceFailureClose reports failure to close the synchronized trace file.
+	CompactTraceFailureClose CompactTraceFailureCode = "compact_trace_close_failed"
+)
+
+// CompactTraceDegradation describes a requested trace that failed after the
+// named compact authority transition committed successfully.
+type CompactTraceDegradation struct {
+	Schema          string                  `json:"schema"`
+	MutationOutcome string                  `json:"mutation_outcome"`
+	LineageID       string                  `json:"lineage_id"`
+	StoreRevision   string                  `json:"store_revision"`
+	Event           CompactTraceEntry       `json:"event"`
+	TraceRequested  bool                    `json:"trace_requested"`
+	TraceFailed     bool                    `json:"trace_failed"`
+	FailureCode     CompactTraceFailureCode `json:"failure_code"`
+	RetrySafe       bool                    `json:"retry_safe"`
+	NextAction      string                  `json:"next_action"`
+}
+
+// CompactTraceDegradationReadFailureCode identifies an unreadable or invalid
+// degradation sidecar for the current committed authority revision.
+const CompactTraceDegradationReadFailureCode = "compact_trace_degradation_read_failed"
+
+// CompactTraceDegradationProblem reports that the current committed trace
+// degradation sidecar could not be read without making the mutation retryable.
+type CompactTraceDegradationProblem struct {
+	MutationOutcome string `json:"mutation_outcome"`
+	LineageID       string `json:"lineage_id"`
+	StoreRevision   string `json:"store_revision"`
+	FailureCode     string `json:"failure_code"`
+	Message         string `json:"message"`
+	RetrySafe       bool   `json:"retry_safe"`
+	NextAction      string `json:"next_action"`
+}
+
+// NewCompactTraceDegradationReadProblem creates the non-retryable status
+// guidance returned when a committed degradation sidecar cannot be read.
+func NewCompactTraceDegradationReadProblem(lineageID, revision string) CompactTraceDegradationProblem {
+	return CompactTraceDegradationProblem{
+		MutationOutcome: "committed", LineageID: lineageID, StoreRevision: revision,
+		FailureCode: CompactTraceDegradationReadFailureCode,
+		Message:     "The committed trace degradation record could not be read; run gentle-ai review status.",
+		RetrySafe:   false, NextAction: "review.status",
+	}
+}
+
+type compactTraceError struct {
+	Code  CompactTraceFailureCode
+	Cause error
+}
+
+func (err *compactTraceError) Error() string { return fmt.Sprintf("%s: %v", err.Code, err.Cause) }
+
+func (err *compactTraceError) Unwrap() error { return err.Cause }
 
 type CompactTransport struct {
 	Schema       string          `json:"schema"`
@@ -1160,14 +1232,15 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 	if err := writeAtomic(requestedStore.StatePath(), payload, 0o644); err != nil {
 		return CompactStartResult{}, err
 	}
+	var traceDegradation *CompactTraceDegradation
 	if request.TracePath != "" {
-		recordCompactTrace(request.TracePath, CompactTraceEntry{
+		traceDegradation = requestedStore.recordCompactTrace(request.TracePath, CompactTraceEntry{
 			Operation: "review/start", Revision: record.Revision, State: request.State.State,
 			RecordedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		})
 	}
 	return CompactStartResult{
-		Record: record, Action: CompactStartCreated,
+		Record: record, Action: CompactStartCreated, TraceDegradation: traceDegradation,
 		LensesRequired: len(request.State.SelectedLenses) > 0,
 	}, nil
 }
@@ -1563,6 +1636,10 @@ func (store CompactStore) ReceiptPath() string {
 	return filepath.Join(store.Dir, compactReceiptFileName)
 }
 
+func (store CompactStore) traceDegradationPath(revision string) string {
+	return filepath.Join(store.Dir, compactTraceGapsDir, strings.TrimPrefix(revision, "sha256:")+".json")
+}
+
 func (store CompactStore) Load() (CompactRecord, error) {
 	return store.LoadContext(context.Background())
 }
@@ -1730,7 +1807,7 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 		return "", err
 	}
 	if store.TracePath != "" {
-		recordCompactTrace(store.TracePath, CompactTraceEntry{
+		store.recordCompactTrace(store.TracePath, CompactTraceEntry{
 			Operation: operation, PreviousRevision: currentRevision, Revision: record.Revision,
 			State: next.State, RecordedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		})
@@ -2184,33 +2261,190 @@ var compactTraceWarn = func(operation, path string, err error) {
 	fmt.Fprintf(os.Stderr, "WARNING: review trace for %s was not recorded at %s: %v\n", operation, path, err)
 }
 
-// recordCompactTrace appends a diagnostic trace entry and reports rather than
-// swallows a write failure. The trace is best-effort diagnostics only: it
-// never carries authority, so its failure must never affect an already
-// committed mutation's success/failure outcome.
-func recordCompactTrace(path string, entry CompactTraceEntry) {
+// recordCompactTrace appends a diagnostic trace entry and records an
+// authority-adjacent gap when it fails. The committed mutation remains
+// successful: the gap directs operators to STATUS rather than retrying START.
+func (store CompactStore) recordCompactTrace(path string, entry CompactTraceEntry) *CompactTraceDegradation {
 	if err := appendCompactTrace(path, entry); err != nil {
-		compactTraceWarn(entry.Operation, path, err)
+		degradation := CompactTraceDegradation{
+			Schema: "gentle-ai.review-trace-gap/v1", MutationOutcome: "committed",
+			LineageID: store.lineageID, StoreRevision: entry.Revision, Event: entry,
+			TraceRequested: true, TraceFailed: true, FailureCode: compactTraceFailureCode(err),
+			RetrySafe: false, NextAction: "review.status",
+		}
+		if persistErr := store.writeTraceDegradation(degradation); persistErr != nil {
+			compactTraceWarn(entry.Operation, path, errors.Join(err, fmt.Errorf("persist trace gap: %w", persistErr)))
+		} else {
+			compactTraceWarn(entry.Operation, path, err)
+		}
+		return &degradation
+	}
+	return nil
+}
+
+func (store CompactStore) writeTraceDegradation(degradation CompactTraceDegradation) error {
+	if !validSHA256(degradation.StoreRevision) {
+		return fmt.Errorf("invalid compact trace degradation revision") // refusal:by-design world-action: a non-content-addressed sidecar cannot be persisted beside authority safely.
+	}
+	if _, err := store.traceDegradationParent(true); err != nil {
+		return err
+	}
+	path := store.traceDegradationPath(degradation.StoreRevision)
+	if err := ensureRegularTraceDegradationEntry(path); err != nil {
+		return err
+	}
+	payload, err := json.MarshalIndent(degradation, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeAtomic(path, append(payload, '\n'), 0o644)
+}
+
+func (store CompactStore) TraceDegradation(revision string) (*CompactTraceDegradation, error) {
+	if !validSHA256(revision) {
+		return nil, fmt.Errorf("invalid compact trace degradation revision") // refusal:by-design world-action: an untrusted non-content-addressed sidecar path cannot be read or repaired safely.
+	}
+	if exists, err := store.traceDegradationParent(false); err != nil {
+		return nil, err
+	} else if !exists {
+		return nil, nil
+	}
+	path := store.traceDegradationPath(revision)
+	if err := ensureRegularTraceDegradationEntry(path); err != nil {
+		return nil, err
+	}
+	payload, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var degradation CompactTraceDegradation
+	if err := json.Unmarshal(payload, &degradation); err != nil {
+		return nil, err
+	}
+	if err := degradation.validate(revision, store.lineageID); err != nil {
+		return nil, err
+	}
+	return &degradation, nil
+}
+
+// traceDegradationParent rejects redirection before sidecar reads and writes.
+func (store CompactStore) traceDegradationParent(create bool) (bool, error) {
+	dir := filepath.Join(store.Dir, compactTraceGapsDir)
+	info, err := os.Lstat(dir)
+	if os.IsNotExist(err) {
+		if !create {
+			return false, nil
+		}
+		if err := os.Mkdir(dir, 0o755); err != nil && !os.IsExist(err) {
+			return false, err
+		}
+		info, err = os.Lstat(dir)
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false, fmt.Errorf("compact trace degradation parent is unsafe") // refusal:by-design world-action: sidecars must never follow a redirected authority parent.
+	}
+	return true, nil
+}
+
+func ensureRegularTraceDegradationEntry(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("compact trace degradation entry is unsafe") // refusal:by-design world-action: a non-regular sidecar cannot bind a trace gap safely.
+	}
+	return nil
+}
+
+func (degradation CompactTraceDegradation) validate(revision, lineageID string) error {
+	if degradation.Schema != "gentle-ai.review-trace-gap/v1" || degradation.MutationOutcome != "committed" ||
+		degradation.LineageID != lineageID || degradation.StoreRevision != revision || degradation.Event.Revision != revision ||
+		degradation.Event.Operation == "" || !degradation.TraceRequested || !degradation.TraceFailed || degradation.RetrySafe ||
+		degradation.NextAction != "review.status" || !validCompactTraceFailureCode(degradation.FailureCode) {
+		return errors.New("invalid compact trace degradation") // refusal:by-design world-action: malformed durable trace-gap metadata cannot be reconstructed from authority state.
+	}
+	return nil
+}
+
+func validCompactTraceFailureCode(code CompactTraceFailureCode) bool {
+	switch code {
+	case CompactTraceFailureMkdir, CompactTraceFailureOpen, CompactTraceFailureMarshal,
+		CompactTraceFailureWrite, CompactTraceFailureSync, CompactTraceFailureClose:
+		return true
+	default:
+		return false
 	}
 }
 
+func compactTraceFailureCode(err error) CompactTraceFailureCode {
+	var traceErr *compactTraceError
+	if errors.As(err, &traceErr) {
+		return traceErr.Code
+	}
+	return CompactTraceFailureWrite
+}
+
+type compactTraceFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+type compactTraceOperations struct {
+	mkdirAll func(string, os.FileMode) error
+	openFile func(string, int, os.FileMode) (compactTraceFile, error)
+	marshal  func(any) ([]byte, error)
+}
+
 func appendCompactTrace(path string, entry CompactTraceEntry) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	return appendCompactTraceWith(path, entry, compactTraceOperations{
+		mkdirAll: os.MkdirAll,
+		openFile: func(path string, flags int, mode os.FileMode) (compactTraceFile, error) {
+			return os.OpenFile(path, flags, mode)
+		},
+		marshal: json.Marshal,
+	})
+}
+
+func appendCompactTraceWith(path string, entry CompactTraceEntry, operations compactTraceOperations) error {
+	if err := operations.mkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return &compactTraceError{Code: CompactTraceFailureMkdir, Cause: err}
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	file, err := operations.openFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
+		return &compactTraceError{Code: CompactTraceFailureOpen, Cause: err}
 	}
-	defer file.Close()
-	payload, err := json.Marshal(entry)
+	payload, err := operations.marshal(entry)
 	if err != nil {
-		return err
+		_ = file.Close()
+		return &compactTraceError{Code: CompactTraceFailureMarshal, Cause: err}
 	}
-	if _, err := file.Write(append(payload, '\n')); err != nil {
-		return err
+	payload = append(payload, '\n')
+	if written, err := file.Write(payload); err != nil || written != len(payload) {
+		_ = file.Close()
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+		return &compactTraceError{Code: CompactTraceFailureWrite, Cause: err}
 	}
-	return file.Sync()
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return &compactTraceError{Code: CompactTraceFailureSync, Cause: err}
+	}
+	if err := file.Close(); err != nil {
+		return &compactTraceError{Code: CompactTraceFailureClose, Cause: err}
+	}
+	return nil
 }
 
 func (store CompactStore) ExportTransport() (CompactTransport, error) {

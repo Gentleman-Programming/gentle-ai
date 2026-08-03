@@ -187,7 +187,7 @@ func InvalidateApprovedCompactAuthority(ctx context.Context, repo string, reques
 		return CompactRecord{}, evaluation, err
 	}
 	if store.TracePath != "" {
-		recordCompactTrace(store.TracePath, CompactTraceEntry{
+		store.recordCompactTrace(store.TracePath, CompactTraceEntry{
 			Operation: "review/invalidate-approved", PreviousRevision: current.Revision,
 			Revision: record.Revision, State: next.State, RecordedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		})

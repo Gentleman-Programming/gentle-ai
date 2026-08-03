@@ -108,6 +108,9 @@ type ReviewFacadeStartResult struct {
 	// keeps its exact field set, and only a candidate the user declined
 	// carries the extra token. A decline is a reported choice, never a veto.
 	Consent string `json:"consent,omitempty"`
+	// TraceDegradation is present only when an explicitly requested diagnostic
+	// trace failed after this authority transition committed.
+	TraceDegradation *reviewtransaction.CompactTraceDegradation `json:"trace_degradation,omitempty"`
 }
 
 // ReviewStartConsentDeclinedThisCandidate reports that the user answered the
@@ -179,9 +182,11 @@ type ReviewFacadeFinalizeResult struct {
 	// reviewtransaction.EscalationAccountingReasonTemplate. It is present only
 	// when the authority actually escalated with a derivable cause, so every
 	// other finalize shape keeps its exact existing output.
-	Escalation    string `json:"escalation,omitempty"`
-	StoreRevision string `json:"store_revision"`
-	ReceiptPath   string `json:"receipt_path,omitempty"`
+	Escalation              string                                            `json:"escalation,omitempty"`
+	StoreRevision           string                                            `json:"store_revision"`
+	ReceiptPath             string                                            `json:"receipt_path,omitempty"`
+	TraceDegradation        *reviewtransaction.CompactTraceDegradation        `json:"trace_degradation,omitempty"`
+	TraceDegradationProblem *reviewtransaction.CompactTraceDegradationProblem `json:"trace_degradation_problem,omitempty"`
 }
 
 type ReviewReceiptDiscoveryKind string
@@ -1713,6 +1718,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	authority := started.Record.State
 	legacyResult := reviewFacadeStartResultFor(started.Action, started.LensesRequired, authority)
+	legacyResult.TraceDegradation = started.TraceDegradation
 	if !negotiated {
 		// Output-only projections of facts this start already computed. Both
 		// describe the frozen candidate, so they attach only when this start
@@ -3871,6 +3877,12 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 	result := ReviewFacadeFinalizeResult{
 		Operation: "review/finalize", LineageID: state.LineageID, State: state.State, Action: action, StoreRevision: revision,
 	}
+	if degradation, err := store.TraceDegradation(revision); err == nil {
+		result.TraceDegradation = degradation
+	} else {
+		problem := reviewtransaction.NewCompactTraceDegradationReadProblem(state.LineageID, revision)
+		result.TraceDegradationProblem = &problem
+	}
 	if state.State == reviewtransaction.StateApproved || state.State == reviewtransaction.StateEscalated {
 		result.ReceiptPath = store.ReceiptPath()
 	}
@@ -3881,7 +3893,8 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 	public := ReviewIntegrationFinalizeResult{
 		Operation: result.Operation, LineageID: result.LineageID, State: result.State,
 		Action: result.Action, Escalation: result.Escalation, StoreRevision: result.StoreRevision,
-		Eligibility: eligibility, NextTransition: transition, ValidationRequest: validationRequest,
+		Eligibility: eligibility, NextTransition: transition, ValidationRequest: validationRequest, TraceDegradation: result.TraceDegradation,
+		TraceDegradationProblem: result.TraceDegradationProblem,
 	}
 	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationFinalize, result, public, contract)
 }

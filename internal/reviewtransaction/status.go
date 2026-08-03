@@ -73,6 +73,7 @@ type AuthorityInventoryEntry struct {
 	SnapshotIdentity string                     `json:"snapshot_identity,omitempty"`
 	ChainIdentity    string                     `json:"chain_identity,omitempty"`
 	Recovery         *CompactRecoveryProvenance `json:"recovery,omitempty"`
+	TraceDegradation *CompactTraceDegradation   `json:"trace_degradation,omitempty"`
 	Problems         []string                   `json:"problems"`
 	compact          *CompactRecord
 }
@@ -279,6 +280,11 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 		entry.SnapshotIdentity = record.State.InitialSnapshot.Identity
 		entry.compact = &record
 		entry.Status = authorityStatusForState(record.State.State)
+		if degradation, degradationErr := store.TraceDegradation(record.Revision); degradationErr != nil {
+			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"read compact trace degradation: " + degradationErr.Error()}
+		} else {
+			entry.TraceDegradation = degradation
+		}
 		if payload, err := os.ReadFile(store.ReceiptPath()); err == nil {
 			receipt, parseErr := ParseCompactReceipt(payload)
 			authoritative, authorityErr := record.State.Receipt()
