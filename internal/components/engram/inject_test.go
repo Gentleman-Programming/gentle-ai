@@ -887,7 +887,7 @@ func TestInjectAntigravityRecoversWriteFailures(t *testing.T) {
 				if bytes.Contains(gotGlobal, []byte(`"engram"`)) || manifestErr != nil {
 					t.Fatalf("not plugin-only: global=%s manifest=%v err=%v", gotGlobal, manifestErr, err)
 				}
-			} else if !bytes.Equal(gotGlobal, original) || tt.manifest != "pre-invalid" && !os.IsNotExist(manifestErr) {
+			} else if !bytes.Equal(gotGlobal, original) || (tt.manifest != "pre-invalid" && !os.IsNotExist(manifestErr)) {
 				t.Fatalf("original not restored: global=%s manifest=%v err=%v", gotGlobal, manifestErr, err)
 			}
 			if tt.manifest == "pre-invalid" {
