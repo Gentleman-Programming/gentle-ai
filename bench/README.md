@@ -33,9 +33,9 @@ go vet ./...
 go test ./...
 ```
 
-The portable core contains 60 journeys. `j57` is deliberately excluded because
-it requires the product's `bench_fixture` seam; it is an explicit
-`source-coupled` axis, not a portable black-box measurement.
+The registry contains 61 journey IDs: 60 portable black-box journeys plus
+source-coupled `j57`. `j57` requires the product's `bench_fixture` seam, so it
+is deliberately excluded from the portable core.
 
 The measured binary is passed in with `--binary`, so the tool never depends on
 the sources next to it. That is what lets it measure an old release and the
@@ -334,13 +334,12 @@ invents a metric is worse than one that admits a gap.
    classifier reads a field other than exit code and denial shape, and widening
    it would let the product talk its way out of a denial.
 
-7. **The corpus is honest, not exhaustive.** Sixty mandatory portable
-   black-box journeys run end to end, weighted toward failure paths because that
-   is where friction lives. `j57` is one explicit source-coupled journey that
-   requires a `bench_fixture`-tagged product binary, for 61 registered journey
-   IDs total. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts)
-   are inspection steps rather than review-lifecycle friction and are not
-   modelled.
+7. **The corpus is honest, not exhaustive.** The registry contains 61 journey
+   IDs: 60 mandatory portable black-box journeys, weighted toward failure paths
+   because that is where friction lives, plus `j57`, one explicit source-coupled
+   journey requiring a `bench_fixture`-tagged product binary. Testing-guide
+   flows 1 (install) and 8 (no phantom SDD artifacts) are inspection steps rather
+   than review-lifecycle friction and are not modelled.
 
 8. **Some edge cases are unreachable from a temp directory and are guide flows
    instead.** A network mount where advisory locks fail in ways that are
@@ -461,12 +460,12 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 ```
 
 Those numbers are the **14-journey** corpus against the binary named above,
-kept as-is because they belong to that named build. The portable core has since
-grown to 60 journeys; the source-coupled `j57` receipt-drift proof is opt-in.
-Re-run `run` against your own binary rather than reading the block above as
-current totals. The row labels moved too: `by_design` did not exist when this
-was recorded and is now printed as `4d`, next to the number it carves out of,
-with `dead_end` at `4e`.
+kept as-is because they belong to that named build. The registry has since grown
+to 61 IDs: 60 portable journeys plus the opt-in, source-coupled `j57`
+receipt-drift proof. Re-run `run` against your own binary rather than reading
+the block above as current totals. The row labels moved too: `by_design` did not
+exist when this was recorded and is now printed as `4d`, next to the number it
+carves out of, with `dead_end` at `4e`.
 
 `results-before.json` is the same corpus against `v2.1.2`, kept as a worked
 example of the cross-version path: 5 journeys completed and 9 recorded

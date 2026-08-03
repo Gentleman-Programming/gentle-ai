@@ -232,7 +232,7 @@ func TestAssessTargetStatusRejectsStagedCandidateChangedDuringAuthorityRead(t *t
 		writeSnapshotFile(t, repo, path, "reviewed "+path+"\n")
 	}
 	lineage := "status-staged-interleaving"
-	_, _, _ = approvedCompactCurrentChangesFixture(t, repo, lineage, []string{"first.txt", "second.txt"})
+	state, _, _ := approvedCompactCurrentChangesFixture(t, repo, lineage, []string{"first.txt", "second.txt"})
 	gitSnapshot(t, repo, "add", "--", "tracked.txt")
 
 	originalHook := targetStatusCompactAuthorityReadHook
@@ -256,7 +256,8 @@ func TestAssessTargetStatusRejectsStagedCandidateChangedDuringAuthorityRead(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.TargetIdentity != live.Identity || current.Identity == live.Identity {
+	if result.TargetIdentity != live.Identity || current.Identity == live.Identity ||
+		live.CandidateTree == state.CurrentSnapshot.CandidateTree || current.CandidateTree != state.CurrentSnapshot.CandidateTree {
 		t.Fatalf("status did not retain the pre-interleaving staged snapshot: result %#v, live %#v, current %#v", result, live, current)
 	}
 	if result.Applicability != TargetApplicabilityCorrupted || result.Action != TargetStatusActionRepairAuthority {

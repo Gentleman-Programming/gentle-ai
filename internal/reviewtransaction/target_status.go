@@ -144,9 +144,6 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 	if err != nil {
 		return targetStatusFailure(base, err)
 	}
-	if err := validateTargetStatusLiveSnapshot(ctx, repo, live); err != nil {
-		return targetStatusFailure(base, err)
-	}
 
 	candidates := []targetStatusCandidate{}
 	scopeChangedCandidates := []targetStatusCandidate{}
@@ -302,6 +299,9 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		// refuses (issue #1826). Plural matches stay stale listings below.
 		candidates = approvedScopeRecovery
 	}
+	// This is the classification linearization point. Every candidate above is
+	// compared to the captured live snapshot, so revalidating it immediately
+	// before returning rejects any target drift during authority observation.
 	if err := validateTargetStatusLiveSnapshot(ctx, repo, live); err != nil {
 		return targetStatusFailure(base, err)
 	}
