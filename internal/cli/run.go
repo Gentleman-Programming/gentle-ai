@@ -62,6 +62,7 @@ var (
 	streamCommandOutput          = true
 	goEnv                        = defaultGoEnv
 	installCommunityTool         = communitytool.Install
+	restoreBackup                = func(manifest backup.Manifest) error { return backup.RestoreService{}.Restore(manifest) }
 	installCommunityToolWithHome = communitytool.InstallWithHome
 	pathEnvEntries               = func(profile system.PlatformProfile) []string {
 		return splitPathForOS(os.Getenv("PATH"), profile.OS)
@@ -179,7 +180,6 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy())
 	result.Execution = orchestrator.Execute(stagePlan)
-	runtime.state.cleanupRollbackSnapshot()
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute install pipeline: %w", result.Execution.Err)
 	}
@@ -236,6 +236,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		return result, fmt.Errorf("persist install state: %w", err)
 	}
 
+	runtime.state.cleanupRollbackSnapshot()
 	return result, nil
 }
 
@@ -990,12 +991,16 @@ func (s rollbackRestoreStep) Run() error {
 }
 
 func (s rollbackRestoreStep) Rollback() error {
-	defer s.state.cleanupRollbackSnapshot()
 	if len(s.state.manifest.Entries) == 0 {
+		s.state.cleanupRollbackSnapshot()
 		return nil
 	}
 
-	return backup.RestoreService{}.Restore(s.state.manifest)
+	if err := restoreBackup(s.state.manifest); err != nil {
+		return err
+	}
+	s.state.cleanupRollbackSnapshot()
+	return nil
 }
 
 type agentInstallStep struct {
@@ -1572,9 +1577,11 @@ func ExecuteTUIInstall(homeDir string, selection model.Selection, resolved plann
 	}
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress))
 	result := orchestrator.Execute(runtime.stagePlan())
-	runtime.state.cleanupRollbackSnapshot()
 	if runtime.state.piCodeGraph != nil {
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
+	}
+	if result.Err == nil {
+		runtime.state.cleanupRollbackSnapshot()
 	}
 	return result
 }
