@@ -1,6 +1,10 @@
 package cli
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -75,6 +79,33 @@ func TestInstallPreflightRequiresGoOnlyForResolvedBetaEngram(t *testing.T) {
 				t.Fatalf("prepare dependency preflight error = %v, want %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestInstallPreflightFindsGoOnPath(t *testing.T) {
+	binDir := t.TempDir()
+	goName := "go"
+	if runtime.GOOS == "windows" {
+		goName += ".exe"
+	}
+	goPath := filepath.Join(binDir, goName)
+	if err := os.WriteFile(goPath, nil, 0o755); err != nil {
+		t.Fatalf("create PATH Go fixture: %v", err)
+	}
+
+	originalLookPath := cmdLookPath
+	cmdLookPath = exec.LookPath
+	t.Cleanup(func() { cmdLookPath = originalLookPath })
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	runtime := installRuntime{
+		homeDir:  t.TempDir(),
+		channel:  ChannelBeta,
+		profile:  system.PlatformProfile{OS: "linux", Supported: true},
+		resolved: planner.ResolvedPlan{OrderedComponents: []model.ComponentID{model.ComponentEngram}},
+	}
+	if err := runtime.stagePlan().Prepare[0].Run(); err != nil {
+		t.Fatalf("prepare dependency preflight error = %v", err)
 	}
 }
 
