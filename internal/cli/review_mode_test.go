@@ -118,11 +118,15 @@ func TestReviewModeScopesRouteAndReportBlastRadius(t *testing.T) {
 		t.Fatalf("enable global: %v", err)
 	}
 	output.Reset()
-	if err := RunReviewMode([]string{"disable", "--cwd", linked, "--scope", "worktree"}, &output); err != nil {
+	if err := RunReviewMode([]string{"disable", "--cwd", linked, "--scope", "worktree", "--json"}, &output); err != nil {
 		t.Fatalf("disable worktree: %v", err)
 	}
-	if !strings.Contains(output.String(), "blast radius: affects only the current worktree") {
-		t.Fatalf("worktree text output misses blast radius:\n%s", output.String())
+	worktree := decodeReviewModeResult(t, output.Bytes())
+	if worktree.BlastRadius == nil || worktree.BlastRadius.Affects != "affects only the current worktree" ||
+		worktree.BlastRadius.WorktreesAvailable == nil || !*worktree.BlastRadius.WorktreesAvailable ||
+		worktree.BlastRadius.WorktreeCount != 1 || worktree.BlastRadius.LinkedWorktreeCount == nil ||
+		*worktree.BlastRadius.LinkedWorktreeCount != 0 {
+		t.Fatalf("worktree result = %#v", worktree)
 	}
 	output.Reset()
 	if err := RunReviewMode([]string{"status", "--cwd", linked, "--json"}, &output); err != nil {

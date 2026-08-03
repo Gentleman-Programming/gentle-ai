@@ -426,7 +426,14 @@ func reviewModeBlastRadius(ctx context.Context, repo, scope string) *ReviewModeB
 	case reviewModeScopeGlobal:
 		return &ReviewModeBlastRadius{Affects: "affects all repositories, clones, and worktrees for this user"}
 	case reviewModeScopeWorktree:
-		return &ReviewModeBlastRadius{Affects: "affects only the current worktree"}
+		available := true
+		linkedWorktreeCount := 0
+		return &ReviewModeBlastRadius{
+			Affects:             "affects only the current worktree",
+			WorktreesAvailable:  &available,
+			WorktreeCount:       1,
+			LinkedWorktreeCount: &linkedWorktreeCount,
+		}
 	default:
 		worktrees, available := reviewModeCloneWorktrees(ctx, repo)
 		if !available {

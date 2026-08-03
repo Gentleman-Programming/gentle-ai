@@ -21,7 +21,7 @@ import (
 // loop to terminate with the block gone. A message that names a command which
 // does not clear the block fails here, and so does one that loops forever.
 
-// reviewModeCorruption selects which of the two independent scopes holds a
+// reviewModeCorruption selects which independent scopes hold a
 // readable but nonsense mode value.
 type reviewModeCorruption struct {
 	global   bool
@@ -48,24 +48,41 @@ func TestBothUnreadableModeSourcesAreNamed(t *testing.T) {
 	assertUnreadableModeIsRecoverable(t, reviewModeCorruption{global: true, clone: true})
 }
 
+func TestAllUnreadableModeSourcesAreRecoverableWithinThreeRounds(t *testing.T) {
+	assertUnreadableModeIsRecoverable(t, reviewModeCorruption{global: true, clone: true, worktree: true})
+}
+
 func assertUnreadableModeIsRecoverable(t *testing.T, corruption reviewModeCorruption) {
 	t.Helper()
 
 	repo, message := reviewModeUnreadableFixture(t, corruption)
 	for _, path := range reviewModeCorruptPaths(t, corruption, repo) {
+		// ResolveRDDMode discovers clone-local corruption before it can inspect a
+		// worktree-local record. That record is named after the clone repair, and
+		// the loop below follows that next recovery in its own round.
+		if corruption.clone && corruption.worktree && path == reviewModeWorktreeRecordPath(t, repo) {
+			continue
+		}
 		if !strings.Contains(message, path) {
 			t.Fatalf("refusal does not name the file holding the unreadable value %q:\n%s", path, message)
 		}
 	}
-	if corruption.global && corruption.clone {
-		if commands := reviewModeNamedCommands(message); len(commands) < 4 {
-			t.Fatalf("both scopes are unreadable but the refusal names %d continuations:\n%s", len(commands), message)
+	corruptScopeCount := 0
+	for _, corrupted := range []bool{corruption.global, corruption.clone, corruption.worktree} {
+		if corrupted {
+			corruptScopeCount++
 		}
+	}
+	if corruption.clone && corruption.worktree {
+		corruptScopeCount--
+	}
+	if commands := reviewModeNamedCommands(message); len(commands) < corruptScopeCount*2 {
+		t.Fatalf("%d scopes are unreadable but the refusal names %d continuations:\n%s", corruptScopeCount, len(commands), message)
 	}
 
 	// Follow the messages exactly as an operator would, and require the loop to
-	// terminate. Two unreadable scopes need at most two repairs, so a bound of
-	// three rounds also proves the recovery makes progress rather than
+	// terminate. The three independent sources need at most three repairs, so
+	// this bound also proves the recovery makes progress rather than
 	// re-emitting the same wall.
 	t.Run("following the named recovery clears the block", func(t *testing.T) {
 		repo, message := reviewModeUnreadableFixture(t, corruption)
@@ -109,36 +126,18 @@ func reviewModeUnreadableFixture(t *testing.T, corruption reviewModeCorruption) 
 		if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone"}, &output); err != nil {
 			t.Fatalf("seed clone-local override: %v\n%s", err, output.String())
 		}
-		path := reviewModeCloneRecordPath(t, repo)
-		payload, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tampered := strings.Replace(string(payload), `"mode":"off"`, `"mode":"sometimes"`, 1)
-		if tampered == string(payload) {
-			t.Fatalf("clone-local override does not carry the expected mode field: %s", payload)
-		}
-		if err := os.WriteFile(path, []byte(tampered), 0o600); err != nil {
-			t.Fatal(err)
-		}
 	}
 	if corruption.worktree {
 		var output bytes.Buffer
 		if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "worktree"}, &output); err != nil {
 			t.Fatalf("seed worktree-local override: %v\n%s", err, output.String())
 		}
-		path := reviewModeWorktreeRecordPath(t, repo)
-		payload, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tampered := strings.Replace(string(payload), `"mode":"off"`, `"mode":"sometimes"`, 1)
-		if tampered == string(payload) {
-			t.Fatalf("worktree-local override does not carry the expected mode field: %s", payload)
-		}
-		if err := os.WriteFile(path, []byte(tampered), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	}
+	if corruption.clone {
+		corruptReviewModeRecord(t, reviewModeCloneRecordPath(t, repo), "clone-local")
+	}
+	if corruption.worktree {
+		corruptReviewModeRecord(t, reviewModeWorktreeRecordPath(t, repo), "worktree-local")
 	}
 	if corruption.global {
 		persisted, err := state.Read(home)
@@ -157,6 +156,21 @@ func reviewModeUnreadableFixture(t *testing.T, corruption reviewModeCorruption) 
 		t.Fatalf("an unreadable switch was reported as an ordinary state: %s", output.String())
 	}
 	return repo, err.Error()
+}
+
+func corruptReviewModeRecord(t *testing.T, path, scope string) {
+	t.Helper()
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := strings.Replace(string(payload), `"mode":"off"`, `"mode":"sometimes"`, 1)
+	if tampered == string(payload) {
+		t.Fatalf("%s override does not carry the expected mode field: %s", scope, payload)
+	}
+	if err := os.WriteFile(path, []byte(tampered), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func reviewModeCorruptPaths(t *testing.T, corruption reviewModeCorruption, repo string) []string {

@@ -146,6 +146,9 @@ func TestResolveRDDModeHonorsWorktreeOffPrecedence(t *testing.T) {
 	if err != nil || cloneInherit.Source != RDDModeSourceGlobal {
 		t.Fatalf("clone inherit status = %#v, %v", cloneInherit, err)
 	}
+	if cloneInherit.Revision != "" {
+		t.Fatalf("global decision leaked clone-local revision %q", cloneInherit.Revision)
+	}
 	status, err = ResolveRDDMode(ctx, repo, globalOn)
 	if err != nil || !status.Enabled() || status.Source != RDDModeSourceGlobal {
 		t.Fatalf("narrower inherit forced a mode: %#v, %v", status, err)

@@ -15,7 +15,9 @@ const ReviewIntegrationConsentSchemaIDV2 = "https://gentle-ai.dev/contracts/revi
 const ReviewIntegrationConsentSchemaV3 = "gentle-ai.review-integration.consent/v3"
 const ReviewIntegrationConsentSchemaIDV3 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/consent-v3.schema.json"
 
-const reviewConsentOffPathLegacyCommand = "gentle-ai review mode disable"
+// The frozen v1 artifact retains its original command, but live v1 guidance
+// must name the explicit scope required by the current mutation contract.
+const reviewConsentOffPathLegacyCommand = "gentle-ai review mode disable --scope=global"
 
 // ReviewIntegrationConsentResult is the typed per-candidate consent question a
 // relay-declared negotiated START answers with instead of proceeding. It is a

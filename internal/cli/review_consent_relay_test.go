@@ -120,6 +120,10 @@ func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion
 	if question.OffPath.Command != reviewConsentOffPathLegacyCommand || !strings.Contains(question.OffPath.Note, "for good") {
 		t.Fatalf("consent off path = %#v", question.OffPath)
 	}
+	var disabled bytes.Buffer
+	if err := RunReviewMode(append(strings.Fields(question.OffPath.Command)[3:], "--cwd", repo), &disabled); err != nil {
+		t.Fatalf("consent off path is not runnable: %v\n%s", err, disabled.String())
+	}
 
 	// Asking is not persisting: no authority, no latch, and no skip notice.
 	if store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "review-consent-question"); err == nil {
@@ -413,16 +417,14 @@ func TestHeadlessSkipNoticeNamesDefaultProvenance(t *testing.T) {
 	}
 }
 
-// TestConsentQuestionMatchesVersionedFixture pins the consent question to the
-// versioned contract artifact, the same way the negotiated START response is
-// pinned to start-v2.fixture.json. The repository path inside the runnable
-// invocations is the one caller-relative value, normalized to the fixture's
-// /repo placeholder.
-func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
+// TestCurrentConsentQuestionMatchesVersionedFixture pins the current consent
+// question to its versioned artifact. The legacy v1 artifact remains frozen and
+// is hash-checked separately; its live off-path guidance follows the current
+// explicit-scope mutation contract.
+func TestCurrentConsentQuestionMatchesVersionedFixture(t *testing.T) {
 	for _, tt := range []struct {
 		name, contract, fixture, schema string
 	}{
-		{name: "v1", contract: ReviewIntegrationContractV1, fixture: filepath.Join("v1", "fixtures", "consent.fixture.json"), schema: filepath.Join("v1", "schemas", "consent.schema.json")},
 		{name: "v2.1", contract: ReviewIntegrationContractV2, fixture: filepath.Join("v2", "fixtures", "consent-v3.fixture.json"), schema: filepath.Join("v2", "schemas", "consent-v3.schema.json")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
