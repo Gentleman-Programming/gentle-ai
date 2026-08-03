@@ -1,6 +1,7 @@
 package sdd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -1655,16 +1656,6 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 
 	var files []string
 	var changed bool
-	if adapter.Agent() == model.AgentKilocode {
-		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
-		if err != nil {
-			return InjectionResult{}, err
-		}
-		if removed {
-			changed = true
-			files = append(files, path)
-		}
-	}
 
 	for _, name := range managedOpenCodePluginNames(adapter.Agent()) {
 		pluginPath := filepath.Join(pluginsDir, name)
@@ -1689,6 +1680,16 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 			files = append(files, pluginPath)
 		}
 	}
+	if adapter.Agent() == model.AgentKilocode {
+		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		if removed {
+			changed = true
+			files = append(files, path)
+		}
+	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
 }
@@ -1703,6 +1704,13 @@ func removeOpenCodeOnlyReviewPlugin(pluginsDir string) (string, bool, error) {
 		return path, false, fmt.Errorf("stat OpenCode-only review plugin %s: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
+		return path, false, nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return path, false, fmt.Errorf("read OpenCode-only review plugin %s: %w", path, err)
+	}
+	if !bytes.Equal(content, []byte(assets.MustRead("opencode/plugins/review-result-artifacts.ts"))) {
 		return path, false, nil
 	}
 	if err := os.Remove(path); err != nil {
@@ -1737,17 +1745,6 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 		}
 	}
 
-	if adapter.Agent() == model.AgentKilocode {
-		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
-		if err != nil {
-			return InjectionResult{}, err
-		}
-		if removed {
-			changed = true
-			files = append(files, path)
-		}
-	}
-
 	for _, name := range managedOpenCodePluginNames(adapter.Agent()) {
 		content := assets.MustRead("opencode/plugins/" + name)
 		pluginPath := filepath.Join(pluginsDir, name)
@@ -1760,6 +1757,16 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 		files = append(files, pluginPath)
 		if writeResult.Changed {
 			changed = true
+		}
+	}
+	if adapter.Agent() == model.AgentKilocode {
+		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		if removed {
+			changed = true
+			files = append(files, path)
 		}
 	}
 

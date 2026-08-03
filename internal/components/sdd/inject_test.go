@@ -4152,7 +4152,7 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 		t.Fatalf("WriteFile(background-agents.ts) error = %v", err)
 	}
 	reviewPluginPath := filepath.Join(pluginsDir, "review-result-artifacts.ts")
-	if err := os.WriteFile(reviewPluginPath, []byte("stale OpenCode-only review plugin"), 0o644); err != nil {
+	if err := os.WriteFile(reviewPluginPath, []byte(assets.MustRead("opencode/plugins/review-result-artifacts.ts")), 0o644); err != nil {
 		t.Fatalf("WriteFile(review-result-artifacts.ts) error = %v", err)
 	}
 
@@ -4182,6 +4182,56 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 	}
 	if _, err := os.Stat(reviewPluginPath); !os.IsNotExist(err) {
 		t.Fatalf("OpenCode-only review plugin remains installed for Kilo: %v", err)
+	}
+}
+
+func TestKilocodeReviewPluginCleanupPreservesUnverifiedFiles(t *testing.T) {
+	tests := []struct {
+		name    string
+		cleanup func(string, agents.Adapter) (InjectionResult, error)
+	}{
+		{
+			name: "install",
+			cleanup: func(home string, adapter agents.Adapter) (InjectionResult, error) {
+				return installOpenCodePlugins(home, adapter)
+			},
+		},
+		{
+			name:    "refresh",
+			cleanup: RefreshInstalledOpenCodePlugins,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			pluginsDir := filepath.Join(home, ".config", "kilo", "plugins")
+			if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll(plugins) error = %v", err)
+			}
+			reviewPluginPath := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+			userContent := []byte("// user-owned Kilo review plugin")
+			if err := os.WriteFile(reviewPluginPath, userContent, 0o644); err != nil {
+				t.Fatalf("WriteFile(review-result-artifacts.ts) error = %v", err)
+			}
+
+			result, err := tt.cleanup(home, kilocodeAdapter())
+			if err != nil {
+				t.Fatalf("Kilo %s error = %v", tt.name, err)
+			}
+			got, err := os.ReadFile(reviewPluginPath)
+			if err != nil {
+				t.Fatalf("ReadFile(user-owned review plugin) error = %v", err)
+			}
+			if !bytes.Equal(got, userContent) {
+				t.Fatalf("user-owned review plugin changed: got %q, want %q", got, userContent)
+			}
+			for _, file := range result.Files {
+				if file == reviewPluginPath {
+					t.Fatalf("user-owned review plugin %q reported as cleanup: %v", reviewPluginPath, result.Files)
+				}
+			}
+		})
 	}
 }
 
