@@ -1144,10 +1144,11 @@ func TestCorrectionPlanStatusAcceptsFrozenBindingAfterAppliedFix(t *testing.T) {
 			if err := status.Validate(); err != nil {
 				t.Fatalf("status contract validation: %v\n%s", err, statusOutput.String())
 			}
-			transition, request := status.NextTransition, status.NextTransition.CorrectionRequest
-			if transition == nil || request == nil || transition.ReasonCode != tt.reason {
+			transition := status.NextTransition
+			if transition == nil || transition.CorrectionRequest == nil || transition.ReasonCode != tt.reason {
 				t.Fatalf("status transition = %#v\n%s", transition, statusOutput.String())
 			}
+			request := transition.CorrectionRequest
 			if request.LineageID != status.Authority.LineageID || request.ExpectedRevision != status.Authority.Revision ||
 				request.TargetIdentity != reviewAuthorityTargetIdentity(status) {
 				t.Fatalf("correction plan request does not bind to the frozen reviewed candidate: request=%#v status=%#v", request, status)
