@@ -342,6 +342,28 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 			return invalid("authority or repository target changed during final authorization")
 		}
 	}
+	// Wave 1 shadow observation (rdd-shadow-evaluation): outcome-neutral,
+	// advisory-only, and a true no-op unless GENTLE_AI_RDD_SHADOW is set —
+	// see shadow_observer.go. shadowDeriveBaseAdvance is called here (rather
+	// than reusing gateContext.BaseAdvance) specifically to exercise
+	// Amendment A's delegation seam from a live call site — but only when
+	// the disable switch is on AND under the exact same gate-kind/
+	// base-changed precondition the live path itself uses at line 296-299.
+	// Without both guards this call would run the full seven-condition
+	// derivation (merge-base, resolveTree, changedPaths, two patchIdentity
+	// runs, one merge-tree --write-tree) on every native gate evaluation
+	// regardless of the switch, breaching design decision 2's "no shadow
+	// Git work on the human's blocking path by default" and spec.md's "Off
+	// by Default in Live Paths" / "Disable Switch Is the Rollback Boundary"
+	// requirements (see shadowDeriveBaseAdvanceCallCountForTest, the
+	// zero-cost regression guard).
+	var shadowAdvance *BaseAdvanceCompatibility
+	if shadowObservationEnabled() && request.Gate == GatePrePR && snapshot.BaseTree != receipt.BaseTree {
+		shadowAdvance = shadowDeriveBaseAdvance(ctx, repo, receipt, request, snapshot, resolvedPrePR, preimages)
+	}
+	ObserveShadowRelation(ctx, repo, request.Gate,
+		receipt.BaseTree, receipt.FinalCandidateTree, receipt.PathsDigest, receipt.PolicyHash,
+		snapshot, policyHash, result, resolvedPrePR, shadowAdvance)
 	return NativeGateEvaluation{Result: result, Reason: nativeGateReason(result), Context: gateContext}
 }
 

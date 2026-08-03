@@ -116,6 +116,7 @@ func TestClassifyCompactRecoveryEdgeAnomalies(t *testing.T) {
 		wantAnomalies           string
 		wantRefusal             string
 		wantAuthorizationDigest bool
+		wantDispositionClass    string
 	}{
 		{name: "valid edge", wantValid: true},
 		{
@@ -141,6 +142,27 @@ func TestClassifyCompactRecoveryEdgeAnomalies(t *testing.T) {
 			wantAnomalies: compactCombinedRecoveryAnomalies, wantAuthorizationDigest: true,
 		},
 		{
+			// This is one of Wave 2's two content-mismatch branches
+			// (rdd-authority-disposition-plan, design decision 2):
+			// errCompactRecoveryTargetUnchanged with a schema-prefixed but
+			// wrong-content authorization.
+			name: "unchanged target with schema-prefixed different-content authorization is non-reconcilable corruption",
+			mutate: func(predecessor CompactRecord, successor *CompactRecord) {
+				successor.State.InitialSnapshot = predecessor.State.CurrentSnapshot
+				successor.State.CurrentSnapshot = predecessor.State.CurrentSnapshot
+				successor.State.GenesisPaths = append([]string(nil), predecessor.State.GenesisPaths...)
+				recovery := successor.State.Recovery
+				recovery.MaintainerAuthorization = compactRecoveryAuthorizationBinding(
+					recovery.PredecessorLineageID, recovery.PredecessorRevision,
+					successor.State.InitialSnapshot.Identity, recovery.Actor, "different reason")
+			},
+			wantRefusal:          "unchanged target is not the sole anomaly",
+			wantDispositionClass: compactContentMismatchedRecoveryAuthorizationClass,
+		},
+		{
+			// The other content-mismatch branch:
+			// errCompactRecoveryAuthorizationInexact with a schema-prefixed but
+			// wrong-content authorization.
 			name: "schema-prefixed different-content authorization is non-reconcilable corruption",
 			mutate: func(_ CompactRecord, successor *CompactRecord) {
 				recovery := successor.State.Recovery
@@ -148,7 +170,8 @@ func TestClassifyCompactRecoveryEdgeAnomalies(t *testing.T) {
 					recovery.PredecessorLineageID, recovery.PredecessorRevision,
 					successor.State.InitialSnapshot.Identity, recovery.Actor, "different reason")
 			},
-			wantRefusal: "corruption, not a pre-contract authorization",
+			wantRefusal:          "corruption, not a pre-contract authorization",
+			wantDispositionClass: compactContentMismatchedRecoveryAuthorizationClass,
 		},
 	}
 
@@ -179,6 +202,9 @@ func TestClassifyCompactRecoveryEdgeAnomalies(t *testing.T) {
 			}
 			if tt.wantRefusal != "" && (got.NonReconcilableError == nil || !strings.Contains(got.NonReconcilableError.Error(), tt.wantRefusal)) {
 				t.Fatalf("non-reconcilable error = %v, want substring %q", got.NonReconcilableError, tt.wantRefusal)
+			}
+			if got.DispositionClass != tt.wantDispositionClass {
+				t.Fatalf("disposition class = %q, want %q", got.DispositionClass, tt.wantDispositionClass)
 			}
 			wantDigest := ""
 			if tt.wantAuthorizationDigest {
