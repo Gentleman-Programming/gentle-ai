@@ -1589,7 +1589,7 @@ func sddJourneys() []Journey {
 						}
 						return nil
 					})},
-				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
+				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--scope", "global", "--json")},
 				{Name: "sdd-status with reviews off", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("pre-verify routing with reviews off", func(status sddStatusV1) error {
@@ -1605,7 +1605,7 @@ func sddJourneys() []Journey {
 						}
 						return nil
 					})},
-				{Name: "mode enable", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
+				{Name: "mode enable", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "global", "--json")},
 				{Name: "sdd-status with reviews back on", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("the gate returns when the switch does", func(status sddStatusV1) error {
@@ -1652,7 +1652,7 @@ func sddJourneys() []Journey {
 						}
 						return nil
 					})},
-				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
+				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--scope", "global", "--json")},
 				{Name: "sdd-status with reviews off", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("archive routing with reviews off", func(status sddStatusV1) error {

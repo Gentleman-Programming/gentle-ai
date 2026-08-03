@@ -503,7 +503,7 @@ func rddModeStatus(
 		Source:     RDDModeSourceDefault,
 	}
 	if clonePresent {
-		status.Revision, status.CloneLocalRevision = cloneOverride.Revision, cloneOverride.Revision
+		status.CloneLocalRevision = cloneOverride.Revision
 		if cloneOverride.Mode == string(RDDModeOff) {
 			status.CloneLocal = RDDModeOff
 		}
@@ -520,6 +520,7 @@ func rddModeStatus(
 		status.Revision = status.WorktreeRevision
 	case status.CloneLocal == RDDModeOff:
 		status.Effective, status.Source = RDDModeOff, RDDModeSourceCloneLocal
+		status.Revision = status.CloneLocalRevision
 	case globalMode == RDDModeOff:
 		status.Effective, status.Source = RDDModeOff, RDDModeSourceGlobal
 	case globalMode == RDDModeOn:
