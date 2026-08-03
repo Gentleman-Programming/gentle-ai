@@ -29,16 +29,22 @@ func defaultScoopGentleAIOwned() bool {
 		return false
 	}
 
-	rootCtx, cancel := context.WithTimeout(context.Background(), scoopRootLookupTimeout)
-	defer cancel()
-	root := scoopRootWith(os.Getenv, os.UserHomeDir, func(args ...string) ([]byte, error) {
-		return scoopCommand(rootCtx, args...)
+	root := scoopRootWithTimeout(scoopRootLookupTimeout, os.Getenv, os.UserHomeDir, func(ctx context.Context, args ...string) ([]byte, error) {
+		return scoopCommand(ctx, args...)
 	})
 	if root == "" {
 		return false
 	}
 
 	return scoopOwnsExecutableWithResolvers(executable, root, scoopResolvePath, scoopResolvePath)
+}
+
+func scoopRootWithTimeout(timeout time.Duration, getenv func(string) string, userHome func() (string, error), run func(context.Context, ...string) ([]byte, error)) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return scoopRootWith(getenv, userHome, func(args ...string) ([]byte, error) {
+		return run(ctx, args...)
+	})
 }
 
 func scoopRootWith(getenv func(string) string, userHome func() (string, error), run func(...string) ([]byte, error)) string {

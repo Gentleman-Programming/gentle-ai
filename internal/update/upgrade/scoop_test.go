@@ -183,6 +183,34 @@ func TestScoopRootWith(t *testing.T) {
 	}
 }
 
+func TestScoopRootWithTimeoutFallsBackAfterDeadline(t *testing.T) {
+	environmentRoot := filepath.Join(t.TempDir(), "environment-scoop")
+	var commandContext context.Context
+	got := scoopRootWithTimeout(0,
+		func(key string) string {
+			if key == "SCOOP" {
+				return environmentRoot
+			}
+			return ""
+		},
+		func() (string, error) { return "", errors.New("home directory should not be read") },
+		func(ctx context.Context, args ...string) ([]byte, error) {
+			commandContext = ctx
+			if !sameStrings(args, []string{"config", "root_path"}) {
+				t.Errorf("Scoop arguments = %v, want [config root_path]", args)
+			}
+			return nil, ctx.Err()
+		},
+	)
+
+	if !errors.Is(commandContext.Err(), context.DeadlineExceeded) {
+		t.Fatalf("Scoop root lookup context error = %v, want deadline exceeded", commandContext.Err())
+	}
+	if got != environmentRoot {
+		t.Errorf("scoopRootWithTimeout() = %q, want SCOOP fallback %q", got, environmentRoot)
+	}
+}
+
 func TestEffectiveMethodRoutesActiveWindowsScoopOwnership(t *testing.T) {
 	origScoopGentleAIOwned := scoopGentleAIOwned
 	t.Cleanup(func() { scoopGentleAIOwned = origScoopGentleAIOwned })
