@@ -76,7 +76,22 @@ type waveCorrectionStatus struct {
 	NextTransition *struct {
 		Kind       string `json:"kind"`
 		ReasonCode string `json:"reason_code"`
+		Collect    *struct {
+			Inputs []struct {
+				Name       string                    `json:"name"`
+				Submission *waveSubmissionDescriptor `json:"submission"`
+			} `json:"inputs"`
+		} `json:"collect"`
 	} `json:"next_transition"`
+}
+
+type waveSubmissionDescriptor struct {
+	OperationToken string   `json:"operation_token"`
+	ArgumentTokens []string `json:"argument_tokens"`
+	Value          struct {
+		Slot                 string `json:"slot"`
+		SubstitutionLocation int    `json:"substitution_location"`
+	} `json:"value"`
 }
 
 type waveRetryStatus struct {
@@ -444,9 +459,69 @@ func readCorrectionStatus(r *journeyRun) (waveCorrectionStatus, error) {
 }
 
 func readCorrectionStatusFor(r *journeyRun, lineage string) (waveCorrectionStatus, error) {
-	observation := r.run(productArgsFor(r, "review", "status", "--contract", reviewContract, "--next-transition", "--lineage", lineage), false)
+	return readCorrectionStatusForContract(r, lineage, reviewContract)
+}
+
+func readCorrectionStatusForContract(r *journeyRun, lineage, contract string) (waveCorrectionStatus, error) {
+	arguments := []string{"review", "status", "--contract", contract, "--next-transition", "--lineage", lineage}
+	if contract == reviewContractV2 {
+		arguments = append(arguments, "--agent", "claude-code")
+	}
+	observation := r.run(productArgsFor(r, arguments...), false)
 	var status waveCorrectionStatus
 	return status, decodeWaveObservation(observation, &status, "corrected review status")
+}
+
+func correctionSubmissionArguments(r *journeyRun, status waveCorrectionStatus, reason, slot, value string) ([]string, error) {
+	if status.Authority == nil || status.NextTransition == nil || status.NextTransition.Kind != "collect" ||
+		status.NextTransition.ReasonCode != reason || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		return nil, fmt.Errorf("submission descriptor transition = %+v", status.NextTransition)
+	}
+	descriptor := status.NextTransition.Collect.Inputs[0].Submission
+	if descriptor == nil || descriptor.OperationToken != "finalize" || descriptor.Value.Slot != slot ||
+		descriptor.Value.SubstitutionLocation < 0 || descriptor.Value.SubstitutionLocation >= len(descriptor.ArgumentTokens) {
+		return nil, fmt.Errorf("submission descriptor = %+v", descriptor)
+	}
+	placeholders := 0
+	for index, token := range descriptor.ArgumentTokens {
+		if !strings.HasPrefix(token, "--") || strings.ContainsAny(token, " \t\r\n") || strings.HasPrefix(token, "--cwd=") || strings.Contains(token, r.sandbox.Root) {
+			return nil, fmt.Errorf("submission descriptor leaked a path or shell token: %q", token)
+		}
+		if strings.Contains(token, "{{value}}") {
+			placeholders++
+			if index != descriptor.Value.SubstitutionLocation || strings.Count(token, "{{value}}") != 1 {
+				return nil, fmt.Errorf("submission descriptor slot = %q at %d", token, index)
+			}
+		}
+	}
+	if len(descriptor.ArgumentTokens) < 5 {
+		return nil, fmt.Errorf("submission descriptor argv has %d tokens, need at least 5: %v", len(descriptor.ArgumentTokens), descriptor.ArgumentTokens)
+	}
+	if placeholders != 1 || !strings.HasPrefix(descriptor.ArgumentTokens[4], "--request-hash=") {
+		return nil, fmt.Errorf("submission descriptor argv = %v", descriptor.ArgumentTokens)
+	}
+	arguments := append([]string{"review", descriptor.OperationToken}, descriptor.ArgumentTokens...)
+	arguments[descriptor.Value.SubstitutionLocation+2] = strings.Replace(arguments[descriptor.Value.SubstitutionLocation+2], "{{value}}", value, 1)
+	if strings.Contains(arguments[descriptor.Value.SubstitutionLocation+2], "{{value}}") {
+		return nil, errors.New("submission descriptor did not replace its only value slot")
+	}
+	return arguments, nil
+}
+
+func submitCorrectionPlan(r *journeyRun) error {
+	status, err := readCorrectionStatusForContract(r, correctedDeliveryLineage, reviewContractV2)
+	if err != nil {
+		return err
+	}
+	arguments, err := correctionSubmissionArguments(r, status, "correction_plan_required", "correction_lines", "2")
+	if err != nil {
+		return err
+	}
+	result, err := decodeWaveOperation(r.runAt(r.sandbox.Root, arguments, false), "correction submission descriptor")
+	if err != nil || result.State != "correction_required" || result.LineageID != correctedDeliveryLineage {
+		return fmt.Errorf("correction submission descriptor result = %+v, %v", result, err)
+	}
+	return nil
 }
 
 func capturePassedCorrectionEvidence(r *journeyRun) error {
@@ -479,11 +554,15 @@ func capturePassedCorrectionEvidenceFor(r *journeyRun, lineage string) error {
 }
 
 func completeCorrectedReview(r *journeyRun) error {
-	return completeCorrectedReviewFor(r, correctedDeliveryLineage)
+	return completeCorrectedReviewForContract(r, correctedDeliveryLineage, reviewContractV2)
 }
 
 func completeCorrectedReviewFor(r *journeyRun, lineage string) error {
-	status, err := readCorrectionStatusFor(r, lineage)
+	return completeCorrectedReviewForContract(r, lineage, reviewContract)
+}
+
+func completeCorrectedReviewForContract(r *journeyRun, lineage, contract string) error {
+	status, err := readCorrectionStatusForContract(r, lineage, contract)
 	if err != nil {
 		return err
 	}
@@ -505,6 +584,20 @@ func completeCorrectedReviewFor(r *journeyRun, lineage string) error {
 	path, err := writeScratch(r.sandbox, "targeted-validation.json", append(validation, '\n'))
 	if err != nil {
 		return err
+	}
+	if contract == reviewContractV2 {
+		arguments, err := correctionSubmissionArguments(r, status, "targeted_validation_required", "validation", path)
+		if err != nil {
+			return err
+		}
+		result, err := decodeWaveOperation(r.runAt(r.sandbox.Root, arguments, false), "corrected review finalize")
+		if err != nil {
+			return err
+		}
+		if result.State != "approved" || result.LineageID != lineage {
+			return fmt.Errorf("corrected review finalized as %+v", result)
+		}
+		return nil
 	}
 	observation := r.run(productArgsFor(r, "review", "finalize", "--lineage", lineage,
 		"--validation", path, "--captured-evidence=true"), false)
@@ -1015,7 +1108,7 @@ func prepareDeclinedCandidate(sandbox *Sandbox) error {
 
 func declineCandidateFromStatus(r *journeyRun) error {
 	statusObservation := r.run(productArgsFor(r, "review", "status", "--contract", reviewContractV2,
-		"--next-transition", "--lineage", declineCandidateLineage), false)
+		"--agent", "claude-code", "--next-transition", "--lineage", declineCandidateLineage), false)
 	var status statusEnvelope
 	if err := decodeWaveObservation(statusObservation, &status, "candidate decline status"); err != nil {
 		return err
@@ -1126,13 +1219,12 @@ func waveOneJourneys() []Journey {
 				{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability,
 					Args:  productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--captured-results=true"),
 					After: requireReviewState("correction_required", correctedDeliveryLineage)},
-				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability,
-					Args: productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--correction-lines", "2")},
+				{Name: "derive and execute the correction submission descriptor", Requires: finalizeCorrectionCapability, Composite: submitCorrectionPlan},
 				{Name: "fixture: corrected candidate proven to change only the reviewed path", Fixture: writeCorrectedCandidate},
 				{Name: "capture passed repository evidence for the provider correction target", Requires: captureOutcomeEvidenceCapability, Composite: capturePassedCorrectionEvidence},
-				{Name: "complete targeted validation and approve the corrected receipt", Requires: finalizeValidationCapability, Composite: completeCorrectedReview},
+				{Name: "execute the targeted validation submission descriptor and approve the corrected receipt", Requires: finalizeValidationCapability, Composite: completeCorrectedReview},
 				{Name: "corrected receipt and advanced current snapshot are proven", Requires: statusCapability,
-					Args: productArgs("review", "status", "--contract", reviewContract, "--lineage", correctedDeliveryLineage), After: proveCorrectedReceipt},
+					Args: productArgs("review", "status", "--contract", reviewContractV2, "--agent", "claude-code", "--lineage", correctedDeliveryLineage), After: proveCorrectedReceipt},
 				{Name: "fixture: corrected candidate staged tree matches the receipt", Fixture: stageCorrectedTree},
 				{Name: "gate pre-commit on the corrected receipt", Requires: validateCapability,
 					Args: productArgs("review", "validate", "--gate", "pre-commit"),

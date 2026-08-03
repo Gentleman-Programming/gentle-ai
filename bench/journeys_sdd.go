@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,6 +59,14 @@ const (
 // help is explicit that the successor's name is the operator's to choose, so the
 // benchmark chooses one and keeps it stable.
 const sddSuccessorLineage = "review-sdd-successor"
+
+const (
+	sddStaleAuthorityLineage   = "review-sdd-stale"
+	sddNewerAuthorityLineage   = "review-sdd-newer"
+	sddAmbiguousFirstLineage   = "review-sdd-ambiguous-first"
+	sddAmbiguousLastLineage    = "review-sdd-ambiguous-last"
+	sddForeignAuthorityLineage = "review-sdd-foreign"
+)
 
 // ---------------------------------------------------------------------------
 // Envelopes
@@ -469,6 +478,329 @@ func sddPlanningArtifacts(verifyReport string) func(*Sandbox) error {
 	}
 }
 
+// sddStaleAuthorityFixture recreates the #1893 shape through the public CLI:
+// an older reviewing lineage and a newer approved lineage bind the same
+// OpenSpec paths but freeze different candidate trees.
+func sddStaleAuthorityFixture(sandbox *Sandbox) error {
+	if err := baseRepo(sandbox); err != nil {
+		return err
+	}
+	if err := sddStageAuthorityChange(sandbox, false); err != nil {
+		return err
+	}
+	paths, err := gitOut(sandbox, sandbox.Repo, "diff", "--cached", "--name-only")
+	if err != nil {
+		return err
+	}
+	if err := sddFixtureStart(sandbox, sddStaleAuthorityLineage); err != nil {
+		return fmt.Errorf("start stale authority: %w", err)
+	}
+
+	if err := sandbox.write(filepath.Join(sddChangeRoot(sandbox), "tasks.md"), "# tasks\n\n- [x] 1.1 write the newer prose\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "openspec"); err != nil {
+		return err
+	}
+	newerPaths, err := gitOut(sandbox, sandbox.Repo, "diff", "--cached", "--name-only")
+	if err != nil {
+		return err
+	}
+	if paths != newerPaths {
+		return fmt.Errorf("fixture changed the bound path set from %q to %q", paths, newerPaths)
+	}
+	if err := sddFixtureStart(sandbox, sddNewerAuthorityLineage); err != nil {
+		return fmt.Errorf("start newer authority: %w", err)
+	}
+
+	head, err := proveAuthorities(sandbox)
+	if err != nil {
+		return err
+	}
+	states := map[string]int{}
+	for _, entry := range head.Entries {
+		states[entry.State]++
+	}
+	if states["reviewing"] != 2 {
+		return fmt.Errorf("fixture needs stale and newer reviewing lineages before approval, got %+v", head.Entries)
+	}
+	if sandbox.Lineage != sddNewerAuthorityLineage {
+		return fmt.Errorf("fixture selected lineage %q, want newer lineage %q", sandbox.Lineage, sddNewerAuthorityLineage)
+	}
+	return nil
+}
+
+// sddStageAuthorityChange stages the complete OpenSpec scope an SDD authority
+// must bind. foreign adds another change to construct the mixed-path rejection.
+func sddStageAuthorityChange(sandbox *Sandbox, foreign bool) error {
+	root := sddChangeRoot(sandbox)
+	for path, content := range map[string]string{
+		filepath.Join(root, "proposal.md"):               "# " + sddChange + "\n\n## Why\n\nexercise stale authority selection.\n",
+		filepath.Join(root, "design.md"):                 "# design\n\n## Approach\n\nplain prose.\n",
+		filepath.Join(root, "tasks.md"):                  "# tasks\n\n- [x] 1.1 write the prose\n",
+		filepath.Join(root, "specs", "prose", "spec.md"): "### Requirement: prose exists\n#### Scenario: prose is present\n\n- **WHEN** the reader opens the change\n- **THEN** the prose is there\n",
+	} {
+		if err := sandbox.write(path, content); err != nil {
+			return err
+		}
+	}
+	if foreign {
+		if err := sandbox.write(filepath.Join(sandbox.Repo, "openspec", "changes", "foreign-change", "tasks.md"), "# tasks\n\n- [x] 1.1 foreign work\n"); err != nil {
+			return err
+		}
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "openspec"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func sddSingleAuthorityFixture(sandbox *Sandbox) error {
+	if err := baseRepo(sandbox); err != nil {
+		return err
+	}
+	if err := sddStageAuthorityChange(sandbox, false); err != nil {
+		return err
+	}
+	return sddFixtureStart(sandbox, sddNewerAuthorityLineage)
+}
+
+func sddAmbiguousAuthorityFixture(sandbox *Sandbox) error {
+	if err := baseRepo(sandbox); err != nil {
+		return err
+	}
+	if err := sddStageAuthorityChange(sandbox, false); err != nil {
+		return err
+	}
+	return sddFixtureStart(sandbox, sddAmbiguousFirstLineage)
+}
+
+func sddForeignAuthorityFixture(sandbox *Sandbox) error {
+	if err := baseRepo(sandbox); err != nil {
+		return err
+	}
+	if err := sddStageAuthorityChange(sandbox, true); err != nil {
+		return err
+	}
+	return sddFixtureStart(sandbox, sddForeignAuthorityLineage)
+}
+
+func sddFixtureStart(sandbox *Sandbox, lineage string) error {
+	observation := sandbox.readBack("review", "start", "--cwd", sandbox.Repo, "--lineage", lineage)
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("review start for %q exited %d: %s", lineage, observation.ExitCode, firstLine(observation.Stderr, observation.Stdout))
+	}
+	if err := rememberLineage(sandbox, observation); err != nil {
+		return err
+	}
+	if sandbox.Lineage != lineage {
+		return fmt.Errorf("review start returned lineage %q, want %q", sandbox.Lineage, lineage)
+	}
+	return nil
+}
+
+// sddProveSelectedApproval verifies the terminal state after the separately
+// capability-guarded approval steps have run.
+func sddProveSelectedApproval(r *journeyRun) error {
+	head, err := proveAuthorities(r.sandbox)
+	if err != nil {
+		return err
+	}
+	for _, entry := range head.Entries {
+		if entry.LineageID == r.sandbox.Lineage && entry.State == "approved" {
+			return nil
+		}
+	}
+	return fmt.Errorf("fixture claims approved lineage %q but review status reports %+v", r.sandbox.Lineage, head.Entries)
+}
+
+// The authority controls intentionally drive the lineage their fixtures chose.
+// Generic journeys must instead follow the product's active authority.
+func sddCaptureSelectedAuthorityLenses(r *journeyRun) error {
+	if r.sandbox.Lineage == "" {
+		return errors.New("no selected authority lineage")
+	}
+	return captureAllLensesFor(r, "--lineage", r.sandbox.Lineage)
+}
+
+func sddCaptureSelectedAuthorityEvidence(r *journeyRun) error {
+	if r.sandbox.Lineage == "" {
+		return errors.New("no selected authority lineage")
+	}
+	return captureFinalEvidenceFor(r, "--lineage", r.sandbox.Lineage)
+}
+
+func sddSelectLineage(lineage string) func(*Sandbox) error {
+	return func(sandbox *Sandbox) error {
+		head, err := proveAuthorities(sandbox)
+		if err != nil {
+			return err
+		}
+		for _, entry := range head.Entries {
+			if entry.LineageID == lineage {
+				sandbox.Lineage = lineage
+				return nil
+			}
+		}
+		return fmt.Errorf("fixture cannot select lineage %q from %+v", lineage, head.Entries)
+	}
+}
+
+func sddReceiptPath(sandbox *Sandbox) (string, error) {
+	directory, err := storeLineageDir(sandbox, sandbox.Lineage)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(directory, "review-receipt.json"), nil
+}
+
+// sddDuplicateSelectedAuthority models a historical double-publication. A
+// second `review start` correctly resumes an equivalent live authority, so this
+// persisted fixture builds two separately terminal receipts governing identical
+// bytes.
+func sddDuplicateSelectedAuthority(sandbox *Sandbox) error {
+	fromState, err := storeStatePath(sandbox, sandbox.Lineage)
+	if err != nil {
+		return err
+	}
+	fromReceipt, err := sddReceiptPath(sandbox)
+	if err != nil {
+		return err
+	}
+	statePayload, err := os.ReadFile(fromState)
+	if err != nil {
+		return err
+	}
+	receiptPayload, err := os.ReadFile(fromReceipt)
+	if err != nil {
+		return err
+	}
+	directory, err := storeLineageDir(sandbox, sddAmbiguousLastLineage)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return err
+	}
+	statePath := filepath.Join(directory, "review-state.json")
+	if err := os.WriteFile(statePath, statePayload, 0o644); err != nil {
+		return err
+	}
+	record, err := loadStoreRecord(statePath)
+	if err != nil {
+		return err
+	}
+	if !setOrderedMember(record.state, "lineage_id", sddAmbiguousLastLineage) {
+		return errors.New("compact state carries no lineage_id")
+	}
+	if _, err := record.save(); err != nil {
+		return err
+	}
+	receipt, err := decodeOrderedJSON(receiptPayload)
+	if err != nil {
+		return err
+	}
+	if lineage, ok := orderedString(receipt, "lineage_id"); !ok || lineage == "" {
+		return errors.New("compact receipt carries no lineage_id")
+	}
+	if !setOrderedMember(receipt, "lineage_id", sddAmbiguousLastLineage) {
+		return errors.New("compact receipt carries no lineage_id")
+	}
+	var compact bytes.Buffer
+	if err := encodeOrderedJSON(receipt, &compact); err != nil {
+		return err
+	}
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, compact.Bytes(), "", "  "); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(directory, "review-receipt.json"), append(indented.Bytes(), '\n'), 0o644); err != nil {
+		return err
+	}
+	head, err := proveAuthorities(sandbox)
+	if err != nil {
+		return err
+	}
+	approved := map[string]bool{}
+	for _, entry := range head.Entries {
+		if entry.State == "approved" {
+			approved[entry.LineageID] = true
+		}
+	}
+	if !approved[sandbox.Lineage] || !approved[sddAmbiguousLastLineage] {
+		return fmt.Errorf("fixture claims two approved authorities but review status reports %+v", head.Entries)
+	}
+	return nil
+}
+
+func sddRemoveReceipt(sandbox *Sandbox) error {
+	path, err := sddReceiptPath(sandbox)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("fixture expected an approved receipt at %q: %w", path, err)
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		return fmt.Errorf("fixture did not remove receipt %q: %v", path, err)
+	}
+	return nil
+}
+
+func sddMismatchReceipt(sandbox *Sandbox) error {
+	path, err := sddReceiptPath(sandbox)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		return err
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if string(payload) != "{}\n" {
+		return fmt.Errorf("fixture wrote receipt mismatch %q, read %q", path, payload)
+	}
+	return nil
+}
+
+func sddDenyPostApply(sandbox *Sandbox) error {
+	path := filepath.Join(sddChangeRoot(sandbox), "tasks.md")
+	if err := sandbox.write(path, "# tasks\n\n- [x] 1.1 changed after approval\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "openspec"); err != nil {
+		return err
+	}
+	if provePostApplyAllows(sandbox) {
+		return errors.New("fixture claims a non-allow post-apply gate but it still allows")
+	}
+	return nil
+}
+
+// sddInstallDiscoveryDriftFixture selects the build-tagged package-internal
+// seam that mutates this sandbox receipt between discovery's immutable reads.
+func sddInstallDiscoveryDriftFixture(sandbox *Sandbox) error {
+	receipt, err := sddReceiptPath(sandbox)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(receipt); err != nil {
+		return fmt.Errorf("fixture expected receipt before discovery drift: %w", err)
+	}
+	content, err := os.ReadFile(receipt)
+	if err != nil {
+		return fmt.Errorf("fixture reads receipt before discovery drift: %w", err)
+	}
+	sandbox.BenchReceiptMutationPath = receipt
+	sandbox.Scratch[sourceCoupledReceiptContentKey] = string(content)
+	return nil
+}
+
 // sddVerifyReport is the fenced envelope a completed independent verification
 // writes. Its exact shape matters: a report the product cannot parse routes as
 // "verification is missing", which is a different journey.
@@ -503,6 +835,18 @@ func readRuntimeStatus(r *journeyRun) (sddRuntimeStatus, error) {
 		return status, fmt.Errorf("parse sdd-attempt status: %w (stderr: %s)", err, firstLine(observation.Stderr))
 	}
 	return status, nil
+}
+
+// selectedReviewArgs keeps a multi-lineage journey on the authority its fixture
+// selected. Without the selector, lifecycle discovery may choose stale history.
+func selectedReviewArgs(parts ...string) func(*Sandbox) ([]string, error) {
+	return func(sandbox *Sandbox) ([]string, error) {
+		if sandbox.Lineage == "" {
+			return nil, errors.New("no selected review lineage")
+		}
+		args := append([]string{}, parts...)
+		return append(args, "--cwd", sandbox.Repo, "--lineage", sandbox.Lineage), nil
+	}
 }
 
 // sddAttemptArgs assembles one runtime mutation. The objective parameters must
@@ -996,6 +1340,32 @@ func sddStatusAssertion(name string, check func(sddStatusV1) error) func(*Sandbo
 	}
 }
 
+func sddStatusFailsClosed(reason string) func(*Sandbox, Observation) error {
+	return sddStatusAssertion("fail-closed SDD authority discovery", func(status sddStatusV1) error {
+		if status.Dependencies.Verify != "blocked" || status.NextRecommended != "resolve-review" {
+			return fmt.Errorf("verify=%q nextRecommended=%q, want blocked/resolve-review; blocked reasons=%v",
+				status.Dependencies.Verify, status.NextRecommended, status.BlockedReasons)
+		}
+		if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), reason) {
+			return fmt.Errorf("blocked reasons %v do not contain %q", status.BlockedReasons, reason)
+		}
+		return nil
+	})
+}
+
+func sddApprovedAuthoritySteps(fixture func(*Sandbox) error) []Step {
+	return []Step{
+		{Name: "fixture: valid compact authority", Fixture: fixture},
+		{Name: "capture every lens for the selected authority", Requires: captureResultCapability, Composite: sddCaptureSelectedAuthorityLenses},
+		{Name: "finalize selected authority results", Requires: selectedFinalizeResultsCapability,
+			Args: selectedReviewArgs("review", "finalize", "--captured-results=true")},
+		{Name: "capture final evidence for the selected authority", Requires: captureEvidenceCapability, Composite: sddCaptureSelectedAuthorityEvidence},
+		{Name: "approve the selected authority", Requires: selectedFinalizeEvidenceCapability,
+			Args: selectedReviewArgs("review", "finalize", "--captured-evidence=true")},
+		{Name: "prove selected authority approval", Composite: sddProveSelectedApproval},
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Capabilities
 // ---------------------------------------------------------------------------
@@ -1037,6 +1407,16 @@ var sddStatusCapability = &Capability{
 var bindSDDCapability = &Capability{
 	Verb:  []string{"review", "bind-sdd"},
 	Flags: []string{"--cwd", "--change", "--lineage", "--expected-binding-revision"},
+}
+
+var selectedFinalizeResultsCapability = &Capability{
+	Verb:  []string{"review", "finalize"},
+	Flags: []string{"--cwd", "--lineage", "--captured-results"},
+}
+
+var selectedFinalizeEvidenceCapability = &Capability{
+	Verb:  []string{"review", "finalize"},
+	Flags: []string{"--cwd", "--lineage", "--captured-evidence"},
 }
 
 var invalidateCapability = &Capability{
@@ -1292,6 +1672,81 @@ func sddJourneys() []Journey {
 						return nil
 					})},
 			},
+		},
+		{
+			ID:     "j52-sdd-stale-authority-does-not-shadow-approved-candidate",
+			Title:  "Stale same-path review authority: SDD selects the newer approved candidate",
+			Source: "issue #1893: stale compact authority must not shadow an exact approved candidate",
+			Steps: []Step{
+				{Name: "fixture: stale and newer same-path review lineages", Fixture: sddStaleAuthorityFixture},
+				{Name: "capture every lens for the newer candidate", Requires: captureResultCapability, Composite: sddCaptureSelectedAuthorityLenses},
+				{Name: "finalize the newer candidate results", Requires: selectedFinalizeResultsCapability, Args: selectedReviewArgs("review", "finalize", "--captured-results=true"), After: rememberLineage},
+				{Name: "capture final evidence for the newer candidate", Requires: captureEvidenceCapability, Composite: sddCaptureSelectedAuthorityEvidence},
+				{Name: "approve the newer candidate", Requires: selectedFinalizeEvidenceCapability, Args: selectedReviewArgs("review", "finalize", "--captured-evidence=true"), After: rememberLineage},
+				{Name: "sdd-status selects the approved candidate", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"),
+					After: sddStatusAssertion("stale authority does not shadow the approved candidate", func(status sddStatusV1) error {
+						if status.NextRecommended != "verify" {
+							return fmt.Errorf("nextRecommended = %q, want verify; blocked reasons = %v", status.NextRecommended, status.BlockedReasons)
+						}
+						if status.Dependencies.Verify != "ready" {
+							return fmt.Errorf("dependencies.verify = %q, want ready; blocked reasons = %v", status.Dependencies.Verify, status.BlockedReasons)
+						}
+						if len(status.BlockedReasons) != 0 {
+							return fmt.Errorf("approved candidate was shadowed by stale authority: %v", status.BlockedReasons)
+						}
+						return nil
+					})},
+			},
+		},
+		{
+			ID:     "j53-sdd-ambiguous-authorities-fail-closed",
+			Title:  "Two approved candidates for the same OpenSpec change: SDD refuses to choose one",
+			Source: "compact authority discovery contract: ambiguous governing candidates block",
+			Steps: append(sddApprovedAuthoritySteps(sddAmbiguousAuthorityFixture),
+				Step{Name: "fixture: duplicate its terminal authority", Fixture: sddDuplicateSelectedAuthority},
+				Step{Name: "sdd-status refuses ambiguous authorities", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("multiple eligible path-bound compact authorities found")},
+			),
+		},
+		{
+			ID:     "j54-sdd-missing-authority-receipt-fails-closed",
+			Title:  "Approved compact authority without its receipt: SDD fails closed",
+			Source: "compact authority discovery contract: a missing receipt is not approval",
+			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
+				Step{Name: "fixture: remove the published authority receipt", Fixture: sddRemoveReceipt},
+				Step{Name: "sdd-status refuses the missing receipt", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("path-bound compact authority receipt is missing")},
+			),
+		},
+		{
+			ID:     "j55-sdd-mismatched-authority-receipt-fails-closed",
+			Title:  "Approved compact authority with a mismatched receipt: SDD fails closed",
+			Source: "compact authority discovery contract: receipt bytes must equal approved state",
+			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
+				Step{Name: "fixture: replace the published authority receipt", Fixture: sddMismatchReceipt},
+				Step{Name: "sdd-status refuses the mismatched receipt", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("path-bound compact authority receipt does not equal approved state")},
+			),
+		},
+		{
+			ID:     "j56-sdd-non-allow-post-apply-gate-fails-closed",
+			Title:  "Valid approved authority over changed bytes: SDD fails closed on a non-allow post-apply gate",
+			Source: "compact authority discovery contract: a valid receipt still needs an allow gate",
+			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
+				Step{Name: "fixture: change the candidate after approval", Fixture: sddDenyPostApply},
+				Step{Name: "sdd-status refuses the non-allow gate", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("path-bound compact authority post-apply gate is not allow")},
+			),
+		},
+		{
+			ID:     "j58-sdd-foreign-openspec-path-fails-closed",
+			Title:  "Mixed OpenSpec authority path set: SDD refuses the selected change",
+			Source: "compact authority discovery contract: mixed foreign OpenSpec paths are not change-bound authority",
+			Steps: append(sddApprovedAuthoritySteps(sddForeignAuthorityFixture),
+				Step{Name: "sdd-status refuses the foreign OpenSpec path", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("path-bound compact authority contains a foreign OpenSpec path")},
+			),
 		},
 
 		// ------------------------------------------------ recovery guard rails

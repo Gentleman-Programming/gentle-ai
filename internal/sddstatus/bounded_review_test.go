@@ -635,6 +635,150 @@ func TestResolveBridgesExactlyOnePathBoundCompactAuthorityToVerifyOnly(t *testin
 	}
 }
 
+func TestResolvePrefersExactApprovedCompactAuthorityOverStaleSamePathLineage(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	runSDDStatusGit(t, root, "init", "-q")
+	runSDDStatusGit(t, root, "config", "user.email", "status@example.com")
+	runSDDStatusGit(t, root, "config", "user.name", "Status Test")
+	runSDDStatusGit(t, root, "add", ".")
+	runSDDStatusGit(t, root, "commit", "-qm", "base")
+
+	builder := reviewtransaction.SnapshotBuilder{Repo: root}
+	staleSnapshot, err := builder.Build(context.Background(), reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleRisk, staleLines, err := builder.ClassifySnapshotRisk(context.Background(), staleSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+		LineageID: "compact-a-stale", Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
+		Snapshot: staleSnapshot, PolicyHash: shaID("c"), RiskLevel: staleRisk, SelectedLenses: compactStatusLenses(staleRisk), OriginalChangedLines: &staleLines,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, stale.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := staleStore.Replace("", "review/start", stale); err != nil {
+		t.Fatal(err)
+	}
+
+	write(t, filepath.Join(changeRoot, "tasks.md"), "- [x] 1.1 Done\n# newer exact candidate\n")
+	approvedSnapshot, err := builder.Build(context.Background(), reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.CurrentSnapshot.CandidateTree == "" || stale.CurrentSnapshot.CandidateTree == approvedSnapshot.CandidateTree {
+		t.Fatalf("fixture candidate trees stale=%q approved=%q, want distinct non-empty trees", stale.CurrentSnapshot.CandidateTree, approvedSnapshot.CandidateTree)
+	}
+	approvedRisk, approvedLines, err := builder.ClassifySnapshotRisk(context.Background(), approvedSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+		LineageID: "compact-z-approved", Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
+		Snapshot: approvedSnapshot, PolicyHash: shaID("c"), RiskLevel: approvedRisk, SelectedLenses: compactStatusLenses(approvedRisk), OriginalChangedLines: &approvedLines,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, approved.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := approvedStore.Replace("", "review/start", approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make([]reviewtransaction.LensResult, len(approved.SelectedLenses))
+	for index, lens := range approved.SelectedLenses {
+		results[index] = reviewtransaction.LensResult{Lens: lens, Findings: []reviewtransaction.Finding{}, Evidence: []string{"review complete"}}
+	}
+	if err := approved.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results, Classifications: []reviewtransaction.FindingEvidence{}, RefuterOutcomes: []reviewtransaction.EvidenceResult{}}); err != nil {
+		t.Fatal(err)
+	}
+	revision, err = approvedStore.Replace(revision, "review/complete-review", approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := approved.CompleteVerification([]byte("verification passed\n"), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := approvedStore.Replace(revision, "review/complete-verification", approved); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := approved.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reviewtransaction.WriteCompactReceiptAtomic(approvedStore.ReceiptPath(), receipt); err != nil {
+		t.Fatal(err)
+	}
+
+	bridge := discoverCompactPreVerifyAuthority(context.Background(), root, "thin", "")
+	approvedRecord, err := approvedStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bridge.Eligible || bridge.Relevant || bridge.Reason != "" || bridge.Revision != approvedRecord.Revision {
+		t.Fatalf("bridge = %#v, want the newer approved authority", bridge)
+	}
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Dependencies.Verify != DependencyReady || status.NextRecommended != "verify" || len(status.BlockedReasons) != 0 {
+		t.Fatalf("status = %#v, want stale authority to leave verification ready", status)
+	}
+}
+
+func TestDiscoverCompactPreVerifyAuthorityFailsClosedWhenAuthorityDriftsDuringDiscovery(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "compact-thin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := afterCompactPreVerifyAuthorityInitialRead
+	afterCompactPreVerifyAuthorityInitialRead = func() error {
+		payload, readErr := os.ReadFile(store.ReceiptPath())
+		if readErr != nil {
+			return readErr
+		}
+		if writeErr := os.WriteFile(store.ReceiptPath(), append(payload, '\n'), 0o644); writeErr != nil {
+			return writeErr
+		}
+		return nil
+	}
+	t.Cleanup(func() { afterCompactPreVerifyAuthorityInitialRead = original })
+
+	bridge := discoverCompactPreVerifyAuthority(context.Background(), root, "thin", "")
+	if !bridge.Relevant || bridge.Reason != "compact authority changed during discovery" {
+		t.Fatalf("bridge = %#v, want discovery drift denial", bridge)
+	}
+}
+
+func TestDiscoverCompactPreVerifyAuthorityReportsMutationHookFailure(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
+
+	original := afterCompactPreVerifyAuthorityInitialRead
+	afterCompactPreVerifyAuthorityInitialRead = func() error { return fmt.Errorf("forced mutation failure") }
+	t.Cleanup(func() { afterCompactPreVerifyAuthorityInitialRead = original })
+
+	bridge := discoverCompactPreVerifyAuthority(context.Background(), root, "thin", "")
+	if !bridge.Relevant || bridge.Reason != "compact authority mutation hook failed: forced mutation failure" {
+		t.Fatalf("bridge = %#v, want mutation hook failure", bridge)
+	}
+}
+
 const emptyOutputHash = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 func TestAuthorityOnlyFailedReportRequiresStructuredFailClosedEvidence(t *testing.T) {
@@ -1443,12 +1587,7 @@ func writeApprovedCompactAuthorityForChangeWithTasks(t *testing.T, repo, changeR
 	if err != nil {
 		t.Fatal(err)
 	}
-	lenses := []string{}
-	if risk == reviewtransaction.RiskMedium {
-		lenses = []string{reviewtransaction.LensReliability}
-	} else if risk == reviewtransaction.RiskHigh {
-		lenses = []string{reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability}
-	}
+	lenses := compactStatusLenses(risk)
 	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1, Snapshot: snapshot, PolicyHash: shaID("c"), RiskLevel: risk, SelectedLenses: lenses, OriginalChangedLines: &lines})
 	if err != nil {
 		t.Fatal(err)
@@ -1730,6 +1869,17 @@ func writeJSON(t *testing.T, path string, value any) {
 
 func shaID(char string) string {
 	return fmt.Sprintf("sha256:%s", strings.Repeat(char, 64))
+}
+
+func compactStatusLenses(risk reviewtransaction.RiskLevel) []string {
+	switch risk {
+	case reviewtransaction.RiskMedium:
+		return []string{reviewtransaction.LensReliability}
+	case reviewtransaction.RiskHigh:
+		return []string{reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability}
+	default:
+		return []string{}
+	}
 }
 
 func freezeStatusFindings(tx *reviewtransaction.Transaction, findings []reviewtransaction.Finding) error {

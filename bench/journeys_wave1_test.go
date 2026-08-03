@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,36 @@ func TestWaveReviewInvocationArgs(t *testing.T) {
 		if _, err := waveReviewInvocationArgs(invalid); err == nil {
 			t.Fatalf("accepted invalid review invocation %q", invalid)
 		}
+	}
+}
+
+func TestCorrectionSubmissionArgumentsRejectsShortDescriptor(t *testing.T) {
+	var status waveCorrectionStatus
+	if err := json.Unmarshal([]byte(`{
+  "authority": {"lineage_id": "lineage"},
+  "next_transition": {
+    "kind": "collect",
+    "reason_code": "correction_plan_required",
+    "collect": {"inputs": [{
+      "name": "correction_lines",
+      "submission": {
+        "operation_token": "finalize",
+        "argument_tokens": [
+          "--contract=gentle-ai.review-integration/v2",
+          "--lineage=lineage",
+          "--expected-revision=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "--target=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ],
+        "value": {"slot": "correction_lines", "substitution_location": 3}
+      }
+    }]}
+  }
+}`), &status); err != nil {
+		t.Fatal(err)
+	}
+	run := &journeyRun{sandbox: &Sandbox{Root: t.TempDir()}}
+	if _, err := correctionSubmissionArguments(run, status, "correction_plan_required", "correction_lines", "2"); err == nil || !strings.Contains(err.Error(), "has 4 tokens") {
+		t.Fatalf("short descriptor error = %v", err)
 	}
 }
 
