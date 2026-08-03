@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -65,4 +66,21 @@ func TestRequireCandidateDeclinedGate(t *testing.T) {
 	if err := requireCandidateDeclinedGate(sandbox, observation); err == nil {
 		t.Fatal("accepted candidate-declined gate with fabricated lineage")
 	}
+}
+
+func TestStagedStatusRetainsWorkspaceReceiptJourney(t *testing.T) {
+	binary := os.Getenv("GENTLE_AI_BENCH_BINARY")
+	if binary == "" {
+		t.Skip("set GENTLE_AI_BENCH_BINARY to run the staged receipt status journey")
+	}
+	for _, journey := range Journeys() {
+		if journey.ID != "j59-staged-status-retains-workspace-receipt" {
+			continue
+		}
+		if result := runJourney(binary, journey); result.Status != StatusCompleted {
+			t.Fatalf("journey result = %#v", result)
+		}
+		return
+	}
+	t.Fatal("staged receipt status journey is not registered")
 }

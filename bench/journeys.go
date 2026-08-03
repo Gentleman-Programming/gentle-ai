@@ -17,11 +17,17 @@ const reviewContract = "gentle-ai.review-integration/v1"
 // benchmark reads. Unknown fields are ignored so older and newer envelopes
 // both parse.
 type statusEnvelope struct {
-	Authority struct {
+	Applicability string `json:"applicability"`
+	Action        string `json:"action"`
+	Authority     struct {
 		LineageID string `json:"lineage_id"`
 		State     string `json:"state"`
 		Revision  string `json:"revision"`
 	} `json:"authority"`
+	Receipt struct {
+		Status   string `json:"status"`
+		Identity string `json:"identity"`
+	} `json:"receipt"`
 	TargetIdentity string `json:"target_identity"`
 	Projection     struct {
 		BaseTree             string   `json:"base_tree"`
@@ -87,6 +93,11 @@ func (e statusEnvelope) paths() []string {
 var statusCapability = &Capability{
 	Verb:  []string{"review", "status"},
 	Flags: []string{"--next-transition", "--contract", "--cwd"},
+}
+
+var stagedStatusCapability = &Capability{
+	Verb:  []string{"review", "status"},
+	Flags: []string{"--next-transition", "--contract", "--cwd", "--projection", "--gate"},
 }
 
 var captureResultCapability = &Capability{

@@ -25,6 +25,7 @@ const (
 	declineCandidateLineage  = "wave-one-candidate-decline"
 	declineCandidatePath     = "scripts/deploy.sh"
 	declineCandidateContents = "#!/bin/sh\necho deploy\n"
+	stagedReceiptLineage     = "wave-one-staged-receipt-status"
 	reviewContractV2         = "gentle-ai.review-integration/v2"
 )
 
@@ -304,6 +305,29 @@ func stageFullScopeCandidate(sandbox *Sandbox) error {
 	paths, err := gitOut(sandbox, sandbox.Repo, "diff", "--cached", "--name-only")
 	if err != nil || paths != "candidate.go\ncompanion.txt" {
 		return fmt.Errorf("full-scope fixture paths = %q, %v", paths, err)
+	}
+	return nil
+}
+
+func writeWorkspaceReceiptCandidate(sandbox *Sandbox) error {
+	path := filepath.Join(sandbox.Repo, "staged-receipt.md")
+	if err := sandbox.write(path, "# staged receipt\n\nreviewed from the workspace.\n"); err != nil {
+		return err
+	}
+	status, err := gitOut(sandbox, sandbox.Repo, "status", "--porcelain")
+	if err != nil || status != "?? staged-receipt.md" {
+		return fmt.Errorf("workspace receipt fixture status = %q, %v", status, err)
+	}
+	return nil
+}
+
+func stageWorkspaceReceiptCandidate(sandbox *Sandbox) error {
+	if err := sandbox.git(sandbox.Repo, "add", "staged-receipt.md"); err != nil {
+		return err
+	}
+	paths, err := gitOut(sandbox, sandbox.Repo, "diff", "--cached", "--name-only")
+	if err != nil || paths != "staged-receipt.md" {
+		return fmt.Errorf("staged receipt fixture paths = %q, %v", paths, err)
 	}
 	return nil
 }
@@ -623,6 +647,35 @@ func proveCorrectedReceipt(sandbox *Sandbox, observation Observation) error {
 		return fmt.Errorf("corrected receipt was not proven: %+v", status)
 	}
 	sandbox.Scratch["corrected-tree"] = status.Projection.CurrentCandidateTree
+	return nil
+}
+
+func rememberWorkspaceReceiptStatus(sandbox *Sandbox, observation Observation) error {
+	var status statusEnvelope
+	if err := decodeWaveObservation(observation, &status, "workspace receipt status"); err != nil {
+		return err
+	}
+	if status.Applicability != "current_target" || status.Action != "validate" ||
+		status.Authority.LineageID != stagedReceiptLineage || status.Authority.State != "approved" ||
+		status.Receipt.Status != "present" || status.Receipt.Identity == "" || status.TargetIdentity == "" {
+		return fmt.Errorf("workspace receipt status = %+v", status)
+	}
+	sandbox.Scratch["workspace-receipt"] = status.Receipt.Identity
+	sandbox.Scratch["workspace-target"] = status.TargetIdentity
+	return nil
+}
+
+func proveStagedReceiptStatus(sandbox *Sandbox, observation Observation) error {
+	var status statusEnvelope
+	if err := decodeWaveObservation(observation, &status, "staged receipt status"); err != nil {
+		return err
+	}
+	if status.Applicability != "current_target" || status.Action != "validate" ||
+		status.Authority.LineageID != stagedReceiptLineage || status.Authority.State != "approved" ||
+		status.Receipt.Status != "present" || status.Receipt.Identity != sandbox.Scratch["workspace-receipt"] ||
+		status.TargetIdentity == "" || status.TargetIdentity == sandbox.Scratch["workspace-target"] {
+		return fmt.Errorf("staged receipt status = %+v", status)
+	}
 	return nil
 }
 
@@ -1424,6 +1477,20 @@ func waveOneJourneys() []Journey {
 				{Name: "review the clean worktree as a no-op", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", noOpSelfLoopLineage)},
 				{Name: "approve the no-op self-loop", Requires: finalizeCapability, Args: productArgs("review", "finalize", "--lineage", noOpSelfLoopLineage), After: proveNoOpSelfLoopApproved},
 				{Name: "same two segments still compose after the no-op", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-pr", "--base-ref", "origin/main"), After: requireNoOpChainCompositionUnchanged, AbortOnBlock: true},
+			},
+		},
+		{
+			ID:     "j59-staged-status-retains-workspace-receipt",
+			Title:  "Staged status: exact reviewed workspace candidate retains its approved receipt",
+			Source: "issue #1951",
+			Steps: []Step{
+				{Name: "fixture: repository", Fixture: baseRepo},
+				{Name: "fixture: reviewed documentation remains in the workspace", Fixture: writeWorkspaceReceiptCandidate},
+				{Name: "review workspace candidate", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", stagedReceiptLineage)},
+				{Name: "approve workspace candidate", Requires: finalizeCapability, Args: productArgs("review", "finalize", "--lineage", stagedReceiptLineage)},
+				{Name: "workspace status proves approved receipt", Requires: statusCapability, Args: productArgs("review", "status", "--contract", reviewContract, "--next-transition", "--lineage", stagedReceiptLineage), After: rememberWorkspaceReceiptStatus},
+				{Name: "fixture: stage the exact reviewed file", Fixture: stageWorkspaceReceiptCandidate},
+				{Name: "pre-commit status retains the approved workspace receipt", Requires: stagedStatusCapability, Args: productArgs("review", "status", "--contract", reviewContract, "--next-transition", "--lineage", stagedReceiptLineage, "--projection", "staged", "--gate", "pre-commit"), After: proveStagedReceiptStatus},
 			},
 		},
 	}

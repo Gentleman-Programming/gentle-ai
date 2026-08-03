@@ -261,7 +261,9 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			if assessmentErr != nil {
 				return targetStatusFailure(base, assessmentErr)
 			}
-			if assessment.Applicability == CompactGateTargetExact {
+			// The gate rebuilds from the mutable index, so it can only support this
+			// status result when it assessed the snapshot STATUS already captured.
+			if assessment.Applicability == CompactGateTargetExact && assessment.Actual.Identity == live.Identity {
 				candidates = append(candidates, candidate)
 				continue
 			}

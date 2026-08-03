@@ -33,7 +33,7 @@ go vet ./...
 go test ./...
 ```
 
-The portable core contains 57 journeys. `j57` is deliberately excluded because
+The portable core contains 60 journeys. `j57` is deliberately excluded because
 it requires the product's `bench_fixture` seam; it is an explicit
 `source-coupled` axis, not a portable black-box measurement.
 

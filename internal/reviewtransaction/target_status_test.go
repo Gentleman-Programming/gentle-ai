@@ -224,6 +224,46 @@ func TestAssessTargetStatusRetainsApprovedReceiptForExactStagedIntendedTransitio
 	}
 }
 
+func TestAssessTargetStatusRejectsStagedCandidateChangedBeforeGateAssessment(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed tracked change\n")
+	for _, path := range []string{"first.txt", "second.txt"} {
+		writeSnapshotFile(t, repo, path, "reviewed "+path+"\n")
+	}
+	lineage := "status-staged-interleaving"
+	_, _, _ = approvedCompactCurrentChangesFixture(t, repo, lineage, []string{"first.txt", "second.txt"})
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+
+	originalHook := targetStatusCompactAuthorityReadHook
+	t.Cleanup(func() { targetStatusCompactAuthorityReadHook = originalHook })
+	var once sync.Once
+	targetStatusCompactAuthorityReadHook = func(observedLineage, phase string, attempt int) {
+		if observedLineage == lineage && phase == "after-state" && attempt == 0 {
+			once.Do(func() { gitSnapshot(t, repo, "add", "--", "first.txt", "second.txt") })
+		}
+	}
+
+	result, live, err := AssessTargetStatusWithSnapshot(context.Background(), repo, TargetStatusRequest{Target: Target{
+		Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{},
+	}, LineageID: lineage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := (SnapshotBuilder{Repo: repo}).BuildStoredSnapshot(context.Background(), Target{
+		Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TargetIdentity != live.Identity || current.Identity == live.Identity {
+		t.Fatalf("status did not retain the pre-interleaving staged snapshot: result %#v, live %#v, current %#v", result, live, current)
+	}
+	if result.Applicability == TargetApplicabilityCurrent || result.Action == TargetStatusActionValidate {
+		t.Fatalf("staged candidate accepted after assessment drift: %#v", result)
+	}
+}
+
 func TestAssessTargetStatusClassifiesAllApplicabilityStates(t *testing.T) {
 	requireSnapshotGit(t)
 	request := TargetStatusRequest{Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}}
