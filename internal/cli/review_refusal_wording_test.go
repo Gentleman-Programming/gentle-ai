@@ -128,7 +128,7 @@ func TestReviewCaptureResultOpaqueBindingMismatchNamesRefreshCommand(t *testing.
 		"--expected-revision", started.RepositoryContext.Revision,
 		"--lens", "not-the-selected-lens", "--order", "0", "--preflight",
 	}, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), reviewNextTransitionRefreshCommandV2) {
-		t.Fatalf("opaque capture binding mismatch error = %v, want it to contain %q", err, reviewNextTransitionRefreshCommandV2)
+	if err == nil || !strings.Contains(err.Error(), reviewNextTransitionRefreshCommandV21) {
+		t.Fatalf("opaque capture binding mismatch error = %v, want it to contain %q", err, reviewNextTransitionRefreshCommandV21)
 	}
 }

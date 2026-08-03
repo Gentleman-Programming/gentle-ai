@@ -12,7 +12,7 @@ import (
 
 var boundedReviewRequiredClauses = []string{
 	"Parent orchestrator and native CLI only",
-	"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition",
+	"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition",
 	"route only from the returned `next_transition`",
 	"exact operation and ordered argument tokens unchanged",
 	"exact `review.capture-result` collection input once per provider-returned collection attempt",
@@ -36,7 +36,8 @@ var boundedReviewRequiredClauses = []string{
 	"canonical four-lens selection is long work",
 	"one cost/side-effect forecast",
 	"four reviewer model runs",
-	"typed `gentle-ai.review-integration.consent/v2` envelope",
+	"typed `gentle-ai.review-integration.consent/v3` envelope",
+	"required `agent: claude-code`",
 	"Lossless Blocking Prompt",
 	"Global RDD enabled permits reviews; it never grants consent for this candidate",
 	"Low-risk structural readback remains silent and asks no consent question",
@@ -88,20 +89,20 @@ func TestBoundedReviewContractRequiresRuntimeBoundReviewerContext(t *testing.T) 
 		"another external file",
 		"a repository scratch file",
 		"`GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`",
-		"OpenCode preflights the opaque binding, discards the caller-authored task body",
-		"injects only the provider's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered manifest",
-		"broad deny precedes narrow allows",
 		"Claude Code carries immutable candidate evidence directly in the reviewer task prompt",
 		"path evidence for every manifest index in exact order",
 		"gentle-ai review inspect-candidate --repository-context <repository_context> --expected-revision <revision> --lineage <lineage> --target <target> --lens <lens> --order <order> --operation <operation>",
-		"Claude lens agents expose no shell and inspect only their prompt-carried context",
-		"Other runtimes that cannot enforce either transport expose no shell and stop incomplete",
+		"its lens agents expose no shell outside prompt-carried context",
+		"Claude Code is the only supported immutable receipt-review runtime",
+		"OpenCode and Codex are eligible but transport-disabled",
+		"Pi, Kilo, and unknown identities are ineligible",
+		"before repository, target, authority, collection, or process work",
 		"read-only native Git commands against those exact immutable trees",
 		"compact `--name-status`/`--numstat` discovery",
 		"replacement objects, external diff and textconv, forces `--text`",
 		"literal pathspecs",
 		"Never pass `--binary`",
-		"OpenCode never adds `candidate_diff`",
+		"Claude Code carries immutable candidate evidence only in its provider-built prompt",
 		"read live worktree/index/HEAD",
 	} {
 		if !strings.Contains(content, want) {
@@ -121,7 +122,7 @@ func TestGeneratedOpenCodeReviewControllersUseNegotiatedStatusRouting(t *testing
 	for name, content := range controllers {
 		t.Run(name, func(t *testing.T) {
 			for _, required := range []string{
-				"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition",
+				"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition",
 				"route only from the returned `next_transition`",
 				"exact operation and ordered argument tokens unchanged",
 				"`execute`", "`collect`", "`stop`",
@@ -309,7 +310,7 @@ func TestBoundedReviewContractListsOnlySupportedLifecycleGates(t *testing.T) {
 func TestAuthorityFirstTerminalProcedureIsStructuredAndMirrorEligibilityIsClosed(t *testing.T) {
 	rows := parseAuthorityFirstRows(t, authorityFirstTerminalProcedure())
 	wantOperations := []string{
-		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition",
+		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition",
 		"provider-returned transition", "repeat 01–02", "reconcile-terminal-mirrors",
 	}
 	if len(rows) != len(wantOperations) {
@@ -353,7 +354,7 @@ func TestOpenCodeAndClaudeApplyCommandsRequireAuthorityBeforeMirrors(t *testing.
 			if strings.Contains(content, authorityFirstProcedurePlaceholder) || strings.Count(content, authorityFirstTerminalProcedure()) != 1 {
 				t.Fatalf("%s did not render the centralized terminal procedure", path)
 			}
-			if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition") {
+			if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition") {
 				t.Fatalf("%s does not begin negotiated review routing with STATUS", path)
 			}
 			if strings.Contains(content, "runs `gentle-ai review start --cwd <repo>`") {
