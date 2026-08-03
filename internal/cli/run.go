@@ -2314,6 +2314,7 @@ func (s checkDependenciesStep) Run() error {
 				continue
 			}
 			if _, err := cmdLookPath("go"); err != nil {
+				// refusal:by-design world-action: installing Go requires user action outside gentle-ai.
 				return fmt.Errorf("beta Engram requires Go in PATH before installation. Install Go from https://go.dev/dl/ and restart your terminal")
 			}
 			break
