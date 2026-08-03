@@ -278,6 +278,56 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			candidates = append(candidates, candidate)
 		}
 	}
+	// Prefer approved scope-changed recovery over correction-required recovery,
+	// mirroring START's precedence (compact_store.go:1095-1099):
+	// recoveryCandidates (approved) govern over claimants (correction-required).
+	// Only promote when it's the sole governing authority.
+	if len(approvedScopeRecovery) == 1 {
+		onlyCorrectionRecovery := true
+		for _, c := range candidates {
+			// A candidate is "governing" if it's not purely a correction-required recovery
+			if !c.correctionRecovery || c.finalVerificationRetry != nil {
+				onlyCorrectionRecovery = false
+				break
+			}
+			// Escalated recovery is also governing
+			if c.recoveryDisposition == RecoveryEscalated {
+				onlyCorrectionRecovery = false
+				break
+			}
+		}
+		if onlyCorrectionRecovery {
+			candidates = approvedScopeRecovery
+		}
+	}
+	// Also consider scope-changed approved deliveries with canonical receipts
+	// that were committed to HEAD (live.BaseTree == CurrentSnapshot.CandidateTree).
+	// These are in scopeChangedCandidates. Only promote when there are
+	// correction-required claimants in candidates that would otherwise win,
+	// mirroring START's "recoveryCandidates > 0 && claimants == 0 -> Recover" rule.
+	if len(candidates) > 0 && len(approvedScopeRecovery) == 0 && len(scopeChangedCandidates) == 1 {
+		sc := scopeChangedCandidates[0]
+		if sc.receiptPublished && sc.receiptCanonical && (sc.compact == nil || sc.compact.State.State == StateApproved) {
+			onlyCorrectionRecovery := true
+			for _, c := range candidates {
+				if !c.correctionRecovery || c.finalVerificationRetry != nil {
+					onlyCorrectionRecovery = false
+					break
+				}
+				if c.recoveryDisposition == RecoveryEscalated {
+					onlyCorrectionRecovery = false
+					break
+				}
+			}
+			if onlyCorrectionRecovery {
+				promoted := scopeChangedCandidates[:1]
+				promoted[0].correctionRecovery = true
+				promoted[0].recoveryDisposition = RecoveryScopeChanged
+				candidates = promoted
+			}
+		}
+	}
+	// Fallback: if no candidates at all, and exactly one approved recovery, use it (issue #1826)
 	if len(candidates) == 0 && len(approvedScopeRecovery) == 1 {
 		// START answers recover for exactly one approved delivery-scope
 		// predecessor with no other claimant, so status must bind that same
