@@ -1454,8 +1454,15 @@ func waveOneJourneys() []Journey {
 			Steps: []Step{
 				{Name: "fixture: single line candidate repo", Fixture: baseRepoWithRemote},
 				{Name: "fixture: stage one line file", Fixture: stageDocs("one-line-candidate")},
-				{Name: "review single line candidate", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", "j59-one-line-compact")},
+				{Name: "review single line candidate", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", "j59-one-line-compact"), After: proveCorrectionBudgetFloorTwo},
 			},
 		},
 	}
+}
+
+func proveCorrectionBudgetFloorTwo(_ *Sandbox, observation Observation) error {
+	if strings.Contains(observation.Output, "\"correction_budget\": 1") {
+		return errors.New("expected correction budget >= 2 for single-line candidate, got 1")
+	}
+	return nil
 }
