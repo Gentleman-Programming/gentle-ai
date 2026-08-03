@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -35,7 +36,7 @@ func NewFrozenCandidateDiff(payload []byte) (FrozenCandidateDiff, error) {
 	digest := sha256.Sum256(payload)
 	return FrozenCandidateDiff{
 		Encoding: FrozenCandidateDiffEncodingBase64, Data: base64.StdEncoding.EncodeToString(payload),
-		SHA256: fmt.Sprintf("sha256:%x", digest), ByteSize: len(payload),
+		SHA256: "sha256:" + hex.EncodeToString(digest[:]), ByteSize: len(payload),
 	}, nil
 }
 
@@ -52,7 +53,8 @@ func (diff FrozenCandidateDiff) Bytes() ([]byte, error) {
 		return nil, errors.New("frozen candidate diff byte size does not match data")
 	}
 	digest := sha256.Sum256(payload)
-	if diff.SHA256 != fmt.Sprintf("sha256:%x", digest) {
+	expectedSHA256 := "sha256:" + hex.EncodeToString(digest[:])
+	if diff.SHA256 != expectedSHA256 {
 		return nil, errors.New("frozen candidate diff digest does not match data")
 	}
 	return payload, nil
