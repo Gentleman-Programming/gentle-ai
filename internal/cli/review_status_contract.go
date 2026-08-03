@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -15,8 +16,10 @@ const ReviewIntegrationStatusSchemaV1 = "gentle-ai.review-integration.status/v1"
 const ReviewIntegrationStatusSchemaIDV1 = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/status.schema.json"
 const ReviewIntegrationStatusSchemaV2 = "gentle-ai.review-integration.status/v2"
 const ReviewIntegrationStatusSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/status-v2.schema.json"
-const ReviewIntegrationStatusSchema = "gentle-ai.review-integration.status/v3"
-const ReviewIntegrationStatusSchemaID = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status.schema.json"
+const ReviewIntegrationStatusSchemaV3 = "gentle-ai.review-integration.status/v3"
+const ReviewIntegrationStatusSchemaIDV3 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status.schema.json"
+const ReviewIntegrationStatusSchema = "gentle-ai.review-integration.status/v4"
+const ReviewIntegrationStatusSchemaID = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v4.schema.json"
 const ReviewIntegrationProjectionSchema = "gentle-ai.review-integration.projection/v1"
 const ReviewIntegrationProjectionSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/projection.schema.json"
 
@@ -313,7 +316,7 @@ func reviewStopEligibility(reason string, requiredInputs []string) *ReviewAction
 
 func (result ReviewTargetStatusResult) Validate() error {
 	legacyTransport := result.Schema == ReviewIntegrationStatusSchemaV2 && result.Contract == ReviewIntegrationContractV1
-	nativeGitTransport := result.Schema == ReviewIntegrationStatusSchema && result.Contract == ReviewIntegrationContractV2
+	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchema) && result.Contract == ReviewIntegrationContractV2
 	if (!legacyTransport && !nativeGitTransport) || result.Operation != "review.status" {
 		return errors.New("invalid negotiated review status identity")
 	}
@@ -360,6 +363,9 @@ func (result ReviewTargetStatusResult) Validate() error {
 		if err := result.validateNextTransitionTargets(); err != nil {
 			return err
 		}
+		if err := result.validateSubmissionDescriptors(); err != nil {
+			return err
+		}
 		transitionRequest := reviewTransitionValidationRequest(result.NextTransition)
 		correctionEvidenceFirst := transitionRequest == nil && result.ValidationRequest != nil &&
 			(result.NextTransition.ReasonCode == "correction_repository_verification_required" ||
@@ -367,6 +373,14 @@ func (result ReviewTargetStatusResult) Validate() error {
 		if !correctionEvidenceFirst && ((transitionRequest == nil) != (result.ValidationRequest == nil) ||
 			transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest)) {
 			return errors.New("negotiated status validation request copies differ")
+		}
+		if request := result.NextTransition.CorrectionRequest; request != nil {
+			if result.Authority == nil || result.Frozen == nil || result.Authority.Version != reviewtransaction.AuthorityVersionCompact ||
+				result.Authority.State != reviewtransaction.StateCorrectionRequired || request.LineageID != result.Authority.LineageID ||
+				request.ExpectedRevision != result.Authority.Revision || request.TargetIdentity != result.TargetIdentity ||
+				request.CorrectionBudget != result.Frozen.CorrectionBudget {
+				return errors.New("negotiated status correction request binding is invalid") // refusal:by-design world-action: provider-generated status and request bindings require a code fix when they disagree
+			}
 		}
 	}
 	switch result.Applicability {
@@ -487,6 +501,79 @@ func (result ReviewTargetStatusResult) Validate() error {
 			result.Projection.Kind == reviewtransaction.TargetBaseDiff
 		if !stagedScopeExpansion && !sameScopeChangedCandidate {
 			return errors.New("approved recovery status requires a published staged scope-expansion or scope-changed target") // refusal:by-design world-action: this envelope is built and validated by the same product; the exit is a code fix, not a command
+		}
+	}
+	return nil
+}
+
+func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
+	transition := result.NextTransition
+	if transition == nil || transition.Collect == nil {
+		return nil
+	}
+	for _, input := range transition.Collect.Inputs {
+		if input.Submission != nil && result.Contract != ReviewIntegrationContractV2 {
+			return errors.New("legacy negotiated status contains a submission descriptor") // refusal:by-design world-action: only a provider code fix can remove a descriptor from a legacy response
+		}
+	}
+	if result.Contract != ReviewIntegrationContractV2 {
+		return nil
+	}
+	if result.Schema == ReviewIntegrationStatusSchemaV3 {
+		for _, input := range transition.Collect.Inputs {
+			if input.Submission != nil {
+				return errors.New("v3 negotiated status contains a v4 submission descriptor") // refusal:by-design world-action: only a provider code fix can preserve the v3 wire contract
+			}
+		}
+		return nil
+	}
+	if result.Schema != ReviewIntegrationStatusSchema {
+		return errors.New("submission descriptor status schema is unsupported") // refusal:by-design world-action: only a provider code fix can select a supported descriptor schema
+	}
+	switch transition.ReasonCode {
+	case "correction_plan_required":
+		if len(transition.Collect.Inputs) != 1 {
+			return errors.New("submission descriptor transition must contain exactly one input") // refusal:by-design world-action: only a provider code fix can produce the required single input
+		}
+		input := transition.Collect.Inputs[0]
+		if input.CaptureOperation != "external.plan_correction" || result.Authority == nil || transition.CorrectionRequest == nil || input.Submission == nil {
+			return errors.New("correction submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the correction request
+		}
+		context, err := input.submissionRepositoryContext()
+		if err != nil {
+			return err
+		}
+		want := reviewCorrectionPlanSubmission(result.Contract, ReviewTransitionBinding{
+			LineageID: result.Authority.LineageID, Revision: result.Authority.Revision,
+			TargetIdentity: result.TargetIdentity, RepositoryContext: context,
+		}, *transition.CorrectionRequest)
+		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
+			return errors.New("correction submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
+		}
+	case "targeted_validation_required":
+		if len(transition.Collect.Inputs) != 1 {
+			return errors.New("submission descriptor transition must contain exactly one input") // refusal:by-design world-action: only a provider code fix can produce the required single input
+		}
+		input := transition.Collect.Inputs[0]
+		if input.CaptureOperation != "external.run_targeted_validation" || result.Authority == nil || result.ValidationRequest == nil || input.Submission == nil {
+			return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+		}
+		context, err := input.submissionRepositoryContext()
+		if err != nil {
+			return err
+		}
+		want := reviewTargetedValidationSubmission(result.Contract, ReviewTransitionBinding{
+			LineageID: result.Authority.LineageID, Revision: result.Authority.Revision,
+			TargetIdentity: result.ValidationRequest.CorrectionTargetIdentity, RepositoryContext: context,
+		}, *result.ValidationRequest)
+		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
+			return errors.New("targeted validation submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
+		}
+	default:
+		for _, input := range transition.Collect.Inputs {
+			if input.Submission != nil {
+				return errors.New("submission descriptor is attached to an unrelated collection input") // refusal:by-design world-action: only a provider code fix can remove the unrelated descriptor
+			}
 		}
 	}
 	return nil
@@ -644,7 +731,14 @@ func (result ReviewTargetStatusResult) validateStartNextTransition() error {
 	if lineage != "" && !validReviewIntegrationLineage(lineage) {
 		return errors.New("fresh target START lineage is not canonical")
 	}
-	wantArguments := reviewStartArguments(result, lineage)
+	runtime := model.AgentID(arguments["agent"])
+	if runtime != "" {
+		if _, err := reviewRuntimeWithImmutableTransport(string(runtime)); err != nil {
+			// refusal:by-design world-action: a START transition with an unproven runtime transport cannot be safely executed
+			return errors.New("fresh target START runtime lacks immutable review transport")
+		}
+	}
+	wantArguments := reviewStartArguments(result, lineage, runtime)
 	for index, argument := range wantArguments {
 		argument.Token = reviewTransitionArgumentToken(argument)
 		wantArguments[index] = argument
@@ -780,6 +874,13 @@ func (transition ReviewNextTransition) Validate() error {
 	if strings.TrimSpace(transition.ReasonCode) == "" {
 		return errors.New("review next transition requires a reason code")
 	}
+	correctionRequestRequired := transition.ReasonCode == "correction_plan_required" || transition.ReasonCode == "corrected_candidate_unavailable"
+	if correctionRequestRequired != (transition.CorrectionRequest != nil) {
+		return errors.New("correction transition must carry exactly one provider-owned request") // refusal:by-design world-action: provider-generated routing requires a code fix when its request is missing or misplaced
+	}
+	if transition.CorrectionRequest != nil && reviewtransaction.ValidateCorrectionPlanRequest(*transition.CorrectionRequest) != nil {
+		return errors.New("correction transition request is invalid") // refusal:by-design world-action: malformed provider-owned findings cannot safely authorize planning
+	}
 	switch transition.Kind {
 	case reviewNextTransitionStop:
 		if transition.Execute != nil || transition.Collect != nil {
@@ -801,6 +902,15 @@ func (transition ReviewNextTransition) Validate() error {
 			arguments, err := reviewTransitionArgumentMap(input.Arguments)
 			if err != nil {
 				return err
+			}
+			submissionAllowed := input.CaptureOperation == "external.plan_correction" || input.CaptureOperation == "external.run_targeted_validation"
+			if input.Submission != nil && !submissionAllowed {
+				return errors.New("collection transition submission placement is invalid") // refusal:by-design world-action: only a provider code fix can place a descriptor on a supported input
+			}
+			if input.Submission != nil {
+				if err := input.Submission.Validate(); err != nil {
+					return err
+				}
 			}
 			if input.CaptureOperation == "review.capture-result" {
 				order, orderErr := strconv.Atoi(arguments["order"])
@@ -886,6 +996,62 @@ func (transition ReviewNextTransition) Validate() error {
 		}
 	default:
 		return errors.New("unsupported review next transition kind")
+	}
+	return nil
+}
+
+func (input ReviewTransitionInput) submissionRepositoryContext() (string, error) {
+	if input.Submission == nil {
+		return "", errors.New("submission descriptor is missing") // refusal:by-design world-action: only a provider code fix can emit the required descriptor
+	}
+	for _, token := range input.Submission.ArgumentTokens {
+		value, found := strings.CutPrefix(token, "--repository-context=")
+		if found {
+			return value, nil
+		}
+	}
+	return "", errors.New("submission descriptor has no repository context") // refusal:by-design world-action: only a provider code fix can bind repository context
+}
+
+func (submission ReviewTransitionSubmission) Validate() error {
+	if submission.OperationToken != "finalize" || submission.Value.SubstitutionLocation != 6 {
+		return errors.New("submission descriptor identity is incomplete") // refusal:by-design world-action: only a provider code fix can restore descriptor identity
+	}
+	for _, token := range submission.ArgumentTokens {
+		if strings.TrimSpace(token) == "" || !strings.HasPrefix(token, "--") || strings.ContainsAny(token, " \t\r\n") || strings.HasPrefix(token, "--cwd=") {
+			return errors.New("submission descriptor contains an unsafe argument token") // refusal:by-design world-action: only a provider code fix can emit safe argv tokens
+		}
+	}
+	if len(submission.ArgumentTokens) < 7 || submission.Value.SubstitutionLocation >= len(submission.ArgumentTokens) {
+		return errors.New("submission descriptor value substitution is malformed") // refusal:by-design world-action: only a provider code fix can restore the single value slot
+	}
+	common := submission.ArgumentTokens[:6]
+	if common[0] != "--contract="+ReviewIntegrationContractV2 ||
+		!strings.HasPrefix(common[1], "--lineage=") || !validReviewIntegrationLineage(strings.TrimPrefix(common[1], "--lineage=")) ||
+		!validReviewCapabilitySHA256(strings.TrimPrefix(common[2], "--expected-revision=")) ||
+		!validReviewCapabilitySHA256(strings.TrimPrefix(common[3], "--target=")) ||
+		!validReviewCapabilitySHA256(strings.TrimPrefix(common[4], "--request-hash=")) ||
+		reviewtransaction.ValidateReviewRepositoryContextHandle(strings.TrimPrefix(common[5], "--repository-context=")) != nil ||
+		!strings.HasPrefix(common[2], "--expected-revision=") || !strings.HasPrefix(common[3], "--target=") ||
+		!strings.HasPrefix(common[4], "--request-hash=") || !strings.HasPrefix(common[5], "--repository-context=") {
+		return errors.New("submission descriptor bindings are invalid") // refusal:by-design world-action: only a provider code fix can restore authority bindings
+	}
+	switch submission.Value.Slot {
+	case "correction_lines":
+		if len(submission.ArgumentTokens) != 7 || submission.ArgumentTokens[6] != "--correction-lines="+reviewSubmissionValuePlaceholder ||
+			submission.Value.Domain != "positive_correction_lines" || submission.Value.Schema != "" ||
+			submission.Value.Minimum != 1 || submission.Value.Maximum < submission.Value.Minimum ||
+			submission.Value.Maximum > reviewtransaction.MaxCorrectionChangedLines {
+			return errors.New("correction submission descriptor value domain is invalid") // refusal:by-design world-action: only a provider code fix can restore the correction domain
+		}
+	case "validation":
+		if len(submission.ArgumentTokens) != 8 || submission.ArgumentTokens[6] != "--validation="+reviewSubmissionValuePlaceholder ||
+			submission.ArgumentTokens[7] != "--captured-evidence=true" || submission.Value.Domain != "artifact_path_or_stdin" ||
+			submission.Value.Schema != reviewValidatorSchemaID || submission.Value.Minimum != 0 || submission.Value.Maximum != 0 {
+			return errors.New("validation submission descriptor value domain is invalid") // refusal:by-design world-action: only a provider code fix can restore the validation domain
+		}
+	default:
+		return errors.New("submission descriptor value slot is unsupported") // refusal:by-design world-action: only a provider code fix can restore a supported value slot
 	}
 	return nil
 }

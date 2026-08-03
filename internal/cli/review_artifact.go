@@ -26,14 +26,8 @@ const (
 	reviewResultArtifactLimit      = 4 << 20
 )
 
-// reviewerResultSlotConflictError is the deliberately unwrapped identity for
-// the byte-literal-conflict guard inside captureReviewerArtifact: the exact
-// same SHA-256 already read back matches artifact.SHA256 yet its bytes
-// differ (a hash-collision-only branch in practice, since
-// readVerifiedReviewerArtifact already rejects a mismatched SHA-256 before
-// this point is ever reached). Keeping it as a named sentinel rather than an
-// inline errors.New lets the discoverability guidance below wrap it with
-// %w instead of duplicating the base message.
+// reviewerResultSlotConflictError gives immutable publication conflicts a
+// stable identity so discoverability guidance can wrap them with %w.
 var reviewerResultSlotConflictError = errors.New("captured reviewer result already exists with different canonical bytes")
 
 // errCapturedFinalEvidenceMissing has the historical explicit-selector error
@@ -165,11 +159,6 @@ type admittedReviewerResult struct {
 	Result    facadeReviewerResult                `json:"result"`
 }
 
-type capturedArtifactBinding struct {
-	Subject   reviewtransaction.ArtifactSubject
-	Admission reviewtransaction.ArtifactAdmission
-}
-
 // ReviewerResultPayloadError is returned when a raw reviewer result payload is
 // structurally invalid before JSON decoding is attempted. Code is
 // machine-readable: "empty_result" for empty/whitespace-only payloads and
@@ -290,7 +279,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if state.State != reviewtransaction.StateReviewing || state.LineageID != *lineage || state.InitialSnapshot.Identity != *target ||
 		(strings.TrimSpace(*revision) != "" && record.Revision != *revision) || *order >= len(state.SelectedLenses) || state.SelectedLenses[*order] != *lens {
 		if contextHandle != "" {
-			return reviewPreflightError(fmt.Errorf("capture binding does not match the current reviewing authority under the provider-issued repository context; ask the parent orchestrator to refresh the exact native next transition by running %s", reviewNextTransitionRefreshCommandV2))
+			return reviewPreflightError(fmt.Errorf("capture binding does not match the current reviewing authority under the provider-issued repository context; ask the parent orchestrator to refresh the exact native next transition by running %s", reviewNextTransitionRefreshCommandV21))
 		}
 		return reviewPreflightError(fmt.Errorf("capture binding does not match the current reviewing authority under repository %q; verify the frozen lineage, target, lens, and order for that repository, or re-run with --cwd set to the repository where the review was started", root))
 	}
@@ -378,7 +367,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if err != nil {
 		return reviewPreflightError(err)
 	}
-	_, admission, err := reviewtransaction.AdmitArtifact(reviewtransaction.ArtifactAdmissionRequest{
+	_, admission, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
 		ExpectedSubject: subject, FrozenContext: frozen, EchoedSubjectHash: result.SubjectHash,
 		Inspection: result.Inspection, Result: nativeResult, CandidateCausalFindingIDs: candidateCausalIDs,
 		RawPayload: rawPayload, CanonicalPayload: canonicalResult,
@@ -386,28 +375,36 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if err != nil {
 		return reviewPreflightError(err)
 	}
-	envelopeSchema := reviewAdmittedResultSchema
-	if subject.Schema == reviewtransaction.ArtifactSubjectSchemaV1 {
-		envelopeSchema = reviewtransaction.AdmittedReviewerResultSchemaV1
-	}
-	envelope, err := json.Marshal(admittedReviewerResult{
-		Schema: envelopeSchema, Subject: subject, Admission: admission, Result: result,
+	path := filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", *order, *lens))
+	_, err = store.CaptureAdmittedReviewerResult(ctx, reviewtransaction.CompactAdmittedReviewerResultRequest{
+		ExpectedRevision: record.Revision, TargetIdentity: *target, FrozenContext: frozen,
+		ArtifactSubject: subject, Inspection: result.Inspection, Result: nativeResult,
+		CandidateCausalFindingIDs: candidateCausalIDs, RawPayload: rawPayload,
+		PreparePublication: func(current reviewtransaction.CompactState) error {
+			return archiveQuarantinedReviewerArtifact(store.Dir, current, *order, path)
+		},
 	})
 	if err != nil {
-		return err
-	}
-	envelope = append(envelope, '\n')
-	var artifact reviewResultArtifact
-	err = store.CaptureReviewerResult(record.Revision, *target, *lens, *order, func(current reviewtransaction.CompactState) error {
-		var captureErr error
-		artifact, captureErr = captureReviewerArtifact(store.Dir, current, *order, envelope, capturedArtifactBinding{Subject: subject, Admission: admission})
-		return captureErr
-	})
-	if err != nil {
+		if strings.Contains(err.Error(), "different canonical bytes") {
+			err = fmt.Errorf("%w; a different reviewer result already occupies this slot — decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)", reviewerResultSlotConflictError)
+		}
 		if contextHandle != "" {
 			return reviewOpaqueContextFailure("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status")
 		}
 		return reviewPreflightError(err)
+	}
+	published, _, err := readPrivateReviewerFile(path, reviewResultArtifactLimit)
+	if err != nil {
+		if contextHandle != "" {
+			return reviewOpaqueContextFailure("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status")
+		}
+		return reviewPreflightError(fmt.Errorf("read published reviewer result: %w", err))
+	}
+	artifact := reviewResultArtifact{
+		Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, Path: path,
+		SHA256: facadePayloadHash(published), LineageID: state.LineageID,
+		TargetIdentity: state.InitialSnapshot.Identity, Lens: *lens, SelectedOrder: *order,
+		SubjectHash: subject.SubjectHash, AdmissionDecision: admission.Decision,
 	}
 	if contextHandle != "" {
 		artifact.Reference = reviewResultReference(artifact)
@@ -429,66 +426,6 @@ func reviewResultReference(artifact reviewResultArtifact) string {
 	}
 	payload, _ := json.Marshal(preimage)
 	return reviewResultReferencePrefix + strings.TrimPrefix(facadePayloadHash(payload), "sha256:")
-}
-func captureReviewerArtifact(storeDir string, state reviewtransaction.CompactState, order int, payload []byte, bindings ...capturedArtifactBinding) (reviewResultArtifact, error) {
-	dir := filepath.Join(storeDir, reviewtransaction.CompactReviewerResultsDir)
-	if err := ensureReviewerArtifactDir(dir); err != nil {
-		return reviewResultArtifact{}, err
-	}
-	path := filepath.Join(dir, fmt.Sprintf("%02d-%s.json", order, state.SelectedLenses[order]))
-	if err := archiveQuarantinedReviewerArtifact(storeDir, state, order, path); err != nil {
-		return reviewResultArtifact{}, err
-	}
-	artifact := reviewResultArtifact{
-		Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, Path: path,
-		SHA256: facadePayloadHash(payload), LineageID: state.LineageID,
-		TargetIdentity: state.InitialSnapshot.Identity, Lens: state.SelectedLenses[order], SelectedOrder: order,
-	}
-	if len(bindings) > 0 {
-		artifact.SubjectHash = bindings[0].Subject.SubjectHash
-		artifact.AdmissionDecision = bindings[0].Admission.Decision
-	}
-	if existing, err := readVerifiedReviewerArtifact(artifact, storeDir, state); err == nil {
-		if !bytes.Equal(existing, payload) {
-			return reviewResultArtifact{}, fmt.Errorf("%w; a different reviewer result already occupies this slot — decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)", reviewerResultSlotConflictError)
-		}
-		return artifact, persistReviewerArtifactDigest(path, artifact.SHA256)
-	} else if !os.IsNotExist(err) {
-		return reviewResultArtifact{}, fmt.Errorf("%w; a different reviewer result already occupies this slot — decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)", err)
-	}
-	temp, err := os.CreateTemp(dir, ".capture-*")
-	if err != nil {
-		return reviewResultArtifact{}, fmt.Errorf("create reviewer result temporary file: %w", err)
-	}
-	owned, _ := temp.Stat()
-	defer removeOwnedArtifact(temp.Name(), owned)
-	if err := temp.Chmod(0o600); err != nil {
-		return reviewResultArtifact{}, err
-	}
-	if _, err := temp.Write(payload); err != nil {
-		return reviewResultArtifact{}, err
-	}
-	if err := temp.Sync(); err != nil {
-		return reviewResultArtifact{}, err
-	}
-	if err := temp.Close(); err != nil {
-		return reviewResultArtifact{}, err
-	}
-	if err := reviewtransaction.PublishFileNoReplace(temp.Name(), path); err != nil {
-		if existing, readErr := readVerifiedReviewerArtifact(artifact, storeDir, state); readErr == nil && bytes.Equal(existing, payload) {
-			return artifact, persistReviewerArtifactDigest(path, artifact.SHA256)
-		}
-		return reviewResultArtifact{}, fmt.Errorf("publish reviewer result atomically: %w", err)
-	}
-	if err := syncReviewerArtifactDirectoryCompatible(dir); err != nil {
-		removeOwnedArtifact(path, owned)
-		return reviewResultArtifact{}, fmt.Errorf("sync reviewer result directory: %w", err)
-	}
-	if _, err := readVerifiedReviewerArtifact(artifact, storeDir, state); err != nil {
-		removeOwnedArtifact(path, owned)
-		return reviewResultArtifact{}, fmt.Errorf("read back reviewer result: %w", err)
-	}
-	return artifact, persistReviewerArtifactDigest(path, artifact.SHA256)
 }
 
 // archiveQuarantinedReviewerArtifact removes only an artifact digest that the
@@ -617,43 +554,6 @@ func publishImmutableReviewerFile(path string, payload []byte) error {
 		if readErr != nil || !bytes.Equal(existing, payload) {
 			return err
 		}
-	}
-	return syncReviewerArtifactDirectoryCompatible(dir)
-}
-
-func persistReviewerArtifactDigest(path, digest string) error {
-	digestPath := path + ".sha256"
-	if existing, err := os.ReadFile(digestPath); err == nil {
-		if strings.TrimSpace(string(existing)) == digest {
-			return nil
-		}
-		return errors.New("captured reviewer result digest already exists with different bytes; decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)")
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	dir := filepath.Dir(path)
-	temp, err := os.CreateTemp(dir, ".capture-digest-*")
-	if err != nil {
-		return err
-	}
-	defer temp.Close()
-	if err := temp.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := temp.WriteString(digest + "\n"); err != nil {
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := reviewtransaction.PublishFileNoReplace(temp.Name(), digestPath); err != nil {
-		if existing, readErr := os.ReadFile(digestPath); readErr == nil && strings.TrimSpace(string(existing)) == digest {
-			return nil
-		}
-		return err
 	}
 	return syncReviewerArtifactDirectoryCompatible(dir)
 }
@@ -830,7 +730,7 @@ func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload
 	if err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
 	}
-	result, err := decodeAdmittedReviewerResult(payload, expected, subjectFrozen)
+	result, err := decodeAdmittedReviewerResult(ctx, payload, expected, subjectFrozen)
 	if err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
 	}
@@ -845,7 +745,7 @@ func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload
 	return result, expected, nil
 }
 
-func decodeAdmittedReviewerResult(payload []byte, expected reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext) (facadeReviewerResult, error) {
+func decodeAdmittedReviewerResult(ctx context.Context, payload []byte, expected reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext) (facadeReviewerResult, error) {
 	var envelope admittedReviewerResult
 	if err := decodeFacadeJSONBytes(payload, &envelope); err != nil {
 		return facadeReviewerResult{}, err
@@ -867,7 +767,7 @@ func decodeAdmittedReviewerResult(payload []byte, expected reviewtransaction.Art
 	canonical = append(canonical, '\n')
 	native := envelope.Result.nativeLensResult()
 	native.Lens = expected.Lens
-	result, revalidated, err := reviewtransaction.AdmitArtifact(reviewtransaction.ArtifactAdmissionRequest{
+	result, revalidated, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
 		ExpectedSubject: expected, FrozenContext: frozen, EchoedSubjectHash: envelope.Result.SubjectHash,
 		Inspection: envelope.Result.Inspection, Result: native,
 		CandidateCausalFindingIDs: envelope.Admission.CandidateCausalFindingIDs,
@@ -891,6 +791,9 @@ func verifiedCandidateCausalFindingIDs(ctx context.Context, repo string, snapsho
 		case reviewtransaction.CausalIntroduced, reviewtransaction.CausalBehaviorActivated, reviewtransaction.CausalWorsened:
 			changed, err := builder.CandidateLocationSupportsCausality(ctx, snapshot, finding.Location, finding.CausalDisposition)
 			if err != nil {
+				if errors.Is(err, reviewtransaction.ErrInvalidFindingLocation) {
+					return nil, reviewtransaction.NewArtifactLocationAdmissionError(finding.ID, finding.Location, err)
+				}
 				return nil, fmt.Errorf("verify candidate causality for finding %q: %w", finding.ID, err)
 			}
 			if changed {

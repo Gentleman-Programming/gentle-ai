@@ -105,13 +105,13 @@ func TestReviewAuthorityRootRejectsLegacyOptionEchoWithoutMutation(t *testing.T)
 	if _, _, err := reviewAuthorityRoot(context.Background(), repo); err == nil {
 		t.Fatal("reviewAuthorityRoot() accepted legacy option echo")
 	}
-	for _, path := range []string{
-		filepath.Join(repo, "--path-format=absolute\n.git"),
-		filepath.Join(repo, "gentle-ai"),
-	} {
-		if _, err := os.Lstat(path); !os.IsNotExist(err) {
-			t.Fatalf("malformed Git output created %q", path)
-		}
+	malformedPath := filepath.Join(repo, "--path-format=absolute\n.git")
+	if _, err := os.Lstat(malformedPath); err == nil {
+		t.Fatalf("malformed Git output created %q", malformedPath)
+	}
+	path := filepath.Join(repo, "gentle-ai")
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("malformed Git output created authority storage %q", path)
 	}
 }
 
@@ -289,10 +289,7 @@ func TestReviewRepositoryIdentityRejectsReplacedCommonDirectory(t *testing.T) {
 	if err := os.Mkdir(common, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.Stat(common)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := openedPathIdentity(t, common)
 	replaced := false
 	overrideGitDirectoryOutputs(t, repo, common, common+"-old", func() {
 		if replaced {

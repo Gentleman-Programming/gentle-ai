@@ -279,6 +279,42 @@ func (builder SnapshotBuilder) ValidateEvidence(ctx context.Context, snapshot Sn
 	return nil
 }
 
+// BuildCorrectedCandidate composes correction-local bytes onto the original
+// reviewed scope without rereading mutable workspace content.
+func (builder SnapshotBuilder) BuildCorrectedCandidate(ctx context.Context, initial, correction Snapshot) (Snapshot, error) {
+	if correction.Kind != TargetFixDiff || correction.Projection != initial.Projection ||
+		correction.BaseTree != initial.CandidateTree || correction.CandidateTree == correction.BaseTree ||
+		!equalStrings(correction.IntendedUntracked, initial.IntendedUntracked) {
+		return Snapshot{}, errors.New("corrected candidate requires an exact fix over the reviewed snapshot") // refusal:by-design world-action: provider code must rebuild both snapshots from one stable repository candidate
+	}
+	if err := builder.ValidateEvidence(ctx, initial); err != nil {
+		return Snapshot{}, err
+	}
+	if err := builder.ValidateEvidence(ctx, correction); err != nil {
+		return Snapshot{}, err
+	}
+	root, err := builder.repositoryRoot(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	builder.Repo = root
+	paths, err := builder.changedPaths(ctx, initial.BaseTree, correction.CandidateTree)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	complete := initial
+	complete.UnbornHead = correction.UnbornHead
+	complete.CandidateTree = correction.CandidateTree
+	complete.Paths, complete.PathsDigest = paths, digestPaths(paths)
+	complete.IntendedUntrackedProof = correction.IntendedUntrackedProof
+	complete.Identity = snapshotIdentityForProjection(complete.Kind, complete.Projection, complete.BaseTree, complete.CandidateTree,
+		complete.PathsDigest, complete.IntendedUntrackedProof, complete.IntendedUntracked, complete.LedgerIDs)
+	if err := builder.ValidateEvidence(ctx, complete); err != nil {
+		return Snapshot{}, err
+	}
+	return complete, nil
+}
+
 // ValidateLiveSnapshot proves that a frozen snapshot still describes its exact live target.
 func (builder SnapshotBuilder) ValidateLiveSnapshot(ctx context.Context, expected Snapshot) error {
 	if err := builder.ValidateEvidence(ctx, expected); err != nil {
@@ -310,12 +346,13 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 	if err := builder.ValidateEvidence(ctx, snapshot); err != nil {
 		return false, err
 	}
-	separator := strings.LastIndex(location, ":")
-	if !findingLocationInGenesis(location, snapshot.Paths) {
+	logicalPath, line, err := parseFindingLocation(location)
+	if err != nil {
+		return false, err
+	}
+	if stringIndex(snapshot.Paths, logicalPath) < 0 {
 		return false, nil
 	}
-	logicalPath := location[:separator]
-	line, _ := strconv.Atoi(location[separator+1:])
 	if causality == CausalBehaviorActivated {
 		entry, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(logicalPath))
 		if err != nil || len(entry) == 0 {
