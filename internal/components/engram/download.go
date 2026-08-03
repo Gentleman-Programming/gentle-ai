@@ -619,23 +619,25 @@ exit 0
 }
 
 // stopEngramProcesses runs the defensive stop script (see engramStopScript) and
-// returns a non-nil error only when powershell.exe itself fails to launch or
+// returns a non-nil error only when PowerShell fails to launch or
 // exits non-zero. A WARNING line (processes found but not all stopped) is
 // surfaced to stderr but is treated as non-fatal.
 func stopEngramProcesses() error {
-	cmd := exec.Command("powershell.exe",
+	return stopEngramProcessesWith(system.NewPowerShellRunner())
+}
+
+func stopEngramProcessesWith(runner system.PowerShellRunner) error {
+	out, err := runner.Run(context.Background(),
 		"-NoProfile",
 		"-NonInteractive",
 		"-Command",
 		engramStopScript(),
 	)
-	cmd.Stdin = nil
-	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// powershell itself failed to launch or returned non-zero despite
+		// PowerShell failed to launch or returned non-zero despite
 		// our SilentlyContinue guards — surface the raw output so the user
 		// has something actionable.
-		return fmt.Errorf("powershell Stop-Process engram: %w (output: %s)", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("PowerShell Stop-Process engram: %w", err)
 	}
 	// If the script emitted a WARNING line, surface it but do not fail.
 	// The caller decides whether to abort based on the returned error being nil.

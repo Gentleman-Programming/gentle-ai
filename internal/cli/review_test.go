@@ -347,10 +347,14 @@ func assertReviewGateResult(t *testing.T, payload []byte, want reviewtransaction
 
 func initReviewCLIRepo(t *testing.T) string {
 	t.Helper()
-	repo := t.TempDir()
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	runReviewCLIGit(t, repo, "init", "-q")
 	runReviewCLIGit(t, repo, "config", "user.email", "test@example.com")
 	runReviewCLIGit(t, repo, "config", "user.name", "Test")
+	runReviewCLIGit(t, repo, "config", "core.autocrlf", "false")
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

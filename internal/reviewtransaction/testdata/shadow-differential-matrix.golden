@@ -1,0 +1,334 @@
+[
+  {
+    "name": "committed-range/ambiguous",
+    "selector": "committed-range",
+    "shadow_relation": "ambiguous",
+    "live_relation": "same",
+    "verdict": "no-live-decision",
+    "explained": false
+  },
+  {
+    "name": "committed-range/changed",
+    "selector": "committed-range",
+    "shadow_relation": "changed",
+    "live_relation": "changed-scope",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "committed-range/changed-amendment-b-degradation",
+    "selector": "committed-range",
+    "shadow_relation": "changed",
+    "live_relation": "provable-contraction",
+    "verdict": "divergence",
+    "explained": true,
+    "reason": "Amendment B no-input degradation (design.md Decision 5): shadow has no admitted-finding evidence in this mode, so it fail-closes provable_contraction to changed; live has no such degradation concept and still reports provable-contraction for the identical path subset -- a documented vocabulary gap, not a fabricated agreement"
+  },
+  {
+    "name": "committed-range/compatible-base-advance",
+    "selector": "committed-range",
+    "shadow_relation": "compatible_base_advance",
+    "live_relation": "compatible-advance",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "committed-range/exact",
+    "selector": "committed-range",
+    "shadow_relation": "exact",
+    "live_relation": "same",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "committed-range/no-shadow-decision",
+    "selector": "committed-range",
+    "live_relation": "changed-scope",
+    "verdict": "no-shadow-decision",
+    "explained": false,
+    "reason": "shadow identity resolution failed before any relation could be computed: committed-range selector's revision could not be resolved by SnapshotBuilder.Build (unresolvable Git revision)"
+  },
+  {
+    "name": "committed-range/provable-contraction",
+    "selector": "committed-range",
+    "shadow_relation": "provable_contraction",
+    "live_relation": "provable-contraction",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "committed-range/unknown-empty-paths",
+    "selector": "committed-range",
+    "shadow_relation": "unknown",
+    "live_relation": "changed-scope",
+    "verdict": "no-live-decision",
+    "explained": false
+  },
+  {
+    "name": "committed-range/unrelated-vs-live-changed-scope",
+    "selector": "committed-range",
+    "shadow_relation": "unrelated",
+    "live_relation": "changed-scope",
+    "verdict": "divergence",
+    "explained": true,
+    "reason": "design.md Decision 6: shadow has no live vocabulary bucket for unrelated (no governing frozen authority exists to compare); this row is recorded as an explained divergence, never absorbed into no-live-decision -- live independently reports \"changed-scope\" for the same live candidate"
+  },
+  {
+    "name": "committed-range/unrelated-vs-live-unsafe",
+    "selector": "committed-range",
+    "shadow_relation": "unrelated",
+    "live_relation": "unsafe",
+    "verdict": "divergence",
+    "explained": true,
+    "reason": "design.md Decision 6: shadow has no live vocabulary bucket for unrelated (no governing frozen authority exists to compare); this row is recorded as an explained divergence, never absorbed into no-live-decision -- live independently reports \"unsafe\" for the same live candidate"
+  },
+  {
+    "name": "staged/ambiguous",
+    "selector": "staged",
+    "shadow_relation": "ambiguous",
+    "live_relation": "same",
+    "verdict": "no-live-decision",
+    "explained": false
+  },
+  {
+    "name": "staged/changed",
+    "selector": "staged",
+    "shadow_relation": "changed",
+    "live_relation": "changed-scope",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "staged/changed-amendment-b-degradation",
+    "selector": "staged",
+    "shadow_relation": "changed",
+    "live_relation": "provable-contraction",
+    "verdict": "divergence",
+    "explained": true,
+    "reason": "Amendment B no-input degradation (design.md Decision 5): shadow has no admitted-finding evidence in this mode, so it fail-closes provable_contraction to changed; live has no such degradation concept and still reports provable-contraction for the identical path subset -- a documented vocabulary gap, not a fabricated agreement"
+  },
+  {
+    "name": "staged/compatible-base-advance",
+    "selector": "staged",
+    "shadow_relation": "compatible_base_advance",
+    "live_relation": "compatible-advance",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "staged/exact",
+    "selector": "staged",
+    "shadow_relation": "exact",
+    "live_relation": "same",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "staged/no-shadow-decision",
+    "selector": "staged",
+    "live_relation": "changed-scope",
+    "verdict": "no-shadow-decision",
+    "explained": false,
+    "reason": "shadow identity resolution failed before any relation could be computed: staged selector supplied both base_ref and ledger_ids, an ambiguity shadowSelectorAmbiguityReason detects at the selector layer before shadowRelate ever runs"
+  },
+  {
+    "name": "staged/provable-contraction",
+    "selector": "staged",
+    "shadow_relation": "provable_contraction",
+    "live_relation": "provable-contraction",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "staged/unknown-unborn-head",
+    "selector": "staged",
+    "shadow_relation": "unknown",
+    "live_relation": "same",
+    "verdict": "no-live-decision",
+    "explained": false
+  },
+  {
+    "name": "staged/unrelated-vs-live-changed-scope",
+    "selector": "staged",
+    "shadow_relation": "unrelated",
+    "live_relation": "changed-scope",
+    "verdict": "divergence",
+    "explained": true,
+    "reason": "design.md Decision 6: shadow has no live vocabulary bucket for unrelated (no governing frozen authority exists to compare); this row is recorded as an explained divergence, never absorbed into no-live-decision -- live independently reports \"changed-scope\" for the same live candidate"
+  },
+  {
+    "name": "staged/unrelated-vs-live-unsafe",
+    "selector": "staged",
+    "shadow_relation": "unrelated",
+    "live_relation": "unsafe",
+    "verdict": "divergence",
+    "explained": true,
+    "reason": "design.md Decision 6: shadow has no live vocabulary bucket for unrelated (no governing frozen authority exists to compare); this row is recorded as an explained divergence, never absorbed into no-live-decision -- live independently reports \"unsafe\" for the same live candidate"
+  },
+  {
+    "name": "workspace-overlay/ambiguous",
+    "selector": "workspace-overlay",
+    "shadow_relation": "ambiguous",
+    "live_relation": "same",
+    "verdict": "no-live-decision",
+    "explained": false
+  },
+  {
+    "name": "workspace-overlay/changed",
+    "selector": "workspace-overlay",
+    "shadow_relation": "changed",
+    "live_relation": "changed-scope",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "workspace-overlay/changed-amendment-b-degradation",
+    "selector": "workspace-overlay",
+    "shadow_relation": "changed",
+    "live_relation": "provable-contraction",
+    "verdict": "divergence",
+    "explained": true,
+    "reason": "Amendment B no-input degradation (design.md Decision 5): shadow has no admitted-finding evidence in this mode, so it fail-closes provable_contraction to changed; live has no such degradation concept and still reports provable-contraction for the identical path subset -- a documented vocabulary gap, not a fabricated agreement"
+  },
+  {
+    "name": "workspace-overlay/compatible-base-advance",
+    "selector": "workspace-overlay",
+    "shadow_relation": "compatible_base_advance",
+    "live_relation": "compatible-advance",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "workspace-overlay/exact",
+    "selector": "workspace-overlay",
+    "shadow_relation": "exact",
+    "live_relation": "same",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "workspace-overlay/no-shadow-decision",
+    "selector": "workspace-overlay",
+    "live_relation": "changed-scope",
+    "verdict": "no-shadow-decision",
+    "explained": false,
+    "reason": "shadow identity resolution failed before any relation could be computed: workspace-overlay selector's base_ref could not be resolved by SnapshotBuilder.Build"
+  },
+  {
+    "name": "workspace-overlay/provable-contraction",
+    "selector": "workspace-overlay",
+    "shadow_relation": "provable_contraction",
+    "live_relation": "provable-contraction",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "workspace-overlay/unknown-unresolvable",
+    "selector": "workspace-overlay",
+    "shadow_relation": "unknown",
+    "live_relation": "same",
+    "verdict": "no-live-decision",
+    "explained": false
+  },
+  {
+    "name": "workspace-overlay/unrelated-vs-live-changed-scope",
+    "selector": "workspace-overlay",
+    "shadow_relation": "unrelated",
+    "live_relation": "changed-scope",
+    "verdict": "divergence",
+    "explained": true,
+    "reason": "design.md Decision 6: shadow has no live vocabulary bucket for unrelated (no governing frozen authority exists to compare); this row is recorded as an explained divergence, never absorbed into no-live-decision -- live independently reports \"changed-scope\" for the same live candidate"
+  },
+  {
+    "name": "workspace-overlay/unrelated-vs-live-unsafe",
+    "selector": "workspace-overlay",
+    "shadow_relation": "unrelated",
+    "live_relation": "unsafe",
+    "verdict": "divergence",
+    "explained": true,
+    "reason": "design.md Decision 6: shadow has no live vocabulary bucket for unrelated (no governing frozen authority exists to compare); this row is recorded as an explained divergence, never absorbed into no-live-decision -- live independently reports \"unsafe\" for the same live candidate"
+  },
+  {
+    "name": "workspace/ambiguous",
+    "selector": "workspace",
+    "shadow_relation": "ambiguous",
+    "live_relation": "same",
+    "verdict": "no-live-decision",
+    "explained": false
+  },
+  {
+    "name": "workspace/changed",
+    "selector": "workspace",
+    "shadow_relation": "changed",
+    "live_relation": "changed-scope",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "workspace/changed-amendment-b-degradation",
+    "selector": "workspace",
+    "shadow_relation": "changed",
+    "live_relation": "provable-contraction",
+    "verdict": "divergence",
+    "explained": true,
+    "reason": "Amendment B no-input degradation (design.md Decision 5): shadow has no admitted-finding evidence in this mode, so it fail-closes provable_contraction to changed; live has no such degradation concept and still reports provable-contraction for the identical path subset -- a documented vocabulary gap, not a fabricated agreement"
+  },
+  {
+    "name": "workspace/compatible-base-advance",
+    "selector": "workspace",
+    "shadow_relation": "compatible_base_advance",
+    "live_relation": "compatible-advance",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "workspace/exact",
+    "selector": "workspace",
+    "shadow_relation": "exact",
+    "live_relation": "same",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "workspace/no-shadow-decision",
+    "selector": "workspace",
+    "live_relation": "changed-scope",
+    "verdict": "no-shadow-decision",
+    "explained": false,
+    "reason": "shadow identity resolution failed before any relation could be computed: OpenRepositoryIdentityLease could not resolve a repository identity for the candidate repository"
+  },
+  {
+    "name": "workspace/provable-contraction",
+    "selector": "workspace",
+    "shadow_relation": "provable_contraction",
+    "live_relation": "provable-contraction",
+    "verdict": "agreement",
+    "explained": false
+  },
+  {
+    "name": "workspace/unknown-unresolvable",
+    "selector": "workspace",
+    "shadow_relation": "unknown",
+    "live_relation": "same",
+    "verdict": "no-live-decision",
+    "explained": false
+  },
+  {
+    "name": "workspace/unrelated-vs-live-changed-scope",
+    "selector": "workspace",
+    "shadow_relation": "unrelated",
+    "live_relation": "changed-scope",
+    "verdict": "divergence",
+    "explained": true,
+    "reason": "design.md Decision 6: shadow has no live vocabulary bucket for unrelated (no governing frozen authority exists to compare); this row is recorded as an explained divergence, never absorbed into no-live-decision -- live independently reports \"changed-scope\" for the same live candidate"
+  },
+  {
+    "name": "workspace/unrelated-vs-live-unsafe",
+    "selector": "workspace",
+    "shadow_relation": "unrelated",
+    "live_relation": "unsafe",
+    "verdict": "divergence",
+    "explained": true,
+    "reason": "design.md Decision 6: shadow has no live vocabulary bucket for unrelated (no governing frozen authority exists to compare); this row is recorded as an explained divergence, never absorbed into no-live-decision -- live independently reports \"unsafe\" for the same live candidate"
+  }
+]

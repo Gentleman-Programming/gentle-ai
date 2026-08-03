@@ -101,6 +101,7 @@ func TestRepositoryIdentityLeaseRejectsGitControlReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	identity := openedPathIdentity(t, controlPath)
 	replacementPath := controlPath + ".replacement"
 	if err := os.WriteFile(replacementPath, payload, info.Mode().Perm()); err != nil {
 		t.Fatal(err)
@@ -120,13 +121,28 @@ func TestRepositoryIdentityLeaseRejectsGitControlReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if os.SameFile(info, replaced) {
+	if os.SameFile(identity, replaced) {
 		t.Fatal("control replacement fixture reused the captured file identity")
 	}
-
 	if err := lease.Validate(context.Background()); !errors.Is(err, ErrRepositoryIdentityChanged) {
 		t.Fatalf("Validate() error = %v, want ErrRepositoryIdentityChanged", err)
 	}
+}
+
+func openedPathIdentity(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	// File.Stat captures the Windows file ID from the open handle; os.Stat
+	// defers that lookup and can accidentally observe the replacement path.
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info
 }
 
 func TestRepositoryIdentityLeaseRejectsCommonControlContentMutation(t *testing.T) {

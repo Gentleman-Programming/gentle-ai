@@ -1,6 +1,8 @@
 package sddstatus
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -197,6 +199,99 @@ func TestDisabledArchiveGateStillValidatesAnExplicitReviewReceipt(t *testing.T) 
 	if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-review" {
 		t.Fatalf("explicit receipt while disabled archive=%q next=%q, want blocked/resolve-review",
 			status.Dependencies.Archive, status.NextRecommended)
+	}
+}
+
+func TestDiscoveredTerminalBlockerRespectsReviewModeProvenance(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     reviewtransaction.GateResult
+		wantReason string
+	}{
+		{name: "invalidated", result: reviewtransaction.GateInvalidated, wantReason: "review receipt was invalidated"},
+		{name: "escalated", result: reviewtransaction.GateEscalated, wantReason: "escalated the receipt"},
+	}
+
+	original := evaluateNativeReviewGate
+	t.Cleanup(func() { evaluateNativeReviewGate = original })
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			changeRoot := seedBoundedReadyChange(t, root)
+			writeApprovedReviewArtifacts(t, changeRoot)
+			receiptPath := filepath.Join(changeRoot, "reviews", "receipt.json")
+			receipt, err := os.ReadFile(receiptPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(receiptPath); err != nil {
+				t.Fatal(err)
+			}
+			store, err := reviewtransaction.AuthoritativeStore(context.Background(), root, "thin-lineage")
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := store.LoadChain()
+			if err != nil {
+				t.Fatal(err)
+			}
+			evaluateNativeReviewGate = func(context.Context, string, reviewtransaction.Receipt, reviewtransaction.GateRequest) reviewtransaction.NativeGateEvaluation {
+				return reviewtransaction.NativeGateEvaluation{Result: tt.result}
+			}
+
+			assertBlocked := func(label string, status Status) {
+				t.Helper()
+				if status.ReviewGate == nil || status.ReviewGate.Result != tt.result || status.ReviewGate.Delivery != "" {
+					t.Fatalf("%s gate = %#v, want %q without delivery", label, status.ReviewGate, tt.result)
+				}
+				if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-review" {
+					t.Fatalf("%s archive=%q next=%q, want blocked/resolve-review", label, status.Dependencies.Archive, status.NextRecommended)
+				}
+			}
+
+			enabled, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertBlocked("enabled discovered", enabled)
+
+			disabled, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if disabled.ReviewGate == nil || disabled.ReviewGate.Result != tt.result || disabled.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
+				t.Fatalf("disabled discovered gate = %#v, want %q disabled/unmanaged", disabled.ReviewGate, tt.result)
+			}
+			if disabled.Dependencies.Archive == DependencyBlocked || disabled.NextRecommended == "resolve-review" {
+				t.Fatalf("disabled discovered archive=%q next=%q, want unmanaged archive route", disabled.Dependencies.Archive, disabled.NextRecommended)
+			}
+			if !strings.Contains(disabled.ReviewGate.Reason, tt.wantReason) {
+				t.Fatalf("disabled discovered reason = %q, want underlying %q", disabled.ReviewGate.Reason, tt.wantReason)
+			}
+
+			reenabled, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertBlocked("re-enabled discovered", reenabled)
+
+			if err := os.WriteFile(receiptPath, receipt, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			explicit, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertBlocked("disabled explicit", explicit)
+
+			after, err := store.LoadChain()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.HeadRevision != before.HeadRevision {
+				t.Fatalf("authority revision changed from %q to %q", before.HeadRevision, after.HeadRevision)
+			}
+		})
 	}
 }
 

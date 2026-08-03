@@ -198,7 +198,7 @@ func TestReviewInspectAuthorityPropagatesContextFailure(t *testing.T) {
 
 func writeInspectCLIRecoveryPair(t *testing.T, repo, prefix string, unchanged bool, authorization string) {
 	t.Helper()
-	path := filepath.Join("docs", prefix+".md")
+	path := "docs/" + prefix + ".md"
 	absolute := filepath.Join(repo, path)
 	if err := os.MkdirAll(filepath.Dir(absolute), 0o755); err != nil {
 		t.Fatal(err)
