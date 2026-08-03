@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -171,9 +172,9 @@ func TestWorktreeRDDModeUsesDistinctMainWorktreeNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CloneLocalRDDModeRecordPath error = %v", err)
 	}
-	worktreePath, err := localRDDModeRecordPath(ctx, repo, RDDModeSourceWorktreeLocal)
+	worktreePath, err := WorktreeLocalRDDModeRecordPath(ctx, repo)
 	if err != nil {
-		t.Fatalf("localRDDModeRecordPath(worktree) error = %v", err)
+		t.Fatalf("WorktreeLocalRDDModeRecordPath error = %v", err)
 	}
 	if clonePath == worktreePath {
 		t.Fatalf("main worktree policy collided with clone policy: clone=%q worktree=%q", clonePath, worktreePath)
@@ -198,13 +199,13 @@ func TestWorktreeRDDModeIsolatedAcrossLinkedWorktrees(t *testing.T) {
 	if !mainStatus.Enabled() || linkedStatus.Source != RDDModeSourceWorktreeLocal {
 		t.Fatalf("linked worktree policy leaked: main=%#v linked=%#v", mainStatus, linkedStatus)
 	}
-	mainPath, err := localRDDModeRecordPath(ctx, primary, RDDModeSourceWorktreeLocal)
+	mainPath, err := WorktreeLocalRDDModeRecordPath(ctx, primary)
 	if err != nil || mainPath != "" {
-		t.Fatalf("primary worktree record = %q, %v", mainPath, err)
+		t.Fatalf("primary WorktreeLocalRDDModeRecordPath = %q, %v", mainPath, err)
 	}
-	linkedPath, err := localRDDModeRecordPath(ctx, linked, RDDModeSourceWorktreeLocal)
+	linkedPath, err := WorktreeLocalRDDModeRecordPath(ctx, linked)
 	if err != nil || linkedPath == "" {
-		t.Fatalf("linked worktree record = %q, %v", linkedPath, err)
+		t.Fatalf("linked WorktreeLocalRDDModeRecordPath = %q, %v", linkedPath, err)
 	}
 	mainIdentity, err := OpenRepositoryIdentityLease(ctx, primary)
 	if err != nil {
@@ -241,6 +242,8 @@ func TestLocalRDDModeCompareAndSwapIsPerScope(t *testing.T) {
 	}
 	if _, err := SetWorktreeLocalRDDMode(ctx, repo, RDDModeUnset, "", global); !errors.Is(err, ErrRDDModeRevisionMismatch) {
 		t.Fatalf("stale worktree CAS error = %v, want ErrRDDModeRevisionMismatch", err)
+	} else if strings.Contains(err.Error(), "clone-local review mode revision mismatch") || !strings.Contains(err.Error(), "worktree-local head") {
+		t.Fatalf("worktree CAS error names the wrong scope: %v", err)
 	}
 }
 

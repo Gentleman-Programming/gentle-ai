@@ -117,7 +117,7 @@ func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion
 	if !strings.Contains(granted.Effect, "exact frozen candidate") || !strings.Contains(granted.Effect, "asks again") {
 		t.Fatalf("grant effect must remain candidate-scoped: %q", granted.Effect)
 	}
-	if question.OffPath.Command != reviewConsentOffPathCommand || !strings.Contains(question.OffPath.Note, "for good") {
+	if question.OffPath.Command != reviewConsentOffPathLegacyCommand || !strings.Contains(question.OffPath.Note, "for good") {
 		t.Fatalf("consent off path = %#v", question.OffPath)
 	}
 
