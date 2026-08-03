@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -257,7 +258,10 @@ func TestWindowsInstallScriptFallbackChecksumExecution(t *testing.T) {
 	t.Logf("PowerShell fallback test output:\n%s", string(out))
 }
 
-func TestInstallScriptAtomicBinaryReplacementStructure(t *testing.T) {
+func TestInstallScriptAtomicBinaryReplacement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping Unix bash install script test on Windows")
+	}
 	path := filepath.Join("..", "..", "scripts", "install.sh")
 	content, err := os.ReadFile(path)
 	if err != nil {
