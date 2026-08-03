@@ -22,6 +22,7 @@ type Sandbox struct {
 	Remote                   string
 	TracePath                string
 	BenchReceiptMutationPath string
+	extraEnv                 []string
 
 	// NewLineageActivation opts this sandbox's whole isolated process
 	// environment into GENTLE_AI_RDD_NEW_LINEAGE (Wave 3 Slice 5, task 6.7).
@@ -85,7 +86,7 @@ func (s *Sandbox) env() []string {
 	if s.NewLineageActivation {
 		env = append(env, "GENTLE_AI_RDD_NEW_LINEAGE=1")
 	}
-	return env
+	return append(env, s.extraEnv...)
 }
 
 // git runs a fixture git command. Fixture commands are sandbox setup, not user
