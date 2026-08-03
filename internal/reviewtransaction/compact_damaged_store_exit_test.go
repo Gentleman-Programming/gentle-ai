@@ -348,4 +348,64 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 			t.Fatalf("start still refuses after the named exit ran: %v", err)
 		}
 	})
+
+	// TestStartOverInvalidGraphRefusalNamesSanctionedExit/forged successor
+	// holding captured results names the repair that clears it pins the one
+	// remaining edge SanctionedCompactRecoveryExits (Wave 2 Slice S3) names
+	// review repair for: reconcile refuses it as corruption and abandon
+	// refuses to discard its captured review data, but the leaf authority
+	// disposition plan closes exactly this class. Before this test, the
+	// refusal's continuation switch had no case for
+	// CompactRecoveryEdgeExitRepair, so it fell through silently and this
+	// edge's refusal named nothing — the operator was told only to run
+	// inspect-authority even though SanctionedCompactRecoveryExits already
+	// named a runnable exit.
+	t.Run("forged successor holding captured results names the repair that clears it", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		forgedRecoveryPair(t, repo, "start-captured", "forged captured start target\n", func(state *CompactState) {
+			results := make([]LensResult, 0, len(state.SelectedLenses))
+			for _, lens := range state.SelectedLenses {
+				results = append(results, LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed once"}})
+			}
+			if err := state.CompleteReview(CompactReviewInput{
+				LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{},
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+		err := freshStart(t, repo, "start-over-captured")
+		if err == nil {
+			t.Fatal("start succeeded over a content-mismatched leaf holding captured review data")
+		}
+		refusal := err.Error()
+		for _, want := range []string{
+			"gentle-ai review repair",
+			"--plan-digest",
+			"--inventory-revision",
+			authorityDispositionAuthorizationSchema,
+		} {
+			if !strings.Contains(refusal, want) {
+				t.Fatalf("start refusal does not name %q:\n%s", want, refusal)
+			}
+		}
+		if strings.Contains(refusal, "gentle-ai review abandon") {
+			t.Fatalf("start names an abandonment the gate rejects for captured review data:\n%s", refusal)
+		}
+
+		ctx := context.Background()
+		plan, err := DeriveAuthorityDispositionPlanAtRepo(ctx, repo, "maintainer@example.com", "clear the content-mismatched leaf")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := AdmitAuthorityDispositionLeaf(plan); err != nil {
+			t.Fatal(err)
+		}
+		plan.Authorization = authorityDispositionAuthorizationBinding(plan)
+		if _, err := RepairAuthorityDisposition(ctx, repo, plan.Actor, plan.Reason, plan.Authorization); err != nil {
+			t.Fatalf("the named repair does not run: %v", err)
+		}
+		if err := freshStart(t, repo, "start-over-captured"); err != nil {
+			t.Fatalf("start still refuses after the named exit ran: %v", err)
+		}
+	})
 }

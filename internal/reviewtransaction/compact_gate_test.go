@@ -1215,22 +1215,53 @@ func TestCompactCorrectedPreCommitBindsStagedIndexAndIgnoresWorkspace(t *testing
 }
 
 func TestCompactCorrectedCurrentChangesPrePushUsesFinalDeliveryBinding(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	branch := currentBranch(context.Background(), repo)
-	configurePublicationRemote(t, repo, branch)
-	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
-	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
-	state := correctedCompactTestStateWithIntended(t, repo, "compact-corrected-current-delivery", []string{})
-	receipt := persistCorrectedCompactFixture(t, repo, state)
-	gitSnapshot(t, repo, "add", "tracked.txt")
-	gitSnapshot(t, repo, "commit", "-m", "corrected delivery")
-	input := NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: "origin/" + branch}
-	if got := EvaluateCompactGate(context.Background(), repo, receipt, input); got.Result != GateAllow {
-		t.Fatalf("one-commit corrected delivery = %#v", got)
+	tests := []struct {
+		name      string
+		mutate    func(t *testing.T, repo string)
+		wantExact bool
+		wantAllow bool
+	}{
+		{name: "exact squashed delivery", wantExact: true, wantAllow: true},
+		{name: "wrong candidate", mutate: func(t *testing.T, repo string) {
+			writeSnapshotFile(t, repo, "tracked.txt", "wrong corrected candidate\n")
+		}},
+		{name: "path drift", mutate: func(t *testing.T, repo string) {
+			writeSnapshotFile(t, repo, "extra.txt", "outside reviewed scope\n")
+		}},
+		{name: "non-squashed delivery", mutate: func(t *testing.T, repo string) {
+			gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "unreviewed extra commit")
+		}},
 	}
-	gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "unreviewed extra commit")
-	if got := EvaluateCompactGate(context.Background(), repo, receipt, input); got.Result == GateAllow {
-		t.Fatalf("multi-commit current-changes delivery = %#v", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			branch := currentBranch(context.Background(), repo)
+			configurePublicationRemote(t, repo, branch)
+			gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+			gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+			state := correctedCompactTestStateWithIntended(t, repo, "compact-corrected-current-delivery-"+strings.ReplaceAll(tt.name, " ", "-"), []string{})
+			receipt := persistCorrectedCompactFixture(t, repo, state)
+			if tt.mutate != nil {
+				tt.mutate(t, repo)
+			}
+			gitSnapshot(t, repo, "add", "-A")
+			gitSnapshot(t, repo, "commit", "-m", "corrected delivery")
+			input := NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: "origin/" + branch}
+			assessment, err := AssessCompactGateTarget(context.Background(), repo, state, input)
+			if tt.wantExact && (err != nil || assessment.Applicability != CompactGateTargetExact) {
+				t.Fatalf("delivery assessment = %#v, %v", assessment, err)
+			}
+			if !tt.wantExact && err == nil && assessment.Applicability == CompactGateTargetExact {
+				t.Fatalf("inexact delivery assessment = %#v", assessment)
+			}
+			got := EvaluateCompactGate(context.Background(), repo, receipt, input)
+			if tt.wantAllow && (got.Result != GateAllow || !got.Context.BaseRelationshipValid) {
+				t.Fatalf("exact squashed delivery = %#v", got)
+			}
+			if !tt.wantAllow && got.Result == GateAllow {
+				t.Fatalf("inexact delivery = %#v", got)
+			}
+		})
 	}
 }
 

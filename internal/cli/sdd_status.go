@@ -9,6 +9,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
+func sddReviewDisabledForWorkspace(workspaceRoot string) bool {
+	return reviewDrivenDevelopmentDisabled(context.Background(), workspaceRoot)
+}
+
 // RunSDDStatus is the CLI entry point for `gentle-ai sdd-status [change]`.
 //
 // The kill switch reaches SDD status here, at the one layer that owns the
@@ -22,10 +26,10 @@ func RunSDDStatus(args []string, stdout io.Writer) error {
 	}
 
 	status, err := sddstatus.Resolve(sddstatus.ResolveOptions{
-		CWD:                 parsed.CWD,
-		ChangeName:          parsed.ChangeName,
-		IncludeInstructions: parsed.IncludeInstructions,
-		ReviewDisabled:      reviewDrivenDevelopmentDisabled(context.Background(), parsed.CWD),
+		CWD:                        parsed.CWD,
+		ChangeName:                 parsed.ChangeName,
+		IncludeInstructions:        parsed.IncludeInstructions,
+		ReviewDisabledForWorkspace: sddReviewDisabledForWorkspace,
 	})
 	if err != nil {
 		return fmt.Errorf("resolve sdd status: %w", err)
@@ -53,10 +57,10 @@ func RunSDDContinue(args []string, stdout io.Writer) error {
 	}
 
 	status, err := sddstatus.Resolve(sddstatus.ResolveOptions{
-		CWD:                 parsed.CWD,
-		ChangeName:          parsed.ChangeName,
-		IncludeInstructions: true,
-		ReviewDisabled:      reviewDrivenDevelopmentDisabled(context.Background(), parsed.CWD),
+		CWD:                        parsed.CWD,
+		ChangeName:                 parsed.ChangeName,
+		IncludeInstructions:        true,
+		ReviewDisabledForWorkspace: sddReviewDisabledForWorkspace,
 	})
 	if err != nil {
 		return fmt.Errorf("resolve sdd status: %w", err)

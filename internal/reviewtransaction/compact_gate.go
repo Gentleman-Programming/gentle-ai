@@ -83,7 +83,7 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	strictBinding := request.Gate == GatePostApply || request.Gate == GatePreCommit ||
 		request.Gate == GatePrePush && state.InitialSnapshot.Kind != TargetCurrentChanges
 	pathsMatch := pathsAreSubset(snapshot.Paths, state.GenesisPaths) == nil
-	baseMatches := snapshot.BaseTree == state.CurrentSnapshot.BaseTree || request.Target.Kind == TargetFixDiff
+	baseMatches := snapshot.BaseTree == state.CurrentSnapshot.BaseTree || request.Target.Kind == TargetFixDiff || squashedFixDelivery
 	if strictBinding {
 		pathsMatch = snapshot.PathsDigest == state.CurrentSnapshot.PathsDigest || squashedFixDelivery
 		baseMatches = snapshot.BaseTree == state.CurrentSnapshot.BaseTree || squashedFixDelivery
@@ -318,7 +318,7 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	binding := record.State.CurrentSnapshot
 	squashedFixDelivery := compactSquashedFixDelivery(request.Gate, record.State, snapshot, resolvedPrePR, receipt.FinalCandidateTree)
 	strictBinding := request.Gate == GatePostApply || request.Gate == GatePreCommit || request.Gate == GatePrePush && record.State.InitialSnapshot.Kind != TargetCurrentChanges
-	baseRelationshipValid := snapshot.BaseTree == receipt.BaseTree || request.Target.Kind == TargetFixDiff
+	baseRelationshipValid := snapshot.BaseTree == receipt.BaseTree || request.Target.Kind == TargetFixDiff || squashedFixDelivery
 	if strictBinding {
 		baseRelationshipValid = snapshot.BaseTree == binding.BaseTree || squashedFixDelivery
 	}
@@ -518,6 +518,13 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 			return invalid("release evidence changed during final authorization", cause)
 		}
 	}
+	// Wave 1 shadow observation (rdd-shadow-evaluation): outcome-neutral,
+	// advisory-only, and a true no-op unless GENTLE_AI_RDD_SHADOW is set —
+	// see shadow_observer.go. compatibility is already-derived Amendment A
+	// evidence for this exact allow, reused rather than re-derived.
+	ObserveShadowRelation(ctx, repo, request.Gate,
+		receipt.BaseTree, receipt.FinalCandidateTree, receipt.PathsDigest, receipt.PolicyHash,
+		snapshot, record.State.PolicyHash, GateAllow, resolvedPrePR, compatibility)
 	return NativeGateEvaluation{Result: GateAllow, Reason: nativeGateReason(GateAllow), Context: gateContext}
 }
 

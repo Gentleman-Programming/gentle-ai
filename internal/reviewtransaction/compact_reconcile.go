@@ -24,6 +24,17 @@ type compactRecoveryEdgeClassification struct {
 	ValidationError             error
 	RecordedAuthorizationSHA256 string
 	NonReconcilableError        error
+	// DispositionClass names the one closed anomaly class Wave 2's
+	// AuthorityDispositionPlan derivation targets
+	// (authority_disposition_plan.go): a schema-prefixed maintainer
+	// authorization bound to different content than the successor's own
+	// recorded fields. It is deliberately NOT surfaced on
+	// CompactRecoveryEdgeInspection.AnomalyClasses — that would advertise a
+	// `review reconcile-authority` continuation this edge would then refuse
+	// (design decision 2) — so CompactRecoveryEdgeInspection's JSON stays
+	// byte-identical. A caller that needs it re-derives classification
+	// directly from records, exactly as deriveAuthorityDispositionPlan does.
+	DispositionClass string
 }
 
 // CompactReconcileRequest identifies one recovery successor whose persisted
@@ -95,6 +106,7 @@ func classifyCompactRecoveryEdgeAnomalies(predecessor, successor CompactRecord) 
 		if strings.HasPrefix(recovery.MaintainerAuthorization, compactRecoveryAuthorizationSchema) {
 			classification.Anomalies = nil
 			classification.NonReconcilableError = fmt.Errorf("unchanged target is not the sole anomaly; successor %q records a %s binding bound to different content, which is corruption rather than a pre-contract authorization", successor.State.LineageID, compactRecoveryAuthorizationSchema)
+			classification.DispositionClass = compactContentMismatchedRecoveryAuthorizationClass
 			return classification
 		}
 		repaired := successor.State
@@ -113,6 +125,7 @@ func classifyCompactRecoveryEdgeAnomalies(predecessor, successor CompactRecord) 
 	case errors.Is(edgeErr, errCompactRecoveryAuthorizationInexact):
 		if strings.HasPrefix(recovery.MaintainerAuthorization, compactRecoveryAuthorizationSchema) {
 			classification.NonReconcilableError = fmt.Errorf("successor %q records a %s binding bound to different content; that is corruption, not a pre-contract authorization", successor.State.LineageID, compactRecoveryAuthorizationSchema)
+			classification.DispositionClass = compactContentMismatchedRecoveryAuthorizationClass
 			return classification
 		}
 		exactBinding := compactRecoveryAuthorizationBinding(

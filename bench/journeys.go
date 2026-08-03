@@ -23,6 +23,12 @@ type statusEnvelope struct {
 		Revision  string `json:"revision"`
 	} `json:"authority"`
 	TargetIdentity string `json:"target_identity"`
+	Projection     struct {
+		BaseTree             string   `json:"base_tree"`
+		CurrentCandidateTree string   `json:"current_candidate_tree"`
+		PathsDigest          string   `json:"paths_digest"`
+		Paths                []string `json:"paths"`
+	} `json:"projection"`
 	NextTransition struct {
 		Kind    string `json:"kind"`
 		Collect struct {
@@ -44,6 +50,7 @@ type statusEnvelope struct {
 		} `json:"collect"`
 		Execute struct {
 			Operation string `json:"operation"`
+			Command   string `json:"command"`
 			Arguments []struct {
 				Name  string `json:"name"`
 				Value string `json:"value"`
@@ -95,7 +102,12 @@ var captureEvidenceCapability = &Capability{
 // readStatus issues one `review status --next-transition`. The invocation is
 // counted: an agent driving this flow really does have to spend it.
 func readStatus(r *journeyRun) (statusEnvelope, error) {
-	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}, false)
+	return readStatusFor(r)
+}
+
+func readStatusFor(r *journeyRun, selectors ...string) (statusEnvelope, error) {
+	args := append([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}, selectors...)
+	observation := r.run(args, false)
 	var envelope statusEnvelope
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &envelope); err != nil {
 		return envelope, fmt.Errorf("parse review status: %w (stderr: %s)", err, firstLine(observation.Stderr))
@@ -138,8 +150,12 @@ func writeScratch(sandbox *Sandbox, name string, content []byte) (string, error)
 // the next transition, synthesize the reviewer result it asks for, capture it,
 // repeat. Each capture counts as one model run.
 func captureAllLenses(r *journeyRun) error {
+	return captureAllLensesFor(r)
+}
+
+func captureAllLensesFor(r *journeyRun, selectors ...string) error {
 	for round := 0; round < 8; round++ {
-		envelope, err := readStatus(r)
+		envelope, err := readStatusFor(r, selectors...)
 		if err != nil {
 			return err
 		}
@@ -173,7 +189,11 @@ func captureAllLenses(r *journeyRun) error {
 
 // captureFinalEvidence answers the verification-evidence collect step.
 func captureFinalEvidence(r *journeyRun) error {
-	envelope, err := readStatus(r)
+	return captureFinalEvidenceFor(r)
+}
+
+func captureFinalEvidenceFor(r *journeyRun, selectors ...string) error {
+	envelope, err := readStatusFor(r, selectors...)
 	if err != nil {
 		return err
 	}
@@ -408,11 +428,12 @@ var abandonCapability = &Capability{Verb: []string{"review", "abandon"}, Flags: 
 // coreJourneys below are the flows drawn from the community testing guide and
 // the failure paths it collected; edgeJourneys in journeys_edge.go are the edge
 // cases those flows never reached; sddJourneys in journeys_sdd.go is the SDD
-// remediation successor cycle and the two surfaces that meet it, which nothing
-// in the first two parts had ever driven.
+// remediation successor cycle and fail-closed authority controls; and
+// waveOneJourneys pins integrated community fixes at their real CLI boundary.
 func Journeys() []Journey {
 	journeys := append(coreJourneys(), edgeJourneys()...)
-	return append(journeys, sddJourneys()...)
+	journeys = append(journeys, sddJourneys()...)
+	return append(journeys, waveOneJourneys()...)
 }
 
 func coreJourneys() []Journey {

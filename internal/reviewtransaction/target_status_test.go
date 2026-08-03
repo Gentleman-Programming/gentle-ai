@@ -1728,8 +1728,10 @@ func TestAssessTargetStatusStopsSecondArtifactReadOnDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || got.Applicability == TargetApplicabilityCorrupted {
 		t.Fatalf("deadline second artifact read status = %#v, error = %T %v", got, err, err)
 	}
-	if calls != 1 {
-		t.Fatalf("deadline second artifact read calls = %d, want 1", calls)
+	// The same deadline covers Git-backed snapshot setup, so a slow runner may
+	// exhaust it before the first authority observation. No second read may start.
+	if calls > 1 {
+		t.Fatalf("deadline second artifact read calls = %d, want at most 1", calls)
 	}
 }
 
@@ -1831,8 +1833,10 @@ func TestAssessTargetStatusStopsStableReadOnDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || got.Applicability == TargetApplicabilityCorrupted {
 		t.Fatalf("deadline coherent read status = %#v, error = %T %v", got, err, err)
 	}
-	if calls != 1 {
-		t.Fatalf("deadline coherent read attempts = %d, want 1", calls)
+	// The same deadline covers Git-backed snapshot setup, so a slow runner may
+	// exhaust it before the first authority observation. No second attempt may start.
+	if calls > 1 {
+		t.Fatalf("deadline coherent read attempts = %d, want at most 1", calls)
 	}
 }
 
