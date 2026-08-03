@@ -33,8 +33,8 @@ go vet ./...
 go test ./...
 ```
 
-The portable core contains 60 journeys; the registry contains 61 including source-coupled `j57`.
-`j57` requires the product's `bench_fixture` seam; it is an explicit
+The portable core contains 60 journeys; its registry has 61 IDs including source-coupled `j57`.
+It requires the product's `bench_fixture` seam; it is an explicit
 `source-coupled` axis, not a portable black-box measurement.
 
 The measured binary is passed in with `--binary`, so the tool never depends on
