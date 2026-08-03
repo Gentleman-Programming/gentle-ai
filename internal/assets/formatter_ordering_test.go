@@ -142,7 +142,13 @@ func TestClaudeNetworkNoneRuntimeProofRespectsFixtureApplicability(t *testing.T)
 				"        id: claude-runtime-proof\n" +
 				"        shell: bash\n" +
 				"        run: |\n" +
-				"          if [[ -f e2e/Dockerfile.claude-network-none ]]; then",
+				"          if [[ -f e2e/Dockerfile.claude-network-none ]]; then\n" +
+				"            echo \"applicable=true\" >> \"$GITHUB_OUTPUT\"\n" +
+				"            echo \"Claude Network-None runtime proof is applicable.\" >> \"$GITHUB_STEP_SUMMARY\"\n" +
+				"          else\n" +
+				"            echo \"applicable=false\" >> \"$GITHUB_OUTPUT\"\n" +
+				"            echo \"Claude Network-None runtime proof is not applicable: this exact candidate predates e2e/Dockerfile.claude-network-none.\" >> \"$GITHUB_STEP_SUMMARY\"\n" +
+				"          fi",
 		},
 		{
 			name: "guarded image build",
