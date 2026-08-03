@@ -241,6 +241,10 @@ func asAgentIDs(values []string) ([]model.AgentID, error) {
 	agents := make([]model.AgentID, 0, len(values))
 	for _, value := range values {
 		id := model.AgentID(value)
+		if value == "devin-desktop" {
+			// Devin Desktop is Windsurf's rebranded distribution and shares its adapter.
+			id = model.AgentWindsurf
+		}
 		if _, ok := allowed[id]; !ok {
 			return nil, fmt.Errorf("unsupported agent %q (valid: %s)", value, strings.Join(names, ", "))
 		}
