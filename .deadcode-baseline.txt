@@ -202,6 +202,7 @@ internal/sddstatus/status.go	reportLineHasPassSignal
 internal/sddstatus/status.go	reportTextIsClearlyPassing
 internal/sddstatus/status.go	reportValueIsBenign
 internal/sddstatus/status.go	stripMarkdownSignal
+internal/state/state.go	Update
 internal/storage/bytes.go	FormatBytes
 internal/system/install_deps.go	InstallCommandsForDep
 internal/system/install_deps.go	installCommandsBrew

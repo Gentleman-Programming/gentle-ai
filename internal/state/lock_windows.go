@@ -9,9 +9,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// tryLockFile attempts to take an exclusive advisory lock without blocking.
-// It returns (true, nil) when the lock was taken, (false, nil) when another
-// holder has it, and (false, err) on any other failure.
+// tryLockFile is the Windows half of the contract documented in lock_unix.go.
 // Adapted from internal/reviewtransaction/store_lock_windows.go.
 func tryLockFile(file *os.File) (bool, error) {
 	overlapped := new(windows.Overlapped)
