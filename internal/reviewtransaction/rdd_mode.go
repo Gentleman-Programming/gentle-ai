@@ -61,7 +61,9 @@ var (
 	ErrRDDModeCorrupt = errors.New("clone-local review mode override is corrupt")
 
 	// ErrRDDModeRevisionMismatch reports a lost compare-and-set race.
-	ErrRDDModeRevisionMismatch = errors.New("clone-local review mode revision mismatch")
+	// It has no scope or repository, so only its caller can name the correct repair command.
+	// refusal:by-design world-action: a scope-neutral sentinel cannot name a safe recovery command.
+	ErrRDDModeRevisionMismatch = errors.New("review mode revision mismatch")
 
 	// ErrRDDModeRepositoryForcedOn reports an attempt to make a repository
 	// impose receipt-driven development on every clone that checks it out.
@@ -240,11 +242,11 @@ func ResolveRDDMode(ctx context.Context, repo string, global RDDGlobalMode) (RDD
 	if globalErr != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceGlobal), globalErr
 	}
-	cloneOverride, clonePresent, overrideErr := readCloneLocalRDDOverride(ctx, repo)
+	cloneOverride, clonePresent, overrideErr := readLocalRDDOverride(ctx, repo, RDDModeSourceCloneLocal)
 	if overrideErr != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), overrideErr
 	}
-	worktreeOverride, worktreePresent, overrideErr := readWorktreeLocalRDDOverride(ctx, repo)
+	worktreeOverride, worktreePresent, overrideErr := readLocalRDDOverride(ctx, repo, RDDModeSourceWorktreeLocal)
 	if overrideErr != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceWorktreeLocal), overrideErr
 	}
@@ -287,7 +289,7 @@ func setLocalRDDMode(
 	if err := ctx.Err(); err != nil {
 		return failedClosedRDDModeStatus(source), err
 	}
-	persisted, err := cloneLocalRDDOverrideValue(mode)
+	persisted, err := localRDDOverrideValue(mode)
 	if err != nil {
 		return failedClosedRDDModeStatus(source), err
 	}
@@ -301,7 +303,7 @@ func setLocalRDDMode(
 	}
 	defer func() { _ = lock.release() }()
 
-	head, present, err := readCloneLocalRDDOverrideHead(dir)
+	head, present, err := readLocalRDDOverrideHead(dir)
 	if err != nil {
 		// An unreadable head is precisely what this command exists to replace,
 		// so it must not be able to block its own repair -- that left the
@@ -316,7 +318,7 @@ func setLocalRDDMode(
 		if !errors.Is(err, ErrRDDModeCorrupt) {
 			return failedClosedRDDModeStatus(source), err
 		}
-		generation, generationErr := cloneLocalRDDOverrideHeadGeneration(dir)
+		generation, generationErr := localRDDOverrideHeadGeneration(dir)
 		if generationErr != nil {
 			return failedClosedRDDModeStatus(source), generationErr
 		}
@@ -359,11 +361,11 @@ func setLocalRDDMode(
 	if globalErr != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceGlobal), globalErr
 	}
-	cloneOverride, clonePresent, err := readCloneLocalRDDOverride(ctx, repo)
+	cloneOverride, clonePresent, err := readLocalRDDOverride(ctx, repo, RDDModeSourceCloneLocal)
 	if err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
 	}
-	worktreeOverride, worktreePresent, err := readWorktreeLocalRDDOverride(ctx, repo)
+	worktreeOverride, worktreePresent, err := readLocalRDDOverride(ctx, repo, RDDModeSourceWorktreeLocal)
 	if err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceWorktreeLocal), err
 	}
@@ -561,7 +563,7 @@ func RDDModeValueUnintelligible(value string) bool {
 	return err != nil
 }
 
-func cloneLocalRDDOverrideValue(mode RDDMode) (string, error) {
+func localRDDOverrideValue(mode RDDMode) (string, error) {
 	switch mode {
 	case RDDModeOff:
 		return string(RDDModeOff), nil
@@ -587,10 +589,6 @@ func localRDDModeLabel(source RDDModeSource) string {
 // existing helpers instead of inventing a second path policy.
 func cloneLocalRDDModeRoot(ctx context.Context, repo string, create bool) (string, error) {
 	return localRDDModeRoot(ctx, repo, RDDModeSourceCloneLocal, create)
-}
-
-func worktreeLocalRDDModeRoot(ctx context.Context, repo string, create bool) (string, error) {
-	return localRDDModeRoot(ctx, repo, RDDModeSourceWorktreeLocal, create)
 }
 
 func localRDDModeRoot(ctx context.Context, repo string, source RDDModeSource, create bool) (string, error) {
@@ -634,21 +632,6 @@ func localRDDModeRoot(ctx context.Context, repo string, source RDDModeSource, cr
 	return dir, nil
 }
 
-func readCloneLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrideRecord, bool, error) {
-	return readLocalRDDOverride(ctx, repo, RDDModeSourceCloneLocal)
-}
-
-func readWorktreeLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrideRecord, bool, error) {
-	dir, err := worktreeLocalRDDModeRoot(ctx, repo, false)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return rddModeOverrideRecord{}, false, nil
-		}
-		return rddModeOverrideRecord{}, false, err
-	}
-	return readCloneLocalRDDOverrideHead(dir)
-}
-
 func readLocalRDDOverride(ctx context.Context, repo string, source RDDModeSource) (rddModeOverrideRecord, bool, error) {
 	dir, err := localRDDModeRoot(ctx, repo, source, false)
 	if err != nil {
@@ -657,7 +640,7 @@ func readLocalRDDOverride(ctx context.Context, repo string, source RDDModeSource
 		}
 		return rddModeOverrideRecord{}, false, err
 	}
-	return readCloneLocalRDDOverrideHead(dir)
+	return readLocalRDDOverrideHead(dir)
 }
 
 // CloneLocalRDDModeRecordPath reports the clone-local override file that
@@ -669,6 +652,13 @@ func CloneLocalRDDModeRecordPath(ctx context.Context, repo string) (string, erro
 	return localRDDModeRecordPath(ctx, repo, RDDModeSourceCloneLocal)
 }
 
+// WorktreeLocalRDDModeRecordPath reports the worktree-local override file that
+// currently decides this worktree's mode. It is strictly read-only and reports
+// an empty path when this worktree holds no override.
+func WorktreeLocalRDDModeRecordPath(ctx context.Context, repo string) (string, error) {
+	return localRDDModeRecordPath(ctx, repo, RDDModeSourceWorktreeLocal)
+}
+
 func localRDDModeRecordPath(ctx context.Context, repo string, source RDDModeSource) (string, error) {
 	dir, err := localRDDModeRoot(ctx, repo, source, false)
 	if err != nil {
@@ -677,18 +667,18 @@ func localRDDModeRecordPath(ctx context.Context, repo string, source RDDModeSour
 		}
 		return "", err
 	}
-	head, err := cloneLocalRDDOverrideHeadGeneration(dir)
+	head, err := localRDDOverrideHeadGeneration(dir)
 	if err != nil || head == 0 {
 		return "", err
 	}
 	return filepath.Join(dir, rddModeGenerationName(head)), nil
 }
 
-// cloneLocalRDDOverrideHeadGeneration reports the highest published generation
+// localRDDOverrideHeadGeneration reports the highest published generation
 // without reading or parsing it. Naming and repairing an unreadable head need
 // the slot number and nothing else, and a record that cannot be parsed must not
 // be able to hide the slot that supersedes it.
-func cloneLocalRDDOverrideHeadGeneration(dir string) (int, error) {
+func localRDDOverrideHeadGeneration(dir string) (int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -709,8 +699,8 @@ func cloneLocalRDDOverrideHeadGeneration(dir string) (int, error) {
 	return head, nil
 }
 
-func readCloneLocalRDDOverrideHead(dir string) (rddModeOverrideRecord, bool, error) {
-	head, err := cloneLocalRDDOverrideHeadGeneration(dir)
+func readLocalRDDOverrideHead(dir string) (rddModeOverrideRecord, bool, error) {
+	head, err := localRDDOverrideHeadGeneration(dir)
 	if err != nil {
 		return rddModeOverrideRecord{}, false, err
 	}

@@ -57,7 +57,7 @@
       "required": ["note", "command"],
       "properties": {
         "note": {"type": "string", "minLength": 1},
-        "command": {"const": "gentle-ai review mode disable --scope=global"}
+        "command": {"const": "gentle-ai review mode disable"}
       }
     }
   },

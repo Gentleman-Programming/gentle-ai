@@ -128,7 +128,7 @@ func TestReviewModeScopesRouteAndReportBlastRadius(t *testing.T) {
 	if err := RunReviewMode([]string{"status", "--cwd", linked, "--json"}, &output); err != nil {
 		t.Fatalf("status linked worktree: %v", err)
 	}
-	if linkedStatus := decodeReviewModeResult(t, output.Bytes()).Status; linkedStatus.Source != reviewtransaction.RDDModeSourceWorktreeLocal {
+	if linkedStatus := decodeReviewModeResult(t, output.Bytes()).Status; linkedStatus.Source != reviewtransaction.RDDModeSourceWorktreeLocal || linkedStatus.Worktree != reviewtransaction.RDDModeOff {
 		t.Fatalf("linked worktree status = %#v", linkedStatus)
 	}
 	output.Reset()
@@ -137,6 +137,25 @@ func TestReviewModeScopesRouteAndReportBlastRadius(t *testing.T) {
 	}
 	if primaryStatus := decodeReviewModeResult(t, output.Bytes()).Status; primaryStatus.Effective != reviewtransaction.RDDModeOn {
 		t.Fatalf("worktree override leaked into primary worktree: %#v", primaryStatus)
+	}
+}
+
+func TestReviewModeFailedMutationOmitsBlastRadius(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone", "--expected-revision", "", "--json"}, &output); err != nil {
+		t.Fatalf("seed clone override: %v", err)
+	}
+
+	output.Reset()
+	err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--expected-revision", "", "--json"}, &output)
+	if !errors.Is(err, reviewtransaction.ErrRDDModeRevisionMismatch) {
+		t.Fatalf("stale clone mutation error = %v, want ErrRDDModeRevisionMismatch", err)
+	}
+	if result := decodeReviewModeResult(t, output.Bytes()); result.BlastRadius != nil {
+		t.Fatalf("failed mutation announced a blast radius: %#v", result)
 	}
 }
 

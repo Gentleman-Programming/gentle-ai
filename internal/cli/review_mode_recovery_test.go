@@ -24,8 +24,9 @@ import (
 // reviewModeCorruption selects which of the two independent scopes holds a
 // readable but nonsense mode value.
 type reviewModeCorruption struct {
-	global bool
-	clone  bool
+	global   bool
+	clone    bool
+	worktree bool
 }
 
 func TestUnreadableGlobalModeNamesItsFileAndACommandThatClearsIt(t *testing.T) {
@@ -34,6 +35,10 @@ func TestUnreadableGlobalModeNamesItsFileAndACommandThatClearsIt(t *testing.T) {
 
 func TestUnreadableCloneLocalModeNamesItsFileAndACommandThatClearsIt(t *testing.T) {
 	assertUnreadableModeIsRecoverable(t, reviewModeCorruption{clone: true})
+}
+
+func TestUnreadableWorktreeLocalModeNamesItsFileAndACommandThatClearsIt(t *testing.T) {
+	assertUnreadableModeIsRecoverable(t, reviewModeCorruption{worktree: true})
 }
 
 // Naming only the first unreadable scope would send the operator round the
@@ -117,6 +122,24 @@ func reviewModeUnreadableFixture(t *testing.T, corruption reviewModeCorruption) 
 			t.Fatal(err)
 		}
 	}
+	if corruption.worktree {
+		var output bytes.Buffer
+		if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "worktree"}, &output); err != nil {
+			t.Fatalf("seed worktree-local override: %v\n%s", err, output.String())
+		}
+		path := reviewModeWorktreeRecordPath(t, repo)
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tampered := strings.Replace(string(payload), `"mode":"off"`, `"mode":"sometimes"`, 1)
+		if tampered == string(payload) {
+			t.Fatalf("worktree-local override does not carry the expected mode field: %s", payload)
+		}
+		if err := os.WriteFile(path, []byte(tampered), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if corruption.global {
 		persisted, err := state.Read(home)
 		if err != nil && !os.IsNotExist(err) {
@@ -149,12 +172,24 @@ func reviewModeCorruptPaths(t *testing.T, corruption reviewModeCorruption, repo 
 	if corruption.clone {
 		paths = append(paths, reviewModeCloneRecordPath(t, repo))
 	}
+	if corruption.worktree {
+		paths = append(paths, reviewModeWorktreeRecordPath(t, repo))
+	}
 	return paths
 }
 
 func reviewModeCloneRecordPath(t *testing.T, repo string) string {
 	t.Helper()
-	root := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	return reviewModeRecordPath(t, filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode"))
+}
+
+func reviewModeWorktreeRecordPath(t *testing.T, repo string) string {
+	t.Helper()
+	return reviewModeRecordPath(t, filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode-worktree"))
+}
+
+func reviewModeRecordPath(t *testing.T, root string) string {
+	t.Helper()
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatalf("clone-local override directory: %v", err)

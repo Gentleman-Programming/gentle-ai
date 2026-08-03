@@ -71,9 +71,9 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/capabilities-v2.1.fixture.json": "4bbcbaed1b20e6ea8f9c615f35ff17b13ee69b4648784a4906191880751c668d",
-		"fixtures/consent-v3.fixture.json":        "ead7d16aa1dabe9db4b7675d7e3b3de5594d7856f98960d8ec9bba99f91c0e31",
+		"fixtures/consent-v3.fixture.json":        "22fa1f9c2dfd1a69f6565ac2b9a66fece7bd846f27820a92dca812a9ee7c4442",
 		"schemas/capabilities-v2.1.schema.json":   "9ede8ebbe3e169cf6ca4f4a6882c9c4e588a6d1073d8e22a155649cd41d38cd0",
-		"schemas/consent-v3.schema.json":          "80915f5f4f43a494826253d1e7251fc463989f41d2cf163a6a52a8b4328c023c",
+		"schemas/consent-v3.schema.json":          "19b5b8390a933d2357d0f155fba2f16de263f6b17a49480ab3c615bcec4da20c",
 		"schemas/status.schema.json":              "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
 	}
 	for name, expected := range want {

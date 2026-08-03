@@ -115,7 +115,9 @@ func RunReviewMode(args []string, stdout io.Writer) error {
 		result.Status, err = reviewModeStatus(ctx, *cwd)
 	} else {
 		result.Status, err = applyReviewMode(ctx, *cwd, operation, selectedScope, *expectedRevision, revisionProvided)
-		result.BlastRadius = reviewModeBlastRadius(ctx, *cwd, selectedScope)
+		if err == nil {
+			result.BlastRadius = reviewModeBlastRadius(ctx, *cwd, selectedScope)
+		}
 	}
 	if emitErr := emitReviewMode(stdout, result, *emitJSON); emitErr != nil && err == nil {
 		return emitErr
@@ -239,14 +241,17 @@ func reviewModeUnreadable(
 	if local, localErr := reviewtransaction.ResolveRDDMode(ctx, repo, reviewtransaction.RDDGlobalMode{}); localErr != nil {
 		var path string
 		var pathErr error
+		var scope string
 		switch local.Source {
 		case reviewtransaction.RDDModeSourceCloneLocal:
 			path, pathErr = reviewtransaction.CloneLocalRDDModeRecordPath(ctx, repo)
+			scope = reviewModeScopeClone
 		case reviewtransaction.RDDModeSourceWorktreeLocal:
-			scopes = append(scopes, ReviewModeUnreadableScope{Scope: reviewModeScopeWorktree, Path: "the current worktree", Repo: repo})
+			path, pathErr = reviewtransaction.WorktreeLocalRDDModeRecordPath(ctx, repo)
+			scope = reviewModeScopeWorktree
 		}
 		if pathErr == nil && path != "" {
-			scopes = append(scopes, ReviewModeUnreadableScope{Scope: reviewModeScopeClone, Path: path, Repo: repo})
+			scopes = append(scopes, ReviewModeUnreadableScope{Scope: scope, Path: path, Repo: repo})
 		}
 	}
 	if len(scopes) == 0 {
@@ -433,8 +438,12 @@ func reviewModeBlastRadius(ctx context.Context, repo, scope string) *ReviewModeB
 		}
 		available = true
 		linkedWorktreeCount := len(worktrees) - 1
+		affects := fmt.Sprintf("affects all %d worktrees sharing this common Git directory (%d linked siblings)", len(worktrees), linkedWorktreeCount)
+		if len(worktrees) == 1 {
+			affects = "affects only this worktree (no linked siblings share this common Git directory)"
+		}
 		return &ReviewModeBlastRadius{
-			Affects:             fmt.Sprintf("affects all %d worktrees sharing this common Git directory (%d linked siblings)", len(worktrees), linkedWorktreeCount),
+			Affects:             affects,
 			WorktreesAvailable:  &available,
 			WorktreeCount:       len(worktrees),
 			LinkedWorktreeCount: &linkedWorktreeCount,

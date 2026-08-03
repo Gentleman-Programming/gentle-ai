@@ -31,7 +31,7 @@
     }
   ],
   "off_path": {
-    "note": "To turn reviews off for good, run 'gentle-ai review mode disable'.",
-    "command": "gentle-ai review mode disable"
+    "note": "To turn reviews off for good, run 'gentle-ai review mode disable --scope=global'.",
+    "command": "gentle-ai review mode disable --scope=global"
   }
 }

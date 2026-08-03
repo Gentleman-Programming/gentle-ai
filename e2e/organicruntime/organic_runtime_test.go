@@ -698,7 +698,7 @@ func TestOrganicKillSwitchStopsAtTheDeliveryBoundary(t *testing.T) {
 
 	mode := harness.disableReview()
 	if mode.Schema != organicModeSchema || mode.Status.Effective != organicModeOff || mode.Status.Source != "clone_local" ||
-		mode.BlastRadius == nil || mode.BlastRadius.WorktreeCount != 1 || mode.BlastRadius.LinkedWorktreeCount != 0 || !strings.Contains(mode.BlastRadius.Affects, "all 1 worktrees") {
+		mode.BlastRadius == nil || mode.BlastRadius.WorktreeCount != 1 || mode.BlastRadius.LinkedWorktreeCount != 0 || !strings.Contains(mode.BlastRadius.Affects, "only this worktree") {
 		t.Fatalf("kill switch produced no typed outcome: %#v", mode)
 	}
 	generationsAfterDisable := harness.reviewModeGenerations()
