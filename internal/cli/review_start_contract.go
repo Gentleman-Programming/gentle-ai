@@ -41,6 +41,7 @@ type ReviewIntegrationStartResult struct {
 	CandidateDiff       *reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff,omitempty"`
 	ChangedPathManifest *[]reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest,omitempty"`
 	RepositoryContext   *ReviewRepositoryContextReference             `json:"repository_context,omitempty"`
+	TraceDegradation    *reviewtransaction.CompactTraceDegradation    `json:"trace_degradation,omitempty"`
 }
 
 // ReviewRepositoryContextReference is the path-free provider context that a
@@ -74,7 +75,7 @@ func newReviewIntegrationStartResult(legacy ReviewFacadeStartResult, assessment 
 		State: legacy.State, RiskLevel: legacy.RiskLevel, SelectedLenses: append([]string{}, legacy.SelectedLenses...),
 		Projection: legacy.Projection, ChangedFiles: legacy.ChangedFiles, ChangedLines: legacy.ChangedLines,
 		CorrectionBudget: legacy.CorrectionBudget, RiskReasons: append([]reviewtransaction.RiskReason{}, assessment.Reasons...),
-		ArtifactSubjects: []reviewtransaction.ArtifactSubject{}, RepositoryContext: repositoryContext,
+		ArtifactSubjects: []reviewtransaction.ArtifactSubject{}, RepositoryContext: repositoryContext, TraceDegradation: legacy.TraceDegradation,
 	}
 	if targetMode == reviewtransaction.TargetBaseWorkspaceOverlay {
 		result.TargetMode = targetMode
