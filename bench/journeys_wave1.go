@@ -1431,6 +1431,7 @@ func waveOneJourneys() []Journey {
 			Title:  "CLI backup management: list stored backups and prune stale snapshots via clean",
 			Source: "issue #2304",
 			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
 				{
 					Name:     "backup list on fresh environment returns zero backups",
 					Requires: &Capability{Verb: []string{"backup", "list"}},
