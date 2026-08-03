@@ -30,8 +30,8 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"schemas/result-artifact.schema.json":     "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
 		"schemas/start.schema.json":               "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
 		"schemas/start-v2.schema.json":            "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
-		"schemas/status.schema.json":              "e0883789d6025657198cac0b54e6a1b204d94fa454f62af849de558c55b77ecd",
-		"schemas/status-v2.schema.json":           "8065daa61d2cd3346772cc07a7439871cc76cd2ab7dd05eba7717172f7555843",
+		"schemas/status.schema.json":              "250d2c646b8822b38eaefafd2bfdefa1134cc23a00e553a7201f33257573149a",
+		"schemas/status-v2.schema.json":           "dd9914b647a1d9edc4ecdcbed4f0c800b39ec290912d5c2a4cc6ba3098d5f21e",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))

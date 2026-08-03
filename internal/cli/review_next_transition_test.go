@@ -806,7 +806,7 @@ func rejectByPublishedNextTransitionSchemas(t *testing.T, payload []byte) {
 		"status.schema.json":       publishedStatusNextTransitionSchema(t, "status.schema.json"),
 		"status-v2.schema.json":    publishedStatusNextTransitionSchema(t, "status-v2.schema.json"),
 		"v2/status.schema.json":    publishedNativeNextTransitionSchema(t),
-		"v2/status-v4.schema.json": publishedStatusNextTransitionSchemaV4(t),
+		"v2/status-v4.schema.json": publishedStatusNextTransitionSchemaV4(t, "status-v4.schema.json"),
 	} {
 		var document any
 		if err := json.Unmarshal(payload, &document); err != nil {
@@ -832,7 +832,7 @@ func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, s
 	if version == "v1" {
 		schema = publishedStatusNextTransitionSchema(t, schemaFile)
 	} else if version == "v2" {
-		schema = publishedStatusNextTransitionSchemaV4(t)
+		schema = publishedStatusNextTransitionSchemaV4(t, schemaFile)
 	} else {
 		t.Fatalf("unknown status schema version %q", version)
 	}
@@ -870,7 +870,7 @@ func publishedStatusNextTransitionSchema(t *testing.T, schemaFile string) *jsons
 	})
 }
 
-func publishedStatusNextTransitionSchemaV4(t *testing.T) *jsonschema.Schema {
+func publishedStatusNextTransitionSchemaV4(t *testing.T, schemaFile string) *jsonschema.Schema {
 	t.Helper()
 	v1Root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas"))
 	if err != nil {
@@ -880,7 +880,7 @@ func publishedStatusNextTransitionSchemaV4(t *testing.T) *jsonschema.Schema {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return publishedNextTransitionSchema(t, v2Root, "status-v4.schema.json", []publishedNextTransitionSchemaResource{
+	return publishedNextTransitionSchema(t, v2Root, schemaFile, []publishedNextTransitionSchemaResource{
 		{Root: v1Root, Name: "status-v2.schema.json", DefinitionsOnly: true},
 		{Root: v1Root, Name: "targeted-validation-request.schema.json"},
 		{Root: v1Root, Name: "correction-plan-request.schema.json"},
