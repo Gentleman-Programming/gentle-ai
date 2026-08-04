@@ -21,8 +21,9 @@ This protocol runs BEFORE you start reading implementation files.
 
 ## Detection
 
-Check if `graphify-out/graph.json` exists relative to the project root (cwd).
-If it does NOT exist, skip this entire protocol and read files normally.
+Check if `graphify-out/graph.json` exists relative to the project root (cwd)
+AND `graphify` CLI is available on PATH (e.g. `command -v graphify`).
+If either check fails, skip this entire protocol and read files normally.
 
 ## Instructions
 
@@ -50,9 +51,13 @@ The result contains:
 
 From this, build a list of files to read.
 
-### 3. Read ONLY What the Graph Signals
+### 3. Read What the Graph Signals
 
-If the graph points to 2 files, read 2 files. Do NOT grep the entire codebase.
+The graph signals the priority files. Start by reading those.
+
+If implementation evidence requires additional files (configuration, tests,
+contracts, dependencies), expand the reading scope as needed. The graph is
+a starting point, not a complete allowlist.
 
 If the graph returns nothing useful, or `graphify` CLI is unavailable, fall back
 to normal file reading — the graph is a supplement, not a replacement.
@@ -69,7 +74,8 @@ This is AST-only, zero API cost. If `graphify` CLI is unavailable, skip silently
 ## Hard Rules
 
 - Always try the graph FIRST before reading files
-- If the graph returns a valid subgraph, read ONLY the files it signals
+- If the graph returns a valid subgraph, prioritize those files but expand when
+  implementation evidence requires configuration, tests, or other dependencies
 - If the graph doesn't exist or the query fails, work normally (read files)
 - `graphify update .` runs only after EDITS, not in read-only phases
 - Never use the graph as the sole source of truth — always verify by reading
