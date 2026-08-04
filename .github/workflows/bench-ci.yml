@@ -1,0 +1,183 @@
+name: Bench CI
+
+# Stand-alone CI workflow for the bench/ module. The bench module already runs
+# inside `ci.yml` as a single step, but PRs that touch only bench/ are easier
+# to verify in isolation here, and the nightly run captures the full
+# `results.json` as a build artifact so anyone can compare runs over time.
+#
+# Drift detection: the workflow compares the current run against a tracked
+# baseline at `bench/.ci-baseline/results.json`. If the baseline is absent
+# (first run), the drift step only emits a notice. If present, any drift
+# produces a `::warning::` annotation in the log. A regression (a journey
+# that completed in the baseline now reports `unsupported`) fails the job.
+#
+# How to update the baseline intentionally: regenerate
+# `bench/.ci-baseline/results.json` from a known-good run and commit it in
+# the same PR that changed the bench surface.
+
+on:
+  pull_request:
+    paths:
+      - "bench/**"
+      - ".github/workflows/bench-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "bench/**"
+      - ".github/workflows/bench-ci.yml"
+  workflow_dispatch:
+  schedule:
+    # 04:00 UTC daily — after the main CI's 03:00 nightly so the bench
+    # runs against a tree that already cleared formatting and unit tests.
+    - cron: "0 4 * * *"
+
+jobs:
+  bench-linux:
+    name: Bench (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build bench module
+        working-directory: bench
+        run: go build -o "$RUNNER_TEMP/gentle-ai-bench" .
+
+      - name: Build product under test
+        run: go build -trimpath -o "$RUNNER_TEMP/gentle-ai" ./cmd/gentle-ai
+
+      - name: Run bench against the product binary
+        working-directory: bench
+        run: |
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --out "$RUNNER_TEMP/bench-results.json"
+          cp "$RUNNER_TEMP/bench-results.json" ./bench-results.json
+
+      - name: Pin six SDD-bound journeys to a completed status
+        run: |
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            completed_once("j52-sdd-stale-authority-does-not-shadow-approved-candidate") and
+            completed_once("j53-sdd-ambiguous-authorities-fail-closed") and
+            completed_once("j54-sdd-missing-authority-receipt-fails-closed") and
+            completed_once("j55-sdd-mismatched-authority-receipt-fails-closed") and
+            completed_once("j56-sdd-non-allow-post-apply-gate-fails-closed") and
+            completed_once("j58-sdd-foreign-openspec-path-fails-closed")
+          ' bench-results.json
+
+      - name: Upload bench results
+        uses: actions/upload-artifact@de65e23aa2b0e4a3e9caf74e76cea5e7d905a3b67  # v4.6.2
+        with:
+          name: bench-results-linux
+          path: bench-results.json
+          if-no-files-found: error
+
+      - name: Drift detection against tracked baseline
+        run: |
+          BASELINE="bench/.ci-baseline/results.json"
+          if [ ! -f "$BASELINE" ]; then
+            echo "::notice::No baseline at $BASELINE yet. First run will not detect drift. Commit a known-good results.json to enable the check."
+          else
+            # Compare journey statuses. A regression is a journey that completed
+            # in the baseline but reports `unsupported` in the current run.
+            REGRESSIONS=$(jq -r --slurpfile curr bench-results.json --slurpfile base "$BASELINE" '
+              $curr[0].journeys as $cj
+              | $base[0].journeys as $bj
+              | $cj[] as $c
+              | ($bj | map(select(.id == $c.id)) | .[0].status // "absent") as $b_status
+              | select($b_status == "completed" and $c.status == "unsupported")
+              | $c.id
+            ')
+            if [ -n "$REGRESSIONS" ]; then
+              echo "::error::benchmark journeys regressed from completed to unsupported: $REGRESSIONS"
+              exit 1
+            fi
+
+            # Other drift is informational, not blocking.
+            DRIFT=$(jq -r --slurpfile curr bench-results.json --slurpfile base "$BASELINE" '
+              $curr[0].journeys as $cj
+              | $base[0].journeys as $bj
+              | $cj[] as $c
+              | ($bj | map(select(.id == $c.id)) | .[0].status // "absent") as $b_status
+              | select($b_status != "absent" and $b_status != $c.status)
+              | "\(.id): \($b_status) -> \($c.status)"
+            ')
+            if [ -n "$DRIFT" ]; then
+              echo "::warning::benchmark journey status drift (informational):"
+              echo "$DRIFT" | while IFS= read -r line; do
+                echo "  - $line"
+              done
+            fi
+
+            NEW_COMPLETED=$(jq -r --slurpfile curr bench-results.json --slurpfile base "$BASELINE" '
+              $curr[0].journeys as $cj
+              | $base[0].journeys as $bj
+              | $cj[] | select(.status == "completed")
+              | (.id) as $id
+              | select([$bj[] | select(.id == $id) | select(.status == "completed")] | length == 0)
+              | $id
+            ')
+            if [ -n "$NEW_COMPLETED" ]; then
+              echo "::notice::newly completed journeys (not in baseline): $NEW_COMPLETED"
+            fi
+          fi
+
+  bench-windows:
+    name: Bench (windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build bench module
+        working-directory: bench
+        run: go build -o "$RUNNER_TEMP/gentle-ai-bench.exe" .
+
+      - name: Build product under test
+        run: go build -trimpath -o "$RUNNER_TEMP/gentle-ai.exe" ./cmd/gentle-ai
+
+      - name: Run bench against the product binary
+        working-directory: bench
+        run: |
+          "$RUNNER_TEMP/gentle-ai-bench.exe" run --binary "$RUNNER_TEMP/gentle-ai.exe" --out "$RUNNER_TEMP/bench-results.json"
+          copy "$RUNNER_TEMP/bench-results.json" .\bench-results.json
+
+      - name: Pin six SDD-bound journeys to a completed status
+        shell: bash
+        run: |
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            completed_once("j52-sdd-stale-authority-does-not-shadow-approved-candidate") and
+            completed_once("j53-sdd-ambiguous-authorities-fail-closed") and
+            completed_once("j54-sdd-missing-authority-receipt-fails-closed") and
+            completed_once("j55-sdd-mismatched-authority-receipt-fails-closed") and
+            completed_once("j56-sdd-non-allow-post-apply-gate-fails-closed") and
+            completed_once("j58-sdd-foreign-openspec-path-fails-closed")
+          ' bench-results.json
+
+      - name: Upload bench results
+        uses: actions/upload-artifact@de65e23aa2b0e4a3e9caf74e76cea5e7d302f96fc  # v4.6.2
+        with:
+          name: bench-results-windows
+          path: bench-results.json
+          if-no-files-found: error
