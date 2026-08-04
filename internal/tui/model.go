@@ -641,6 +641,7 @@ type Model struct {
 	Width                     int
 	Height                    int
 	Cursor                    int
+	CursorMemory              map[Screen]int
 	Version                   string
 	SpinnerFrame              int
 
@@ -909,6 +910,7 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		ReviewModeCwdFn:       os.Getwd,
 		ReviewModeStatusFn:    cli.ReviewModeStatus,
 		ReviewModeSetGlobalFn: cli.SetGlobalReviewMode,
+		CursorMemory:          make(map[Screen]int),
 		Progress: NewProgressState([]string{
 			"Install dependencies",
 			"Configure selected agents",
@@ -1891,6 +1893,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m = m.goBack(&cmd)
+		m.restoreCursorMemory()
 		return m, cmd
 	case " ":
 		switch m.Screen {
@@ -1981,6 +1984,10 @@ func (m Model) isModelPickerSeparatorCursor() bool {
 }
 
 func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
+	if m.CursorMemory == nil {
+		m.CursorMemory = make(map[Screen]int)
+	}
+	m.CursorMemory[m.Screen] = m.Cursor
 	switch m.Screen {
 	case ScreenWelcome:
 		switch m.Cursor {
@@ -3719,6 +3726,17 @@ func (m *Model) setScreen(next Screen) {
 	if next == ScreenUninstallMode {
 		m.refreshUninstallEngramScope()
 	}
+}
+
+func (m *Model) restoreCursorMemory() {
+	saved, ok := m.CursorMemory[m.Screen]
+	if !ok {
+		return
+	}
+	if count := m.optionCount(); count > 0 && saved >= count {
+		saved = count - 1
+	}
+	m.Cursor = saved
 }
 
 // handleRenameInput processes key events when the rename backup screen is active.
