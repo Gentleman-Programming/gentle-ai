@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,11 +33,14 @@ const (
 
 // Package-level vars for testability.
 var (
-	engramHTTPClient      = &http.Client{Timeout: 5 * time.Minute}
-	engramGitHubBaseURL   = "https://github.com"
-	engramInstallDirFn    = engramInstallDir
-	engramChecksumURLFn   = engramChecksumURL
-	engramStopProcessesFn = stopEngramProcesses
+	engramHTTPClient           = &http.Client{Timeout: 5 * time.Minute}
+	engramGitHubBaseURL        = "https://github.com"
+	engramInstallDirFn         = engramInstallDir
+	engramChecksumURLFn        = engramChecksumURL
+	engramStopProcessesFn      = stopEngramProcesses
+	engramCreateDownloadFileFn = func(path string) (engramDownloadFile, error) {
+		return os.Create(path)
+	}
 
 	// engramGoInstallFn runs `go install <pkg>` and returns the path to the installed binary.
 	// Package-level var for testability — swapped in tests to avoid real go install calls.
@@ -74,6 +78,14 @@ var (
 		return values, nil
 	}
 )
+
+// engramDownloadFile is the small filesystem boundary needed to durably write
+// a downloaded archive before its checksum is trusted.
+type engramDownloadFile interface {
+	io.Writer
+	Sync() error
+	Close() error
+}
 
 func goPrivateModuleEnv(base []string, modulePath string) []string {
 	values := map[string]string{
@@ -514,15 +526,34 @@ func engramDownloadToFile(ctx context.Context, url string, outPath string) (hexD
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return "", fmt.Errorf("create dir: %w", err)
 	}
-	f, err := os.Create(outPath)
+	f, err := engramCreateDownloadFileFn(outPath)
 	if err != nil {
 		return "", fmt.Errorf("create %s: %w", outPath, err)
 	}
-	defer f.Close()
+	closed := false
+	defer func() {
+		if !closed {
+			if closeErr := f.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close download file %s: %w", outPath, closeErr))
+			}
+		}
+		if err != nil {
+			if removeErr := os.Remove(outPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				err = errors.Join(err, fmt.Errorf("remove incomplete download %s: %w", outPath, removeErr))
+			}
+		}
+	}()
 
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
 		return "", fmt.Errorf("write %s: %w", outPath, err)
+	}
+	if err := f.Sync(); err != nil {
+		return "", fmt.Errorf("sync download file %s: %w", outPath, err)
+	}
+	closed = true
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("close download file %s: %w", outPath, err)
 	}
 
 	return hex.EncodeToString(h.Sum(nil)), nil
