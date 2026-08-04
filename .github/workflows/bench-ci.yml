@@ -160,11 +160,25 @@ jobs:
         working-directory: bench
         shell: bash
         run: |
-          "$RUNNER_TEMP/gentle-ai-bench.exe" run --binary "$RUNNER_TEMP/gentle-ai.exe" --out "$RUNNER_TEMP/bench-results.json"
+          # On Windows runners under Git Bash, $RUNNER_TEMP expands to a path
+          # mixed with backslashes (e.g. D:\a\_temp). The bench binary, invoked
+          # by Go's exec.LookPath, requires a Windows-style path with consistent
+          # separators. Use cygpath to normalize before invoking.
+          if [[ "$RUNNER_TEMP" == *\\* ]]; then
+            RESULTS_DIR=$(cygpath -w "$RUNNER_TEMP")
+          else
+            RESULTS_DIR="$RUNNER_TEMP"
+          fi
+          "$RESULTS_DIR/gentle-ai-bench.exe" run --binary "$RESULTS_DIR/gentle-ai.exe" --out "$RESULTS_DIR/bench-results.json"
 
       - name: Pin six SDD-bound journeys to a completed status
         shell: bash
         run: |
+          if [[ "$RUNNER_TEMP" == *\\* ]]; then
+            RESULTS_DIR=$(cygpath -w "$RUNNER_TEMP")
+          else
+            RESULTS_DIR="$RUNNER_TEMP"
+          fi
           jq -e '
             def completed_once($id):
               [.journeys[] | select(.id == $id)] as $matches
@@ -175,7 +189,7 @@ jobs:
             completed_once("j55-sdd-mismatched-authority-receipt-fails-closed") and
             completed_once("j56-sdd-non-allow-post-apply-gate-fails-closed") and
             completed_once("j58-sdd-foreign-openspec-path-fails-closed")
-          ' "$RUNNER_TEMP/bench-results.json"
+          ' "$RESULTS_DIR/bench-results.json"
 
       - name: Upload bench results
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
