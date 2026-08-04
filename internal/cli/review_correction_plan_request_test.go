@@ -34,8 +34,8 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 		{
 			name: "high risk after accepted correction forecast", path: "service-token.ts",
 			content: strings.Repeat("export const candidate = 1;\n", 400), forecast: 120,
-			wantRisk: reviewtransaction.RiskHigh, wantKind: reviewNextTransitionStop,
-			wantReason: "corrected_candidate_unavailable", wantBudget: 200, wantSelectedLens: 4,
+			wantRisk: reviewtransaction.RiskHigh, wantKind: reviewNextTransitionCollect,
+			wantReason: "correction_candidate_required", wantBudget: 200, wantSelectedLens: 4,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -112,6 +112,17 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 				t.Fatalf("correction transition = %#v", transition)
 			}
 			request := transition.CorrectionRequest
+			if tt.forecast > 0 {
+				if transition.Collect == nil || len(transition.Collect.Inputs) != 1 ||
+					transition.Collect.Inputs[0].Name != "correction_candidate" ||
+					transition.Collect.Inputs[0].Schema != reviewtransaction.CorrectionPlanRequestSchema ||
+					transition.Collect.Inputs[0].CaptureOperation != "external.apply_correction" ||
+					!reflect.DeepEqual(transition.Collect.Inputs[0].Arguments, reviewBindingArguments(ReviewTransitionBinding{
+						LineageID: record.State.LineageID, Revision: record.Revision, TargetIdentity: record.State.CurrentSnapshot.Identity,
+					})) {
+					t.Fatalf("forecasted correction collection = %#v", transition.Collect)
+				}
+			}
 			classification := record.State.Classifications[record.State.FixFindingIDs[0]]
 			if request.LineageID != record.State.LineageID || request.ExpectedRevision != record.Revision ||
 				request.TargetIdentity != record.State.CurrentSnapshot.Identity || request.CorrectionBudget != record.State.CorrectionBudget ||
@@ -135,7 +146,59 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			validateAgainstPublishedNextTransitionSchemaV4(t, transitionPayload)
+			if tt.forecast > 0 {
+				validateAgainstPublishedNextTransitionSchemaV4(t, transitionPayload)
+				for _, mutate := range []struct {
+					name  string
+					apply func(*ReviewTransitionInput)
+				}{
+					{name: "capture operation", apply: func(input *ReviewTransitionInput) { input.CaptureOperation = "external.plan_correction" }},
+					{name: "argument order", apply: func(input *ReviewTransitionInput) {
+						input.Arguments[0], input.Arguments[1] = input.Arguments[1], input.Arguments[0]
+					}},
+				} {
+					t.Run("runtime rejects malformed apply correction "+mutate.name, func(t *testing.T) {
+						malformed := *transition
+						collection := *transition.Collect
+						collection.Inputs = append([]ReviewTransitionInput(nil), transition.Collect.Inputs...)
+						collection.Inputs[0].Arguments = append([]ReviewTransitionArgument(nil), collection.Inputs[0].Arguments...)
+						mutate.apply(&collection.Inputs[0])
+						malformed.Collect = &collection
+						if err := malformed.Validate(); err == nil {
+							t.Fatalf("runtime accepted malformed correction collection: %#v", malformed)
+						}
+					})
+				}
+				for _, mutate := range []struct {
+					name  string
+					apply func(map[string]any)
+				}{
+					{name: "input name", apply: func(input map[string]any) { input["name"] = "unbound_correction_candidate" }},
+					{name: "input schema", apply: func(input map[string]any) { input["schema"] = "gentle-ai.unbound-correction/v1" }},
+					{name: "capture operation", apply: func(input map[string]any) { input["capture_operation"] = "external.plan_correction" }},
+					{name: "revision argument", apply: func(input map[string]any) {
+						input["arguments"].([]any)[1].(map[string]any)["value"] = "not-a-revision"
+					}},
+					{name: "argument order", apply: func(input map[string]any) {
+						arguments := input["arguments"].([]any)
+						arguments[0], arguments[1] = arguments[1], arguments[0]
+					}},
+				} {
+					t.Run("rejects malformed apply correction "+mutate.name, func(t *testing.T) {
+						var malformed map[string]any
+						if err := json.Unmarshal(transitionPayload, &malformed); err != nil {
+							t.Fatal(err)
+						}
+						input := malformed["collect"].(map[string]any)["inputs"].([]any)[0].(map[string]any)
+						mutate.apply(input)
+						malformedPayload, err := json.Marshal(malformed)
+						if err != nil {
+							t.Fatal(err)
+						}
+						rejectByPublishedNextTransitionSchemas(t, malformedPayload)
+					})
+				}
+			}
 			after, err := os.ReadFile(store.StatePath())
 			if err != nil || !bytes.Equal(before, after) || len(record.State.CorrectionAttempts) != 0 || record.State.CumulativeCorrectionLines != 0 {
 				t.Fatalf("read-only correction request consumed authority or budget: %v", err)

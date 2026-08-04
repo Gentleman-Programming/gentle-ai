@@ -139,7 +139,7 @@ func TestCorrectionNextTransitionAgreesBetweenFinalizeAndRestartStatus(t *testin
 		kind                  string
 	}{
 		{name: "forecast absent", reason: "correction_plan_required", kind: reviewNextTransitionCollect},
-		{name: "forecast present candidate unchanged", reason: "corrected_candidate_unavailable", forecast: true, kind: reviewNextTransitionStop},
+		{name: "forecast present candidate unchanged", reason: "correction_candidate_required", forecast: true, kind: reviewNextTransitionCollect},
 		{name: "forecast present candidate changed", reason: "correction_repository_verification_required", forecast: true, change: true, kind: reviewNextTransitionCollect},
 		{name: "forecast present candidate changed evidence passed", reason: "targeted_validation_required", forecast: true, change: true, capturePassedEvidence: true, kind: reviewNextTransitionCollect},
 	} {
@@ -214,6 +214,22 @@ func TestCorrectionNextTransitionAgreesBetweenFinalizeAndRestartStatus(t *testin
 				t.Fatalf("read-only FINALIZE/STATUS routing mutated authority: %v", err)
 			}
 		})
+	}
+}
+
+func TestForecastedCorrectionWithoutProviderRequestFailsClosed(t *testing.T) {
+	transition := newReviewNextTransition(ReviewTargetStatusResult{
+		Applicability: reviewtransaction.TargetApplicabilityCurrent,
+		Authority: &ReviewTargetStatusAuthority{
+			LineageID: "forecasted-correction-without-request",
+			Revision:  "sha256:" + strings.Repeat("a", 64),
+			State:     reviewtransaction.StateCorrectionRequired,
+		},
+		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+	}, nil, nil, nil, nil, reviewNextTransitionInput{CorrectionForecasted: true})
+	if transition.Kind != reviewNextTransitionStop || transition.ReasonCode != "corrupted_or_unverifiable_authority" ||
+		transition.Collect != nil || transition.CorrectionRequest != nil {
+		t.Fatalf("forecasted correction without provider request = %#v", transition)
 	}
 }
 
@@ -776,6 +792,32 @@ func validateAgainstPublishedNextTransitionSchemaV4(t *testing.T, payload []byte
 	validateAgainstPublishedStatusNextTransitionSchema(t, "v2", "status-v4.schema.json", payload)
 }
 
+// validateAgainstPublishedNativeNextTransitionSchema keeps the native Git v2
+// status schema aligned with the two v1-compatible status schemas above.
+func validateAgainstPublishedNativeNextTransitionSchema(t *testing.T, payload []byte) {
+	t.Helper()
+	schema := publishedNativeNextTransitionSchema(t)
+	validatePublishedNextTransitionSchema(t, schema, payload, "v2/status.schema.json")
+}
+
+func rejectByPublishedNextTransitionSchemas(t *testing.T, payload []byte) {
+	t.Helper()
+	for name, schema := range map[string]*jsonschema.Schema{
+		"status.schema.json":       publishedStatusNextTransitionSchema(t, "status.schema.json"),
+		"status-v2.schema.json":    publishedStatusNextTransitionSchema(t, "status-v2.schema.json"),
+		"v2/status.schema.json":    publishedNativeNextTransitionSchema(t),
+		"v2/status-v4.schema.json": publishedStatusNextTransitionSchemaV4(t, "status-v4.schema.json"),
+	} {
+		var document any
+		if err := json.Unmarshal(payload, &document); err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(document); err == nil {
+			t.Fatalf("published next_transition schema (%s) accepted malformed correction collection", name)
+		}
+	}
+}
+
 // validateAgainstPublishedStatusNextTransitionSchema is the shared engine
 // behind both the v1 and v2 published-schema validators above. It registers
 // every schema file that either version's $defs/next_transition subtree can
@@ -786,11 +828,95 @@ func validateAgainstPublishedNextTransitionSchemaV4(t *testing.T, payload []byte
 // negative-lookahead regex (see the comment above the v1 wrapper).
 func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, schemaFile string, payload []byte) {
 	t.Helper()
-	root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration"))
+	var schema *jsonschema.Schema
+	if version == "v1" {
+		schema = publishedStatusNextTransitionSchema(t, schemaFile)
+	} else if version == "v2" {
+		schema = publishedStatusNextTransitionSchemaV4(t, schemaFile)
+	} else {
+		t.Fatalf("unknown status schema version %q", version)
+	}
+	validatePublishedNextTransitionSchema(t, schema, payload, schemaFile)
+}
+
+func validatePublishedNextTransitionSchema(t *testing.T, schema *jsonschema.Schema, payload []byte, name string) {
+	t.Helper()
+	var document any
+	if err := json.Unmarshal(payload, &document); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(document); err != nil {
+		t.Fatalf("published next_transition schema (%s) rejected the emitted transition: %v", name, err)
+	}
+}
+
+type publishedNextTransitionSchemaResource struct {
+	Root            string
+	Name            string
+	DefinitionsOnly bool
+}
+
+func publishedStatusNextTransitionSchema(t *testing.T, schemaFile string) *jsonschema.Schema {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	statusSchemaBytes, err := os.ReadFile(filepath.Join(root, version, "schemas", schemaFile))
+	return publishedNextTransitionSchema(t, root, schemaFile, []publishedNextTransitionSchemaResource{
+		{Root: root, Name: "targeted-validation-request.schema.json"},
+		{Root: root, Name: "correction-plan-request.schema.json"},
+		{Root: root, Name: "artifact-subject.schema.json"},
+		{Root: root, Name: "start-v2.schema.json"},
+	})
+}
+
+func publishedStatusNextTransitionSchemaV4(t *testing.T, schemaFile string) *jsonschema.Schema {
+	t.Helper()
+	v1Root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2Root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v2", "schemas"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return publishedNextTransitionSchema(t, v2Root, schemaFile, []publishedNextTransitionSchemaResource{
+		{Root: v1Root, Name: "status-v2.schema.json", DefinitionsOnly: true},
+		{Root: v1Root, Name: "targeted-validation-request.schema.json"},
+		{Root: v1Root, Name: "correction-plan-request.schema.json"},
+		{Root: v1Root, Name: "artifact-subject.schema.json"},
+		{Root: v1Root, Name: "start-v2.schema.json"},
+		{Root: v1Root, Name: "authority-repair-assessment.schema.json"},
+		{Root: v2Root, Name: "artifact-subject.schema.json"},
+		{Root: v2Root, Name: "start.schema.json"},
+	})
+}
+
+func publishedNativeNextTransitionSchema(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+	v1Root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2Root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v2", "schemas"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return publishedNextTransitionSchema(t, v2Root, "status.schema.json", []publishedNextTransitionSchemaResource{
+		{Root: v1Root, Name: "status-v2.schema.json", DefinitionsOnly: true},
+		{Root: v1Root, Name: "targeted-validation-request.schema.json"},
+		{Root: v1Root, Name: "correction-plan-request.schema.json"},
+		{Root: v1Root, Name: "artifact-subject.schema.json"},
+		{Root: v1Root, Name: "start-v2.schema.json"},
+		{Root: v1Root, Name: "authority-repair-assessment.schema.json"},
+		{Root: v2Root, Name: "artifact-subject.schema.json"},
+		{Root: v2Root, Name: "start.schema.json"},
+	})
+}
+
+func publishedNextTransitionSchema(t *testing.T, root, schemaFile string, resources []publishedNextTransitionSchemaResource) *jsonschema.Schema {
+	t.Helper()
+	statusSchemaBytes, err := os.ReadFile(filepath.Join(root, schemaFile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -806,41 +932,36 @@ func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, s
 	if !ok {
 		t.Fatalf("%s $defs.next_transition is missing or not an object: %#v", schemaFile, defs["next_transition"])
 	}
-
-	location := "https://gentle-ai.dev/contracts/review-integration/" + version + "/schemas/_test-next-transition.schema.json"
+	location, ok := statusSchema["$id"].(string)
+	if !ok {
+		t.Fatalf("%s has no schema ID", schemaFile)
+	}
 	synthetic := map[string]any{"$schema": statusSchema["$schema"], "$id": location, "$defs": defs}
 	for key, value := range nextTransition {
 		synthetic[key] = value
 	}
-
 	compiler := jsonschema.NewCompiler()
-	resources := []struct{ version, name string }{
-		{"v1", "status-v2.schema.json"},
-		{"v1", "targeted-validation-request.schema.json"},
-		{"v1", "correction-plan-request.schema.json"},
-		{"v1", "artifact-subject.schema.json"},
-		{"v1", "start-v2.schema.json"},
-	}
-	if version == "v2" {
-		resources = append(resources,
-			struct{ version, name string }{"v2", "artifact-subject.schema.json"},
-			struct{ version, name string }{"v2", "start.schema.json"},
-		)
-	}
 	for _, resource := range resources {
-		refBytes, err := os.ReadFile(filepath.Join(root, resource.version, "schemas", resource.name))
+		payload, err := os.ReadFile(filepath.Join(resource.Root, resource.Name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		var refSchema any
-		if err := json.Unmarshal(refBytes, &refSchema); err != nil {
+		var document map[string]any
+		if err := json.Unmarshal(payload, &document); err != nil {
 			t.Fatal(err)
 		}
-		if resource.version == "v1" && resource.name == "status-v2.schema.json" {
-			document := refSchema.(map[string]any)
-			refSchema = map[string]any{"$schema": document["$schema"], "$id": document["$id"], "$defs": document["$defs"]}
+		if resource.DefinitionsOnly {
+			document = map[string]any{
+				"$schema": document["$schema"],
+				"$id":     document["$id"],
+				"$defs":   document["$defs"],
+			}
 		}
-		if err := compiler.AddResource("https://gentle-ai.dev/contracts/review-integration/"+resource.version+"/schemas/"+resource.name, refSchema); err != nil {
+		id, ok := document["$id"].(string)
+		if !ok {
+			t.Fatalf("%s has no schema ID", resource.Name)
+		}
+		if err := compiler.AddResource(id, document); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -851,13 +972,7 @@ func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, s
 	if err != nil {
 		t.Fatal(err)
 	}
-	var document any
-	if err := json.Unmarshal(payload, &document); err != nil {
-		t.Fatal(err)
-	}
-	if err := schema.Validate(document); err != nil {
-		t.Fatalf("published next_transition schema (%s) rejected the emitted transition: %v", schemaFile, err)
-	}
+	return schema
 }
 
 func nextTransitionTestCaptureContext(t *testing.T, status ReviewTargetStatusResult, lenses []string) *reviewCaptureContext {

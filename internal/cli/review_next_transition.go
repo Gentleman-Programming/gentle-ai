@@ -219,7 +219,10 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			if input.CorrectionRequest == nil {
 				return reviewStopTransition("corrupted_or_unverifiable_authority")
 			}
-			transition := reviewStopTransition("corrected_candidate_unavailable")
+			transition := reviewCollectTransition("correction_candidate_required", ReviewTransitionInput{
+				Name: "correction_candidate", Schema: reviewtransaction.CorrectionPlanRequestSchema,
+				CaptureOperation: "external.apply_correction", Arguments: reviewBindingArguments(binding),
+			})
 			transition.CorrectionRequest = input.CorrectionRequest
 			return transition
 		}

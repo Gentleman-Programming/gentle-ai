@@ -874,12 +874,26 @@ func (transition ReviewNextTransition) Validate() error {
 	if strings.TrimSpace(transition.ReasonCode) == "" {
 		return errors.New("review next transition requires a reason code")
 	}
-	correctionRequestRequired := transition.ReasonCode == "correction_plan_required" || transition.ReasonCode == "corrected_candidate_unavailable"
+	correctionRequestRequired := transition.ReasonCode == "correction_plan_required" || transition.ReasonCode == "correction_candidate_required"
 	if correctionRequestRequired != (transition.CorrectionRequest != nil) {
 		return errors.New("correction transition must carry exactly one provider-owned request") // refusal:by-design world-action: provider-generated routing requires a code fix when its request is missing or misplaced
 	}
 	if transition.CorrectionRequest != nil && reviewtransaction.ValidateCorrectionPlanRequest(*transition.CorrectionRequest) != nil {
 		return errors.New("correction transition request is invalid") // refusal:by-design world-action: malformed provider-owned findings cannot safely authorize planning
+	}
+	if transition.ReasonCode == "correction_candidate_required" {
+		request := transition.CorrectionRequest
+		if transition.Kind != reviewNextTransitionCollect || transition.Execute != nil || transition.Collect == nil || len(transition.Collect.Inputs) != 1 {
+			return errors.New("correction candidate transition must collect exactly one bound candidate") // refusal:by-design world-action: provider-generated routing requires a code fix when collection shape is malformed
+		}
+		input := transition.Collect.Inputs[0]
+		wantArguments := reviewBindingArguments(ReviewTransitionBinding{
+			LineageID: request.LineageID, Revision: request.ExpectedRevision, TargetIdentity: request.TargetIdentity,
+		})
+		if input.Name != "correction_candidate" || input.Schema != reviewtransaction.CorrectionPlanRequestSchema ||
+			input.CaptureOperation != "external.apply_correction" || !reflect.DeepEqual(input.Arguments, wantArguments) {
+			return errors.New("correction candidate transition lacks its exact provider-owned collection binding") // refusal:by-design world-action: provider-generated routing requires a code fix when its immutable binding is malformed
+		}
 	}
 	switch transition.Kind {
 	case reviewNextTransitionStop:
@@ -957,6 +971,14 @@ func (transition ReviewNextTransition) Validate() error {
 			}
 			if input.CaptureOperation == "external.run_targeted_validation" && input.ValidationRequest == nil {
 				return errors.New("targeted validation transition lacks its provider-owned request")
+			}
+			if input.CaptureOperation == "external.apply_correction" {
+				request := transition.CorrectionRequest
+				if input.Name != "correction_candidate" || input.Schema != reviewtransaction.CorrectionPlanRequestSchema || request == nil ||
+					len(arguments) != 3 || arguments["lineage"] != request.LineageID || arguments["expected-revision"] != request.ExpectedRevision ||
+					arguments["target"] != request.TargetIdentity {
+					return errors.New("correction candidate transition lacks its provider-owned binding") // refusal:by-design world-action: provider-generated routing requires a code fix when its normalized binding is malformed
+				}
 			}
 			if input.ValidationRequest != nil {
 				request := input.ValidationRequest
