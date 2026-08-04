@@ -76,7 +76,7 @@ jobs:
           ' bench-results.json
 
       - name: Upload bench results
-        uses: actions/upload-artifact@de65e23aa2b0e4a3e9caf74e76cea5e7d905a3b67  # v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: bench-results-linux
           path: bench-results.json
@@ -176,7 +176,7 @@ jobs:
           ' bench-results.json
 
       - name: Upload bench results
-        uses: actions/upload-artifact@de65e23aa2b0e4a3e9caf74e76cea5e7d302f96fc  # v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: bench-results-windows
           path: bench-results.json
