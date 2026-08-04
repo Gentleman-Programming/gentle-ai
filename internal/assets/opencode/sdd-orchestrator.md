@@ -430,8 +430,9 @@ MUST check if the project has a knowledge graph at `graphify-out/graph.json`. If
 inject graph-first retrieval so sub-agents query the graph before reading implementation files.
 
 **Detection**: Before a matching sub-agent launch, check whether `graphify-out/graph.json`
-exists relative to `cwd` (e.g. `ls graphify-out/graph.json 2>/dev/null`). Cache the result
-for the session. If the file does not exist, skip injection silently.
+exists relative to `cwd` (e.g. `ls graphify-out/graph.json 2>/dev/null`) AND `graphify`
+CLI is available on PATH (e.g. `command -v graphify`). Cache the result for the session.
+If either check fails, skip injection silently.
 
 | Phase | Reason |
 |---|---|
