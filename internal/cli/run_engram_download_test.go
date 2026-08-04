@@ -625,6 +625,9 @@ func TestRunInstallBetaEngramUsesMainGoInstallAndInstalledBinary(t *testing.T) {
 		if name == "engram" {
 			return "/usr/local/bin/engram", nil
 		}
+		if name == "go" {
+			return "/usr/local/bin/go", nil
+		}
 		return missingBinaryLookPath(name)
 	}
 	goEnv = func(keys ...string) (map[string]string, error) {

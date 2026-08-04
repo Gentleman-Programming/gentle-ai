@@ -1,17 +1,113 @@
 package cli
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 // windowsProfile is a convenience profile for Windows tests that exercise the
 // npm preflight (scoop is the package manager reported by Windows scoop users).
 var windowsProfile = system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true}
+
+func TestInstallPreflightRequiresGoOnlyForResolvedBetaEngram(t *testing.T) {
+	originalLookPath := cmdLookPath
+	t.Cleanup(func() { cmdLookPath = originalLookPath })
+
+	tests := []struct {
+		name       string
+		channel    InstallChannel
+		components []model.ComponentID
+		goPresent  bool
+		wantErr    string
+	}{
+		{
+			name:       "beta Engram without Go fails before apply",
+			channel:    ChannelBeta,
+			components: []model.ComponentID{model.ComponentEngram},
+			wantErr:    "beta Engram requires Go",
+		},
+		{
+			name:       "beta without Engram does not require Go",
+			channel:    ChannelBeta,
+			components: []model.ComponentID{model.ComponentPermission},
+		},
+		{
+			name:       "stable Engram does not require Go",
+			channel:    ChannelStable,
+			components: []model.ComponentID{model.ComponentEngram},
+		},
+		{
+			name:       "beta Engram with Go continues",
+			channel:    ChannelBeta,
+			components: []model.ComponentID{model.ComponentEngram},
+			goPresent:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmdLookPath = func(name string) (string, error) {
+				if name == "go" && tt.goPresent {
+					return "/usr/local/bin/go", nil
+				}
+				return "", errNotFound{}
+			}
+
+			runtime := installRuntime{
+				homeDir:  t.TempDir(),
+				channel:  tt.channel,
+				profile:  system.PlatformProfile{OS: "linux", Supported: true},
+				resolved: planner.ResolvedPlan{OrderedComponents: tt.components},
+			}
+			err := runtime.stagePlan().Prepare[0].Run()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("prepare dependency preflight error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("prepare dependency preflight error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestInstallPreflightFindsGoOnPath(t *testing.T) {
+	binDir := t.TempDir()
+	goName := "go"
+	if runtime.GOOS == "windows" {
+		goName += ".exe"
+	}
+	goPath := filepath.Join(binDir, goName)
+	if err := os.WriteFile(goPath, nil, 0o755); err != nil {
+		t.Fatalf("create PATH Go fixture: %v", err)
+	}
+
+	originalLookPath := cmdLookPath
+	cmdLookPath = exec.LookPath
+	t.Cleanup(func() { cmdLookPath = originalLookPath })
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	runtime := installRuntime{
+		homeDir:  t.TempDir(),
+		channel:  ChannelBeta,
+		profile:  system.PlatformProfile{OS: "linux", Supported: true},
+		resolved: planner.ResolvedPlan{OrderedComponents: []model.ComponentID{model.ComponentEngram}},
+	}
+	if err := runtime.stagePlan().Prepare[0].Run(); err != nil {
+		t.Fatalf("prepare dependency preflight error = %v", err)
+	}
+}
 
 func TestCheckDependenciesStepFailsWhenKimiUVMissing(t *testing.T) {
 	restore := installcmd.OverrideLookPath(func(file string) (string, error) {
