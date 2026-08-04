@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
 )
@@ -148,6 +149,80 @@ func TestBackOptionRestoresCursorAcrossScreens(t *testing.T) {
 				t.Errorf("cursor not restored: got %d, want %d", m.Cursor, tt.saved)
 			}
 		})
+	}
+}
+
+func TestPickerAdvanceRemembersSourceCursor(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Selection.Agents = []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE}
+	m.Selection.Components = []model.ComponentID{model.ComponentSDD}
+	m.Screen = ScreenClaudeModelPicker
+	m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
+	m.Cursor = 1 // "Performance" preset row
+
+	// Enter on a named preset advances to the next picker in the chain,
+	// bypassing confirmSelection.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.Screen != ScreenKiroModelPicker {
+		t.Fatalf("expected ScreenKiroModelPicker, got %v", m.Screen)
+	}
+
+	// Esc walks back to the Claude picker and must restore the source row.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.Screen != ScreenClaudeModelPicker {
+		t.Fatalf("expected ScreenClaudeModelPicker, got %v", m.Screen)
+	}
+	if m.Cursor != 1 {
+		t.Errorf("cursor not restored after picker advance: got %d, want 1", m.Cursor)
+	}
+}
+
+func TestNoProviderBackRestoresSDDModeCursor(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelPicker // zero AvailableIDs → "Continue with defaults" / "Back"
+	m.Cursor = 1                 // "Back"
+	m.CursorMemory[ScreenSDDMode] = 1
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+
+	if m.Screen != ScreenSDDMode {
+		t.Fatalf("expected ScreenSDDMode, got %v", m.Screen)
+	}
+	if m.Cursor != 1 {
+		t.Errorf("cursor not restored on no-provider Back: got %d, want 1", m.Cursor)
+	}
+}
+
+func TestDeleteBackupCancelKeepsRestoredRowVisible(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	count := screens.BackupMaxVisible + 5
+	m.Backups = make([]backup.Manifest, count)
+	for i := range m.Backups {
+		m.Backups[i] = backup.Manifest{ID: string(rune('a' + i))}
+	}
+	m.Cursor = count - 3 // row beyond the first visible window
+	m.BackupScroll = m.Cursor - screens.BackupMaxVisible + 1
+
+	// "d" opens the delete confirmation; Cancel returns to the list.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	m.Cursor = 1 // Cancel
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+
+	if m.Screen != ScreenBackups {
+		t.Fatalf("expected ScreenBackups, got %v", m.Screen)
+	}
+	if m.Cursor != count-3 {
+		t.Fatalf("cursor not restored: got %d, want %d", m.Cursor, count-3)
+	}
+	if m.Cursor < m.BackupScroll || m.Cursor >= m.BackupScroll+screens.BackupMaxVisible {
+		t.Errorf("restored row %d is outside the visible window [%d, %d)",
+			m.Cursor, m.BackupScroll, m.BackupScroll+screens.BackupMaxVisible)
 	}
 }
 
