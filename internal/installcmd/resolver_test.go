@@ -180,6 +180,12 @@ func TestResolveDependencyInstall(t *testing.T) {
 			want:    CommandSequence{{"sudo", "dnf", "install", "-y", "somepkg"}},
 		},
 		{
+			name:    "alpine resolves apk command",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
+			dep:     "somepkg",
+			want:    CommandSequence{{"apk", "add", "--no-cache", "somepkg"}},
+		},
+		{
 			name:    "windows resolves winget command",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			dep:     "somepkg",
@@ -288,11 +294,12 @@ func TestResolveAgentInstall(t *testing.T) {
 	r := NewResolver()
 
 	tests := []struct {
-		name    string
-		profile system.PlatformProfile
-		agent   model.AgentID
-		want    CommandSequence
-		wantErr bool
+		name        string
+		profile     system.PlatformProfile
+		agent       model.AgentID
+		want        CommandSequence
+		wantErr     bool
+		errContains string
 	}{
 		{
 			name:    "claude-code on darwin uses npm without sudo",
@@ -361,6 +368,19 @@ func TestResolveAgentInstall(t *testing.T) {
 			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
 		},
 		{
+			name:    "opencode on alpine writable npm prefix runs npm without sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk", NpmWritable: true},
+			agent:   model.AgentOpenCode,
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+		},
+		{
+			name:        "opencode on alpine non-writable npm prefix returns actionable error",
+			profile:     system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
+			agent:       model.AgentOpenCode,
+			wantErr:     true,
+			errContains: "gentle-ai install",
+		},
+		{
 			name:    "claude-code on windows uses npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", NpmWritable: true},
 			agent:   model.AgentClaudeCode,
@@ -407,11 +427,66 @@ func TestResolveAgentInstall(t *testing.T) {
 			}
 
 			if tt.wantErr {
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("ResolveAgentInstall() error = %q, want to contain %q", err.Error(), tt.errContains)
+				}
 				return
 			}
 
 			if !reflect.DeepEqual(command, tt.want) {
 				t.Fatalf("ResolveAgentInstall() = %v, want %v", command, tt.want)
+			}
+		})
+	}
+}
+
+func TestUVInstallHint(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile system.PlatformProfile
+		want    string
+	}{
+		{
+			name:    "alpine fallback installs curl and updates current shell PATH",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
+			want:    "apk add --no-cache uv (requires community); otherwise: apk add --no-cache curl && curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\"",
+		},
+		{
+			name:    "brew hint is unchanged",
+			profile: system.PlatformProfile{PackageManager: "brew"},
+			want:    "brew install uv",
+		},
+		{
+			name:    "apt hint is unchanged",
+			profile: system.PlatformProfile{PackageManager: "apt"},
+			want:    "sudo apt-get install -y uv (or see https://docs.astral.sh/uv/getting-started/installation/)",
+		},
+		{
+			name:    "pacman hint is unchanged",
+			profile: system.PlatformProfile{PackageManager: "pacman"},
+			want:    "sudo pacman -S --noconfirm uv",
+		},
+		{
+			name:    "dnf hint is unchanged",
+			profile: system.PlatformProfile{PackageManager: "dnf"},
+			want:    "sudo dnf install -y uv",
+		},
+		{
+			name:    "winget hint is unchanged",
+			profile: system.PlatformProfile{PackageManager: "winget"},
+			want:    "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements",
+		},
+		{
+			name:    "unsupported package manager uses documentation",
+			profile: system.PlatformProfile{PackageManager: "zypper"},
+			want:    "https://docs.astral.sh/uv/getting-started/installation/",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := uvInstallHint(tt.profile); got != tt.want {
+				t.Fatalf("uvInstallHint() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -650,6 +725,20 @@ func TestResolveComponentInstall(t *testing.T) {
 			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
 			component: model.ComponentGGA,
 			want: CommandSequence{
+				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
+				{"mkdir", "-p", "/tmp/gentleman-guardian-angel"},
+				{"git", "init", "/tmp/gentleman-guardian-angel"},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "refs/tags/v" + versions.GGAVersion + ":refs/tags/v" + versions.GGAVersion},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "checkout", "-f", "refs/tags/v" + versions.GGAVersion},
+				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
+			},
+		},
+		{
+			name:      "gga on alpine installs git and bash before cleanup and installation",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroAlpine, PackageManager: "apk"},
+			component: model.ComponentGGA,
+			want: CommandSequence{
+				{"apk", "add", "--no-cache", "git", "bash"},
 				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
 				{"mkdir", "-p", "/tmp/gentleman-guardian-angel"},
 				{"git", "init", "/tmp/gentleman-guardian-angel"},

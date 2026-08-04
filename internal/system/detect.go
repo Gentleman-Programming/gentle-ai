@@ -31,6 +31,7 @@ const (
 	LinuxDistroDebian  = "debian"
 	LinuxDistroArch    = "arch"
 	LinuxDistroFedora  = "fedora"
+	LinuxDistroAlpine  = "alpine"
 )
 
 type DetectionResult struct {
@@ -148,6 +149,9 @@ func resolvePlatformProfile(goos, linuxOSRelease string, tools map[string]ToolSt
 		case LinuxDistroFedora:
 			profile.PackageManager = "dnf"
 			profile.Supported = true
+		case LinuxDistroAlpine:
+			profile.PackageManager = "apk"
+			profile.Supported = true
 		default:
 			profile.PackageManager = ""
 			profile.Supported = false
@@ -204,6 +208,10 @@ func detectLinuxDistro(linuxOSRelease string) string {
 		return LinuxDistroFedora
 	}
 
+	if isAlpineLike(id, idLike) {
+		return LinuxDistroAlpine
+	}
+
 	return LinuxDistroUnknown
 }
 
@@ -242,6 +250,20 @@ func isFedoraLike(id, idLike string) bool {
 
 	for _, token := range strings.Fields(idLike) {
 		if token == LinuxDistroFedora || token == "rhel" || token == "centos" || token == "rocky" || token == "almalinux" || token == "nobara" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isAlpineLike(id, idLike string) bool {
+	if id == LinuxDistroAlpine {
+		return true
+	}
+
+	for _, token := range strings.Fields(idLike) {
+		if token == LinuxDistroAlpine {
 			return true
 		}
 	}

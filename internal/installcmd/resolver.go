@@ -186,6 +186,8 @@ func uvInstallHint(profile system.PlatformProfile) string {
 		return "sudo pacman -S --noconfirm uv"
 	case "dnf":
 		return "sudo dnf install -y uv"
+	case "apk":
+		return "apk add --no-cache uv (requires community); otherwise: apk add --no-cache curl && curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\""
 	case "winget":
 		return "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements"
 	default:
@@ -218,6 +220,8 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 		return CommandSequence{{"sudo", "pacman", "-S", "--noconfirm", dependency}}, nil
 	case "dnf":
 		return CommandSequence{{"sudo", "dnf", "install", "-y", dependency}}, nil
+	case "apk":
+		return CommandSequence{{"apk", "add", "--no-cache", dependency}}, nil
 	case "winget":
 		return CommandSequence{{"winget", "install", "--id", dependency, "-e", "--accept-source-agreements", "--accept-package-agreements"}}, nil
 	default:
@@ -257,6 +261,11 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 			return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 		}
 		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
+	case "apk":
+		if !profile.NpmWritable {
+			return nil, fmt.Errorf("OpenCode auto-install on Alpine requires a user-writable npm prefix on PATH; run npm config set prefix \"$HOME/.local\", add \"$HOME/.local/bin\" to PATH, then rerun gentle-ai install")
+		}
+		return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}}, nil
 	case "winget":
 		// On Windows, npm global installs do not require sudo.
 		return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
@@ -282,6 +291,18 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 		const tmpDir = "/tmp/gentleman-guardian-angel"
 		tagRef := "refs/tags/v" + versions.GGAVersion
 		return CommandSequence{
+			{"rm", "-rf", tmpDir},
+			{"mkdir", "-p", tmpDir},
+			{"git", "init", tmpDir},
+			{"git", "-C", tmpDir, "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tagRef + ":" + tagRef},
+			{"git", "-C", tmpDir, "checkout", "-f", tagRef},
+			{"bash", tmpDir + "/install.sh"},
+		}, nil
+	case "apk":
+		const tmpDir = "/tmp/gentleman-guardian-angel"
+		tagRef := "refs/tags/v" + versions.GGAVersion
+		return CommandSequence{
+			{"apk", "add", "--no-cache", "git", "bash"},
 			{"rm", "-rf", tmpDir},
 			{"mkdir", "-p", tmpDir},
 			{"git", "init", tmpDir},
