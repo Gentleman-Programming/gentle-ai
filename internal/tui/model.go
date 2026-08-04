@@ -1561,6 +1561,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		// Rename: only when on ScreenBackups and cursor is on a backup item (not "Back").
 		if m.Screen == ScreenBackups && m.Cursor < len(m.Backups) {
+			m.rememberCursor()
 			m.SelectedBackup = m.Backups[m.Cursor]
 			m.BackupRenameText = m.SelectedBackup.Description
 			m.BackupRenamePos = len([]rune(m.SelectedBackup.Description))
@@ -1570,6 +1571,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		// "n" on ScreenProfiles: shortcut for "Create new profile".
 		if m.Screen == ScreenProfiles {
+			m.rememberCursor()
 			m.ProfileEditMode = false
 			m.ProfileDraft = model.Profile{}
 			m.ProfileCreateStep = 0
@@ -1583,12 +1585,14 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		// Delete: only when on ScreenBackups and cursor is on a backup item (not "Back").
 		if m.Screen == ScreenBackups && m.Cursor < len(m.Backups) {
+			m.rememberCursor()
 			m.SelectedBackup = m.Backups[m.Cursor]
 			m.setScreen(ScreenDeleteConfirm)
 			return m, nil
 		}
 		// Delete on ScreenProfiles: only non-default profiles (those in ProfileList).
 		if m.Screen == ScreenProfiles && m.Cursor < len(m.ProfileList) {
+			m.rememberCursor()
 			m.ProfileDeleteErr = nil
 			m.ProfileDeleteTarget = m.ProfileList[m.Cursor].Name
 			m.setScreen(ScreenProfileDelete)
@@ -1640,10 +1644,7 @@ func (m Model) isModelPickerSeparatorCursor() bool {
 }
 
 func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
-	if m.CursorMemory == nil {
-		m.CursorMemory = make(map[Screen]int)
-	}
-	m.CursorMemory[m.Screen] = m.Cursor
+	m.rememberCursor()
 	switch m.Screen {
 	case ScreenWelcome:
 		switch m.Cursor {
@@ -1785,7 +1786,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				}
 			}
 		case m.Cursor == len(options):
-			m.setScreen(ScreenWelcome)
+			m.returnToScreen(ScreenWelcome)
 		}
 		return m, nil
 	case ScreenUninstall:
@@ -1796,7 +1797,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case m.Cursor == agentCount && len(m.UninstallAgents) > 0:
 			m.setScreen(ScreenUninstallComponents)
 		case m.Cursor == agentCount+1:
-			m.setScreen(ScreenUninstallMode)
+			m.returnToScreen(ScreenUninstallMode)
 		}
 		return m, nil
 	case ScreenUninstallComponents:
@@ -1815,7 +1816,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenUninstallConfirm)
 			}
 		case m.Cursor == componentCount+1:
-			m.setScreen(ScreenUninstall)
+			m.returnToScreen(ScreenUninstall)
 		}
 		return m, nil
 	case ScreenUninstallProfiles:
@@ -1835,9 +1836,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenUninstallConfirm)
 		case m.Cursor == continueIdx+1:
 			if m.UninstallMode == model.UninstallModePartial {
-				m.setScreen(ScreenUninstallComponents)
+				m.returnToScreen(ScreenUninstallComponents)
 			} else {
-				m.setScreen(ScreenUninstallMode)
+				m.returnToScreen(ScreenUninstallMode)
 			}
 		}
 		return m, nil
@@ -1854,13 +1855,13 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// - partial: go back to components selection
 		// - full/full-remove: go back to uninstall mode selection
 		if m.UninstallProfileSelection {
-			m.setScreen(ScreenUninstallProfiles)
+			m.returnToScreen(ScreenUninstallProfiles)
 		} else {
 			switch m.UninstallMode {
 			case model.UninstallModePartial:
-				m.setScreen(ScreenUninstallComponents)
+				m.returnToScreen(ScreenUninstallComponents)
 			default:
-				m.setScreen(ScreenUninstallMode)
+				m.returnToScreen(ScreenUninstallMode)
 			}
 		}
 		return m, nil
@@ -1972,7 +1973,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenProfileCreate)
 		default:
 			// "Back"
-			m.setScreen(ScreenWelcome)
+			m.returnToScreen(ScreenWelcome)
 		}
 		return m, nil
 	case ScreenProfileCreate:
@@ -1983,7 +1984,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			if err := removeProfileAgentsFn(opencode.DefaultSettingsPath(), m.ProfileDeleteTarget); err != nil {
 				// Store the error so it can be displayed on ScreenProfiles.
 				m.ProfileDeleteErr = err
-				m.setScreen(ScreenProfiles)
+				m.returnToScreen(ScreenProfiles)
 			} else {
 				m.ProfileDeleteErr = nil
 				m.PendingSyncOverrides = nil
@@ -1994,7 +1995,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				return m, tea.Batch(tickCmd(), m.startSync(nil))
 			}
 		default: // "Cancel"
-			m.setScreen(ScreenProfiles)
+			m.returnToScreen(ScreenProfiles)
 		}
 		return m, nil
 	case ScreenModelConfig:
@@ -2031,7 +2032,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
 			m.setScreen(ScreenCodexModelPicker)
 		case 4: // Back
-			m.setScreen(ScreenWelcome)
+			m.returnToScreen(ScreenWelcome)
 		}
 		return m, nil
 	case ScreenDetection:
@@ -2039,7 +2040,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenAgents)
 			return m, nil
 		}
-		m.setScreen(ScreenWelcome)
+		m.returnToScreen(ScreenWelcome)
 	case ScreenAgents:
 		agentCount := len(screens.AgentOptions())
 		switch {
@@ -2054,7 +2055,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			m.setScreen(ScreenPersona)
 		case m.Cursor == agentCount+1:
-			m.setScreen(ScreenDetection)
+			m.returnToScreen(ScreenDetection)
 		}
 	case ScreenPersona:
 		options := screens.PersonaOptions()
@@ -2067,7 +2068,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenPreset)
 			return m, nil
 		}
-		m.setScreen(ScreenAgents)
+		m.returnToScreen(ScreenAgents)
 	case ScreenPreset:
 		options := screens.PresetOptions()
 		if m.Cursor < len(options) {
@@ -2098,18 +2099,19 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenDependencyTree)
 			return m, nil
 		}
-		m.setScreen(ScreenPersona)
+		m.returnToScreen(ScreenPersona)
 	case ScreenClaudeModelPicker:
 		if !m.ClaudeModelPicker.InCustomMode && m.Cursor == screens.ClaudeModelPickerOptionCount(m.ClaudeModelPicker)-1 {
 			// "Back" option: in ModelConfigMode return to the config menu,
 			// otherwise use pickerPreviousScreen for unified reverse navigation.
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
-				m.setScreen(ScreenModelConfig)
+				m.returnToScreen(ScreenModelConfig)
 				return m, nil
 			}
 			if prev, ok := m.pickerPreviousScreen(); ok {
 				m.applyPickerEntry(prev)
+				m.restoreCursorMemory()
 			}
 			return m, nil
 		}
@@ -2117,11 +2119,12 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		if !m.KiroModelPicker.InCustomMode && m.Cursor == screens.KiroModelPickerOptionCount(m.KiroModelPicker)-1 {
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
-				m.setScreen(ScreenModelConfig)
+				m.returnToScreen(ScreenModelConfig)
 				return m, nil
 			}
 			if prev, ok := m.pickerPreviousScreen(); ok {
 				m.applyPickerEntry(prev)
+				m.restoreCursorMemory()
 			}
 			return m, nil
 		}
@@ -2129,11 +2132,12 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		if m.CodexModelPicker.CustomMode == screens.CodexCustomModeNone && m.Cursor == screens.CodexModelPickerOptionCount(m.CodexModelPicker)-1 {
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
-				m.setScreen(ScreenModelConfig)
+				m.returnToScreen(ScreenModelConfig)
 				return m, nil
 			}
 			if prev, ok := m.pickerPreviousScreen(); ok {
 				m.applyPickerEntry(prev)
+				m.restoreCursorMemory()
 			}
 			return m, nil
 		}
@@ -2159,6 +2163,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Back — use pickerPreviousScreen for unified reverse navigation.
 		if prev, ok := m.pickerPreviousScreen(); ok {
 			m.applyPickerEntry(prev)
+			m.restoreCursorMemory()
 		}
 	case ScreenModelPicker:
 		// When no providers are detected the screen offers Continue with defaults
@@ -2166,7 +2171,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		if len(m.ModelPicker.AvailableIDs) == 0 {
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
-				m.setScreen(ScreenModelConfig)
+				m.returnToScreen(ScreenModelConfig)
 				return m, nil
 			}
 			if m.Cursor == 1 {
@@ -2235,11 +2240,12 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Back → ModelConfigMode early-return, then pickerPreviousScreen (SDDMode).
 		if m.ModelConfigMode {
 			m.ModelConfigMode = false
-			m.setScreen(ScreenModelConfig)
+			m.returnToScreen(ScreenModelConfig)
 			return m, nil
 		}
 		if prev, ok := m.pickerPreviousScreen(); ok {
 			m.applyPickerEntry(prev)
+			m.restoreCursorMemory()
 		}
 	case ScreenStrictTDD:
 		options := screens.StrictTDDOptions()
@@ -2274,7 +2280,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		// Back — use pickerPreviousScreen for unified reverse navigation.
 		if prev, ok := m.pickerPreviousScreen(); ok {
-			return m, m.applyPickerEntry(prev)
+			cmd := m.applyPickerEntry(prev)
+			m.restoreCursorMemory()
+			return m, cmd
 		}
 	case ScreenOpenCodePlugins:
 		return m.confirmOpenCodePlugins()
@@ -2343,7 +2351,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
 				m.setScreen(ScreenReview)
 			default:
-				m.setScreen(ScreenPreset)
+				m.returnToScreen(ScreenPreset)
 			}
 			return m, nil
 		}
@@ -2356,18 +2364,19 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// then optional setup guards (outside the slice), then pickerPreviousScreen.
 		// INV-2: Enter-on-Back and Esc must produce identical results.
 		if isPiOnlyAgents(m.Selection.Agents) {
-			m.setScreen(ScreenAgents)
+			m.returnToScreen(ScreenAgents)
 		} else if m.shouldShowOpenCodePluginsScreen() {
 			// OpenCodePlugins sits between CommunityTools and DependencyTree.
-			m.setScreen(ScreenOpenCodePlugins)
+			m.returnToScreen(ScreenOpenCodePlugins)
 		} else if m.shouldShowCommunityToolsScreen() {
 			// CommunityTools sits between the picker chain and DependencyTree in
 			// the actual flow but is NOT in pickerFlowSlice. Check it so
 			// Enter-on-Back matches Esc behavior (INV-2).
-			m.setScreen(ScreenCommunityTools)
+			m.returnToScreen(ScreenCommunityTools)
 		} else if prev, ok := m.pickerPreviousScreen(); ok {
 			// No OpenCode; step back through the picker slice.
 			m.applyPickerEntry(prev)
+			m.restoreCursorMemory()
 		}
 	case ScreenSkillPicker:
 		allSkills := screens.AllSkillsOrdered()
@@ -2384,20 +2393,22 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			// "Back" — in custom preset, return to the screen that preceded SkillPicker.
 			if m.Selection.Preset == model.PresetCustom {
 				if m.shouldShowStrictTDDScreen() {
-					m.setScreen(ScreenStrictTDD)
+					m.returnToScreen(ScreenStrictTDD)
 				} else if m.shouldShowSDDModeScreen() {
 					if m.Selection.SDDMode == model.SDDModeMulti {
-						return m, m.applyPickerEntry(ScreenModelPicker)
+						cmd := m.applyPickerEntry(ScreenModelPicker)
+						m.restoreCursorMemory()
+						return m, cmd
 					} else {
-						m.setScreen(ScreenSDDMode)
+						m.returnToScreen(ScreenSDDMode)
 					}
 				} else if m.shouldShowClaudeModelPickerScreen() {
-					m.setScreen(ScreenClaudeModelPicker)
+					m.returnToScreen(ScreenClaudeModelPicker)
 				} else {
-					m.setScreen(ScreenDependencyTree)
+					m.returnToScreen(ScreenDependencyTree)
 				}
 			} else {
-				m.setScreen(ScreenDependencyTree)
+				m.returnToScreen(ScreenDependencyTree)
 			}
 		}
 	case ScreenReview:
@@ -2410,22 +2421,24 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				if len(m.SkillPicker) == 0 {
 					m.initSkillPicker()
 				}
-				m.setScreen(ScreenSkillPicker)
+				m.returnToScreen(ScreenSkillPicker)
 			} else if m.shouldShowStrictTDDScreen() {
-				m.setScreen(ScreenStrictTDD)
+				m.returnToScreen(ScreenStrictTDD)
 			} else if m.shouldShowSDDModeScreen() {
 				if m.Selection.SDDMode == model.SDDModeMulti {
-					return m, m.applyPickerEntry(ScreenModelPicker)
+					cmd := m.applyPickerEntry(ScreenModelPicker)
+					m.restoreCursorMemory()
+					return m, cmd
 				} else {
-					m.setScreen(ScreenSDDMode)
+					m.returnToScreen(ScreenSDDMode)
 				}
 			} else if m.shouldShowClaudeModelPickerScreen() {
-				m.setScreen(ScreenClaudeModelPicker)
+				m.returnToScreen(ScreenClaudeModelPicker)
 			} else {
-				m.setScreen(ScreenDependencyTree)
+				m.returnToScreen(ScreenDependencyTree)
 			}
 		} else {
-			m.setScreen(ScreenDependencyTree)
+			m.returnToScreen(ScreenDependencyTree)
 		}
 	case ScreenInstalling:
 		if m.Progress.Done() {
@@ -2448,14 +2461,14 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenRestoreConfirm)
 			return m, nil
 		}
-		m.setScreen(ScreenWelcome)
+		m.returnToScreen(ScreenWelcome)
 	case ScreenRestoreConfirm:
 		// Cursor 0 = "Restore", Cursor 1 = "Cancel".
 		if m.Cursor == 0 {
 			m.OperationRunning = true
 			return m.restoreBackup(m.SelectedBackup)
 		}
-		m.setScreen(ScreenBackups)
+		m.returnToScreen(ScreenBackups)
 	case ScreenRestoreResult:
 		// Enter on the result screen returns to backup selection.
 		// Refresh the backup list to reflect any changes from the restore.
@@ -2468,7 +2481,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			m.setScreen(ScreenDeleteResult)
 		} else {
-			m.setScreen(ScreenBackups)
+			m.returnToScreen(ScreenBackups)
 		}
 	case ScreenDeleteResult:
 		// Enter on the result screen returns to backup selection.
@@ -2481,7 +2494,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenAgentBuilderPrompt)
 		} else {
 			// "Back" option.
-			m.setScreen(ScreenWelcome)
+			m.returnToScreen(ScreenWelcome)
 		}
 	case ScreenAgentBuilderPrompt:
 		// "Continue" only if textarea is not empty.
@@ -2510,7 +2523,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			return m.startGeneration()
 		}
 		// "Back" option.
-		m.setScreen(ScreenAgentBuilderSDD)
+		m.returnToScreen(ScreenAgentBuilderSDD)
 	case ScreenAgentBuilderGenerating:
 		// Only interactive when an error is shown (retry/back).
 		if m.AgentBuilder.GenerationErr != nil {
@@ -2814,7 +2827,7 @@ func (m Model) confirmOpenCodePluginUninstallSelect() (tea.Model, tea.Cmd) {
 	}
 	// Back row.
 	m.resetOpenCodePluginUninstallState()
-	m.setScreen(ScreenWelcome)
+	m.returnToScreen(ScreenWelcome)
 	return m, nil
 }
 
@@ -3477,6 +3490,20 @@ func (m *Model) restoreCursorMemory() {
 	m.Cursor = saved
 }
 
+func (m *Model) returnToScreen(next Screen) {
+	m.setScreen(next)
+	m.restoreCursorMemory()
+}
+
+// rememberCursor records the current cursor position for the current screen
+// so back navigation can restore it later.
+func (m *Model) rememberCursor() {
+	if m.CursorMemory == nil {
+		m.CursorMemory = make(map[Screen]int)
+	}
+	m.CursorMemory[m.Screen] = m.Cursor
+}
+
 // handleRenameInput processes key events when the rename backup screen is active.
 // It manages text input for the new backup description.
 func (m Model) handleRenameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -3489,10 +3516,10 @@ func (m Model) handleRenameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.ListBackupsFn != nil {
 			m.Backups = m.ListBackupsFn()
 		}
-		m.setScreen(ScreenBackups)
+		m.returnToScreen(ScreenBackups)
 		return m, nil
 	case tea.KeyEsc:
-		m.setScreen(ScreenBackups)
+		m.returnToScreen(ScreenBackups)
 		return m, nil
 	case tea.KeyBackspace:
 		if m.BackupRenamePos > 0 {
@@ -3864,7 +3891,9 @@ func (m Model) confirmCommunityTools() (tea.Model, tea.Cmd) {
 		}
 		return m.continueAfterCommunityTools(), nil
 	default:
-		return m.goBackFromCommunityTools(), nil
+		m = m.goBackFromCommunityTools()
+		m.restoreCursorMemory()
+		return m, nil
 	}
 }
 
@@ -3951,7 +3980,9 @@ func (m Model) confirmOpenCodePlugins() (tea.Model, tea.Cmd) {
 		}
 		return m.continueAfterOpenCodePlugins(), nil
 	default:
-		return m.goBackFromOpenCodePlugins(), nil
+		m = m.goBackFromOpenCodePlugins()
+		m.restoreCursorMemory()
+		return m, nil
 	}
 }
 
@@ -4531,7 +4562,7 @@ func (m Model) handleProfileNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, discoveryCmd
 	case tea.KeyEsc:
 		m.ProfileNameCollision = false
-		m.setScreen(ScreenProfiles)
+		m.returnToScreen(ScreenProfiles)
 		return m, nil
 	case tea.KeyBackspace:
 		if m.ProfileNamePos > 0 {
@@ -4595,7 +4626,7 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 				m.Cursor = 0
 			case 1:
 				if m.ProfileEditMode {
-					m.setScreen(ScreenProfiles)
+					m.returnToScreen(ScreenProfiles)
 				} else {
 					m.ProfileCreateStep = 0
 					m.Cursor = 0
@@ -4640,7 +4671,7 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 		if m.Cursor == len(rows)+1 {
 			// "Back": return to step 0 (name) or profiles list.
 			if m.ProfileEditMode {
-				m.setScreen(ScreenProfiles)
+				m.returnToScreen(ScreenProfiles)
 			} else {
 				m.ProfileCreateStep = 0
 				m.Cursor = 0
@@ -4662,7 +4693,7 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 			m.OperationMode = "sync"
 			return m, tea.Batch(tickCmd(), m.startSync(m.PendingSyncOverrides))
 		default: // "Cancel"
-			m.setScreen(ScreenProfiles)
+			m.returnToScreen(ScreenProfiles)
 		}
 		return m, nil
 	}
