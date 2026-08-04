@@ -104,10 +104,14 @@ func TestNewLineageRollbackSafetyStaysReadableAndFinalizableWhileSwitchIsOff(t *
 	if transition.Kind != reviewtransaction.CoreTransitionApprove || transition.Receipt == nil {
 		t.Fatalf("finalize(approved) after rollback = %#v", transition)
 	}
+	digest, err := record.Authority.ProviderCausalAggregateDigest(record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.WriteReceipt(context.Background(), reviewtransaction.NewLineageReceipt{
 		Schema: reviewtransaction.NewLineageReceiptSchema, LineageID: record.Authority.LineageID,
 		TerminalState: record.Authority.State, AuthorityRevision: transition.Receipt.AuthorityRevision,
-		CandidateIdentity: record.Authority.CandidateIdentity,
+		CandidateIdentity: record.Authority.CandidateIdentity, ProviderCausalAggregateDigest: digest,
 	}); err != nil {
 		t.Fatalf("terminal receipt refused after rollback: %v", err)
 	}

@@ -36,6 +36,18 @@ func EvaluateNewLineageGate(ctx context.Context, root string, record NewLineageR
 		BaseTree: record.Authority.CandidateIdentity.BaseTree, CandidateTree: record.Authority.CandidateIdentity.CandidateTree,
 		PolicyHash: record.Authority.CandidateIdentity.PolicyHash,
 	}
+	if transition.Kind == CoreTransitionContinue || transition.Kind == CoreTransitionEscalate {
+		// A prior discovery result is not receipt authority. Every terminal
+		// delivery outcome re-loads the immutable receipt under the store lock,
+		// including escalation, so missing or stale provider evidence fails closed.
+		store, storeErr := NewLineageAuthorityStore(ctx, root, record.Authority.LineageID)
+		if storeErr != nil {
+			return NativeGateEvaluation{Result: GateInvalidated, Reason: "new-lineage receipt authority cannot be opened: " + storeErr.Error(), Context: context, Cause: storeErr}
+		}
+		if _, receiptErr := store.LoadReceipt(); receiptErr != nil {
+			return NativeGateEvaluation{Result: GateInvalidated, Reason: "new-lineage receipt aggregate binding is not valid: " + receiptErr.Error(), Context: context, Cause: receiptErr}
+		}
+	}
 	switch transition.Kind {
 	case CoreTransitionContinue:
 		// Mirrors EvaluateLegacyGate's own derivation (legacy_projection.go):

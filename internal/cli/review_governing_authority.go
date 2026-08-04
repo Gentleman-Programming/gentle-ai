@@ -148,6 +148,13 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 				PolicyHash: record.Authority.CandidateIdentity.PolicyHash,
 				Denial:     &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: string(reviewtransaction.NewLineageStateEscalated)},
 			}
+			authorityStore, storeErr := reviewtransaction.NewLineageAuthorityStore(ctx, root, lineage)
+			if storeErr != nil {
+				return true, reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateInvalidated, Reason: "new-lineage receipt authority cannot be opened: " + storeErr.Error(), Context: context, Cause: storeErr}, nil
+			}
+			if _, receiptErr := authorityStore.LoadReceipt(); receiptErr != nil {
+				return true, reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateInvalidated, Reason: "new-lineage receipt aggregate binding is not valid: " + receiptErr.Error(), Context: context, Cause: receiptErr}, nil
+			}
 			return true, reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateEscalated, Reason: "authority already escalated: escalated is a terminal non-approval", Context: context}, nil
 		default: // reviewing, correcting, validating — and any future non-approved value
 			return true, reviewtransaction.NativeGateEvaluation{

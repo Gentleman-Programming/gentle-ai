@@ -200,8 +200,8 @@ func TestNewLineageReasonTaxonomyCoversLegacyRefusals(t *testing.T) {
 		if got == reviewtransaction.GateAllow {
 			t.Fatalf("new-lineage ambiguous relation must never allow, got %q", got)
 		}
-		if got != reviewtransaction.GateEscalated {
-			t.Fatalf("new-lineage ambiguous relation = %q, want the documented strengthening to GateEscalated", got)
+		if got != reviewtransaction.GateInvalidated {
+			t.Fatalf("new-lineage ambiguous relation without a terminal receipt = %q, want fail-closed invalidated", got)
 		}
 	})
 }

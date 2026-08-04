@@ -13,6 +13,19 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
+func providerDigestForStore(t *testing.T, store reviewtransaction.AuthorityStore) string {
+	t.Helper()
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := record.Authority.ProviderCausalAggregateDigest(record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
+}
+
 // TestResolveGoverningAuthorityAbsentWithoutMarkerCostsNoGitCall proves the
 // cheap common case at the CLI wiring layer: with no explicit --lineage
 // marker, resolveGoverningAuthority returns "legacy governs unchanged"
@@ -214,17 +227,138 @@ func TestResolveGoverningAuthorityApprovedWithValidReceiptAllowsExactCandidate(t
 	if err != nil {
 		t.Fatal(err)
 	}
+	digest := providerDigestForStore(t, store)
 	if err := store.WriteReceipt(context.Background(), reviewtransaction.NewLineageReceipt{
 		Schema: reviewtransaction.NewLineageReceiptSchema, LineageID: lineage,
 		TerminalState: reviewtransaction.NewLineageStateApproved, AuthorityRevision: revision,
-		CandidateIdentity: live,
+		CandidateIdentity: live, ProviderCausalAggregateDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
-	if !governs || discoveryErr != nil || evaluation.Result != reviewtransaction.GateAllow {
-		t.Fatalf("approved authority with a valid receipt and exact live candidate must allow, got governs=%v evaluation=%#v discoveryErr=%v", governs, evaluation, discoveryErr)
+	releaseDir := t.TempDir()
+	releaseArtifact := func(name string) string {
+		path := filepath.Join(releaseDir, name)
+		if err := os.WriteFile(path, []byte(name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	for _, gate := range []reviewtransaction.GateKind{
+		reviewtransaction.GatePostApply, reviewtransaction.GatePreCommit, reviewtransaction.GatePrePush,
+		reviewtransaction.GatePrePR, reviewtransaction.GateRelease,
+	} {
+		t.Run(string(gate), func(t *testing.T) {
+			input := reviewtransaction.NativeGateRequestInput{Gate: gate}
+			if gate == reviewtransaction.GateRelease {
+				input.ReleaseConfiguration = releaseArtifact("configuration")
+				input.ReleaseGenerated = releaseArtifact("generated")
+				input.ReleaseProvenance = releaseArtifact("provenance")
+				input.ReleasePublicationBoundary = releaseArtifact("publication")
+				input.ReleaseEvidenceFreshness = releaseArtifact("freshness")
+			}
+			governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, input)
+			if !governs || discoveryErr != nil || evaluation.Result != reviewtransaction.GateAllow {
+				t.Fatalf("approved authority with a valid receipt must allow exact candidate, got governs=%v evaluation=%#v discoveryErr=%v", governs, evaluation, discoveryErr)
+			}
+		})
+	}
+}
+
+func TestResolveGoverningAuthorityEscalatedReceiptMatrix(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		mutate func(t *testing.T, store reviewtransaction.AuthorityStore, receipt reviewtransaction.NewLineageReceipt)
+		want   reviewtransaction.GateResult
+	}{
+		{name: "valid receipt", want: reviewtransaction.GateEscalated},
+		{name: "missing receipt", mutate: func(t *testing.T, store reviewtransaction.AuthorityStore, receipt reviewtransaction.NewLineageReceipt) {
+			if err := os.Remove(store.ReceiptPath()); err != nil {
+				t.Fatal(err)
+			}
+		}, want: reviewtransaction.GateInvalidated},
+		{name: "stale receipt", mutate: func(t *testing.T, store reviewtransaction.AuthorityStore, receipt reviewtransaction.NewLineageReceipt) {
+			receipt.AuthorityRevision = "sha256:" + strings.Repeat("0", 64)
+			payload, err := json.MarshalIndent(receipt, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(store.ReceiptPath(), append(payload, '\n'), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, want: reviewtransaction.GateInvalidated},
+		{name: "malformed receipt", mutate: func(t *testing.T, store reviewtransaction.AuthorityStore, receipt reviewtransaction.NewLineageReceipt) {
+			if err := os.WriteFile(store.ReceiptPath(), []byte("not-json\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, want: reviewtransaction.GateInvalidated},
+		{name: "tampered provider aggregate", mutate: func(t *testing.T, store reviewtransaction.AuthorityStore, receipt reviewtransaction.NewLineageReceipt) {
+			receipt.ProviderCausalAggregateDigest = "sha256:" + strings.Repeat("e", 64)
+			payload, err := json.MarshalIndent(receipt, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(store.ReceiptPath(), append(payload, '\n'), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, want: reviewtransaction.GateInvalidated},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reviewModeHome(t)
+			repo := initReviewCLIRepo(t)
+			const lineage = "escalated-receipt-caller-matrix"
+			if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("escalated caller matrix fixture\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runReviewCLIGit(t, repo, "add", "tracked.txt")
+			live, _, err := governingAuthorityLiveEvidence(context.Background(), repo, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, err := reviewtransaction.NewLineageAuthorityStore(context.Background(), repo, lineage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Mutate(context.Background(), "", func(next *reviewtransaction.NewLineageAuthority) error {
+				next.State = reviewtransaction.NewLineageStateEscalated
+				next.CandidateIdentity = live
+				next.Tier = reviewtransaction.RiskLow
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			record, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest, err := record.Authority.ProviderCausalAggregateDigest(record.Revision)
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt := reviewtransaction.NewLineageReceipt{
+				Schema: reviewtransaction.NewLineageReceiptSchema, LineageID: lineage,
+				TerminalState: reviewtransaction.NewLineageStateEscalated, AuthorityRevision: record.Revision,
+				CandidateIdentity: live, ProviderCausalAggregateDigest: digest,
+			}
+			if err := store.WriteReceipt(context.Background(), receipt); err != nil {
+				t.Fatal(err)
+			}
+			if tt.mutate != nil {
+				tt.mutate(t, store, receipt)
+			}
+
+			for _, gate := range []reviewtransaction.GateKind{
+				reviewtransaction.GatePostApply, reviewtransaction.GatePreCommit, reviewtransaction.GatePrePush,
+				reviewtransaction.GatePrePR, reviewtransaction.GateRelease,
+			} {
+				t.Run(string(gate), func(t *testing.T) {
+					governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: gate})
+					if !governs || discoveryErr != nil || evaluation.Result != tt.want {
+						t.Fatalf("escalated receipt gate = governs=%v evaluation=%#v discoveryErr=%v, want %q", governs, evaluation, discoveryErr, tt.want)
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -265,6 +399,7 @@ func TestResolveGoverningAuthorityCandidateIdentityMismatchDenies(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	digest := providerDigestForStore(t, store)
 	// Write a genuinely valid receipt first (proving WriteReceipt itself
 	// still enforces the matching CandidateIdentity at issuance time), then
 	// tamper with the published bytes directly on disk — the same technique
@@ -274,7 +409,7 @@ func TestResolveGoverningAuthorityCandidateIdentityMismatchDenies(t *testing.T) 
 	if err := store.WriteReceipt(context.Background(), reviewtransaction.NewLineageReceipt{
 		Schema: reviewtransaction.NewLineageReceiptSchema, LineageID: lineage,
 		TerminalState: reviewtransaction.NewLineageStateApproved, AuthorityRevision: revision,
-		CandidateIdentity: live,
+		CandidateIdentity: live, ProviderCausalAggregateDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +418,7 @@ func TestResolveGoverningAuthorityCandidateIdentityMismatchDenies(t *testing.T) 
 	tamperedReceipt := reviewtransaction.NewLineageReceipt{
 		Schema: reviewtransaction.NewLineageReceiptSchema, LineageID: lineage,
 		TerminalState: reviewtransaction.NewLineageStateApproved, AuthorityRevision: revision,
-		CandidateIdentity: tampered,
+		CandidateIdentity: tampered, ProviderCausalAggregateDigest: digest,
 	}
 	payload, err := json.MarshalIndent(tamperedReceipt, "", "  ")
 	if err != nil {
@@ -347,10 +482,11 @@ func TestResolveGoverningAuthorityCorruptReceiptNamesFreshLineageNotFinalize(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	digest := providerDigestForStore(t, store)
 	if err := store.WriteReceipt(context.Background(), reviewtransaction.NewLineageReceipt{
 		Schema: reviewtransaction.NewLineageReceiptSchema, LineageID: lineage,
 		TerminalState: reviewtransaction.NewLineageStateApproved, AuthorityRevision: revision,
-		CandidateIdentity: live,
+		CandidateIdentity: live, ProviderCausalAggregateDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +495,7 @@ func TestResolveGoverningAuthorityCorruptReceiptNamesFreshLineageNotFinalize(t *
 	tamperedPayload, err := json.MarshalIndent(reviewtransaction.NewLineageReceipt{
 		Schema: reviewtransaction.NewLineageReceiptSchema, LineageID: lineage,
 		TerminalState: reviewtransaction.NewLineageStateApproved, AuthorityRevision: revision,
-		CandidateIdentity: tampered,
+		CandidateIdentity: tampered, ProviderCausalAggregateDigest: digest,
 	}, "", "  ")
 	if err != nil {
 		t.Fatal(err)

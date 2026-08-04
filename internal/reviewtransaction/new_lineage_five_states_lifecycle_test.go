@@ -107,10 +107,14 @@ func TestNewLineageFivePersistedStatesLifecycleNeverPersistsDerivedCategory(t *t
 		if err != nil {
 			t.Fatal(err)
 		}
+		digest, err := record.Authority.ProviderCausalAggregateDigest(record.Revision)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := store.WriteReceipt(context.Background(), NewLineageReceipt{
 			Schema: NewLineageReceiptSchema, LineageID: record.Authority.LineageID,
 			TerminalState: record.Authority.State, AuthorityRevision: receiptRevision,
-			CandidateIdentity: record.Authority.CandidateIdentity,
+			CandidateIdentity: record.Authority.CandidateIdentity, ProviderCausalAggregateDigest: digest,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -162,10 +166,14 @@ func TestNewLineageFivePersistedStatesLifecycleNeverPersistsDerivedCategory(t *t
 		if err != nil {
 			t.Fatal(err)
 		}
+		digest, err := record.Authority.ProviderCausalAggregateDigest(record.Revision)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := store.WriteReceipt(context.Background(), NewLineageReceipt{
 			Schema: NewLineageReceiptSchema, LineageID: record.Authority.LineageID,
 			TerminalState: record.Authority.State, AuthorityRevision: receiptRevision,
-			CandidateIdentity: record.Authority.CandidateIdentity,
+			CandidateIdentity: record.Authority.CandidateIdentity, ProviderCausalAggregateDigest: digest,
 		}); err != nil {
 			t.Fatal(err)
 		}
