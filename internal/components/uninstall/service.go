@@ -499,7 +499,7 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			ops = append(ops, removeFile(path))
 			ops = append(ops, removeDirIfEmpty(adapter.OutputStyleDir(homeDir)))
 		}
-		if path := adapter.SettingsPath(homeDir); path != "" {
+		if path := adapter.SettingsPath(homeDir); path != "" && agents.SupportsJSONSettingsObjectMutation(adapter) {
 			targets = append(targets, path)
 			jsonPaths := []jsonPath{{"outputStyle"}}
 			if adapter.Agent() == model.AgentOpenCode {
@@ -544,7 +544,7 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			}
 		}
 	case model.ComponentTheme:
-		if path := adapter.SettingsPath(homeDir); path != "" {
+		if path := adapter.SettingsPath(homeDir); path != "" && agents.SupportsJSONSettingsObjectMutation(adapter) {
 			targets = append(targets, path)
 			ops = append(ops, rewriteJSONFile(path, jsonPath{"theme"}))
 		}
