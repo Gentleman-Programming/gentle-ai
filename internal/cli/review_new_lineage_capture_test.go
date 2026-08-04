@@ -2,9 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -169,16 +171,10 @@ func TestReviewFacadeCaptureResultNewLineage_MediumTierFinalizeAllowsAllFiveGate
 // #10186 cycle 2): `review capture-result` on a v3 lineage validated a
 // reviewer result's findings/evidence and then discarded the findings --
 // CaptureLensResult persisted only {Lens, Order, SubjectHash}, so a
-// reviewer-reported, deterministic, candidate-introduced BLOCKER never
-// reached AdmitCandidateCausalFindings, and finalize --captured-results
-// issued `approved` where the identical input escalates on the
-// --admission-findings channel. This test submits the identical BLOCKER
-// shape the verify report used (severity BLOCKER, evidence_class
-// deterministic, causal_disposition introduced) through the real capture
-// CLI and asserts finalize now escalates with the finding admitted -- the
-// SAME outcome (blocks) the v2/compact path reaches as correction_required
-// and the v3 --admission-findings channel already reached as escalated.
-func TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates(t *testing.T) {
+// reviewer-reported causal_disposition is not provider authority. This slice
+// captures the claim and derives the frozen carrier, while later lifecycle
+// slices consume that carrier. Finalize remains on its existing behavior here.
+func TestReviewFacadeCaptureResultNewLineage_ReviewerClassificationIsNotConsumedInSlice1(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "candidate-causal-blocker-lineage"
@@ -201,10 +197,10 @@ func TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates(t *
 		"findings": [{
 			"id": "R3-boom-div-zero",
 			"lens": "` + lens + `",
-			"location": "lib/boom.go:1",
+			"location": "lib/` + lineage + `.go:3",
 			"severity": "BLOCKER",
 			"claim": "candidate introduces a division by zero",
-			"proof_refs": ["lib/boom.go:1"],
+			"proof_refs": ["lib/` + lineage + `.go:3"],
 			"evidence_class": "deterministic",
 			"causal_disposition": "introduced"
 		}],
@@ -220,18 +216,33 @@ func TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates(t *
 	}, &captureOut); err != nil {
 		t.Fatalf("capture-result with a candidate-causal BLOCKER: %v\n%s", err, captureOut.String())
 	}
+	store, err := reviewtransaction.NewLineageAuthorityStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(captured.Authority.CapturedResults) != 1 {
+		t.Fatalf("captured results = %d, want 1", len(captured.Authority.CapturedResults))
+	}
+	provider := captured.Authority.CapturedResults[0].Provider
+	if provider.SubjectHash != preflight.SubjectHash || len(provider.Findings) != 1 || provider.Findings[0].Classification != reviewtransaction.ProviderCandidateCausal {
+		t.Fatalf("captured provider carrier = %#v, want provider-derived candidate-causal finding", provider)
+	}
 
 	var finalizeOut bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--captured-results=true"}, &finalizeOut); err != nil {
-		t.Fatalf("finalize after capturing a candidate-causal BLOCKER: %v\n%s", err, finalizeOut.String())
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage}, &finalizeOut); err != nil {
+		t.Fatalf("finalize after capturing a candidate-causal BLOCKER without the flag: %v\n%s", err, finalizeOut.String())
 	}
 	var finalized ReviewFacadeFinalizeNewLineageResult
 	decodeStrictReviewJSON(t, finalizeOut.Bytes(), &finalized)
 	if finalized.State != reviewtransaction.NewLineageStateEscalated {
-		t.Fatalf("finalize after a captured candidate-causal BLOCKER = %q, want escalated (CRITICAL-E: a captured BLOCKER must not silently approve)", finalized.State)
+		t.Fatalf("slice 2 finalize after a captured provider candidate classification = %q, want escalated", finalized.State)
 	}
-	if len(finalized.AdmittedFindingIDs) != 1 || finalized.AdmittedFindingIDs[0] != "R3-boom-div-zero" {
-		t.Fatalf("admitted_finding_ids = %v, want exactly [R3-boom-div-zero]", finalized.AdmittedFindingIDs)
+	if !reflect.DeepEqual(finalized.AdmittedFindingIDs, []string{"R3-boom-div-zero"}) {
+		t.Fatalf("admitted_finding_ids = %v, want the provider-owned candidate finding", finalized.AdmittedFindingIDs)
 	}
 }
 
@@ -290,8 +301,8 @@ func TestReviewFacadeCaptureResultNewLineage_NonCausalFindingDoesNotBlock(t *tes
 	}
 	var finalized ReviewFacadeFinalizeNewLineageResult
 	decodeStrictReviewJSON(t, finalizeOut.Bytes(), &finalized)
-	if finalized.State != reviewtransaction.NewLineageStateApproved {
-		t.Fatalf("finalize after a captured pre-existing (non-causal) finding = %q, want approved (a follow-up must never block)", finalized.State)
+	if finalized.State != reviewtransaction.NewLineageStateEscalated {
+		t.Fatalf("finalize after a provider-unknown finding = %q, want escalated fail-closed", finalized.State)
 	}
 	if len(finalized.AdmittedFindingIDs) != 0 {
 		t.Fatalf("admitted_finding_ids = %v, want empty", finalized.AdmittedFindingIDs)

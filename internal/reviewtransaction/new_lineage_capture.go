@@ -127,3 +127,43 @@ func (store AuthorityStore) CaptureLensResult(ctx context.Context, expectedRevis
 	}
 	return store.Load()
 }
+
+// CaptureLensResultWithProviderEvidence is the native new-lineage admission
+// seam. Reviewer classifications are claims only; DeriveProviderCausalCarrier
+// computes the persisted authority from the frozen candidate identity.
+func (store AuthorityStore) CaptureLensResultWithProviderEvidence(ctx context.Context, expectedRevision, lens string, order int, subjectHash string, claims []ProviderCausalEvidence) (NewLineageRecord, error) {
+	record, err := store.Load()
+	if err != nil {
+		return NewLineageRecord{}, err
+	}
+	carrier, err := DeriveProviderCausalCarrier(ctx, store.repo, subjectHash, record.Authority.CandidateIdentity, claims)
+	if err != nil {
+		return NewLineageRecord{}, err
+	}
+	if _, err := store.Mutate(ctx, expectedRevision, func(next *NewLineageAuthority) error {
+		if next.State != NewLineageStateReviewing && next.State != NewLineageStateValidating {
+			return fmt.Errorf("%w: lineage %q is %q", ErrNewLineageCaptureNotReviewable, next.LineageID, next.State)
+		}
+		if order < 0 || order >= len(next.SelectedLenses) || next.SelectedLenses[order] != lens {
+			return fmt.Errorf("%w: lineage %q lens %q order %d", ErrNewLineageCaptureLensNotSelected, next.LineageID, lens, order)
+		}
+		want := NewLineageArtifactSubjectHash(*next, lens, order)
+		if subjectHash != want {
+			return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureSubjectMismatch, next.LineageID, lens)
+		}
+		for _, existing := range next.CapturedResults {
+			if existing.Lens != lens {
+				continue
+			}
+			if existing.SubjectHash == subjectHash && reflect.DeepEqual(existing.Provider, carrier) {
+				return nil
+			}
+			return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureConflict, next.LineageID, lens)
+		}
+		next.CapturedResults = append(next.CapturedResults, NewLineageCapturedResult{Lens: lens, Order: order, SubjectHash: subjectHash, Provider: carrier})
+		return nil
+	}); err != nil {
+		return NewLineageRecord{}, err
+	}
+	return store.Load()
+}

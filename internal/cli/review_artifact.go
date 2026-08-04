@@ -925,24 +925,15 @@ type ReviewFacadeCaptureResultNewLineageResult struct {
 	Preflight     bool   `json:"preflight,omitempty"`
 }
 
-// newLineageCapturedFindings converts the reviewer-contract wire shape
-// (facadeFinding, the SAME shape v2's own reviewer results use) into the
-// reviewtransaction admission shape (FindingEvidence, the SAME shape
-// --admission-findings already reads from a caller-supplied file) -- C-E,
-// Wave 5 fix cycle 3: capture-result validates and persists findings, and
-// finalize feeds them into the EXISTING AdmitCandidateCausalFindings, reused
-// rather than duplicated. ProofRefs (a list) joins into Proof (a single
-// string) with "; ", matching the single free-text Proof field
-// FindingEvidence has always carried for the --admission-findings channel.
-func newLineageCapturedFindings(findings []facadeFinding) []reviewtransaction.FindingEvidence {
-	converted := make([]reviewtransaction.FindingEvidence, len(findings))
+func newLineageProviderClaims(findings []facadeFinding) []reviewtransaction.ProviderCausalEvidence {
+	claims := make([]reviewtransaction.ProviderCausalEvidence, len(findings))
 	for index, finding := range findings {
-		converted[index] = reviewtransaction.FindingEvidence{
-			FindingID: finding.ID, Class: finding.EvidenceClass, Causality: finding.CausalDisposition,
-			Proof: strings.Join(finding.ProofRefs, "; "),
+		claims[index] = reviewtransaction.ProviderCausalEvidence{
+			FindingID: finding.ID, Location: finding.Location, ProofRefs: append([]string(nil), finding.ProofRefs...),
+			Classification: reviewtransaction.ProviderCausalClassification(finding.CausalDisposition),
 		}
 	}
-	return converted
+	return claims
 }
 
 // runReviewFacadeCaptureResultNewLineage is C-A's CLI wiring for the minimal
@@ -1001,7 +992,7 @@ func runReviewFacadeCaptureResultNewLineage(
 	if err != nil {
 		return err
 	}
-	if _, err := store.CaptureLensResult(ctx, record.Revision, lens, order, result.SubjectHash, newLineageCapturedFindings(result.Findings)); err != nil {
+	if _, err := store.CaptureLensResultWithProviderEvidence(ctx, record.Revision, lens, order, result.SubjectHash, newLineageProviderClaims(result.Findings)); err != nil {
 		return reviewPreflightError(err)
 	}
 	return encodeReviewJSON(stdout, ReviewFacadeCaptureResultNewLineageResult{

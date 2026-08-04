@@ -71,9 +71,17 @@ func TestAuthorityStoreNewLineageWritesExactlyTwoArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := record.Authority.ProviderCausalAggregateDigest(revision)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.WriteReceipt(context.Background(), NewLineageReceipt{
 		Schema: NewLineageReceiptSchema, LineageID: "two-artifact-lineage", TerminalState: NewLineageStateApproved,
-		AuthorityRevision: revision, CandidateIdentity: authority.CandidateIdentity,
+		AuthorityRevision: revision, CandidateIdentity: authority.CandidateIdentity, ProviderCausalAggregateDigest: digest,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -312,6 +320,10 @@ func TestAuthorityStoreReceiptImmutableAfterIssuance(t *testing.T) {
 		Schema: NewLineageReceiptSchema, LineageID: "receipt-immutable-lineage", TerminalState: NewLineageStateApproved,
 		AuthorityRevision: revision, CandidateIdentity: authority.CandidateIdentity,
 	}
+	receipt.ProviderCausalAggregateDigest, err = authority.ProviderCausalAggregateDigest(revision)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.WriteReceipt(context.Background(), receipt); err != nil {
 		t.Fatal(err)
 	}
@@ -354,4 +366,116 @@ func equalStringSlices(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+func authorityWithProviderCarrier(lineageID string) (NewLineageAuthority, ProviderCausalCarrier) {
+	authority := fixtureNewLineageAuthority(lineageID, NewLineageStateApproved)
+	authority.SelectedLenses = []string{"lint"}
+	carrier := ProviderCausalCarrier{
+		SubjectHash:       "sha256:" + strings.Repeat("1", 64),
+		CandidateIdentity: authority.CandidateIdentity,
+	}
+	carrier.AggregateDigest = providerAggregateDigest(carrier)
+	authority.CapturedResults = []NewLineageCapturedResult{{
+		Lens: "lint", Order: 0, SubjectHash: carrier.SubjectHash, Provider: carrier,
+	}}
+	return authority, carrier
+}
+
+func TestAuthorityStoreProviderAggregateDigestBinding(t *testing.T) {
+	cases := []struct {
+		name      string
+		digest    func(actual string, authority NewLineageAuthority) string
+		wantWrite bool
+	}{
+		{name: "valid digest", digest: func(actual string, _ NewLineageAuthority) string { return actual }, wantWrite: true},
+		{name: "missing digest", digest: func(_ string, _ NewLineageAuthority) string { return "" }},
+		{name: "stale digest", digest: func(_ string, authority NewLineageAuthority) string {
+			old := authority
+			old.CapturedResults = nil
+			old.SelectedLenses = nil
+			digest, _ := old.ProviderCausalCarrierDigest()
+			return digest
+		}},
+		{name: "tampered digest", digest: func(_ string, _ NewLineageAuthority) string { return "sha256:" + strings.Repeat("f", 64) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			lineage := "provider-digest-" + strings.ReplaceAll(tc.name, " ", "-")
+			store, err := NewLineageAuthorityStore(context.Background(), repo, lineage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			authority, _ := authorityWithProviderCarrier(lineage)
+			revision, err := store.Mutate(context.Background(), "", func(next *NewLineageAuthority) error {
+				*next = authority
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual, err := authority.ProviderCausalAggregateDigest(revision)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = store.WriteReceipt(context.Background(), NewLineageReceipt{
+				Schema: NewLineageReceiptSchema, LineageID: lineage, TerminalState: authority.State,
+				AuthorityRevision: revision, CandidateIdentity: authority.CandidateIdentity,
+				ProviderCausalAggregateDigest: tc.digest(actual, authority),
+			})
+			if (err == nil) != tc.wantWrite {
+				t.Fatalf("WriteReceipt() error = %v, want success = %v", err, tc.wantWrite)
+			}
+			if tc.wantWrite {
+				if _, err := store.LoadReceipt(); err != nil {
+					t.Fatalf("LoadReceipt(valid) error = %v", err)
+				}
+			} else if _, err := os.Stat(store.ReceiptPath()); !os.IsNotExist(err) {
+				t.Fatalf("rejected digest published receipt, stat error = %v", err)
+			}
+		})
+	}
+}
+
+func TestAuthorityStoreLoadReceiptRejectsAggregateChange(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	const lineage = "provider-digest-changed-after-receipt"
+	store, err := NewLineageAuthorityStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := fixtureNewLineageAuthority(lineage, NewLineageStateApproved)
+	revision, err := store.Mutate(context.Background(), "", func(next *NewLineageAuthority) error {
+		*next = authority
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := authority.ProviderCausalAggregateDigest(revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteReceipt(context.Background(), NewLineageReceipt{
+		Schema: NewLineageReceiptSchema, LineageID: lineage, TerminalState: authority.State,
+		AuthorityRevision: revision, CandidateIdentity: authority.CandidateIdentity,
+		ProviderCausalAggregateDigest: digest,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	changed, carrier := authorityWithProviderCarrier(lineage)
+	if _, err := store.Mutate(context.Background(), revision, func(next *NewLineageAuthority) error {
+		next.SelectedLenses = changed.SelectedLenses
+		next.CapturedResults = changed.CapturedResults
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadReceipt(); err == nil {
+		t.Fatal("LoadReceipt accepted a receipt after the persisted provider aggregate changed")
+	}
+	if carrier.AggregateDigest == digest {
+		t.Fatal("fixture did not change the provider aggregate digest")
+	}
 }

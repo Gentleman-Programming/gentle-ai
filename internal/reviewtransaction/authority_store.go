@@ -119,10 +119,11 @@ type NewLineageAuthority struct {
 // no reopen) -- only the findings themselves, fed into the existing
 // AdmitCandidateCausalFindings at finalize time.
 type NewLineageCapturedResult struct {
-	Lens        string            `json:"lens"`
-	Order       int               `json:"order"`
-	SubjectHash string            `json:"subject_hash"`
-	Findings    []FindingEvidence `json:"findings,omitempty"`
+	Lens        string                `json:"lens"`
+	Order       int                   `json:"order"`
+	SubjectHash string                `json:"subject_hash"`
+	Findings    []FindingEvidence     `json:"findings,omitempty"`
+	Provider    ProviderCausalCarrier `json:"provider_causal,omitempty"`
 }
 
 // CapturedLensNames returns the plain lens-name list
@@ -222,6 +223,32 @@ func (authority NewLineageAuthority) Validate() error {
 		for _, finding := range captured.Findings {
 			if strings.TrimSpace(finding.FindingID) == "" {
 				return errors.New("new-lineage authority captured findings must carry a non-empty finding id") // refusal:by-design world-action: captured findings are only ever written by AuthorityStore.CaptureLensResult from an already-decoded reviewer result; a malformed entry here means in-process corruption, not something an operator command repairs
+			}
+		}
+		if captured.Provider.SubjectHash != "" {
+			if captured.Provider.SubjectHash != captured.SubjectHash || captured.Provider.CandidateIdentity != authority.CandidateIdentity || !validSHA256(captured.Provider.AggregateDigest) {
+				return errors.New("new-lineage authority provider causal evidence does not bind the frozen subject and candidate") // refusal:by-design operator-knowledge: provider bindings are immutable integrity evidence and require a fresh capture when invalid
+			}
+			seenProviderFindings := make(map[string]bool, len(captured.Provider.Findings))
+			for _, finding := range captured.Provider.Findings {
+				if finding.FindingID == "" {
+					return errors.New("new-lineage authority provider causal findings require finding ids") // refusal:by-design operator-knowledge: persisted provider findings without identities indicate authority corruption
+				}
+				if seenProviderFindings[finding.FindingID] {
+					return errors.New("new-lineage authority provider causal findings must be deduplicated") // refusal:by-design operator-knowledge: duplicate persisted provider findings cannot be safely repaired in place
+				}
+				seenProviderFindings[finding.FindingID] = true
+				switch finding.Classification {
+				case ProviderCandidateCausal, ProviderProvenNonCandidate, ProviderUnknown:
+				default:
+					return errors.New("new-lineage authority provider causal classification is unsupported") // refusal:by-design operator-knowledge: provider classification is a closed tri-state and unsupported persisted values require fresh capture
+				}
+				if finding.EvidenceDigest != providerFindingDigest(finding) {
+					return errors.New("new-lineage authority provider causal finding digest does not match its content") // refusal:by-design operator-knowledge: a mismatched provider digest proves persisted authority corruption
+				}
+			}
+			if captured.Provider.AggregateDigest != providerAggregateDigest(captured.Provider) {
+				return errors.New("new-lineage authority provider causal aggregate digest does not match its findings") // refusal:by-design operator-knowledge: aggregate integrity failure requires fresh provider evidence
 			}
 		}
 	}
@@ -494,6 +521,22 @@ func (record NewLineageRecord) ResolveReplay(requestDigest string) (transition j
 	return nil, false, nil
 }
 
+// ResolveReplayWithProviderCausalDigest is the native authority-level seam
+// for finalize callers that have no product replay command yet. It refuses a
+// changed carrier/aggregate before consulting the existing replay identity;
+// callers therefore cannot replay a stale provider decision or consume a
+// second correction budget.
+func (record NewLineageRecord) ResolveReplayWithProviderCausalDigest(requestDigest, expectedAggregateDigest string) (json.RawMessage, bool, error) {
+	actual, err := record.Authority.ProviderCausalAggregateDigest(record.Revision)
+	if err != nil {
+		return nil, false, err
+	}
+	if actual != expectedAggregateDigest {
+		return nil, false, errors.New("new-lineage provider causal aggregate does not match replay authority") // refusal:by-design operator-knowledge: a changed provider aggregate is not an exact replay
+	}
+	return record.ResolveReplay(requestDigest)
+}
+
 // NewLineageReceipt is the exact review-receipt.json payload: the immutable
 // terminal artifact issued exactly once per lineage (spec
 // rdd-review-core-transitions, "Terminal Receipt Issuance Exactly Once").
@@ -503,12 +546,13 @@ func (record NewLineageRecord) ResolveReplay(requestDigest string) (transition j
 // is issued becomes byte-immutable and bound to the exact authority
 // revision that authorized it.
 type NewLineageReceipt struct {
-	Schema            string            `json:"schema"`
-	LineageID         string            `json:"lineage_id"`
-	TerminalState     NewLineageState   `json:"terminal_state"`
-	AuthorityRevision string            `json:"authority_revision"`
-	CandidateIdentity CandidateIdentity `json:"candidate_identity"`
-	IssuedTransition  json.RawMessage   `json:"issued_transition,omitempty"`
+	Schema                        string            `json:"schema"`
+	LineageID                     string            `json:"lineage_id"`
+	TerminalState                 NewLineageState   `json:"terminal_state"`
+	AuthorityRevision             string            `json:"authority_revision"`
+	CandidateIdentity             CandidateIdentity `json:"candidate_identity"`
+	ProviderCausalAggregateDigest string            `json:"provider_causal_aggregate_digest"`
+	IssuedTransition              json.RawMessage   `json:"issued_transition,omitempty"`
 }
 
 // Validate enforces the structural half of receipt issuance; ReviewCore
@@ -528,6 +572,9 @@ func (receipt NewLineageReceipt) Validate() error {
 	}
 	if receipt.CandidateIdentity == (CandidateIdentity{}) {
 		return errors.New("new-lineage receipt requires the frozen candidate identity") // refusal:by-design world-action: a zero CandidateIdentity on a receipt means the caller never copied the frozen one from the authority record; the fix is that code, not an operator command
+	}
+	if !validSHA256(receipt.ProviderCausalAggregateDigest) {
+		return errors.New("new-lineage receipt requires a provider causal aggregate digest") // refusal:by-design operator-knowledge: v3 terminal receipts without the persisted provider aggregate are not authoritative
 	}
 	if len(receipt.IssuedTransition) > 0 && !json.Valid(receipt.IssuedTransition) {
 		return errors.New("new-lineage receipt issued transition must be valid JSON") // refusal:by-design world-action: the issued-transition payload is the caller's own copy of an already-validated transition; malformed JSON here is a caller bug, not an operator-fixable state
@@ -572,6 +619,13 @@ func (store AuthorityStore) WriteReceipt(ctx context.Context, receipt NewLineage
 	if record.Authority.CandidateIdentity != receipt.CandidateIdentity {
 		return errors.New("new-lineage receipt candidate identity does not match authority") // refusal:by-design world-action: the receipt must carry the exact frozen identity the authority already recorded; a mismatch is a caller construction bug, not an operator-fixable state
 	}
+	providerDigest, err := record.Authority.ProviderCausalAggregateDigest(record.Revision)
+	if err != nil {
+		return fmt.Errorf("verify provider causal aggregate for receipt: %w", err)
+	}
+	if providerDigest != receipt.ProviderCausalAggregateDigest {
+		return errors.New("new-lineage receipt provider causal aggregate digest does not match authority") // refusal:by-design operator-knowledge: publication refuses stale or forged provider authority before immutable write
+	}
 	receiptPayload, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {
 		return err
@@ -588,16 +642,59 @@ func (store AuthorityStore) WriteReceipt(ctx context.Context, receipt NewLineage
 // caller (resolveGoverningAuthority) treats that identically to "no receipt
 // exists", never as "trust the state field instead".
 func (store AuthorityStore) LoadReceipt() (NewLineageReceipt, error) {
+	lock, err := acquireStoreLock(store.lockPath)
+	if err != nil {
+		return NewLineageReceipt{}, err
+	}
+	defer lock.release()
+
 	payload, err := os.ReadFile(store.ReceiptPath())
 	if err != nil {
 		return NewLineageReceipt{}, err
 	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
 	var receipt NewLineageReceipt
-	if err := json.Unmarshal(payload, &receipt); err != nil {
+	if err := decoder.Decode(&receipt); err != nil {
 		return NewLineageReceipt{}, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return NewLineageReceipt{}, errors.New("multiple JSON values in new-lineage receipt") // refusal:by-design operator-knowledge: a terminal artifact with multiple values is corrupted and cannot authorize delivery
 	}
 	if err := receipt.Validate(); err != nil {
 		return NewLineageReceipt{}, err
 	}
+	statePayload, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		return NewLineageReceipt{}, err
+	}
+	record, err := parseNewLineageRecord(statePayload, store.lineageID)
+	if err != nil {
+		return NewLineageReceipt{}, err
+	}
+	if err := validateNewLineageReceiptAgainstAuthority(receipt, record); err != nil {
+		return NewLineageReceipt{}, err
+	}
 	return receipt, nil
+}
+
+func validateNewLineageReceiptAgainstAuthority(receipt NewLineageReceipt, record NewLineageRecord) error {
+	if receipt.LineageID != record.Authority.LineageID || receipt.AuthorityRevision != record.Revision {
+		return errors.New("new-lineage receipt does not match current authority") // refusal:by-design operator-knowledge: receipt identity and CAS revision must describe the exact current authority
+	}
+	if receipt.TerminalState != record.Authority.State {
+		return errors.New("new-lineage receipt terminal state does not match current authority") // refusal:by-design operator-knowledge: a receipt for another persisted state cannot authorize delivery
+	}
+	if receipt.CandidateIdentity != record.Authority.CandidateIdentity {
+		return errors.New("new-lineage receipt candidate identity does not match current authority") // refusal:by-design operator-knowledge: delivery must bind to the frozen candidate identity
+	}
+	digest, err := record.Authority.ProviderCausalAggregateDigest(record.Revision)
+	if err != nil {
+		return fmt.Errorf("verify provider causal aggregate for receipt: %w", err)
+	}
+	if receipt.ProviderCausalAggregateDigest != digest {
+		return errors.New("new-lineage receipt provider causal aggregate digest does not match current authority") // refusal:by-design operator-knowledge: changed or tampered provider carriers invalidate the terminal receipt
+	}
+	return nil
 }
