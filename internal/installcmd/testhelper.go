@@ -13,15 +13,6 @@ func OverrideGoVersion(fn func() ([]byte, error)) (restore func()) {
 	return func() { cmdGoVersion = prev }
 }
 
-// OverrideNodeVersion replaces cmdNodeVersion with fn and returns a restore
-// function. Intended for tests in external packages that exercise the
-// Node.js >= 22.19.0 kimi-code preflight without shelling out to `node`.
-func OverrideNodeVersion(fn func() ([]byte, error)) (restore func()) {
-	prev := cmdNodeVersion
-	cmdNodeVersion = fn
-	return func() { cmdNodeVersion = prev }
-}
-
 // OverrideLookPath replaces cmdLookPath (installcmd's internal lookup, independent from
 // cli.cmdLookPath) with fn and returns a restore function.
 func OverrideLookPath(fn func(string) (string, error)) (restore func()) {

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 func TestNewAdapter(t *testing.T) {

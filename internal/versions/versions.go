@@ -16,9 +16,6 @@ package versions
 // renovate: datasource=npm depName=opencode-ai
 const OpenCode = "1.18.10"
 
-// renovate: datasource=npm depName=@moonshot-ai/kimi-code
-const KimiCode = "0.23.6"
-
 // renovate: datasource=npm depName=@upstash/context7-mcp
 const Context7MCP = "2.2.5"
 

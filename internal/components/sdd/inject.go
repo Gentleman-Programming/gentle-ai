@@ -11,7 +11,6 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
@@ -449,71 +448,6 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 			changed = changed || writeResult.Changed
 			files = append(files, modulePath)
-		}
-	}
-
-	// sectionTriggerRules is the section ID used for marker-based injection.
-	// openMarker("trigger-rules") produces <!-- gentle-ai:trigger-rules -->.
-	// No new marker constant is needed — filemerge derives it from the section ID string.
-	const sectionTriggerRules = "trigger-rules"
-
-	// 1c. Inject the trigger-rules section into every agent's system prompt.
-	// Approach mirrors the strict-tdd-mode step (1b) with an additional path for
-	// OpenCode/Kilocode whose content lives in the gentle-orchestrator agent prompt
-	// (scoped to that agent only, not in a global AGENTS.md section).
-	//
-	// Decision (4.10): OpenCode and Kilocode deliver trigger-rules inside the
-	// gentle-orchestrator prompt where all existing SDD content lives — this keeps
-	// the rules in the always-loaded scope for those agents.
-	//
-	// Decision (4.11): Only Kimi uses StrategyJinjaModules today. If a future
-	// adapter adopts Jinja modules it must add its own {% include "trigger-rules.md" %}
-	// line and will be handled by the StrategyJinjaModules branch below.
-	{
-		rendered := RenderTriggerRules(catalog.DefaultTriggerRuleSet())
-
-		if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
-			// OpenCode / Kilocode: trigger-rules is appended to the gentle-orchestrator
-			// prompt content inside opencode.json (handled by inlineOpenCodeSDDPrompts
-			// via the triggerRulesContent variable set on InjectOptions — see below).
-			// We store the rendered content in opts so inlineOpenCodeSDDPrompts can pick it up.
-			opts.triggerRulesContent = rendered
-		} else if adapter.SystemPromptStrategy() == model.StrategyJinjaModules {
-			// Jinja agents (currently only Kimi): write the rendered block as a
-			// standalone module file. The static AGENTS.md template includes it via
-			// {% include "trigger-rules.md" ignore missing %}.
-			configDir := adapter.GlobalConfigDir(homeDir)
-			modulePath := filepath.Join(configDir, "trigger-rules.md")
-			writeResult, err := filemerge.WriteFileAtomic(modulePath, []byte(rendered), 0o644)
-			if err != nil {
-				return InjectionResult{}, err
-			}
-			changed = changed || writeResult.Changed
-			files = append(files, modulePath)
-		} else {
-			// All other system-prompt agents: inject via marker-based section.
-			promptPath := adapter.SystemPromptFile(homeDir)
-			existing, readErr := readFileOrEmpty(promptPath)
-			if readErr != nil {
-				return InjectionResult{}, readErr
-			}
-			updated := filemerge.InjectMarkdownSection(existing, sectionTriggerRules, rendered)
-			writeResult, writeErr := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
-			if writeErr != nil {
-				return InjectionResult{}, writeErr
-			}
-			changed = changed || writeResult.Changed
-			// Dedupe the path — it may already be present from step 1.
-			alreadyInFiles := false
-			for _, f := range files {
-				if f == promptPath {
-					alreadyInFiles = true
-					break
-				}
-			}
-			if !alreadyInFiles {
-				files = append(files, promptPath)
-			}
 		}
 	}
 
