@@ -153,7 +153,7 @@ jobs:
         run: |
           if [[ "$RUNNER_TEMP" == *\\* ]]; then
             RESULTS_DIR=$(cygpath -w "$RUNNER_TEMP")
-            SEP='\\'
+            SEP="\\"
           else
             RESULTS_DIR="$RUNNER_TEMP"
             SEP='/'
@@ -165,7 +165,7 @@ jobs:
         run: |
           if [[ "$RUNNER_TEMP" == *\\* ]]; then
             RESULTS_DIR=$(cygpath -w "$RUNNER_TEMP")
-            SEP='\\'
+            SEP="\\"
           else
             RESULTS_DIR="$RUNNER_TEMP"
             SEP='/'
@@ -182,7 +182,7 @@ jobs:
           # separators. Use cygpath to normalize, then a backslash separator.
           if [[ "$RUNNER_TEMP" == *\\* ]]; then
             RESULTS_DIR=$(cygpath -w "$RUNNER_TEMP")
-            SEP='\\'
+            SEP="\\"
           else
             RESULTS_DIR="$RUNNER_TEMP"
             SEP='/'
@@ -194,7 +194,7 @@ jobs:
         run: |
           if [[ "$RUNNER_TEMP" == *\\* ]]; then
             RESULTS_DIR=$(cygpath -w "$RUNNER_TEMP")
-            SEP='\\'
+            SEP="\\"
           else
             RESULTS_DIR="$RUNNER_TEMP"
             SEP='/'
