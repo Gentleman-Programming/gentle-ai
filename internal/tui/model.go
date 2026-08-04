@@ -1641,6 +1641,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
 				} else if next, ok := m.pickerNextScreen(); ok {
+					m.rememberCursor()
 					return m, m.advanceToNextPickerScreen(next)
 				}
 			}
@@ -1666,6 +1667,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
 				} else if next, ok := m.pickerNextScreen(); ok {
+					m.rememberCursor()
 					return m, m.advanceToNextPickerScreen(next)
 				}
 			}
@@ -1756,6 +1758,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
 				} else if next, ok := m.pickerNextScreen(); ok {
+					m.rememberCursor()
 					return m, m.advanceToNextPickerScreen(next)
 				}
 			}
@@ -3744,6 +3747,17 @@ func (m *Model) restoreCursorMemory() {
 		saved = count - 1
 	}
 	m.Cursor = saved
+	// Backups is currently the only m.Cursor screen with a scroll window, so
+	// its scroll sync lives inline here for simplicity. If another scrolled
+	// screen needs this, replace it with a centralized per-screen post-restore
+	// hook instead of adding more cases.
+	if m.Screen == ScreenBackups {
+		if m.Cursor < m.BackupScroll {
+			m.BackupScroll = m.Cursor
+		} else if m.Cursor >= m.BackupScroll+screens.BackupMaxVisible {
+			m.BackupScroll = m.Cursor - screens.BackupMaxVisible + 1
+		}
+	}
 }
 
 func (m *Model) returnToScreen(next Screen) {
