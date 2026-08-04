@@ -59,7 +59,6 @@ jobs:
         working-directory: bench
         run: |
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --out "$RUNNER_TEMP/bench-results.json"
-          cp "$RUNNER_TEMP/bench-results.json" ./bench-results.json
 
       - name: Pin six SDD-bound journeys to a completed status
         run: |
@@ -73,16 +72,17 @@ jobs:
             completed_once("j55-sdd-mismatched-authority-receipt-fails-closed") and
             completed_once("j56-sdd-non-allow-post-apply-gate-fails-closed") and
             completed_once("j58-sdd-foreign-openspec-path-fails-closed")
-          ' bench-results.json
+          ' "$RUNNER_TEMP/bench-results.json"
 
       - name: Upload bench results
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: bench-results-linux
-          path: bench-results.json
+          path: ${{ runner.temp }}/bench-results.json
           if-no-files-found: error
 
       - name: Drift detection against tracked baseline
+        working-directory: bench
         run: |
           BASELINE="bench/.ci-baseline/results.json"
           if [ ! -f "$BASELINE" ]; then
@@ -90,7 +90,7 @@ jobs:
           else
             # Compare journey statuses. A regression is a journey that completed
             # in the baseline but reports `unsupported` in the current run.
-            REGRESSIONS=$(jq -r --slurpfile curr bench-results.json --slurpfile base "$BASELINE" '
+            REGRESSIONS=$(jq -r --slurpfile curr "$RUNNER_TEMP/bench-results.json" --slurpfile base "$BASELINE" '
               $curr[0].journeys as $cj
               | $base[0].journeys as $bj
               | $cj[] as $c
@@ -104,7 +104,7 @@ jobs:
             fi
 
             # Other drift is informational, not blocking.
-            DRIFT=$(jq -r --slurpfile curr bench-results.json --slurpfile base "$BASELINE" '
+            DRIFT=$(jq -r --slurpfile curr "$RUNNER_TEMP/bench-results.json" --slurpfile base "$BASELINE" '
               $curr[0].journeys as $cj
               | $base[0].journeys as $bj
               | $cj[] as $c
@@ -119,7 +119,7 @@ jobs:
               done
             fi
 
-            NEW_COMPLETED=$(jq -r --slurpfile curr bench-results.json --slurpfile base "$BASELINE" '
+            NEW_COMPLETED=$(jq -r --slurpfile curr "$RUNNER_TEMP/bench-results.json" --slurpfile base "$BASELINE" '
               $curr[0].journeys as $cj
               | $base[0].journeys as $bj
               | $cj[] | select(.status == "completed")
@@ -149,16 +149,18 @@ jobs:
 
       - name: Build bench module
         working-directory: bench
+        shell: bash
         run: go build -o "$RUNNER_TEMP/gentle-ai-bench.exe" .
 
       - name: Build product under test
+        shell: bash
         run: go build -trimpath -o "$RUNNER_TEMP/gentle-ai.exe" ./cmd/gentle-ai
 
       - name: Run bench against the product binary
         working-directory: bench
+        shell: bash
         run: |
           "$RUNNER_TEMP/gentle-ai-bench.exe" run --binary "$RUNNER_TEMP/gentle-ai.exe" --out "$RUNNER_TEMP/bench-results.json"
-          copy "$RUNNER_TEMP/bench-results.json" .\bench-results.json
 
       - name: Pin six SDD-bound journeys to a completed status
         shell: bash
@@ -173,11 +175,11 @@ jobs:
             completed_once("j55-sdd-mismatched-authority-receipt-fails-closed") and
             completed_once("j56-sdd-non-allow-post-apply-gate-fails-closed") and
             completed_once("j58-sdd-foreign-openspec-path-fails-closed")
-          ' bench-results.json
+          ' "$RUNNER_TEMP/bench-results.json"
 
       - name: Upload bench results
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: bench-results-windows
-          path: bench-results.json
+          path: ${{ runner.temp }}/bench-results.json
           if-no-files-found: error
