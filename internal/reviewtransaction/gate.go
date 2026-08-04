@@ -670,10 +670,6 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 	remotes := strings.Fields(string(output))
 	matches := []PrePRBoundarySelection{}
 	for _, remote := range remotes {
-		identity, identityErr := remoteRepositoryIdentity(ctx, repo, remote)
-		if identityErr != nil {
-			continue
-		}
 		branch := selector
 		if strings.HasPrefix(selector, remote+"/") {
 			branch = strings.TrimPrefix(selector, remote+"/")
@@ -685,9 +681,13 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 		} else if _, err := runGit(ctx, repo, nil, nil, "check-ref-format", "--branch", branch); err != nil {
 			continue
 		}
+		identity, identityErr := remoteRepositoryIdentity(ctx, repo, remote)
+		if identityErr != nil {
+			return PrePRBoundarySelection{}, identityErr
+		}
 		remoteOutput, queryErr := runGit(ctx, repo, nil, nil, "ls-remote", "--heads", remote, branch)
 		if queryErr != nil {
-			continue
+			return PrePRBoundarySelection{}, queryErr
 		}
 		for _, line := range strings.Split(string(remoteOutput), "\n") {
 			fields := strings.Fields(line)
@@ -729,7 +729,10 @@ func advertisedRemoteRef(ctx context.Context, repo, remote, ref, selector string
 
 func remoteRepositoryIdentity(ctx context.Context, repo, remote string) (string, error) {
 	output, err := runGit(ctx, repo, nil, nil, "config", "--get", "remote."+remote+".url")
-	if err != nil || strings.TrimSpace(string(output)) == "" {
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(string(output)) == "" {
 		return "", errors.New("publication remote URL is not configured")
 	}
 	return repositoryLocationIdentity(ctx, repo, strings.TrimSpace(string(output)))
