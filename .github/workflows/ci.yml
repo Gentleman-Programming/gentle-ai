@@ -116,13 +116,28 @@ jobs:
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Determine Claude runtime proof applicability
+        id: claude-runtime-proof
+        shell: bash
+        run: |
+          if [[ -f e2e/Dockerfile.claude-network-none ]]; then
+            echo "applicable=true" >> "$GITHUB_OUTPUT"
+            echo "Claude Network-None runtime proof is applicable." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "applicable=false" >> "$GITHUB_OUTPUT"
+            echo "Claude Network-None runtime proof is not applicable: this exact candidate predates e2e/Dockerfile.claude-network-none." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Build pinned Claude runtime proof image
+        if: steps.claude-runtime-proof.outputs.applicable == 'true'
         run: docker build -f e2e/Dockerfile.claude-network-none -t gentle-ai-claude-network-none:ci .
       - name: Prove Claude transport without external networking
+        if: steps.claude-runtime-proof.outputs.applicable == 'true'
         run: |
           docker run --rm --pull=never --network none --cap-drop=ALL \
             --security-opt=no-new-privileges --read-only \
             --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \
+            -e GENTLE_AI_CLAUDE_RUNTIME_E2E=1 \
+            -e GENTLE_AI_CLAUDE_RUNTIME_REQUIRED=1 \
             -e GENTLE_AI_PARENT_NETNS="$(stat -Lc %i /proc/self/ns/net)" \
             gentle-ai-claude-network-none:ci
 

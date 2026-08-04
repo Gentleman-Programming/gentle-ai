@@ -1,27 +1,65 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
-// fakeBinary writes an executable that answers a fixed argv with a fixed
-// message, so the capability probe can be tested without a real gentle-ai.
+const fakeBinaryScriptEnv = "GENTLE_AI_BENCH_FAKE_BINARY_SCRIPT"
+
+func TestMain(m *testing.M) {
+	if script := os.Getenv(fakeBinaryScriptEnv); script != "" {
+		runFakeBinary(script, os.Args[1:])
+	}
+	os.Exit(m.Run())
+}
+
+func runFakeBinary(script string, args []string) {
+	if strings.Contains(script, `case "$*"`) {
+		if strings.Contains(strings.Join(args, " "), "--help") {
+			fmt.Fprintln(os.Stderr, "Error: flag provided but not defined: -help")
+		} else {
+			fmt.Fprintln(os.Stderr, "Error: sdd-attempt requires --cwd")
+		}
+		os.Exit(1)
+	}
+	if strings.Contains(script, "GIT_TRACE=[$GIT_TRACE]") {
+		fmt.Fprintf(os.Stdout, "GIT_TRACE=[%s]\n", os.Getenv("GIT_TRACE"))
+		os.Exit(0)
+	}
+	if strings.Contains(script, `{"next_transition":{"kind":"complete"}}`) {
+		fmt.Fprintln(os.Stdout, `{"next_transition":{"kind":"complete"}}`)
+		os.Exit(0)
+	}
+	if strings.Contains(script, "flag provided but not defined") {
+		fmt.Fprintln(os.Stderr, "Error: flag provided but not defined: -expected-binding-revision")
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stderr, "Error: sdd-attempt requires --cwd")
+	os.Exit(1)
+}
+
+// fakeBinary uses the current test executable so the probe cases work on every
+// supported platform without relying on a Unix shell script.
 func fakeBinary(t *testing.T, script string) *Sandbox {
 	t.Helper()
 	root := t.TempDir()
-	sandbox, err := newSandbox(filepath.Join(root, "fake"), root)
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("test executable: %v", err)
+	}
+	sandbox, err := newSandbox(binary, root)
 	if err != nil {
 		t.Fatalf("newSandbox: %v", err)
 	}
 	if err := os.MkdirAll(sandbox.Repo, 0o755); err != nil {
 		t.Fatalf("mkdir repo: %v", err)
 	}
-	if err := os.WriteFile(sandbox.Binary, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
-		t.Fatalf("write fake binary: %v", err)
-	}
+	sandbox.extraEnv = []string{fakeBinaryScriptEnv + "=" + script}
 	return sandbox
 }
 
@@ -189,5 +227,33 @@ func TestSelectedAuthorityCaptureHelpersSelectTheSandboxLineage(t *testing.T) {
 				t.Fatalf("status args = %q, want selected lineage %q", args, sandbox.Lineage)
 			}
 		})
+	}
+}
+
+func TestExecutableForOS(t *testing.T) {
+	root := t.TempDir()
+	windowsBinary := filepath.Join(root, "gentle-ai.exe")
+	unixBinary := filepath.Join(root, "gentle-ai")
+	if err := os.WriteFile(windowsBinary, []byte("binary"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unixBinary, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if !executableForOS("windows", windowsBinary) {
+		t.Fatal("Windows executable was rejected")
+	}
+	if executableForOS("windows", unixBinary) {
+		t.Fatal("Windows accepted a binary without the .exe extension")
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if !executableForOS("linux", unixBinary) {
+		t.Fatal("Unix executable was rejected")
+	}
+	if executableForOS("linux", windowsBinary) {
+		t.Fatal("Unix accepted a binary without execute permission")
 	}
 }

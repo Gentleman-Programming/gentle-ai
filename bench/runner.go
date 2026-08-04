@@ -22,6 +22,7 @@ type Sandbox struct {
 	Remote                   string
 	TracePath                string
 	BenchReceiptMutationPath string
+	extraEnv                 []string
 
 	// BenchCrashAtPhase, when non-empty, is read by product binaries built
 	// with `-tags bench_fixture` as GENTLE_AI_BENCH_CRASH_AT_PHASE
@@ -100,7 +101,7 @@ func (s *Sandbox) env() []string {
 	if s.NewLineageActivation {
 		env = append(env, "GENTLE_AI_RDD_NEW_LINEAGE=1")
 	}
-	return env
+	return append(env, s.extraEnv...)
 }
 
 // git runs a fixture git command. Fixture commands are sandbox setup, not user

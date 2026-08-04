@@ -45,21 +45,27 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 		"        if: needs.go-format.result != 'success'\n" +
 		"        run: exit 1\n"
 
-	jobs := []struct{ id, next string }{
-		{id: "unit-tests", next: "windows-runtime"},
+	jobs := []struct {
+		id, next       string
+		requiresFormat bool
+	}{
+		{id: "unit-tests", next: "claude-network-none", requiresFormat: true},
+		// Claude Network-None is an independent required proof. Its fixture
+		// applicability condition is intentionally unrelated to Go formatting.
+		{id: "claude-network-none", next: "windows-runtime"},
 		// The sharded Windows full suite is deliberately NOT here: it lives in
 		// its own workflow while the pre-existing Windows failures it exposed
 		// are paid down, so it is not one of ci.yml's required checks and owes
 		// no fail-closed contract to a go-format job in another file.
-		{id: "windows-runtime", next: "darwin-runtime"},
+		{id: "windows-runtime", next: "darwin-runtime", requiresFormat: true},
 		// darwin-runtime is a required check like its siblings, so it owes the
 		// same fail-closed contract. Listing it here is also what keeps the
 		// section slicing honest: a job this list does not know about gets
 		// swallowed into its predecessor's section, and its own guard step
 		// then reads as the predecessor bypassing the format gate.
-		{id: "darwin-runtime", next: "organic-runtime-e2e"},
-		{id: "organic-runtime-e2e", next: "e2e-tests"},
-		{id: "e2e-tests"},
+		{id: "darwin-runtime", next: "organic-runtime-e2e", requiresFormat: true},
+		{id: "organic-runtime-e2e", next: "e2e-tests", requiresFormat: true},
+		{id: "e2e-tests", requiresFormat: true},
 	}
 	for _, job := range jobs {
 		t.Run(job.id, func(t *testing.T) {
@@ -76,15 +82,17 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 				}
 				section = section[:end]
 			}
-			for _, required := range []string{"    needs: go-format\n", "    if: always()\n", guard} {
-				if !strings.Contains(section, required) {
-					t.Fatalf("%s missing fail-closed contract %q", job.id, required)
+			if job.requiresFormat {
+				for _, required := range []string{"    needs: go-format\n", "    if: always()\n", guard} {
+					if !strings.Contains(section, required) {
+						t.Fatalf("%s missing fail-closed contract %q", job.id, required)
+					}
 				}
-			}
 
-			expensiveSteps := section[strings.Index(section, guard)+len(guard):]
-			if strings.Contains(expensiveSteps, "\n        if:") || strings.Contains(section, "continue-on-error:") {
-				t.Fatalf("%s can bypass the failed format guard", job.id)
+				expensiveSteps := section[strings.Index(section, guard)+len(guard):]
+				if strings.Contains(expensiveSteps, "\n        if:") || strings.Contains(section, "continue-on-error:") {
+					t.Fatalf("%s can bypass the failed format guard", job.id)
+				}
 			}
 		})
 	}
@@ -98,6 +106,91 @@ func TestOrganicRuntimeE2EUsesInstalledOpenCodePin(t *testing.T) {
 	install := "npm install --global opencode-ai@" + versions.OpenCode
 	if strings.Count(string(data), install) != 1 {
 		t.Fatalf("organic runtime E2E must install exact supported OpenCode pin %q once", install)
+	}
+}
+
+func TestClaudeNetworkNoneRuntimeProofRespectsFixtureApplicability(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(data)
+	start := strings.Index(workflow, "  claude-network-none:\n")
+	if start < 0 {
+		t.Fatal("missing Claude Network-None runtime job")
+	}
+	end := strings.Index(workflow[start:], "\n  windows-runtime:")
+	if end < 0 {
+		t.Fatal("missing Claude Network-None runtime job boundary")
+	}
+	job := workflow[start : start+end]
+
+	steps := []struct {
+		name, block string
+	}{
+		{
+			name: "exact candidate checkout",
+			block: "      - name: Checkout exact event candidate\n" +
+				"        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1\n" +
+				"        with:\n" +
+				"          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}\n" +
+				"          ref: ${{ github.event.pull_request.head.sha || github.sha }}",
+		},
+		{
+			name: "fixture applicability",
+			block: "      - name: Determine Claude runtime proof applicability\n" +
+				"        id: claude-runtime-proof\n" +
+				"        shell: bash\n" +
+				"        run: |\n" +
+				"          if [[ -f e2e/Dockerfile.claude-network-none ]]; then\n" +
+				"            echo \"applicable=true\" >> \"$GITHUB_OUTPUT\"\n" +
+				"            echo \"Claude Network-None runtime proof is applicable.\" >> \"$GITHUB_STEP_SUMMARY\"\n" +
+				"          else\n" +
+				"            echo \"applicable=false\" >> \"$GITHUB_OUTPUT\"\n" +
+				"            echo \"Claude Network-None runtime proof is not applicable: this exact candidate predates e2e/Dockerfile.claude-network-none.\" >> \"$GITHUB_STEP_SUMMARY\"\n" +
+				"          fi",
+		},
+		{
+			name: "guarded image build",
+			block: "      - name: Build pinned Claude runtime proof image\n" +
+				"        if: steps.claude-runtime-proof.outputs.applicable == 'true'\n" +
+				"        run: docker build -f e2e/Dockerfile.claude-network-none -t gentle-ai-claude-network-none:ci .",
+		},
+		{
+			name: "guarded non-skippable runtime proof",
+			block: "      - name: Prove Claude transport without external networking\n" +
+				"        if: steps.claude-runtime-proof.outputs.applicable == 'true'\n" +
+				"        run: |\n" +
+				"          docker run --rm --pull=never --network none --cap-drop=ALL \\\n" +
+				"            --security-opt=no-new-privileges --read-only \\\n" +
+				"            --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=1777 \\\n" +
+				"            -e GENTLE_AI_CLAUDE_RUNTIME_E2E=1 \\\n" +
+				"            -e GENTLE_AI_CLAUDE_RUNTIME_REQUIRED=1 \\\n" +
+				"            -e GENTLE_AI_PARENT_NETNS=\"$(stat -Lc %i /proc/self/ns/net)\" \\\n" +
+				"            gentle-ai-claude-network-none:ci",
+		},
+	}
+	previous := -1
+	for _, step := range steps {
+		index := strings.Index(job, step.block)
+		if index < 0 {
+			t.Fatalf("Claude Network-None runtime job missing %s step", step.name)
+		}
+		if index <= previous {
+			t.Fatalf("Claude Network-None runtime job runs %s out of order", step.name)
+		}
+		previous = index
+	}
+
+	dockerfile, err := os.ReadFile(filepath.Join("..", "..", "e2e", "Dockerfile.claude-network-none"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(dockerfile), `ENTRYPOINT ["/usr/local/bin/claude-review-e2e", "-test.v", "-test.run=^TestClaudeReviewerTransportInNetworkNone$", "-test.count=1", "-test.timeout=6m"]`) {
+		t.Fatal("Claude runtime image must execute the required network-none E2E target")
+	}
+	if strings.Contains(job, "continue-on-error:") {
+		t.Fatal("Claude Network-None runtime job must not waive fixture, build, or runtime failures")
 	}
 }
 
