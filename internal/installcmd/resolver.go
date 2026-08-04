@@ -13,16 +13,13 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
-// cmdLookPath, osStat, osGetenv, cmdGoVersion, and cmdNodeVersion are
-// package-level vars for testability.
+// cmdLookPath, osStat, osGetenv, and cmdGoVersion are package-level vars for
+// testability.
 var cmdLookPath = exec.LookPath
 var osStat = os.Stat
 var osGetenv = os.Getenv
 var cmdGoVersion = func() ([]byte, error) {
 	return exec.Command("go", "version").Output()
-}
-var cmdNodeVersion = func() ([]byte, error) {
-	return exec.Command("node", "--version").Output()
 }
 
 // CommandSequence represents an ordered list of commands to run in sequence.
@@ -89,23 +86,25 @@ func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
 	return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}
 }
 
-// resolveKimiInstall returns the npm install command sequence for the current
-// Node.js-based Kimi Code (@moonshot-ai/kimi-code). The legacy Python-based
-// kimi-cli (`uv tool install kimi-cli`) is the old product: gentle-ai still
-// detects an existing legacy install (~/.kimi) but no longer installs it.
+// resolveKimiInstall returns the npm install command sequence gentle-ai shows
+// for the current Node.js-based Kimi Code (@moonshot-ai/kimi-code). The legacy
+// Python-based kimi-cli (`uv tool install kimi-cli`) is the old product:
+// gentle-ai still detects an existing legacy install (~/.kimi) but no longer
+// installs it.
 //
 // On Linux with system npm, sudo is required. With nvm/fnm/volta, it is not.
 // On Windows and macOS, sudo is never needed.
 //
 // --ignore-scripts blocks postinstall hooks, the primary supply-chain attack
-// vector for npm packages. The version is pinned to avoid pulling a tampered
-// "latest" tag.
+// vector for npm packages. The version is "latest" because a human reads and
+// runs this command; a frozen pin would go stale as soon as upstream ships a
+// newer release.
 func resolveKimiInstall(profile system.PlatformProfile) (CommandSequence, error) {
 	if !profile.Supported {
 		return nil, fmt.Errorf("Kimi is not supported on this platform (%s/%s)", profile.OS, profile.LinuxDistro)
 	}
 
-	pkg := "@moonshot-ai/kimi-code@" + versions.KimiCode
+	const pkg = "@moonshot-ai/kimi-code@latest"
 	if profile.OS == "linux" && !profile.NpmWritable {
 		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 	}
@@ -123,7 +122,6 @@ var npmBasedAgents = map[model.AgentID]struct{}{
 	model.AgentClaudeCode: {},
 	model.AgentOpenCode:   {},
 	model.AgentKilocode:   {},
-	model.AgentKimi:       {},
 	model.AgentGeminiCLI:  {},
 	model.AgentCodex:      {},
 	model.AgentQwenCode:   {},
@@ -133,13 +131,6 @@ var npmBasedAgents = map[model.AgentID]struct{}{
 // ValidateAgentInstallPreflight validates agent-specific prerequisites that must
 // exist before running installation commands.
 func ValidateAgentInstallPreflight(profile system.PlatformProfile, agent model.AgentID) error {
-	// Kimi's platform-support guard must run before any executable lookup so
-	// unsupported platforms fail with a clear error and zero lookups.
-	if agent == model.AgentKimi {
-		if err := validateKimiInstallPreflight(profile); err != nil {
-			return err
-		}
-	}
 	if _, ok := npmBasedAgents[agent]; ok {
 		if err := validateNpmInstallPreflight(profile); err != nil {
 			return err
@@ -176,89 +167,6 @@ func validateNpmInstallPreflight(profile system.PlatformProfile) error {
 		)
 	}
 	return nil
-}
-
-// kimiMinNodeVersion is the minimum Node.js version required by the current
-// kimi-code CLI (@moonshot-ai/kimi-code), per the official install docs.
-const kimiMinNodeVersion = "22.19.0"
-
-// validateKimiInstallPreflight ensures the platform supports Kimi and that
-// Node.js >= 22.19.0 is available before installing current kimi-code.
-// The npm-presence check runs separately via npmBasedAgents.
-func validateKimiInstallPreflight(profile system.PlatformProfile) error {
-	if !profile.Supported {
-		return fmt.Errorf("Kimi is not supported on this platform (%s/%s)", profile.OS, profile.LinuxDistro)
-	}
-
-	out, err := cmdNodeVersion()
-	if err != nil {
-		return fmt.Errorf(
-			"Kimi Code requires Node.js >= %s, but `node` was not found in PATH.\n"+
-				"Install Node.js and retry:\n"+
-				"  %s",
-			kimiMinNodeVersion,
-			system.InstallHintForDep("node", profile),
-		)
-	}
-
-	major, minor, patch, ok := parseNodeVersion(string(out))
-	if !ok {
-		return fmt.Errorf(
-			"Kimi Code requires Node.js >= %s, but could not parse `node --version` output %q.\n"+
-				"Ensure Node.js is properly installed: https://nodejs.org/",
-			kimiMinNodeVersion,
-			strings.TrimSpace(string(out)),
-		)
-	}
-
-	minMajor, minMinor, minPatch, _ := parseNodeVersion(kimiMinNodeVersion)
-	if nodeVersionLess(major, minor, patch, minMajor, minMinor, minPatch) {
-		return fmt.Errorf(
-			"Kimi Code requires Node.js >= %s, but found v%d.%d.%d.\n"+
-				"Upgrade Node.js and retry:\n"+
-				"  %s",
-			kimiMinNodeVersion,
-			major, minor, patch,
-			system.InstallHintForDep("node", profile),
-		)
-	}
-
-	return nil
-}
-
-// parseNodeVersion extracts the numeric major.minor.patch triple from
-// `node --version` output such as "v22.19.0". Missing minor/patch segments
-// default to zero and pre-release/build suffixes (e.g. "0-pre") are ignored.
-// ok is false when the output is not a recognizable version.
-func parseNodeVersion(output string) (major, minor, patch int, ok bool) {
-	version := strings.TrimPrefix(strings.TrimSpace(output), "v")
-	segments := strings.SplitN(version, ".", 3)
-	values := make([]int, 3)
-	for i, segment := range segments {
-		if i == 2 {
-			if idx := strings.IndexAny(segment, "-+"); idx != -1 {
-				segment = segment[:idx]
-			}
-		}
-		n, err := strconv.Atoi(segment)
-		if err != nil {
-			return 0, 0, 0, false
-		}
-		values[i] = n
-	}
-	return values[0], values[1], values[2], true
-}
-
-// nodeVersionLess reports whether version major.minor.patch is below the
-// minimum minMajor.minMinor.minPatch.
-func nodeVersionLess(major, minor, patch, minMajor, minMinor, minPatch int) bool {
-	if major != minMajor {
-		return major < minMajor
-	}
-	if minor != minMinor {
-		return minor < minMinor
-	}
-	return patch < minPatch
 }
 
 func (profileResolver) ResolveComponentInstall(profile system.PlatformProfile, component model.ComponentID) (CommandSequence, error) {
