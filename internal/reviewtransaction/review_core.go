@@ -57,7 +57,9 @@ var ErrFinalizeRequiresTerminalState = errors.New("new-lineage finalize requires
 // does not cover every selected lens (absorbed N1, W3/W4 verify). A tier
 // with an empty SelectedLenses (tier-low) legitimately needs no captured
 // results at all and never triggers this refusal.
-var ErrFinalizeRequiresLensResults = errors.New("new-lineage finalize requires captured results for every frozen selected lens before approving") // refusal:by-design world-action: the caller must actually capture a result for each selected lens (the v3 reviewer-result ingestion pipeline, not yet wired) before calling finalize without --failed; there is no operator command that approves on the caller's behalf
+var ErrFinalizeRequiresLensResults = errors.New("new-lineage finalize requires captured results for every frozen selected lens before approving") // refusal:by-design world-action: the caller must actually capture a result for each selected lens (the v3 reviewer-result ingestion pipeline, not yet wired) before calling finalize without --failed; there is no operator command that approves on the caller’s behalf
+
+var ErrFinalizeRawAdmittedFindingIDs = errors.New("new-lineage finalize does not accept caller-supplied admitted finding ids") // refusal:by-design operator-knowledge: causal admission must come from the persisted provider carrier, not a caller override
 
 // ReviewCore is the sole transition owner for new-lineage reviews (spec
 // rdd-review-core-transitions, "Sole Transition Owner for New Lineages"). It
@@ -143,31 +145,51 @@ func (core ReviewCore) finalize(authority NewLineageAuthority, request CoreReque
 		if err != nil {
 			return CoreTransition{}, err
 		}
+		providerDigest, err := authority.ProviderCausalAggregateDigest(revision)
+		if err != nil {
+			return CoreTransition{}, err
+		}
 		kind := CoreTransitionApprove
 		if authority.State == NewLineageStateEscalated {
 			kind = CoreTransitionEscalate
 		}
 		return CoreTransition{
 			Kind: kind, ReasonCode: string(authority.State),
-			Receipt: &ReceiptRef{LineageID: authority.LineageID, AuthorityRevision: revision},
+			Receipt: &ReceiptRef{LineageID: authority.LineageID, AuthorityRevision: revision, ProviderCausalAggregateDigest: providerDigest},
 		}, nil
 	case NewLineageStateReviewing, NewLineageStateCorrecting, NewLineageStateValidating:
 		if request.AdvanceRequest == nil {
 			return CoreTransition{}, fmt.Errorf("%w: got %q", ErrFinalizeRequiresTerminalState, authority.State)
 		}
-		escalating := request.AdvanceRequest.Failed || len(request.AdvanceRequest.AdmittedFindingIDs) > 0
-		if !escalating && !hasCapturedAllSelectedLenses(authority.SelectedLenses, request.AdvanceRequest.CapturedLensResults) {
+		if len(request.AdvanceRequest.AdmittedFindingIDs) > 0 {
+			return CoreTransition{}, ErrFinalizeRawAdmittedFindingIDs
+		}
+		if !request.AdvanceRequest.Failed && !hasCapturedAllSelectedLenses(authority.SelectedLenses, request.AdvanceRequest.CapturedLensResults) {
 			return CoreTransition{}, fmt.Errorf("%w: lineage %q", ErrFinalizeRequiresLensResults, authority.LineageID)
 		}
+		admitted := []string(nil)
+		providerUnknown := false
+		// An explicit failure already fails closed when no provider capture exists;
+		// any persisted carrier is still verified before the terminal transition.
+		if !(request.AdvanceRequest.Failed && len(authority.CapturedResults) == 0 && len(authority.SelectedLenses) > 0) {
+			var err error
+			admitted, providerUnknown, err = authority.ProviderCausalAdmission()
+			if err != nil {
+				return CoreTransition{}, fmt.Errorf("verify persisted provider causal carrier: %w", err)
+			}
+		}
+		escalating := request.AdvanceRequest.Failed || providerUnknown || len(admitted) > 0
 		next := authority
 		next.State = NewLineageStateApproved
 		if escalating {
 			next.State = NewLineageStateEscalated
 		}
-		if len(request.AdvanceRequest.AdmittedFindingIDs) > 0 {
-			next.AdmittedFindingIDs = append(append([]string{}, next.AdmittedFindingIDs...), request.AdvanceRequest.AdmittedFindingIDs...)
-		}
+		next.AdmittedFindingIDs = append([]string(nil), admitted...)
 		revision, err := NewLineageRevisionForState(next)
+		if err != nil {
+			return CoreTransition{}, err
+		}
+		providerDigest, err := next.ProviderCausalAggregateDigest(revision)
 		if err != nil {
 			return CoreTransition{}, err
 		}
@@ -177,7 +199,7 @@ func (core ReviewCore) finalize(authority NewLineageAuthority, request CoreReque
 		}
 		return CoreTransition{
 			Kind: kind, ReasonCode: string(next.State), Authority: &next,
-			Receipt: &ReceiptRef{LineageID: next.LineageID, AuthorityRevision: revision},
+			Receipt: &ReceiptRef{LineageID: next.LineageID, AuthorityRevision: revision, ProviderCausalAggregateDigest: providerDigest},
 		}, nil
 	default:
 		return CoreTransition{}, fmt.Errorf("%w: got %q", ErrFinalizeRequiresTerminalState, authority.State)

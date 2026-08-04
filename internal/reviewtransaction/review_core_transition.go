@@ -46,8 +46,9 @@ type CoreInput struct {
 // so the caller can bind AuthorityStore.WriteReceipt to the exact authority
 // revision ReviewCore just committed — never a re-read, never re-derived.
 type ReceiptRef struct {
-	LineageID         string `json:"lineage_id"`
-	AuthorityRevision string `json:"authority_revision"`
+	LineageID                     string `json:"lineage_id"`
+	AuthorityRevision             string `json:"authority_revision"`
+	ProviderCausalAggregateDigest string `json:"provider_causal_aggregate_digest"`
 }
 
 // CoreTransition is Next's exact return shape (design's literal Interfaces /
@@ -112,12 +113,10 @@ type CoreRequest struct {
 }
 
 // FinalizeAdvanceRequest is finalize's decision context for a non-terminal
-// authority (reviewing, correcting, or validating): Failed and
-// AdmittedFindingIDs are the caller's already-computed classification
-// (AdmitCandidateCausalFindings) -- finalize decides WHICH terminal state
-// they produce (escalated when either is non-empty/true, approved
-// otherwise) and whether AdmittedFindingIDs get appended to the resulting
-// authority; it never re-derives the classification itself. Supplying this
+// authority (reviewing, correcting, or validating). Failed is an explicit
+// review failure signal. AdmittedFindingIDs is retained only as a refusal
+// boundary for stale callers: ReviewCore derives IDs from persisted provider
+// carriers and never trusts this field. Supplying this also
 // also reopens a `correcting` lineage's own finalize path (spec
 // rdd-review-core-transitions' "In-flight new lineage still finalizes after
 // rollback" scenario, whose GIVEN is literally a `correcting` lineage) --

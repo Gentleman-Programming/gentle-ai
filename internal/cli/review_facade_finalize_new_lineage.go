@@ -57,16 +57,14 @@ type ReviewFacadeFinalizeNewLineageResult struct {
 // (whose GIVEN is literally a `correcting` lineage) at the product surface.
 //
 // C6 remediation (verify-report CRITICAL, "ReviewCore-owned transitions in
-// finalize"): this function no longer sets NewLineageState itself. It
-// classifies findings (AdmitCandidateCausalFindings — pure, not a state
-// decision) and hands the result to ReviewCore.Next(finalize) via
-// CoreRequest.AdvanceRequest; ReviewCore alone decides the resulting
-// authority, and the ONE Mutate call below stores it verbatim
+// finalize"): this function no longer sets NewLineageState or causal
+// admission itself. ReviewCore verifies the persisted provider carrier and
+// decides the resulting authority, and the ONE Mutate call below stores it verbatim
 // (`*next = *transition.Authority`), mirroring runReviewFacadeStartNewLineage's
 // own precedent (review_facade_new_lineage.go:73-78) exactly.
 func runReviewFacadeFinalizeNewLineage(
 	ctx context.Context, stdout io.Writer, root, lineage string, record reviewtransaction.NewLineageRecord,
-	findings []reviewtransaction.FindingEvidence, failed, capturedResults bool,
+	failed, capturedResults bool,
 ) error {
 	store, err := reviewtransaction.NewLineageAuthorityStore(ctx, root, lineage)
 	if err != nil {
@@ -82,14 +80,22 @@ func runReviewFacadeFinalizeNewLineage(
 	// shape v2's --captured-results has. A tier-low authority (SelectedLenses
 	// empty) passes hasCapturedAllSelectedLenses trivially either way.
 	var capturedLensResults []string
-	if capturedResults {
+	consumeProvider := capturedResults || len(authority.CapturedResults) > 0
+	if consumeProvider {
 		capturedLensResults = authority.CapturedLensNames()
 	}
-	admitted, _ := reviewtransaction.AdmitCandidateCausalFindings(findings)
+	if consumeProvider {
+		if missing := authority.MissingCapturedLensNames(); len(missing) > 0 {
+			return reviewPreflightError(fmt.Errorf(
+				"new-lineage finalize requires captured results for every frozen selected lens before approving: missing %s; capture each with `gentle-ai review capture-result --cwd <repo> --lineage %s --target <target> --lens <lens> --order <order> --input <result.json>`, then retry `gentle-ai review finalize --cwd <repo> --lineage %s --captured-results=true`",
+				strings.Join(missing, ", "), lineage, lineage,
+			))
+		}
+	}
 	transition, err := (reviewtransaction.ReviewCore{}).Next(ctx, authority, reviewtransaction.CoreRequest{
 		Kind: reviewtransaction.CoreRequestFinalize,
 		AdvanceRequest: &reviewtransaction.FinalizeAdvanceRequest{
-			Failed: failed, AdmittedFindingIDs: admitted, CapturedLensResults: capturedLensResults,
+			Failed: failed, CapturedLensResults: capturedLensResults,
 		},
 	})
 	if err != nil {
@@ -107,6 +113,9 @@ func runReviewFacadeFinalizeNewLineage(
 				"new-lineage finalize requires captured results for every frozen selected lens before approving: missing %s; capture each with `gentle-ai review capture-result --cwd <repo> --lineage %s --target <target> --lens <lens> --order <order> --input <result.json>` (run with --preflight first to discover the exact subject hash to echo back), then retry `gentle-ai review finalize --cwd <repo> --lineage %s --captured-results=true`",
 				strings.Join(missing, ", "), lineage, lineage,
 			))
+		}
+		if errors.Is(err, reviewtransaction.ErrProviderCausalCarrierMissing) || errors.Is(err, reviewtransaction.ErrProviderCausalCarrierConflict) {
+			return reviewPreflightError(fmt.Errorf("verify persisted provider causal carrier: %w", err))
 		}
 		return fmt.Errorf("review core finalize: %w", err)
 	}
@@ -126,10 +135,14 @@ func runReviewFacadeFinalizeNewLineage(
 	if err != nil {
 		return err
 	}
+	providerDigest, err := record.Authority.ProviderCausalAggregateDigest(transition.Receipt.AuthorityRevision)
+	if err != nil {
+		return fmt.Errorf("derive provider causal aggregate from persisted authority: %w", err)
+	}
 	if err := store.WriteReceipt(ctx, reviewtransaction.NewLineageReceipt{
 		Schema: reviewtransaction.NewLineageReceiptSchema, LineageID: record.Authority.LineageID,
 		TerminalState: record.Authority.State, AuthorityRevision: transition.Receipt.AuthorityRevision,
-		CandidateIdentity: record.Authority.CandidateIdentity,
+		CandidateIdentity: record.Authority.CandidateIdentity, ProviderCausalAggregateDigest: providerDigest,
 	}); err != nil {
 		return fmt.Errorf("write new-lineage terminal receipt: %w", err)
 	}

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -111,12 +110,8 @@ func TestReviewFacadeFinalizeNewLineageFailedEvidenceEscalates(t *testing.T) {
 	}
 }
 
-// TestReviewFacadeFinalizeNewLineageAdmitsOnlyCandidateCausalFindings is
-// task C2's CLI-level RED/GREEN evidence: a candidate-caused finding blocks
-// finalize (escalates rather than approves) and is the ONLY finding ID ever
-// persisted into review-state.json's admitted_finding_ids; the sibling
-// pre-existing finding never appears there (spec rdd-review-core-transitions,
-// "Candidate-Causal Admission Only", both scenarios).
+// TestReviewFacadeFinalizeNewLineageAdmitsOnlyCandidateCausalFindings proves
+// raw reviewer admission input is refused for a new-lineage authority.
 func TestReviewFacadeFinalizeNewLineageAdmitsOnlyCandidateCausalFindings(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
@@ -137,31 +132,8 @@ func TestReviewFacadeFinalizeNewLineageAdmitsOnlyCandidateCausalFindings(t *test
 	}
 
 	var out bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--admission-findings", findingsPath}, &out); err != nil {
-		t.Fatalf("new-lineage finalize(admission findings) must still reach a receipt, got error: %v\n%s", err, out.String())
-	}
-	var result ReviewFacadeFinalizeNewLineageResult
-	decodeStrictReviewJSON(t, out.Bytes(), &result)
-	if result.State != reviewtransaction.NewLineageStateEscalated {
-		t.Fatalf("finalize with an admitted candidate-causal finding = %q, want escalated (blocked)", result.State)
-	}
-	if !reflect.DeepEqual(result.AdmittedFindingIDs, []string{"candidate-caused-finding"}) {
-		t.Fatalf("admitted_finding_ids = %v, want exactly [candidate-caused-finding]", result.AdmittedFindingIDs)
-	}
-
-	store, err := reviewtransaction.NewLineageAuthorityStore(context.Background(), repo, lineage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(store.StatePath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "pre-existing-finding") {
-		t.Fatalf("pre-existing (follow-up) finding must never be persisted into review-state.json's admitted set: %s", raw)
-	}
-	if !strings.Contains(string(raw), "candidate-caused-finding") {
-		t.Fatalf("candidate-causal finding must be persisted: %s", raw)
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--admission-findings", findingsPath}, &out); err == nil || !strings.Contains(err.Error(), "does not accept raw reviewer --admission-findings") {
+		t.Fatalf("new-lineage finalize(admission findings) = %v, want an explicit raw-input refusal", err)
 	}
 }
 
@@ -189,16 +161,8 @@ func TestReviewFacadeFinalizeNewLineageFollowUpFindingsDoNotBlock(t *testing.T) 
 	}
 
 	var out bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--admission-findings", findingsPath}, &out); err != nil {
-		t.Fatalf("new-lineage finalize(follow-ups only) must reach a receipt, got error: %v\n%s", err, out.String())
-	}
-	var result ReviewFacadeFinalizeNewLineageResult
-	decodeStrictReviewJSON(t, out.Bytes(), &result)
-	if result.State != reviewtransaction.NewLineageStateApproved {
-		t.Fatalf("finalize with only follow-up findings = %q, want approved (never blocked)", result.State)
-	}
-	if len(result.AdmittedFindingIDs) != 0 {
-		t.Fatalf("admitted_finding_ids = %v, want empty", result.AdmittedFindingIDs)
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--admission-findings", findingsPath}, &out); err == nil || !strings.Contains(err.Error(), "does not accept raw reviewer --admission-findings") {
+		t.Fatalf("new-lineage finalize(follow-up findings) = %v, want an explicit raw-input refusal", err)
 	}
 }
 

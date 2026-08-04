@@ -49,8 +49,9 @@ func TestReviewCoreFinalizeSelfApprovesMediumTierWithZeroLensResultsBeforeFix(t 
 // actual regression proof: a medium-tier authority (SelectedLenses
 // non-empty) whose AdvanceRequest carries no CapturedLensResults for its
 // frozen selection must NOT reach approved -- finalize must refuse, closing
-// the self-approval hole N1 identified. An authority whose captured results
-// DO cover the frozen selection still approves normally.
+// the self-approval hole N1 identified. Lens names alone are not provider
+// authority: without persisted carriers, finalize fails closed even when the
+// caller claims every lens was captured.
 func TestReviewCoreFinalizeRefusesApprovalWithoutCapturedLensResults(t *testing.T) {
 	medium := fixtureNewLineageAuthority("finalize-self-approval-tier-medium", NewLineageStateReviewing)
 	medium.Tier = RiskMedium
@@ -79,15 +80,15 @@ func TestReviewCoreFinalizeRefusesApprovalWithoutCapturedLensResults(t *testing.
 		}
 	})
 
-	t.Run("captured results covering the full frozen selection approves", func(t *testing.T) {
-		transition, err := (ReviewCore{}).Next(context.Background(), medium, CoreRequest{
+	t.Run("captured lens names without provider carriers fail closed", func(t *testing.T) {
+		_, err := (ReviewCore{}).Next(context.Background(), medium, CoreRequest{
 			Kind: CoreRequestFinalize,
 			AdvanceRequest: &FinalizeAdvanceRequest{
 				CapturedLensResults: []string{LensReliability},
 			},
 		})
-		if err != nil || transition.Kind != CoreTransitionApprove {
-			t.Fatalf("finalize with captured lens results covering the selection = %#v, %v, want approve", transition, err)
+		if !errors.Is(err, ErrProviderCausalCarrierMissing) {
+			t.Fatalf("finalize with caller-only lens names = %v, want provider carrier refusal", err)
 		}
 	})
 

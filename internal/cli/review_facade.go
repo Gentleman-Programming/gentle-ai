@@ -2198,21 +2198,8 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 					return reviewPreflightError(fmt.Errorf("new-lineage finalize does not yet support --%s; retry with `gentle-ai review finalize --lineage %s` and, if needed, --failed or --admission-findings", unsupported, *lineage))
 				}
 			}
-			// C-E (Wave 5 fix cycle 3, verify-report #10186 cycle 2): the reviewer
-			// channel's own captured findings feed the identical
-			// AdmitCandidateCausalFindings admission decision --admission-findings
-			// already drives, reused rather than duplicated. --admission-findings
-			// stays an explicit override/compat surface (coordinator decision):
-			// when the caller supplies it, it is used verbatim exactly as before,
-			// UNCONDITIONALLY -- captured findings are consulted only when the
-			// caller did not override.
-			var findings []reviewtransaction.FindingEvidence
-			if trimmed := strings.TrimSpace(*admissionFindingsPath); trimmed != "" {
-				if err := readFacadeJSON(trimmed, &findings); err != nil {
-					return reviewPreflightError(fmt.Errorf("read new-lineage admission findings: %w", err))
-				}
-			} else if *capturedResults {
-				findings = newRecord.Authority.CapturedFindingEvidence()
+			if strings.TrimSpace(*admissionFindingsPath) != "" {
+				return reviewPreflightError(errors.New("new-lineage finalize does not accept raw reviewer --admission-findings; finalize consumes persisted provider causal carriers")) // refusal:by-design operator-knowledge: reviewer claims cannot override persisted provider authority
 			}
 			newTerminalAtEntry := newRecord.Authority.State == reviewtransaction.NewLineageStateApproved || newRecord.Authority.State == reviewtransaction.NewLineageStateEscalated
 			if !newTerminalAtEntry {
@@ -2220,7 +2207,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 					return err
 				}
 			}
-			return runReviewFacadeFinalizeNewLineage(ctx, stdout, root, *lineage, newRecord, findings, *failed, *capturedResults)
+			return runReviewFacadeFinalizeNewLineage(ctx, stdout, root, *lineage, newRecord, *failed, *capturedResults)
 		}
 	}
 	store, record, err := discoverCompactFacadeFinalize(ctx, root, *lineage)

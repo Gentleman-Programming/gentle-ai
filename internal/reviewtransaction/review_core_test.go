@@ -225,7 +225,6 @@ func TestReviewCoreFinalizeAdvanceEscalatesOnFailedOrAdmittedFindings(t *testing
 		request FinalizeAdvanceRequest
 	}{
 		{"failed evidence", FinalizeAdvanceRequest{Failed: true}},
-		{"admitted candidate-causal finding", FinalizeAdvanceRequest{AdmittedFindingIDs: []string{"F-CAUSAL"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -237,10 +236,40 @@ func TestReviewCoreFinalizeAdvanceEscalatesOnFailedOrAdmittedFindings(t *testing
 			if transition.Kind != CoreTransitionEscalate || transition.Authority == nil || transition.Authority.State != NewLineageStateEscalated {
 				t.Fatalf("finalize(reviewing, %s) = %#v, want escalate with an escalated authority", tc.name, transition)
 			}
-			if len(tc.request.AdmittedFindingIDs) > 0 && !reflect.DeepEqual(transition.Authority.AdmittedFindingIDs, tc.request.AdmittedFindingIDs) {
-				t.Fatalf("finalize(reviewing, %s) admitted finding ids = %v, want %v", tc.name, transition.Authority.AdmittedFindingIDs, tc.request.AdmittedFindingIDs)
-			}
 		})
+	}
+}
+
+func TestReviewCoreFinalizeRejectsForgedAdmittedFindingIDs(t *testing.T) {
+	authority, _ := providerAdmissionFixture(t, map[string][]ProviderCausalClassification{
+		"lens-a": {ProviderCandidateCausal}, "lens-b": nil,
+	})
+	authority.LineageID = "finalize-forged-id-lineage"
+	_, err := (ReviewCore{}).Next(context.Background(), authority, CoreRequest{
+		Kind: CoreRequestFinalize,
+		AdvanceRequest: &FinalizeAdvanceRequest{
+			AdmittedFindingIDs: []string{"forged-id"}, CapturedLensResults: []string{"lens-a", "lens-b"},
+		},
+	})
+	if !errors.Is(err, ErrFinalizeRawAdmittedFindingIDs) {
+		t.Fatalf("finalize with forged admitted id error = %v, want explicit raw override refusal", err)
+	}
+}
+
+func TestReviewCoreFinalizeUsesProviderDerivedCandidateIDs(t *testing.T) {
+	authority, _ := providerAdmissionFixture(t, map[string][]ProviderCausalClassification{
+		"lens-a": {ProviderCandidateCausal}, "lens-b": nil,
+	})
+	authority.LineageID = "finalize-provider-id-lineage"
+	transition, err := (ReviewCore{}).Next(context.Background(), authority, CoreRequest{
+		Kind:           CoreRequestFinalize,
+		AdvanceRequest: &FinalizeAdvanceRequest{CapturedLensResults: []string{"lens-a", "lens-b"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transition.Authority.State != NewLineageStateEscalated || !reflect.DeepEqual(transition.Authority.AdmittedFindingIDs, []string{"finding-a0"}) {
+		t.Fatalf("provider-derived finalize = %#v, want escalated with provider finding", transition.Authority)
 	}
 }
 
