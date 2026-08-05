@@ -81,12 +81,12 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		})
 	case "finish":
 		if missing := missingSDDAttemptFlags(args[1:], "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence"); len(missing) != 0 {
-			return fmt.Errorf("sdd-attempt finish requires %s", strings.Join(missing, ", "))
+			return fmt.Errorf("sdd-attempt finish requires %s; rerun `gentle-ai sdd-attempt finish --help` for the authoritative finish contract", strings.Join(missing, ", "))
 		}
 		remediationFlags := presentSDDAttemptFlags(args[1:], "expected-binding-revision", "successor-lineage", "remediates-evidence-revision")
-		unmanagedRemediation := *expectedBindingRevision == "" && *successorLineage == "" && *remediatesEvidenceRevision != ""
+		unmanagedRemediation := values.string("expected-binding-revision") == "" && values.string("successor-lineage") == "" && values.string("remediates-evidence-revision") != ""
 		if remediationFlags != 0 && remediationFlags != 3 && !unmanagedRemediation {
-			return errors.New("remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together")
+			return fmt.Errorf("remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together; rerun `gentle-ai sdd-attempt finish --help` for the authoritative finish contract")
 		}
 		result, err = store.Finish(ctx, sddstatus.FinishAttemptRequest{
 			ExpectedRevision: values.string("expected-revision"), RequestID: values.string("request-id"), Outcome: sddstatus.AttemptOutcome(values.string("outcome")),
@@ -193,10 +193,10 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 			{name: "request-id", usage: "idempotency request identifier (lowercase canonical ID, up to 128 characters)"},
 			{name: "outcome", usage: "terminal outcome: failed|interrupted|passed"},
 			{name: "evidence-revision", usage: "required lowercase sha256:<64 lowercase hex>; the literal none is invalid"},
-			{name: "diagnosis", usage: "proven runtime diagnosis (up to 500 characters)"},
+			{name: "diagnosis", usage: "proven runtime diagnosis (up to 500 bytes)"},
 			{name: "harness-disposition", usage: "harness disposition: reused|invalidated"},
-			{name: "cleanup-evidence", usage: "bounded cleanup evidence (up to 500 characters)"},
-			{name: "process-evidence", usage: "bounded process evidence (up to 500 characters)"},
+			{name: "cleanup-evidence", usage: "bounded cleanup evidence (up to 500 bytes)"},
+			{name: "process-evidence", usage: "bounded process evidence (up to 500 bytes)"},
 			{name: "expected-binding-revision", usage: "exact populated binding revision for passed remediation"},
 			{name: "successor-lineage", usage: "approved lowercase successor lineage (up to 128 characters)"},
 			{name: "remediates-evidence-revision", usage: "failed evidence revision repaired by a passed successor"},
@@ -214,16 +214,17 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		name: "rescope", purpose: "narrow a terminal zero-drift runtime objective", flags: []sddAttemptFlagDefinition{
 			{name: "expected-revision", usage: "exact current native runtime revision (sha256:<64 lowercase hex>)"},
 			{name: "request-id", usage: "idempotency request identifier (lowercase canonical ID, up to 128 characters)"},
-			{name: "work-unit", usage: fmt.Sprintf("narrower caller-facing work-unit label (up to %d characters)", sddstatus.RuntimeWorkUnitLimit)},
-			{name: "evidence-goal", usage: fmt.Sprintf("narrower stable runtime evidence objective (up to %d characters)", sddstatus.RuntimeEvidenceGoalLimit)},
+			{name: "work-unit", usage: fmt.Sprintf("narrower caller-facing work-unit label (up to %d bytes)", sddstatus.RuntimeWorkUnitLimit)},
+			{name: "evidence-goal", usage: fmt.Sprintf("narrower stable runtime evidence objective (up to %d bytes)", sddstatus.RuntimeEvidenceGoalLimit)},
 			{name: "max-attempts", kind: sddAttemptIntFlag, usage: fmt.Sprintf("narrowed attempt limit in the range 1..%d; at most the current objective", sddstatus.RuntimeMaxAttemptLimit)},
 			{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: fmt.Sprintf("narrowed changed-line limit in the range 1..%d; at most the current objective", sddstatus.RuntimeMaxChangedLines)},
-			{name: "reason", usage: fmt.Sprintf("explicit narrowing reason (up to %d characters)", sddstatus.RuntimeResetReasonLimit)},
-			{name: "actor", usage: fmt.Sprintf("explicit rescope actor (up to %d characters)", sddstatus.RuntimeActorLimit)},
+			{name: "reason", usage: fmt.Sprintf("explicit narrowing reason (up to %d bytes)", sddstatus.RuntimeResetReasonLimit)},
+			{name: "actor", usage: fmt.Sprintf("explicit rescope actor (up to %d bytes)", sddstatus.RuntimeActorLimit)},
 		},
 	},
 	{
 		name: "acquire", purpose: "acquire a bounded attempt", flags: []sddAttemptFlagDefinition{
+			{name: "token", usage: "optional opaque compact attempt ownership proof"},
 			{name: "request-id", usage: "idempotency request identifier"},
 			{name: "work-unit", usage: "caller-facing work-unit label"},
 			{name: "evidence-goal", usage: "stable runtime evidence objective"},
@@ -310,6 +311,9 @@ func sddAttemptHelpRequest(args []string) (bool, string) {
 				continue
 			}
 			if sddAttemptFlagTakesValue(name) {
+				if next := index + 1; next < len(args) && (args[next] == "-h" || args[next] == "--help") {
+					requested = true
+				}
 				index++
 			}
 			continue
@@ -390,10 +394,14 @@ func renderSDDAttemptOperationContract(stdout io.Writer, operation string) {
 	case "finish":
 		_, _ = fmt.Fprintln(stdout, "  RuntimeStatus.revision is the finish CAS value; finish requires a non-nil, running RuntimeStatus.active_attempt.")
 		_, _ = fmt.Fprintln(stdout, "  RuntimeStatus.binding_revision/binding identify remediation authority; evidence_revision is the failed value to remediate.")
-		_, _ = fmt.Fprintf(stdout, "  Revision, evidence, and binding values use %s; change grammar %s; lineage grammar %s.\n", sddstatus.RuntimeRevisionPattern, sddstatus.RuntimeChangePattern, sddstatus.RuntimeLineagePattern)
+		_, _ = fmt.Fprintf(stdout, "  Revision, evidence, and binding values use %s; request IDs match %s; change grammar %s; lineage grammar %s.\n", sddstatus.RuntimeRevisionPattern, sddstatus.RuntimeRequestIDPattern, sddstatus.RuntimeChangePattern, sddstatus.RuntimeLineagePattern)
 		_, _ = fmt.Fprintf(stdout, "  Outcomes are %s; dispositions are %s.\n", strings.Join(sddstatus.RuntimeTerminalOutcomes(), "|"), strings.Join(sddstatus.RuntimeHarnessDispositions(), "|"))
-		_, _ = fmt.Fprintln(stdout, "  The remediation flags are all-or-none and valid only for passed attempts; a nonempty evidence revision is required.")
-		_, _ = fmt.Fprintln(stdout, "  Request IDs are idempotency keys: replaying the same request with the same ID returns its committed result; reusing an ID with different fields is rejected.")
+		_, _ = fmt.Fprintln(stdout, "  Every supplied finish revision value uses exactly sha256:<64 lowercase hex>; the literal none is invalid because it cannot match the exact revision pattern.")
+		_, _ = fmt.Fprintln(stdout, "  Required flags: --cwd, --change, --expected-revision, --request-id, --outcome, --evidence-revision, --diagnosis, --harness-disposition, --cleanup-evidence, --process-evidence [required].")
+		_, _ = fmt.Fprintln(stdout, "  Conditional flags: --expected-binding-revision, --successor-lineage, --remediates-evidence-revision [conditional]; all-or-none and valid only for a passed remediation.")
+		_, _ = fmt.Fprintln(stdout, "  Diagnosis, cleanup evidence, and process evidence are non-empty, already trimmed, single-line, NUL-free, and limited to at most 500 bytes (matching runtime len(string) semantics; inclusive; not Unicode characters).")
+		_, _ = fmt.Fprintln(stdout, "  Status maps to finish inputs: status.revision maps to --expected-revision; a non-nil active_attempt is the finish precondition; status.binding_revision (or binding.revision) maps to --expected-binding-revision; a failed status.evidence_revision maps to --remediates-evidence-revision; newly produced evidence maps to --evidence-revision; and an approved successor lineage maps to --successor-lineage.")
+		_, _ = fmt.Fprintln(stdout, "  Request IDs are idempotency keys: identical request digests may replay under the same request ID, while different fields are rejected.")
 		_, _ = fmt.Fprintln(stdout, `  Example: REPO_DIR="$(git rev-parse --show-toplevel)"; gentle-ai sdd-attempt finish --cwd "$REPO_DIR" --change runtime-demo --expected-revision "${CURRENT_REVISION:?set from status.revision}" --request-id finish-runtime-demo-1 --outcome failed --evidence-revision "${EVIDENCE_REVISION:?set to a lowercase sha256 evidence revision}" --diagnosis "runtime evidence shows the bounded attempt failed" --harness-disposition reused --cleanup-evidence "cleanup completed" --process-evidence "process scan completed"`)
 	case "reset":
 		_, _ = fmt.Fprintln(stdout, "  --expected-revision must equal the exact current RuntimeStatus.revision; reset is for decision-required or complete objectives.")
@@ -403,10 +411,14 @@ func renderSDDAttemptOperationContract(stdout io.Writer, operation string) {
 	case "rescope":
 		_, _ = fmt.Fprintln(stdout, "  Rescope requires no active attempt, an existing objective that is not decision-required or complete, and a terminal failed or interrupted attempt whose candidate has not drifted.")
 		_, _ = fmt.Fprintf(stdout, "  Revision matches %s; request IDs match %s; change grammar %s; lineage grammar %s.\n", sddstatus.RuntimeRevisionPattern, sddstatus.RuntimeRequestIDPattern, sddstatus.RuntimeChangePattern, sddstatus.RuntimeLineagePattern)
-		_, _ = fmt.Fprintln(stdout, "  --max-attempts and --max-changed-lines may only narrow or hold the current objective ceilings; cumulative attempts and changed lines carry forward unchanged.")
+		_, _ = fmt.Fprintln(stdout, "  --max-attempts and --max-changed-lines are required explicit ceilings; they may only narrow or hold the current objective ceilings, and zero is invalid rather than defaulted.")
+		_, _ = fmt.Fprintln(stdout, "  Cumulative attempts and changed lines carry forward unchanged; reason and actor are bounded byte fields persisted in the runtime audit record.")
 		_, _ = fmt.Fprintln(stdout, "  Rescope is a maintainer-authorized successor scope; reason and actor are persisted in the runtime audit record.")
+		_, _ = fmt.Fprintln(stdout, "  Request IDs are idempotency keys: replaying the same request with the same ID returns its committed result; reusing an ID with different fields is rejected.")
+		_, _ = fmt.Fprintln(stdout, `  Example: REPO_DIR="$(git rev-parse --show-toplevel)"; gentle-ai sdd-attempt rescope --cwd "$REPO_DIR" --change runtime-demo --expected-revision "${CURRENT_REVISION:?set from status.revision}" --request-id rescope-runtime-demo-1 --work-unit runtime-help-narrower --evidence-goal "prove narrower runtime help" --max-attempts 2 --max-changed-lines 100 --reason "maintainer narrowed the objective" --actor maintainer`)
 	case "acquire":
 		_, _ = fmt.Fprintln(stdout, "  Acquire claims one bounded attempt without exposing the growing runtime history; the returned token identifies that exact begin record for settle.")
+		_, _ = fmt.Fprintln(stdout, "  A supplied --token proves the caller continues the same active attempt; a foreign token stays blocked, and omission preserves ordinary acquire behavior.")
 		_, _ = fmt.Fprintln(stdout, "  Replaying the same --request-id returns its committed CompactAttemptResult; a different request reusing that ID is rejected as an invalid continuation.")
 		_, _ = fmt.Fprintln(stdout, "  A complete, decision-required, or already-active objective blocks acquire and returns CompactAttemptResult.state=blocked with the active token when applicable.")
 		_, _ = fmt.Fprintf(stdout, "  Revision matches %s; request IDs match %s; change grammar %s; lineage grammar %s.\n", sddstatus.RuntimeRevisionPattern, sddstatus.RuntimeRequestIDPattern, sddstatus.RuntimeChangePattern, sddstatus.RuntimeLineagePattern)
@@ -468,6 +480,9 @@ func validateSDDAttemptOperationFlags(operation string, args []string) error {
 			hasInlineValue = true
 		}
 		if !allowed[name] {
+			if operation == "finish" {
+				return fmt.Errorf("flag provided but not defined: -%s; rerun `gentle-ai sdd-attempt finish --help` for the authoritative finish contract", name)
+			}
 			return fmt.Errorf("flag provided but not defined: -%s", name)
 		}
 		if !hasInlineValue && index+1 < len(args) {

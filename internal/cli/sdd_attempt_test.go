@@ -117,6 +117,7 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 		{name: "missing change", args: []string{"status", "--cwd", repo}, want: "--change"},
 		{name: "unknown flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--mystery"}, want: "flag provided but not defined"},
 		{name: "irrelevant flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--outcome", "failed"}, want: "flag provided but not defined"},
+		{name: "rescope rejects finish-only flag", args: []string{"rescope", "--cwd", repo, "--change", "thin", "--outcome", "failed"}, want: "flag provided but not defined"},
 		{name: "missing begin CAS", args: []string{"begin", "--cwd", repo, "--change", "thin", "--request-id", "begin", "--work-unit", "unit", "--evidence-goal", "goal"}, want: "--expected-revision"},
 		{name: "missing rescope scope", args: []string{"rescope", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('e'), "--request-id", "rescope", "--reason", "narrowing", "--actor", "maintainer"}, want: "--work-unit"},
 		{name: "missing finish evidence", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "failed", "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process"}, want: "--evidence-revision"},
@@ -229,7 +230,7 @@ func TestRunSDDAttemptHelpContracts(t *testing.T) {
 			name: "top level short help",
 			args: []string{"-h"},
 			want: []string{
-				"Usage: gentle-ai sdd-attempt <operation> [flags]", "status", "begin", "finish", "reset", "acquire", "settle",
+				"Usage: gentle-ai sdd-attempt <operation> [flags]", "status", "begin", "finish", "reset", "rescope", "acquire", "settle",
 				"--cwd", "--change", "acquire a bounded attempt", "settle a bounded attempt",
 				"change grammar", "lineage grammar",
 				"Request IDs are idempotency keys",
@@ -281,7 +282,7 @@ func TestRunSDDAttemptHelpContracts(t *testing.T) {
 				"active_attempt", "binding_revision", "evidence_revision",
 				"finish requires a non-nil, running RuntimeStatus.active_attempt.",
 				"change grammar", "lineage grammar",
-				"Request IDs are idempotency keys: replaying the same request with the same ID returns its committed result; reusing an ID with different fields is rejected",
+				"Request IDs are idempotency keys: identical request digests may replay under the same request ID, while different fields are rejected",
 				`gentle-ai sdd-attempt finish --cwd "$REPO_DIR" --change runtime-demo --expected-revision "${CURRENT_REVISION:?set from status.revision}" --request-id finish-runtime-demo-1`,
 			},
 			unwanted: []string{"--max-attempts", "--reason", "planning relationship"},
@@ -314,6 +315,62 @@ func TestRunSDDAttemptHelpContracts(t *testing.T) {
 				if strings.Contains(text, unwanted) {
 					t.Errorf("help unexpectedly contains %q:\n%s", unwanted, text)
 				}
+			}
+		})
+	}
+}
+
+func TestRunSDDAttemptRescopeHelpContractIsAuthoritative(t *testing.T) {
+	missingRepo := filepath.Join(t.TempDir(), "does-not-exist")
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "operation before long help",
+			args: []string{"rescope", "--cwd", missingRepo, "--change", "runtime-help", "--help"},
+		},
+		{
+			name: "value-taking flag before short help",
+			args: []string{"--work-unit", "ignored", "-h", "rescope", "--cwd", missingRepo, "--change", "runtime-help"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunSDDAttempt(tt.args, &output); err != nil {
+				t.Fatalf("RunSDDAttempt(%v) error = %v", tt.args, err)
+			}
+			text := output.String()
+			want := []string{
+				"Usage: gentle-ai sdd-attempt rescope [flags]",
+				"narrow a terminal zero-drift runtime objective",
+				"--cwd", "--change", "--expected-revision", "--request-id", "--work-unit", "--evidence-goal",
+				"--max-attempts", "--max-changed-lines", "--reason", "--actor",
+				"not decision-required or complete",
+				"terminal failed or interrupted",
+				"candidate has not drifted",
+				"required explicit ceilings",
+				"zero is invalid rather than defaulted",
+				"carry forward unchanged",
+				"maintainer-authorized successor scope",
+				"Request IDs are idempotency keys",
+				`gentle-ai sdd-attempt rescope --cwd "$REPO_DIR"`,
+				sddstatus.RuntimeRevisionPattern,
+				sddstatus.RuntimeRequestIDPattern,
+				sddstatus.RuntimeChangePattern,
+				sddstatus.RuntimeLineagePattern,
+			}
+			for _, token := range want {
+				if !strings.Contains(text, token) {
+					t.Errorf("rescope help missing %q:\n%s", token, text)
+				}
+			}
+			if strings.Contains(text, "Usage: gentle-ai sdd-attempt <operation> [flags]") {
+				t.Errorf("rescope help unexpectedly fell back to top-level help:\n%s", text)
+			}
+			if _, err := os.Stat(missingRepo); !os.IsNotExist(err) {
+				t.Fatalf("help accessed or created nonexistent repository %q: %v", missingRepo, err)
 			}
 		})
 	}
@@ -364,10 +421,11 @@ func TestRunSDDAttemptCompactOperationHelpIsOperationSpecific(t *testing.T) {
 			},
 			want: []string{
 				"Usage: gentle-ai sdd-attempt acquire [flags]",
-				"--cwd", "--change", "--request-id", "--work-unit", "--evidence-goal",
+				"--cwd", "--change", "--token", "--request-id", "--work-unit", "--evidence-goal",
 				"--max-attempts", "--max-changed-lines",
 				"acquire a bounded attempt",
 				"Acquire claims one bounded attempt without exposing the growing runtime history",
+				"A supplied --token proves the caller continues the same active attempt",
 				"token identifies that exact begin record for settle",
 				"Replaying the same --request-id returns its committed CompactAttemptResult",
 				"blocks acquire and returns CompactAttemptResult.state=blocked",
@@ -375,7 +433,7 @@ func TestRunSDDAttemptCompactOperationHelpIsOperationSpecific(t *testing.T) {
 				`gentle-ai sdd-attempt acquire --cwd "$REPO_DIR"`,
 			},
 			unwanted: []string{
-				"--token", "--outcome", "--evidence-revision", "--diagnosis",
+				"--outcome", "--evidence-revision", "--diagnosis",
 				"--harness-disposition", "--cleanup-evidence", "--process-evidence",
 				"--successor-lineage", "--remediates-evidence-revision", "--expected-binding-revision",
 				"--reason", "--actor", "--expected-revision",
@@ -390,10 +448,11 @@ func TestRunSDDAttemptCompactOperationHelpIsOperationSpecific(t *testing.T) {
 			},
 			want: []string{
 				"Usage: gentle-ai sdd-attempt acquire [flags]",
+				"--token",
 				"acquire a bounded attempt",
 				"Acquire claims one bounded attempt without exposing the growing runtime history",
 			},
-			unwanted: []string{"--token", "Usage: gentle-ai sdd-attempt <operation> [flags]"},
+			unwanted: []string{"Usage: gentle-ai sdd-attempt <operation> [flags]"},
 		},
 		{
 			name: "settle short help anywhere", operation: "settle", helpAlias: "-h",
@@ -455,6 +514,247 @@ func TestRunSDDAttemptCompactOperationHelpIsOperationSpecific(t *testing.T) {
 			}
 			if _, err := os.Stat(missingRepo); !os.IsNotExist(err) {
 				t.Fatalf("help accessed or created nonexistent repository %q: %v", missingRepo, err)
+			}
+		})
+	}
+}
+
+// TestRunSDDAttemptHelpAliasInValueSlotSelectsOperationHelp proves the help
+// alias is detected even when it occupies the would-be value position of a
+// value-taking flag, and the operation token later in argv still selects
+// operation-specific help. Mirrors issue #1937 position-independent help.
+func TestRunSDDAttemptHelpAliasInValueSlotSelectsOperationHelp(t *testing.T) {
+	missingRepo := filepath.Join(t.TempDir(), "does-not-exist")
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "cwd short help value slot then status",
+			args: []string{"--cwd", "-h", "status"},
+			want: []string{"Usage: gentle-ai sdd-attempt status [flags]", "--cwd", "--change", "show the current native runtime status"},
+		},
+		{
+			name: "cwd long help value slot then status",
+			args: []string{"--cwd", "--help", "status"},
+			want: []string{"Usage: gentle-ai sdd-attempt status [flags]", "show the current native runtime status"},
+		},
+		{
+			name: "status then cwd short help value slot",
+			args: []string{"status", "--cwd", "-h"},
+			want: []string{"Usage: gentle-ai sdd-attempt status [flags]", "show the current native runtime status"},
+		},
+		{
+			name: "change short help value slot then status",
+			args: []string{"--change", "-h", "status"},
+			want: []string{"Usage: gentle-ai sdd-attempt status [flags]", "--change", "show the current native runtime status"},
+		},
+		{
+			name: "request-id long help value slot then begin",
+			args: []string{"--request-id", "--help", "begin"},
+			want: []string{"Usage: gentle-ai sdd-attempt begin [flags]", "start a bounded runtime attempt", "--expected-revision", "--work-unit"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunSDDAttempt(tt.args, &output); err != nil {
+				t.Fatalf("RunSDDAttempt(%v) error = %v", tt.args, err)
+			}
+			text := output.String()
+			for _, want := range tt.want {
+				if !strings.Contains(text, want) {
+					t.Errorf("help missing %q:\n%s", want, text)
+				}
+			}
+			if !strings.Contains(text, "Usage: gentle-ai sdd-attempt status [flags]") && !strings.Contains(text, "Usage: gentle-ai sdd-attempt begin [flags]") {
+				t.Fatalf("operation-specific help not selected for %v:\n%s", tt.args, text)
+			}
+			if _, err := os.Stat(missingRepo); !os.IsNotExist(err) {
+				t.Fatalf("help accessed or created nonexistent repository %q: %v", missingRepo, err)
+			}
+		})
+	}
+}
+
+// TestRunSDDAttemptFinishHelpContractIsAuthoritative proves the finish
+// help exposes the authoritative runtime contract: the ten required flags,
+// the conditional remediation trio, exact authority-derived patterns and
+// enums, the invalid literal none, the replay-digest rule, the 500-byte
+// (not character) boundaries, the status mappings, and the shell-runnable
+// example. Mirrors the sdd-finish-help-contract spec requirements.
+func TestRunSDDAttemptFinishHelpContractIsAuthoritative(t *testing.T) {
+	var output bytes.Buffer
+	if err := RunSDDAttempt([]string{"finish", "--help"}, &output); err != nil {
+		t.Fatalf("RunSDDAttempt finish --help error = %v", err)
+	}
+	text := output.String()
+	// Ten required flags MUST be marked with the [required] annotation and be
+	// individually discoverable. Asserting the exact marker (not the loose
+	// "required" substring) forces a real annotation rather than a trivial
+	// hit on existing wording like "required lowercase sha256".
+	required := []string{
+		"--cwd", "--change", "--expected-revision", "--request-id", "--outcome",
+		"--evidence-revision", "--diagnosis", "--harness-disposition",
+		"--cleanup-evidence", "--process-evidence",
+	}
+	for _, flag := range required {
+		if !strings.Contains(text, flag) {
+			t.Errorf("finish help missing required flag %q:\n%s", flag, text)
+		}
+	}
+	if !strings.Contains(text, "[required]") {
+		t.Errorf("finish help missing [required] annotation:\n%s", text)
+	}
+	// The conditional remediation trio MUST carry the [conditional] marker and
+	// be described as all-or-none and valid only for passed attempts.
+	conditional := []string{
+		"--expected-binding-revision", "--successor-lineage", "--remediates-evidence-revision",
+	}
+	for _, flag := range conditional {
+		if !strings.Contains(text, flag) {
+			t.Errorf("finish help missing conditional flag %q:\n%s", flag, text)
+		}
+	}
+	if !strings.Contains(text, "[conditional]") {
+		t.Errorf("finish help missing [conditional] annotation:\n%s", text)
+	}
+	if !strings.Contains(text, "all-or-none") {
+		t.Errorf("finish help missing all-or-none rule:\n%s", text)
+	}
+	if !strings.Contains(text, "passed") {
+		t.Errorf("finish help missing passed-only remediation rule:\n%s", text)
+	}
+	// Authority-derived patterns and enums MUST appear verbatim, including the
+	// request-ID grammar which the prior finish contract omitted.
+	authority := []string{
+		sddstatus.RuntimeRevisionPattern,
+		sddstatus.RuntimeRequestIDPattern,
+		sddstatus.RuntimeChangePattern,
+		sddstatus.RuntimeLineagePattern,
+		strings.Join(sddstatus.RuntimeTerminalOutcomes(), "|"),
+		strings.Join(sddstatus.RuntimeHarnessDispositions(), "|"),
+	}
+	for _, token := range authority {
+		if !strings.Contains(text, token) {
+			t.Errorf("finish help missing authority token %q:\n%s", token, text)
+		}
+	}
+	// The literal none MUST be explicitly stated invalid.
+	if !strings.Contains(text, "none") || !strings.Contains(text, "invalid") {
+		t.Errorf("finish help missing invalid none statement:\n%s", text)
+	}
+	// The replay-digest rule MUST state identical request digests may replay
+	// under one request ID while different fields are rejected.
+	if !strings.Contains(text, "replay") {
+		t.Errorf("finish help missing replay rule:\n%s", text)
+	}
+	// The bounded text fields MUST state byte semantics (inclusive 500 bytes),
+	// explicitly, and MUST NOT keep the misleading "500 characters" wording.
+	// (Other "characters" wordings on shared limits are out of scope and
+	// untouched so unrelated operations stay stable.)
+	if !strings.Contains(text, "500 bytes") {
+		t.Errorf("finish help missing 500 bytes invariant:\n%s", text)
+	}
+	if strings.Contains(text, "500 characters") {
+		t.Errorf("finish help must state 500 bytes not 500 characters:\n%s", text)
+	}
+	// Status mappings MUST be described explicitly, not merely present as flag
+	// names in the flag list.
+	mappings := []string{
+		"status.revision",
+		"active_attempt",
+		"binding_revision",
+		"evidence_revision",
+		"--expected-binding-revision",
+		"--remediates-evidence-revision",
+		"--evidence-revision",
+		"--successor-lineage",
+		"--expected-revision",
+	}
+	for _, mapping := range mappings {
+		if !strings.Contains(text, mapping) {
+			t.Errorf("finish help missing status mapping %q:\n%s", mapping, text)
+		}
+	}
+	if !strings.Contains(text, "maps to") {
+		t.Errorf("finish help missing explicit map wording:\n%s", text)
+	}
+	// The shell-runnable failed example MUST be present and complete.
+	if !strings.Contains(text, `gentle-ai sdd-attempt finish --cwd "$REPO_DIR"`) {
+		t.Errorf("finish help missing runnable example:\n%s", text)
+	}
+	if !strings.Contains(text, "--outcome failed") {
+		t.Errorf("finish help example missing failed outcome:\n%s", text)
+	}
+}
+
+// TestRunSDDAttemptFinishRefusalHintsFinishHelp proves the exact
+// `gentle-ai sdd-attempt finish --help` pointer appears only on the three
+// finish pre-validation refusal classes (unknown/invalid finish flag,
+// missing required flag, and partial remediation trio) and never on
+// post-store CAS/runtime errors or unrelated operations. Mirrors the
+// spec "Hints stop at pre-validation" scenario.
+func TestRunSDDAttemptFinishRefusalHintsFinishHelp(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	const pointer = "gentle-ai sdd-attempt finish --help"
+	tests := []struct {
+		name      string
+		args      []string
+		wantHint  bool
+		wantError string
+	}{
+		{
+			name:      "unknown finish flag",
+			args:      []string{"finish", "--cwd", repo, "--change", "thin", "--mystery"},
+			wantHint:  true,
+			wantError: "flag provided but not defined",
+		},
+		{
+			name:      "missing required finish flag",
+			args:      []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "failed", "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process"},
+			wantHint:  true,
+			wantError: "--evidence-revision",
+		},
+		{
+			name:      "partial remediation trio",
+			args:      []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "passed", "--evidence-revision", cliAttemptHash('c'), "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process", "--successor-lineage", "review-successor"},
+			wantHint:  true,
+			wantError: "remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together",
+		},
+		{
+			name:      "post-store CAS error no hint",
+			args:      []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", "sha256:" + strings.Repeat("a", 64), "--request-id", "finish-cas", "--outcome", "failed", "--evidence-revision", cliAttemptHash('z'), "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process"},
+			wantHint:  false,
+			wantError: "sdd-attempt finish:",
+		},
+		{
+			name:      "unrelated begin operation no hint",
+			args:      []string{"begin", "--cwd", repo, "--change", "thin", "--request-id", "begin", "--work-unit", "unit", "--evidence-goal", "goal"},
+			wantHint:  false,
+			wantError: "--expected-revision",
+		},
+		{
+			name:      "unrelated reset operation no hint",
+			args:      []string{"reset", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "reset", "--reason", "reason", "--actor", "actor"},
+			wantHint:  false,
+			wantError: "sdd-attempt reset:",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunSDDAttempt(tt.args, &output)
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("RunSDDAttempt(%v) = output %q, err %v, want error containing %q", tt.args, output.String(), err, tt.wantError)
+			}
+			containsHint := strings.Contains(err.Error(), pointer)
+			if tt.wantHint && !containsHint {
+				t.Fatalf("refusal %q missing finish-help pointer:\nerr=%v", tt.name, err)
+			}
+			if !tt.wantHint && containsHint {
+				t.Fatalf("non-pre-validation error %q unexpectedly contains finish-help pointer:\nerr=%v", tt.name, err)
 			}
 		})
 	}

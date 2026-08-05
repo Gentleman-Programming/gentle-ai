@@ -1846,8 +1846,8 @@ func applyRuntimeBindingEvent(replay *runtimeReplay, event *runtimeBindingEvent)
 func validateRuntimeBeginEvent(record runtimeRecord) error {
 	event := record.Begin
 	if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, 160) != nil ||
-		validateRuntimeText(event.EvidenceGoal, 240) != nil || event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
-		event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines || event.Ordinal < 1 ||
+		validateRuntimeText(event.EvidenceGoal, RuntimeEvidenceGoalLimit) != nil || event.MaxAttempts < 1 || event.MaxAttempts > RuntimeMaxAttemptLimit ||
+		event.MaxChangedLines < 1 || event.MaxChangedLines > RuntimeMaxChangedLines || event.Ordinal < 1 ||
 		!runtimeRevisionPattern.MatchString(event.BeginCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.BeginCandidateTree) ||
 		// BeginWorktree is optional (empty means legacy/pre-field), but a
 		// PRESENT value is still an identity string, not free user input: it
@@ -1977,13 +1977,13 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		event := record.Rescope
 		if !runtimeRevisionPattern.MatchString(event.PreviousObjectiveID) || event.PreviousGeneration < 1 ||
-			event.PreviousMaxAttempts < 1 || event.PreviousMaxAttempts > maximumRuntimeAttemptLimit ||
-			event.PreviousMaxChangedLines < 1 || event.PreviousMaxChangedLines > maximumRuntimeChangedLines ||
+			event.PreviousMaxAttempts < 1 || event.PreviousMaxAttempts > RuntimeMaxAttemptLimit ||
+			event.PreviousMaxChangedLines < 1 || event.PreviousMaxChangedLines > RuntimeMaxChangedLines ||
 			!runtimeRevisionPattern.MatchString(event.RescopeCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.RescopeCandidateTree) ||
 			!runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 1 ||
 			validateRuntimeText(event.WorkUnit, 160) != nil || validateRuntimeText(event.EvidenceGoal, 240) != nil ||
-			event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
-			event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines ||
+			event.MaxAttempts < 1 || event.MaxAttempts > RuntimeMaxAttemptLimit ||
+			event.MaxChangedLines < 1 || event.MaxChangedLines > RuntimeMaxChangedLines ||
 			// The shape-level narrowing check below defends against a record
 			// whose OWN fields are internally inconsistent; it is not the
 			// real narrowing guard. applyRuntimeRescopeEvent independently
@@ -2226,11 +2226,11 @@ func normalizeRescopeObjectiveRequest(request RescopeObjectiveRequest) (RescopeO
 	if err := validateRuntimeText(request.EvidenceGoal, 240); err != nil {
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid evidence_goal: %w", err)
 	}
-	if request.MaxAttempts < 1 || request.MaxAttempts > maximumRuntimeAttemptLimit {
-		return RescopeObjectiveRequest{}, fmt.Errorf("max_attempts must be within 1..%d", maximumRuntimeAttemptLimit)
+	if request.MaxAttempts < 1 || request.MaxAttempts > RuntimeMaxAttemptLimit {
+		return RescopeObjectiveRequest{}, fmt.Errorf("max_attempts must be within 1..%d", RuntimeMaxAttemptLimit)
 	}
-	if request.MaxChangedLines < 1 || request.MaxChangedLines > maximumRuntimeChangedLines {
-		return RescopeObjectiveRequest{}, fmt.Errorf("max_changed_lines must be within 1..%d", maximumRuntimeChangedLines)
+	if request.MaxChangedLines < 1 || request.MaxChangedLines > RuntimeMaxChangedLines {
+		return RescopeObjectiveRequest{}, fmt.Errorf("max_changed_lines must be within 1..%d", RuntimeMaxChangedLines)
 	}
 	if err := validateRuntimeText(request.Reason, 500); err != nil {
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid rescope reason: %w", err)
