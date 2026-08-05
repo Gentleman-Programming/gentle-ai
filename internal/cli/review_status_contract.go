@@ -43,19 +43,28 @@ type ReviewTargetStatusResult struct {
 	// ActionDisposition names the provider recovery class accepted by the
 	// selected action. Generic recover and final-verification retry remain
 	// distinct operations.
-	ActionDisposition       reviewtransaction.RecoveryDisposition                `json:"action_disposition,omitempty"`
-	Replayability           reviewtransaction.Replayability                      `json:"replayability"`
-	Frozen                  *ReviewTargetStatusFrozen                            `json:"frozen,omitempty"`
-	TargetIdentity          string                                               `json:"target_identity"`
-	AuthorityTargetIdentity string                                               `json:"authority_target_identity,omitempty"`
-	Projection              ReviewTargetStatusProjection                         `json:"projection"`
-	Repair                  reviewtransaction.AuthorityRepairAssessment          `json:"repair"`
-	Candidates              []string                                             `json:"candidates"`
-	Reconciliation          *ReviewFinalizeReconciliation                        `json:"reconciliation,omitempty"`
-	Eligibility             *ReviewActionEligibility                             `json:"eligibility,omitempty"`
-	NextTransition          *ReviewNextTransition                                `json:"next_transition,omitempty"`
-	ValidationRequest       *reviewtransaction.TargetedValidationRequest         `json:"validation_request,omitempty"`
-	FinalVerificationRetry  *reviewtransaction.FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
+	ActionDisposition       reviewtransaction.RecoveryDisposition       `json:"action_disposition,omitempty"`
+	Replayability           reviewtransaction.Replayability             `json:"replayability"`
+	Frozen                  *ReviewTargetStatusFrozen                   `json:"frozen,omitempty"`
+	TargetIdentity          string                                      `json:"target_identity"`
+	AuthorityTargetIdentity string                                      `json:"authority_target_identity,omitempty"`
+	Projection              ReviewTargetStatusProjection                `json:"projection"`
+	Repair                  reviewtransaction.AuthorityRepairAssessment `json:"repair"`
+	// Disposition is Wave 6's negotiated-route provider preview (rdd-closure-
+	// disposition-execution / "Reachable Through the Negotiated Transition
+	// Route"): populated only when Repair is not eligible but a closed
+	// closure disposition plan derives and admits. It carries the same two
+	// fields `review repair --preflight` already publishes for this route
+	// (ReviewRepairDispositionProviderInputs) — nothing a maintainer could
+	// not already derive read-only, and nothing that changes without a real
+	// authorization.
+	Disposition            *ReviewRepairDispositionProviderInputs               `json:"disposition,omitempty"`
+	Candidates             []string                                             `json:"candidates"`
+	Reconciliation         *ReviewFinalizeReconciliation                        `json:"reconciliation,omitempty"`
+	Eligibility            *ReviewActionEligibility                             `json:"eligibility,omitempty"`
+	NextTransition         *ReviewNextTransition                                `json:"next_transition,omitempty"`
+	ValidationRequest      *reviewtransaction.TargetedValidationRequest         `json:"validation_request,omitempty"`
+	FinalVerificationRetry *reviewtransaction.FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
 }
 
 // ReviewActionEligibility remains an additive compatibility detail for older

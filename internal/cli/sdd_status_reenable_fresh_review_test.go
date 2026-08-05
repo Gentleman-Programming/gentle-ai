@@ -79,18 +79,17 @@ func TestSDDStatusReEnableSequenceLandsOnTheFreshFullReview(t *testing.T) {
 	writeSDDStatusFile(t, root+"/docs/unmanaged-two.md", "# two\n\nplain prose, delivered while disabled.\n")
 	commitAllSDDStatus(t, root, "unmanaged delivery two")
 
-	// The disabled window records the change as unmanaged: the stale baseline
-	// receipt no longer governs anything, and declining to manage is not a
-	// blocker demanding a review the switch refuses to run.
+	// The disabled window proceeds unmanaged: the stale baseline receipt is
+	// never even consulted (corrective verify cycle CRITICAL-1 — structural
+	// absence, not a populated disabled/unmanaged disposition), and
+	// declining to manage is not a blocker demanding a review the switch
+	// refuses to run.
 	disabled := resolveSDDStatusJSON(t, root)
 	if disabled.Dependencies.Archive == sddstatus.DependencyBlocked {
 		t.Fatalf("disabled archive over a stale receipt = blocked; reasons = %v", disabled.BlockedReasons)
 	}
-	if disabled.ReviewGate == nil || disabled.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
-		t.Fatalf("disabled window did not record the unmanaged disposition: %#v", disabled.ReviewGate)
-	}
-	if disabled.ReviewGate.Result == reviewtransaction.GateAllow {
-		t.Fatalf("disabled window fabricated an approval: %#v", disabled.ReviewGate)
+	if disabled.ReviewGate != nil {
+		t.Fatalf("disabled window produced a review gate instead of structural absence: %#v", disabled.ReviewGate)
 	}
 
 	// Re-enable. The archive stop must come back, and it must name the fresh
@@ -191,23 +190,27 @@ func TestSDDStatusArchiveNeverTreatsAnEmptyCandidateReviewAsCoverage(t *testing.
 	}
 }
 
-// TestSDDStatusEnabledMissingReceiptStopNamesTheFreshReview keeps the plainest
-// enabled stop runnable: a change at its archive decision with no review
-// authority anywhere must name `gentle-ai review start` instead of only
-// stating that a receipt is missing.
-func TestSDDStatusEnabledMissingReceiptStopNamesTheFreshReview(t *testing.T) {
+// TestSDDStatusEnabledMissingReceiptIsDeclineNotAStop is corrective verify
+// cycle 4's BLOCKER-1 (rdd-post-verify-review-offer's "Decline Proceeds to
+// Unmanaged Ordinary Archive"): a change at its archive decision with no
+// review authority anywhere is decline-by-absence-of-action, not a stop --
+// the offer is an invitation, never a gate. Superseded (documented, not
+// silently dropped): this test previously required naming `gentle-ai review
+// start` as a runnable exit from a blocked state; there is no blocked state
+// to exit from anymore for this exact fixture.
+func TestSDDStatusEnabledMissingReceiptIsDeclineNotAStop(t *testing.T) {
 	reviewModeHome(t)
 	root := t.TempDir()
 	seedArchiveGatedSDDChange(t, root)
 
 	status := resolveSDDStatusJSON(t, root)
-	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateInvalidated {
-		t.Fatalf("enabled missing-receipt gate = %#v, want invalidated", status.ReviewGate)
+	if status.ReviewGate != nil {
+		t.Fatalf("enabled missing-receipt gate = %#v, want structural absence (decline)", status.ReviewGate)
 	}
-	if !strings.Contains(status.ReviewGate.Reason, "terminal review receipt is missing") {
-		t.Fatalf("missing-receipt reason lost its cause: %q", status.ReviewGate.Reason)
+	if status.ReviewOffer == nil || !status.ReviewOffer.Available {
+		t.Fatalf("enabled missing-receipt reviewOffer = %#v, want an available invitation", status.ReviewOffer)
 	}
-	if tokens := namedReviewCommandTokens(t, status.ReviewGate.Reason); len(tokens) < 2 || tokens[0] != "review" || tokens[1] != "start" {
-		t.Fatalf("missing-receipt stop named %v, want the fresh review start", tokens)
+	if status.Dependencies.Archive != sddstatus.DependencyReady || status.NextRecommended != "archive" {
+		t.Fatalf("enabled missing-receipt archive=%q next=%q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
 	}
 }

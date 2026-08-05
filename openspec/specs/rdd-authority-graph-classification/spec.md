@@ -24,7 +24,7 @@ The classifier MUST return exactly one of `healthy`, `repairable`, or `blocked` 
 
 ### Requirement: No Mutation or Execution
 
-The classifier MUST NOT mutate the authority graph, derive or execute a disposition plan, quarantine bytes, or acquire the maintenance lock. Classification is inspection-only.
+The classifier MUST NOT mutate the authority graph, derive or execute a disposition plan, quarantine bytes, or acquire the maintenance lock. Classification is inspection-only. A separate, deterministic plan derivation (owned by `rdd-authority-disposition-plan`) MAY consume a `repairable` classification's evidence to produce a `DispositionPlan`; that derivation is not part of the classifier and MUST NOT be implemented inside it.
 
 #### Scenario: Classification has no side effect
 
@@ -32,6 +32,12 @@ The classifier MUST NOT mutate the authority graph, derive or execute a disposit
 - WHEN the classifier runs
 - THEN no authority record, receipt, or graph edge is modified
 - AND no disposition plan is created or persisted
+
+#### Scenario: Repairable result feeds a separate plan derivation, not the classifier itself
+
+- GIVEN a `repairable` classification for #1892's leaf anomaly shape
+- WHEN a `DispositionPlan` is subsequently derived from that classification's evidence
+- THEN the derivation happens in `rdd-authority-disposition-plan`, and re-running the classifier alone still produces no plan and no mutation
 
 ### Requirement: Fail-Closed on Unknown Shape
 

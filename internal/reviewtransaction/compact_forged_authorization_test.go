@@ -59,21 +59,23 @@ func forgedRecoveryPair(t *testing.T, repo, suffix, target string, mutate ...fun
 }
 
 // TestForgedRecoveryAuthorizationOnNonPristineSuccessorHasSanctionedRepairExit
-// pins the shape #2014 named as a dead end: reconciliation refuses it as
-// corruption and the abandonment gate refuses to discard captured review
-// results — but Wave 2's leaf authority disposition plan closes exactly this
-// content_mismatched_recovery_authorization class, and quarantine byte-
-// preserves the entry (nothing is discarded the way `review abandon` would
-// discard captured review results), so the successor's pristine state does
-// not gate admission (rdd-leaf-disposition-execution: cardinality is the only
-// admission predicate). SanctionedCompactRecoveryExits (Wave 2 Slice S3) now
-// names `review repair` for this edge. ReconcileInvalidRecoveryEdge itself
-// still independently refuses this edge as corruption — its own refusal
-// continuation is a separate, unmodified code path this slice.
+// pins the shape #2014 named as a dead end: the abandonment gate refuses to
+// discard captured review results -- but Wave 2's leaf authority disposition
+// plan closes exactly this content_mismatched_recovery_authorization class,
+// and quarantine byte-preserves the entry (nothing is discarded the way
+// `review abandon` would discard captured review results), so the
+// successor's pristine state does not gate admission
+// (rdd-leaf-disposition-execution: cardinality is the only admission
+// predicate). SanctionedCompactRecoveryExits (Wave 2 Slice S3) names `review
+// repair` for this edge. (ReconcileInvalidRecoveryEdge itself used to also
+// independently refuse this edge as corruption -- Wave 7 S3b retired that
+// provider along with the verb it served; the inspection/exit surface this
+// test drives is the only route left, and it already covered this shape on
+// its own.)
 func TestForgedRecoveryAuthorizationOnNonPristineSuccessorHasSanctionedRepairExit(t *testing.T) {
 	ctx := context.Background()
 	repo := initSnapshotRepo(t)
-	predecessor, successor, successorStore := forgedRecoveryPair(t, repo, "captured", "forged captured target\n", func(state *CompactState) {
+	_, successor, successorStore := forgedRecoveryPair(t, repo, "captured", "forged captured target\n", func(state *CompactState) {
 		results := make([]LensResult, 0, len(state.SelectedLenses))
 		for _, lens := range state.SelectedLenses {
 			results = append(results, LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed once"}})
@@ -103,32 +105,12 @@ func TestForgedRecoveryAuthorizationOnNonPristineSuccessorHasSanctionedRepairExi
 	if len(exits) != 1 || exits[0].Operation != CompactRecoveryEdgeExitRepair || exits[0].Blocked != "" {
 		t.Fatalf("disposition-eligible sanctioned exit = %#v", exits)
 	}
-
-	_, err = ReconcileInvalidRecoveryEdge(ctx, repo, forgedReconcileRequest(predecessor, successor))
-	if err == nil {
-		t.Fatal("reconcile admitted a forged authorization on a non-pristine successor")
-	}
-	refusal := err.Error()
-	for _, want := range []string{
-		"corruption",
-		"No advertised operation admits this edge",
-		"captured review or correction data",
-		"gentle-ai review inspect-authority",
-	} {
-		if !strings.Contains(refusal, want) {
-			t.Fatalf("blocked refusal does not name %q:\n%s", want, refusal)
-		}
-	}
-	// The refusal must not advertise an abandonment that would then refuse.
-	if strings.Contains(refusal, "gentle-ai review abandon") {
-		t.Fatalf("blocked refusal names an abandonment the gate rejects:\n%s", refusal)
-	}
 	if _, abandonErr := InspectCompactPristineAbandonment(ctx, repo, successor.State.LineageID); abandonErr != nil {
 		t.Fatal(abandonErr)
 	}
 	current, err := os.ReadFile(successorStore.StatePath())
 	if err != nil || !bytes.Equal(current, persisted) {
-		t.Fatalf("a refused reconcile rewrote the corrupt authorization bytes: %v", err)
+		t.Fatalf("the read-only inspection/exit surfaces rewrote the corrupt authorization bytes: %v", err)
 	}
 }
 
@@ -145,7 +127,7 @@ func TestCompactAuthorityRemovalRegressionStillRefuses(t *testing.T) {
 	}
 	// The graph is already invalid, so a whole-graph post-condition would
 	// refuse both removals and leave the store unrecoverable.
-	if _, err := compactAuthorityLeaves(records, map[string]CompactStore{}); err == nil {
+	if violations, _ := compactAuthorityGraphViolations(records); len(violations) == 0 {
 		t.Fatal("fixture graph is unexpectedly valid")
 	}
 	if err := compactAuthorityRemovalRegression(records, compactRecordsWithout(records, successor.State.LineageID)); err != nil {
@@ -158,23 +140,16 @@ func TestCompactAuthorityRemovalRegressionStillRefuses(t *testing.T) {
 	}
 }
 
-func forgedReconcileRequest(predecessor, successor CompactRecord) CompactReconcileRequest {
-	request := CompactReconcileRequest{
-		PredecessorLineageID: predecessor.State.LineageID, ExpectedPredecessorRevision: predecessor.Revision,
-		SuccessorLineageID: successor.State.LineageID, ExpectedSuccessorRevision: successor.Revision,
-		Reason: "quarantine forged recovery authorization", Actor: "maintainer@example.com",
-	}
-	request.MaintainerAuthorization = compactReconcileAuthorizationBinding(
-		request.PredecessorLineageID, predecessor.Revision, request.SuccessorLineageID, successor.Revision,
-		request.Actor, request.Reason)
-	return request
-}
-
 // TestForgedRecoveryAuthorizationDeadEndHasRunnableExit drives a compact-v2
 // store holding two independent forged-authorization recovery edges from
 // non-authoritative back to authoritative by running only what the product's
 // own refusals name. Two edges are load-bearing: with a whole-graph
-// post-condition each repair refuses citing the other, so neither can go first.
+// post-condition each repair refuses citing the other, so neither can go
+// first. (Step 2, which used to independently drive
+// ReconcileInvalidRecoveryEdge to prove IT also refused and named the same
+// abandonment, retired with the provider in Wave 7 S3b -- the sanctioned-exit
+// assertion in step 1 already proves the abandonment is the named,
+// runnable continuation, on its own.)
 func TestForgedRecoveryAuthorizationDeadEndHasRunnableExit(t *testing.T) {
 	ctx := context.Background()
 	repo := initSnapshotRepo(t)
@@ -194,8 +169,10 @@ func TestForgedRecoveryAuthorizationDeadEndHasRunnableExit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before.Authoritative ||
-		!hasAuthorityInventoryStatus(before.Entries, successorAlpha.State.LineageID, AuthorityStatusInvalid) ||
+	// Both forged successors are reported invalid on their own entries. The
+	// inventory as a whole stays usable, because two damaged successors are
+	// two damaged successors and not a repository-wide verdict.
+	if !hasAuthorityInventoryStatus(before.Entries, successorAlpha.State.LineageID, AuthorityStatusInvalid) ||
 		!hasAuthorityInventoryStatus(before.Entries, successorBravo.State.LineageID, AuthorityStatusInvalid) {
 		t.Fatalf("forged inventory = %#v", before)
 	}
@@ -226,26 +203,7 @@ func TestForgedRecoveryAuthorizationDeadEndHasRunnableExit(t *testing.T) {
 		}
 	}
 
-	// 2. Reconciliation still refuses — the edge really is corruption — but the
-	//    refusal now names a continuation that resolves the block.
-	_, err = ReconcileInvalidRecoveryEdge(ctx, repo, forgedReconcileRequest(predecessorAlpha, successorAlpha))
-	if err == nil {
-		t.Fatal("reconcile admitted a forged recovery authorization")
-	}
-	refusal := err.Error()
-	for _, want := range []string{
-		"corruption",
-		"gentle-ai review abandon",
-		"--lineage \"" + successorAlpha.State.LineageID + "\"",
-		"--expected-revision \"" + successorAlpha.Revision + "\"",
-		CompactAbandonAuthorizationSchema,
-	} {
-		if !strings.Contains(refusal, want) {
-			t.Fatalf("reconcile refusal does not name %q:\n%s", want, refusal)
-		}
-	}
-
-	// 3. Run only what the refusal named, on each edge in turn.
+	// 2. Run only what the sanctioned exit named, on each edge in turn.
 	for _, successor := range []CompactRecord{successorAlpha, successorBravo} {
 		eligibility, err := InspectCompactPristineAbandonment(ctx, repo, successor.State.LineageID)
 		if err != nil {
@@ -280,7 +238,7 @@ func TestForgedRecoveryAuthorizationDeadEndHasRunnableExit(t *testing.T) {
 		}
 	}
 
-	// 4. The store is authoritative again, and both predecessors survive.
+	// 3. The store is authoritative again, and both predecessors survive.
 	after, err := InventoryAuthority(ctx, repo)
 	if err != nil {
 		t.Fatal(err)

@@ -420,7 +420,15 @@ func TestReviewIntegrationNonVacuousModeClassificationsAreEvidenced(t *testing.T
 		file     string
 		evidence string
 	}{
-		{fn: "runReviewFacadeStart", file: "review_facade.go", evidence: "reviewStartNegotiateContractHint"},
+		// Issue #2447 replaced the named reviewStartNegotiateContractHint
+		// constant with an up-front refusal for base-diff/workspace-overlay
+		// candidates that select lenses (see runReviewFacadeStart's refusal
+		// at reviewPreflightDirectRouteUncompletableReason). The additive
+		// Hint field survives for the one shape #2447 left untouched --
+		// workspace-mode candidates whose selected lenses still need the
+		// negotiated form's repository_context -- so the evidence now points
+		// at that call site instead of the removed constant.
+		{fn: "runReviewFacadeStart", file: "review_facade.go", evidence: "reviewNegotiatedStartCommand(authority.InitialSnapshot, *runtimeAgent)"},
 		{fn: "runReviewFacadeFinalize", file: "review_facade.go", evidence: "reviewContractRequiredForActionEligibilityReason"},
 	}
 	for _, testCase := range cases {

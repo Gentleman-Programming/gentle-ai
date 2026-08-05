@@ -962,6 +962,52 @@ func TestNegotiatedReviewStatusCompletesWithOneHundredHistoricalLeaves(t *testin
 	t.Logf("negotiated status completed 100 terminal histories in %s within the %s contract deadline", elapsed, reviewFacadeOperationTimeout)
 }
 
+func TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uses a repository with a large tracked dirty candidate")
+	}
+	repo := initReviewCLIRepo(t)
+	for index := 0; index < 64; index++ {
+		path := filepath.Join(repo, "inventory", fmt.Sprintf("tracked-%03d.txt", index))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(strings.Repeat("baseline content\n", 1024)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runReviewCLIGit(t, repo, "add", "inventory")
+	runReviewCLIGit(t, repo, "commit", "-qm", "fixture: tracked inventory")
+	for index := 0; index < 64; index++ {
+		path := filepath.Join(repo, "inventory", fmt.Sprintf("tracked-%03d.txt", index))
+		if err := os.WriteFile(path, []byte(strings.Repeat("revised content\n", 1024)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unavailableProcessTemp(t)
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo,
+	}, &output); err != nil {
+		t.Fatalf("fresh negotiated status on a large tracked dirty candidate: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.Applicability != reviewtransaction.TargetApplicabilityUnrelated ||
+		status.Action != reviewtransaction.TargetStatusActionStart || status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionExecute || status.NextTransition.Execute == nil ||
+		status.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("fresh large dirty status = %#v", status)
+	}
+	// A fresh target has no authority. Asserting the start offer alone would
+	// pass even if status had bound this candidate to unrelated history.
+	if status.Authority != nil {
+		t.Fatalf("fresh large dirty status published an authority: %#v", status.Authority)
+	}
+	requireNoReviewProcessTempResidue(t, repo)
+}
+
 func TestNegotiatedReviewStatusReturnsFailureForUnreadableAuthority(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {

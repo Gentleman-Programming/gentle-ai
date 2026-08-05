@@ -31,6 +31,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
 
@@ -491,7 +492,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	apply := []pipeline.Step{
-		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state},
+		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir},
 	}
 
 	for _, component := range r.selection.Components {
@@ -822,6 +823,7 @@ type codeGraphHomeRunner struct {
 
 func (r codeGraphHomeRunner) Run(name string, args ...string) error {
 	command := exec.Command(name, args...)
+	system.EnsureCommandDir(command)
 	actualHome, _ := os.UserHomeDir()
 	if filepath.Clean(r.homeDir) != filepath.Clean(actualHome) {
 		command.Env = overrideCommandEnvironment(os.Environ(), map[string]string{

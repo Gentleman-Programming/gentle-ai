@@ -57,26 +57,27 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 		// storeByLineage (needed unfiltered by the explicit-selector branch
 		// below, including for a caller naming this exact quarantined lineage)
 		// must not be the one used here.
+		//
+		// A record this read cannot decode is left out of the graph entirely.
+		// Status is the surface an operator reaches for when something is
+		// wrong, so it is the last surface that may answer "everything is
+		// unavailable" because one entry is (2234, 2270, 2456).
 		healthyStoreByLineage := make(map[string]CompactStore, len(stores))
 		for _, store := range stores {
 			record, loadErr := store.LoadContext(ctx)
 			if loadErr != nil {
-				// Selector-free enumeration quarantines one TERMINAL lineage that
-				// fails semantic validation instead of poisoning every other
-				// healthy lineage's status (issue-1813). An explicit selector
-				// naming this lineage below still fails closed.
-				if _, quarantinable := compactLineageQuarantinable(loadErr); quarantinable {
-					continue
+				// Only content failures quarantine. Not being able to READ the
+				// store is a different fact from an entry being damaged, and
+				// status has to keep saying so.
+				if compactAuthorityOperationalFailure(loadErr) {
+					return nil, loadErr
 				}
-				return nil, loadErr
+				continue
 			}
 			records[record.State.LineageID] = record
 			healthyStoreByLineage[record.State.LineageID] = store
 		}
-		selected, err = compactAuthorityLeaves(records, healthyStoreByLineage)
-		if err != nil {
-			return nil, err
-		}
+		selected = compactAuthorityLeaves(records, healthyStoreByLineage)
 	} else if store, ok := storeByLineage[lineageID]; ok {
 		// An explicit selector keeps unrelated inventory isolated, while still
 		// validating every recovery edge in the selected lineage's ancestry.
@@ -100,12 +101,12 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 			}
 			cursor = predecessor
 		}
-		chainStores := make(map[string]CompactStore, len(records))
-		for lineage := range records {
-			chainStores[lineage] = storeByLineage[lineage]
-		}
-		if _, graphErr := compactAuthorityLeaves(records, chainStores); graphErr != nil {
-			return nil, graphErr
+		// The named lineage's OWN ancestry still has to validate completely.
+		// Scoping the refusal is not relaxing it: what changes is whose
+		// business a defect is, never whether a defect is tolerated.
+		violations, _ := compactAuthorityGraphViolations(records)
+		if carrier, cause := compactAuthorityBlockingCause(records, violations, lineageID); cause != nil {
+			return nil, compactBlockedLineageError(lineageID, carrier, cause)
 		}
 	}
 

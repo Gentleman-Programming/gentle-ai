@@ -115,7 +115,7 @@ func TestLensAgentPromptsStateTheAdmissionEnvelope(t *testing.T) {
 				runtime, len(paths), paths, len(envelope.LensAgentNames), envelope.LensAgentNames)
 		}
 		for _, path := range paths {
-			prompt := renderBoundedReviewAsset(path)
+			prompt := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
 
 			for _, field := range envelope.RequiredTopLevelFields {
 				if !strings.Contains(prompt, field) {
@@ -217,7 +217,7 @@ func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 			if strings.HasPrefix(path, "claude/agents/") {
 				continue // Claude's separate prompt transport is pinned in bounded_review_contract_test.go.
 			}
-			prompt := strings.ToLower(renderBoundedReviewAsset(path))
+			prompt := strings.ToLower(renderBoundedReviewAsset(agentForAssetPath(t, path), path))
 			for claim, why := range map[string]string{
 				"artifact_subject":      "does not name the bound artifact subject",
 				"changed_path_manifest": "does not name the ordered manifest",
@@ -264,7 +264,7 @@ func TestJudgmentDayPromptsDoNotClaimTheLensEnvelope(t *testing.T) {
 	sort.Strings(judgePaths)
 
 	for _, path := range judgePaths {
-		prompt := renderBoundedReviewAsset(path)
+		prompt := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
 		// Match the JSON key forms, not the English words: a judge prompt may
 		// legitimately talk about inspecting a target.
 		if strings.Contains(prompt, `"subject_hash"`) || strings.Contains(prompt, `"inspection"`) {

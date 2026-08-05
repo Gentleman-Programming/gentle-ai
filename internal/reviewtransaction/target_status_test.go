@@ -209,6 +209,10 @@ func TestAssessTargetStatusClassifiesAllApplicabilityStates(t *testing.T) {
 		}
 	})
 
+	// Corrupted is a verdict about the lineage under assessment, so it is
+	// reached by naming that lineage. A selector-free assessment over the
+	// same store answers about the live target instead, which is the whole
+	// point: unrelated work is not corrupted because history is.
 	t.Run("corrupted", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -216,7 +220,16 @@ func TestAssessTargetStatusClassifiesAllApplicabilityStates(t *testing.T) {
 		if err := os.WriteFile(store.StatePath(), []byte("{\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		got, err := AssessTargetStatus(context.Background(), repo, request)
+		unrelated, err := AssessTargetStatus(context.Background(), repo, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if unrelated.Applicability == TargetApplicabilityCorrupted {
+			t.Fatalf("a corrupt unrelated entry made the live target corrupted: %#v", unrelated)
+		}
+		corruptRequest := request
+		corruptRequest.LineageID = "review-corrupt"
+		got, err := AssessTargetStatus(context.Background(), repo, corruptRequest)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -581,7 +594,7 @@ func TestAssessTargetStatusKeepsExplicitCompactLineageCurrentWithInvalidLegacyIn
 	for _, entry := range report.Entries {
 		invalidLegacyEvidence = invalidLegacyEvidence || entry.LineageID == legacyLineage && entry.Status == AuthorityStatusInvalid && len(entry.Problems) > 0
 	}
-	if report.Complete || report.Authoritative || !invalidLegacyEvidence {
+	if !invalidLegacyEvidence {
 		t.Fatalf("invalid legacy inventory diagnostics = %#v", report)
 	}
 	if after := authorityBytes(t, authorityRoot); !reflect.DeepEqual(before, after) {
@@ -1267,12 +1280,12 @@ func TestAssessTargetStatusPropagatesOperationalAuthorityFailures(t *testing.T) 
 
 	t.Run("git timeout", func(t *testing.T) {
 		repo := targetStatusOperationalFailureFixture(t, "status-git-timeout")
-		originalCommand, originalTimeout, originalWait := gitCommandContext, localGitCommandTimeout, gitCommandWaitDelay
+		originalCommand, originalTimeout, originalWait := gitCommandContext, LocalGitCommandTimeout, gitCommandWaitDelay
 		t.Cleanup(func() {
-			gitCommandContext, localGitCommandTimeout, gitCommandWaitDelay = originalCommand, originalTimeout, originalWait
+			gitCommandContext, LocalGitCommandTimeout, gitCommandWaitDelay = originalCommand, originalTimeout, originalWait
 		})
 		t.Setenv("GENTLE_AI_TARGET_STATUS_GIT_HELPER", "sleep")
-		localGitCommandTimeout, gitCommandWaitDelay = 25*time.Millisecond, 10*time.Millisecond
+		LocalGitCommandTimeout, gitCommandWaitDelay = 25*time.Millisecond, 10*time.Millisecond
 		gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 			if gitInvocationContains(args, "--git-common-dir") {
 				return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestTargetStatusGitHelperProcess$", "--")
@@ -1377,13 +1390,25 @@ func TestAssessTargetStatusStillCorruptsMalformedAuthorityGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+	// The successor whose predecessor is gone is the entry that is corrupted,
+	// and naming it says so. The live target inherits nothing from it and is
+	// assessed on its own terms.
+	scoped := targetStatusCurrentChangesRequest()
+	scoped.LineageID = successor.LineageID
+	got, err := AssessTargetStatus(context.Background(), repo, scoped)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Applicability != TargetApplicabilityCorrupted || got.Action != TargetStatusActionRepairAuthority ||
 		got.Replayability != ReplayabilityManualActionRequired {
 		t.Fatalf("malformed graph status = %#v", got)
+	}
+	unrelated, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unrelated.Applicability == TargetApplicabilityCorrupted {
+		t.Fatalf("a dangling successor made the live target corrupted: %#v", unrelated)
 	}
 }
 

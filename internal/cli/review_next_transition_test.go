@@ -146,9 +146,7 @@ func TestCorrectionNextTransitionAgreesBetweenFinalizeAndRestartStatus(t *testin
 		t.Run(tt.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			candidatePath := filepath.Join(repo, "candidate.go")
-			if err := os.WriteFile(candidatePath, []byte("package candidate\n\nfunc value() int { return 1 }\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
+			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
 			started := runNegotiatedReviewStart(t, repo, "correction-routing-"+strings.ReplaceAll(tt.name, " ", "-"))
 			resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
 			writeReviewCLIJSON(t, resultPath, facadeReviewerResult{

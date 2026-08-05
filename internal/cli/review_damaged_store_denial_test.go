@@ -138,6 +138,7 @@ type damagedStoreInspection struct {
 // be appended in its place.
 func liftBacktickedReviewCommand(t *testing.T, message, verb string) []string {
 	t.Helper()
+	longest := []string{}
 	for _, match := range regexp.MustCompile("`gentle-ai ([^`]*)`").FindAllStringSubmatch(message, -1) {
 		tokens := []string{}
 		for _, token := range strings.Fields(match[1]) {
@@ -150,12 +151,38 @@ func liftBacktickedReviewCommand(t *testing.T, message, verb string) []string {
 		if len(tokens) > 0 && strings.HasPrefix(tokens[len(tokens)-1], "--") {
 			tokens = tokens[:len(tokens)-1]
 		}
-		if len(tokens) >= 2 && tokens[0] == "review" && tokens[1] == verb {
-			return tokens
+		// The longest match, not the first: a refusal often mentions the verb
+		// in prose before rendering it in full, and an operator copies the
+		// one with the arguments in it.
+		if len(tokens) >= 2 && tokens[0] == "review" && tokens[1] == verb && len(tokens) > len(longest) {
+			longest = tokens
 		}
+	}
+	if len(longest) > 0 {
+		return longest
 	}
 	t.Fatalf("message names no runnable `gentle-ai review %s ...`: %q", verb, message)
 	return nil
+}
+
+// dispatchNamedDiagnosisInRepo is dispatchNamedDiagnosis for a refusal that
+// names the diagnosis without a --cwd, which is how an operator reads it: they
+// are standing in the repository the refusal came from. The command is lifted
+// from the message verbatim and only that standing position is supplied.
+func dispatchNamedDiagnosisInRepo(t *testing.T, repo, message string) damagedStoreInspection {
+	t.Helper()
+	tokens := liftBacktickedReviewCommand(t, message, "inspect-authority")
+	var output bytes.Buffer
+	args := append(append([]string{}, tokens[1:]...), "--cwd", repo)
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("the diagnosis the refusal named exits non-zero (named dead end): gentle-ai %s: %v\n%s",
+			strings.Join(args, " "), err, output.String())
+	}
+	var report damagedStoreInspection
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatalf("diagnosis output is not an inspection envelope: %v\n%s", err, output.String())
+	}
+	return report
 }
 
 // dispatchNamedDiagnosis lifts the named runnable inspection out of the
@@ -176,13 +203,25 @@ func dispatchNamedDiagnosis(t *testing.T, repo, message string) damagedStoreInsp
 	return report
 }
 
-// TestGateDenialOverDamagedStoreNamesDamageKindAndDiagnosis drives the
-// post-apply gate over the three ds damage shapes and requires each denial to
-// name its own kind of damage — not the shared generic sentence alone — plus
-// the runnable diagnosis, which is then dispatched and required to answer.
-func TestGateDenialOverDamagedStoreNamesDamageKindAndDiagnosis(t *testing.T) {
+// TestDamagedEntryNamesItsOwnDamageKindAndDiagnosis drives the three ds damage
+// shapes and requires two things of each.
+//
+// The delivery gate for an UNRELATED live candidate never inherits the damage:
+// the generic "complete review authority inventory is unavailable or
+// corrupted" sentence that the ds01-ds05 benchmark measured was a verdict
+// about a repository, issued to an operator working on one file.
+//
+// The damaged entry itself still names its own kind of damage plus a runnable
+// diagnosis, and that diagnosis is dispatched through the real router and
+// required to answer with exactly the damage claimed. Naming the kind is what
+// the benchmark found missing; scoping the verdict is what makes the naming
+// reach the right person.
+func TestDamagedEntryNamesItsOwnDamageKindAndDiagnosis(t *testing.T) {
 	const forgedKind = "binding bound to different content"
-	const danglingKind = "missing from the store"
+	// The inspection's own vocabulary, not the retired gate sentence's: the
+	// diagnosis is the surface that names the damage now, so its words are
+	// the ones that have to be distinct per shape.
+	const danglingKind = "missing predecessor"
 	const truncatedKind = "malformed_compact_state"
 
 	tests := []struct {
@@ -244,27 +283,81 @@ func TestGateDenialOverDamagedStoreNamesDamageKindAndDiagnosis(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			test.stage(t, repo)
 
+			// The unrelated live candidate is answered on its own terms.
 			var output bytes.Buffer
 			runErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "post-apply"}, &output)
-			if runErr == nil {
-				t.Fatalf("post-apply allowed a damaged store: %s", output.String())
-			}
-			var gateErr ReviewGateDeniedError
-			if !errors.As(runErr, &gateErr) {
-				t.Fatalf("post-apply denial = %T %v, want ReviewGateDeniedError", runErr, runErr)
-			}
-			message := gateErr.Error()
-			if !strings.Contains(message, test.wantKind) {
-				t.Fatalf("gate denial does not name the kind of damage (%q):\n%s", test.wantKind, message)
-			}
-			for _, absent := range test.absentKinds {
-				if strings.Contains(message, absent) {
-					t.Fatalf("gate denial claims a damage kind this store does not hold (%q):\n%s", absent, message)
+			if runErr != nil {
+				if strings.Contains(runErr.Error(), "unavailable or corrupted") {
+					t.Fatalf("the live candidate inherited a repository-wide corruption verdict:\n%v", runErr)
+				}
+				for _, kind := range append([]string{test.wantKind}, test.absentKinds...) {
+					if strings.Contains(runErr.Error(), kind) {
+						t.Fatalf("the live candidate's denial borrowed a damage kind from history (%q):\n%v", kind, runErr)
+					}
 				}
 			}
-			test.verify(t, dispatchNamedDiagnosis(t, repo, message))
+
+			// The damaged entry names its own damage, and the diagnosis it
+			// names answers.
+			blocked := reviewtransaction.CompactAuthorityLineageBlocked(t.Context(), repo, damagedStoreSuccessorLineage)
+			if blocked == nil {
+				blocked = damagedStoreEntryProblem(t, repo, damagedStoreSuccessorLineage)
+			}
+			message := blocked.Error()
+			if !strings.Contains(message, damagedStoreSuccessorLineage) {
+				t.Fatalf("the block does not name the entry it refuses:\n%s", message)
+			}
+			if !strings.Contains(message, "gentle-ai review inspect-authority") {
+				t.Fatalf("the block names no runnable diagnosis:\n%s", message)
+			}
+			report := dispatchNamedDiagnosisInRepo(t, repo, message)
+			test.verify(t, report)
+			named := damagedStoreDiagnosisText(t, report)
+			if !strings.Contains(named, test.wantKind) {
+				t.Fatalf("the diagnosis does not name the kind of damage (%q):\n%s", test.wantKind, named)
+			}
+			for _, absent := range test.absentKinds {
+				if strings.Contains(named, absent) {
+					t.Fatalf("the diagnosis claims a damage kind this store does not hold (%q):\n%s", absent, named)
+				}
+			}
 		})
 	}
+}
+
+const damagedStoreSuccessorLineage = "review-damaged-successor"
+
+// damagedStoreEntryProblem falls back to the inventory entry's own problem for
+// a shape the graph never classifies -- an unreadable record never becomes an
+// edge, so it carries no graph violation, only its own decode failure.
+func damagedStoreEntryProblem(t *testing.T, repo, lineage string) error {
+	t.Helper()
+	report, err := reviewtransaction.InventoryAuthority(t.Context(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range report.Entries {
+		if entry.LineageID == lineage && len(entry.Problems) > 0 {
+			return errors.New(strings.Join(entry.Problems, "; "))
+		}
+	}
+	t.Fatalf("no entry or block names %q: %#v", lineage, report.Entries)
+	return nil
+}
+
+// damagedStoreDiagnosisText flattens everything the inspection says about the
+// damage, so a per-shape claim is matched against the product's own words.
+func damagedStoreDiagnosisText(t *testing.T, report damagedStoreInspection) string {
+	t.Helper()
+	parts := []string{}
+	for _, edge := range report.Edges {
+		parts = append(parts, edge.NonReconcilableReason)
+		parts = append(parts, edge.Problems...)
+	}
+	for _, diagnostic := range report.EntryDiagnostics {
+		parts = append(parts, diagnostic.Problem)
+	}
+	return strings.Join(parts, "\n")
 }
 
 func anyDamagedStoreProblemContains(problems []string, fragment string) bool {
@@ -276,15 +369,18 @@ func anyDamagedStoreProblemContains(problems []string, fragment string) bool {
 	return false
 }
 
-// TestStartRefusalOverDanglingPredecessorNamesRunnableAbandon is the CLI half
-// of the ds04 measurement: `review start` over a graph whose successor names a
-// missing predecessor refused with the bare graph violation and named
-// nothing, while abandoning the orphaned successor provably clears it. The
-// refusal now renders that abandonment; this test lifts the command and the
-// authorization template values out of the message, supplies only the
-// operator-owned actor and reason, dispatches through the real router, and
-// requires the same start to then succeed.
-func TestStartRefusalOverDanglingPredecessorNamesRunnableAbandon(t *testing.T) {
+// TestOrphanedSuccessorHasARunnableAbandonThatDoesNotBlockNewWork is the CLI
+// half of the ds04 measurement, after the scope rule.
+//
+// `review start` over a graph whose successor names a missing predecessor
+// refused, and the orphaned successor's abandonment was the way out -- for
+// everybody, whether or not they had anything to do with that successor. New
+// work now starts; the orphaned successor is still an orphan, still refuses
+// for itself, and its abandonment is still rendered as a runnable command.
+// This test lifts that command and its authorization template values out of
+// the refusal, supplies only the operator-owned actor and reason, dispatches
+// through the real router, and requires the entry to be gone afterwards.
+func TestOrphanedSuccessorHasARunnableAbandonThatDoesNotBlockNewWork(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	predecessor, successor := mintDamagedStoreRecoveryPair(t, repo)
@@ -293,15 +389,26 @@ func TestStartRefusalOverDanglingPredecessorNamesRunnableAbandon(t *testing.T) {
 	}
 	writeDamagedStoreProse(t, repo, "fresh")
 
+	// New work is not the orphan's business.
 	var output bytes.Buffer
-	startErr := RunReviewFacadeStart([]string{"--cwd", repo}, &output)
-	if startErr == nil {
-		t.Fatalf("start succeeded over a dangling predecessor: %s", output.String())
+	if err := RunReviewFacadeStart([]string{"--cwd", repo}, &output); err != nil {
+		t.Fatalf("an orphaned successor blocked a fresh unrelated start: %v\n%s", err, output.String())
 	}
-	message := startErr.Error()
-	if !strings.Contains(message, "dangling predecessor") {
-		t.Fatalf("start refusal does not name the graph defect: %q", message)
+
+	// The orphan is still an orphan, and says so.
+	blocked := reviewtransaction.CompactAuthorityLineageBlocked(t.Context(), repo, successor)
+	if blocked == nil || !strings.Contains(blocked.Error(), "dangling predecessor") {
+		t.Fatalf("the orphaned successor does not name its own graph defect: %v", blocked)
 	}
+
+	// Its abandonment is still rendered runnable, by the surface an operator
+	// reaches when they act on that entry.
+	reclaimErr := RunReviewReclaim([]string{"--cwd", repo, "--lineage", successor,
+		"--reason", "its predecessor is gone", "--actor", "maintainer@example.com"}, io.Discard)
+	if reclaimErr == nil {
+		t.Fatal("reclaim accepted an entry that holds authoritative state")
+	}
+	message := reclaimErr.Error()
 
 	tokens := liftBacktickedReviewCommand(t, message, "abandon")
 	// The template block in the message carries the persisted binding values;
@@ -310,7 +417,7 @@ func TestStartRefusalOverDanglingPredecessorNamesRunnableAbandon(t *testing.T) {
 	expectedRevision := regexp.MustCompile(`\nrevision=(\S+)`).FindStringSubmatch(message)
 	snapshotIdentity := regexp.MustCompile(`\nsnapshot_identity=(\S+)`).FindStringSubmatch(message)
 	if expectedRevision == nil || snapshotIdentity == nil {
-		t.Fatalf("start refusal renders no authorization template: %q", message)
+		t.Fatalf("the refusal renders no authorization template: %q", message)
 	}
 	const actor, reason = "maintainer@example.com", "its predecessor is gone"
 	authorization := reviewtransaction.RenderCompactAbandonAuthorization(
@@ -321,9 +428,12 @@ func TestStartRefusalOverDanglingPredecessorNamesRunnableAbandon(t *testing.T) {
 		t.Fatalf("the abandonment the refusal named exits non-zero (named dead end): %v\n%s", err, abandoned.String())
 	}
 
+	if reviewtransaction.CompactAuthorityLineageBlocked(t.Context(), repo, successor) != nil {
+		t.Fatal("the abandonment the refusal named left the orphan in place")
+	}
 	output.Reset()
 	if err := RunReviewFacadeStart([]string{"--cwd", repo}, &output); err != nil {
-		t.Fatalf("start still refuses after the named exit ran: %v\n%s", err, output.String())
+		t.Fatalf("start refuses after the named exit ran: %v\n%s", err, output.String())
 	}
 }
 

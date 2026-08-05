@@ -145,6 +145,7 @@ type FollowUp struct {
 
 type FindingEvidence struct {
 	FindingID string            `json:"finding_id"`
+	Severity  string            `json:"severity,omitempty"`
 	Class     EvidenceClass     `json:"class"`
 	Causality CausalDisposition `json:"causal_disposition,omitempty"`
 	Proof     string            `json:"proof"`

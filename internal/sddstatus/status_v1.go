@@ -29,9 +29,37 @@ type StatusV1Projection struct {
 	RemediationState  remediationStateV1             `json:"remediationState"`
 	ReviewGate        *reviewGateStateV1             `json:"reviewGate,omitempty"`
 	ReviewTransaction *reviewtransaction.Transaction `json:"reviewTransaction,omitempty"`
-	PhaseInstructions *phaseInstructionsV1           `json:"phaseInstructions,omitempty"`
-	NextRecommended   string                         `json:"nextRecommended"`
-	BlockedReasons    []string                       `json:"blockedReasons"`
+	// ReviewOffer and ReVerify project Status.ReviewOffer/Status.ReVerify
+	// (design.md decision 3's amendment and the targeted re-verify call-site
+	// amendment) onto the wire. Corrective verify cycle CRITICAL-2: before
+	// this fix StatusV1Projection had no field for either, so every CLI path
+	// (RunSDDStatus, RunSDDContinue, RenderMarkdown, RenderDispatcherMarkdown
+	// all project through ProjectStatusV1) silently dropped both blocks —
+	// Wave 4's two headline deliverables were computed but unreachable. Both
+	// are `omitempty` pointers reusing the exact internal block types
+	// unchanged (ReviewOfferBlock, ReVerifyBlock carry no internal-only
+	// fields, the same reuse pattern ReviewTransaction above already
+	// establishes), so a Status with both nil — every legacy shape
+	// TestProjectStatusV1FreezesExactLegacyShape and
+	// TestStatusRenderersEmbedOnlyStatusV1Projection already exercise —
+	// produces byte-identical output to before this fix. The frozen legacy
+	// shape moves forward to include these two keys only when the internal
+	// Status actually populates them (verify passed and the kill switch is
+	// on), which is new observable behavior by design, not a compatibility
+	// break: no field is renamed, removed, or reordered.
+	ReviewOffer *ReviewOfferBlock `json:"reviewOffer,omitempty"`
+	ReVerify    *ReVerifyBlock    `json:"reVerify,omitempty"`
+	// Consent projects Status.Consent (#2563, S4b of #2540) onto the wire
+	// under the same ratified omitempty-pointer discipline as ReviewOffer and
+	// ReVerify above: the SDD edit-authority consent envelope is only useful
+	// if the orchestrator consuming `sdd-status --json` can relay it, and a
+	// nil Consent — every status that is not blocked(edit_authority_missing),
+	// which is every legacy shape the freeze tests exercise — produces
+	// byte-identical output to before this field existed.
+	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
+	PhaseInstructions *phaseInstructionsV1         `json:"phaseInstructions,omitempty"`
+	NextRecommended   string                       `json:"nextRecommended"`
+	BlockedReasons    []string                     `json:"blockedReasons"`
 }
 
 type planningHomeV1 struct {
@@ -169,6 +197,9 @@ func ProjectStatusV1(status Status) (StatusV1Projection, error) {
 			Delivery: status.ReviewGate.Delivery,
 		}
 	}
+	projected.ReviewOffer = status.ReviewOffer
+	projected.ReVerify = status.ReVerify
+	projected.Consent = status.Consent
 	if status.PhaseInstructions != nil {
 		projected.PhaseInstructions = &phaseInstructionsV1{
 			Apply:     status.PhaseInstructions.Apply,
@@ -189,13 +220,7 @@ func marshalStatusV1Indent(status Status) ([]byte, error) {
 }
 
 func projectArtifactsV1(store ArtifactStore, source map[string]ArtifactState) (map[string]ArtifactState, error) {
-	keys := []string{
-		"proposal", "specs", "design", "tasks", "applyProgress", "verifyReport",
-		"reviewLedger", "reviewReceipt", "reviewBundle", "reviewContext", "reviewState",
-	}
-	if store == ArtifactStoreEngram {
-		keys = append(keys, "reviewPolicy")
-	}
+	keys := artifactStateKeys(store)
 	projected := make(map[string]ArtifactState, len(keys))
 	for _, key := range keys {
 		state, ok := source[key]

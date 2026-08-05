@@ -157,16 +157,19 @@ func TestOrganicInvalidatedDispositionRefusalNamesTheDispositionThatWorks(t *tes
 }
 
 // TestOrganicHealthyInvalidationRefusalNamesTheWorldAction is the third leg.
-// Invalidating a healthy approved authority is refused, and that refusal
-// protects an approval the operator earned.
-//
-// It used to answer in the authority model's own vocabulary — `native gate
-// result is "allow"` — which is a fact about an internal evaluation the
-// operator never asked for. It must instead state what is true of their
-// lineage, and name the one continuation that exists once the candidate moves.
-// The successor's name is theirs to choose, so exactly one value stays a
-// placeholder and every other value is already filled in.
-func TestOrganicHealthyInvalidationRefusalNamesTheWorldAction(t *testing.T) {
+// TestOrganicApprovedInvalidationRefusesAndNamesReviewValidate supersedes
+// TestOrganicHealthyInvalidationRefusalNamesTheWorldAction (Wave 5 Slice 7,
+// design decision 2): `review invalidate --gate` no longer re-derives a
+// gate result to decide healthy-vs-drifted at all — it refuses
+// UNCONDITIONALLY for any approved lineage (healthy or not), naming
+// `review validate --gate <gate>` as the runnable alternative, a fully
+// concrete command with zero operator-supplied placeholders (there is no
+// successor to name: this is a read, not a recovery). Running the named
+// command for this genuinely healthy candidate reaches the SAME derived
+// allow the fixture already proved at approveOrganicHealthyCandidate,
+// proving the named continuation is real and correct, not merely present
+// in the refusal text.
+func TestOrganicApprovedInvalidationRefusesAndNamesReviewValidate(t *testing.T) {
 	harness := newOrganicHarness(t)
 	const lineage = "approved-healthy-invalidation"
 	revision := approveOrganicHealthyCandidate(t, harness, lineage)
@@ -179,21 +182,25 @@ func TestOrganicHealthyInvalidationRefusalNamesTheWorldAction(t *testing.T) {
 		"--gate", "post-apply",
 	)
 	if err == nil {
-		t.Fatalf("invalidation of a healthy approved authority was allowed")
+		t.Fatalf("invalidation of an approved authority was allowed")
 	}
 	message := strings.TrimSpace(stderr)
 	if strings.Contains(message, "native gate result") {
-		t.Fatalf("healthy invalidation refusal answers in internal vocabulary:\n%s", message)
+		t.Fatalf("invalidation refusal answers in internal vocabulary:\n%s", message)
 	}
-	if !strings.Contains(message, "change the candidate") {
-		t.Fatalf("healthy invalidation refusal does not say the candidate has to change:\n%s", message)
+	if !strings.Contains(message, "no longer performs gate-derived invalidation") {
+		t.Fatalf("invalidation refusal does not say invalidated is now a derived verdict:\n%s", message)
 	}
 	arguments, placeholders := organicNamedCommand(t, message)
-	if len(placeholders) != 1 {
-		t.Fatalf("healthy invalidation refusal named %d operator-supplied placeholders, want exactly the successor name: %v\n%s",
+	if len(placeholders) != 0 {
+		t.Fatalf("invalidation refusal named %d operator-supplied placeholders, want a fully concrete command: %v\n%s",
 			len(placeholders), placeholders, message)
 	}
-	arguments = organicFillPlaceholder(arguments, placeholders[0], lineage+"-successor")
+	if len(arguments) < 2 || arguments[0] != "review" || arguments[1] != "validate" {
+		t.Fatalf("invalidation refusal named %q, want a review validate continuation", strings.Join(arguments, " "))
+	}
 
-	followOrganicGuardRailContinuation(t, harness, arguments, lineage+"-successor")
+	if _, stderr, err := harness.gentleAllowFailure(arguments...); err != nil {
+		t.Fatalf("the continuation the refusal named failed: gentle-ai %v: %v\nstderr:\n%s", arguments, err, stderr)
+	}
 }

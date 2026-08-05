@@ -181,7 +181,7 @@ This baseline exists so the end-of-migration pass is a diff against these rows, 
 1. Re-read each row above against the shipped architecture.
 2. For any row still claimed `open`, require reproduction on then-current `main` before treating it as live.
 3. For every `absorbed-into-wave-N` row, confirm wave `N` shipped the exit evidence named in the design's `Migration waves` table.
-4. For every `superseded-by-design` row, require the design's `Deletion plan` proof for the retired surface (e.g., for `#1455`/`#1462`/`#1570`: proof that the legacy mutation lifecycle no longer exists and historical records parse read-only).
+4. For every `superseded-by-design` row, require the design's `Deletion plan` proof for the retired surface (e.g., for `#1455`/`#1462`/`#1570`: proof that the legacy mutation lifecycle no longer exists and historical records parse read-only). See `rdd-wave7-deletion-proof-tracker.md` for where that proof lands and how it is scoped — Wave 7 retired 5 of the originally-listed candidate verbs (the ones these three issues actually name); 6 others turned out to be live compact-v2 surface, not legacy, and stay reachable.
 5. **Final step**: verify the underlying issues and PRs are closed as outdated — each with a comment linking the wave PR and the design section that superseded it, and the closure date recorded back into this document's row.
 
 Step 5 is why every row above carries a stable identity (`#`), a source citation, and a one-line rationale: the audit pass links against those, it does not reconstruct them.

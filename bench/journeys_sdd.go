@@ -53,6 +53,7 @@ const sddChange = "bench-change"
 const (
 	sddFailedEvidence    = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	sddCorrectedEvidence = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	sddWrongEvidence     = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 )
 
 // sddSuccessorLineage is the name a recovery successor is minted under. The CLI
@@ -83,9 +84,10 @@ type sddRuntimeStatus struct {
 		Outcome            string `json:"outcome"`
 	} `json:"active_attempt"`
 	Attempts []struct {
-		Ordinal          int    `json:"ordinal"`
-		Outcome          string `json:"outcome"`
-		EvidenceRevision string `json:"evidence_revision"`
+		Ordinal                    int    `json:"ordinal"`
+		Outcome                    string `json:"outcome"`
+		EvidenceRevision           string `json:"evidence_revision"`
+		RemediatesEvidenceRevision string `json:"remediates_evidence_revision"`
 	} `json:"attempts"`
 	EvidenceRevision string `json:"evidence_revision"`
 	BindingRevision  string `json:"binding_revision"`
@@ -95,6 +97,11 @@ type sddRuntimeStatus struct {
 	} `json:"binding"`
 	NextAction string `json:"next_action"`
 	Complete   bool   `json:"complete"`
+}
+
+type sddCompactAttemptResult struct {
+	State string `json:"state"`
+	Token string `json:"token"`
 }
 
 // sddStatusV1 is the subset of `sdd-status --json` the kill-switch journeys read.
@@ -110,12 +117,23 @@ type sddStatusV1 struct {
 		Reason   string `json:"reason"`
 		Delivery string `json:"delivery"`
 	} `json:"reviewGate"`
-	BlockedReasons []string `json:"blockedReasons"`
-	TaskProgress   struct {
+	ReviewOffer *struct {
+		Available  bool   `json:"available"`
+		LineageID  string `json:"lineageId"`
+		Invocation string `json:"invocation"`
+	} `json:"reviewOffer"`
+	BlockedReasons    []string `json:"blockedReasons"`
+	PhaseInstructions struct {
+		Remediate []string `json:"remediate"`
+	} `json:"phaseInstructions"`
+	TaskProgress struct {
 		Total       int  `json:"total"`
 		Completed   int  `json:"completed"`
 		AllComplete bool `json:"allComplete"`
 	} `json:"taskProgress"`
+	RemediationState struct {
+		Required bool `json:"required"`
+	} `json:"remediationState"`
 }
 
 // gateResult is the subset of a lifecycle gate envelope the proofs read.
@@ -820,6 +838,59 @@ const sddVerifyReport = "```yaml\n" +
 	"build_output_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333\n" +
 	"```\n"
 
+const sddFailedVerifyReport = "```yaml\n" +
+	"schema: gentle-ai.verify-result/v1\n" +
+	"evidence_revision: " + sddFailedEvidence + "\n" +
+	"verdict: fail\n" +
+	"blockers: 1\n" +
+	"critical_findings: 0\n" +
+	"requirements: 1/1\n" +
+	"scenarios: 1/1\n" +
+	"test_command: go test ./internal/example\n" +
+	"test_exit_code: 1\n" +
+	"test_output_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222\n" +
+	"build_command: go test ./cmd/gentle-ai\n" +
+	"build_exit_code: 0\n" +
+	"build_output_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333\n" +
+	"```\n"
+
+const sddHistoricalStalePassReport = "```yaml\n" +
+	"schema: gentle-ai.verify-result/v1\n" +
+	"evidence_revision: sha256:1111111111111111111111111111111111111111111111111111111111111111\n" +
+	"verdict: pass\n" +
+	"blockers: 0\n" +
+	"critical_findings: 0\n" +
+	"requirements: 0/0\n" +
+	"scenarios: 1/1\n" +
+	"test_command: go test ./internal/example\n" +
+	"test_exit_code: 0\n" +
+	"test_output_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222\n" +
+	"build_command: go test ./cmd/gentle-ai\n" +
+	"build_exit_code: 0\n" +
+	"build_output_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333\n" +
+	"```\n"
+
+// sddHistoricalStalePass creates a first-time component whose change-local
+// delta spec uses the valid historical requirement heading. The all-green report
+// predates that count and must re-enter fresh review routing, never remediation.
+func sddHistoricalStalePass(sandbox *Sandbox) error {
+	if err := sddPlanningArtifacts("")(sandbox); err != nil {
+		return err
+	}
+	root := sddChangeRoot(sandbox)
+	if err := sandbox.write(filepath.Join(root, "specs", "prose", "spec.md"),
+		"### REQ-1: prose exists\n#### Scenario: prose is present\n"); err != nil {
+		return err
+	}
+	if err := sandbox.write(filepath.Join(root, "verify-report.md"), sddHistoricalStalePassReport); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "openspec"); err != nil {
+		return err
+	}
+	return sandbox.git(sandbox.Repo, "commit", "-qm", "historical SDD verification evidence")
+}
+
 // ---------------------------------------------------------------------------
 // Counted operator work
 // ---------------------------------------------------------------------------
@@ -866,6 +937,12 @@ var sddObjective = []string{
 	"--max-attempts", "6", "--max-changed-lines", "600",
 }
 
+var sddUnmanagedObjective = []string{
+	"--work-unit", "bench unmanaged correction",
+	"--evidence-goal", "repair admitted verification failure",
+	"--max-attempts", "2", "--max-changed-lines", "20",
+}
+
 // sddTerminalEvidence is the bounded evidence every finish must carry.
 var sddTerminalEvidence = []string{
 	"--diagnosis", "the benchmark drove this attempt to a terminal outcome",
@@ -896,6 +973,105 @@ func sddBeginFailBegin(r *journeyRun) error {
 	r.run(sddAttemptArgs(r, "begin", status.Revision, "bench-begin-two", sddObjective...), false)
 
 	return proveActiveAttempt(r.sandbox, 2, sddFailedEvidence)
+}
+
+func sddBeginFailedUnmanagedVerification(r *journeyRun) error {
+	status, err := readRuntimeStatus(r)
+	if err != nil {
+		return err
+	}
+	r.run(sddAttemptArgs(r, "begin", status.Revision, "bench-unmanaged-begin-verification", sddUnmanagedObjective...), false)
+	if status, err = readRuntimeStatus(r); err != nil {
+		return err
+	}
+	r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-unmanaged-finish-verification",
+		append([]string{"--outcome", "failed", "--evidence-revision", sddFailedEvidence}, sddTerminalEvidence...)...), false)
+	status, err = proveRuntime(r.sandbox)
+	if err != nil {
+		return err
+	}
+	if status.ActiveAttempt != nil || len(status.Attempts) != 1 || status.Attempts[0].Outcome != "failed" || status.NextAction != "begin" {
+		return fmt.Errorf("failed verification did not leave exactly one bounded successor: %#v", status)
+	}
+	return nil
+}
+
+func sddUnmanagedAcquireCorrection(r *journeyRun) error {
+	observation := r.run(append([]string{"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange, "--request-id", "bench-unmanaged-acquire"}, sddUnmanagedObjective...), false)
+	var result sddCompactAttemptResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
+		return fmt.Errorf("parse unmanaged correction acquire: %w (stderr: %s)", err, firstLine(observation.Stderr))
+	}
+	if observation.ExitCode != 0 || result.State != "proceed" || result.Token == "" {
+		return fmt.Errorf("unmanaged correction acquire = %#v exit=%d", result, observation.ExitCode)
+	}
+	r.sandbox.Scratch["unmanaged-token"] = result.Token
+	return nil
+}
+
+func sddUnmanagedSettle(r *journeyRun, requestID, failedEvidence string, wantSuccess bool) error {
+	token := r.sandbox.Scratch["unmanaged-token"]
+	observation := r.run(append([]string{
+		"sdd-attempt", "settle", "--cwd", r.sandbox.Repo, "--change", sddChange, "--token", token,
+		"--request-id", requestID, "--outcome", "passed", "--evidence-revision", sddCorrectedEvidence,
+		"--remediates-evidence-revision", failedEvidence,
+	}, sddTerminalEvidence...), false)
+	var result sddCompactAttemptResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
+		return fmt.Errorf("parse unmanaged correction settle: %w (stderr: %s)", err, firstLine(observation.Stderr))
+	}
+	if wantSuccess && (observation.ExitCode != 0 || result.State != "complete") {
+		return fmt.Errorf("bounded unmanaged correction did not settle: %#v exit=%d", result, observation.ExitCode)
+	}
+	if !wantSuccess && result.State != "blocked" {
+		return fmt.Errorf("invalid unmanaged correction = %#v, want blocked", result)
+	}
+	return nil
+}
+
+func sddUnmanagedCorrectionRemainsBounded(r *journeyRun) error {
+	if err := sddUnmanagedSettle(r, "bench-unmanaged-unchanged", sddFailedEvidence, false); err != nil {
+		return err
+	}
+	return proveActiveAttempt(r.sandbox, 2, sddFailedEvidence)
+}
+
+func sddUnmanagedWrongEvidenceIsRejected(r *journeyRun) error {
+	if err := sddUnmanagedSettle(r, "bench-unmanaged-wrong-evidence", sddWrongEvidence, false); err != nil {
+		return err
+	}
+	return proveActiveAttempt(r.sandbox, 2, sddFailedEvidence)
+}
+
+func sddUnmanagedCorrectionCompletes(r *journeyRun) error {
+	if err := sddUnmanagedSettle(r, "bench-unmanaged-correct", sddFailedEvidence, true); err != nil {
+		return err
+	}
+	status, err := proveRuntime(r.sandbox)
+	if err != nil {
+		return err
+	}
+	if status.Binding != nil || status.BindingRevision != "" || len(status.Attempts) != 2 ||
+		status.Attempts[1].RemediatesEvidenceRevision != sddFailedEvidence {
+		return fmt.Errorf("unmanaged correction invented review authority or lost failed evidence: %#v", status)
+	}
+	return nil
+}
+
+func sddUnmanagedReplayIsComplete(r *journeyRun) error {
+	observation := r.run(append([]string{"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange, "--request-id", "bench-unmanaged-replay"}, sddUnmanagedObjective...), false)
+	var result sddCompactAttemptResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
+		return fmt.Errorf("parse unmanaged correction replay: %w", err)
+	}
+	if observation.ExitCode != 0 || result.State != "complete" {
+		return fmt.Errorf("unmanaged correction replay = %#v exit=%d", result, observation.ExitCode)
+	}
+	return nil
+}
+
+func sddReplaceFailedVerifyReport(sandbox *Sandbox) error {
+	return sandbox.write(filepath.Join(sddChangeRoot(sandbox), "verify-report.md"), sddVerifyReport)
 }
 
 // sddBeginThenInterrupt closes the first attempt as interrupted with budget to
@@ -1340,14 +1516,33 @@ func sddStatusAssertion(name string, check func(sddStatusV1) error) func(*Sandbo
 	}
 }
 
-func sddStatusFailsClosed(reason string) func(*Sandbox, Observation) error {
-	return sddStatusAssertion("fail-closed SDD authority discovery", func(status sddStatusV1) error {
-		if status.Dependencies.Verify != "blocked" || status.NextRecommended != "resolve-review" {
-			return fmt.Errorf("verify=%q nextRecommended=%q, want blocked/resolve-review; blocked reasons=%v",
+// sddStatusIgnoresCorruptCompactAuthorityPreVerify (formerly
+// sddStatusFailsClosed) pinned `applyPreVerifyCompactBridgeRouting`, deleted
+// by Wave 4 commit 21dfc0fe ("remove pre-verify review supervision, add
+// offer absence guard", S3) along with `applyPreVerifyReviewRouting` (the
+// mechanism j41 pinned). `discoverCompactPreVerifyAuthority`
+// (internal/sddstatus/review_gate.go) still computes the exact `Relevant`/
+// `Reason` values these fixtures are named for (ambiguous authorities,
+// missing/mismatched receipt, non-allow gate, foreign OpenSpec path), but
+// nothing in production reads them anymore -- only the still-alive
+// `Eligible` field feeds the unrelated stale-report-recovery bridge. This is
+// spec-ratified, not an oversight: `rdd-post-verify-review-offer`'s "Offer
+// Occurs Strictly Post-Verify, Pre-Archive" requirement is unconditional
+// ("SDD MUST NOT consult, block on, or offer RDD review before or during
+// apply"), and these fixtures never reach a passing SDD verify-report, so
+// under Wave 4 the corrupted compact authority is correctly never even
+// looked at. Corrective verify cycle 3 (CRITICAL-C) rewrites the assertion
+// to pin that absence directly, the same "ready/verify, zero blocked
+// reasons, regardless of what garbage exists in the review store" shape
+// j41 already established for the sibling pre-verify-routing case.
+func sddStatusIgnoresCorruptCompactAuthorityPreVerify(_ string) func(*Sandbox, Observation) error {
+	return sddStatusAssertion("corrupt compact authority is not consulted pre-verify", func(status sddStatusV1) error {
+		if status.Dependencies.Verify != "ready" || status.NextRecommended != "verify" {
+			return fmt.Errorf("verify=%q nextRecommended=%q, want ready/verify (pre-verify review consultation was removed in Wave 4); blocked reasons=%v",
 				status.Dependencies.Verify, status.NextRecommended, status.BlockedReasons)
 		}
-		if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), reason) {
-			return fmt.Errorf("blocked reasons %v do not contain %q", status.BlockedReasons, reason)
+		if len(status.BlockedReasons) != 0 {
+			return fmt.Errorf("pre-verify status reports blocked reasons despite no review consultation: %v", status.BlockedReasons)
 		}
 		return nil
 	})
@@ -1546,46 +1741,43 @@ func sddJourneys() []Journey {
 		// -------------------------------------------------- kill switch and SDD
 		{
 			ID:     "j41-kill-switch-versus-sdd-pre-verify",
-			Title:  "Reviews off at the pre-verify decision: the router steps aside instead of naming a command the operator cannot run",
-			Source: "shape 5 (the kill switch and the pre-verify router disagreeing) + a limitation this corpus measured closed",
-			// This journey was written to turn a believed-open limitation into a
-			// measured one: the claim was that the SDD pre-verify router still
-			// demanded a bounded review while reviews were switched off, which
-			// would name `review start` as the next action and then refuse it — a
-			// dead end whose only exit is undoing the operator's own decision.
+			Title:  "Pre-verify: RDD supervises nothing, on or off, before verify runs",
+			Source: "shape 5 (the kill switch and the pre-verify router) + Wave 4's own removal of pre-verify review supervision",
+			// Corrective verify cycle 3 (CRITICAL-C): this journey pinned a
+			// PRE-Wave-4 shape -- a pre-verify review gate that blocked
+			// Dependencies.Verify and routed nextRecommended to "review" while
+			// reviews were on, stepping aside only when the switch was off. Wave
+			// 4 commit 21dfc0fe ("remove pre-verify review supervision, add offer
+			// absence guard", S3) deliberately removed that gate entirely --
+			// ratified by rdd-post-verify-review-offer's "Offer Occurs Strictly
+			// Post-Verify, Pre-Archive" requirement: SDD MUST NOT consult, block
+			// on, or offer RDD review before or during apply, full stop, on
+			// either side of the switch. This journey was never updated when
+			// that landed, so it pinned dead behavior and could never again
+			// observe a real regression in the code path it named.
 			//
-			// The claim is FALSE as of the run that failed this journey's old
-			// assertions, and the failure is how the corpus found out. The
-			// assertions below now pin the behavior that replaced it, in both
-			// positions, because one half alone proves nothing:
-			//
-			//   reviews ON  — nextRecommended `review`, verify blocked, and a
-			//                 blocked reason that says why. The gate is real.
-			//   reviews OFF — nextRecommended `verify`, verify ready, and NO
-			//                 blocked reasons at all. The router steps aside
-			//                 rather than pointing at a refusal.
-			//
-			// Then the switch goes back on and the gate returns, because a kill
-			// switch that cannot be un-flipped would be a different defect wearing
-			// this journey's pass. Nothing here blocks: the product is correct on
-			// this shape, and the row's zeros are the finding.
-			//
-			// `review start` while off is deliberately NOT run here. With the
-			// switch off the router never names it, so running it would measure an
-			// off-path refusal — and j03 already owns that measurement.
+			// Rewritten to pin the CURRENT, ratified shape: with planning
+			// complete and no verify report yet, nextRecommended is "verify" and
+			// Dependencies.Verify is "ready" -- identically, byte-for-byte in
+			// the fields that matter -- whether the switch is on or off, because
+			// there is no pre-verify review supervision left to differ. The
+			// switch toggling is kept in the journey (rather than deleted
+			// outright) specifically to prove that absence: on, off, and back on
+			// all produce the same pre-verify routing.
 			Steps: []Step{
 				{Name: "fixture: change with planning complete and no verification yet", Fixture: sddPlanningArtifacts("")},
 				{Name: "sdd-status with reviews on", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("pre-verify routing with reviews on", func(status sddStatusV1) error {
-						if status.NextRecommended != "review" {
-							return fmt.Errorf("nextRecommended = %q, want review", status.NextRecommended)
+						if status.NextRecommended != "verify" {
+							return fmt.Errorf("nextRecommended = %q, want verify: pre-verify review supervision was removed in Wave 4", status.NextRecommended)
 						}
-						if status.Dependencies.Verify != "blocked" {
-							return fmt.Errorf("dependencies.verify = %q, want blocked", status.Dependencies.Verify)
+						if status.Dependencies.Verify != "ready" {
+							return fmt.Errorf("dependencies.verify = %q, want ready; blocked reasons = %v",
+								status.Dependencies.Verify, status.BlockedReasons)
 						}
-						if len(status.BlockedReasons) == 0 {
-							return errors.New("verify is blocked and no blocked reason says why")
+						if len(status.BlockedReasons) != 0 {
+							return fmt.Errorf("enabled pre-verify routing reports blocked reasons: %v", status.BlockedReasons)
 						}
 						return nil
 					})},
@@ -1594,7 +1786,7 @@ func sddJourneys() []Journey {
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("pre-verify routing with reviews off", func(status sddStatusV1) error {
 						if status.NextRecommended != "verify" {
-							return fmt.Errorf("nextRecommended = %q, want verify: the router still steers at a review the operator is not allowed to start", status.NextRecommended)
+							return fmt.Errorf("nextRecommended = %q, want verify", status.NextRecommended)
 						}
 						if status.Dependencies.Verify != "ready" {
 							return fmt.Errorf("dependencies.verify = %q, want ready; blocked reasons = %v",
@@ -1608,12 +1800,12 @@ func sddJourneys() []Journey {
 				{Name: "mode enable", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
 				{Name: "sdd-status with reviews back on", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
-					After: sddStatusAssertion("the gate returns when the switch does", func(status sddStatusV1) error {
-						if status.NextRecommended != "review" {
-							return fmt.Errorf("nextRecommended = %q, want review: the switch went back on and the gate did not return", status.NextRecommended)
+					After: sddStatusAssertion("pre-verify routing is unchanged once the switch returns", func(status sddStatusV1) error {
+						if status.NextRecommended != "verify" {
+							return fmt.Errorf("nextRecommended = %q, want verify: re-enabling must not resurrect pre-verify supervision", status.NextRecommended)
 						}
-						if status.Dependencies.Verify != "blocked" {
-							return fmt.Errorf("dependencies.verify = %q, want blocked", status.Dependencies.Verify)
+						if status.Dependencies.Verify != "ready" {
+							return fmt.Errorf("dependencies.verify = %q, want ready", status.Dependencies.Verify)
 						}
 						return nil
 					})},
@@ -1621,34 +1813,46 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j42-kill-switch-versus-sdd-archive",
-			Title:  "Reviews off at the archive decision: the product defers and never fabricates an approval",
-			Source: "shape 5 (a shipped agent contract and the product disagreeing about the same fact)",
-			// The second believed-open item is that `sdd-archive` still requires
-			// `reviewGate.result: allow`. This journey measures the product half of
-			// that pair, which is the half a black-box benchmark can see.
+			Title:  "The offer is an invitation, never a gate: archive proceeds with reviews on or off",
+			Source: "shape 5 (a shipped agent contract and the product disagreeing about the same fact) + corrective verify cycle 4 BLOCKER-1",
+			// Corrective verify cycle 4, BLOCKER-1 (rdd-post-verify-review-offer's
+			// "Decline Proceeds to Unmanaged Ordinary Archive"): a genuinely
+			// missing receipt is decline-by-absence-of-action, not a blocker, on
+			// EITHER side of the switch. Superseded expectation (documented, not
+			// silently dropped): this journey previously required
+			// dependencies.archive = "blocked" with reviews on, treating an
+			// unacted-on offer as a hard gate.
 			//
-			// Expected: with reviews ON the archive dependency is blocked and the
-			// gate result is not allow. With reviews OFF the archive dependency
-			// becomes ready, the gate reports the `disabled/unmanaged` delivery
-			// disposition — and the result is still NOT `allow`, because declining
-			// to manage is not approval.
+			// Rewritten to pin the ratified "invitation, never a gate" shape: with
+			// reviews on, verify passed, and no receipt, archive is READY and
+			// reviewOffer is present (the invitation the user may act on or not --
+			// declining simply means archiving). With reviews off, archive is
+			// READY and reviewOffer is structurally ABSENT (corrective verify
+			// cycle CRITICAL-1/CRITICAL-3, rdd-post-verify-review-offer's
+			// "Kill-Switch-Off Is Structural Absence" requirement — no offer, no
+			// reviewGate, no ceremony of any kind). Both sides never fabricate an
+			// approval (reviewGate stays absent throughout), and the one thing
+			// that still distinguishes them is exactly the offer itself, not
+			// whether archive proceeds.
 			//
-			// So the product is already correct and nothing here blocks. The
-			// remaining half of the limitation is a shipped document: the
-			// sdd-archive skill contract requires the literal `allow` that a
-			// disabled run is right never to produce. That is a text this
-			// benchmark cannot execute, so it is asserted here as the value the
-			// product will never hand that contract, and reported as such.
+			// The shipped sdd-archive skill contract's residual reference to
+			// `reviewGate.result: allow` is a stale document this benchmark cannot
+			// execute; not re-asserted here since the product's own correct
+			// behavior no longer produces a `reviewGate` field at all in the
+			// no-receipt shape either path takes.
 			Steps: []Step{
 				{Name: "fixture: change complete with an independent verification", Fixture: sddPlanningArtifacts(sddVerifyReport)},
 				{Name: "sdd-status with reviews on", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("archive routing with reviews on", func(status sddStatusV1) error {
-						if status.Dependencies.Archive != "blocked" {
-							return fmt.Errorf("dependencies.archive = %q, want blocked", status.Dependencies.Archive)
+						if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+							return fmt.Errorf("dependencies.archive = %q next = %q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
 						}
-						if status.ReviewGate == nil || status.ReviewGate.Result == "allow" {
-							return fmt.Errorf("reviewGate = %+v, want a present result that is not allow", status.ReviewGate)
+						if status.ReviewGate != nil {
+							return fmt.Errorf("reviewGate = %+v, want structural absence (decline, no review ever started)", status.ReviewGate)
+						}
+						if status.ReviewOffer == nil || !status.ReviewOffer.Available {
+							return fmt.Errorf("reviewOffer = %+v, want an available invitation", status.ReviewOffer)
 						}
 						return nil
 					})},
@@ -1660,14 +1864,77 @@ func sddJourneys() []Journey {
 							return fmt.Errorf("dependencies.archive = %q, want unblocked; blocked reasons = %v",
 								status.Dependencies.Archive, status.BlockedReasons)
 						}
-						if status.ReviewGate == nil {
-							return errors.New("reviewGate is absent, so the disabled disposition is not on the wire")
+						if status.ReviewGate != nil {
+							return fmt.Errorf("reviewGate = %+v, want structural absence while the kill switch is off", status.ReviewGate)
 						}
-						if status.ReviewGate.Delivery != deliveryDisabledUnmanaged {
-							return fmt.Errorf("reviewGate.delivery = %q, want %q", status.ReviewGate.Delivery, deliveryDisabledUnmanaged)
+						if status.ReviewOffer != nil {
+							return fmt.Errorf("reviewOffer = %+v, want structural absence while the kill switch is off", status.ReviewOffer)
 						}
-						if status.ReviewGate.Result == "allow" {
-							return errors.New("a disabled run fabricated the approval the archive contract asks for")
+						return nil
+					})},
+			},
+		},
+		{
+			ID:     "j63-disabled-failed-verification-unmanaged-remediation",
+			Title:  "Disabled failed verification admits one evidence-bound correction, then requires a fresh verification",
+			Source: "#2182 acceptance: disabled/unmanaged remediation successor",
+			Steps: []Step{
+				{Name: "fixture: completed change with admitted failed verification", Fixture: sddPlanningArtifacts(sddFailedVerifyReport)},
+				{Name: "enabled mode still refuses missing review authority", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("enabled remediation", func(status sddStatusV1) error {
+						if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "bounded review transaction is missing") {
+							return fmt.Errorf("enabled remediation lost its bounded review refusal: %v", status.BlockedReasons)
+						}
+						return nil
+					})},
+				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
+				{Name: "failed verification enters unmanaged remediation", Requires: sddAttemptBeginCapability, Composite: sddBeginFailedUnmanagedVerification},
+				{Name: "disabled status names remediation without review authority", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json", "--instructions"), After: sddStatusAssertion("disabled remediation", func(status sddStatusV1) error {
+						if status.NextRecommended != "remediate" || status.ReviewGate != nil {
+							return fmt.Errorf("disabled failed verification = next %q reviewGate=%+v", status.NextRecommended, status.ReviewGate)
+						}
+						instructions := strings.Join(status.PhaseInstructions.Remediate, "\n")
+						if !strings.Contains(instructions, "gentle-ai sdd-attempt acquire") ||
+							!strings.Contains(instructions, "--remediates-evidence-revision "+sddFailedEvidence) {
+							return fmt.Errorf("disabled remediation emitted no executable evidence-bound continuation: %s", instructions)
+						}
+						return nil
+					})},
+				{Name: "acquire the one bounded correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedAcquireCorrection},
+				{Name: "unchanged candidate cannot satisfy correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedCorrectionRemainsBounded},
+				{Name: "fixture: correction changes the candidate", Fixture: sddBoundedCorrection},
+				{Name: "wrong failed evidence cannot satisfy correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedWrongEvidenceIsRejected},
+				{Name: "settle the evidence-bound correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedCorrectionCompletes},
+				{Name: "replay cannot acquire another correction", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedReplayIsComplete},
+				{Name: "fresh verification is required before archive", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("fresh verification", func(status sddStatusV1) error {
+						if status.Dependencies.Verify != "ready" || status.Dependencies.Archive != "blocked" || status.NextRecommended != "verify" {
+							return fmt.Errorf("post-correction status = verify %q archive %q next %q", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+						}
+						return nil
+					})},
+				{Name: "fixture: fresh independent verification passes", Fixture: sddReplaceFailedVerifyReport},
+				{Name: "archive is ready without review authority", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("disabled archive", func(status sddStatusV1) error {
+						if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || status.ReviewGate != nil || status.ReviewOffer != nil {
+							return fmt.Errorf("disabled archive = archive %q next %q gate=%+v offer=%+v", status.Dependencies.Archive, status.NextRecommended, status.ReviewGate, status.ReviewOffer)
+						}
+						return nil
+					})},
+				{Name: "mode enable after unmanaged correction", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
+				{Name: "enabled archive requires bounded review authority", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("re-enabled unmanaged correction", func(status sddStatusV1) error {
+						if status.Dependencies.Verify != "all_done" || status.Dependencies.Archive != "blocked" || status.NextRecommended != "resolve-review" {
+							return fmt.Errorf("re-enabled archive = verify %q archive %q next %q", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+						}
+						if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" ||
+							!strings.Contains(status.ReviewGate.Reason, "disabled/unmanaged correction") ||
+							!strings.Contains(status.ReviewGate.Reason, "gentle-ai review start") {
+							return fmt.Errorf("re-enabled archive omitted bounded review authority: %+v", status.ReviewGate)
+						}
+						if status.ReviewOffer == nil || !status.ReviewOffer.Available || !strings.Contains(status.ReviewOffer.Invocation, "review start") {
+							return fmt.Errorf("re-enabled archive omitted executable review offer: %+v", status.ReviewOffer)
 						}
 						return nil
 					})},
@@ -1701,51 +1968,51 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j53-sdd-ambiguous-authorities-fail-closed",
-			Title:  "Two approved candidates for the same OpenSpec change: SDD refuses to choose one",
-			Source: "compact authority discovery contract: ambiguous governing candidates block",
+			Title:  "Two approved candidates for the same OpenSpec change: not consulted before verify",
+			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddAmbiguousAuthorityFixture),
 				Step{Name: "fixture: duplicate its terminal authority", Fixture: sddDuplicateSelectedAuthority},
-				Step{Name: "sdd-status refuses ambiguous authorities", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("multiple eligible path-bound compact authorities found")},
+				Step{Name: "sdd-status ignores the ambiguous authorities pre-verify", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusIgnoresCorruptCompactAuthorityPreVerify("multiple eligible path-bound compact authorities found")},
 			),
 		},
 		{
 			ID:     "j54-sdd-missing-authority-receipt-fails-closed",
-			Title:  "Approved compact authority without its receipt: SDD fails closed",
-			Source: "compact authority discovery contract: a missing receipt is not approval",
+			Title:  "Approved compact authority without its receipt: not consulted before verify",
+			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
 				Step{Name: "fixture: remove the published authority receipt", Fixture: sddRemoveReceipt},
-				Step{Name: "sdd-status refuses the missing receipt", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("path-bound compact authority receipt is missing")},
+				Step{Name: "sdd-status ignores the missing receipt pre-verify", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusIgnoresCorruptCompactAuthorityPreVerify("path-bound compact authority receipt is missing")},
 			),
 		},
 		{
 			ID:     "j55-sdd-mismatched-authority-receipt-fails-closed",
-			Title:  "Approved compact authority with a mismatched receipt: SDD fails closed",
-			Source: "compact authority discovery contract: receipt bytes must equal approved state",
+			Title:  "Approved compact authority with a mismatched receipt: not consulted before verify",
+			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
 				Step{Name: "fixture: replace the published authority receipt", Fixture: sddMismatchReceipt},
-				Step{Name: "sdd-status refuses the mismatched receipt", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("path-bound compact authority receipt does not equal approved state")},
+				Step{Name: "sdd-status ignores the mismatched receipt pre-verify", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusIgnoresCorruptCompactAuthorityPreVerify("path-bound compact authority receipt does not equal approved state")},
 			),
 		},
 		{
 			ID:     "j56-sdd-non-allow-post-apply-gate-fails-closed",
-			Title:  "Valid approved authority over changed bytes: SDD fails closed on a non-allow post-apply gate",
-			Source: "compact authority discovery contract: a valid receipt still needs an allow gate",
+			Title:  "Valid approved authority over changed bytes: not consulted before verify",
+			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
 				Step{Name: "fixture: change the candidate after approval", Fixture: sddDenyPostApply},
-				Step{Name: "sdd-status refuses the non-allow gate", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("path-bound compact authority post-apply gate is not allow")},
+				Step{Name: "sdd-status ignores the non-allow gate pre-verify", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusIgnoresCorruptCompactAuthorityPreVerify("path-bound compact authority post-apply gate is not allow")},
 			),
 		},
 		{
 			ID:     "j58-sdd-foreign-openspec-path-fails-closed",
-			Title:  "Mixed OpenSpec authority path set: SDD refuses the selected change",
-			Source: "compact authority discovery contract: mixed foreign OpenSpec paths are not change-bound authority",
+			Title:  "Mixed OpenSpec authority path set: not consulted before verify",
+			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddForeignAuthorityFixture),
-				Step{Name: "sdd-status refuses the foreign OpenSpec path", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("path-bound compact authority contains a foreign OpenSpec path")},
+				Step{Name: "sdd-status ignores the foreign OpenSpec path pre-verify", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusIgnoresCorruptCompactAuthorityPreVerify("path-bound compact authority contains a foreign OpenSpec path")},
 			),
 		},
 
@@ -1779,23 +2046,52 @@ func sddJourneys() []Journey {
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
 				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberLineage},
 				{Name: "walk into the recovery guard rails", Requires: recoverCapability, Composite: sddWalkIntoRecoveryGuardRails},
-				// The third rail is the one whose honest exit is not a command.
-				// The approval covers exactly the candidate in the working tree,
-				// so nothing the operator can run makes it stale; the bytes have
-				// to change first. The product cannot print a complete command
-				// either, because the successor's name is the operator's to
-				// choose. The declaration is what says that out loud, and it is
-				// verified against the words the product actually printed.
+				// This step used to carry a by-design world-action declaration:
+				// the approval covers exactly the candidate in the working tree,
+				// so nothing the operator runs makes it stale, and the product
+				// was said to be unable to print a complete command because the
+				// successor's name is the operator's to choose.
+				//
+				// The product now prints one, so the declaration was failing as
+				// a stale claim. It is removed rather than restated, because the
+				// runner already counts this in_band from mechanical evidence and
+				// a declaration that disagrees with what the product printed is
+				// worth less than the printed words themselves.
 				{Name: "invalidate the healthy approved authority", Requires: invalidateCapability,
-					Args: sddInvalidateHealthyApproved,
-					ByDesign: &ByDesignDeclaration{
-						Shape:      ByDesignWorldAction,
-						NextAction: "change the candidate first",
-					}},
+					Args: sddInvalidateHealthyApproved},
 				{Name: "the refused invalidation changed nothing", Composite: sddProveApprovalSurvived},
 				{Name: "fixture: change the candidate, which is what all three asked for", Fixture: stageProse("", "changed")},
 				{Name: "recover, following exactly what the gate then names",
 					Requires: recoverCapability, Composite: recoverScopeChangeRoundTrip("review-guardrail-successor")},
+			},
+		},
+		{
+			ID:     "j44-sdd-historical-requirement-stale-pass",
+			Title:  "Historical change-local requirement heading: stale PASS restarts verification instead of failed remediation",
+			Source: "issue #2137 (historical OpenSpec requirement compatibility and stale verification routing)",
+			Steps: []Step{
+				{Name: "fixture: first-time component with historical requirement evidence", Fixture: sddHistoricalStalePass},
+				// Wave 4 S3 removed pre-verify review supervision: this fixture
+				// carries no review artifacts anywhere, so absent authority is
+				// decline-by-absence and the stale PASS re-enters verification
+				// directly (never review, never remediation). Archive stays
+				// blocked until that fresh verification lands. Mirrors
+				// TestEnabledStaleEvidenceWithNoReceiptRestartsVerification.
+				{Name: "sdd-status routes stale PASS to fresh verification", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("historical stale PASS routing", func(status sddStatusV1) error {
+						if status.NextRecommended != "verify" || status.Dependencies.Verify != "ready" || status.Dependencies.Archive != "blocked" {
+							return fmt.Errorf("nextRecommended=%q verify=%q archive=%q, want fresh verification before archive", status.NextRecommended, status.Dependencies.Verify, status.Dependencies.Archive)
+						}
+						if status.RemediationState.Required {
+							return errors.New("stale PASS entered failed-verification remediation")
+						}
+						for _, reason := range status.BlockedReasons {
+							if strings.Contains(reason, "bounded review transaction is missing") || strings.Contains(reason, "remediation") {
+								return fmt.Errorf("stale PASS exposed failed-evidence routing: %q", reason)
+							}
+						}
+						return nil
+					})},
 			},
 		},
 	}

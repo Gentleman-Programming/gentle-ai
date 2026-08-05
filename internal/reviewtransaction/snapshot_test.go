@@ -1573,7 +1573,7 @@ func TestBatchGitProtocolReadersRejectDiagnostics(t *testing.T) {
 			return err
 		}},
 		{name: "cat-file-batch", run: func() error {
-			_, err := batchBlobContents(context.Background(), repo, []string{strings.Repeat("a", 40)})
+			_, err := batchBlobContents(context.Background(), repo, []string{strings.Repeat("a", 40)}, defaultGitOutputLimit)
 			return err
 		}},
 	}

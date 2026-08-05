@@ -17,7 +17,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 	want := map[string]string{
 		"fixtures/capabilities-v1.4.fixture.json": "84e0db457b76b97b35c2be772dfc647f9eab66810ea98f64fed85645c3c266ba",
 		"fixtures/start.fixture.json":             "f369160ac26eb3427b57de2dd01c9d8c81e51c8a2bd546446780129d31b1945b",
-		"fixtures/start-v2.fixture.json":          "388c7c21374b89afe2d42d64bd1987d17ec0e2c7151cab1c56a08969ffb2ea0e",
+		"fixtures/start-v2.fixture.json":          "688614bccff748975d5d9b3cce3c7f771cf3920e3cfd2d37fff61a5240f0364a",
 		"fixtures/status.fixture.json":            "555054d8046a896162995dcb117752f9cd1ef903fb9ebaad29af1b7e7f319bb3",
 		"fixtures/status-v2.fixture.json":         "5410d8bbae1b7152a43b3a5c4c880e9e98a5e47b76d910456f5ef13f19836f3a",
 		"fixtures/status-ambiguous.fixture.json":  "ee695fd58ba72adfb3b51dfd16432a177498173a45bfcb594d6bdc53bfa32e6e",
@@ -71,7 +71,7 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/capabilities-v2.1.fixture.json": "4bbcbaed1b20e6ea8f9c615f35ff17b13ee69b4648784a4906191880751c668d",
-		"fixtures/consent-v3.fixture.json":        "ead7d16aa1dabe9db4b7675d7e3b3de5594d7856f98960d8ec9bba99f91c0e31",
+		"fixtures/consent-v3.fixture.json":        "e60ff36dfe92834e788ea7733d343d45764b2ef4f29008ff6b1403ad6a987edd",
 		"schemas/capabilities-v2.1.schema.json":   "9ede8ebbe3e169cf6ca4f4a6882c9c4e588a6d1073d8e22a155649cd41d38cd0",
 		"schemas/consent-v3.schema.json":          "80915f5f4f43a494826253d1e7251fc463989f41d2cf163a6a52a8b4328c023c",
 		"schemas/status.schema.json":              "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",

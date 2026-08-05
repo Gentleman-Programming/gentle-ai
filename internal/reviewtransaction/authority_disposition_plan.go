@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 // AuthorityDispositionPlanSchema identifies AuthorityDispositionPlan's shape.
@@ -16,10 +18,10 @@ const AuthorityDispositionPlanSchema = "gentle-ai.review-authority-disposition-p
 // disposition plan for a closed-classified authority graph anomaly
 // (rdd-authority-disposition-plan). It is the one reusable shape for every
 // future disposition wave: Wave 2's leaf-only executor
-// (authority_disposition_execute.go, Slice S2) admits only a cardinality-one
-// closure; a future wave (#2014, #1656) reuses this exact shape for a larger
-// closure by replacing admission only — never the plan shape or digest
-// domains (design decision 5).
+// (authority_disposition_execute.go, Slice S2) admitted only a cardinality-one
+// closure; Wave 6 (#2014, #1656) reuses this exact shape for a larger closure
+// by relaxing admission only (admitClosureDisposition) — never the plan shape
+// or digest domains (design decision 5).
 //
 // Schema is an explicitly-permitted eleventh serialization field beyond the
 // spec's ten (rdd-authority-disposition-plan / "Plan Field Set"). Authorization
@@ -154,34 +156,46 @@ func deriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reas
 // predicate already proved read-only (shadow_authority_health.go): a
 // lineage's descendants are every edge in the same report whose
 // PredecessorLineageID names it. It never re-reads authority state or
-// consults a cache — only the already-loaded report. A leaf seed (no report
-// edge names it as predecessor) derives closure = {seed} exactly, which is
-// Wave 2's whole disposition scope; a seed with descendants derives their
-// full transitive closure so a future wave can reuse this exact function
+// consults a cache — only the already-loaded report.
+//
+// As of Wave 6 (rdd-authority-disposition-plan / "Deterministic Closure
+// Derivation From the Graph Source of Record"), ordering is normative, not
+// just deterministic: entries emit deepest-descendant-first with the seed
+// last via a post-order depth-first walk over the same children map,
+// visiting each node's children in lexicographic order before appending the
+// node itself — so every prefix of the returned slice is a set of nodes with
+// no not-yet-emitted ancestor, which is exactly what makes each ordered
+// disposition prefix a valid retained graph (rdd-closure-disposition-execution
+// / "Descendant-First Ordered Disposition"). The visited guard doubles as
+// cycle protection, matching the old BFS's guarantee. A leaf seed (no report
+// edge names it as predecessor) derives closure = {seed} exactly — the
+// identity of the pre-Wave-6 lexicographic sort for N=1 — which was Wave 2's
+// whole disposition scope; a seed with descendants derives their full
+// transitive closure so Wave 6's executor can reuse this exact function
 // unchanged (design decision 5).
 func authorityDispositionClosure(report CompactRecoveryInspectionReport, seed string) []string {
 	children := make(map[string][]string, len(report.Edges))
 	for _, edge := range report.Edges {
 		children[edge.PredecessorLineageID] = append(children[edge.PredecessorLineageID], edge.SuccessorLineageID)
 	}
-	visited := map[string]bool{seed: true}
-	queue := []string{seed}
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-		for _, child := range children[current] {
-			if visited[child] {
-				continue
-			}
-			visited[child] = true
-			queue = append(queue, child)
+	for lineage := range children {
+		slices.SortFunc(children[lineage], func(left, right string) int { return cmp.Compare(left, right) })
+	}
+
+	closure := make([]string, 0, len(children)+1)
+	visited := make(map[string]bool, len(children)+1)
+	var visitDescendantsFirst func(node string)
+	visitDescendantsFirst = func(node string) {
+		if visited[node] {
+			return
 		}
+		visited[node] = true
+		for _, child := range children[node] {
+			visitDescendantsFirst(child)
+		}
+		closure = append(closure, node)
 	}
-	closure := make([]string, 0, len(visited))
-	for lineage := range visited {
-		closure = append(closure, lineage)
-	}
-	slices.SortFunc(closure, func(left, right string) int { return cmp.Compare(left, right) })
+	visitDescendantsFirst(seed)
 	return closure
 }
 
@@ -239,6 +253,12 @@ func authorityDispositionPlanDigest(plan AuthorityDispositionPlan) (string, erro
 // pending-confirmation assumption 1).
 const authorityDispositionAuthorizationSchema = "gentle-ai.review-disposition-authorization/v1"
 
+// AuthorityDispositionAuthorizationSchema is the exported form of
+// authorityDispositionAuthorizationSchema for Wave 6 Slice S4's negotiated-
+// transition wiring (internal/cli), which needs to publish the disposition
+// collect{}'s schema without duplicating the literal.
+const AuthorityDispositionAuthorizationSchema = authorityDispositionAuthorizationSchema
+
 // authorityDispositionAuthorizationBinding renders the exact authorization
 // text a maintainer must supply for plan to be admitted at execution time,
 // shaped like authorityRepairAuthorizationBinding: schema, repository,
@@ -256,15 +276,30 @@ func authorityDispositionAuthorizationBinding(plan AuthorityDispositionPlan) str
 }
 
 // validateAuthorityDispositionAuthorization proves an authorized plan's
-// Authorization binds to its own plan_digest AND the CURRENT
-// authority_inventory_revision. No elapsed-time expiry check exists anywhere
-// in this function or its caller — CAS on ExpectedRevisions (Slice S2) plus
-// this revision comparison is the entire staleness guard (rdd-authority-
-// disposition-plan / "Authorization Binds to Digest and Revision, No
-// Wall-Clock Expiry", pending-confirmation assumption 1).
-func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, currentAuthorityInventoryRevision string) error {
-	if plan.AuthorityInventoryRevision != currentAuthorityInventoryRevision {
-		return fmt.Errorf("%w: authority inventory revision drifted from %q to %q", ErrConcurrentUpdate, plan.AuthorityInventoryRevision, currentAuthorityInventoryRevision)
+// Authorization binds to its own plan_digest AND the
+// authority_inventory_revision named by callerAuthorityInventoryRevision.
+//
+// Fix cycle 2 (WARNING-2, sdd-verify cycle-2): callerAuthorityInventoryRevision
+// is NOT always the live, freshly re-derived revision — its meaning is
+// caller-supplied and depends on the execution path. On a FRESH execution
+// (lockedAuthorityDispositionMutation, authority_disposition_execute.go) the
+// caller passes the just-re-derived current revision, so this genuinely
+// checks the plan against the live store. On a RESUME the caller passes
+// plan.AuthorityInventoryRevision — the plan's own FROZEN value, compared to
+// itself — which makes the drift half of this check a deliberate no-op
+// (a narrowing re-derivation mid-closure is exactly what forward-only resume
+// forbids); CAS-all-N is the live guard for the members a resume actually
+// disposes. Only the binding half (Authorization matching its own frozen
+// plan_digest/inventory_revision) is unconditional on every path — which is
+// what makes a forged or mismatched Authorization refuse regardless of
+// fresh-vs-resume. No elapsed-time expiry check exists anywhere in this
+// function or its caller — CAS on ExpectedRevisions (Slice S2) plus the
+// drift comparison (on the paths where it is live) is the entire staleness
+// guard (rdd-authority-disposition-plan / "Authorization Binds to Digest and
+// Revision, No Wall-Clock Expiry", pending-confirmation assumption 1).
+func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, callerAuthorityInventoryRevision string) error {
+	if plan.AuthorityInventoryRevision != callerAuthorityInventoryRevision {
+		return fmt.Errorf("%w: authority inventory revision drifted from %q to %q", ErrConcurrentUpdate, plan.AuthorityInventoryRevision, callerAuthorityInventoryRevision)
 	}
 	if plan.Authorization != authorityDispositionAuthorizationBinding(plan) {
 		// refusal:by-design human-authority: only a maintainer can supply a correct authorization binding; there is no command that fixes a forged one
@@ -276,7 +311,7 @@ func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, cu
 // compactRepairCommandText renders the exact runnable `review repair`
 // invocation for one leaf authority disposition plan a caller already
 // confirmed derives and admits (deriveAuthorityDispositionPlanAtRepo +
-// admitLeafDisposition — the same read-only prediction `review repair
+// admitClosureDisposition — the same read-only prediction `review repair
 // --preflight` runs), with the persisted plan_digest and
 // authority_inventory_revision preflight would publish and the authorization
 // template execution verifies. plan_digest is actor/reason-independent
@@ -290,11 +325,11 @@ func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, cu
 func compactRepairCommandText(repo string, plan AuthorityDispositionPlan) string {
 	template := plan
 	template.Actor, template.Reason = "<actor>", "<why-it-is-repaired>"
-	return fmt.Sprintf("`gentle-ai review repair --cwd %q --plan-digest %q --inventory-revision %q --actor \"<actor>\" --reason \"<why-it-is-repaired>\" --authorization \"<maintainer-authorization>\"`"+
-		" (`gentle-ai review repair --preflight --cwd %q` re-confirms these are still current);"+
+	return fmt.Sprintf("`gentle-ai review repair --cwd %s --plan-digest %q --inventory-revision %q --actor \"<actor>\" --reason \"<why-it-is-repaired>\" --authorization \"<maintainer-authorization>\"`"+
+		" (`gentle-ai review repair --preflight --cwd %s` re-confirms these are still current);"+
 		" the repair quarantines the entry whole and rewrites nothing, so the recorded authorization bytes survive exactly as persisted."+
 		" --authorization is exactly these seven lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
-		repo, plan.PlanDigest, plan.AuthorityInventoryRevision, repo, authorityDispositionAuthorizationBinding(template))
+		pathquote.Quote(repo), plan.PlanDigest, plan.AuthorityInventoryRevision, pathquote.Quote(repo), authorityDispositionAuthorizationBinding(template))
 }
 
 // DeriveAuthorityDispositionPlanAtRepo is the exported form of

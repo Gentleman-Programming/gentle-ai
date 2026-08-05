@@ -1006,28 +1006,128 @@ func stringInSlice(values []string, target string) bool {
 }
 
 // repairAuthorityDispositionAtRepo is the production seam that ties
-// disposition plan derivation (authority_disposition_plan.go) to leaf
+// disposition plan derivation (authority_disposition_plan.go) to closure
 // executor admission and mutation (authority_disposition_execute.go) behind
-// the shape a future `review repair` CLI wiring (Slice S3) calls: derive the
-// current plan, stamp the caller-supplied maintainer authorization, and
-// execute it. It stays unexported and unwired from any CLI entrypoint this
-// slice — no new public repair verb (rdd-authority-disposition-plan / "No
-// New Public Repair Verb") — Slice S3 wires it behind the existing
-// `review repair` verb.
-func repairAuthorityDispositionAtRepo(ctx context.Context, repo, actor, reason, authorization string) (CompactReclaimRecord, error) {
+// the shape `review repair` CLI wiring (Slice S3, extended by Wave 6 Slice
+// S3's forward-only resume) calls.
+//
+// Wave 6: a fresh re-derivation is not safe to use unconditionally.
+// executeAuthorityDisposition's own internal resume logic
+// (authorityDispositionClosureIsFresh) already knows to skip re-derivation
+// entirely once ANY closure member has prior progress — but this public
+// entrypoint has to decide WHICH plan to hand it in the first place, and a
+// blind re-derivation from actor/reason on every call would silently
+// produce a smaller, mismatched closure the moment even one member is
+// already quarantined (a missing member contributes no report edge), which
+// is exactly the narrowing re-derivation the resume design forbids. So this
+// checks first whether planDigest already names an in-progress closure —
+// reconstructing the original plan from an already-committed member's own
+// AuthorityDisposition proof, never re-deriving it — and only falls back to
+// a fresh derivation (compared against the caller-supplied planDigest/
+// inventoryRevision) when no such record exists.
+func repairAuthorityDispositionAtRepo(ctx context.Context, repo, planDigest, inventoryRevision, actor, reason, authorization string) (CompactReclaimRecord, error) {
+	if reconstructed, found, err := reconstructAuthorityDispositionPlanForResume(ctx, repo, planDigest, actor, reason); err != nil {
+		return CompactReclaimRecord{}, err
+	} else if found {
+		reconstructed.Authorization = authorization
+		return executeAuthorityDisposition(ctx, repo, reconstructed)
+	}
 	plan, err := deriveAuthorityDispositionPlanAtRepo(ctx, repo, actor, reason)
 	if err != nil {
 		return CompactReclaimRecord{}, err
+	}
+	if err := admitClosureDisposition(plan); err != nil {
+		return CompactReclaimRecord{}, err
+	}
+	if plan.PlanDigest != planDigest || plan.AuthorityInventoryRevision != inventoryRevision {
+		// This wraps ErrConcurrentUpdate (%w) — exempt plumbing propagating an
+		// existing typed error, not a site that needs its own by-design
+		// annotation (the underlying condition is world-action: the graph
+		// changed between --preflight and this call, or the values were
+		// copied from a stale preflight; the fix is running
+		// `review repair --preflight` again).
+		//
+		// Fix cycle 2 (WARNING-4, sdd-verify cycle-2): base bb3c22a9's own
+		// version of this exact refusal ended with a runnable continuation
+		// ("run `gentle-ai review repair --preflight` again for the current
+		// values"); Wave 6 Slice S3 replaced the CLI-level pre-check this
+		// refusal now lives in without carrying that continuation text
+		// forward, so cycle-1's CRITICAL-2 fix (which restored the CAUSE
+		// reaching the operator) still left it silent about what to do next.
+		return CompactReclaimRecord{}, fmt.Errorf("%w: submitted plan_digest/inventory_revision does not match the current provider-derived plan; run `gentle-ai review repair --preflight` again for the current values", ErrConcurrentUpdate)
 	}
 	plan.Authorization = authorization
 	return executeAuthorityDisposition(ctx, repo, plan)
 }
 
+// reconstructAuthorityDispositionPlanForResume scans the quarantine root for
+// any existing record whose AuthorityDisposition.PlanDigest matches
+// planDigest — evidence this exact plan already began — and, if found,
+// reconstructs the full AuthorityDispositionPlan from that record's own
+// proof (Schema, AnomalyClass, SeedSet, Closure, ExpectedRevisions,
+// AuthorityInventoryRevision, PlanDigest all come from the proof; only
+// RepositoryBinding is freshly resolved, and Actor/Reason are the CURRENT
+// call's, not the original attempt's — plan_digest's pre-image excludes
+// both, so this changes nothing about plan identity). It is the resume half
+// of repairAuthorityDispositionAtRepo's fresh-vs-resume decision, mirroring
+// authorityDispositionClosureIsFresh's identical principle one layer up:
+// never attempt a narrowing re-derivation once real progress exists.
+func reconstructAuthorityDispositionPlanForResume(ctx context.Context, repo, planDigest, actor, reason string) (AuthorityDispositionPlan, bool, error) {
+	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return AuthorityDispositionPlan{}, false, err
+	}
+	base, binding, err := authorityRepairRoot(root)
+	if err != nil {
+		return AuthorityDispositionPlan{}, false, err
+	}
+	quarantineRoot := filepath.Join(base, "quarantine")
+	entries, err := os.ReadDir(quarantineRoot)
+	if os.IsNotExist(err) {
+		return AuthorityDispositionPlan{}, false, nil
+	}
+	if err != nil {
+		return AuthorityDispositionPlan{}, false, fmt.Errorf("inspect authority disposition quarantine for resume: %w", err)
+	}
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return AuthorityDispositionPlan{}, false, err
+		}
+		if !entry.IsDir() {
+			continue
+		}
+		payload, readErr := os.ReadFile(filepath.Join(quarantineRoot, entry.Name(), "reclaim-record.json"))
+		if readErr != nil {
+			continue
+		}
+		var record CompactReclaimRecord
+		if err := json.Unmarshal(payload, &record); err != nil {
+			continue
+		}
+		proof := record.AuthorityDisposition
+		if proof == nil || proof.PlanDigest != planDigest {
+			continue
+		}
+		return AuthorityDispositionPlan{
+			Schema: AuthorityDispositionPlanSchema, RepositoryBinding: binding,
+			AuthorityInventoryRevision: proof.AuthorityInventoryRevision, AnomalyClass: proof.AnomalyClass,
+			SeedSet: append([]string(nil), proof.SeedSet...), Closure: append([]string(nil), proof.Closure...),
+			ExpectedRevisions: cloneAuthorityDispositionRevisions(proof.ExpectedRevisions),
+			Actor:             strings.TrimSpace(actor), Reason: strings.TrimSpace(reason),
+			PlanDigest: proof.PlanDigest,
+		}, true, nil
+	}
+	return AuthorityDispositionPlan{}, false, nil
+}
+
 // RepairAuthorityDisposition is the exported form of
 // repairAuthorityDispositionAtRepo — the one public entrypoint Slice S3's
-// `review repair` CLI wiring calls to execute a leaf authority disposition
-// plan (rdd-authority-disposition-plan / "No New Public Repair Verb": an
-// exported Go seam behind the existing verb, not a new CLI command).
-func RepairAuthorityDisposition(ctx context.Context, repo, actor, reason, authorization string) (CompactReclaimRecord, error) {
-	return repairAuthorityDispositionAtRepo(ctx, repo, actor, reason, authorization)
+// `review repair` CLI wiring calls to execute a closure authority
+// disposition plan (rdd-authority-disposition-plan / "No New Public Repair
+// Verb": an exported Go seam behind the existing verb, not a new CLI
+// command). Wave 6: planDigest and inventoryRevision are now required
+// parameters — repairAuthorityDispositionAtRepo needs them to decide
+// fresh-vs-resume; it no longer blindly re-derives from actor/reason alone.
+func RepairAuthorityDisposition(ctx context.Context, repo, planDigest, inventoryRevision, actor, reason, authorization string) (CompactReclaimRecord, error) {
+	return repairAuthorityDispositionAtRepo(ctx, repo, planDigest, inventoryRevision, actor, reason, authorization)
 }

@@ -10,10 +10,6 @@ import (
 // Capability tags for adapter feature checks.
 type Capability string
 
-const (
-	CapabilityAutoInstall Capability = "auto-install"
-)
-
 // Adapter is the core abstraction for AI agent integration. Components use
 // adapter methods instead of switch statements on AgentID, making it trivial
 // to add new agents without modifying component code.
@@ -26,7 +22,6 @@ type Adapter interface {
 	Detect(ctx context.Context, homeDir string) (installed bool, binaryPath string, configPath string, configFound bool, err error)
 
 	// Installation
-	SupportsAutoInstall() bool
 	InstallCommand(profile system.PlatformProfile) ([][]string, error)
 
 	// Config paths — components use these instead of hardcoding paths per agent.

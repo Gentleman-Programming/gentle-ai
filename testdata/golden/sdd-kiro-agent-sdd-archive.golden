@@ -36,6 +36,8 @@ Execute all steps from the skill directly in this context window:
 
 Treat `verify-report` and `apply-progress` as intermediate snapshots: the archive report records the state at close per the skill's Final-State Authority section, and explicit final-state facts in your launch prompt outrank stale snapshot claims.
 
+Copy and move archive artifacts mechanically with shell commands (`cp -R`, `mv`, `git mv`) only — NEVER Read a file and Write its content back, which routes bytes through the model and can truncate silently. After every copy/move, run `diff -r` (source vs. destination, archive-report additive-only) and include its verbatim output in your result; an empty diff is the only passing evidence.
+
 ## Engram Save (mandatory)
 
 After completing work, call `mem_save` with:

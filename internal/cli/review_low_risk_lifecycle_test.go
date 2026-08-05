@@ -23,13 +23,7 @@ func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
 	for index := range lines {
 		lines[index] = fmt.Sprintf("ordinary documentation line %03d", index+1)
 	}
-	path := filepath.Join(repo, "docs", "ordinary-guide.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "docs/ordinary-guide.md", strings.Join(lines, "\n")+"\n", 0o644)
 
 	startedAt := time.Now()
 	var startOutput bytes.Buffer
@@ -155,13 +149,7 @@ func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
 // structural readback alone.
 func TestActiveMDXRequiresReviewerEvidence(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	path := filepath.Join(repo, "docs", "guide.mdx")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("import Widget from './widget'\n\n# Active guide\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "docs/guide.mdx", "import Widget from './widget'\n\n# Active guide\n", 0o644)
 	var output bytes.Buffer
 	if err := RunReview(boundNegotiatedStartArgs(t, []string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo}), &output); err != nil {
 		t.Fatal(err)

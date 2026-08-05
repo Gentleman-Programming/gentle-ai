@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 // CompactAbandonAuthorizationSchema is the first line of the exact six-line
@@ -291,8 +293,8 @@ func AbandonPristineCompactStore(ctx context.Context, repo string, request Compa
 	var capturedLenses, uncapturedLenses []string
 	if request.IncompleteInspection {
 		if record.State.State != StateReviewing {
-			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: incomplete-inspection abandonment applies only to a reviewing lineage; %q holds %q authority. See where this review actually is with `gentle-ai review status --cwd %q --lineage %s`",
-				request.LineageID, record.State.State, repo, request.LineageID)
+			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: incomplete-inspection abandonment applies only to a reviewing lineage; %q holds %q authority. See where this review actually is with `gentle-ai review status --cwd %s --lineage %s`",
+				request.LineageID, record.State.State, pathquote.Quote(repo), request.LineageID)
 		}
 		if !compactAbandonablePristineState(record.State) {
 			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: reviewing lineage %q is not pristine; it carries review or correction data", request.LineageID)
@@ -306,8 +308,8 @@ func AbandonPristineCompactStore(ctx context.Context, repo string, request Compa
 				request.LineageID)
 		}
 		if len(uncapturedLenses) == 0 {
-			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: lineage %q captured every selected lens and can finalize; incomplete-inspection abandonment never discards a complete review. Continue it with `gentle-ai review status --cwd %q --lineage %s --next-transition`",
-				request.LineageID, repo, request.LineageID)
+			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: lineage %q captured every selected lens and can finalize; incomplete-inspection abandonment never discards a complete review. Continue it with `gentle-ai review status --cwd %s --lineage %s --next-transition`",
+				request.LineageID, pathquote.Quote(repo), request.LineageID)
 		}
 	} else {
 		switch record.State.State {
@@ -348,8 +350,8 @@ func AbandonPristineCompactStore(ctx context.Context, repo string, request Compa
 			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: store entry %q holds authoritative artifact %q beyond its pristine state,"+
 				" and abandoning it would discard captured review work."+
 				" Nothing quarantines this shape today; the entry stays exactly as persisted."+
-				" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %q` and escalate that report",
-				request.LineageID, item.Name(), repo)
+				" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %s` and escalate that report",
+				request.LineageID, item.Name(), pathquote.Quote(repo))
 		}
 		residue = append(residue, item.Name())
 	}

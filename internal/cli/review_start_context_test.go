@@ -60,7 +60,9 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 	if bytes.Contains(encoded, []byte("private tracked candidate")) || bytes.Contains(encoded, []byte("private intended candidate")) {
 		t.Fatalf("negotiated START leaked candidate bytes: %s", encoded)
 	}
-	if len(frozenManifest) != 2 || frozenManifest[0].Path != "private.txt" || !frozenManifest[0].IntendedUntracked ||
+	// #2394: private.txt reaches the candidate through the index it was
+	// declared in, so no path carries intended-untracked provenance any more.
+	if len(frozenManifest) != 2 || frozenManifest[0].Path != "private.txt" || frozenManifest[0].IntendedUntracked ||
 		frozenManifest[1].Path != "tracked.txt" || frozenManifest[1].IntendedUntracked {
 		t.Fatalf("negotiated manifest = %#v", frozenManifest)
 	}

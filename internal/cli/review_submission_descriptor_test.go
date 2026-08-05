@@ -130,9 +130,7 @@ func TestSubmissionDescriptorsAreBoundAndExecuteOneValueOnly(t *testing.T) {
 func submissionDescriptorCorrectionFixture(t *testing.T) (string, ReviewIntegrationStartResult, reviewtransaction.CompactStore) {
 	t.Helper()
 	repo := initReviewCLIRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "candidate.go"), []byte("package candidate\n\nfunc value() int { return 1 }\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, "submission-descriptor")
 	result := filepath.Join(t.TempDir(), "blocking-result.json")
 	writeReviewCLIJSON(t, result, facadeReviewerResult{

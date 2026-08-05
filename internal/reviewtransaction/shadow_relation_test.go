@@ -75,16 +75,16 @@ func TestShadowRelationSevenValuesNoEighth(t *testing.T) {
 func TestShadowRelateExactAndUnrelatedScenarios(t *testing.T) {
 	t.Run("identical candidate and policy resolve to exact", func(t *testing.T) {
 		identical := fixtureCandidateIdentity(strings.Repeat("1", 40), strings.Repeat("2", 40), "a", "b")
-		got := shadowRelate(shadowRelationInput{Frozen: identical, Live: identical, LiveSnapshot: Snapshot{Paths: []string{"a.txt"}}})
+		got := relateCandidates(shadowRelationInput{Frozen: identical, Live: identical, LiveSnapshot: Snapshot{Paths: []string{"a.txt"}}})
 		if got != ShadowRelationExact {
-			t.Fatalf("shadowRelate() = %q, want %q", got, ShadowRelationExact)
+			t.Fatalf("relateCandidates() = %q, want %q", got, ShadowRelationExact)
 		}
 	})
 	t.Run("no governing lineage resolves to unrelated", func(t *testing.T) {
 		live := fixtureCandidateIdentity(strings.Repeat("3", 40), strings.Repeat("4", 40), "c", "d")
-		got := shadowRelate(shadowRelationInput{Frozen: CandidateIdentity{}, Live: live, LiveSnapshot: Snapshot{Paths: []string{"z.txt"}}})
+		got := relateCandidates(shadowRelationInput{Frozen: CandidateIdentity{}, Live: live, LiveSnapshot: Snapshot{Paths: []string{"z.txt"}}})
 		if got != ShadowRelationUnrelated {
-			t.Fatalf("shadowRelate() = %q, want %q", got, ShadowRelationUnrelated)
+			t.Fatalf("relateCandidates() = %q, want %q", got, ShadowRelationUnrelated)
 		}
 	})
 }
@@ -166,8 +166,8 @@ func TestShadowRelateOrderedFailClosedPrecedence(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := shadowRelate(tt.input); got != tt.want {
-				t.Fatalf("shadowRelate() = %q, want %q", got, tt.want)
+			if got := relateCandidates(tt.input); got != tt.want {
+				t.Fatalf("relateCandidates() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -197,10 +197,10 @@ func TestShadowRelateBaseAdvanceProofBindsToCandidateTree(t *testing.T) {
 		GenesisPaths: []string{"a.txt"},
 		BaseAdvance:  fixtureValidBaseAdvance(frozenBase, liveBase),
 	}
-	if got := shadowRelate(input); got == ShadowRelationCompatibleBaseAdvance {
-		t.Fatalf("shadowRelate() = %q, want anything but compatible_base_advance when CandidateTree changed (proof must bind to CandidateTree like live's classifyCompactTargetRelation)", got)
+	if got := relateCandidates(input); got == ShadowRelationCompatibleBaseAdvance {
+		t.Fatalf("relateCandidates() = %q, want anything but compatible_base_advance when CandidateTree changed (proof must bind to CandidateTree like live's classifyCompactTargetRelation)", got)
 	} else if got != ShadowRelationChanged {
-		t.Fatalf("shadowRelate() = %q, want %q", got, ShadowRelationChanged)
+		t.Fatalf("relateCandidates() = %q, want %q", got, ShadowRelationChanged)
 	}
 }
 
@@ -215,30 +215,30 @@ func TestShadowRelateAmendmentBDegradesContractionOnExcludedFinding(t *testing.T
 	liveSnapshot := Snapshot{Paths: []string{"a.txt"}}
 
 	t.Run("contraction with no excluded-path findings", func(t *testing.T) {
-		got := shadowRelate(shadowRelationInput{
+		got := relateCandidates(shadowRelationInput{
 			Frozen: frozen, Live: live, LiveSnapshot: liveSnapshot, GenesisPaths: genesis,
 			AdmittedPathsKnown: true, AdmittedFindingPaths: []string{"a.txt"},
 		})
 		if got != ShadowRelationProvableContraction {
-			t.Fatalf("shadowRelate() = %q, want %q", got, ShadowRelationProvableContraction)
+			t.Fatalf("relateCandidates() = %q, want %q", got, ShadowRelationProvableContraction)
 		}
 	})
 	t.Run("contraction with an excluded-path finding degrades", func(t *testing.T) {
-		got := shadowRelate(shadowRelationInput{
+		got := relateCandidates(shadowRelationInput{
 			Frozen: frozen, Live: live, LiveSnapshot: liveSnapshot, GenesisPaths: genesis,
 			AdmittedPathsKnown: true, AdmittedFindingPaths: []string{"a.txt", "b.txt"},
 		})
 		if got != ShadowRelationChanged {
-			t.Fatalf("shadowRelate() = %q, want %q (excluded-path finding must degrade)", got, ShadowRelationChanged)
+			t.Fatalf("relateCandidates() = %q, want %q (excluded-path finding must degrade)", got, ShadowRelationChanged)
 		}
 	})
 	t.Run("no-input degradation never fabricates provable_contraction or unknown", func(t *testing.T) {
-		got := shadowRelate(shadowRelationInput{
+		got := relateCandidates(shadowRelationInput{
 			Frozen: frozen, Live: live, LiveSnapshot: liveSnapshot, GenesisPaths: genesis,
 			AdmittedPathsKnown: false,
 		})
 		if got != ShadowRelationChanged {
-			t.Fatalf("shadowRelate() = %q, want %q (Amendment B no-input degradation)", got, ShadowRelationChanged)
+			t.Fatalf("relateCandidates() = %q, want %q (Amendment B no-input degradation)", got, ShadowRelationChanged)
 		}
 	})
 }
@@ -325,40 +325,54 @@ func buildShadowBaseAdvanceFixture(t *testing.T, breakMergeBasePreservation bool
 	return repo, receipt, request, snapshot, refs, preimages
 }
 
+// deriveBaseAdvanceCompatibilityPtr adapts deriveBaseAdvanceCompatibility's
+// (BaseAdvanceCompatibility, error) return to the nil-on-error shape
+// relateCandidates' BaseAdvance input expects — the exact conversion the
+// retired shadowDeriveBaseAdvance wrapper (Wave 7 S2a) used to perform, kept
+// here only for this file's own direct characterization of Amendment A
+// delegation, independent of any observer.
+func deriveBaseAdvanceCompatibilityPtr(ctx context.Context, repo string, receipt Receipt, request GateRequest, snapshot Snapshot, refs *resolvedPrePRRefs, preimages gateArtifactPreimages) *BaseAdvanceCompatibility {
+	proof, err := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, refs, preimages)
+	if err != nil {
+		return nil
+	}
+	return &proof
+}
+
 // TestShadowRelateDelegatesCompatibleBaseAdvanceToDeriveBaseAdvanceCompatibility
-// is Amendment A's "all seven conditions hold" scenario: shadowDeriveBaseAdvance
-// calls deriveBaseAdvanceCompatibility directly, and shadowRelate attributes
-// compatible_base_advance to that delegated proof.
+// is Amendment A's "all seven conditions hold" scenario: relateCandidates
+// attributes compatible_base_advance to deriveBaseAdvanceCompatibility's own
+// delegated proof.
 func TestShadowRelateDelegatesCompatibleBaseAdvanceToDeriveBaseAdvanceCompatibility(t *testing.T) {
 	repo, receipt, request, snapshot, refs, preimages := buildShadowBaseAdvanceFixture(t, false)
-	proof := shadowDeriveBaseAdvance(context.Background(), repo, receipt, request, snapshot, refs, preimages)
+	proof := deriveBaseAdvanceCompatibilityPtr(context.Background(), repo, receipt, request, snapshot, refs, preimages)
 	if proof == nil || !proof.valid() {
-		t.Fatalf("shadowDeriveBaseAdvance() = %#v, want a valid delegated proof", proof)
+		t.Fatalf("deriveBaseAdvanceCompatibility() = %#v, want a valid delegated proof", proof)
 	}
 	frozen := fixtureCandidateIdentity(receipt.BaseTree, receipt.FinalCandidateTree, "a", "b")
 	live := fixtureCandidateIdentity(snapshot.BaseTree, snapshot.CandidateTree, "c", "d")
-	got := shadowRelate(shadowRelationInput{Frozen: frozen, Live: live, LiveSnapshot: snapshot, BaseAdvance: proof})
+	got := relateCandidates(shadowRelationInput{Frozen: frozen, Live: live, LiveSnapshot: snapshot, BaseAdvance: proof})
 	if got != ShadowRelationCompatibleBaseAdvance {
-		t.Fatalf("shadowRelate() = %q, want %q", got, ShadowRelationCompatibleBaseAdvance)
+		t.Fatalf("relateCandidates() = %q, want %q", got, ShadowRelationCompatibleBaseAdvance)
 	}
 }
 
 // TestShadowRelateAmendmentANeverOverridesAFailedDelegatedCondition is
 // Amendment A's "any condition fails" scenario: breaking condition 1 (merge-
-// base tree preservation) makes deriveBaseAdvanceCompatibility fail, so
-// shadowDeriveBaseAdvance reports nil and shadowRelate never fabricates
-// compatible_base_advance from a shadow-local override.
+// base tree preservation) makes deriveBaseAdvanceCompatibility fail (nil
+// proof), and relateCandidates never fabricates compatible_base_advance from
+// a local override.
 func TestShadowRelateAmendmentANeverOverridesAFailedDelegatedCondition(t *testing.T) {
 	repo, receipt, request, snapshot, refs, preimages := buildShadowBaseAdvanceFixture(t, true)
-	proof := shadowDeriveBaseAdvance(context.Background(), repo, receipt, request, snapshot, refs, preimages)
+	proof := deriveBaseAdvanceCompatibilityPtr(context.Background(), repo, receipt, request, snapshot, refs, preimages)
 	if proof != nil {
-		t.Fatalf("shadowDeriveBaseAdvance() = %#v, want nil on a broken delegated condition", proof)
+		t.Fatalf("deriveBaseAdvanceCompatibility() = %#v, want nil on a broken delegated condition", proof)
 	}
 	frozen := fixtureCandidateIdentity(receipt.BaseTree, receipt.FinalCandidateTree, "a", "b")
 	live := fixtureCandidateIdentity(snapshot.BaseTree, snapshot.CandidateTree, "c", "d")
-	got := shadowRelate(shadowRelationInput{Frozen: frozen, Live: live, LiveSnapshot: snapshot, BaseAdvance: proof})
+	got := relateCandidates(shadowRelationInput{Frozen: frozen, Live: live, LiveSnapshot: snapshot, BaseAdvance: proof})
 	if got == ShadowRelationCompatibleBaseAdvance {
-		t.Fatalf("shadowRelate() = %q, want no shadow-local override when the delegated condition fails", got)
+		t.Fatalf("relateCandidates() = %q, want no shadow-local override when the delegated condition fails", got)
 	}
 }
 
@@ -379,9 +393,9 @@ func TestShadowRelateCommitStateThreatNeverAccidentalExact(t *testing.T) {
 			t.Fatalf("Build(unborn staged) error = %v", err)
 		}
 		frozen := fixtureCandidateIdentity(snapshot.BaseTree, snapshot.CandidateTree, "a", "b")
-		got := shadowRelate(shadowRelationInput{Frozen: frozen, Live: frozen, LiveSnapshot: snapshot})
+		got := relateCandidates(shadowRelationInput{Frozen: frozen, Live: frozen, LiveSnapshot: snapshot})
 		if got != ShadowRelationUnknown {
-			t.Fatalf("shadowRelate(unborn HEAD staged) = %q, want %q", got, ShadowRelationUnknown)
+			t.Fatalf("relateCandidates(unborn HEAD staged) = %q, want %q", got, ShadowRelationUnknown)
 		}
 	})
 
@@ -398,9 +412,9 @@ func TestShadowRelateCommitStateThreatNeverAccidentalExact(t *testing.T) {
 			t.Fatal("fixture snapshot.UnbornHead = false, want true")
 		}
 		frozen := fixtureCandidateIdentity(snapshot.BaseTree, snapshot.CandidateTree, "a", "b")
-		got := shadowRelate(shadowRelationInput{Frozen: frozen, Live: frozen, LiveSnapshot: snapshot})
+		got := relateCandidates(shadowRelationInput{Frozen: frozen, Live: frozen, LiveSnapshot: snapshot})
 		if got != ShadowRelationUnknown {
-			t.Fatalf("shadowRelate(unborn HEAD workspace) = %q, want %q", got, ShadowRelationUnknown)
+			t.Fatalf("relateCandidates(unborn HEAD workspace) = %q, want %q", got, ShadowRelationUnknown)
 		}
 	})
 
@@ -414,9 +428,9 @@ func TestShadowRelateCommitStateThreatNeverAccidentalExact(t *testing.T) {
 			t.Fatalf("fixture snapshot.Paths = %v, want empty (nothing staged)", snapshot.Paths)
 		}
 		frozen := fixtureCandidateIdentity(snapshot.BaseTree, snapshot.CandidateTree, "a", "b")
-		got := shadowRelate(shadowRelationInput{Frozen: frozen, Live: frozen, LiveSnapshot: snapshot})
+		got := relateCandidates(shadowRelationInput{Frozen: frozen, Live: frozen, LiveSnapshot: snapshot})
 		if got != ShadowRelationUnknown {
-			t.Fatalf("shadowRelate(empty index) = %q, want %q", got, ShadowRelationUnknown)
+			t.Fatalf("relateCandidates(empty index) = %q, want %q", got, ShadowRelationUnknown)
 		}
 	})
 }
@@ -451,9 +465,9 @@ func TestShadowRelatePushStateThreatUnresolvableBoundaryIsUnknown(t *testing.T) 
 			t.Fatalf("Build(first push target) error = %v", err)
 		}
 		frozen := fixtureCandidateIdentity(snapshot.BaseTree, snapshot.CandidateTree, "a", "b")
-		got := shadowRelate(shadowRelationInput{Frozen: frozen, Live: frozen, LiveSnapshot: snapshot, LiveUnresolvable: true})
+		got := relateCandidates(shadowRelationInput{Frozen: frozen, Live: frozen, LiveSnapshot: snapshot, LiveUnresolvable: true})
 		if got != ShadowRelationUnknown {
-			t.Fatalf("shadowRelate(first push) = %q, want %q", got, ShadowRelationUnknown)
+			t.Fatalf("relateCandidates(first push) = %q, want %q", got, ShadowRelationUnknown)
 		}
 	})
 

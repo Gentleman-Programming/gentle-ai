@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -431,10 +432,18 @@ func TestReviewRepairHelpRecommendsGenericClassifiedFlow(t *testing.T) {
 	if err := RunReview([]string{"repair", "--help"}, &help); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--preflight", "provider-owned", reviewtransaction.AuthorityRepairAuthorizationSchema, "repair-legacy-alias"} {
+	for _, want := range []string{"--preflight", "provider-owned", reviewtransaction.AuthorityRepairAuthorizationSchema} {
 		if !strings.Contains(help.String(), want) {
 			t.Fatalf("generic repair help missing %q: %s", want, help.String())
 		}
+	}
+	// repair-legacy-alias retired in Wave 7 S5a (WU14): the compatibility CLI
+	// verb is gone, so its own help text must no longer advertise it as an
+	// available continuation. The provider it wrapped (repairHistoricalLegacyAlias)
+	// stays live underneath the classified flow this help text describes --
+	// only the compatibility CLI surface and its exported wrapper retired.
+	if strings.Contains(help.String(), "repair-legacy-alias") {
+		t.Fatalf("generic repair help still advertises the retired repair-legacy-alias verb: %s", help.String())
 	}
 }
 
@@ -637,6 +646,54 @@ func TestReviewRepairDispositionExecutionQuarantinesEligibleLeaf(t *testing.T) {
 	}
 	if preflight.DispositionProviderInputs != nil {
 		t.Fatalf("follow-on preflight still surfaced a plan for an already-quarantined leaf: %#v", preflight)
+	}
+}
+
+// TestReviewRepairDispositionExecutionDigestMismatchRefusesWithoutDefectReport
+// is fix cycle 1's CRITICAL-2 mutation proof: a by-design digest-mismatch
+// refusal on a `review repair` leaf authority disposition execution must
+// propagate its real cause and MUST NOT be surfaced as an unexpected
+// tool-internal fault with a saved defect report. Before Wave 6 Slice S3
+// removed the CLI's own plan_digest/inventory_revision pre-check (base
+// bb3c22a9), this exact N=1 scenario refused with its real cause text and no
+// defect report; Slice S3's replacement wraps every
+// RepairAuthorityDisposition error in reviewRepairOperationError, whose
+// Error() dropped the cause entirely and which the classification cascade
+// does not recognize, so it fell through to operation_outcome_unknown and
+// appended a saved-defect-report clause even though nothing mutated and
+// nothing is actually wrong with the tool.
+func TestReviewRepairDispositionExecutionDigestMismatchRefusesWithoutDefectReport(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeInspectCLIRecoveryPair(t, repo, "leaf-digest-mismatch", false, dispositionForgedAuthorization)
+
+	actor, reason := "maintainer@example.com", "quarantine content-mismatched leaf"
+	plan, err := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(context.Background(), repo, actor, reason)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := authorityDispositionAuthorization(plan)
+
+	staleDigest := "sha256:" + strings.Repeat("a", 64)
+	executeArgs := []string{
+		"repair", "--cwd", repo,
+		"--plan-digest", staleDigest, "--inventory-revision", plan.AuthorityInventoryRevision,
+		"--actor", actor, "--reason", reason, "--authorization", authorization,
+	}
+	var executed bytes.Buffer
+	err = RunReview(executeArgs, &executed)
+	if err == nil {
+		t.Fatal("digest-mismatched disposition execution was admitted")
+	}
+	if !errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
+		t.Fatalf("digest-mismatch execution error = %v, want it to wrap ErrConcurrentUpdate", err)
+	}
+	if !strings.Contains(err.Error(), "does not match the current provider-derived plan") {
+		t.Fatalf("digest-mismatch execution error dropped its real cause: %v", err)
+	}
+	for _, unwanted := range []string{"defect report", "tool-internal fault", "operation_outcome_unknown"} {
+		if strings.Contains(err.Error(), unwanted) {
+			t.Fatalf("by-design digest-mismatch refusal was misclassified as an unexpected tool fault (%q present): %v", unwanted, err)
+		}
 	}
 }
 

@@ -634,7 +634,7 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 					t.Fatalf("%s guidance count = %d, want 1", fileName, count)
 				}
 
-				source := renderBoundedReviewAsset(adapter.EmbeddedSubAgentsDir() + "/" + fileName)
+				source := renderBoundedReviewAsset(adapter.Agent(), adapter.EmbeddedSubAgentsDir()+"/"+fileName)
 				if tc.toolGrant != "" {
 					sourceTools := nativeToolsLineForCodeGraphTest(t, source)
 					wantTools := sourceTools + ", " + tc.toolGrant

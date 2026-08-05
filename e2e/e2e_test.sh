@@ -989,8 +989,8 @@ test_qwen_engram_idempotency() {
 
     local settings="$HOME/.qwen/settings.json"
 
-    # First run — `|| true` keeps `set -e` from aborting the suite if install
-    # errors out (e.g. transient npm failure); we assert on the resulting file.
+    # First run — the install's exit code is irrelevant here (e.g. transient
+    # npm failure); we assert on the resulting file.
     $BINARY install --agent qwen-code --component engram --persona neutral > /dev/null 2>&1 || true
     if [ ! -f "$settings" ]; then
         log_fail "Qwen settings.json missing after first install"
@@ -1777,6 +1777,9 @@ test_antigravity_sdd_skills_path() {
     log_test "Antigravity: SDD skills install to ~/.gemini/antigravity-cli/skills/"
     cleanup_test_env
 
+    # Antigravity is a desktop app — create the config dir to signal it's "installed"
+    mkdir -p "$HOME/.gemini/antigravity"
+
     if $BINARY install --agent antigravity --component sdd --persona neutral 2>&1; then
         local skills_dir="$HOME/.gemini/antigravity-cli/skills"
         assert_dir_exists "$skills_dir" "Antigravity skills directory"
@@ -1801,6 +1804,9 @@ test_antigravity_sdd_skills_path() {
 test_windsurf_persona_and_sdd_content() {
     log_test "Windsurf: persona + SDD inject into global_rules.md"
     cleanup_test_env
+
+    # Windsurf is a desktop app — create the config dir to signal it's "installed"
+    mkdir -p "$HOME/.codeium/windsurf"
 
     if $BINARY install --agent windsurf --component persona --component sdd --persona gentleman 2>&1; then
         local rules="$HOME/.codeium/windsurf/memories/global_rules.md"
@@ -1833,7 +1839,10 @@ test_codex_context7_in_toml() {
     # Idempotent: re-running must not duplicate the block.
     $BINARY install --agent codex --component context7 --persona neutral 2>&1 || true
     local count
-    count=$(grep -c "\[mcp_servers.context7\]" "$config_toml" 2>/dev/null || echo 0)
+    # `grep -c` prints "0" AND exits 1 on zero matches, so `|| echo 0` would
+    # yield the two-line string "0\n0" and break the numeric comparison below.
+    count=$(grep -c "\[mcp_servers.context7\]" "$config_toml" 2>/dev/null || true)
+    count=${count:-0}
     if [ "$count" -eq 1 ]; then
         log_pass "Codex context7 block is idempotent (exactly 1 entry)"
     else

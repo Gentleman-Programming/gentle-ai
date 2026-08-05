@@ -6207,8 +6207,8 @@ func TestInjectClaudeSubAgentsScopedTools(t *testing.T) {
 		},
 		{
 			phase:       "sdd-archive",
-			mustContain: []string{"Read", "Edit", "Write", "mcp__plugin_engram_engram__mem_search", "mcp__plugin_engram_engram__mem_get_observation", "mcp__plugin_engram_engram__mem_save"},
-			mustNotHave: []string{"Bash", "Task"},
+			mustContain: []string{"Read", "Edit", "Write", "Bash", "mcp__plugin_engram_engram__mem_search", "mcp__plugin_engram_engram__mem_get_observation", "mcp__plugin_engram_engram__mem_save"},
+			mustNotHave: []string{"Task"},
 		},
 	}
 

@@ -332,6 +332,7 @@ func (builder SnapshotBuilder) activePassiveContentPaths(ctx context.Context, sn
 		return active, nil
 	}
 	oids := make([]string, 0, len(candidates)*2)
+	batchOutputLimit := int64(0)
 	for _, stat := range candidates {
 		for _, version := range []struct {
 			tree string
@@ -344,10 +345,18 @@ func (builder SnapshotBuilder) activePassiveContentPaths(ctx context.Context, sn
 			if !present {
 				return nil, fmt.Errorf("read immutable passive candidate %q: blob is absent from tree inventory", stat.Path) // refusal:by-design world-action: contradictory immutable Git evidence cannot be repaired by a review command
 			}
+			recordBytes := catFileBatchRecordBytes(blob.oid, blob.size)
+			if recordBytes >= processBoundaryScanByteLimit-batchOutputLimit {
+				for _, logicalPath := range paths {
+					active[logicalPath] = struct{}{}
+				}
+				return active, nil
+			}
+			batchOutputLimit += recordBytes
 			oids = append(oids, blob.oid)
 		}
 	}
-	contents, err := batchBlobContents(ctx, repo, oids)
+	contents, err := batchBlobContents(ctx, repo, oids, int(batchOutputLimit))
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +380,7 @@ func (builder SnapshotBuilder) activePassiveContentPaths(ctx context.Context, sn
 
 // batchBlobContents reads exact OIDs rather than rev:path expressions, keeping
 // path bytes out of cat-file's line-delimited batch protocol.
-func batchBlobContents(ctx context.Context, repo string, oids []string) (map[string][]byte, error) {
+func batchBlobContents(ctx context.Context, repo string, oids []string, outputLimit int) (map[string][]byte, error) {
 	contents := make(map[string][]byte, len(oids))
 	if len(oids) == 0 {
 		return contents, nil
@@ -381,7 +390,7 @@ func batchBlobContents(ctx context.Context, repo string, oids []string) (map[str
 		stdin = append(stdin, oid...)
 		stdin = append(stdin, '\n')
 	}
-	output, err := runGitCaptured(ctx, repo, nil, stdin, 0, false, true, "cat-file", "--batch")
+	output, err := runGitCaptured(ctx, repo, nil, stdin, outputLimit, false, true, "cat-file", "--batch")
 	if err != nil {
 		return nil, fmt.Errorf("read immutable passive candidate blobs: %w", err)
 	}
@@ -407,6 +416,12 @@ func batchBlobContents(ctx context.Context, repo string, oids []string) (map[str
 		return nil, errors.New("read immutable passive candidate blobs: unexpected trailing cat-file batch output") // refusal:by-design world-action: malformed Git protocol output cannot be made trustworthy by a review command
 	}
 	return contents, nil
+}
+
+// catFileBatchRecordBytes accounts for Git's exact --batch framing:
+// "<oid> blob <decimal-size>\n<content>\n".
+func catFileBatchRecordBytes(oid string, size int64) int64 {
+	return int64(len(oid)+len(" blob ")+len(strconv.FormatInt(size, 10))+2) + size
 }
 
 // isPassiveDocumentContent proves a document is inert from its own bytes.
@@ -1118,6 +1133,10 @@ func hotPathRiskSignals(logicalPath string) []RiskSignal {
 		case "update":
 			signals = append(signals, SignalUpdate)
 		case "security":
+			signals = append(signals, SignalSecurity)
+		case "webhook":
+			// Webhook handlers own signature verification, credential handling,
+			// and authorization boundaries, so they are security evidence.
 			signals = append(signals, SignalSecurity)
 		case "payments":
 			signals = append(signals, SignalPayments)

@@ -22,6 +22,129 @@ func derivePlanFixture(t *testing.T, repo, actor, reason string) AuthorityDispos
 	return plan
 }
 
+// TestAuthorityDispositionClosureMultiChainAssumption satisfies tasks.md 1.1
+// (S1 spike, load-bearing for S2/S3/S5): before Wave 6 writes any ordering or
+// admission-relaxation production code, this proves authorityDispositionClosure's
+// BFS `children` map — built from every edge's PredecessorLineageID ->
+// SuccessorLineageID — actually derives a real multi-chain, multi-hop closure
+// from report.Edges shaped exactly as InspectCompactRecoveryEdges emits it
+// (compact_inspect.go inspectCompactRecoveryRecordSet: one edge per record
+// carrying a non-nil Recovery, valid or invalid, no filtering by anomaly
+// class). Two independent chains share one report: chain one is three nodes
+// deep (seed -> child -> grandchild, two hops), chain two is a disjoint,
+// unrelated pair. Per tasks.md 1.2, a failure here means STOP and escalate —
+// do not patch around it ad hoc; S2 (ordered N-node transaction), S3
+// (forward-only resume), and S5 (ds09+ bench journeys) all assume this
+// closure derivation is correct.
+func TestAuthorityDispositionClosureMultiChainAssumption(t *testing.T) {
+	report := CompactRecoveryInspectionReport{
+		Complete: true, Valid: false,
+		Edges: []CompactRecoveryEdgeInspection{
+			// Chain one: seed -> child -> grandchild (three nodes, two hops).
+			// The seed->child edge is the classified, invalid anomaly edge a
+			// real derivation would seed from; child->grandchild is an
+			// ordinary valid recovery edge — closure must still walk it.
+			{PredecessorLineageID: "seed", SuccessorLineageID: "child", Valid: false, AnomalyClasses: []string{compactContentMismatchedRecoveryAuthorizationClass}},
+			{PredecessorLineageID: "child", SuccessorLineageID: "grandchild", Valid: true},
+			// Chain two: unrelated-root -> unrelated-leaf, disjoint from chain
+			// one and reachable from a different seed only.
+			{PredecessorLineageID: "unrelated-root", SuccessorLineageID: "unrelated-leaf", Valid: true},
+		},
+	}
+
+	closure := authorityDispositionClosure(report, "seed")
+
+	want := map[string]bool{"seed": true, "child": true, "grandchild": true}
+	if len(closure) != len(want) {
+		t.Fatalf("closure(%q) = %v, want exactly the 3-node chain %v — multi-hop descendant derivation failed", "seed", closure, want)
+	}
+	sawGrandchild := false
+	for _, lineage := range closure {
+		if !want[lineage] {
+			t.Fatalf("closure %v contains %q, which belongs to the disjoint chain — over-collection", closure, lineage)
+		}
+		if lineage == "grandchild" {
+			sawGrandchild = true
+		}
+	}
+	if !sawGrandchild {
+		t.Fatalf("closure %v did not include the second-hop descendant %q — BFS children map does not walk multi-hop chains as the design assumes", closure, "grandchild")
+	}
+}
+
+// TestAuthorityDispositionClosureDescendantFirstSeedLastOrdering satisfies
+// tasks.md 1.3 and rdd-authority-disposition-plan's "Ordering is
+// descendant-first, seed-last" scenario. N=1 stays the identity of the old
+// lexicographic sort (a single-entry closure has no ordering to prove); N>=2
+// asserts every descendant precedes the seed and, for ties at the same BFS
+// depth, lexicographic order still breaks the tie deterministically.
+func TestAuthorityDispositionClosureDescendantFirstSeedLastOrdering(t *testing.T) {
+	t.Run("N=1 identity of the old sort", func(t *testing.T) {
+		report := CompactRecoveryInspectionReport{
+			Edges: []CompactRecoveryEdgeInspection{
+				{PredecessorLineageID: "unrelated-root", SuccessorLineageID: "unrelated-leaf", Valid: true},
+			},
+		}
+		closure := authorityDispositionClosure(report, "seed")
+		if len(closure) != 1 || closure[0] != "seed" {
+			t.Fatalf("N=1 closure = %v, want [\"seed\"]", closure)
+		}
+	})
+
+	t.Run("N>=2 multi-chain is descendant-first, seed-last", func(t *testing.T) {
+		report := CompactRecoveryInspectionReport{
+			Edges: []CompactRecoveryEdgeInspection{
+				{PredecessorLineageID: "seed", SuccessorLineageID: "child", Valid: false},
+				{PredecessorLineageID: "child", SuccessorLineageID: "grandchild", Valid: true},
+			},
+		}
+		closure := authorityDispositionClosure(report, "seed")
+		want := []string{"grandchild", "child", "seed"}
+		if !reflect.DeepEqual(closure, want) {
+			t.Fatalf("closure = %v, want deepest-descendant-first, seed-last %v", closure, want)
+		}
+	})
+
+	t.Run("same-depth ties break lexicographically", func(t *testing.T) {
+		report := CompactRecoveryInspectionReport{
+			Edges: []CompactRecoveryEdgeInspection{
+				{PredecessorLineageID: "seed", SuccessorLineageID: "zebra", Valid: false},
+				{PredecessorLineageID: "seed", SuccessorLineageID: "alpha", Valid: false},
+			},
+		}
+		closure := authorityDispositionClosure(report, "seed")
+		want := []string{"alpha", "zebra", "seed"}
+		if !reflect.DeepEqual(closure, want) {
+			t.Fatalf("closure = %v, want lexicographic tie-break within depth then seed-last %v", closure, want)
+		}
+	})
+}
+
+// TestAuthorityDispositionPlanDigestN1ByteStability satisfies tasks.md 1.5:
+// pins plan_digest for a cardinality-one closure to a literal, pre-Wave-6
+// value so the topological-ordering change (task 1.4) cannot silently alter
+// N=1 digest bytes. Closure = {seed} has no ordering choice to make, so this
+// is the unit-level half of "every Wave 2 leaf digest, golden, and ds06/ds08
+// journey stays byte-stable" (design.md); the bench axis run against
+// ds06/ds08 is the end-to-end half (tasks.md 1.11).
+func TestAuthorityDispositionPlanDigestN1ByteStability(t *testing.T) {
+	plan := AuthorityDispositionPlan{
+		Schema: AuthorityDispositionPlanSchema, RepositoryBinding: "repository-binding",
+		AuthorityInventoryRevision: "sha256:inventory-revision", AnomalyClass: compactContentMismatchedRecoveryAuthorizationClass,
+		SeedSet: []string{"leaf-seed"}, Closure: []string{"leaf-seed"},
+		ExpectedRevisions: map[string]string{"leaf-seed": "sha256:leaf-revision"},
+		Actor:             "maintainer@example.com", Reason: "quarantine forged recovery authorization",
+	}
+	digest, err := authorityDispositionPlanDigest(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantDigest = "sha256:7084e2abc8a42b812a785dad4a4426483e63af71a8ced06ac51c7e88f21843e6"
+	if digest != wantDigest {
+		t.Fatalf("N=1 plan_digest = %q, want pinned pre-Wave-6 value %q — topological ordering change altered N=1 digest bytes", digest, wantDigest)
+	}
+}
+
 // TestAuthorityDispositionPlanFieldSet satisfies tasks.md 1.3 and
 // rdd-authority-disposition-plan's "Plan Field Set" requirement: a plan
 // derived for a repairable-classified graph carries all ten spec fields

@@ -24,7 +24,7 @@ import (
 func currentChangesTargetIdentity(t *testing.T, repo string) string {
 	t.Helper()
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
-	intended, err := builder.DiscoverIntendedUntracked(context.Background())
+	intended, err := builder.DiscoverUnignoredUntracked(context.Background())
 	if err != nil {
 		t.Fatalf("discover intended untracked candidate: %v", err)
 	}
@@ -396,8 +396,11 @@ func TestOrganicReviewLifecycleErrorTyping(t *testing.T) {
 		if result.Allowed || result.Result == string(reviewtransaction.GateAllow) {
 			t.Fatalf("disabled pre-push with no upstream fabricated an approval: %#v", result)
 		}
-		if result.Context.Denial == nil {
-			t.Fatalf("disabled pre-push with no upstream hid why no receipt governs: %#v", result)
+		// Wave 5 Slice 2 (design decision 4): the switch is consulted before
+		// any authority read, so the no-upstream boundary is never even
+		// derived while disabled -- no discovery-kind detail leaks.
+		if result.Context.Denial != nil {
+			t.Fatalf("disabled pre-push with no upstream leaked discovery-kind detail: %#v", result.Context.Denial)
 		}
 	})
 
@@ -1068,37 +1071,21 @@ func TestOrganicReviewRecoveryGraph(t *testing.T) {
 		harness.assertNoSDDArtifacts()
 	})
 
-	t.Run("issue-1782", func(t *testing.T) {
-		harness := newOrganicHarness(t)
-		var commits []string
-		for _, name := range []string{"a", "b", "c"} {
-			lineage := "organic-chain-segment-1782-" + name
-			path := "segment-" + name + ".txt"
-			harness.writeFiles(map[string]string{path: "reviewed segment " + name + "\n"})
-			harness.git("add", "--", path)
-			started, _ := harness.startReview(lineage, "--projection", "staged")
-			if approved := harness.approveReview(lineage, started); approved.State != organicStateApproved {
-				t.Fatalf("segment %s did not approve: %#v", name, approved)
-			}
-			expected := strings.TrimSpace(harness.git("rev-parse", "HEAD"))
-			harness.git("commit", "-q", "-m", "deliver reviewed segment "+name)
-			harness.pushWithLease(expected)
-			commits = append(commits, strings.TrimSpace(harness.git("rev-parse", "HEAD")))
-		}
-
-		// Move the published tracker back to the FIRST delivered commit
-		// (segment A): the chain A->B->C on top of it is genuinely linear, but
-		// the historical prologue commit's receipt still lands exactly on A.
-		// Before the fix this was misreported as a chain convergence.
-		harness.bareGit("update-ref", "refs/heads/main", commits[0])
-		harness.git("fetch", "-q", "origin", "main")
-
-		prGate := harness.gate("pre-pr", "--base-ref", "origin/main")
-		if !prGate.Allowed || prGate.Result != organicGateAllow {
-			t.Fatalf("linear chain with the publication tracker at its own mid-chain root = %#v", prGate)
-		}
-		harness.assertNoSDDArtifacts()
-	})
+	// issue-1782 is DELETED, not superseded (Wave 5 Slice 5, pre-PR chain
+	// composition deletion): its regression -- a linear A->B->C delivery
+	// chain misreported as a "chain convergence" when the published
+	// tracker sat at the chain's own mid-chain root -- was a bug inside
+	// EvaluateCompactPrePRChain's own composition graph and convergence
+	// detection. That graph no longer exists
+	// (TestPrePRComposition_ZeroCallers, internal/cli, proves it by
+	// call-absence), so there is no analogous "after" behavior to pin: a
+	// three-segment linear chain like this fixture built now denies
+	// receipt_ambiguous at pre-PR regardless of where the tracker sits,
+	// exactly like TestUnqualifiedPrePRDiscoveryDeniesSequentialCompactReceiptsWithoutComposition
+	// (internal/cli) and j61-pre-pr-multi-segment-delivery-denies-without-composition
+	// (bench/journeys_wave5.go) already prove for the general multi-segment
+	// case -- this fixture's specific tracker-placement detail is no longer
+	// a distinguishing variable once composition itself is gone.
 }
 
 // TestOrganicReviewStoreRobustness proves Group D (1813): one invalid

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -149,11 +150,21 @@ func InventoryAuthority(ctx context.Context, repo string) (AuthorityStatusReport
 	}
 	markCompactGraph(&report)
 	markMixedCollisions(&report)
-	for _, entry := range report.Entries {
-		if entry.Status == AuthorityStatusInvalid || entry.Status == AuthorityStatusIncomplete || entry.Status == AuthorityStatusReset || entry.Status == AuthorityStatusCollision {
-			report.Complete = false
-		}
-	}
+	// Completeness is a statement about the INVENTORY, not about every entry
+	// in it. A per-entry defect already has a per-entry home: the entry keeps
+	// its own Invalid/Incomplete/Reset/Collision status and its own problems,
+	// which is where an operator with a damaged lineage has to look anyway.
+	//
+	// Folding those per-entry verdicts back into one repository-wide boolean
+	// is what this removes. Every worktree of a repository shares one review
+	// store through the Git common directory, so that boolean turned one
+	// unreadable historical record into "complete review authority inventory
+	// is unavailable or corrupted" for every unrelated candidate, in every
+	// worktree, with no exit (1892, 2014, 2167, 2234, 2270, 2456). Complete
+	// now flips only for problems that really are repository-scope: an
+	// unreadable authority root, a prepared batch reconciliation, an
+	// unexpected entry directly under a version root, an ambiguous lock, or a
+	// version root that cannot be listed at all.
 	sortAuthorityReport(&report)
 	report.Authoritative = report.Complete
 	if len(report.Entries) == 0 && report.Complete {
@@ -214,9 +225,6 @@ func inventoryVersion(ctx context.Context, repo, root, directory string, version
 		}
 		result.entries = append(result.entries, entry)
 		result.locks = append(result.locks, locks...)
-		if entry.Status == AuthorityStatusReset {
-			result.complete = false
-		}
 	}
 	return result
 }
@@ -231,6 +239,17 @@ func inventoryUnexpected(result authorityVersionInventory, path, problem string)
 	result.complete = false
 	result.diagnostics = append(result.diagnostics, AuthorityInventoryDiagnostic{Path: path, Problem: problem})
 	return result
+}
+
+// compactUnreadableEntryProblem states one entry's own failure, the fact that
+// it is one entry's failure, and the read-only diagnosis that names whatever
+// sanctioned exit this particular damage has. No clearing command is guessed
+// here: which one applies depends on what the entry holds, and inspection is
+// the surface that already knows.
+func compactUnreadableEntryProblem(lineage string, cause error) string {
+	return fmt.Sprintf(
+		"%v. Lineage %q alone cannot be read and every other lineage is unaffected; see this entry's own diagnosis and sanctioned exits with `gentle-ai review inspect-authority`",
+		cause, lineage)
 }
 
 func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion, path, lineage string) (AuthorityInventoryEntry, []AuthorityLockEvidence, *AuthorityInventoryDiagnostic) {
@@ -272,7 +291,12 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 			if _, quarantinable := compactLineageQuarantinable(err); quarantinable {
 				return entry, locks, &AuthorityInventoryDiagnostic{Path: path, Problem: "quarantined-terminal-lineage: " + err.Error()}
 			}
-			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{err.Error()}
+			// This entry refuses for itself, and now it has to say how to
+			// leave: it is no longer accompanied by a repository-wide refusal
+			// that somebody else was going to have to diagnose. The exit is
+			// named rather than described, because a refusal whose
+			// continuation is a paraphrase is a dead end with better prose.
+			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{compactUnreadableEntryProblem(lineage, err)}
 			return entry, locks, nil
 		}
 		entry.Revision, entry.State, entry.Recovery = record.Revision, record.State.State, record.State.Recovery

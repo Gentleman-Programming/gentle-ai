@@ -69,7 +69,6 @@ func ResolveCapabilityManifest(adapter Adapter) (AgentCapabilityManifest, error)
 		got  bool
 		want bool
 	}{
-		{name: "SupportsAutoInstall", got: adapter.SupportsAutoInstall(), want: features.AutoInstall},
 		{name: "SupportsOutputStyles", got: adapter.SupportsOutputStyles(), want: features.OutputStyles},
 		{name: "SupportsSlashCommands", got: adapter.SupportsSlashCommands(), want: features.SlashCommands},
 		{name: "SupportsSubAgents", got: adapter.SupportsSubAgents(), want: features.FileSubAgents},

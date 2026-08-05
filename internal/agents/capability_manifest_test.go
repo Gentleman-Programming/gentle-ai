@@ -98,8 +98,8 @@ type projectionMismatchAdapter struct {
 	mockAdapter
 }
 
-func (a projectionMismatchAdapter) SupportsAutoInstall() bool {
-	return !a.CapabilityManifest().Features.AutoInstall
+func (a projectionMismatchAdapter) SupportsSkills() bool {
+	return !a.CapabilityManifest().Features.Skills
 }
 
 func TestRegistryRejectsLegacyProjectionMismatch(t *testing.T) {

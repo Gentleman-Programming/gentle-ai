@@ -51,18 +51,17 @@ func TestCorrectionSubmissionArgumentsRejectsShortDescriptor(t *testing.T) {
 	}
 }
 
-func TestRequireCandidateDeclinedGate(t *testing.T) {
-	sandbox := &Sandbox{Scratch: map[string]string{
-		"decline-base":  "1111111111111111111111111111111111111111",
-		"decline-tree":  "2222222222222222222222222222222222222222",
-		"decline-paths": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-	}}
-	observation := Observation{Stdout: `{"result":"invalidated","allowed":false,"action":"repository-policy","delivery":"candidate_declined/unmanaged","context":{"lineage_id":"","base_tree":"1111111111111111111111111111111111111111","candidate_tree":"2222222222222222222222222222222222222222","paths_digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","denial":{"stage":"candidate-decline","code":"exact_candidate"}}}`}
-	if err := requireCandidateDeclinedGate(sandbox, observation); err != nil {
+// TestRequireCandidateDeclineGateDeniesGenerically supersedes
+// TestRequireCandidateDeclinedGate (Wave 5 Slice 6, design decision 6):
+// requireCandidateDeclinedGate asserted the OLD decline-specific unmanaged
+// shape, deleted along with j50's old form.
+func TestRequireCandidateDeclineGateDeniesGenerically(t *testing.T) {
+	observation := Observation{ExitCode: 1, Stdout: `{"result":"invalidated","allowed":false,"action":"explicit-maintainer-action","reason":"no terminal review receipt exists for gate validation","context":{"lineage_id":"","denial":{"stage":"receipt-discovery","code":"receipt_missing"}}}`}
+	if err := requireCandidateDeclineGateDeniesGenerically(nil, observation); err != nil {
 		t.Fatal(err)
 	}
-	observation.Stdout = strings.Replace(observation.Stdout, `"lineage_id":""`, `"lineage_id":"fabricated"`, 1)
-	if err := requireCandidateDeclinedGate(sandbox, observation); err == nil {
-		t.Fatal("accepted candidate-declined gate with fabricated lineage")
+	allowed := Observation{Stdout: `{"result":"allow","allowed":true,"action":"continue"}`}
+	if err := requireCandidateDeclineGateDeniesGenerically(nil, allowed); err == nil {
+		t.Fatal("accepted an allowed candidate-declined gate")
 	}
 }

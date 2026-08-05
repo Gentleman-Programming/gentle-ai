@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -78,13 +77,7 @@ func paddedReviewCLIModule(header []string, lines int) string {
 
 func writeReviewCLIModule(t *testing.T, repo, name, content string) {
 	t.Helper()
-	path := filepath.Join(repo, name)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, filepath.ToSlash(name), content, 0o644)
 }
 
 func TestReviewStartContractValidatesProcessBoundaryReason(t *testing.T) {

@@ -6,14 +6,11 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-// The kill switch freezes review authority read-only; it never destroys it.
-// "Read-only" is only true if every verb that advances or consumes authority
-// refuses while the switch is off, and the sole production call site used to
-// authorize exactly one operation -- START -- leaving the documented
-// RDDOperationMutate constant unreferenced. A lineage started before the switch
-// went off could therefore still be finalized to an approved terminal receipt
-// with reviews disabled, which also silently defeats re-validation on
-// re-enabling: the operator would come back to approved authority.
+// The kill switch freezes authority against review progress. Every operation
+// that starts or advances authority refuses while it is off. Reads and the one
+// sanctioned destructive cleanup, RDDOperationAbandon, remain
+// available: its own storage gate proves that it can only discard a pristine
+// lineage and cannot mint a terminal receipt.
 //
 // The gate is applied at one exact moment in every mutating verb: after the
 // verb has validated its own request, and as it resolves the repository it is
@@ -42,16 +39,27 @@ import (
 // only it can be either half: against an in-flight lineage it advances the
 // review, and against an already-terminal one it is the exact replay that
 // RDDOperationRead covers, which re-emits the frozen receipt and writes nothing.
+//
+// `review abandon` passes RDDOperationAbandon through the same mode
+// resolver. Its expected revision, authorization binding, persisted
+// pristineness proof, and quarantine audit record remain its own gates. Other
+// cleanup-shaped verbs remain RDDOperationMutate until separately sanctioned.
 
 // resolveReviewMutationRoot resolves the repository a mutating review verb is
 // about to write to, and refuses while the kill switch is off. It replaces the
 // bare root resolution in every such verb so the two steps cannot drift apart.
 func resolveReviewMutationRoot(ctx context.Context, cwd string) (string, error) {
+	return resolveReviewOperationRoot(ctx, cwd, reviewtransaction.RDDOperationMutate)
+}
+
+// resolveReviewOperationRoot resolves the repository and applies the single
+// operation-classified RDD policy before a command can reach authority.
+func resolveReviewOperationRoot(ctx context.Context, cwd string, operation reviewtransaction.RDDOperation) (string, error) {
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: cwd}).ResolveRepositoryRoot(ctx)
 	if err != nil {
 		return "", err
 	}
-	if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
+	if err := authorizeReviewRDDOperation(ctx, root, operation); err != nil {
 		return "", err
 	}
 	return root, nil

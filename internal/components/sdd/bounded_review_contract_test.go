@@ -10,62 +10,68 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
-var boundedReviewRequiredClauses = []string{
-	"Parent orchestrator and native CLI only",
-	"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition",
-	"route only from the returned `next_transition`",
-	"exact operation and ordered argument tokens unchanged",
-	"exact `review.capture-result` collection input once per provider-returned collection attempt",
-	"After empty, malformed, schema-invalid, access/provider failure, or incomplete inspection, query negotiated STATUS again",
-	"fresh `next_transition` reoffers the exact same bound slot",
-	"If STATUS discovers a committed capture, continue without relaunching",
-	"Never infer a retry from transcript or error text alone",
-	"exact literal prefix `GENTLE_AI_REVIEW_BINDING `",
-	"including the trailing space and never `=`",
-	"These are the prompt's first bytes",
-	"one-line JSON assembled only from that input",
-	"`revision` from `expected-revision`",
-	"`subject_hash` from `artifact_subject.subject_hash`",
-	"Capture follows the native transition",
-	"via repeated `--result-artifact-file <path>`",
-	"BOM-less UTF-8 on Windows PowerShell 5.1",
-	"POSIX inline `--result-artifact '<manifest-json>'` and provider-owned `--captured-results` remain compatible",
-	"Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding",
-	"Only candidate-caused severe findings block",
-	"pre-existing/base-only become follow-ups, unknown escalates",
-	"canonical four-lens selection is long work",
-	"one cost/side-effect forecast",
-	"four reviewer model runs",
-	"typed `gentle-ai.review-integration.consent/v3` envelope",
-	"required `agent: claude-code`",
-	"Lossless Blocking Prompt",
-	"Global RDD enabled permits reviews; it never grants consent for this candidate",
-	"Low-risk structural readback remains silent and asks no consent question",
-	"active conversation language",
-	"one narrow localization exception to the no-relabeling rule",
-	"original groups/order, selection mode, exact allowed-answer domain, and answer tokens",
-	"Project `value` as explicit benefits and every `effect` as explicit consequences",
-	"Never translate or alter machine answer tokens (`granted`, `declined`), commands, target IDs, or invocations",
-	"map the selected label back exactly once to the corresponding original answer token and exact invocation",
-	"not the kill switch",
-	"one correction transaction",
-	"positive forecast before editing",
-	"one read-only scoped fix validator",
-	// The fix validator's capability is named because leaving it unnamed cost a
-	// real correction attempt: an orchestrator routed targeted validation to the
-	// refuter, which has no shell by design, and its inconclusive answer was
-	// submitted as a failed check that escalated the lineage irreversibly.
-	"must hold read-only Git execution against the immutable trees",
-	"never route it to the refuter or any other actor that cannot run Git",
-	"produced no verdict",
-	"surface one blocked human decision and submit nothing",
-	"one independent requirements/runtime verification",
-	"### Authority-First Terminal Procedure",
-	"query STATUS again",
-	"Repository Git common-dir CAS remains authoritative",
-	"Existing transaction, policy, ledger, receipt, bundle, and gate-context schemas",
-	"exact returned `review.validate`",
-	"Model/provider/profile selection remains user-owned",
+// boundedReviewRequiredClausesFor is agent-parameterized because two of these
+// clauses state the runtime identity the negotiated route must carry. Pinning
+// them to a constant is what let issue #2440 ship: every runtime's generated
+// instructions claimed to be claude-code, and the test suite agreed.
+func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
+	return []string{
+		"Parent orchestrator and native CLI only",
+		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
+		"route only from the returned `next_transition`",
+		"exact operation and ordered argument tokens unchanged",
+		"exact `review.capture-result` collection input once per provider-returned collection attempt",
+		"After empty, malformed, schema-invalid, access/provider failure, or incomplete inspection, query negotiated STATUS again",
+		"fresh `next_transition` reoffers the exact same bound slot",
+		"If STATUS discovers a committed capture, continue without relaunching",
+		"Never infer a retry from transcript or error text alone",
+		"exact literal prefix `GENTLE_AI_REVIEW_BINDING `",
+		"including the trailing space and never `=`",
+		"These are the prompt's first bytes",
+		"one-line JSON assembled only from that input",
+		"`revision` from `expected-revision`",
+		"`subject_hash` from `artifact_subject.subject_hash`",
+		"Capture follows the native transition",
+		"via repeated `--result-artifact-file <path>`",
+		"BOM-less UTF-8 on Windows PowerShell 5.1",
+		"POSIX inline `--result-artifact '<manifest-json>'` and provider-owned `--captured-results` remain compatible",
+		"Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding",
+		"Only candidate-caused severe findings block",
+		"pre-existing/base-only become follow-ups, unknown escalates",
+		"canonical four-lens selection is long work",
+		"one cost/side-effect forecast",
+		"four reviewer model runs",
+		"typed `gentle-ai.review-integration.consent/v3` envelope",
+		"required `agent: " + string(agent) + "`",
+		"Lossless Blocking Prompt",
+		"Global RDD enabled permits reviews; it never grants consent for this candidate",
+		"Low-risk structural readback remains silent and asks no consent question",
+		"active conversation language",
+		"one narrow localization exception to the no-relabeling rule",
+		"original groups/order, selection mode, exact allowed-answer domain, and answer tokens",
+		"Project `value` as explicit benefits and every `effect` as explicit consequences",
+		"Never translate or alter machine answer tokens (`granted`, `declined`), commands, target IDs, or invocations",
+		"map the selected label back exactly once to the corresponding original answer token and exact invocation",
+		"not the kill switch",
+		"one correction transaction",
+		"positive forecast before editing",
+		"one read-only scoped fix validator",
+		// The fix validator's capability is named because leaving it unnamed cost a
+		// real correction attempt: an orchestrator routed targeted validation to the
+		// refuter, which has no shell by design, and its inconclusive answer was
+		// submitted as a failed check that escalated the lineage irreversibly.
+		"must hold read-only Git execution against the immutable trees",
+		"never route it to the refuter or any other actor that cannot run Git",
+		"produced no verdict",
+		"surface one blocked human decision and submit nothing",
+		"one independent requirements/runtime verification",
+		"### Authority-First Terminal Procedure",
+		"query STATUS again",
+		"Repository Git common-dir CAS remains authoritative",
+		"Existing transaction, policy, ledger, receipt, bundle, and gate-context schemas",
+		"exact returned `review.validate`",
+		"Model/provider/profile selection remains user-owned",
+	}
 }
 
 func TestBoundedReviewConsentLocalizationPreservesMachineDomain(t *testing.T) {
@@ -117,12 +123,12 @@ func TestBoundedReviewContractRequiresRuntimeBoundReviewerContext(t *testing.T) 
 func TestGeneratedOpenCodeReviewControllersUseNegotiatedStatusRouting(t *testing.T) {
 	controllers := map[string]string{
 		"orchestrator": renderSDDOrchestratorAsset(model.AgentOpenCode),
-		"post-apply":   renderBoundedReviewAsset("opencode/commands/sdd-apply.md"),
+		"post-apply":   renderBoundedReviewAsset(model.AgentOpenCode, "opencode/commands/sdd-apply.md"),
 	}
 	for name, content := range controllers {
 		t.Run(name, func(t *testing.T) {
 			for _, required := range []string{
-				"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition",
+				"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(model.AgentOpenCode) + " --next-transition",
 				"route only from the returned `next_transition`",
 				"exact operation and ordered argument tokens unchanged",
 				"`execute`", "`collect`", "`stop`",
@@ -152,7 +158,7 @@ func TestBoundedReviewContractRendersForEverySupportedAgent(t *testing.T) {
 	for _, agent := range agents {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			content := renderSDDOrchestratorAsset(agent.ID)
-			assertTextContainsClauses(t, string(agent.ID), content, boundedReviewRequiredClauses)
+			assertTextContainsClauses(t, string(agent.ID), content, boundedReviewRequiredClausesFor(agent.ID))
 			// The retired WorkRun commands are gone from the assets, so nothing
 			// here may require them. internal/assets/assets_test.go owns the
 			// inverse assertion that they never come back.
@@ -239,7 +245,7 @@ func TestRenderedReviewersAreReadOnlyAndSingleResult(t *testing.T) {
 		for _, lens := range []string{"risk", "readability", "reliability", "resilience"} {
 			path := family + "/agents/review-" + lens + ".md"
 			t.Run(family+"/"+lens, func(t *testing.T) {
-				content := renderBoundedReviewAsset(path)
+				content := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
 				for _, want := range []string{"Review once", "changed_path_manifest", "base_tree", "candidate_tree", "incomplete inspection", "Never read the live worktree", "## Candidate-Causal Admission", "Return one JSON object and no prose", `"subject_hash":"<artifact_subject.subject_hash>"`, "GENTLE_AI_REVIEW_BINDING.subject_hash", `"inspection":{"status":"completed","paths":["<every changed_path_manifest.path in exact order>"]}`, "lens triage", "Emit no unknown fields"} {
 					if !strings.Contains(content, want) {
 						t.Errorf("%s missing %q", path, want)
@@ -310,7 +316,10 @@ func TestBoundedReviewContractListsOnlySupportedLifecycleGates(t *testing.T) {
 func TestAuthorityFirstTerminalProcedureIsStructuredAndMirrorEligibilityIsClosed(t *testing.T) {
 	rows := parseAuthorityFirstRows(t, authorityFirstTerminalProcedure())
 	wantOperations := []string{
-		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition",
+		// The canonical procedure is the shared source fragment, so it carries
+		// the substitution placeholder; renderBoundedReviewAsset binds it to the
+		// runtime that installs it.
+		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + runtimeAgentIDPlaceholder + " --next-transition",
 		"provider-returned transition", "repeat 01–02", "reconcile-terminal-mirrors",
 	}
 	if len(rows) != len(wantOperations) {
@@ -332,9 +341,9 @@ func TestAuthorityFirstTerminalProcedureIsStructuredAndMirrorEligibilityIsClosed
 }
 
 func TestAuthorityFirstLifecycleRendersIdenticallyForEverySupportedAgent(t *testing.T) {
-	procedure := authorityFirstTerminalProcedure()
 	for _, agent := range catalog.AllAgents() {
 		t.Run(string(agent.ID), func(t *testing.T) {
+			procedure := bindRuntimeAgentIdentity(authorityFirstTerminalProcedure(), agent.ID)
 			content := renderSDDOrchestratorAsset(agent.ID)
 			if strings.Count(content, procedure) != 1 {
 				t.Fatal("rendered orchestrator does not contain exactly one canonical terminal procedure")
@@ -350,11 +359,13 @@ func TestOpenCodeAndClaudeApplyCommandsRequireAuthorityBeforeMirrors(t *testing.
 			if strings.Count(raw, authorityFirstProcedurePlaceholder) != 1 {
 				t.Fatalf("%s must reference the centralized terminal procedure exactly once", path)
 			}
-			content := renderBoundedReviewAsset(path)
-			if strings.Contains(content, authorityFirstProcedurePlaceholder) || strings.Count(content, authorityFirstTerminalProcedure()) != 1 {
+			agent := agentForAssetPath(t, path)
+			content := renderBoundedReviewAsset(agent, path)
+			procedure := bindRuntimeAgentIdentity(authorityFirstTerminalProcedure(), agent)
+			if strings.Contains(content, authorityFirstProcedurePlaceholder) || strings.Count(content, procedure) != 1 {
 				t.Fatalf("%s did not render the centralized terminal procedure", path)
 			}
-			if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition") {
+			if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent "+string(agent)+" --next-transition") {
 				t.Fatalf("%s does not begin negotiated review routing with STATUS", path)
 			}
 			if strings.Contains(content, "runs `gentle-ai review start --cwd <repo>`") {

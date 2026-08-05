@@ -237,67 +237,66 @@ func TestOrganicDirectoryIdentityAcceptsCanonicalAliases(t *testing.T) {
 // "proposed" leg. Every configured agent is told the same thing through its own
 // delivery strategy: three routes exist, SDD is only ever proposed, and it is
 // selected only by an explicit request or an accepted proposal.
-func TestOrganicConfiguredAgentReceivesRoutingGuidance(t *testing.T) {
+// organicRoutingGuidanceRequiredFragments is the routing-guidance content
+// every configured agent must receive, shared between this file's Cursor
+// case and organic_runtime_real_agent_detection_test.go's Claude Code /
+// OpenCode cases (see that file for why they're split).
+var organicRoutingGuidanceRequiredFragments = []string{
+	"Direct inline",
+	"Delegated direct",
+	"Optional SDD",
+	"never selects SDD",
+	"never create SDD artifacts",
+	"gentle-ai review mode enable|disable|status",
+	"disabled/unmanaged",
+}
+
+// TestOrganicConfiguredAgentReceivesRoutingGuidanceCursor proves the
+// markdown-rules delivery strategy for Cursor. Cursor's Detect is
+// config-dir-only (~/.cursor, no PATH lookup — see
+// internal/agents/cursor/adapter.go), so this case needs no real agent
+// binary and runs unconditionally in the ordinary unit sweep.
+//
+// Claude Code and OpenCode's equivalent cases used to live in this same
+// table-driven test, but their detection follows the inherited PATH to a
+// real installed binary — install refuses instead of installing a missing
+// runtime now (agentInstallStep in internal/cli/run.go) — so running them
+// here depended on those binaries happening to be on the machine running
+// `go test ./...`, which is true on developer machines but not on every CI
+// runner. They now live in
+// organic_runtime_real_agent_detection_test.go, gated behind the
+// real_agent_e2e build tag so they run only in the organic-runtime-e2e CI
+// job, which installs both runtimes first.
+func TestOrganicConfiguredAgentReceivesRoutingGuidanceCursor(t *testing.T) {
 	t.Parallel()
-	// One row per adapter delivery strategy: a markdown section, an always-loaded
-	// orchestrator prompt inside agent settings, and a markdown rules file. The
-	// orchestrator prompt lives in the home settings document even under
-	// workspace scope, because that is the only settings document the OpenCode
-	// family ever loads (issue #1825).
-	agents := []struct {
-		name    string
-		agentID string
-		path    string
-		inHome  bool
-	}{
-		{name: "markdown section", agentID: "claude-code", path: ".claude/CLAUDE.md"},
-		{name: "orchestrator prompt", agentID: "opencode", path: ".config/opencode/opencode.json", inHome: true},
-		{name: "markdown rules", agentID: "cursor", path: ".cursor/rules/gentle-ai.mdc"},
+	workspace := t.TempDir()
+	home := t.TempDir()
+	if _, err := organicGitOutput(context.Background(), workspace, "init", "--quiet", "--initial-branch=main", "."); err != nil {
+		t.Fatal(err)
 	}
-	required := []string{
-		"Direct inline",
-		"Delegated direct",
-		"Optional SDD",
-		"never selects SDD",
-		"never create SDD artifacts",
-		"gentle-ai review mode enable|disable|status",
-		"disabled/unmanaged",
+	// Cursor's Detect looks for ~/.cursor, which this fake isolated HOME
+	// never has. Simulate Cursor as already installed so gentle-ai does not
+	// correctly refuse an undetected agent here — this test targets
+	// routing-guidance delivery, not agent install behavior.
+	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	for _, agent := range agents {
-		t.Run(agent.name, func(t *testing.T) {
-			t.Parallel()
-			workspace := t.TempDir()
-			home := t.TempDir()
-			if _, err := organicGitOutput(context.Background(), workspace, "init", "--quiet", "--initial-branch=main", "."); err != nil {
-				t.Fatal(err)
-			}
-			output, stderr, err := runOrganicCommand(
-				t, organicBinary, workspace, organicEnvironment(home),
-				"install", "--agent", agent.agentID, "--scope", "workspace", "--components", "permissions",
-			)
-			if err != nil {
-				t.Fatalf("install %s: %v\nstdout:\n%s\nstderr:\n%s", agent.agentID, err, output, stderr)
-			}
-			root := workspace
-			if agent.inHome {
-				root = home
-			}
-			rendered, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(agent.path)))
-			if readErr != nil {
-				t.Fatalf("configured agent %s received no routing guidance at %s: %v", agent.agentID, agent.path, readErr)
-			}
-			for _, fragment := range required {
-				if !bytes.Contains(rendered, []byte(fragment)) {
-					t.Fatalf("routing guidance for %s omits %q:\n%s", agent.agentID, fragment, rendered)
-				}
-			}
-			if agent.inHome {
-				stranded := filepath.Join(workspace, filepath.FromSlash(agent.path))
-				if _, statErr := os.Stat(stranded); !os.IsNotExist(statErr) {
-					t.Fatalf("workspace-scoped install stranded a settings document the agent never loads at %s (stat err = %v)", stranded, statErr)
-				}
-			}
-		})
+	const path = ".cursor/rules/gentle-ai.mdc"
+	output, stderr, err := runOrganicCommand(
+		t, organicBinary, workspace, organicEnvironment(home),
+		"install", "--agent", "cursor", "--scope", "workspace", "--components", "permissions",
+	)
+	if err != nil {
+		t.Fatalf("install cursor: %v\nstdout:\n%s\nstderr:\n%s", err, output, stderr)
+	}
+	rendered, readErr := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(path)))
+	if readErr != nil {
+		t.Fatalf("configured agent cursor received no routing guidance at %s: %v", path, readErr)
+	}
+	for _, fragment := range organicRoutingGuidanceRequiredFragments {
+		if !bytes.Contains(rendered, []byte(fragment)) {
+			t.Fatalf("routing guidance for cursor omits %q:\n%s", fragment, rendered)
+		}
 	}
 }
 
@@ -722,8 +721,12 @@ func TestOrganicKillSwitchStopsAtTheDeliveryBoundary(t *testing.T) {
 	if gate.Schema != organicGateSchema || gate.Allowed || gate.Result == organicGateAllow {
 		t.Fatalf("disabled delivery gate did not fail closed: %#v", gate)
 	}
-	if gate.Context.Denial == nil || gate.Context.Denial.Stage != "receipt-discovery" {
-		t.Fatalf("disabled delivery gate denial is not discoverable: %#v", gate.Context.Denial)
+	// Wave 5 Slice 2 (design decision 4): the kill switch is consulted
+	// before any authority read, so this report carries no discovery-kind
+	// detail at all -- there is no receipt-discovery outcome to describe,
+	// because discovery never runs.
+	if gate.Context.Denial != nil {
+		t.Fatalf("disabled delivery gate leaked discovery-kind detail: %#v", gate.Context.Denial)
 	}
 	// The guidance installed on all 16 adapters promises this exact token under a
 	// disabled switch. Asserting it here is what keeps that promise honest, and
@@ -790,8 +793,11 @@ func TestOrganicKillSwitchReportsUnmanagedDeliveryOverPriorReceipts(t *testing.T
 	if gate.Delivery != "disabled/unmanaged" {
 		t.Fatalf("disabled delivery over a prior receipt did not report the promised disposition: %q", gate.Delivery)
 	}
-	if gate.Context.Denial == nil {
-		t.Fatalf("disabled delivery hid why the prior receipt does not govern: %#v", gate.Context)
+	// Wave 5 Slice 2 (design decision 4): the switch is consulted before any
+	// authority read, so the prior receipt is never even discovered while
+	// disabled -- no discovery-kind detail leaks.
+	if gate.Context.Denial != nil {
+		t.Fatalf("disabled delivery over a prior receipt leaked discovery-kind detail: %#v", gate.Context.Denial)
 	}
 
 	// Reporting moved nothing: the remote is untouched and no branch appeared.
@@ -844,10 +850,12 @@ func TestOrganicKillSwitchReportsUnmanagedDeliveryOverWorkspaceReceipt(t *testin
 	if gate.Delivery != "disabled/unmanaged" {
 		t.Fatalf("disabled delivery over a workspace receipt did not report the promised disposition: %q", gate.Delivery)
 	}
-	// The healthy receipt's real relation to the candidate stays discoverable:
-	// the delivery shape moved past it, and the store was never corrupted.
-	if gate.Context.Denial == nil || gate.Context.Denial.Code != "delivery-shape-mismatch" {
-		t.Fatalf("disabled delivery hid why the workspace receipt does not govern: %#v", gate.Context.Denial)
+	// Wave 5 Slice 2 (design decision 4): the switch is consulted before any
+	// authority read, so the healthy receipt is never even discovered while
+	// disabled -- no discovery-kind detail (not even "delivery-shape-mismatch")
+	// leaks.
+	if gate.Context.Denial != nil {
+		t.Fatalf("disabled delivery over a workspace receipt leaked discovery-kind detail: %#v", gate.Context.Denial)
 	}
 
 	// Reporting moved nothing: the remote is untouched and no branch appeared.
@@ -902,18 +910,19 @@ func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
 		harness.git("commit", "-q", "-m", "docs: unmanaged delivery "+unit)
 	}
 
-	// The disabled window records the change as unmanaged even though the
-	// stale baseline receipt is still in history: declining to manage is not a
-	// blocker demanding a review the switch refuses to run.
+	// The disabled window proceeds unmanaged even though the stale baseline
+	// receipt is still in history: corrective verify cycle CRITICAL-1 makes
+	// this structural absence (sdd-status's own reviewGate, distinct from the
+	// pre-commit delivery gate checked above, which correctly keeps its own
+	// "disabled/unmanaged" disposition) -- not a populated disposition.
+	// Declining to manage is not a blocker demanding a review the switch
+	// refuses to run.
 	disabled := harness.sddStatus(change)
 	if disabled.Dependencies.Archive == "blocked" {
 		t.Fatalf("disabled archive over a stale receipt = blocked; reasons = %v", disabled.BlockedReasons)
 	}
-	if disabled.ReviewGate == nil || disabled.ReviewGate.Delivery != "disabled/unmanaged" {
-		t.Fatalf("disabled window did not record the unmanaged disposition: %#v", disabled.ReviewGate)
-	}
-	if disabled.ReviewGate.Result == organicGateAllow {
-		t.Fatalf("disabled window fabricated an approval: %#v", disabled.ReviewGate)
+	if disabled.ReviewGate != nil {
+		t.Fatalf("disabled window produced a review gate instead of structural absence: %#v", disabled.ReviewGate)
 	}
 
 	if mode := harness.enableReview(); mode.Status.Effective != "on" {
@@ -1005,6 +1014,17 @@ func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
 // expiry-stable terminal state. The authorization that permitted the review is
 // withdrawn afterwards, and the terminal receipt still validates, replays
 // byte-identically, and produces no additional effect.
+// TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect is
+// Wave 5 Slice 2's most consequential black-box behavior reversal (design
+// decision 4; rdd-receipt-only-gates/spec.md's "Kill switch off
+// short-circuits before authority discovery" scenario, a firm requirement,
+// not a tagged pending assumption): the kill switch is now consulted before
+// ANY receipt or authority read, so even the terminal receipt this journey
+// just earned is never consulted while disabled -- the gate reports the
+// generic disabled/unmanaged shape instead of replaying the same allow. The
+// name and behavior this test asserts changed accordingly: the terminal
+// AUTHORITY survives withdrawal unmutated (proven by re-enabling and
+// replaying below), but it no longer GOVERNS DELIVERY while withdrawn.
 func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *testing.T) {
 	t.Parallel()
 	deadline := time.Now().Add(organicWithdrawalDeadline)
@@ -1035,9 +1055,18 @@ func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *te
 		t.Fatal("a new review started after the authorization was withdrawn")
 	}
 
-	replayedGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
-	if !bytes.Equal(replayedGate, firstGate) {
-		t.Fatalf("the terminal gate result changed after withdrawal:\nfirst:\n%s\nreplay:\n%s", firstGate, replayedGate)
+	// While withdrawn: the terminal receipt just earned is never consulted --
+	// the gate reports the generic disabled/unmanaged shape, not a replay of
+	// the pre-withdrawal allow.
+	withdrawnGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
+	if bytes.Equal(withdrawnGate, firstGate) {
+		t.Fatal("the terminal gate result did not change after withdrawal -- the receipt was consulted while disabled")
+	}
+	if !bytes.Contains(withdrawnGate, []byte(`"disabled/unmanaged"`)) {
+		t.Fatalf("withdrawn gate did not report disabled/unmanaged: %s", withdrawnGate)
+	}
+	if bytes.Contains(withdrawnGate, []byte(`"allowed":true`)) {
+		t.Fatalf("withdrawn gate fabricated an approval: %s", withdrawnGate)
 	}
 	replayedFinalize := harness.gentle("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage)
 	if !bytes.Equal(replayedFinalize, firstFinalize) {
@@ -1054,6 +1083,17 @@ func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *te
 		t.Fatalf("replay moved the remote: %s != %s", remote, harness.repo.baseRevision)
 	}
 	harness.assertOnlyMainRef()
+
+	// Re-enabling rediscovers the SAME unmutated receipt, and it governs
+	// again exactly as before withdrawal -- proving the switch never touched
+	// the authority itself, only whether it is consulted.
+	if mode := harness.enableReview(); mode.Status.Effective != "on" {
+		t.Fatalf("re-enabling did not take effect: %#v", mode)
+	}
+	reEnabledGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
+	if !bytes.Equal(reEnabledGate, firstGate) {
+		t.Fatalf("the terminal gate result changed across a withdraw/re-enable cycle:\nbefore:\n%s\nafter:\n%s", firstGate, reEnabledGate)
+	}
 
 	if time.Now().After(deadline) {
 		t.Fatalf("the withdrawal journey exceeded its %s CI budget", organicWithdrawalDeadline)
@@ -1550,6 +1590,10 @@ func (harness *organicHarness) runActor(role, path, body, message, marker string
 	}
 }
 
+// writeFiles writes candidate files and declares them. Since #2394 a new file
+// only enters the review candidate once the user put it in the index, so a
+// journey that means to have its files reviewed has to say so the same way a
+// real user does.
 func (harness *organicHarness) writeFiles(files map[string]string) {
 	harness.t.Helper()
 	for relative, body := range files {
@@ -1560,6 +1604,7 @@ func (harness *organicHarness) writeFiles(files map[string]string) {
 		if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
 			harness.t.Fatal(err)
 		}
+		harness.git("add", "--", relative)
 	}
 }
 

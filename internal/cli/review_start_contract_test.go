@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -329,9 +330,7 @@ func TestReviewRecoverRetainsWorkspaceOverlayBaseAndScope(t *testing.T) {
 	if err := RunReviewRecover(args, io.Discard); err == nil || !strings.Contains(err.Error(), "scope has not changed") {
 		t.Fatalf("unchanged overlay recovery error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, "new.txt"), []byte("new scope\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "new.txt", "new scope\n", 0o644)
 	if err := RunReviewRecover(args, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +392,12 @@ func approvedWorkspaceOverlayRecoveryPredecessor(t *testing.T, lineage string) (
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("overlay\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", base, "--workspace-overlay", "--lineage", lineage}, io.Discard); err != nil {
+	// A workspace-overlay candidate large enough to select a lens now refuses
+	// a direct start up front through the CLI (issue #2447); this helper is
+	// SETUP for the recover behavior its callers test, so it constructs legacy
+	// authority directly via runLegacyFacadeStartForTest instead of going
+	// through that dispatch.
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", base, "--workspace-overlay", "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
@@ -530,7 +534,7 @@ func escalatedRecoveryProjectionFixture(t *testing.T, lineage string) (string, r
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
@@ -593,7 +597,7 @@ func TestReviewRecoverReleaseScopeExpandsMergedSliceToFirstParentDiff(t *testing
 	}
 
 	lineage := "release-slice-predecessor"
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
@@ -944,15 +948,7 @@ func boundNegotiatedStartArgs(t *testing.T, args []string) []string {
 			overlay = true
 		}
 	}
-	intended := []string{}
-	if projection != reviewtransaction.ProjectionStaged {
-		var err error
-		intended, err = (reviewtransaction.SnapshotBuilder{Repo: cwd}).DiscoverIntendedUntracked(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
+	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: []string{}}
 	if baseRef != "" {
 		target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, baseRef
 	}
@@ -984,7 +980,30 @@ func decodeNegotiatedReviewStart(t *testing.T, payload []byte) ReviewIntegration
 	return result
 }
 
+// writeReviewStartCandidate writes one file of the review candidate. Since
+// #2394 a new file only enters the candidate when the user declared it, so a
+// path Git does not already track is also staged here: `git add` is the
+// declaration, and a helper named "review start candidate" must produce
+// something START would actually review.
 func writeReviewStartCandidate(t *testing.T, repo, path, contents string, mode os.FileMode) {
+	t.Helper()
+	fullPath := filepath.Join(repo, filepath.FromSlash(path))
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tracked := isReviewCLITrackedPath(t, repo, path)
+	if err := os.WriteFile(fullPath, []byte(contents), mode); err != nil {
+		t.Fatal(err)
+	}
+	if !tracked {
+		runReviewCLIGit(t, repo, "add", "--", path)
+	}
+}
+
+// writeUndeclaredWorkspaceFile writes a file the user never declared: it stays
+// untracked and unstaged, so since #2394 it is workspace noise rather than
+// review scope. Tests use it exactly where that exclusion is the point.
+func writeUndeclaredWorkspaceFile(t *testing.T, repo, path, contents string, mode os.FileMode) {
 	t.Helper()
 	fullPath := filepath.Join(repo, filepath.FromSlash(path))
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
@@ -993,4 +1012,13 @@ func writeReviewStartCandidate(t *testing.T, repo, path, contents string, mode o
 	if err := os.WriteFile(fullPath, []byte(contents), mode); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// isReviewCLITrackedPath reports whether HEAD's index already tracks path, so
+// declaring a new file never disturbs the staged/unstaged split a tracked
+// modification is deliberately testing.
+func isReviewCLITrackedPath(t *testing.T, repo, path string) bool {
+	t.Helper()
+	command := exec.Command("git", "-C", repo, "ls-files", "--error-unmatch", "--", path)
+	return command.Run() == nil
 }

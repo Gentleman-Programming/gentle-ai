@@ -7,7 +7,7 @@ import (
 )
 
 func TestProjectStatusV1FreezesExactLegacyShape(t *testing.T) {
-	status := baseStatus("/repo", nil, nil, "apply", nil)
+	status := baseStatus(ArtifactStoreOpenSpec, "/repo", nil, nil, nil, "apply", nil)
 	status.RuntimeStatus = &RuntimeStatus{Schema: RuntimeStatusSchema, Change: "internal-only"}
 	status.RemediationState.CorrectionBudgetRemaining = 7
 	status.RemediationState.CorrectionBudgetTotal = 10
@@ -81,7 +81,7 @@ func TestProjectStatusV1RejectsNonLegacyValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			status := baseStatus("/repo", nil, nil, "apply", nil)
+			status := baseStatus(ArtifactStoreOpenSpec, "/repo", nil, nil, nil, "apply", nil)
 			tt.mutate(&status)
 			_, err := ProjectStatusV1(status)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
@@ -92,7 +92,7 @@ func TestProjectStatusV1RejectsNonLegacyValues(t *testing.T) {
 }
 
 func TestStatusRenderersEmbedOnlyStatusV1Projection(t *testing.T) {
-	status := baseStatus("/repo", nil, nil, "apply", nil)
+	status := baseStatus(ArtifactStoreOpenSpec, "/repo", nil, nil, nil, "apply", nil)
 	status.RuntimeStatus = &RuntimeStatus{Schema: RuntimeStatusSchema, Change: "internal-only"}
 	status.RemediationState.CorrectionBudgetRemaining = 7
 	status.RemediationState.CorrectionBudgetTotal = 10

@@ -204,7 +204,6 @@ func (a noSkillsAdapter) Tier() model.SupportTier { return model.TierFull }
 func (a noSkillsAdapter) Detect(_ context.Context, _ string) (bool, string, string, bool, error) {
 	return false, "", "", false, nil
 }
-func (a noSkillsAdapter) SupportsAutoInstall() bool { return false }
 func (a noSkillsAdapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 	return nil, nil
 }

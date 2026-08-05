@@ -224,12 +224,35 @@ func readReviewTransaction(path, content string) (*reviewtransaction.Transaction
 // sddstatus-qualified name working unchanged for both remaining consumers.
 const EscalationAccountingReasonTemplate = reviewtransaction.EscalationAccountingReasonTemplate
 
-func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, transaction *reviewtransaction.Transaction, compact *reviewtransaction.CompactState, transactionReason, applyProgress string) RemediationState {
+func resolveBoundedRemediation(required, reviewDisabled bool, verify verifyResultEvaluation, transaction *reviewtransaction.Transaction, compact *reviewtransaction.CompactState, transactionReason, applyProgress string) RemediationState {
 	if !required {
 		return RemediationState{}
 	}
 	if verify.EvidenceRevision == "" && strings.Contains(verify.Reason, "evidence_revision") {
 		return RemediationState{Reason: fmt.Sprintf("verify evidence cannot enter remediation: %s", verify.Reason)}
+	}
+	// #2182: the kill switch already gates the review authority LOOKUP at the
+	// call site; without this it did not gate the classification that consumes
+	// the absence of what that lookup would have found, so an admitted failure
+	// was refused for missing a bounded review transaction that policy itself
+	// prevented from existing. A kill switch a downstream check overrides is not
+	// a kill switch.
+	//
+	// Correction proceeds unmanaged: bound to the failed evidence, and carrying
+	// none of the lineage, generation, fix-batch or budget fields that only a
+	// review authority can issue. Those stay zero rather than fabricated,
+	// because no path may report or imply review approval while review is off.
+	// Completion stays review-independent too: the runtime ledger already
+	// settles it through nativeRuntimeCompletesRemediation.
+	if reviewDisabled {
+		return RemediationState{
+			Required:               true,
+			FailedEvidenceRevision: verify.EvidenceRevision,
+			Reason: fmt.Sprintf(
+				"verify evidence requires unmanaged remediation for %s: %s; receipt-driven review is disabled, so this correction is bounded by the native runtime attempt budget alone",
+				verify.EvidenceRevision, verify.Reason,
+			),
+		}
 	}
 	if transaction == nil && compact != nil {
 		if compact.State == reviewtransaction.StateEscalated {
@@ -320,6 +343,9 @@ type reviewAuthorityEvaluation struct {
 	Result       reviewtransaction.GateResult
 	Reason       string
 	CompactState *reviewtransaction.CompactState
+	// Blocking distinguishes a discovered non-allow authority from an absent
+	// governing receipt, so stale verification can preserve its resolution path.
+	Blocking bool
 	// Absent reports that no review authority GOVERNS this change: the change
 	// supplied no review artifact, and discovery found either no terminal native
 	// receipt or only receipts whose terminal evaluation cannot govern the
@@ -330,23 +356,44 @@ type reviewAuthorityEvaluation struct {
 	// failed validation keeps Absent false and stays a blocker whatever the
 	// kill switch says.
 	Absent bool
+	// Missing is the narrower "genuinely zero receipts exist anywhere"
+	// signal (corrective verify cycle 4, BLOCKER-1: rdd-post-verify-review-
+	// offer's "Decline Proceeds to Unmanaged Ordinary Archive" requirement).
+	// Unlike Absent -- which is also true for a discovered-but-ambiguous or
+	// discovered-but-stale receipt, cases where SOME review artifact exists
+	// and is broken -- Missing is set ONLY when discovery's own terminal
+	// inventory is empty (errTerminalReceiptMissing): no review was ever
+	// started for this candidate at all. That is exactly "the offer was
+	// never acted on", the decline case the ratified requirement's
+	// "invitation, never a gate" reading describes. Ambiguous/stale/invalid
+	// discovered receipts are real review activity gone wrong, not a
+	// decline, and keep blocking regardless of this field.
+	Missing bool
 }
 
-func resolveCompactRemediationAuthority(ctx context.Context, repo, change string, bindingPresent, required bool, receiptPath, receiptContent string) *reviewtransaction.CompactState {
+// resolveCompactRemediationAuthority collapses the change's explicit
+// governing receipt (Wave 4 S5c') and the receipt-discovery fallback into
+// one CompactState resolution. When ref is non-nil, validity is a single
+// reviewtransaction.ValidateSDDReceiptRef re-derivation (no stored
+// AuthorityRevision pinning or GateContext comparison — the ref's own
+// receipt-hash identity plus a fresh gate evaluation is the whole check);
+// otherwise it falls back to resolveReviewAuthority's unrelated
+// discovery-based evaluation, unchanged.
+func resolveCompactRemediationAuthority(ctx context.Context, repo, change string, ref *reviewtransaction.SDDReceiptRef, required bool, receiptPath, receiptContent string) *reviewtransaction.CompactState {
 	if !required {
 		return nil
 	}
-	if bindingPresent {
-		binding, _, err := validateBoundReview(ctx, repo, change)
-		if err != nil {
+	if ref != nil {
+		result, _, err := reviewtransaction.ValidateSDDReceiptRef(ctx, repo, *ref)
+		if err != nil || result != reviewtransaction.GateAllow {
 			return nil
 		}
-		store, err := reviewtransaction.CompactAuthoritativeStore(ctx, repo, binding.Lineage)
+		store, err := reviewtransaction.CompactAuthoritativeStore(ctx, repo, ref.Lineage)
 		if err != nil {
 			return nil
 		}
 		record, err := store.Load()
-		if err != nil || record.Revision != binding.AuthorityRevision || record.State.State != reviewtransaction.StateApproved {
+		if err != nil || record.State.State != reviewtransaction.StateApproved {
 			return nil
 		}
 		return &record.State
@@ -358,45 +405,92 @@ func resolveCompactRemediationAuthority(ctx context.Context, repo, change string
 	return evaluation.CompactState
 }
 
+// resolveGoverningReceiptRef resolves the change's explicit governing
+// receipt reference for the archive-gate evaluation path (Wave 4 S5c',
+// design.md's decision-1 amendment, 2026-08-03). It reuses
+// loadEffectiveReviewBinding's existing native-then-legacy resolution
+// (RuntimeStatus.Binding, still populated only by the unchanged `review
+// bind-sdd` writer path, or the read-only legacy binding.json projection)
+// and derives the two-field SDDReceiptRef shape from it. It performs no new
+// I/O of its own and never writes anything; the underlying data source is
+// unchanged from before this slice, only the archive-gate's validity check
+// against it is rerouted (see resolveReviewAuthority/
+// resolveCompactRemediationAuthority's callers in status.go).
+//
+// It mirrors bindingExists's own resilience: a repository that cannot be
+// Git-resolved at all (pure planning/OpenSpec fixtures with no `.git`) has
+// structurally no native runtime authority to read, so that case answers
+// "no governing ref" rather than surfacing a resolution error — exactly
+// what bindingExists already did for the equivalent case.
+func resolveGoverningReceiptRef(ctx context.Context, repo, change string) (*reviewtransaction.SDDReceiptRef, error) {
+	if _, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx); err != nil {
+		return nil, nil
+	}
+	binding, err := loadEffectiveReviewBinding(ctx, repo, change)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	ref := reviewtransaction.SDDReceiptRef{Lineage: binding.Lineage, ReceiptHash: binding.ReceiptHash}
+	return &ref, nil
+}
+
 // errTerminalReceiptMissing distinguishes an empty terminal inventory from
 // discovery failures that must remain fail-closed. It is a sentinel rather than
 // a message to match on so the empty-inventory reason can name a fresh review.
 var errTerminalReceiptMissing = errors.New("terminal review receipt is missing")
 
-// reviewGateDisabledUnmanagedReason names the situation before the mechanism:
-// what governs this change comes first, and the reason the gate could not
-// govern stays appended behind it so no information is destroyed.
-const reviewGateDisabledUnmanagedReason = "receipt-driven development is disabled, so no review governs this change; it closes under ordinary repository policy rather than under a review receipt"
-
+// applyReviewGate is SDD's one entry point into review authority discovery.
+// Corrective verify cycle CRITICAL-1 (rdd-post-verify-review-offer's "Kill-
+// Switch-Off Is Structural Absence" requirement, ratified text: "When the RDD
+// kill switch is OFF, zero review code MUST execute on any SDD path: no
+// offer, no status consultation, no disabled/unmanaged ceremony capable of
+// failing or blocking" and "archive consults no reviewGate structured status
+// ... archive cannot fail or block for review reasons"): the kill-switch
+// check happens ONCE, here, before any authority read — mirroring
+// applyReviewOfferRouting's and applyTargetedReVerifyRouting's own early-
+// return shape. While disabled, resolveReviewAuthority/discoverNativeReceipts
+// never run (no repository walk), status.ReviewGate stays nil (structural
+// absence, no disabled/unmanaged ceremony), and Dependencies.Archive is never
+// touched here, so it can never be review-blocked while the switch is off.
+// This removes the previous behavior of still validating an explicit review
+// artifact while disabled: the ratified requirement carries no such
+// carve-out ("zero review code" is unconditional), superseding the earlier,
+// narrower ReviewDisabled contract.
 func applyReviewGate(
 	status *Status,
 	repo string,
 	receiptPath, receiptContent string,
 	reviewDisabled bool,
 ) {
-	if status.Dependencies.Verify != DependencyAllDone || !status.TaskProgress.AllComplete {
+	if reviewDisabled || status.Dependencies.Verify != DependencyAllDone || !status.TaskProgress.AllComplete {
 		return
 	}
-	applyReviewGateEvaluation(status, resolveReviewAuthority(context.Background(), repo, receiptPath, receiptContent, ""), reviewDisabled)
+	applyReviewGateEvaluation(status, resolveReviewAuthority(context.Background(), repo, receiptPath, receiptContent, ""))
 }
 
-func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluation, reviewDisabled bool) {
+func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluation) {
 	if evaluation.Result == reviewtransaction.GateAllow {
 		status.ReviewGate = &ReviewGateState{Result: evaluation.Result, Reason: evaluation.Reason}
 		return
 	}
-	// With the kill switch off the archive gate has no say in whether this
-	// change may close: it would demand a terminal receipt that review/start is
-	// refused from producing, which is a deadlock, not a safeguard. Only the
-	// implicit demand goes away — an explicit review artifact that failed
-	// validation still blocks below. Re-enabling re-validates from the current
-	// state, because the next enforcement point rediscovers it on its own.
-	if reviewDisabled && evaluation.Absent {
-		status.ReviewGate = &ReviewGateState{
-			Result:   evaluation.Result,
-			Reason:   fmt.Sprintf("%s: %s", reviewGateDisabledUnmanagedReason, evaluation.Reason),
-			Delivery: reviewtransaction.RDDDeliveryDisabledUnmanaged,
-		}
+	// Corrective verify cycle 4, BLOCKER-1 (rdd-post-verify-review-offer's
+	// "Decline Proceeds to Unmanaged Ordinary Archive"): the offer is an
+	// invitation, never a gate. When no review was ever started for this
+	// candidate (evaluation.Missing), that is decline-by-absence-of-action,
+	// not a blocker -- status.ReviewGate stays nil (structural absence,
+	// mirroring the kill-switch-off shape), Dependencies.Archive is left at
+	// whatever resolveDependencies already computed (Ready, since this path
+	// only runs once Verify is AllDone), and no resolve-review demand is
+	// raised. A discovered-but-broken receipt (ambiguous, stale, invalid)
+	// is real review activity gone wrong, not a decline, and still blocks.
+	if evaluation.Missing {
+		return
+	}
+	if status.Dependencies.Verify != DependencyAllDone {
+		status.ReviewGate = &ReviewGateState{Result: evaluation.Result, Reason: evaluation.Reason}
 		return
 	}
 	blockReviewGate(status, evaluation.Result, evaluation.Reason)
@@ -435,9 +529,10 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 				reason += "; " + reviewGateFreshReviewContinuation
 			}
 			return reviewAuthorityEvaluation{
-				Result: reviewtransaction.GateInvalidated,
-				Reason: reason,
-				Absent: absent,
+				Result:  reviewtransaction.GateInvalidated,
+				Reason:  reason,
+				Absent:  absent,
+				Missing: absent,
 			}
 		}
 	}
@@ -471,6 +566,7 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 	if len(blockers) > 0 {
 		selected := blockers[0]
 		selected.Absent = !explicit
+		selected.Blocking = true
 		return selected
 	}
 	selected := stale[0]

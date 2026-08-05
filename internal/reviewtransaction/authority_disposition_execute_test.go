@@ -22,6 +22,47 @@ func authorizedPlanFixture(t *testing.T, repo, actor, reason string) AuthorityDi
 	return plan
 }
 
+// TestAuthorityDispositionClosureAdmission satisfies Wave 6 tasks.md 1.6 and
+// rdd-closure-disposition-execution's "N-Node Admission for Closed Anomaly
+// Classes" requirement: N=1 is admitted (the N=1 base case,
+// rdd-leaf-disposition-execution's "Single-node closure is admitted"), a
+// classified N>=2 closure is admitted provided the seed is last (descendant-
+// first, seed-last per authorityDispositionClosure's Wave 6 ordering), and an
+// unknown/mixed/ambiguous shape — an empty anomaly class, or a closure that
+// does not end with the seed — still refuses with no generic fallback.
+func TestAuthorityDispositionClosureAdmission(t *testing.T) {
+	t.Run("N=1 admitted", func(t *testing.T) {
+		plan := AuthorityDispositionPlan{SeedSet: []string{"seed"}, Closure: []string{"seed"}}
+		if err := admitClosureDisposition(plan); err != nil {
+			t.Fatalf("N=1 closure refused: %v", err)
+		}
+	})
+	t.Run("N>=2 classified closure admitted when seed is last", func(t *testing.T) {
+		plan := AuthorityDispositionPlan{SeedSet: []string{"seed"}, Closure: []string{"grandchild", "child", "seed"}}
+		if err := admitClosureDisposition(plan); err != nil {
+			t.Fatalf("multi-node descendant-first, seed-last closure refused: %v", err)
+		}
+	})
+	t.Run("seed not last refuses (malformed/ambiguous shape)", func(t *testing.T) {
+		plan := AuthorityDispositionPlan{SeedSet: []string{"seed"}, Closure: []string{"seed", "child", "grandchild"}}
+		if err := admitClosureDisposition(plan); err == nil {
+			t.Fatal("closure with seed not last was admitted")
+		}
+	})
+	t.Run("more than one seed refuses", func(t *testing.T) {
+		plan := AuthorityDispositionPlan{SeedSet: []string{"seed-one", "seed-two"}, Closure: []string{"child", "seed-one"}}
+		if err := admitClosureDisposition(plan); err == nil {
+			t.Fatal("plan with more than one seed was admitted")
+		}
+	})
+	t.Run("empty closure refuses", func(t *testing.T) {
+		plan := AuthorityDispositionPlan{SeedSet: []string{"seed"}, Closure: []string{}}
+		if err := admitClosureDisposition(plan); err == nil {
+			t.Fatal("plan with an empty closure was admitted")
+		}
+	})
+}
+
 // TestAuthorityDispositionExecuteAdmitsSingleNodeClosure satisfies tasks.md
 // 2.1 and "Cardinality-One Admission": a single-node closure classified from
 // #1892's historical exact-binding edge shape is admitted and quarantined.
@@ -42,31 +83,70 @@ func TestAuthorityDispositionExecuteAdmitsSingleNodeClosure(t *testing.T) {
 	}
 }
 
-// TestAuthorityDispositionExecuteRefusesMultiNodeClosure satisfies tasks.md
-// 2.1 "Multi-node closure refuses": a synthetic multi-member closure (the
-// #2014/#1656 shape) refuses admission before any I/O, naming cardinality as
-// the reason and Wave 6 as the escalation path — not a delivery promise.
-func TestAuthorityDispositionExecuteRefusesMultiNodeClosure(t *testing.T) {
-	plan := AuthorityDispositionPlan{
-		Schema: AuthorityDispositionPlanSchema, RepositoryBinding: "binding", AuthorityInventoryRevision: "rev",
-		AnomalyClass: compactContentMismatchedRecoveryAuthorizationClass, SeedSet: []string{"seed"},
-		Closure: []string{"seed", "descendant-one"}, ExpectedRevisions: map[string]string{"seed": "rev-seed", "descendant-one": "rev-one"},
-		Actor: "maintainer@example.com", Reason: "escalate multi-lineage shape",
-	}
-	digest, err := authorityDispositionPlanDigest(plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan.PlanDigest = digest
-	plan.Authorization = authorityDispositionAuthorizationBinding(plan)
+// TestAuthorityDispositionClosureGitRepositorySelectionThreatMatrix satisfies
+// tasks.md 1.9's Git-repository-selection threat matrix cell under the
+// renamed export (AdmitAuthorityDispositionClosure): a relative --cwd and an
+// absolute --cwd both resolve the same repository root and bind/execute
+// correctly, and a foreign-repo --cwd — a plan derived against one
+// repository, submitted against a completely different one — refuses
+// pre-lock, naming the repository-binding mismatch, without ever admitting
+// through the renamed export.
+func TestAuthorityDispositionClosureGitRepositorySelectionThreatMatrix(t *testing.T) {
+	t.Run("relative --cwd binds and executes", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		parent, base := filepath.Dir(repo), filepath.Base(repo)
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chdir(cwd) })
+		if err := os.Chdir(parent); err != nil {
+			t.Fatal(err)
+		}
+		forgedRecoveryPair(t, repo, "relative-cwd", "relative cwd target\n")
+		plan := authorizedPlanFixture(t, base, "maintainer@example.com", "quarantine forged recovery authorization")
+		if err := AdmitAuthorityDispositionClosure(plan); err != nil {
+			t.Fatalf("relative --cwd plan refused by renamed export: %v", err)
+		}
+		if _, err := executeAuthorityDisposition(context.Background(), base, plan); err != nil {
+			t.Fatalf("relative --cwd execution: %v", err)
+		}
+	})
 
-	_, err = executeAuthorityDisposition(context.Background(), "/nonexistent-repo-never-touched", plan)
-	if !errors.Is(err, errAuthorityDispositionCardinality) {
-		t.Fatalf("multi-node closure error = %v, want errAuthorityDispositionCardinality", err)
-	}
-	if !strings.Contains(err.Error(), "cardinality") || !strings.Contains(err.Error(), "Wave 6") {
-		t.Fatalf("multi-node refusal does not name cardinality and Wave 6: %v", err)
-	}
+	t.Run("absolute --cwd binds and executes", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		if !filepath.IsAbs(repo) {
+			t.Fatalf("initSnapshotRepo did not return an absolute path: %q", repo)
+		}
+		forgedRecoveryPair(t, repo, "absolute-cwd", "absolute cwd target\n")
+		plan := authorizedPlanFixture(t, repo, "maintainer@example.com", "quarantine forged recovery authorization")
+		if err := AdmitAuthorityDispositionClosure(plan); err != nil {
+			t.Fatalf("absolute --cwd plan refused by renamed export: %v", err)
+		}
+		if _, err := executeAuthorityDisposition(context.Background(), repo, plan); err != nil {
+			t.Fatalf("absolute --cwd execution: %v", err)
+		}
+	})
+
+	t.Run("foreign-repo --cwd refuses pre-lock without moving anything", func(t *testing.T) {
+		repoA := initSnapshotRepo(t)
+		_, successorA, successorStoreA := forgedRecoveryPair(t, repoA, "foreign-a", "foreign repo a target\n")
+		plan := authorizedPlanFixture(t, repoA, "maintainer@example.com", "quarantine forged recovery authorization")
+
+		repoB := initSnapshotRepo(t)
+
+		if err := AdmitAuthorityDispositionClosure(plan); err != nil {
+			t.Fatalf("plan admission refused before the cross-repository check even ran: %v", err)
+		}
+		_, err := executeAuthorityDisposition(context.Background(), repoB, plan)
+		if err == nil || !strings.Contains(err.Error(), "different repository") {
+			t.Fatalf("foreign-repo execution error = %v, want a repository-binding mismatch refusal", err)
+		}
+		if _, statErr := os.Stat(successorStoreA.Dir); statErr != nil {
+			t.Fatalf("foreign-repo refusal moved the original repository's entry: %v", statErr)
+		}
+		_ = successorA
+	})
 }
 
 // TestAuthorityDispositionExecuteNoPredecessorPointerRewritten satisfies

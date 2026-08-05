@@ -1140,6 +1140,9 @@ func TestStartCompactAuthorityBlocksInvalidReceiptAndCorruptUnrelatedStore(t *te
 			t.Fatalf("invalid receipt start = %#v, %v", result, err)
 		}
 	})
+	// A corrupt UNRELATED entry is not a reason to refuse new work. It is
+	// still a reason to refuse itself, and both halves are asserted here so
+	// the relaxation cannot quietly become permissiveness.
 	t.Run("corrupt unrelated store", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "tracked.txt", "historical candidate\n")
@@ -1148,8 +1151,14 @@ func TestStartCompactAuthorityBlocksInvalidReceiptAndCorruptUnrelatedStore(t *te
 			t.Fatal(err)
 		}
 		writeSnapshotFile(t, repo, "tracked.txt", "new candidate\n")
-		if _, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: newCompactTestState(t, repo, "compact-start-corrupt-request")}); err == nil {
-			t.Fatal("corrupt unrelated store allowed a fresh authority")
+		if _, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: newCompactTestState(t, repo, "compact-start-corrupt-request")}); err != nil {
+			t.Fatalf("a corrupt unrelated entry refused a fresh authority: %v", err)
+		}
+		if err := CompactAuthorityLineageBlocked(context.Background(), repo, "compact-start-corrupt-history"); err == nil {
+			t.Fatal("the corrupt entry reports no block of its own")
+		}
+		if _, err := store.Load(); err == nil {
+			t.Fatal("the corrupt entry became loadable")
 		}
 	})
 }
@@ -1950,21 +1959,60 @@ func TestCompactDiscoveryIgnoresOnlyUnpublishedCrashResidue(t *testing.T) {
 	if err != nil || len(leaves) != 1 || leaves[0].lineageID != state.LineageID {
 		t.Fatalf("leaves with crash residue = %#v, %v", leaves, err)
 	}
+	// Neither of the two shapes below may be silently treated as authority,
+	// and neither may take the published lineage down with it. "Hidden" means
+	// enumerated as authority or absent from the inventory -- not "did not
+	// abort the whole enumeration", which is what a shared review store can
+	// never afford to do over one directory.
 	unexpected := filepath.Join(residue.Dir, "unexpected-residue")
 	if err := os.WriteFile(unexpected, []byte("not a temporary publication"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CompactAuthorityLeaves(context.Background(), repo); err == nil {
-		t.Fatal("unexpected state-less lineage entry was hidden as crash residue")
-	}
+	requireResidueNeverAuthority(t, repo, residue.lineageID, state.LineageID)
 	if err := os.Remove(unexpected); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(residue.StatePath(), []byte("corrupt published authority"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CompactAuthorityLeaves(context.Background(), repo); err == nil {
-		t.Fatal("corrupt published authority was hidden as residue")
+	requireResidueNeverAuthority(t, repo, residue.lineageID, state.LineageID)
+	if err := CompactAuthorityLineageBlocked(context.Background(), repo, residue.lineageID); err == nil {
+		t.Fatal("corrupt published authority reports no block of its own")
+	}
+}
+
+// requireResidueNeverAuthority holds both halves at once: the residue lineage
+// is never a leaf, the published lineage still is, and the inventory names the
+// residue rather than dropping it.
+func requireResidueNeverAuthority(t *testing.T, repo, residue, published string) {
+	t.Helper()
+	leaves, err := CompactAuthorityLeaves(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("residue poisoned enumeration: %v", err)
+	}
+	names := map[string]bool{}
+	for _, leaf := range leaves {
+		names[leaf.lineageID] = true
+	}
+	if names[residue] {
+		t.Fatalf("residue lineage %q was enumerated as authority: %#v", residue, names)
+	}
+	if !names[published] {
+		t.Fatalf("published lineage %q was excluded by residue: %#v", published, names)
+	}
+	report, err := InventoryAuthority(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := false
+	for _, entry := range report.Entries {
+		named = named || entry.LineageID == residue
+	}
+	for _, diagnostic := range report.Diagnostics {
+		named = named || strings.Contains(diagnostic.Path, residue)
+	}
+	if !named {
+		t.Fatalf("residue lineage %q vanished from the inventory: %#v", residue, report)
 	}
 }
 
@@ -2143,6 +2191,34 @@ func TestCompactStateRejectsChecksumValidImpossibleSemantics(t *testing.T) {
 				t.Fatalf("checksum-valid impossible import error = %v", err)
 			}
 		})
+	}
+}
+
+// TestCompactStoresShareRepositoryWriteLock re-homed from
+// compact_chain_test.go (Wave 5 Slice 5, pre-PR chain composition deletion):
+// the invariant itself — every compact store in one repository shares ONE
+// physical write lock file, regardless of lineage — is general-purpose, not
+// composition-specific; only the deleted file's elaborate multi-segment
+// pre-PR chain fixture was. Rebuilt here with the minimal fixture this
+// invariant actually needs: two independent lineages' own
+// CompactAuthoritativeStore values in the same repository.
+func TestCompactStoresShareRepositoryWriteLock(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	first, err := CompactAuthoritativeStore(context.Background(), repo, "shared-lock-first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := CompactAuthoritativeStore(context.Background(), repo, "shared-lock-second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := acquireStoreLock(first.lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.release()
+	if _, err := acquireStoreLock(second.lockPath); !errors.Is(err, ErrConcurrentUpdate) {
+		t.Fatalf("second compact store lock error = %v, want concurrent update", err)
 	}
 }
 

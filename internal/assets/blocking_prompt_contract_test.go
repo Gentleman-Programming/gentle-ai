@@ -60,6 +60,9 @@ func TestCoordinatorOrchestratorsCarryLosslessBlockingPromptRule(t *testing.T) {
 				"Do not choose, default, infer, launch dependent work, or continue",
 				"Accept an answer only when each response belongs to the exact allowed-answer domain",
 				"free text or multi-select only when the original prompt allowed it",
+				"request for information, not a candidate answer",
+				"answer it directly from the envelope already held",
+				"re-present the complete choice envelope and keep waiting",
 				"invalid or ambiguous",
 				"same blocked actor exactly once",
 			} {
@@ -178,9 +181,10 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "final privacy scan", text: "Immediately before the first GitHub operation, perform a final privacy scan"},
 		{name: "privacy ordering", text: "This scan precedes the duplicate search, report creation, and occurrence comment"},
 		{name: "privacy exclusions", text: "raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values"},
-		{name: "released fix only", text: "Resume only after an installed released fix"},
+		{name: "published fix only", text: "Resume only after an installed published fix"},
 		{name: "native status re-entry", text: "re-enter through native status"},
-		{name: "no source checkout resume", text: "Never resume against a source checkout or unmerged pull request"},
+		{name: "installed prerelease qualifies", text: "A published prerelease or release candidate the user installed satisfies this."},
+		{name: "no unpublished code resume", text: "Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request"},
 	}
 
 	allPaths := allSDDOrchestratorAssetPaths(t)
@@ -278,6 +282,68 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 	}
 }
 
+// TestCoordinatorOrchestratorsCarrySDDEditAuthorityConsentRelay is #2570's
+// (S6 of #2540) guard: every orchestrator variant teaches the lossless relay
+// of the typed SDD edit-authority consent envelope that native status emits
+// on blocked(edit_authority_missing) (#2563), byte-identical across variants
+// like the provider-defect handoff above.
+func TestCoordinatorOrchestratorsCarrySDDEditAuthorityConsentRelay(t *testing.T) {
+	requirements := []string{
+		"When native SDD status reports `blocked(edit_authority_missing)`",
+		"typed `gentle-ai.sdd-integration.consent/v1` envelope",
+		"optional `consent` block",
+		"Treat that envelope as a Lossless Blocking Prompt under this contract",
+		"same discipline as the review consent relay",
+		"Present the complete envelope once in the active conversation language",
+		"faithfully translate the headline, reason, `value`, the missing-root evidence, choice labels, every choice `effect`, and the off-path note",
+		"preserving the original choices, order, selection mode, exact allowed-answer domain, and answer tokens",
+		"Never translate or alter the machine answer tokens (`granted`, `declined`), commands, paths, or invocations",
+		"Never summarize, reshape, reorder, merge, or omit any part",
+		"never answer on the human's behalf and never run the grant unprompted",
+		"Only after the human's explicit `granted` answer",
+		"execute the envelope's exact grant invocation verbatim, exactly once",
+		"then re-enter through native status",
+		"granted roots project into `allowedEditRoots`",
+		"per-change, audited, and dies with archive",
+		"run the envelope's decline invocation",
+		"nothing is persisted",
+		"names both exits",
+		"edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority",
+		"A blocked status without a `consent` block names the same two exits; relay them and stop.",
+	}
+
+	for _, path := range allSDDOrchestratorAssetPaths(t) {
+		t.Run(path, func(t *testing.T) {
+			contract := sddConsentRelaySection(t, path)
+			if canonical := sddConsentRelaySection(t, providerDefectHandoffCanonicalPath); contract != canonical {
+				t.Error("SDD edit-authority consent relay differs from the canonical cross-variant block")
+			}
+			for _, required := range requirements {
+				if !strings.Contains(contract, required) {
+					t.Errorf("SDD edit-authority consent relay missing %q", required)
+				}
+			}
+		})
+	}
+}
+
+func sddConsentRelaySection(t *testing.T, path string) string {
+	t.Helper()
+	const heading = "#### SDD Edit-Authority Consent Relay (MANDATORY)"
+	content := MustRead(path)
+	start := strings.Index(content, heading)
+	if start == -1 {
+		t.Fatalf("%s missing %q", path, heading)
+	}
+	contract := content[start:]
+	const endMarker = "A blocked status without a `consent` block names the same two exits; relay them and stop."
+	end := strings.Index(contract, endMarker)
+	if end == -1 {
+		t.Fatalf("%s SDD edit-authority consent relay missing terminal boundary", path)
+	}
+	return strings.TrimSpace(contract[:end+len(endMarker)])
+}
+
 func providerDefectHandoffLine(t *testing.T, contract, prefix string) string {
 	t.Helper()
 	start := strings.Index(contract, prefix)
@@ -300,7 +366,7 @@ func providerDefectHandoffSection(t *testing.T, path string) string {
 		t.Fatalf("%s missing %q", path, heading)
 	}
 	contract := content[start:]
-	const endMarker = "Never resume against a source checkout or unmerged pull request."
+	const endMarker = "Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request."
 	end := strings.Index(contract, endMarker)
 	if end == -1 {
 		t.Fatalf("%s provider-defect handoff missing terminal release boundary", path)

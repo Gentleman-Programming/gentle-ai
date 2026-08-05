@@ -109,6 +109,10 @@ const (
 	RDDOperationStart RDDOperation = "start"
 	// RDDOperationMutate advances existing authority. Disabled mode rejects it.
 	RDDOperationMutate RDDOperation = "mutate"
+	// RDDOperationAbandon delegates eligibility to the abandon storage gate,
+	// which admits only its explicitly sanctioned cleanup classes. Disabled mode
+	// permits that cleanup; it cannot issue or advance a terminal receipt.
+	RDDOperationAbandon RDDOperation = "abandon"
 	// RDDOperationRead covers status, exact replay, receipt validation, and
 	// diagnostics. Disabled mode never rejects it.
 	RDDOperationRead RDDOperation = "read"
@@ -324,9 +328,9 @@ func SetCloneLocalRDDMode(
 	return rddModeStatus(globalMode, record, true), nil
 }
 
-// AuthorizeRDDOperation is the single kill-switch gate. Reads always pass so
-// that status, exact replay, receipt validation, and diagnostics survive;
-// starts and mutations stop with a typed error while the switch is off.
+// AuthorizeRDDOperation is the single kill-switch gate. Reads and the
+// independently-gated abandon cleanup pass; starts and mutations stop
+// with a typed error while the switch is off.
 func AuthorizeRDDOperation(
 	ctx context.Context,
 	repo string,
@@ -338,7 +342,7 @@ func AuthorizeRDDOperation(
 		return status, err
 	}
 	switch operation {
-	case RDDOperationRead:
+	case RDDOperationRead, RDDOperationAbandon:
 		return status, nil
 	case RDDOperationStart, RDDOperationMutate:
 		if !status.Enabled() {

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
@@ -69,6 +70,13 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 		}
 	}
 
+	// The advertisement must name a target the effective installer can deliver.
+	// A brew-owned install only ever receives the tap's stable formula, so a
+	// main-head beta target is advertised only when Homebrew does not own the
+	// tool (issue #2323: checker advertised main@sha while the instruction
+	// installed stable).
+	betaMainHead := usesBetaMainHeadCheck(tool, currentBuildVersion) && homebrewOwnership == HomebrewNone
+
 	// Run local detection and remote fetch concurrently.
 	var wg sync.WaitGroup
 	var localVersion string
@@ -90,7 +98,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 
 	go func() {
 		defer wg.Done()
-		if usesBetaMainHeadCheck(tool, currentBuildVersion) {
+		if betaMainHead {
 			mainCommit, fetchErr = fetchMainCommit(ctx, tool.Owner, tool.Repo)
 			return
 		}
@@ -109,7 +117,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 		return result
 	}
 
-	if usesBetaMainHeadCheck(tool, currentBuildVersion) {
+	if betaMainHead {
 		return applyBetaMainHeadStatus(result, localVersion, mainCommit)
 	}
 
@@ -186,6 +194,11 @@ func applyBetaMainHeadStatus(result UpdateResult, localVersion string, commit gi
 
 	result.LatestVersion = "main@" + shortRemote
 	result.ReleaseURL = strings.TrimSpace(commit.HTMLURL)
+	// Derive the instruction from the advertised target: the only installer
+	// that delivers main@<sha> is `go install ...@main`. The per-OS stable
+	// hint would silently replace this beta build with the latest stable
+	// release (issue #2323).
+	result.UpdateHint = GentleAISourceInstallCommand(result.LatestVersion)
 
 	if strings.TrimSpace(localVersion) == "" {
 		result.Status = VersionUnknown
@@ -207,9 +220,40 @@ func applyBetaMainHeadStatus(result UpdateResult, localVersion string, commit gi
 		return result
 	}
 
+	// Ordering guard: a prefix mismatch alone does not mean the local build is
+	// behind main. When the local pseudo-version timestamp is newer than the
+	// fetched commit's date, offering an "update" advertises a downgrade
+	// (issue #2319 offer half). Unknown dates fail open and keep the offer.
+	if localTime, ok := pseudoVersionTime(localVersion); ok {
+		remoteTime := commit.Commit.Committer.Date
+		if !remoteTime.IsZero() && localTime.After(remoteTime) {
+			result.Status = UpToDate
+			return result
+		}
+	}
+
 	result.Status = UpdateAvailable
 	result.ReleaseURL = fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", result.Tool.Owner, result.Tool.Repo, shortCommit(localSHA), shortRemote)
 	return result
+}
+
+// pseudoVersionTime extracts the UTC timestamp a Go pseudo-version embeds
+// (vX.Y.Z-0.yyyymmddhhmmss-abcdefabcdef). It reports false for any version
+// that does not carry a well-formed 14-digit timestamp.
+func pseudoVersionTime(version string) (time.Time, bool) {
+	if !isGoPseudoVersionWithCommit(version) {
+		return time.Time{}, false
+	}
+	parts := strings.Split(strings.TrimSpace(version), "-")
+	timestampPart := parts[len(parts)-2]
+	if idx := strings.LastIndex(timestampPart, "."); idx >= 0 {
+		timestampPart = timestampPart[idx+1:]
+	}
+	ts, err := time.Parse("20060102150405", timestampPart)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return ts.UTC(), true
 }
 
 func localBuildCommit(version string) string {

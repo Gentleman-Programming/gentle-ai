@@ -89,6 +89,24 @@ func canonicalBindingLedgerHash(t *testing.T, findings []reviewtransaction.Findi
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// validateCurrentBoundCandidate reloads the change's effective review binding
+// from disk (native or legacy) and validates it via validateRuntimeBoundCandidate
+// — the same call runtime_ledger.go's Finish (the remediation-successor CAS)
+// still makes, and the one remaining production caller of
+// boundGateContextMatches after S5c'/S7 rerouted the archive-gate read path
+// onto ValidateSDDReceiptRef's re-derivation instead. It exists so ledger/
+// GateContext-comparison-specific tests (like the empty-hash backward
+// compatibility exemption below) keep exercising a real production call
+// path now that validateBoundReview itself is deleted.
+func validateCurrentBoundCandidate(t *testing.T, repo, change string) error {
+	t.Helper()
+	binding, err := loadEffectiveReviewBinding(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return validateRuntimeBoundCandidate(context.Background(), repo, binding, binding.GateContext.CandidateTree)
+}
+
 func TestBoundReviewBindsLedgerAcceptsLegacyEmptyAndRejectsForgedHash(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
@@ -105,7 +123,7 @@ func TestBoundReviewBindsLedgerAcceptsLegacyEmptyAndRejectsForgedHash(t *testing
 	if binding.GateContext.LedgerHash != want {
 		t.Fatalf("fresh binding ledger_hash = %q, want frozen findings ledger %q", binding.GateContext.LedgerHash, want)
 	}
-	if _, _, err := validateBoundReview(context.Background(), root, "thin"); err != nil {
+	if err := validateCurrentBoundCandidate(t, root, "thin"); err != nil {
 		t.Fatalf("fresh binding validation: %v", err)
 	}
 	// Recreate the pre-native compatibility state. Once a native binding is
@@ -136,7 +154,7 @@ func TestBoundReviewBindsLedgerAcceptsLegacyEmptyAndRejectsForgedHash(t *testing
 	if err := os.WriteFile(legacyPath, payload, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := validateBoundReview(context.Background(), root, "thin"); err != nil {
+	if err := validateCurrentBoundCandidate(t, root, "thin"); err != nil {
 		t.Fatalf("legacy empty-ledger binding rejected: %v", err)
 	}
 
@@ -151,7 +169,7 @@ func TestBoundReviewBindsLedgerAcceptsLegacyEmptyAndRejectsForgedHash(t *testing
 	if err := os.WriteFile(legacyPath, payload, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := validateBoundReview(context.Background(), root, "thin"); err == nil {
+	if err := validateCurrentBoundCandidate(t, root, "thin"); err == nil {
 		t.Fatal("forged ledger hash binding was accepted")
 	}
 }

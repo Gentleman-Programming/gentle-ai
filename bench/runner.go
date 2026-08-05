@@ -23,11 +23,34 @@ type Sandbox struct {
 	TracePath                string
 	BenchReceiptMutationPath string
 
+	// BenchCrashAtPhase, when non-empty, is read by product binaries built
+	// with `-tags bench_fixture` as GENTLE_AI_BENCH_CRASH_AT_PHASE
+	// (format "<phase>:<lineage_id>"): the deterministic phase-hook
+	// interruption internal/reviewtransaction's own crash-position matrix
+	// uses in-process (compactReclaimPhaseHook), reachable here through the
+	// real binary instead. It is read fresh from this field on every
+	// invoke, so a caller sets it before the crash-inducing command and
+	// clears it (empty string) before the resume command; an ordinary
+	// product binary without the bench_fixture tag never reads this
+	// variable at all.
+	BenchCrashAtPhase string
+
+	// NewLineageActivation opts this sandbox's whole isolated process
+	// environment into GENTLE_AI_RDD_NEW_LINEAGE (Wave 3 Slice 5, task 6.7).
+	// It is off by default, matching the product's own default-off
+	// activation switch (design decision 5): every wave1/wave2/edge/sdd
+	// journey that never sets this stays on the legacy `review start` path,
+	// byte-identical to before this field existed.
+	NewLineageActivation bool
+
 	// Journey state carried between steps.
 	Lineage  string
 	Target   string
 	Revision string
 	Scratch  map[string]string
+	// UnavailableProcessTemp is set by a journey after fixture setup to prove
+	// product commands do not depend on the parent process temp directory.
+	UnavailableProcessTemp string
 
 	traceOffset int64
 }
@@ -74,7 +97,34 @@ func (s *Sandbox) env() []string {
 	if s.BenchReceiptMutationPath != "" {
 		env = append(env, "GENTLE_AI_BENCH_MUTATE_RECEIPT="+s.BenchReceiptMutationPath)
 	}
+	if s.BenchCrashAtPhase != "" {
+		env = append(env, "GENTLE_AI_BENCH_CRASH_AT_PHASE="+s.BenchCrashAtPhase)
+	}
+	if s.NewLineageActivation {
+		env = append(env, "GENTLE_AI_RDD_NEW_LINEAGE=1")
+	}
+	// Set last so a journey that poisons the process temp directory overrides
+	// the sandbox's own writable TMP/TEMP/TMPDIR defaults above.
+	if s.UnavailableProcessTemp != "" {
+		env = append(env,
+			"TEMP="+s.UnavailableProcessTemp,
+			"TMP="+s.UnavailableProcessTemp,
+			"TMPDIR="+s.UnavailableProcessTemp,
+		)
+	}
 	return env
+}
+
+func unavailableProcessTemp(sandbox *Sandbox) error {
+	path := filepath.Join(sandbox.Root, "unavailable-process-temp")
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("unavailable process temp path already exists: %s", path)
+	}
+	sandbox.UnavailableProcessTemp = path
+	return nil
 }
 
 // git runs a fixture git command. Fixture commands are sandbox setup, not user
@@ -348,6 +398,10 @@ type Journey struct {
 	Title  string
 	Source string
 	Steps  []Step
+	// NewLineageActivation propagates to the journey's own Sandbox (task
+	// 6.7): a journey exercising the new-lineage lifecycle sets this true;
+	// every other journey leaves it false and is unaffected.
+	NewLineageActivation bool
 }
 
 // validateCorpus checks every author-declared classifier input in the corpus
@@ -445,6 +499,7 @@ func runJourney(binary string, journey Journey) JourneyResult {
 		result.FailureReason = err.Error()
 		return result
 	}
+	sandbox.NewLineageActivation = journey.NewLineageActivation
 	accumulator := newAccumulator()
 	probe := newCapabilityProbe(sandbox)
 	run := &journeyRun{sandbox: sandbox, probe: probe, accumulator: accumulator}
@@ -519,6 +574,15 @@ func runJourney(binary string, journey Journey) JourneyResult {
 		if step.AbortOnBlock && record.Block != NotABlock && record.Block != BlockSelfRecovered {
 			break
 		}
+	}
+
+	// A product that emitted an execute transition with nothing to run fails
+	// the journey outright, whatever else the journey managed to do. It is not
+	// a friction number: no honest metric can be reported about a flow whose
+	// stated continuation the reader cannot follow.
+	if len(accumulator.deadTransitions) > 0 && result.Status != StatusFailed {
+		result.Status = StatusFailed
+		result.FailureReason = strings.Join(accumulator.deadTransitions, "; ")
 	}
 
 	result.Metrics = accumulator.metrics("")

@@ -20,6 +20,26 @@ type reviewImmutableTransport string
 const (
 	reviewImmutableTransportUnsupported         reviewImmutableTransport = "unsupported"
 	reviewImmutableTransportClaudePromptCarried reviewImmutableTransport = "claude_prompt_carried"
+	// reviewImmutableTransportOpenCodeProviderInjected is issue #2417's
+	// restored transport: the OpenCode plugin (review-result-artifacts.ts)
+	// asks `review lens-context` for the finished reviewer context through
+	// its shell-less runNative channel and injects those exact bytes into
+	// the reviewer task's prompt before the reviewer ever launches. The
+	// provider materializes the evidence, applies the budget, and resolves
+	// every refusal; the plugin assembles nothing. The generated lens holds no
+	// bash and no read tool. OpenCode itself concatenates live project
+	// instructions (AGENTS.md/CLAUDE.md/CONTEXT.md, local `instructions`
+	// glob entries) and the skill catalog into every session's system
+	// prompt regardless of tools, so the plugin also refuses to launch the
+	// reviewer unless OPENCODE_DISABLE_PROJECT_CONFIG and
+	// OPENCODE_DISABLE_EXTERNAL_SKILLS are both set. OpenCode also fetches
+	// any remote (http/https) `instructions` entry unconditionally, from
+	// any config layer, regardless of either variable, so the plugin
+	// separately reads the effective configuration through its own OpenCode
+	// client (client.config.get) and refuses to launch the reviewer if one
+	// is present, naming the offending entry. Only then is the injected
+	// block provably the reviewer's only byte source.
+	reviewImmutableTransportOpenCodeProviderInjected reviewImmutableTransport = "opencode_provider_injected"
 )
 
 type reviewImmutableRuntimePolicy struct {
@@ -36,15 +56,20 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 	case model.AgentCodex:
 		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportUnsupported}
 	case model.AgentOpenCode:
-		// #2076 owns a future documented exact child-session binding.
-		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportUnsupported}
+		// #2417 restored genuine support through the provider-injected
+		// shell-less channel; #2076 (per-session exact-value Bash-permission
+		// binding) remains structurally impossible because OpenCode reads
+		// its config only at process startup, before review.start mints any
+		// dynamic value, and is no longer needed for support.
+		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportOpenCodeProviderInjected}
 	default:
 		return reviewImmutableRuntimePolicy{Transport: reviewImmutableTransportUnsupported}
 	}
 }
 
 func (capability reviewImmutableRuntimePolicy) supportsImmutableReceiptReview() bool {
-	return capability.Transport == reviewImmutableTransportClaudePromptCarried
+	return capability.Transport == reviewImmutableTransportClaudePromptCarried ||
+		capability.Transport == reviewImmutableTransportOpenCodeProviderInjected
 }
 
 // reviewRuntimeWithImmutableTransport accepts only the exact compiled runtime

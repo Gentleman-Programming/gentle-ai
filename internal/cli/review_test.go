@@ -42,6 +42,139 @@ func TestFlatReviewStartRejectsBeforeCreatingLegacyAuthority(t *testing.T) {
 	}
 }
 
+// TestReviewFacadeStartRefusesOverExistingV1Authority is Wave 7 S7a's (WU18a)
+// end-to-end proof for the v1 collision guard added to the switch-ON v3
+// start path in runReviewFacadeStart: with GENTLE_AI_RDD_NEW_LINEAGE set, a
+// v3 start over an existing v1 chain must still refuse -- with the exact
+// same, pre-existing "choose a new lineage for compact authority" wording
+// every other legacy-read-only collision in this codebase shares (see
+// review_operation_contract_test.go, review_stop_discoverability_test.go,
+// review_failure_contract_test.go, review_status_contract_test.go) -- rather
+// than silently freezing a v3 record alongside the live v1 chain. (The
+// legacy, switch-OFF branch already had this exact guard unchanged; this
+// test specifically exercises the NEW switch-ON copy WU18a added.)
+func TestReviewFacadeStartRefusesOverExistingV1Authority(t *testing.T) {
+	fixture := newLegacyCLIFixture(t, "v1-blocks-v3-start")
+	runReviewCLIGit(t, fixture.repo, "add", "-A")
+	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "1")
+
+	var output bytes.Buffer
+	err := RunReviewFacadeStart([]string{"--cwd", fixture.repo, "--lineage", fixture.lineage}, &output)
+	if err == nil {
+		t.Fatalf("v3 start over live v1 authority succeeded: %s", output.String())
+	}
+	var typed *reviewtransaction.LegacyReadOnlyError
+	if !errors.Is(err, reviewtransaction.ErrLegacyReadOnly) || !errors.As(err, &typed) ||
+		typed.Operation != "review/start" || typed.LineageID != fixture.lineage ||
+		!strings.Contains(err.Error(), "choose a new lineage for compact authority") {
+		t.Fatalf("v3 start over live v1 authority error = %v", err)
+	}
+	// Nothing was frozen: no v3 record exists for this lineage id.
+	v3Store, storeErr := reviewtransaction.NewLineageAuthorityStore(context.Background(), fixture.repo, fixture.lineage)
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	if _, statErr := os.Stat(v3Store.Dir); !os.IsNotExist(statErr) {
+		t.Fatalf("v3 start over live v1 authority created a v3 record: stat err = %v", statErr)
+	}
+}
+
+// TestReviewFacadeStartRefusesOverExistingV2AuthorityAndNamesRecover is Wave
+// 7 S7a's (WU18a) new guard: before this wave, a switch-ON `review start`
+// (runReviewFacadeStartNewLineage, called directly) never checked for an
+// existing compact-v2 lineage under the same id at all -- the switch-OFF
+// legacy branch's own internal conflict detection never runs when the
+// switch is on, and the switch-ON path had no guard of its own. Without
+// this fix a v3 record could be created silently alongside a LIVE v2
+// lineage of the same name. Unlike the v1 case above, a v2 predecessor
+// genuinely IS `review recover`'s own supported shape
+// (reviewtransaction.CompactAuthoritativeStore) -- so unlike v1's "choose a
+// new lineage" (the only real exit for a v1 collision, review recover never
+// accepts a v1 chain), this refusal must name review recover as an
+// ADDITIONAL, genuinely resolving option.
+func TestReviewFacadeStartRefusesOverExistingV2AuthorityAndNamesRecover(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	const lineage = "v2-blocks-v3-start"
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("v2 collision fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
+	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessment, err := rootBuilder.AssessSnapshotRisk(ctx, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lenses, err := facadeSelectedLenses(assessment, "reliability")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := facadePolicyBytes("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+		LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
+		Snapshot: snapshot, PolicyHash: facadePayloadHash(policy), RiskLevel: assessment.Level,
+		SelectedLenses: lenses, OriginalChangedLines: &assessment.ChangedLines,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reviewtransaction.StartCompactAuthority(ctx, root, reviewtransaction.CompactStartRequest{
+		State: state, ExplicitLineage: true,
+	}); err != nil {
+		t.Fatalf("start compact-v2 collision fixture: %v", err)
+	}
+
+	// A genuinely DIFFERENT candidate than the v2 fixture above: the guard
+	// is content-aware (an exact hint-replay of the SAME candidate must not
+	// be refused, only a real conflict), so this collision proof needs
+	// scope that actually changed, not just a second start attempt.
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("v2 collision fixture, now with different content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "1")
+
+	var output bytes.Buffer
+	startErr := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, &output)
+	if startErr == nil {
+		t.Fatalf("v3 start over live v2 authority succeeded: %s", output.String())
+	}
+	if !strings.Contains(startErr.Error(), "review recover") ||
+		!strings.Contains(startErr.Error(), "--predecessor-lineage "+lineage) ||
+		!strings.Contains(startErr.Error(), "already governs this lineage id") {
+		t.Fatalf("v3 start over live v2 authority error = %v, want it to name review recover with the predecessor pre-filled", startErr)
+	}
+	// Nothing was frozen: no v3 record exists for this lineage id, and the
+	// v2 record is untouched.
+	v3Store, storeErr := reviewtransaction.NewLineageAuthorityStore(ctx, repo, lineage)
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	if _, statErr := os.Stat(v3Store.Dir); !os.IsNotExist(statErr) {
+		t.Fatalf("v3 start over live v2 authority created a v3 record: stat err = %v", statErr)
+	}
+	compact, err := reviewtransaction.CompactAuthoritativeStore(ctx, repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := compact.Load(); err != nil {
+		t.Fatalf("v2 authority untouched check: %v", err)
+	}
+}
+
 func TestLegacyV1ResumeValidateExportImportRemainUsable(t *testing.T) {
 	fixture := newLegacyCLIFixture(t, "legacy-readable")
 	var output bytes.Buffer
@@ -382,4 +515,43 @@ func writeReviewCLIJSON(t *testing.T, path string, value any) {
 	if err := os.WriteFile(path, append(payload, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// reviewCLIAuthorityRoot and writeReconcileCLIRecord used to live in
+// review_reconcile_test.go, retired in Wave 7 S3a along with the CLI verb it
+// tested — both helpers are shared, reused across review_repair_test.go,
+// review_abandon_test.go, review_partial_capture_deadend_test.go,
+// review_incident_recapture_test.go, review_inspect_authority_test.go,
+// review_reconcile_batch_test.go, and review_repair_transition_test.go
+// (confirmed by grep before the retiring commit), so they moved here rather
+// than dying with their original home.
+
+func reviewCLIAuthorityRoot(t *testing.T, repo string) string {
+	t.Helper()
+	commonDir := filepath.Clean(strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")))
+	return filepath.Join(commonDir, "gentle-ai", "review-transactions")
+}
+
+// writeReconcileCLIRecord persists one compact-v2 record directly to disk
+// (bypassing the product's own write path) so a fixture can seed an exact,
+// already-known revision for a test to bind against.
+func writeReconcileCLIRecord(t *testing.T, repo string, state reviewtransaction.CompactState) string {
+	t.Helper()
+	revision, err := reviewtransaction.CompactRevisionForState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := reviewtransaction.CompactRecord{Schema: "gentle-ai.review-state-record/v2", Revision: revision, State: state}
+	payload, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", state.LineageID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "review-state.json"), append(payload, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return revision
 }

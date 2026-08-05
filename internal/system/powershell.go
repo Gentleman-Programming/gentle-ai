@@ -33,7 +33,9 @@ func NewPowerShellRunner() PowerShellRunner {
 	return PowerShellRunner{
 		LookPath: exec.LookPath,
 		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			return exec.CommandContext(ctx, name, args...).CombinedOutput()
+			cmd := exec.CommandContext(ctx, name, args...)
+			EnsureCommandDir(cmd)
+			return cmd.CombinedOutput()
 		},
 	}
 }

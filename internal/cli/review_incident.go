@@ -60,14 +60,78 @@ type reviewIncidentArtifact struct {
 type reviewOpaqueContextOperationError struct {
 	Code   string
 	Action string
+	// Cause is the scrubbed one-line reason this operation failed, empty when
+	// the code alone already identifies the failure exactly (a Git trust
+	// refusal, for example, has exactly one cause).
+	Cause string
 }
 
 func (err *reviewOpaqueContextOperationError) Error() string {
-	return fmt.Sprintf("%s: provider-issued review repository context operation failed; %s", err.Code, err.Action)
+	if err.Cause == "" {
+		return fmt.Sprintf("%s: provider-issued review repository context operation failed; %s", err.Code, err.Action)
+	}
+	return fmt.Sprintf("%s: provider-issued review repository context operation failed; cause: %s; %s", err.Code, err.Cause, err.Action)
 }
 
 func reviewOpaqueContextFailure(code, action string) error {
 	return reviewPreflightError(&reviewOpaqueContextOperationError{Code: code, Action: action})
+}
+
+// reviewOpaqueContextCause reports the same typed code and instruction as
+// reviewOpaqueContextFailure and additionally names the scrubbed cause.
+//
+// Why this exists: the opaque path used to answer every distinct failure behind
+// one code with one constant sentence, so a missing authority record, an
+// unparsable one, a Git setup refusal, and a stale binding all reached the
+// reporter as the same string. That is the mechanism behind community reports
+// #2227, #2411 and #2461: different roots, one message, and no way for the
+// reporter or the maintainer to tell them apart. The opacity itself is not
+// the defect -- an absolute path must never reach a session transcript -- so
+// the cause is forwarded through the SAME privacy gate the defect reporter
+// already uses (reviewScrubDefectReportField) rather than dropped.
+func reviewOpaqueContextCause(code, action string, cause error) error {
+	return reviewPreflightError(&reviewOpaqueContextOperationError{
+		Code: code, Action: action, Cause: reviewScrubOpaqueContextCause(cause),
+	})
+}
+
+// reviewOpaqueContextCauseLimit bounds a forwarded cause. Native errors can
+// quote reviewer payload fragments, and the destination is a session
+// transcript, not a log file.
+const reviewOpaqueContextCauseLimit = 512
+
+func reviewScrubOpaqueContextCause(cause error) string {
+	scrubbed := reviewScrubDefectReportField(reviewOpaqueContextCauseChain(cause))
+	if runes := []rune(scrubbed); len(runes) > reviewOpaqueContextCauseLimit {
+		return string(runes[:reviewOpaqueContextCauseLimit]) + " (truncated)"
+	}
+	return scrubbed
+}
+
+// reviewOpaqueContextCauseChain flattens an error chain into one line.
+//
+// Walking the chain instead of reading only the outermost Error() is
+// load-bearing, not defensive: reviewtransaction deliberately flattens some
+// failures behind a fixed public sentence and keeps the real cause reachable
+// only through Unwrap (reviewRepositoryContextIdentityError and
+// reviewRepositoryContextTargetedValidationError both do this). Reading the
+// surface alone would re-collapse exactly the failures this change exists to
+// separate. A link whose message is already contained in what has been
+// collected is skipped, so ordinary %w wrapping does not repeat itself.
+func reviewOpaqueContextCauseChain(cause error) string {
+	message := ""
+	for err := cause; err != nil; err = errors.Unwrap(err) {
+		next := strings.TrimSpace(err.Error())
+		if next == "" || strings.Contains(message, next) {
+			continue
+		}
+		if message == "" {
+			message = next
+			continue
+		}
+		message += ": " + next
+	}
+	return message
 }
 
 const (
@@ -116,7 +180,7 @@ func reviewRepositoryContextResolutionFailure(err error) error {
 	if reviewGitOwnershipRefusal(err) {
 		return reviewOpaqueContextFailure(reviewGitTrustRefusalCode, reviewGitTrustRefusalAction)
 	}
-	return reviewOpaqueContextFailure("repository_context_unavailable", "refresh the exact native next_transition before retrying")
+	return reviewOpaqueContextCause("repository_context_unavailable", "refresh the exact native next_transition before retrying", err)
 }
 
 // reviewGitOwnershipRefusal reports whether err was caused by Git refusing a
@@ -230,7 +294,7 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 	_, record, err := discoverCompactFacadeReview(ctx, repo, *lineage, false)
 	if err != nil {
 		if contextHandle != "" {
-			return reviewOpaqueContextFailure("repository_context_authority_unavailable", "refresh the exact native next_transition before retrying")
+			return reviewOpaqueContextCause("repository_context_authority_unavailable", "refresh the exact native next_transition before retrying", err)
 		}
 		return reviewPreflightError(fmt.Errorf("resolve reviewing authority for preserve-result: %w", err))
 	}
@@ -246,7 +310,7 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 	dir, err := reviewtransaction.CompactIncidentsDir(ctx, repo, *lineage)
 	if err != nil {
 		if contextHandle != "" {
-			return reviewOpaqueContextFailure("repository_context_preserve_unavailable", "retry preserve-result with the same exact binding")
+			return reviewOpaqueContextCause("repository_context_preserve_unavailable", "retry preserve-result with the same exact binding", err)
 		}
 		return reviewPreflightError(fmt.Errorf("resolve incident preservation directory: %w", err))
 	}
@@ -260,7 +324,7 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 	artifact, err := preserveIncidentArtifact(dir, *lineage, *target, *lens, *order, payload, reviewtransaction.ResultIncidentClass(*class))
 	if err != nil {
 		if contextHandle != "" {
-			return reviewOpaqueContextFailure("repository_context_preserve_failed", "retry preserve-result with the same exact binding")
+			return reviewOpaqueContextCause("repository_context_preserve_failed", "retry preserve-result with the same exact binding", err)
 		}
 		return reviewPreflightError(err)
 	}

@@ -288,10 +288,6 @@ func acquireMaintenanceLock(ctx context.Context, path string, mode maintenanceLo
 	return acquireMaintenanceLockInternal(ctx, path, mode, false)
 }
 
-func acquireMaintenanceLockForCompactBatch(ctx context.Context, path string) (*MaintenanceLock, error) {
-	return acquireMaintenanceLockInternal(ctx, path, maintenanceExclusive, true)
-}
-
 func acquireMaintenanceLockInternal(ctx context.Context, path string, mode maintenanceLockMode, allowPreparedBatch bool) (*MaintenanceLock, error) {
 	if err := ensureMaintenanceLockPath(path); err != nil {
 		return nil, err

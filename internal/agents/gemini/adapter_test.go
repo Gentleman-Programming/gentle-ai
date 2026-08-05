@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 func TestDetect(t *testing.T) {
@@ -99,22 +98,22 @@ func TestInstallCommand(t *testing.T) {
 		{
 			name:    "darwin uses npm without sudo",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@" + versions.GeminiCLI}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@latest"}},
 		},
 		{
 			name:    "linux system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@" + versions.GeminiCLI}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@latest"}},
 		},
 		{
 			name:    "linux nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", NpmWritable: true},
-			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@" + versions.GeminiCLI}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@latest"}},
 		},
 		{
 			name:    "windows uses npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", NpmWritable: true},
-			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@" + versions.GeminiCLI}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@latest"}},
 		},
 	}
 

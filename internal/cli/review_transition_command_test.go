@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -179,28 +180,24 @@ func reviewTransitionExecutionOperationEnum(t *testing.T, schemaFile string) []s
 // exhaustive set of published transition operations that resolve to NO
 // runnable command, and why.
 //
-// "review.recover" is emitted as an execute transition by
-// reviewRecoveryCollection, is published in both status schemas' operation
-// enums, and `case "recover":` is a real dispatch in review_facade.go -- but
-// reviewIntegrationOperationRegistry has no entry for it, so no registry-owned
-// verb exists to derive. Adding one is NOT a local fix: the registry also
-// drives reviewIntegrationOperationNames(), which publishes the negotiated
-// capabilities `operations` array. Adding "review.recover" there was measured
-// to break five existing tests that pin that published surface
-// (TestReviewCapabilitiesMatchesConformanceFixtureOutsideRepository,
-// TestReviewCapabilitiesAdvertisesOnlyNativeSurface,
-// TestReviewCapabilitiesSchemaAndFixtureAreStrict,
-// TestReviewCapabilitiesVersionsKeepV1ReadableAndFailClosedAcrossSchemas and
-// TestReviewIntegrationOperationRegistryOwnsPublishedAndFailurePolicy), plus
-// the v1.1-v1.5 capability fixtures external consumers read. That is a
-// published-contract change and a maintainer decision, not a derivation.
+// It is EMPTY, and that is the point: every operation either status schema
+// publishes as an execute transition resolves to a verb review_facade.go
+// really dispatches.
+//
+// It held "review.recover" until issue #1864. The reasoning recorded there was
+// that adding a registry row was not a local fix, because the registry also
+// drives reviewIntegrationOperationNames() and therefore the published
+// capabilities `operations` array, whose schemas pin an exact maxItems and a
+// closed enum. That reasoning was right about the constraint and wrong about
+// the conclusion: the fix was to stop conflating "this row owns a runnable CLI
+// verb" with "this operation is part of the published negotiated surface".
+// reviewIntegrationOperationMetadata.Negotiated now separates them, so
+// review.recover owns its verb without appearing in any published contract.
 //
 // This map fails closed in BOTH directions below, so it can never rot: a new
 // unresolved operation fails, and an operation named here that later DOES
 // resolve fails too, forcing the entry to be removed.
-var reviewTransitionOperationsWithoutRegistryEntry = map[string]string{
-	"review.recover": "absent from reviewIntegrationOperationRegistry; adding it changes the published negotiated capabilities surface",
-}
+var reviewTransitionOperationsWithoutRegistryEntry = map[string]string{}
 
 // TestEveryPublishedTransitionOperationProducesARunnableCommand is the test
 // that makes this defect impossible to reintroduce for a FUTURE operation: it
@@ -460,4 +457,127 @@ func TestPublishedStatusSchemasRequireTokenOnExecutableArguments(t *testing.T) {
 			t.Errorf("%s transition_execution declares no command property: %#v", schemaFile, properties["command"])
 		}
 	}
+}
+
+// TestReviewRecoverTransitionEmitsACommandThatRuns is issue #1864 in one test.
+//
+// A negotiated recovery emitted `kind: execute`, named `review.recover`, and
+// carried an empty `command`: the caller was told to run something and handed
+// nothing to run. Asserting the string is only half a proof, so this builds a
+// real authorized recovery, reads the command the product prints, splits it the
+// way a POSIX shell would, and runs exactly those bytes. The recovery has to
+// actually land, because a command that parses but does not work is the dead
+// end this defect class is about.
+func TestReviewRecoverTransitionEmitsACommandThatRuns(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "recover-command"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	result := filepath.Join(t.TempDir(), "blocking.json")
+	writeReviewCLIJSON(t, result, facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
+		Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
+		ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+		CausalDisposition: reviewtransaction.CausalIntroduced,
+	}}, Evidence: []string{"reviewed exact current changes"}})
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Change the candidate so the live target really differs from the frozen
+	// one; recovery onto an unchanged target is refused by design.
+	writeReviewStartCandidate(t, repo, "helper.go", "package candidate\n", 0o644)
+	probe := selectorTransitionStatus(t, repo, "--lineage", started.LineageID)
+	if probe.Authority == nil || probe.Action != reviewtransaction.TargetStatusActionRecover {
+		t.Fatalf("recovery probe = action %q authority %#v", probe.Action, probe.Authority)
+	}
+	const successor, actor, reason = "recover-command-successor", "maintainer", "authorized recovery"
+	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + started.LineageID +
+		"\npredecessor_revision=" + probe.Authority.Revision + "\ntarget_identity=" + probe.TargetIdentity +
+		"\nsuccessor_lineage=" + successor + "\nactor=" + actor + "\nreason=" + reason
+	status := selectorTransitionStatus(t, repo,
+		"--lineage", started.LineageID,
+		"--recovery-successor-lineage", successor,
+		"--recovery-reason", reason,
+		"--recovery-actor", actor,
+		"--recovery-authorization", authorization,
+	)
+	if status.NextTransition == nil || status.NextTransition.Execute == nil ||
+		status.NextTransition.Execute.Operation != "review.recover" {
+		t.Fatalf("recovery transition = %#v", status.NextTransition)
+	}
+
+	// The exact bytes a caller is handed. The authorization is six LF-joined
+	// lines, so it is the one argument the product must quote for the printed
+	// line to survive a shell.
+	want := "gentle-ai review recover" +
+		" --predecessor-lineage=" + started.LineageID +
+		" --expected-predecessor-revision=" + probe.Authority.Revision +
+		" --successor-lineage=" + successor +
+		" --disposition=" + string(probe.ActionDisposition) +
+		" '--reason=" + reason + "'" +
+		" --actor=" + actor +
+		" '--maintainer-authorization=" + authorization + "'"
+	if status.NextTransition.Execute.Command != want {
+		t.Fatalf("recover command = %q\nwant %q", status.NextTransition.Execute.Command, want)
+	}
+
+	// Run the printed bytes, not a reassembly of them.
+	words := reviewShellWords(t, status.NextTransition.Execute.Command)
+	if len(words) < 3 || words[0] != "gentle-ai" || words[1] != "review" {
+		t.Fatalf("printed command is not a gentle-ai review invocation: %#v", words)
+	}
+	t.Chdir(repo)
+	var recovered bytes.Buffer
+	if err := RunReview(words[2:], &recovered); err != nil {
+		t.Fatalf("the printed command did not run: %v\n%s", err, recovered.String())
+	}
+	var operation ReviewRecoverResult
+	decodeStrictReviewJSON(t, recovered.Bytes(), &operation)
+	if operation.LineageID != successor || operation.State != reviewtransaction.StateReviewing {
+		t.Fatalf("printed recovery command produced %#v, want a reviewing successor %q", operation, successor)
+	}
+}
+
+// reviewShellWords splits a printed command line the way a POSIX shell would,
+// understanding exactly the single quoting reviewTransitionShellWord emits.
+func reviewShellWords(t *testing.T, line string) []string {
+	t.Helper()
+	words := []string{}
+	var word strings.Builder
+	quoted, escaped, started := false, false, false
+	for _, char := range line {
+		switch {
+		case quoted && char == '\'':
+			quoted = false
+		case quoted:
+			word.WriteRune(char)
+		case escaped:
+			word.WriteRune(char)
+			escaped = false
+		case char == '\\':
+			escaped, started = true, true
+		case char == '\'':
+			quoted, started = true, true
+		case char == ' ' || char == '\t' || char == '\n':
+			if started {
+				words = append(words, word.String())
+				word.Reset()
+				started = false
+			}
+		default:
+			word.WriteRune(char)
+			started = true
+		}
+	}
+	if quoted || escaped {
+		t.Fatalf("printed command does not close its quoting: %q", line)
+	}
+	if started {
+		words = append(words, word.String())
+	}
+	return words
 }

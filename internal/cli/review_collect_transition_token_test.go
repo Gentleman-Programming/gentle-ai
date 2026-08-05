@@ -197,7 +197,7 @@ func reviewVerbFlagNames(t *testing.T, verb string) map[string]struct{} {
 	if err := RunReview([]string{verb, "--help"}, &help); err != nil {
 		t.Fatalf("review %s --help: %v\n%s", verb, err, help.String())
 	}
-	pattern := regexp.MustCompile(`^--([a-z][a-z0-9-]*) <value>$`)
+	pattern := regexp.MustCompile(`^--([a-z][a-z0-9-]*)( <value>)?$`)
 	names := map[string]struct{}{}
 	for _, line := range strings.Split(help.String(), "\n") {
 		if match := pattern.FindStringSubmatch(strings.TrimSpace(line)); match != nil {

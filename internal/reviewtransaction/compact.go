@@ -104,6 +104,7 @@ type CompactState struct {
 	CumulativeCorrectionLines    int                          `json:"cumulative_correction_lines,omitempty"`
 	ResultDispositions           []CompactResultDisposition   `json:"result_dispositions,omitempty"`
 	ResultReopens                []CompactResultReopen        `json:"result_reopens,omitempty"`
+	ReviewerContextLevel         ReviewerContextLevel         `json:"reviewer_context_level,omitempty"`
 }
 
 // CompactResultReopenSlot binds one selected lens artifact at the exact
@@ -279,6 +280,18 @@ type CompactReceipt struct {
 	SelectedLenses            []string            `json:"selected_lenses"`
 	ResolvedFindingIDs        []string            `json:"resolved_finding_ids"`
 	TerminalState             TerminalState       `json:"terminal_state"`
+	// ReviewerContextLevel records the mechanism that put the immutable
+	// candidate evidence in front of this review's reviewers. It is recorded
+	// only, never gated on, and never compared to another level: whether any
+	// delivery gate ever requires a particular mechanism is a separate
+	// decision, and this field exists now because it cannot be backfilled — a
+	// receipt issued without it can never be classified later.
+	//
+	// It is omitempty, and absence means "not recorded" rather than any
+	// particular mechanism. That keeps every receipt issued before this field
+	// existed re-derivable byte-identically, which its immutable publication
+	// requires.
+	ReviewerContextLevel ReviewerContextLevel `json:"reviewer_context_level,omitempty"`
 }
 
 type CompactReviewInput struct {
@@ -1119,22 +1132,6 @@ func (state *CompactState) Invalidate(reason string) error {
 	return nil
 }
 
-func (state *CompactState) invalidateApproved(evaluation NativeGateEvaluation) error {
-	reason := strings.TrimSpace(evaluation.Reason)
-	if reason == "" {
-		return errors.New("approved invalidation reason is required")
-	}
-	if evaluation.Result != GateInvalidated {
-		return fmt.Errorf("approved invalidation requires an invalidated gate result, got %q", evaluation.Result)
-	}
-	if state.State != StateApproved {
-		return fmt.Errorf("cannot invalidate approved authority from compact state %q", state.State)
-	}
-	state.State, state.InvalidationReason = StateInvalidated, reason
-	state.InvalidationEvidence = &CompactInvalidationEvidence{Gate: evaluation.Context.Gate, Reason: reason, Context: evaluation.Context}
-	return state.Validate()
-}
-
 // validateCompactResultDispositions enforces the persisted shape of audited
 // reviewer-result dispositions. Only a terminally escalated authority may
 // carry them, each binds a distinct selected lens/order pair on the frozen
@@ -1545,6 +1542,7 @@ func (state CompactState) Receipt() (CompactReceipt, error) {
 		EvidenceTargetIdentity: state.EvidenceTargetIdentity, EvidenceAuthorityRevision: state.EvidenceAuthorityRevision,
 		RiskLevel: state.RiskLevel, SelectedLenses: append([]string{}, state.SelectedLenses...),
 		ResolvedFindingIDs: append([]string(nil), state.FixFindingIDs...), TerminalState: terminal,
+		ReviewerContextLevel: state.ReviewerContextLevel,
 	}
 	if err := receipt.Validate(); err != nil {
 		return CompactReceipt{}, err
@@ -1625,6 +1623,11 @@ func (receipt CompactReceipt) Validate() error {
 	}
 	if receipt.TerminalState != TerminalApproved && receipt.TerminalState != TerminalEscalated {
 		return errors.New("compact receipt terminal state is invalid")
+	}
+	// Shape only, deliberately never membership: an unknown level recorded by a
+	// later release must stay readable here. See ReviewerContextLevel.
+	if receipt.ReviewerContextLevel != "" && !ReviewerContextLevelWellFormed(receipt.ReviewerContextLevel) {
+		return errors.New("compact receipt reviewer context level is malformed") // refusal:by-design world-action: a persisted receipt carrying unreadable bytes in an audit field requires storage repair, not an operator command
 	}
 	hasRecordBinding := receipt.EvidenceRecordDigest != "" || receipt.EvidenceOutcome != "" ||
 		receipt.EvidenceTargetIdentity != "" || receipt.EvidenceAuthorityRevision != ""

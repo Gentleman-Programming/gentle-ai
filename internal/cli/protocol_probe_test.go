@@ -5,6 +5,13 @@ import (
 	"errors"
 	"os"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/gemini"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kilocode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/openclaw"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/qwen"
 )
 
 // TestMain overrides verifyEngramVersion and probeEngramProtocolFlag with
@@ -20,6 +27,23 @@ import (
 // and an unsupported --protocol flag (omit it, matching pre-change setup
 // invocations exactly — see the exact-argv assertions in
 // run_integration_test.go).
+//
+// It does the same for claude/opencode/gemini/qwen/kilocode/openclaw's own
+// LookPathOverride: since gentle-ai now refuses instead of installing a
+// missing agent runtime (agentInstallStep in run.go), the many tests in this
+// package whose real target is protocol forwarding, engram provisioning,
+// workspace resolution, or config injection — not install/detection
+// behavior — used to pass only because those binaries happened to be on the
+// developer's PATH (openclaw is genuinely on this repo's dev machines, which
+// is exactly the kind of accidental dependency this guards against).
+// Defaulting them to "present" here makes that accidental dependency an
+// intentional, hermetic one; tests that must exercise a genuine absence (the
+// refusal itself) override the relevant package's LookPathOverride back to
+// missing locally, the same save/restore pattern as everywhere else — see
+// e.g. TestRunInstallRefusesMissingOpenCodeInsteadOfInstalling,
+// TestAgentInstallStepRefusesMissingCodexInsteadOfInstalling, and
+// TestRunInstallRefusesMissingKimiRegardlessOfUVPresence for that opposite,
+// deliberately-kept case.
 func TestMain(m *testing.M) {
 	if code, ok := reviewGitProcessHelperExitCode(); ok {
 		os.Exit(code)
@@ -44,6 +68,14 @@ func TestMain(m *testing.M) {
 	probeEngramProtocolFlag = func(context.Context) (string, error) {
 		return "", errors.New("engram setup --help not available in tests")
 	}
+
+	agentPresent := func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+	claude.LookPathOverride = agentPresent
+	opencode.LookPathOverride = agentPresent
+	gemini.LookPathOverride = agentPresent
+	qwen.LookPathOverride = agentPresent
+	kilocode.LookPathOverride = agentPresent
+	openclaw.LookPathOverride = agentPresent
 
 	code := m.Run()
 	_ = os.RemoveAll(testHome)

@@ -730,9 +730,7 @@ func newArtifactReview(t *testing.T, high bool) (string, ReviewFacadeStartResult
 	if high {
 		name = "service-token.ts"
 	}
-	if err := os.WriteFile(filepath.Join(repo, name), []byte("candidate\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, name, "candidate\n", 0o644)
 	started := startFacadeReview(t, repo)
 	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	record, err := store.Load()

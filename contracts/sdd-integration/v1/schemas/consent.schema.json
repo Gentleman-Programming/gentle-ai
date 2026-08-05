@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/sdd-integration/v1/schemas/consent.schema.json",
+  "title": "Gentle AI SDD edit-authority consent question",
+  "description": "The typed blocking consent question a multi-repository SDD change raises when its task plan targets repository roots outside the authorized edit roots (#2540). The identity block is the change name plus the missing roots; granting is per-change, audited, and dies with archive; declining persists nothing and the change stays blocked. Native SDD status emits this envelope on blocked(edit_authority_missing) as the optional `consent` block of the v1 status projection (#2563).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "contract", "operation", "action", "blocking", "change", "missing_roots",
+    "headline", "reason", "value", "evidence", "choices", "off_path"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.sdd-integration.consent/v1"},
+    "contract": {"const": "gentle-ai.sdd-integration/v1"},
+    "operation": {"const": "sdd-attempt.grant"},
+    "action": {"const": "consent_required"},
+    "blocking": {"const": true},
+    "change": {"type": "string", "minLength": 1},
+    "missing_roots": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "headline": {"type": "string", "minLength": 1},
+    "reason": {"type": "string", "minLength": 1},
+    "value": {"type": "string", "minLength": 1},
+    "evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "choices": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {"$ref": "#/$defs/choice_granted"},
+        {"$ref": "#/$defs/choice_declined"}
+      ],
+      "items": false
+    },
+    "off_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["note", "command"],
+      "properties": {
+        "note": {"type": "string", "minLength": 1},
+        "command": {"type": "string", "pattern": "^gentle-ai sdd-status \\S+ --cwd \\S+$"}
+      }
+    }
+  },
+  "$defs": {
+    "choice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["answer", "label", "effect", "invocation"],
+      "properties": {
+        "answer": {"enum": ["granted", "declined"]},
+        "label": {"type": "string", "minLength": 1},
+        "effect": {"type": "string", "minLength": 1},
+        "invocation": {"type": "string", "minLength": 1}
+      }
+    },
+    "choice_granted": {
+      "description": "The exact flag set of the shipped sdd-attempt grant verb (S3 #2558 plus S5 #2559's reconciliation): the conscious contract change the provisional S3 pin announced, applied by #2563 together with the fixture and the test pin. --request-id makes accidental re-execution idempotent, --change-instance binds the grant to the one change instance the status layer derived, and the optional --expected-revision is the compare-and-swap token a widening grant chains on.",
+      "allOf": [{"$ref": "#/$defs/choice"}],
+      "properties": {
+        "answer": {"const": "granted"},
+        "invocation": {"type": "string", "pattern": "^gentle-ai sdd-attempt grant --cwd \\S+ --change \\S+( --expected-revision \\S+)?( --root \\S+)+ --actor \\S+ --reason \\S+ --request-id \\S+ --change-instance \\S+$"}
+      }
+    },
+    "choice_declined": {
+      "description": "Declining persists nothing: the change stays blocked, and the runnable follow-up is native SDD status for the same change. The effect text names both remaining exits.",
+      "allOf": [{"$ref": "#/$defs/choice"}],
+      "properties": {
+        "answer": {"const": "declined"},
+        "invocation": {"type": "string", "pattern": "^gentle-ai sdd-status \\S+ --cwd \\S+$"}
+      }
+    }
+  }
+}

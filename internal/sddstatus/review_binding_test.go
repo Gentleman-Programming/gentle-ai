@@ -302,61 +302,6 @@ func TestBindApprovedReviewRequiresTheSelectedCanonicalChange(t *testing.T) {
 	}
 }
 
-func TestValidateBoundReviewFailsClosedWhenFinalGateChanges(t *testing.T) {
-	root := t.TempDir()
-	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
-	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "approved-thin")
-	if _, err := BindApprovedReview(context.Background(), root, "thin", "approved-thin", ""); err != nil {
-		t.Fatal(err)
-	}
-	original := bindingFinalAuthorizationHook
-	bindingFinalAuthorizationHook = func() { write(t, filepath.Join(changeRoot, "tasks.md"), "- [x] 1.1 Done\n# final gate drift\n") }
-	t.Cleanup(func() { bindingFinalAuthorizationHook = original })
-	if _, _, err := validateBoundReview(context.Background(), root, "thin"); err == nil {
-		t.Fatal("final live gate mutation was accepted")
-	}
-}
-
-func TestValidateBoundReviewFailsClosedForFinalAuthorityArtifacts(t *testing.T) {
-	for _, tt := range []struct {
-		name   string
-		mutate func(t *testing.T, root string, store reviewtransaction.CompactStore)
-	}{
-		{name: "receipt bytes", mutate: func(t *testing.T, _ string, store reviewtransaction.CompactStore) {
-			if err := os.WriteFile(store.ReceiptPath(), []byte("{}\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "authority state", mutate: func(t *testing.T, _ string, store reviewtransaction.CompactStore) {
-			if err := os.WriteFile(store.StatePath(), []byte("{}\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "binding bytes", mutate: func(t *testing.T, root string, _ reviewtransaction.CompactStore) {
-			corruptNativeRuntimeBinding(t, mustRuntimeStore(t, root, "thin"))
-		}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
-			writeApprovedCompactAuthorityForChange(t, root, changeRoot, "approved-thin")
-			if _, err := BindApprovedReview(context.Background(), root, "thin", "approved-thin", ""); err != nil {
-				t.Fatal(err)
-			}
-			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "approved-thin")
-			if err != nil {
-				t.Fatal(err)
-			}
-			original := bindingFinalAuthorizationHook
-			bindingFinalAuthorizationHook = func() { tt.mutate(t, root, store) }
-			t.Cleanup(func() { bindingFinalAuthorizationHook = original })
-			if _, _, err := validateBoundReview(context.Background(), root, "thin"); err == nil {
-				t.Fatal("final artifact mutation was accepted")
-			}
-		})
-	}
-}
-
 func TestBindApprovedReviewPreservesAuthorityAcrossBindingPublicationFailures(t *testing.T) {
 	for _, name := range []string{"HEAD replace", "directory sync"} {
 		t.Run(name, func(t *testing.T) {

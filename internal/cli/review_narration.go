@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
@@ -96,39 +97,71 @@ const reviewtransactionEscalationCauseSample = "budget_exceeded"
 // exemption applies to them. corrected_candidate_unavailable and
 // staged_workspace_overlay_recovery_unavailable carry the exact content
 // organic-dx tasks.md 3b.10 already recorded as Phase 4 registry input.
+// reviewModeDisableCloneCommand is the scoped form of the self-service
+// delivery exit named throughout this registry (adversarial finding F6):
+// `--scope` defaults to `global` (review_mode.go's own flag default), so
+// naming the bare `gentle-ai review mode disable` would let a reader
+// silently disable receipt-driven development for every repository on the
+// machine instead of just the one they meant. Verified by execution: the
+// bare form writes ~/.gentle-ai/state.json; this scoped form writes only
+// under the named repository's own .git/gentle-ai directory.
+const reviewModeDisableCloneCommand = "gentle-ai review mode disable --scope clone --cwd <repo>"
+
+// reviewModeDisableCloneCaveat is appended everywhere
+// reviewModeDisableCloneCommand is named, so a reader of just one narration
+// statement -- these are read independently, on stderr, one per stop -- still
+// learns that dropping --scope changes the blast radius from "this
+// repository" to "every repository on this machine".
+const reviewModeDisableCloneCaveat = "(omitting --scope disables it for every repository on the machine)"
+
 var reviewStopReasonNarration = map[string]string{
 	"captured_verification_evidence_invalid": "The captured verification record or its immutable bytes failed integrity checks. " +
-		"Ask a maintainer to inspect the review record before trusting that evidence.",
+		"Ask a maintainer to inspect the review record before trusting that evidence, or run `" + reviewModeDisableCloneCommand + "` " +
+		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"captured_artifacts_unverifiable": "A previously captured review result failed verification, so this review cannot continue on its own. " +
-		"Ask a maintainer to inspect the review record directly.",
+		"Ask a maintainer to inspect the review record directly, or run `" + reviewModeDisableCloneCommand + "` " +
+		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"captured_result_selection_unavailable": "This run reached a state that should never happen: every review result it expected was already present. " +
-		"This is a defect; there is nothing more to do from here.",
+		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
+		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
 	"corrected_candidate_unavailable": "Change the candidate content so it differs from the frozen original, then re-run " +
-		"`gentle-ai review status --next-transition` (or `review finalize`). " +
+		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition` " +
+		"(or `gentle-ai review finalize --lineage <id>`). " +
 		"That is the right path when the review found real defects. If instead the reviewers were given the wrong input " +
 		"and their findings describe content that was never the candidate, a maintainer can quarantine those results and " +
-		"reopen their lenses over the same frozen content: run `gentle-ai review reopen-results --prepare --quarantine-lens <lens>` " +
+		"reopen their lenses over the same frozen content: run `gentle-ai review reopen-results --prepare --cwd <repo> --lineage <id> " +
+		"--expected-revision <revision> --target <target> --reason <reason> --actor <actor> --quarantine-lens <lens>` " +
 		"(repeat `--quarantine-lens` per affected lens) and follow its output.",
 	"correction_repository_verification_failed": "Repository verification failed for this correction candidate. Change the candidate within the open correction, then re-run " +
-		"`gentle-ai review status --next-transition` to capture evidence for the new candidate.",
+		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition` " +
+		"to capture evidence for the new candidate.",
 	"corrupted_or_unverifiable_authority": "This review's stored record cannot be trusted as-is, and it cannot be repaired automatically. " +
-		"Ask a maintainer to inspect it directly.",
+		"Ask a maintainer to inspect it directly, or run `" + reviewModeDisableCloneCommand + "` " +
+		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"final_verification_retry_unavailable": "This run reached a state that should never happen: it was routed to retry a final verification it was not eligible to retry. " +
-		"This is a defect; there is nothing more to do from here.",
+		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
+		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
 	"manual_intervention_required": "This review reached a state Gentle AI does not recognize. " +
-		"This is a defect; there is nothing more to do from here.",
+		"This is a product defect. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
+		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, ask a maintainer to review it and report the defect.",
 	"missing_authority_binding": "This run reached a state that should never happen: it lost track of the record it needs to continue. " +
-		"This is a defect; there is nothing more to do from here.",
+		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
+		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
 	"native_stop_required": "This review is stuck at an escalated state that is not yet eligible to continue. " +
-		"Ask a maintainer to review it before doing anything else.",
+		"Ask a maintainer to review it before doing anything else, or run `" + reviewModeDisableCloneCommand + "` " +
+		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"original_finalize_request_required": "Re-run `gentle-ai review finalize` with the exact same results or evidence you submitted before.",
 	"pre_pr_selector_unrepresentable":    "Pass a branch or tag name to `--base-ref` instead of a raw commit id when selecting the pre-pr gate.",
-	"recovery_scope_unchanged":           "Change the candidate so it targets something different from what is already on record, then retry the recovery.",
+	"recovery_scope_unchanged": "Change the candidate so it targets something different from what is already on record, then retry the recovery, " +
+		"or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"recovery_target_unrepresentable": "Use one of the supported ways to select what to recover: no base selector for current changes, " +
 		"`--base-ref <ref> --committed-only` for a base diff, or `--workspace-overlay --base-ref <ref>` for a workspace overlay.",
 	"staged_workspace_overlay_recovery_unavailable": "Pass `--lineage <id>` to continue the review you already started, " +
 		"or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh.",
-	"unchanged_or_unverified_authority": "This review already used its one correction attempt without a verified change. Start a new review to continue.",
+	"unchanged_or_unverified_authority": "This review already used its one correction attempt without a verified change. " +
+		"`gentle-ai review start` on this exact unchanged candidate only resumes this same review, not a fresh one -- change the " +
+		"candidate content first, then run `gentle-ai review start` to begin a genuinely new one, or run `" +
+		reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 }
 
 // reviewConsentPromptNarration registers the one-time RDD consent prompt's
@@ -211,10 +244,26 @@ func reviewStopReasonStatement(reason string) (string, bool) {
 // terminal state emits exactly one statement" scenario. A reason with no
 // registry entry prints nothing: TestReviewNarrationRegistryCoversEveryStopReasonCode
 // is the fail-closed proof that should never happen for a code the source emits.
-func reviewNarrateStopReason(reason string) {
+func reviewNarrateStopReason(reason string, runtimeAgent model.AgentID) {
 	statement, ok := reviewStopReasonStatement(reason)
 	if !ok {
 		return
 	}
-	_, _ = fmt.Fprintln(reviewNarrationOutput, statement)
+	_, _ = fmt.Fprintln(reviewNarrationOutput, bindNarrationRuntimeIdentity(statement, runtimeAgent))
+}
+
+// bindNarrationRuntimeIdentity fills the runtime-identity slot in a registered
+// statement with the identity the caller declared on this very invocation. The
+// registry is a package-level map with no caller context, so the statements
+// carry a slot rather than a constant: a narration that told every runtime to
+// rerun as `claude-code` would invite a Codex or OpenCode reader to declare a
+// false identity and pass the transport admission check under Claude Code's
+// capability profile (issue #2440). An undeclared caller keeps the slot, which
+// asks the reader to name themselves instead of naming them wrongly.
+func bindNarrationRuntimeIdentity(statement string, runtimeAgent model.AgentID) string {
+	identity := strings.TrimSpace(string(runtimeAgent))
+	if identity == "" {
+		return statement
+	}
+	return strings.ReplaceAll(statement, reviewUndeclaredRuntimeIdentitySlot, identity)
 }

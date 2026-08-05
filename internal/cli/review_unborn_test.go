@@ -74,7 +74,7 @@ func TestReviewFacadeUnbornHeadDefaultProjectionStart(t *testing.T) {
 	runReviewCLIGit(t, repo, "add", "--", "candidate.go", "candidate.md")
 
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo}, &output); err != nil {
 		t.Fatalf("unborn default-projection review start: %v", err)
 	}
 	var started ReviewFacadeStartResult
@@ -103,7 +103,7 @@ func TestReviewFacadeUnbornHeadStagedLifecycle(t *testing.T) {
 	runReviewCLIGit(t, repo, "add", "--", "candidate.go", "candidate.md")
 
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
 		t.Fatalf("unborn staged review start: %v", err)
 	}
 	var started ReviewFacadeStartResult
@@ -153,7 +153,7 @@ func TestReviewFacadeUnbornHeadStagedWithNothingStagedRefusesActionably(t *testi
 	repo := initUnbornReviewCLIRepo(t)
 	writeUnbornReviewCandidate(t, repo)
 
-	err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged"}, io.Discard)
+	err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--projection", "staged"}, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "git add") {
 		t.Fatalf("unborn nothing-staged start error = %v, want actionable staging guidance", err)
 	}
@@ -165,7 +165,7 @@ func TestReviewFacadeUnbornReceiptDeniesFirstPublicationGates(t *testing.T) {
 	runReviewCLIGit(t, repo, "add", "--", "candidate.go", "candidate.md")
 
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
 		t.Fatalf("unborn staged review start: %v", err)
 	}
 	var started ReviewFacadeStartResult
@@ -215,7 +215,7 @@ func TestFirstPublicationEmptyBaseReceiptRefusal(t *testing.T) {
 	runReviewCLIGit(t, repo, "add", "--", "candidate.go", "candidate.md")
 
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
 		t.Fatalf("unborn staged review start: %v", err)
 	}
 	var started ReviewFacadeStartResult
@@ -276,7 +276,7 @@ func TestReviewFacadeExistingRemoteEmptyCommitAllowsPublicationGates(t *testing.
 	writeUnbornReviewCandidate(t, repo)
 	runReviewCLIGit(t, repo, "add", "--", "candidate.go", "candidate.md")
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult

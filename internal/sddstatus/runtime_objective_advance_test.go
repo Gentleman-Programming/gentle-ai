@@ -209,8 +209,10 @@ func TestCompactAcquireProceedsForDistinctWorkUnitAfterPassedObjective(t *testin
 	fixture := newRuntimeAdvanceFixture(t, "compact-objective-advance")
 	before := countRuntimeRecords(t, fixture.store.Dir)
 	request := CompactAcquireRequest{
-		RequestID: "compact-advance-verify", WorkUnit: advanceVerifyWorkUnit, EvidenceGoal: advanceVerifyGoal,
-		MaxAttempts: advanceVerifyMaxAttempts, MaxChangedLines: advanceVerifyMaxLines,
+		BeginAttemptRequest: BeginAttemptRequest{
+			RequestID: "compact-advance-verify", WorkUnit: advanceVerifyWorkUnit, EvidenceGoal: advanceVerifyGoal,
+			MaxAttempts: advanceVerifyMaxAttempts, MaxChangedLines: advanceVerifyMaxLines,
+		},
 	}
 
 	result, err := fixture.store.Acquire(context.Background(), request)
@@ -240,8 +242,10 @@ func TestCompactAcquireStaysCompleteForTheSettledWorkUnit(t *testing.T) {
 	before := countRuntimeRecords(t, fixture.store.Dir)
 
 	result, err := fixture.store.Acquire(context.Background(), CompactAcquireRequest{
-		RequestID: "compact-advance-same-scope", WorkUnit: advanceApplyWorkUnit, EvidenceGoal: advanceApplyGoal,
-		MaxAttempts: advanceApplyMaxAttempts, MaxChangedLines: advanceApplyMaxLines,
+		BeginAttemptRequest: BeginAttemptRequest{
+			RequestID: "compact-advance-same-scope", WorkUnit: advanceApplyWorkUnit, EvidenceGoal: advanceApplyGoal,
+			MaxAttempts: advanceApplyMaxAttempts, MaxChangedLines: advanceApplyMaxLines,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -345,7 +345,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					continue
 				}
 
-				content := renderBoundedReviewAsset(commandsAssetDir + "/" + entry.Name())
+				content := renderBoundedReviewAsset(adapter.Agent(), commandsAssetDir+"/"+entry.Name())
 				path := filepath.Join(commandsDir, entry.Name())
 				writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
 				if err != nil {
@@ -494,14 +494,15 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.SupportsSkills() {
 		skillDir := adapter.SkillsDir(homeDir)
 		if skillDir != "" {
-			sharedFiles := []string{
-				"SKILL.md",
-				"persistence-contract.md",
-				"engram-convention.md",
-				"openspec-convention.md",
-				"sdd-phase-common.md",
-				"sdd-status-contract.md",
-				"skill-resolver.md",
+			// The embedded skills/_shared listing is the single source of
+			// truth for the shared inventory; deriving it here keeps a newly
+			// added shared file from silently missing this deployment path.
+			sharedFiles, sharedErr := assets.SharedSkillFileNames()
+			if sharedErr != nil {
+				return InjectionResult{}, fmt.Errorf("resolve SDD shared files: %w", sharedErr)
+			}
+			if len(sharedFiles) == 0 {
+				return InjectionResult{}, fmt.Errorf("resolve SDD shared files: embedded %s listing is empty", assets.SharedSkillDir)
 			}
 			sddSkillIDs := []model.SkillID{
 				"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
@@ -513,7 +514,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// These are written directly, not via skills.Inject, since they are
 			// not part of the skills component's injection scope.
 			for _, fileName := range sharedFiles {
-				assetPath := "skills/_shared/" + fileName
+				assetPath := assets.SharedSkillDir + "/" + fileName
 				content, readErr := assets.Read(assetPath)
 				if readErr != nil {
 					return InjectionResult{}, fmt.Errorf("required SDD shared file %q: embedded asset not found: %w", fileName, readErr)
@@ -615,7 +616,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				continue
 			}
 			// Copy all files (not just .md) to support Kimi's YAML-based agents
-			contentStr := renderBoundedReviewAsset(embeddedDir + "/" + entry.Name())
+			contentStr := renderBoundedReviewAsset(adapter.Agent(), embeddedDir+"/"+entry.Name())
 
 			// Resolve {{KIRO_MODEL}} placeholder for adapters that support it (e.g. Kiro).
 			// Non-Kiro adapters (Cursor, etc.) don't implement kiroModelResolver and are unaffected.
@@ -795,7 +796,7 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 	if !ok {
 		return overlayBytes, nil
 	}
-	expandOpenCodeBoundedReviewAgents(agentsMap, agent)
+	expandOpenCodeBoundedReviewAgents(agentsMap)
 
 	// Inline the orchestrator prompt (always inlined, not a file reference),
 	// unless an external strategy requested preserving the existing prompt.
@@ -935,23 +936,27 @@ func extractManagedSection(content, sectionID string) string {
 	return strings.Trim(content[start+len(open):end], "\n")
 }
 
-func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any, agentID model.AgentID) {
+// expandOpenCodeBoundedReviewAgents renders the OpenCode-shaped review-lens
+// sub-agents shared by the OpenCode and Kilocode overlays. Both identities
+// get the identical shell-less, read-less shape: the OpenCode plugin
+// (review-result-artifacts.ts) asks `review lens-context` for all immutable
+// candidate evidence through its provider-owned native channel and injects it
+// into each reviewer task's prompt before the reviewer ever launches, so the lens
+// itself needs no bash and no read tool — this provider-injected block is
+// its only byte source. Kilocode is not RDD-eligible and never receives the
+// capturing plugin, so review never starts there; it gets the identical
+// denied shape rather than a permissive one that a fresh Kilocode-specific
+// entry point could someday reach.
+func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 	for _, name := range opencode.ReviewLensPhases() {
 		agent, ok := agentsMap[name].(map[string]any)
 		if !ok {
 			continue
 		}
-		if agentID == model.AgentOpenCode {
-			prompt, _ := openCodeUnsupportedReviewerPrompt(name)
-			agent["prompt"] = prompt
-			agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
-			agent["permission"] = map[string]any{"edit": "deny", "bash": "deny"}
-			continue
-		}
-		prompt, _ := reviewerPrompt(name)
+		prompt, _ := openCodeProviderInjectedReviewerPrompt(name)
 		agent["prompt"] = prompt
-		agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": true, "task": false}
-		agent["permission"] = openCodeReviewerPermission()
+		agent["tools"] = map[string]any{"*": false, "read": false, "write": false, "edit": false, "bash": false, "task": false}
+		agent["permission"] = map[string]any{"edit": "deny", "bash": "deny"}
 	}
 
 	for _, name := range []string{"jd-judge-a", "jd-judge-b"} {

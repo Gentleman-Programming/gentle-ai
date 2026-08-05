@@ -231,49 +231,84 @@ func PublishReviewRepositoryContext(ctx context.Context, repo string, binding Re
 // ResolveReviewRepositoryContext resolves one provider-issued handle from any
 // process cwd, then revalidates its repository and current compact authority.
 func ResolveReviewRepositoryContext(ctx context.Context, handle string, binding ReviewRepositoryContextBinding) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if err := ValidateReviewRepositoryContextHandle(handle); err != nil {
-		return "", err
-	}
 	if err := validateReviewRepositoryContextBinding(binding); err != nil {
 		return "", err
 	}
-	path, err := reviewRepositoryContextPath(handle)
+	root, resolved, err := ResolveReviewRepositoryContextBinding(ctx, handle)
 	if err != nil {
 		return "", err
+	}
+	if resolved != binding {
+		return "", errors.New("review repository context binding is invalid") // refusal:by-design operator-knowledge: the caller supplied a binding the provider-issued handle does not commit to, and only a fresh native transition can supply the exact one
+	}
+	return root, nil
+}
+
+// ResolveReviewRepositoryContextBinding resolves one provider-issued handle and
+// returns both the repository root and the binding the handle itself commits
+// to. The handle is a digest over the schema, lineage, target identity,
+// revision, and repository identity (reviewRepositoryContextHandle), and the
+// stored record is only accepted when it re-derives that exact handle. A caller
+// therefore cannot influence which lineage, target, or revision it receives by
+// supplying different fields: there are no fields to supply. That is what lets
+// a reviewer-facing surface take one opaque token instead of six values a
+// relaying orchestrator could mistype.
+func ResolveReviewRepositoryContextBinding(ctx context.Context, handle string) (string, ReviewRepositoryContextBinding, error) {
+	root, binding, err := resolveReviewRepositoryContext(ctx, handle)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
+	}
+	return root, binding, nil
+}
+
+func resolveReviewRepositoryContext(ctx context.Context, handle string) (string, ReviewRepositoryContextBinding, error) {
+	if err := ctx.Err(); err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
+	}
+	if err := ValidateReviewRepositoryContextHandle(handle); err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
+	}
+	empty := ReviewRepositoryContextBinding{}
+	path, err := reviewRepositoryContextPath(handle)
+	if err != nil {
+		return "", empty, err
 	}
 	home, err := reviewRepositoryContextHome()
 	if err != nil {
-		return "", err
+		return "", empty, err
 	}
 	storageRoot, err := ensureReviewRepositoryContextStorageRoot(home, false)
 	if err != nil {
-		return "", err
+		return "", empty, err
 	}
 	if err := validatePrivateLocatorDirectory(storageRoot, filepath.Dir(path)); err != nil {
-		return "", err
+		return "", empty, err
 	}
 	payload, err := readReviewRepositoryContext(path)
 	if err != nil {
-		return "", err
+		return "", empty, err
 	}
 	var record reviewRepositoryContextFile
 	if err := decodeReviewRepositoryContext(payload, &record); err != nil {
-		return "", err
+		return "", empty, err
 	}
-	if record.Handle != handle || record.LineageID != binding.LineageID ||
-		record.TargetIdentity != binding.TargetIdentity || record.Revision != binding.Revision {
-		return "", errors.New("review repository context binding is invalid")
+	binding := ReviewRepositoryContextBinding{
+		LineageID: record.LineageID, TargetIdentity: record.TargetIdentity, Revision: record.Revision,
+	}
+	if record.Handle != handle {
+		return "", empty, errors.New("review repository context binding is invalid") // refusal:by-design world-action: the stored provider-private locator does not name the requested handle, which is provider storage corruption rather than an operator-fixable state
 	}
 	stored := reviewRepositoryIdentityRecord{
 		RepositoryRoot: record.RepositoryRoot, GitCommonDir: record.GitCommonDir,
 		GitDir: record.GitDir, RepositoryIdentity: record.RepositoryIdentity,
 	}
+	// The handle is a digest over the binding and the repository identity, so
+	// re-deriving it from the record's own fields is what proves the record was
+	// not substituted: a record carrying any other lineage, target, revision, or
+	// repository cannot reproduce this handle.
 	if reviewRepositoryIdentityHash(stored) != stored.RepositoryIdentity ||
 		reviewRepositoryContextHandle(binding, stored) != handle {
-		return "", errors.New("review repository context identity is invalid")
+		return "", empty, errors.New("review repository context identity is invalid") // refusal:by-design world-action: the provider-private locator no longer re-derives its own handle, which is provider storage corruption rather than an operator-fixable state
 	}
 	live, err := reviewRepositoryIdentity(ctx, stored.RepositoryRoot)
 	if err != nil {
@@ -282,17 +317,17 @@ func ResolveReviewRepositoryContext(ctx context.Context, handle string, binding 
 		// no review action can repair (Git declining the repository outright,
 		// for example for ownership reasons) from a genuine identity change
 		// once the cause has been flattened into prose.
-		return "", &reviewRepositoryContextIdentityError{cause: err}
+		return "", empty, &reviewRepositoryContextIdentityError{cause: err}
 	}
 	if !sameLocatorDirectory(stored.RepositoryRoot, live.RepositoryRoot) ||
 		!sameLocatorDirectory(stored.GitCommonDir, live.GitCommonDir) ||
 		!sameLocatorDirectory(stored.GitDir, live.GitDir) || live.RepositoryIdentity != stored.RepositoryIdentity {
-		return "", errors.New("review repository context identity changed")
+		return "", empty, errors.New("review repository context identity changed") // refusal:by-design world-action: the bound Git worktree was replaced outside this product and only restoring or re-creating that exact repository resolves it
 	}
 	if err := validateLiveReviewRepositoryContext(ctx, live.RepositoryRoot, binding); err != nil {
-		return "", err
+		return "", empty, err
 	}
-	return live.RepositoryRoot, nil
+	return live.RepositoryRoot, binding, nil
 }
 
 // reviewRepositoryContextIdentityError reports that the repository bound by a

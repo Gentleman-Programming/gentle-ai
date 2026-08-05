@@ -277,15 +277,15 @@ func managedSkillBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		})
 	}
 
-	for _, relPath := range []string{
-		"_shared/persistence-contract.md",
-		"_shared/engram-convention.md",
-		"_shared/openspec-convention.md",
-		"_shared/sdd-phase-common.md",
-		"_shared/sdd-status-contract.md",
-		"_shared/skill-resolver.md",
-	} {
-		paths = append(paths, filepath.Join(skillDir, relPath))
+	// The embedded skills/_shared listing is the single source of truth for the
+	// shared inventory; deriving it here keeps a newly added shared file from
+	// silently missing the upgrade backup.
+	sharedFiles, sharedErr := assets.SharedSkillFileNames()
+	if sharedErr != nil {
+		writeBackupDiagnostic(diagnostics, "backup: skipping embedded path %s: %v", assets.SharedSkillDir, sharedErr)
+	}
+	for _, relPath := range sharedFiles {
+		paths = append(paths, filepath.Join(skillDir, "_shared", filepath.FromSlash(relPath)))
 	}
 
 	return paths

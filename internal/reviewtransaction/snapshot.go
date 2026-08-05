@@ -225,7 +225,13 @@ func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intend
 		}
 	}
 
-	temp, err := os.CreateTemp("", "gentle-ai-review-index-*")
+	gitDir, err := resolveGitDirectory(ctx, builder.Repo, "--git-dir")
+	if err != nil {
+		return "", "", err
+	}
+	// Keep the private index beside Git's writable control files. A restricted
+	// integration environment may not provide an accessible process temp dir.
+	temp, err := os.CreateTemp(gitDir, ".gentle-ai-review-index-*")
 	if err != nil {
 		return "", "", err
 	}
@@ -595,9 +601,19 @@ func (builder SnapshotBuilder) ResolveRepositoryRoot(ctx context.Context) (strin
 	return root, nil
 }
 
-// DiscoverIntendedUntracked returns canonical untracked paths from the
-// requested repository while ignoring inherited Git repository selectors.
-func (builder SnapshotBuilder) DiscoverIntendedUntracked(ctx context.Context) ([]string, error) {
+// DiscoverUnignoredUntracked returns the canonical unignored untracked paths
+// of the requested repository while ignoring inherited Git repository
+// selectors.
+//
+// Issue #2394: this is a live worktree inventory, NOT a declaration of review
+// scope. It used to be handed straight to Target.IntendedUntracked, which made
+// every unignored file the user happened to have on disk part of the frozen
+// candidate and delivered its exact bytes to a reviewer. Review scope is now
+// declared the way Git has always let a user declare it: `git add` puts a new
+// file in the index, and the index is what the candidate is built from, so
+// callers that mean "what did the user submit" must not call this. The
+// remaining callers ask a different question: what is untracked right now.
+func (builder SnapshotBuilder) DiscoverUnignoredUntracked(ctx context.Context) ([]string, error) {
 	root, err := builder.ResolveRepositoryRoot(ctx)
 	if err != nil {
 		return nil, err
@@ -945,7 +961,9 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 			return "", "", "", fmt.Errorf("intended-untracked path %q must name a file or symlink, not a directory", logicalPath)
 		}
 	}
-	temp, err := os.CreateTemp("", "gentle-ai-review-index-*")
+	// Keep the private index beside Git's writable control files. A restricted
+	// integration environment may not provide an accessible process temp dir.
+	temp, err := os.CreateTemp(filepath.Dir(indexPath), ".gentle-ai-review-index-*")
 	if err != nil {
 		return "", "", "", err
 	}
@@ -1382,7 +1400,12 @@ type GitCommandTimeoutError struct {
 	Timeout   time.Duration
 	Remote    bool
 	Aggregate bool
-	Cause     error
+	// Elapsed is the observed wall-clock lifetime of the cut child. It is what
+	// makes a hang-guard timeout explainable on a loaded runner: a reader can
+	// tell a child that genuinely hung from one that was starved of CPU and
+	// cut just past the budget. Zero means unmeasured, never instantaneous.
+	Elapsed time.Duration
+	Cause   error
 }
 
 func (err *GitCommandTimeoutError) Error() string {
@@ -1393,7 +1416,14 @@ func (err *GitCommandTimeoutError) Error() string {
 	if err.Aggregate {
 		scope = "aggregate"
 	}
-	return fmt.Sprintf("%v within %s %s budget", ErrGitCommandTimeout, err.Timeout, scope)
+	message := fmt.Sprintf("%v within %s %s budget", ErrGitCommandTimeout, err.Timeout, scope)
+	if len(err.Args) > 0 {
+		message = fmt.Sprintf("%s: git %s", message, strings.Join(err.Args, " "))
+	}
+	if err.Elapsed > 0 {
+		message = fmt.Sprintf("%s ran %s before cancellation", message, err.Elapsed.Round(time.Millisecond))
+	}
+	return message
 }
 
 func (err *GitCommandTimeoutError) Unwrap() []error {
@@ -1423,6 +1453,21 @@ func (err *GitCommandError) Error() string {
 func (err *GitCommandError) Unwrap() error { return err.Cause }
 
 var ErrGitOutputLimit = errors.New("git output exceeded deterministic byte limit")
+
+// refusal:by-design world-action: unexpected Git diagnostics require repairing the repository or its environment; no Gentle AI command can safely infer that repair.
+var ErrGitInventoryDiagnostics = errors.New("git inventory produced diagnostics")
+
+// GitInventoryDiagnosticsError reports unexpected diagnostics from a Git
+// inventory command that otherwise completed successfully.
+type GitInventoryDiagnosticsError struct {
+	Diagnostics string
+}
+
+func (err *GitInventoryDiagnosticsError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrGitInventoryDiagnostics, err.Diagnostics)
+}
+
+func (err *GitInventoryDiagnosticsError) Unwrap() error { return ErrGitInventoryDiagnostics }
 
 // GitOutputLimitError reports that a bounded Git capture produced more bytes
 // than the caller permits. The capture retains at most Limit bytes while the
@@ -1462,14 +1507,30 @@ func (err *GitProcessControlError) Error() string {
 
 func (err *GitProcessControlError) Unwrap() error { return err.Cause }
 
-var localGitCommandTimeout = 15 * time.Second
-var remoteGitCommandTimeout = 20 * time.Second
+// LocalGitCommandTimeout and RemoteGitCommandTimeout bound the wall-clock
+// lifetime of every Git child a runner spawns. They are hang guards, not
+// latency assertions: a genuinely hung child (credential prompt, filesystem
+// deadlock) must still fail, but a healthy child that is merely starved of CPU
+// on a loaded runner must never be cut. Issue #2483 observed a healthy git
+// exceed a 15-second budget on a loaded CI shard, so the ceilings sit roughly
+// an order of magnitude above that worst observed dilation. Inside a
+// negotiated operation the 25-second aggregate operation budget still fires
+// first; these per-command ceilings govern direct paths such as snapshot
+// builders and delivery gates. Exported as a test seam so callers in other
+// packages that need deterministic timeout ordering can shrink them.
+var LocalGitCommandTimeout = 120 * time.Second
+var RemoteGitCommandTimeout = 180 * time.Second
 var gitCommandWaitDelay = time.Second
 var gitCommandContext = exec.CommandContext
 var gitProcessTreeStarter = startGitProcessTree
 
+const (
+	defaultGitOutputLimit = 8 << 20
+	defaultGitStderrLimit = 64 << 10
+)
+
 func runGit(ctx context.Context, repo string, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
-	return runGitCaptured(ctx, repo, extraEnv, stdin, 0, false, false, args...)
+	return runGitCaptured(ctx, repo, extraEnv, stdin, defaultGitOutputLimit, false, false, args...)
 }
 
 func runGitInventory(ctx context.Context, repo string, args ...string) ([]byte, error) {
@@ -1477,11 +1538,11 @@ func runGitInventory(ctx context.Context, repo string, args ...string) ([]byte, 
 }
 
 func runGitInventoryWithEnv(ctx context.Context, repo string, extraEnv []string, args ...string) ([]byte, error) {
-	return runGitCaptured(ctx, repo, extraEnv, nil, 0, false, true, args...)
+	return runGitCaptured(ctx, repo, extraEnv, nil, defaultGitOutputLimit, false, true, args...)
 }
 
 func runGitIsolated(ctx context.Context, repo string, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
-	return runGitCaptured(ctx, repo, extraEnv, stdin, 0, true, false, args...)
+	return runGitCaptured(ctx, repo, extraEnv, stdin, defaultGitOutputLimit, true, false, args...)
 }
 
 func runGitLimited(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputLimit int, args ...string) ([]byte, error) {
@@ -1498,9 +1559,9 @@ func runGitCaptured(ctx context.Context, repo string, extraEnv []string, stdin [
 
 func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputOffset, outputLimit int, isolateConfig, rejectStderr, rejectOverflow bool, args ...string) ([]byte, int, error) {
 	remote := len(args) > 0 && args[0] == "ls-remote"
-	timeout := localGitCommandTimeout
+	timeout := LocalGitCommandTimeout
 	if remote {
-		timeout = remoteGitCommandTimeout
+		timeout = RemoteGitCommandTimeout
 	}
 	commandContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -1511,17 +1572,13 @@ func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, st
 	if stdin != nil {
 		command.Stdin = bytes.NewReader(stdin)
 	}
-	var combined, machineStdout, machineStderr bytes.Buffer
-	var stdout, stderr *boundedGitOutput
-	if outputLimit > 0 {
-		stdout = &boundedGitOutput{offset: outputOffset, limit: outputLimit}
-		stderr = &boundedGitOutput{limit: 64 << 10}
-		command.Stdout, command.Stderr = stdout, stderr
-	} else if rejectStderr {
-		command.Stdout, command.Stderr = &machineStdout, &machineStderr
-	} else {
-		command.Stdout, command.Stderr = &combined, &combined
+	if outputLimit <= 0 {
+		outputLimit = defaultGitOutputLimit
 	}
+	stdout := &boundedGitOutput{offset: outputOffset, limit: outputLimit}
+	stderr := &boundedGitOutput{limit: defaultGitStderrLimit}
+	command.Stdout, command.Stderr = stdout, stderr
+	started := time.Now()
 	release, startErr := gitProcessTreeStarter(command)
 	err := startErr
 	if err == nil {
@@ -1541,15 +1598,11 @@ func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, st
 		_ = command.Process.Kill()
 		_ = command.Wait()
 	}
-	output, diagnostic := combined.Bytes(), combined.Bytes()
-	if stdout != nil {
-		output, diagnostic = stdout.Bytes(), stderr.Bytes()
-	} else if rejectStderr {
-		output, diagnostic = machineStdout.Bytes(), machineStderr.Bytes()
-	}
+	output, diagnostic := stdout.Bytes(), stderr.Bytes()
 	if errors.Is(err, exec.ErrWaitDelay) && commandContext.Err() == nil {
 		err = nil
 	}
+	overflow := gitOutputOverflow(args, outputLimit, stdout, stderr, rejectOverflow)
 	if err != nil {
 		if commandContext.Err() != nil {
 			cause := commandContext.Err()
@@ -1557,34 +1610,56 @@ func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, st
 			if aggregate {
 				cause = ctx.Err()
 			}
-			return nil, 0, &GitCommandTimeoutError{
-				Args: append([]string{}, args...), Timeout: timeout, Remote: remote, Aggregate: aggregate, Cause: cause,
-			}
+			return nil, 0, joinGitOutputOverflow(&GitCommandTimeoutError{
+				Args: append([]string{}, args...), Timeout: timeout, Remote: remote, Aggregate: aggregate,
+				Elapsed: time.Since(started), Cause: cause,
+			}, overflow)
 		}
 		if startErr != nil {
-			return nil, 0, &GitProcessControlError{Args: append([]string{}, args...), Cause: startErr}
+			return nil, 0, joinGitOutputOverflow(&GitProcessControlError{Args: append([]string{}, args...), Cause: startErr}, overflow)
 		}
 		exitCode := -1
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		}
-		return nil, 0, &GitCommandError{
+		return nil, 0, joinGitOutputOverflow(&GitCommandError{
 			Args: append([]string{}, args...), ExitCode: exitCode, Remote: remote, Cause: err,
 			Output: strings.TrimSpace(string(diagnostic)),
-		}
+		}, overflow)
 	}
-	if stdout != nil && stdout.exceeded && rejectOverflow {
-		return nil, 0, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit, Actual: stdout.total}
+	if overflow != nil {
+		return nil, 0, overflow
 	}
 	if rejectStderr && len(diagnostic) != 0 {
-		return nil, 0, fmt.Errorf("git inventory produced diagnostics: %s", strings.TrimSpace(string(diagnostic)))
+		return nil, 0, &GitInventoryDiagnosticsError{Diagnostics: strings.TrimSpace(string(diagnostic))}
 	}
-	total := len(output)
-	if stdout != nil {
-		total = stdout.total
+	return output, stdout.total, nil
+}
+
+func gitOutputOverflow(args []string, outputLimit int, stdout, stderr *boundedGitOutput, rejectOverflow bool) error {
+	if !rejectOverflow {
+		return nil
 	}
-	return output, total, nil
+	var overflows []error
+	// Preserve stream order so errors.As deterministically finds stdout first.
+	if stdout.exceeded {
+		overflows = append(overflows, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit, Actual: stdout.total})
+	}
+	if stderr.exceeded {
+		overflows = append(overflows, &GitOutputLimitError{Args: append([]string{}, args...), Limit: stderr.limit, Actual: stderr.total})
+	}
+	if len(overflows) == 1 {
+		return overflows[0]
+	}
+	return errors.Join(overflows...)
+}
+
+func joinGitOutputOverflow(err, overflow error) error {
+	if overflow == nil {
+		return err
+	}
+	return errors.Join(err, overflow)
 }
 
 type boundedGitOutput struct {

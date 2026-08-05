@@ -42,29 +42,49 @@ jobs:
 
             core.setFailed(`❌ ${message}`);
 
+  check-workflow-scripts:
+    name: Check Workflow Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+      - name: Run workflow script tests
+        run: node --test .github/scripts/parse-linked-issues.test.cjs
+
   check-issue-reference:
     name: Check Issue Reference
     runs-on: ubuntu-latest
+    outputs:
+      issue-numbers: ${{ steps.parse.outputs.issue-numbers }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
       - name: Verify PR body references an issue
+        id: parse
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
         with:
           script: |
-            const body = context.payload.pull_request.body || '';
-            const pattern = /(?:closes|fixes|resolves)\s+#(\d+)/gi;
-            const matches = [...body.matchAll(pattern)];
+            const { parseLinkedIssues } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/parse-linked-issues.cjs`
+            );
 
-            if (matches.length === 0) {
+            // Parse the visible body once; HTML comments (like the PR
+            // template's `Closes #42` example) are stripped by the shared
+            // parser, and check-issue-approved reuses this exact result.
+            const issueNumbers = parseLinkedIssues(context.payload.pull_request.body);
+            core.setOutput('issue-numbers', JSON.stringify(issueNumbers));
+
+            if (issueNumbers.length === 0) {
               core.setFailed(
                 '❌ PR body must reference a linked issue using one of:\n' +
                 '  - Closes #<number>\n' +
                 '  - Fixes #<number>\n' +
                 '  - Resolves #<number>\n\n' +
+                'References inside HTML comments (<!-- ... -->) do not count.\n' +
                 'Every PR must be linked to an approved issue.'
               );
             } else {
-              const numbers = matches.map(m => `#${m[1]}`).join(', ');
-              console.log(`✅ Found issue reference(s): ${numbers}`);
+              console.log(`✅ Found issue reference(s): ${issueNumbers.map(n => `#${n}`).join(', ')}`);
             }
 
   check-issue-approved:
@@ -74,19 +94,19 @@ jobs:
     steps:
       - name: Verify linked issue(s) have status:approved label
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
+        env:
+          ISSUE_NUMBERS: ${{ needs.check-issue-reference.outputs.issue-numbers }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const body = context.payload.pull_request.body || '';
-            const pattern = /(?:closes|fixes|resolves)\s+#(\d+)/gi;
-            const matches = [...body.matchAll(pattern)];
+            // Reuse the single parse from check-issue-reference; do not
+            // re-scan the raw body here (see issue #1770).
+            const issueNumbers = JSON.parse(process.env.ISSUE_NUMBERS || '[]');
 
-            if (matches.length === 0) {
+            if (issueNumbers.length === 0) {
               core.setFailed('❌ Could not find issue reference in PR body.');
               return;
             }
-
-            const issueNumbers = matches.map(m => parseInt(m[1], 10));
             const failures = [];
 
             for (const issueNumber of issueNumbers) {
