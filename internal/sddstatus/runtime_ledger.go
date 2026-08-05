@@ -492,7 +492,7 @@ type runtimeReplay struct {
 
 func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, error) {
 	if !validReviewBindingChange(change) {
-		return RuntimeStore{}, fmt.Errorf("invalid SDD change name %q; want letters, digits, and single hyphens or underscores between them, at most 96 characters; run `gentle-ai sdd-status --cwd <repo> --json` to read the resolved changeName", change)
+		return RuntimeStore{}, fmt.Errorf("invalid SDD change name %q; want letters, digits, and single hyphens or underscores between them, at most %d bytes; run `gentle-ai sdd-status --cwd <repo> --json` to read the resolved changeName", change, RuntimeChangeLimit)
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -535,7 +535,7 @@ const encodedRuntimeChangeNamespace = "_encoded"
 // 2^k variants to search: at 64 bits a birthday collision costs about 2^32
 // candidates, which is reachable, while 128 bits puts it at 2^64. The remaining
 // half is dropped because the leaf must stay addressable on Windows, where an
-// identity at the 96-character limit plus a full 64-character digest crowds the
+// identity at the RuntimeChangeLimit-byte limit plus a full 64-character digest crowds the
 // 260-character path ceiling that this issue's original reporter was hitting.
 const encodedRuntimeChangeDigestWidth = 32
 
@@ -1845,7 +1845,7 @@ func applyRuntimeBindingEvent(replay *runtimeReplay, event *runtimeBindingEvent)
 
 func validateRuntimeBeginEvent(record runtimeRecord) error {
 	event := record.Begin
-	if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, 160) != nil ||
+	if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, RuntimeWorkUnitLimit) != nil ||
 		validateRuntimeText(event.EvidenceGoal, RuntimeEvidenceGoalLimit) != nil || event.MaxAttempts < 1 || event.MaxAttempts > RuntimeMaxAttemptLimit ||
 		event.MaxChangedLines < 1 || event.MaxChangedLines > RuntimeMaxChangedLines || event.Ordinal < 1 ||
 		!runtimeRevisionPattern.MatchString(event.BeginCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.BeginCandidateTree) ||
@@ -1886,7 +1886,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		advance := record.Advance
 		if !runtimeRevisionPattern.MatchString(advance.PreviousObjectiveID) || advance.PreviousGeneration < 1 ||
-			validateRuntimeText(advance.PreviousWorkUnit, 160) != nil || advance.PreviousWorkUnit == record.Begin.WorkUnit {
+			validateRuntimeText(advance.PreviousWorkUnit, RuntimeWorkUnitLimit) != nil || advance.PreviousWorkUnit == record.Begin.WorkUnit {
 			return errors.New("invalid SDD runtime objective advance event") // refusal:by-design world-action: the advance event is derived from validated status, so a violation is a mutated record and the exit is restoring the store
 		}
 		// The successor carries an ordinary begin request, so its digest binds
@@ -1981,7 +1981,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			event.PreviousMaxChangedLines < 1 || event.PreviousMaxChangedLines > RuntimeMaxChangedLines ||
 			!runtimeRevisionPattern.MatchString(event.RescopeCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.RescopeCandidateTree) ||
 			!runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 1 ||
-			validateRuntimeText(event.WorkUnit, 160) != nil || validateRuntimeText(event.EvidenceGoal, 240) != nil ||
+			validateRuntimeText(event.WorkUnit, RuntimeWorkUnitLimit) != nil || validateRuntimeText(event.EvidenceGoal, RuntimeEvidenceGoalLimit) != nil ||
 			event.MaxAttempts < 1 || event.MaxAttempts > RuntimeMaxAttemptLimit ||
 			event.MaxChangedLines < 1 || event.MaxChangedLines > RuntimeMaxChangedLines ||
 			// The shape-level narrowing check below defends against a record
@@ -1990,7 +1990,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			// recomputes narrowing against the REPLAYED objective, which a
 			// forged PreviousMax* cannot fool (see its doc comment).
 			event.MaxAttempts > event.PreviousMaxAttempts || event.MaxChangedLines > event.PreviousMaxChangedLines ||
-			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
+			validateRuntimeText(event.Reason, RuntimeResetReasonLimit) != nil || validateRuntimeText(event.Actor, RuntimeActorLimit) != nil {
 			return errors.New("invalid SDD runtime rescope event") // refusal:by-design world-action: this shape (including narrowing) is enforced before publication, so a violation is a mutated record and the exit is restoring the store
 		}
 		request := RescopeObjectiveRequest{
@@ -2220,10 +2220,10 @@ func normalizeRescopeObjectiveRequest(request RescopeObjectiveRequest) (RescopeO
 	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
 		return RescopeObjectiveRequest{}, errors.New("request_id must be a canonical lowercase identifier") // refusal:by-design operator-knowledge: only the caller can supply a canonical lowercase request identifier
 	}
-	if err := validateRuntimeText(request.WorkUnit, 160); err != nil {
+	if err := validateRuntimeText(request.WorkUnit, RuntimeWorkUnitLimit); err != nil {
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid work_unit: %w", err)
 	}
-	if err := validateRuntimeText(request.EvidenceGoal, 240); err != nil {
+	if err := validateRuntimeText(request.EvidenceGoal, RuntimeEvidenceGoalLimit); err != nil {
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid evidence_goal: %w", err)
 	}
 	if request.MaxAttempts < 1 || request.MaxAttempts > RuntimeMaxAttemptLimit {
@@ -2232,10 +2232,10 @@ func normalizeRescopeObjectiveRequest(request RescopeObjectiveRequest) (RescopeO
 	if request.MaxChangedLines < 1 || request.MaxChangedLines > RuntimeMaxChangedLines {
 		return RescopeObjectiveRequest{}, fmt.Errorf("max_changed_lines must be within 1..%d", RuntimeMaxChangedLines)
 	}
-	if err := validateRuntimeText(request.Reason, 500); err != nil {
+	if err := validateRuntimeText(request.Reason, RuntimeResetReasonLimit); err != nil {
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid rescope reason: %w", err)
 	}
-	if err := validateRuntimeText(request.Actor, 128); err != nil {
+	if err := validateRuntimeText(request.Actor, RuntimeActorLimit); err != nil {
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid rescope actor: %w", err)
 	}
 	return request, nil

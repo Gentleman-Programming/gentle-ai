@@ -5,7 +5,7 @@ import "regexp"
 const (
 	RuntimeRequestIDPattern    = `^[a-z0-9][a-z0-9._-]{0,127}$`
 	RuntimeRevisionPattern     = `^sha256:[a-f0-9]{64}$`
-	RuntimeChangePattern       = `^[a-z0-9]+(?:-[a-z0-9]+)*$`
+	RuntimeChangePattern       = `^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$`
 	RuntimeLineagePattern      = `^[a-z0-9]+(?:-[a-z0-9]+)*$`
 	RuntimeDefaultAttemptLimit = 2
 	RuntimeMaxAttemptLimit     = 100
@@ -16,6 +16,7 @@ const (
 	DefaultRuntimeChangedLines  = RuntimeDefaultChangedLines
 	RuntimeChangeLimit          = 96
 	RuntimeLineageLimit         = 128
+	RuntimeRequestIDLimit       = 128
 	RuntimeWorkUnitLimit        = 160
 	RuntimeEvidenceGoalLimit    = 240
 	RuntimeDiagnosisLimit       = 500

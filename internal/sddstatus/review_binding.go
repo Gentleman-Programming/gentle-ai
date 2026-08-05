@@ -692,7 +692,7 @@ func validReviewBindingChange(change string) bool {
 // legacyRuntimeChangeDir reports whether a change identity is one the runtime
 // ledger has always stored directly at v1/<change>.
 func legacyRuntimeChangeDir(change string) bool {
-	return len(change) <= 96 && legacyRuntimeChange.MatchString(change)
+	return len(change) <= RuntimeChangeLimit && legacyRuntimeChange.MatchString(change)
 }
 
 func validReviewBindingLineage(lineage string) bool {

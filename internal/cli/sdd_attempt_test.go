@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -168,7 +169,7 @@ func TestSDDAttemptRuntimeContractAuthority(t *testing.T) {
 	}{
 		{name: "revision", pattern: sddstatus.RuntimeRevisionPattern, valid: cliAttemptHash('a'), invalid: "sha256:" + strings.Repeat("A", 64)},
 		{name: "request id", pattern: sddstatus.RuntimeRequestIDPattern, valid: "request-1.v2", invalid: "Request ID"},
-		{name: "change", pattern: sddstatus.RuntimeChangePattern, valid: "sdd-cli-help-contracts", invalid: "sdd_cli_help_contracts"},
+		{name: "change", pattern: sddstatus.RuntimeChangePattern, valid: "MixedCase_And-Digits2", invalid: "sdd--cli_help"},
 		{name: "lineage", pattern: sddstatus.RuntimeLineagePattern, valid: "review-successor", invalid: "ReviewSuccessor"},
 	}
 	for _, tt := range tests {
@@ -205,6 +206,7 @@ func TestSDDAttemptRuntimeContractAuthority(t *testing.T) {
 		"actor":              {sddstatus.RuntimeActorLimit, 128},
 		"change identifier":  {sddstatus.RuntimeChangeLimit, 96},
 		"lineage identifier": {sddstatus.RuntimeLineageLimit, 128},
+		"request ID":         {sddstatus.RuntimeRequestIDLimit, 128},
 	} {
 		if limits[0] != limits[1] {
 			t.Fatalf("%s limit = %d, want %d", name, limits[0], limits[1])
@@ -232,6 +234,7 @@ func TestRunSDDAttemptHelpContracts(t *testing.T) {
 			want: []string{
 				"Usage: gentle-ai sdd-attempt <operation> [flags]", "status", "begin", "finish", "reset", "rescope", "acquire", "settle",
 				"--cwd", "--change", "acquire a bounded attempt", "settle a bounded attempt",
+				fmt.Sprintf("up to %d bytes", sddstatus.RuntimeChangeLimit),
 				"change grammar", "lineage grammar",
 				"Request IDs are idempotency keys",
 			},
@@ -264,6 +267,9 @@ func TestRunSDDAttemptHelpContracts(t *testing.T) {
 			want: []string{
 				"Usage: gentle-ai sdd-attempt begin [flags]", "--expected-revision", "--request-id", "--work-unit",
 				"--evidence-goal", "--max-attempts", "--max-changed-lines", "default 2", "default 200",
+				fmt.Sprintf("idempotency request identifier (lowercase canonical ID, up to %d bytes)", sddstatus.RuntimeRequestIDLimit),
+				fmt.Sprintf("caller-facing work-unit label (up to %d bytes)", sddstatus.RuntimeWorkUnitLimit),
+				fmt.Sprintf("stable runtime evidence objective (up to %d bytes)", sddstatus.RuntimeEvidenceGoalLimit),
 				"A non-nil RuntimeStatus.active_attempt blocks begin.",
 				"change grammar", "lineage grammar",
 				"Request IDs are idempotency keys: replaying the same request with the same ID returns its committed result; reusing an ID with different fields is rejected",
@@ -279,6 +285,11 @@ func TestRunSDDAttemptHelpContracts(t *testing.T) {
 				"--evidence-revision", "--diagnosis", "--harness-disposition", "--cleanup-evidence",
 				"--process-evidence", "--expected-binding-revision", "--successor-lineage",
 				"--remediates-evidence-revision", "failed|interrupted|passed", "reused|invalidated", "sha256:",
+				fmt.Sprintf("idempotency request identifier (lowercase canonical ID, up to %d bytes)", sddstatus.RuntimeRequestIDLimit),
+				fmt.Sprintf("approved lowercase successor lineage (up to %d bytes)", sddstatus.RuntimeLineageLimit),
+				fmt.Sprintf("proven runtime diagnosis (up to %d bytes)", sddstatus.RuntimeDiagnosisLimit),
+				fmt.Sprintf("bounded cleanup evidence (up to %d bytes)", sddstatus.RuntimeCleanupEvidenceLimit),
+				fmt.Sprintf("bounded process evidence (up to %d bytes)", sddstatus.RuntimeProcessEvidenceLimit),
 				"active_attempt", "binding_revision", "evidence_revision",
 				"finish requires a non-nil, running RuntimeStatus.active_attempt.",
 				"change grammar", "lineage grammar",
@@ -292,6 +303,9 @@ func TestRunSDDAttemptHelpContracts(t *testing.T) {
 			args: []string{"reset", "--help"},
 			want: []string{
 				"Usage: gentle-ai sdd-attempt reset [flags]", "--expected-revision", "--request-id", "--reason", "--actor",
+				fmt.Sprintf("idempotency request identifier (lowercase canonical ID, up to %d bytes)", sddstatus.RuntimeRequestIDLimit),
+				fmt.Sprintf("explicit objective reset reason (up to %d bytes)", sddstatus.RuntimeResetReasonLimit),
+				fmt.Sprintf("explicit reset actor (up to %d bytes)", sddstatus.RuntimeActorLimit),
 				"A non-nil RuntimeStatus.active_attempt blocks reset.",
 				"change grammar", "lineage grammar",
 				"Request IDs are idempotency keys: replaying the same request with the same ID returns its committed result; reusing an ID with different fields is rejected",
@@ -347,6 +361,9 @@ func TestRunSDDAttemptRescopeHelpContractIsAuthoritative(t *testing.T) {
 				"narrow a terminal zero-drift runtime objective",
 				"--cwd", "--change", "--expected-revision", "--request-id", "--work-unit", "--evidence-goal",
 				"--max-attempts", "--max-changed-lines", "--reason", "--actor",
+				fmt.Sprintf("idempotency request identifier (lowercase canonical ID, up to %d bytes)", sddstatus.RuntimeRequestIDLimit),
+				fmt.Sprintf("explicit narrowing reason (up to %d bytes)", sddstatus.RuntimeResetReasonLimit),
+				fmt.Sprintf("explicit rescope actor (up to %d bytes)", sddstatus.RuntimeActorLimit),
 				"not decision-required or complete",
 				"terminal failed or interrupted",
 				"candidate has not drifted",
@@ -532,27 +549,27 @@ func TestRunSDDAttemptHelpAliasInValueSlotSelectsOperationHelp(t *testing.T) {
 	}{
 		{
 			name: "cwd short help value slot then status",
-			args: []string{"--cwd", "-h", "status"},
+			args: []string{"--cwd", "-h", "status", "--change", missingRepo},
 			want: []string{"Usage: gentle-ai sdd-attempt status [flags]", "--cwd", "--change", "show the current native runtime status"},
 		},
 		{
 			name: "cwd long help value slot then status",
-			args: []string{"--cwd", "--help", "status"},
+			args: []string{"--cwd", "--help", "status", "--change", missingRepo},
 			want: []string{"Usage: gentle-ai sdd-attempt status [flags]", "show the current native runtime status"},
 		},
 		{
 			name: "status then cwd short help value slot",
-			args: []string{"status", "--cwd", "-h"},
+			args: []string{"status", "--cwd", "-h", "--change", missingRepo},
 			want: []string{"Usage: gentle-ai sdd-attempt status [flags]", "show the current native runtime status"},
 		},
 		{
 			name: "change short help value slot then status",
-			args: []string{"--change", "-h", "status"},
+			args: []string{"--change", "-h", "status", "--cwd", missingRepo},
 			want: []string{"Usage: gentle-ai sdd-attempt status [flags]", "--change", "show the current native runtime status"},
 		},
 		{
 			name: "request-id long help value slot then begin",
-			args: []string{"--request-id", "--help", "begin"},
+			args: []string{"--request-id", "--help", "begin", "--cwd", missingRepo},
 			want: []string{"Usage: gentle-ai sdd-attempt begin [flags]", "start a bounded runtime attempt", "--expected-revision", "--work-unit"},
 		},
 	}
@@ -642,7 +659,7 @@ func TestRunSDDAttemptFinishHelpContractIsAuthoritative(t *testing.T) {
 		}
 	}
 	// The literal none MUST be explicitly stated invalid.
-	if !strings.Contains(text, "none") || !strings.Contains(text, "invalid") {
+	if !strings.Contains(text, "Every supplied finish revision value uses exactly sha256:<64 lowercase hex>; the literal none is invalid because it cannot match the exact revision pattern.") {
 		t.Errorf("finish help missing invalid none statement:\n%s", text)
 	}
 	// The replay-digest rule MUST state identical request digests may replay

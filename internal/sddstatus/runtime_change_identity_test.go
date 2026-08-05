@@ -2,6 +2,7 @@ package sddstatus
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -43,6 +44,9 @@ func TestOpenRuntimeStoreRejectsUnsafeChangeName(t *testing.T) {
 		"-leading",
 		"trailing-",
 		"double--hyphen",
+		"double__underscore",
+		"mixed-_separator",
+		"mixed_-separator",
 		".hidden",
 		"has space",
 		"has:colon",
@@ -68,6 +72,9 @@ func TestOpenRuntimeStoreRejectionNamesValueAndShape(t *testing.T) {
 	}
 	if !strings.Contains(message, "letters, digits") {
 		t.Fatalf("error %q does not state the expected shape", message)
+	}
+	if !strings.Contains(message, fmt.Sprintf("at most %d bytes", RuntimeChangeLimit)) {
+		t.Fatalf("error %q does not state the shared byte limit", message)
 	}
 	if !strings.Contains(message, "gentle-ai sdd-status") {
 		t.Fatalf("error %q does not name the command that reveals the resolved identity", message)
