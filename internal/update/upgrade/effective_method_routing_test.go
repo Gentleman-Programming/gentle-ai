@@ -442,7 +442,7 @@ func TestGentleAIWindowsWithoutGoNamesRunnableSourceInstall(t *testing.T) {
 		t.Fatalf("effectiveMethod without Go = %q, want %q", got, update.InstallBinary)
 	}
 
-	result := executeOne(context.Background(), r, profile, false)
+	result := executeOne(context.Background(), r, profile, false, t.TempDir())
 	if result.Status != UpgradeSkipped || result.Err != nil {
 		t.Fatalf("executeOne = %#v, want a non-error skip", result)
 	}

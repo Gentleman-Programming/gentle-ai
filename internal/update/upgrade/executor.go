@@ -536,7 +536,7 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 		method := effectiveMethod(r.Tool, profile)
 		msg := fmt.Sprintf("Upgrading %s via %s (%s → %s)", r.Tool.Name, method, r.InstalledVersion, r.LatestVersion)
 		sp := NewSpinner(pw, msg)
-		toolResult := executeOne(ctx, r, profile, dryRun, candidate.goInstallDestination)
+		toolResult := executeOne(ctx, r, profile, dryRun, homeDir, candidate.goInstallDestination)
 
 		// Check if the upgrade succeeded but requires immediate exit.
 		// This must be handled BEFORE calling sp.Finish() so the spinner can terminate properly.
@@ -617,7 +617,18 @@ func detectCommandHint(tool update.ToolInfo) string {
 }
 
 // executeOne runs the upgrade for a single tool.
-func executeOne(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, dryRun bool, preflightDestination ...string) ToolUpgradeResult {
+// executeOne runs the upgrade for a single tool.
+//
+// homeDir is passed in so the post-execution verification (issue #744) can
+// re-read the OpenCode plugin's materialized package.json without relying on
+// the upgrade package's openCodeHomeDir var — that var is set in some tests
+// and would be inconsistent with the actual user home being upgraded. When
+// homeDir is empty the verification is skipped for OpenCode plugins.
+//
+// preflightDestination carries optional preflight-resolved destinations (e.g.
+// the Windows gentle-ai go install destination validated by
+// preflightWindowsGentleAIUpgrades) that the underlying strategy may consult.
+func executeOne(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, dryRun bool, homeDir string, preflightDestination ...string) ToolUpgradeResult {
 	base := ToolUpgradeResult{
 		ToolName:   r.Tool.Name,
 		OldVersion: r.InstalledVersion,
@@ -651,6 +662,29 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 		}
 		base.Status = UpgradeSucceeded
 		base.ExitRequested = outcome.exitRequested
+	}
+
+	// Post-execution trust-but-verify for OpenCode plugins (issue #744): the
+	// strategy already performs a node_modules re-read at the strategy level;
+	// this is the second layer at the executor level so the report reflects
+	// the OBSERVED version instead of the advertised target, AND any
+	// remaining mismatch (e.g. if the strategy's check was bypassed by a
+	// future change) is surfaced as UpgradeFailed. Non-OpenCode-plugin tools
+	// are not re-verified here — other strategies either self-verify (e.g.
+	// verifyLegacyCaskTarget) or trust the package manager + checksum chain.
+	// Guarded by err == nil so a strategy-level ManualFallbackError (unregistered
+	// plugin) is honored as UpgradeSkipped, not overridden as UpgradeFailed.
+	if err == nil && strings.TrimSpace(r.Tool.NpmPackage) != "" && strings.TrimSpace(homeDir) != "" {
+		opencodeDir := filepath.Join(homeDir, ".config", "opencode")
+		observed, _, matches := update.VerifyOpenCodePluginMaterializationInDir(opencodeDir, r.Tool.NpmPackage, r.LatestVersion)
+		if observed != "" {
+			base.NewVersion = observed
+		}
+		if !matches {
+			base.Status = UpgradeFailed
+			base.Err = fmt.Errorf("upgrade reported success but %s is still at version %q (expected %q); check package manager output and retry", r.Tool.Name, observed, r.LatestVersion)
+			return base
+		}
 	}
 
 	return base

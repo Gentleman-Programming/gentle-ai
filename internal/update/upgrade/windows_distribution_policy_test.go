@@ -60,7 +60,7 @@ func TestGentleAIWindowsUpgradeFailsClosedToSourceInstall(t *testing.T) {
 				t.Fatalf("manual hint recommends forbidden Windows distribution: %s", hint)
 			}
 
-			result := executeOne(context.Background(), r, profile, false)
+			result := executeOne(context.Background(), r, profile, false, t.TempDir())
 			if result.Status != UpgradeSkipped || result.Err != nil || result.ExitRequested || result.Method != update.InstallBinary {
 				t.Fatalf("executeOne result = %#v, want non-error binary-policy skip", result)
 			}

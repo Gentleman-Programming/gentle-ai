@@ -141,6 +141,75 @@ func detectNpmPackageVersion(pkg string) string {
 	return version
 }
 
+// VerifyOpenCodePluginUpgradeMaterialized re-reads
+// ~/.config/opencode/node_modules/<pkg>/package.json to confirm an OpenCode
+// plugin upgrade actually wrote the package to disk at the expected version.
+//
+// Returns:
+//   - observedVersion: the version reported by the materialized package.json
+//     (or the package.json dependency entry when the node_modules entry is
+//     missing). Empty string when the package is not present on disk and not
+//     listed in package.json dependencies.
+//   - registered: true when the package is still only registered in tui.json
+//     and was never materialized (the bug #744 signature).
+//   - matches: true when observedVersion equals the normalized targetVersion.
+//
+// This is the post-exec verification the upgrade executor needs to detect the
+// case where the package manager (npm or bun) reports exit 0 without actually
+// writing the plugin on disk — the regression reported in issue #744 where
+// `gentle-ai update tools` showed a successful upgrade but
+// opencode-subagent-statusline remained on its previous version.
+func VerifyOpenCodePluginUpgradeMaterialized(pkg, targetVersion string) (observedVersion string, registered bool, matches bool) {
+	observedVersion, registered = detectOpenCodePluginPackage(pkg)
+	if observedVersion == "" {
+		return observedVersion, registered, false
+	}
+	normalizedTarget := normalizeVersion(targetVersion)
+	matches = normalizedTarget != "" && observedVersion == normalizedTarget
+	return observedVersion, registered, matches
+}
+
+// VerifyOpenCodePluginMaterializationInDir re-reads the package state for an
+// OpenCode plugin inside an explicit opencodeDir. Same return contract as
+// VerifyOpenCodePluginUpgradeMaterialized.
+//
+// The upgrade executor uses this variant because it has already resolved the
+// OpenCode config directory from its own home-directory lookup and cannot
+// re-enter the userHomeDir package var without leaking test-fixture state
+// across packages. Internal callers that only need the canonical lookup
+// (i.e. resolve from userHomeDir) should keep using
+// VerifyOpenCodePluginUpgradeMaterialized.
+func VerifyOpenCodePluginMaterializationInDir(opencodeDir, pkg, targetVersion string) (observedVersion string, registered bool, matches bool) {
+	if strings.TrimSpace(opencodeDir) == "" || strings.TrimSpace(pkg) == "" {
+		return "", false, false
+	}
+	if info, err := os.Stat(filepath.Join(opencodeDir, "node_modules", pkg)); err == nil && info.IsDir() {
+		// Materialized: read the on-disk version directly.
+		data, err := os.ReadFile(filepath.Join(opencodeDir, "node_modules", pkg, "package.json"))
+		if err == nil {
+			var manifest struct {
+				Version string `json:"version"`
+			}
+			if json.Unmarshal(data, &manifest) == nil {
+				observedVersion = parseVersionFromOutput(manifest.Version)
+			}
+		}
+	} else {
+		// Not materialized: fall back to package.json deps, then tui.json.
+		if version, ok := openCodePackageJSONDependencyVersion(opencodeDir, pkg); ok {
+			observedVersion = version
+		} else {
+			registered = isOpenCodePluginRegistered(opencodeDir, pkg)
+		}
+	}
+	if observedVersion == "" {
+		return observedVersion, registered, false
+	}
+	normalizedTarget := normalizeVersion(targetVersion)
+	matches = normalizedTarget != "" && observedVersion == normalizedTarget
+	return observedVersion, registered, matches
+}
+
 func detectOpenCodePluginPackage(pkg string) (string, bool) {
 	home, err := userHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {

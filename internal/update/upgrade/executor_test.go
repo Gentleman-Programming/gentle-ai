@@ -136,7 +136,11 @@ func TestExecute_VersionUnknownIsSurfacedAsSkipped(t *testing.T) {
 	}
 }
 
-func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
+func TestExecute_RegisteredNotMaterialized_PreMaterializedPackageSucceeds(t *testing.T) {
+	// Pre-materialized happy path: the plugin is registered in tui.json AND
+	// already present on disk at the target version. npm install reports
+	// success; post-exec verification sees the expected version and the
+	// executor reports UpgradeSucceeded.
 	origExecCommand := execCommand
 	origHomeDir := openCodeHomeDir
 	origLookPath := lookPathCommand
@@ -154,6 +158,13 @@ func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkgDir := filepath.Join(opencodeDir, "node_modules", "opencode-sdd-engram-manage")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.2.0"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	openCodeHomeDir = func() (string, error) { return home, nil }
@@ -203,14 +214,23 @@ func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
 }
 
 func TestExecute_OpenCodePluginPostMutationVerificationFailureIsFailed(t *testing.T) {
+	// Bug #744 repro: plugin registered in tui.json (RegisteredNotMaterialized),
+	// execCommand returns success, but the post-mutation strategy-level
+	// verification finds no node_modules/<pkg>/package.json on disk.
+	// This must surface as UpgradeFailed, not UpgradeSucceeded.
 	origExecCommand := execCommand
 	origHomeDir := openCodeHomeDir
 	origLookPath := lookPathCommand
+	origSnapshotCreator := snapshotCreator
 	t.Cleanup(func() {
 		execCommand = origExecCommand
 		openCodeHomeDir = origHomeDir
 		lookPathCommand = origLookPath
+		snapshotCreator = origSnapshotCreator
 	})
+	snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest, error) {
+		return backup.Manifest{ID: "backup-test"}, nil
+	}
 
 	home := t.TempDir()
 	opencodeDir := filepath.Join(home, ".config", "opencode")
@@ -220,6 +240,8 @@ func TestExecute_OpenCodePluginPostMutationVerificationFailureIsFailed(t *testin
 	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-subagent-statusline"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// NOTE: no node_modules/<pkg>/package.json is created — this is the bug
+	// repro. The exec mock returns success without materializing anything.
 	openCodeHomeDir = func() (string, error) { return home, nil }
 	lookPathCommand = func(file string) (string, error) {
 		if file == "npm" {
@@ -237,7 +259,7 @@ func TestExecute_OpenCodePluginPostMutationVerificationFailureIsFailed(t *testin
 
 	result := makeResult("opencode-subagent-statusline", update.RegisteredNotMaterialized, "0.7.1", "0.8.0", update.InstallOpenCodePlugin)
 	result.Tool.NpmPackage = "opencode-subagent-statusline"
-	toolResult := executeOne(context.Background(), result, linuxProfile(), false)
+	toolResult := executeOne(context.Background(), result, linuxProfile(), false, home)
 
 	if toolResult.Status != UpgradeFailed {
 		t.Fatalf("status = %q, want %q", toolResult.Status, UpgradeFailed)
@@ -265,11 +287,16 @@ func TestExecute_OpenCodePluginUnregisteredSkipsWithoutMutation(t *testing.T) {
 	origExecCommand := execCommand
 	origHomeDir := openCodeHomeDir
 	origLookPath := lookPathCommand
+	origSnapshotCreator := snapshotCreator
 	t.Cleanup(func() {
 		execCommand = origExecCommand
 		openCodeHomeDir = origHomeDir
 		lookPathCommand = origLookPath
+		snapshotCreator = origSnapshotCreator
 	})
+	snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest, error) {
+		return backup.Manifest{ID: "backup-test"}, nil
+	}
 
 	home := t.TempDir()
 	opencodeDir := filepath.Join(home, ".config", "opencode")
@@ -294,7 +321,7 @@ func TestExecute_OpenCodePluginUnregisteredSkipsWithoutMutation(t *testing.T) {
 
 	result := makeResult("opencode-subagent-statusline", update.UpdateAvailable, "0.7.1", "0.8.0", update.InstallOpenCodePlugin)
 	result.Tool.NpmPackage = "opencode-subagent-statusline"
-	toolResult := executeOne(context.Background(), result, linuxProfile(), false)
+	toolResult := executeOne(context.Background(), result, linuxProfile(), false, home)
 
 	if toolResult.Status != UpgradeSkipped {
 		t.Fatalf("status = %q, want %q", toolResult.Status, UpgradeSkipped)

@@ -583,6 +583,12 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = append([]string(nil), args...)
+		// Materialize the target version on disk so the post-exec verification
+		// (issue #744) sees a successful upgrade. The helper process writes the
+		// cwd marker before this side-effect runs in the parent test goroutine.
+		if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"0.2.0"}`), 0o644); err != nil {
+			t.Errorf("materialize target package.json: %v", err)
+		}
 		cmd := exec.Command(os.Args[0], "-test.run=TestOpenCodePluginUpgradeHelperProcess", "--")
 		cmd.Env = append(os.Environ(),
 			"GENTLE_AI_UPGRADE_HELPER=1",
@@ -772,6 +778,16 @@ func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing
 	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Pre-materialize at the advertised target so the post-exec verification
+	// (issue #744) passes. The intent of this test is to assert the package
+	// manager runs; materialization is exercised by other tests.
+	pkgDir := filepath.Join(opencodeDir, "node_modules", pkg)
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.2.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	openCodeHomeDir = func() (string, error) { return home, nil }
 	lookPathCommand = func(file string) (string, error) {
@@ -933,6 +949,11 @@ func configureOpenCodeNpmTest(t *testing.T, command func(string, ...string) *exe
 	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Pre-materialize the package so the post-exec verification (issue #744)
+	// does not turn a passing retry test into a spurious materialization
+	// failure. The retry tests exercise npm's retry-on-ERESOLVE path; they
+	// do not exercise the materialization gate, so the gate must be satisfied
+	// independently for the strategy to return nil.
 	pkgDir := filepath.Join(opencodeDir, "node_modules", "opencode-sdd-engram-manage")
 	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -1918,5 +1939,127 @@ func TestEngramBinaryUpgrade_BetaChannelUsesGoInstallMain(t *testing.T) {
 	}
 	if !betaCalled {
 		t.Fatal("expected engramBetaInstallFn (beta path) to be called, but it was not")
+	}
+}
+
+// --- Issue #744: post-exec materialization verification ---
+
+// TestOpencodePluginUpgrade_StaleVersionDetectedAfterExec exercises the
+// bug #744 scenario where the package manager exits 0 but does not actually
+// upgrade node_modules/<pkg>/package.json. The strategy must return an
+// error whose message names the version mismatch, NOT a silent success.
+func TestOpencodePluginUpgrade_StaleVersionDetectedAfterExec(t *testing.T) {
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	origExecCommand := execCommand
+	t.Cleanup(func() {
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+		execCommand = origExecCommand
+	})
+
+	home := t.TempDir()
+	pkg := "opencode-subagent-statusline"
+	pkgDir := filepath.Join(home, ".config", "opencode", "node_modules", pkg)
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The exact bug #744 repro: the package manager reported success but the
+	// on-disk version did not advance.
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"0.7.1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "bun" {
+			return "/usr/bin/bun", nil
+		}
+		return "", errors.New("not found")
+	}
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return mockCmd("true")
+	}
+
+	_, err := runStrategy(context.Background(), update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          pkg,
+			InstallMethod: update.InstallOpenCodePlugin,
+			NpmPackage:    pkg,
+		},
+		InstalledVersion: "0.7.1",
+		LatestVersion:    "0.7.2",
+	}, system.PlatformProfile{})
+	if !execCalled {
+		t.Fatal("exec must have been called before the materialization check")
+	}
+	if err == nil {
+		t.Fatal("expected version-mismatch error after exec succeeded but on-disk version is stale")
+	}
+	for _, want := range []string{"version", "0.7.1", "0.7.2", "upgrade was not verified"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err.Error(), want)
+		}
+	}
+}
+
+// TestOpencodePluginUpgrade_NotMaterializedDetectedAfterExec exercises the
+// RegisteredNotMaterialized path: the plugin is listed in tui.json, npm is
+// invoked, npm returns success, but node_modules/<pkg>/package.json is not
+// created (or is removed by a sandbox). The strategy must report the
+// mismatch instead of silently claiming success.
+func TestOpencodePluginUpgrade_NotMaterializedDetectedAfterExec(t *testing.T) {
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	origExecCommand := execCommand
+	t.Cleanup(func() {
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+		execCommand = origExecCommand
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	pkg := "opencode-subagent-statusline"
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-subagent-statusline"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// No node_modules/<pkg>/package.json — npm "succeeded" but did not write.
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "bun" {
+			return "/usr/bin/bun", nil
+		}
+		return "", errors.New("not found")
+	}
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return mockCmd("true")
+	}
+
+	_, err := runStrategy(context.Background(), update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          pkg,
+			InstallMethod: update.InstallOpenCodePlugin,
+			NpmPackage:    pkg,
+		},
+		Status:        update.RegisteredNotMaterialized,
+		LatestVersion: "0.7.2",
+	}, system.PlatformProfile{})
+	if !execCalled {
+		t.Fatal("exec must have been called before the materialization check")
+	}
+	if err == nil {
+		t.Fatal("expected not-materialized error after exec succeeded but no node_modules entry")
+	}
+	for _, want := range []string{"absent", pkg, opencodeDir, "upgrade was not verified"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err.Error(), want)
+		}
 	}
 }
