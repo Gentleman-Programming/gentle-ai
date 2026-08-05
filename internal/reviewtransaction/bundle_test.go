@@ -14,7 +14,7 @@ import (
 )
 
 func TestChainBundleRoundTripsFrozenCorrectionBudgetInputs(t *testing.T) {
-	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
 	tx, err := NewTransaction(boundedStart(t, []string{LensReliability}))
 	if err != nil {
 		t.Fatal(err)
@@ -335,7 +335,7 @@ func TestChainBundleImportRejectsTamperingTruncationAndWrongBindings(t *testing.
 
 func TestChainBundleValidationRejectsForgedReleaseTransitions(t *testing.T) {
 	withoutRelease := approvedStoreTransaction(t, "bundle-without-release")
-	withoutReleaseStore := Store{Dir: filepath.Join(canonicalTempDir(t), "without-release")}
+	withoutReleaseStore := Store{Dir: filepath.Join(t.TempDir(), "without-release")}
 	appendApprovedStoreChain(t, withoutReleaseStore, withoutRelease)
 	withoutReleaseBundle, err := withoutReleaseStore.ExportBundle()
 	if err != nil {
@@ -345,7 +345,7 @@ func TestChainBundleValidationRejectsForgedReleaseTransitions(t *testing.T) {
 	withRelease := approvedStoreTransaction(t, "bundle-with-release")
 	release := testReleaseEvidence(withRelease.FinalCandidateTree)
 	withRelease.Release = cloneReleaseEvidence(&release)
-	withReleaseStore := Store{Dir: filepath.Join(canonicalTempDir(t), "with-release")}
+	withReleaseStore := Store{Dir: filepath.Join(t.TempDir(), "with-release")}
 	appendApprovedStoreChain(t, withReleaseStore, withRelease)
 	withReleaseBundle, err := withReleaseStore.ExportBundle()
 	if err != nil {
@@ -416,7 +416,7 @@ type correctedBundleTestFixture struct {
 }
 
 func TestLegacyClassificationBundleRemainsReadable(t *testing.T) {
-	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	_ = tx.StartReview()
 	genesis := writeStoreEvent(t, store, Record{Operation: "review/start", Transaction: *tx})

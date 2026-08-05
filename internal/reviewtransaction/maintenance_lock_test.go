@@ -64,7 +64,7 @@ func TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance(t *testing.T) 
 }
 
 func TestMaintenanceLockModesAndRelease(t *testing.T) {
-	path := filepath.Join(canonicalTempDir(t), "gentle-ai", "review-transactions", "MAINTENANCE.lock")
+	path := filepath.Join(t.TempDir(), "gentle-ai", "review-transactions", "MAINTENANCE.lock")
 	shared, err := acquireMaintenanceLock(context.Background(), path, maintenanceShared)
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +105,7 @@ func TestMaintenanceLockModesAndRelease(t *testing.T) {
 }
 
 func TestMaintenanceLockRejectsSymlinksAndStaleBytesAreNotOwnership(t *testing.T) {
-	dir := canonicalTempDir(t)
+	dir := t.TempDir()
 	path := filepath.Join(dir, "gentle-ai", "review-transactions", "MAINTENANCE.lock")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -146,7 +146,7 @@ func TestEnsureMaintenanceLockPathRejectsRelativePaths(t *testing.T) {
 }
 
 func TestEnsureMaintenanceLockPathAcceptsCanonicalAbsolutePath(t *testing.T) {
-	path := filepath.Join(canonicalTempDir(t), "gentle-ai", "REVIEW-MAINTENANCE.lock")
+	path := filepath.Join(t.TempDir(), "gentle-ai", "REVIEW-MAINTENANCE.lock")
 	if err := ensureMaintenanceLockPath(path); err != nil {
 		t.Fatalf("canonical absolute maintenance lock path was rejected: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestEnsureMaintenanceLockPathAcceptsCanonicalAbsolutePath(t *testing.T) {
 }
 
 func TestMaintenanceLockHonorsCancellation(t *testing.T) {
-	path := filepath.Join(canonicalTempDir(t), "MAINTENANCE.lock")
+	path := filepath.Join(t.TempDir(), "MAINTENANCE.lock")
 	held, err := acquireMaintenanceLock(context.Background(), path, maintenanceExclusive)
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +178,7 @@ func TestMaintenanceLockIsReleasedWhenOwnerProcessExits(t *testing.T) {
 		_ = lock
 		return
 	}
-	path := filepath.Join(canonicalTempDir(t), "MAINTENANCE.lock")
+	path := filepath.Join(t.TempDir(), "MAINTENANCE.lock")
 	command := exec.Command(os.Args[0], "-test.run=^TestMaintenanceLockIsReleasedWhenOwnerProcessExits$")
 	command.Env = append(os.Environ(), "GENTLE_AI_MAINTENANCE_LOCK_EXIT_HELPER=1", "GENTLE_AI_MAINTENANCE_LOCK_EXIT_PATH="+path)
 	if output, err := command.CombinedOutput(); err != nil {

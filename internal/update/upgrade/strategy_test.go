@@ -140,29 +140,14 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
 	for _, want := range []string{
-		"GONOSUMDB",
-		"GOPRIVATE",
-		"GONOPROXY",
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v2",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v2",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v2",
 	} {
-		if !envContainsPattern(gotCmd.Env, want, "github.com/gentleman-programming/gentle-ai/v2") {
-			t.Fatalf("go install env %s missing required private module in %v", want, gotCmd.Env)
+		if !envContains(gotCmd.Env, want) {
+			t.Fatalf("go install env missing %q in %v", want, gotCmd.Env)
 		}
 	}
-}
-
-func envContainsPattern(env []string, key, pattern string) bool {
-	for _, entry := range env {
-		name, value, ok := strings.Cut(entry, "=")
-		if !ok || name != key {
-			continue
-		}
-		for _, part := range strings.Split(value, ",") {
-			if strings.TrimSpace(part) == pattern {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func envContains(env []string, want string) bool {

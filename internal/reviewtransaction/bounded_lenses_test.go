@@ -142,7 +142,7 @@ func TestOrdinaryBoundedLensStateRoundTripsAndLegacyJSONRemainsAdditive(t *testi
 	if legacy.Counters.FullReviews != 1 {
 		t.Fatalf("legacy FullReviews = %d, want 1", legacy.Counters.FullReviews)
 	}
-	legacyRevision, err := (Store{Dir: canonicalTempDir(t)}).Append("", Record{Operation: "review/start", Transaction: *legacy})
+	legacyRevision, err := (Store{Dir: t.TempDir()}).Append("", Record{Operation: "review/start", Transaction: *legacy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestOrdinaryBoundedLensStateRoundTripsAndLegacyJSONRemainsAdditive(t *testi
 }
 
 func TestStoreValidatesContentAddressedLensResultSuccessorsAndReplay(t *testing.T) {
-	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
 	tx, err := NewTransaction(boundedStart(t, []string{"review-reliability"}))
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestStoreValidatesContentAddressedLensResultSuccessorsAndReplay(t *testing.
 	if _, err := store.Append(genesis, Record{Operation: "review/freeze-findings", Transaction: forged}); !errors.Is(err, ErrInvalidSuccessor) {
 		t.Fatalf("Append(forged stale result) error = %v, want ErrInvalidSuccessor", err)
 	}
-	otherStore := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
+	otherStore := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
 	fresh, err := NewTransaction(boundedStart(t, []string{"review-reliability"}))
 	if err != nil {
 		t.Fatal(err)
@@ -362,7 +362,7 @@ func TestCanonicalLensResultAcceptsTechnicalPunctuationAndRejectsExactSentinels(
 }
 
 func TestStoreRejectsForgedIncompleteLensFreezeBeforeAppend(t *testing.T) {
-	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
 	tx, err := NewTransaction(boundedStart(t, []string{LensReliability}))
 	if err != nil {
 		t.Fatal(err)
@@ -386,7 +386,7 @@ func TestStoreRejectsForgedIncompleteLensFreezeBeforeAppend(t *testing.T) {
 }
 
 func TestStoreRequiresExactNativeFreezeOperation(t *testing.T) {
-	store := Store{Dir: filepath.Join(canonicalTempDir(t), "review-store")}
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
 	tx, err := NewTransaction(boundedStart(t, []string{LensReliability}))
 	if err != nil {
 		t.Fatal(err)
