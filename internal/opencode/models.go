@@ -412,6 +412,24 @@ type ConfigProvider struct {
 	Models map[string]ConfigModel `json:"models"`
 }
 
+func (p *ConfigProvider) UnmarshalJSON(data []byte) error {
+	type configProvider ConfigProvider
+	var raw struct {
+		configProvider
+		Options struct {
+			BaseURL string `json:"baseURL"`
+		} `json:"options"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*p = ConfigProvider(raw.configProvider)
+	if p.URL == "" {
+		p.URL = raw.Options.BaseURL
+	}
+	return nil
+}
+
 // ConfigAgent represents only the agent fields Gentle AI needs to preserve.
 type ConfigAgent struct {
 	Model    string `json:"model"`

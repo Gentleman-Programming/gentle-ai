@@ -547,6 +547,28 @@ func TestLoadConfigProviders(t *testing.T) {
 	if !lm.Models["qwen/qwen3.5-35b-a3b"].ToolCall {
 		t.Fatal("expected tool_call metadata to be loaded from config")
 	}
+	if lm.URL != "http://localhost:1234/v1" {
+		t.Fatalf("lmstudio URL = %q, want options.baseURL", lm.URL)
+	}
+}
+
+func TestLoadConfigProvidersPrefersURLOverOptionsBaseURL(t *testing.T) {
+	path := writeConfigFixture(t, `{
+		"provider": {
+			"lmstudio": {
+				"url": "http://direct.example/v1",
+				"options": {"baseURL": "http://options.example/v1"}
+			}
+		}
+	}`)
+
+	config, err := LoadConfigProviders(path)
+	if err != nil {
+		t.Fatalf("LoadConfigProviders() error = %v", err)
+	}
+	if got := config["lmstudio"].URL; got != "http://direct.example/v1" {
+		t.Fatalf("lmstudio URL = %q, want direct url", got)
+	}
 }
 
 func TestLoadConfigProvidersSupportedFallbackFilenamesAndJSONC(t *testing.T) {

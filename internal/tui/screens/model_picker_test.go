@@ -1240,8 +1240,10 @@ func lmStudioState(t *testing.T, catalog, settings string) ModelPickerState {
 
 func TestLMStudioDiscovery(t *testing.T) {
 	for name, tt := range map[string]struct{ settings, url string }{
-		"default URL":    {`{}`, "http://127.0.0.1:1234/v1"},
-		"configured URL": {`{"provider":{"lmstudio":{"url":"http://gateway:1234/v1"}}}`, "http://gateway:1234/v1"},
+		"default URL":                {`{}`, "http://127.0.0.1:1234/v1"},
+		"configured URL":             {`{"provider":{"lmstudio":{"url":"http://gateway:1234/v1"}}}`, "http://gateway:1234/v1"},
+		"options baseURL":            {`{"provider":{"lmstudio":{"options":{"baseURL":"http://options-gateway:1234/v1"}}}}`, "http://options-gateway:1234/v1"},
+		"url before options baseURL": {`{"provider":{"lmstudio":{"url":"http://direct-gateway:1234/v1","options":{"baseURL":"http://options-gateway:1234/v1"}}}}`, "http://direct-gateway:1234/v1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			calls, gotURL, original := 0, "", fetchDynamicModels
