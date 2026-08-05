@@ -1,19 +1,22 @@
 package communitytool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	piagent "github.com/gentleman-programming/gentle-ai/internal/agents/pi"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	piagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 )
 
 func TestPiCodeGraphUnselectedIsNoOp(t *testing.T) {
@@ -144,8 +147,14 @@ func TestPiCodeGraphRootValidationRejectsUnsafeRoots(t *testing.T) {
 	if err := ValidatePiCodeGraphRoot(valid, home); err != nil {
 		t.Fatalf("valid root rejected: %v", err)
 	}
-	if output, err := exec.Command("git", "-C", valid, "rev-parse", "--show-toplevel").CombinedOutput(); err != nil || strings.TrimSpace(string(output)) != valid {
-		t.Fatalf("git -C root resolution = %q, %v; want %q", output, err, valid)
+	if output, err := exec.Command("git", "-C", valid, "rev-parse", "--show-toplevel").CombinedOutput(); err != nil {
+		t.Fatalf("git -C root resolution = %q, %v", output, err)
+	} else {
+		gotInfo, gotErr := os.Stat(strings.TrimSpace(string(output)))
+		wantInfo, wantErr := os.Stat(valid)
+		if gotErr != nil || wantErr != nil || !os.SameFile(gotInfo, wantInfo) {
+			t.Fatalf("git root %q and %q differ: %v, %v", output, valid, gotErr, wantErr)
+		}
 	}
 	t.Chdir(home)
 	if err := ValidatePiCodeGraphRoot("repo", home); err != nil {
@@ -298,7 +307,7 @@ func TestPiCodeGraphRefreshRestoresMissingOwnedChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o640 {
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o640 {
 		t.Fatalf("restored child mode = %o, want %o", got, 0o640)
 	}
 }
@@ -733,36 +742,29 @@ func TestPiCodeGraphProbeVerifiesDirectMCPWithoutPiProcess(t *testing.T) {
 
 func TestPiCodeGraphProbeClassifiesStalledMCPResponsesAsDeadlineExceeded(t *testing.T) {
 	for _, tt := range []struct {
-		name      string
-		script    string
-		wantPhase string
+		name               string
+		stallInitialize    bool
+		responseAtDeadline string
+		wantPhase          string
 	}{
 		{
-			name:      "initialize",
-			script:    `while IFS= read -r request; do while :; do :; done; done`,
-			wantPhase: "MCP initialize: read response",
+			name:            "initialize",
+			stallInitialize: true,
+			wantPhase:       "MCP initialize: read response",
 		},
 		{
-			name: "tools list",
-			script: `while IFS= read -r request; do
-  case "$request" in
-	    *'"id":1'*) printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}' ;;
-    *'"id":2'*) while :; do :; done ;;
-  esac
-done`,
-			wantPhase: "MCP tools/list: read response",
+			name:               "tools list cleanup race",
+			responseAtDeadline: `{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}` + "\n",
+			wantPhase:          "MCP tools/list",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			home := t.TempDir()
-			agentDir := filepath.Join(home, "custom-agent")
-			mcpPath := filepath.Join(home, "project", ".mcp.json")
-			writePiFile(t, filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
-			installFakeCodeGraphScript(t, tt.script)
-
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
-			_, err := probePiCodeGraphMCPWithAgentDirContext(ctx, mcpPath, agentDir)
+			transport := &piCodeGraphStalledTransport{ctx: ctx, stallInitialize: tt.stallInitialize, responseAtDeadline: []byte(tt.responseAtDeadline)}
+			_, err := probePiCodeGraphMCPWithTransport(ctx, transport, transport, func() (error, error) {
+				return nil, nil
+			})
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("probe error = %v, want context deadline exceeded", err)
 			}
@@ -772,6 +774,38 @@ done`,
 		})
 	}
 }
+
+type piCodeGraphStalledTransport struct {
+	ctx                context.Context
+	response           bytes.Buffer
+	stallInitialize    bool
+	responseAtDeadline []byte
+}
+
+func (t *piCodeGraphStalledTransport) Write(request []byte) (int, error) {
+	if bytes.Contains(request, []byte(`"id":1`)) {
+		if t.stallInitialize {
+			return len(request), nil
+		}
+		t.response.WriteString(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}` + "\n")
+	}
+	return len(request), nil
+}
+
+func (t *piCodeGraphStalledTransport) Read(data []byte) (int, error) {
+	if t.response.Len() != 0 {
+		return t.response.Read(data)
+	}
+	<-t.ctx.Done()
+	if len(t.responseAtDeadline) != 0 {
+		t.response.Write(t.responseAtDeadline)
+		t.responseAtDeadline = nil
+		return t.response.Read(data)
+	}
+	return 0, io.EOF
+}
+
+func (*piCodeGraphStalledTransport) Close() error { return nil }
 
 func TestPiCodeGraphProbeRejectsInvalidInitializeResponses(t *testing.T) {
 	responses := []string{
@@ -785,7 +819,12 @@ func TestPiCodeGraphProbeRejectsInvalidInitializeResponses(t *testing.T) {
 			home := t.TempDir()
 			agentDir := filepath.Join(home, "custom-agent")
 			writePiFile(t, filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
-			installFakeCodeGraphScript(t, `while IFS= read -r request; do printf '%s\n' '`+response+`'; done`)
+			if runtime.GOOS == "windows" {
+				t.Setenv("GENTLE_AI_CODEGRAPH_TEST_RESPONSE", response)
+				installFakeCodeGraphHelper(t, "invalid-response")
+			} else {
+				installFakeCodeGraphScript(t, `while IFS= read -r request; do printf '%s\n' '`+response+`'; done`)
+			}
 
 			_, err := probePiCodeGraphMCPWithAgentDir(filepath.Join(home, "mcp.json"), agentDir)
 			if err == nil || !strings.Contains(err.Error(), "invalid JSON-RPC 2.0 result") {
@@ -810,6 +849,9 @@ func TestPiCodeGraphRejectsMalformedMCPServersWithoutChangingBytes(t *testing.T)
 }
 
 func TestPiCodeGraphPreservesSensitiveFileModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("exact POSIX file modes are unavailable on Windows")
+	}
 	home := t.TempDir()
 	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
 	childPath := filepath.Join(home, ".pi", "agent", "subagents", "worker.md")
@@ -956,12 +998,34 @@ func mustReadPiFile(t *testing.T, path string) []byte {
 
 func installFakeCodeGraph(t *testing.T) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		installFakeCodeGraphHelper(t, "normal")
+		return
+	}
 	installFakeCodeGraphScript(t, `while IFS= read -r request; do
   case "$request" in
     *'"id":1'*) printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}' ;;
     *'"id":2'*) printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"codegraph_explore","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"maxFiles":{"type":"integer"},"projectPath":{"type":"string"}},"required":["query"]}}]}}' ;;
   esac
 done`)
+}
+
+func installFakeCodeGraphHelper(t *testing.T, mode string) {
+	t.Helper()
+	binDir := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "codegraph.exe"), data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GENTLE_AI_CODEGRAPH_TEST_HELPER", mode)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func installFakeCodeGraphScript(t *testing.T, body string) {

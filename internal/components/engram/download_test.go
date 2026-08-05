@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,8 +18,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
+
+func TestMain(m *testing.M) {
+	if os.Getenv("GENTLE_AI_FAKE_GO") == "1" {
+		data := fmt.Sprintf("GONOSUMDB=%s\nGOPRIVATE=%s\nGONOPROXY=%s\n", os.Getenv("GONOSUMDB"), os.Getenv("GOPRIVATE"), os.Getenv("GONOPROXY"))
+		_ = os.WriteFile(os.Getenv("GO_ENV_RECORD"), []byte(data), 0o600)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 // --- test helpers ---
 
@@ -1184,8 +1194,8 @@ func TestCanonicalEngramGoInstallPackagePreservesDeclaredModuleCasing(t *testing
 		},
 		{
 			name: "unrelated package remains unchanged",
-			pkg:  "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest",
-			want: "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest",
+			pkg:  "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest",
+			want: "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest",
 		},
 	}
 
@@ -1234,7 +1244,7 @@ func TestEngramGoInstallFromMainCanonicalizesModuleCasing(t *testing.T) {
 // This matters when GOBIN is set via `go env -w GOBIN=...` (stored in Go's
 // env file) but NOT exported into the shell environment.
 func TestEngramGoInstallFromMain_UsesGoEnvForBinDir(t *testing.T) {
-	const fakeInstallDir = "/custom/gobin/via/go-env"
+	fakeInstallDir := filepath.Join(t.TempDir(), "custom", "gobin", "via", "go-env")
 
 	origGoEnvFn := engramGoEnvFn
 	t.Cleanup(func() { engramGoEnvFn = origGoEnvFn })
@@ -1279,10 +1289,26 @@ func TestEngramGoInstallFromMain_BypassesPublicGoProxy(t *testing.T) {
 	goPath := filepath.Join(binDir, "go")
 	recordPath := filepath.Join(t.TempDir(), "go-env.txt")
 	fakeGo := filepath.Join(binDir, "go")
-	script := "#!/usr/bin/env bash\n" +
-		"printf 'GONOSUMDB=%s\\nGOPRIVATE=%s\\nGONOPROXY=%s\\n' \"${GONOSUMDB:-}\" \"${GOPRIVATE:-}\" \"${GONOPROXY:-}\" > \"$GO_ENV_RECORD\"\n"
-	if err := os.WriteFile(fakeGo, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	if runtime.GOOS == "windows" {
+		fakeGo += ".exe"
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(executable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fakeGo, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("GENTLE_AI_FAKE_GO", "1")
+	} else {
+		script := "#!/usr/bin/env bash\n" +
+			"printf 'GONOSUMDB=%s\\nGOPRIVATE=%s\\nGONOPROXY=%s\\n' \"${GONOSUMDB:-}\" \"${GOPRIVATE:-}\" \"${GONOPROXY:-}\" > \"$GO_ENV_RECORD\"\n"
+		if err := os.WriteFile(fakeGo, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GO_ENV_RECORD", recordPath)
@@ -1302,14 +1328,29 @@ func TestEngramGoInstallFromMain_BypassesPublicGoProxy(t *testing.T) {
 		t.Fatalf("ReadFile(%q) error = %v", recordPath, err)
 	}
 	for _, want := range []string{
-		"GONOSUMDB=github.com/Gentleman-Programming/engram",
-		"GOPRIVATE=github.com/Gentleman-Programming/engram",
-		"GONOPROXY=github.com/Gentleman-Programming/engram",
+		"GONOSUMDB",
+		"GOPRIVATE",
+		"GONOPROXY",
 	} {
-		if !strings.Contains(string(recorded), want) {
-			t.Fatalf("go install env missing %q\nrecorded:\n%s", want, recorded)
+		if !recordedGoEnvHasPattern(string(recorded), want, "github.com/Gentleman-Programming/engram") {
+			t.Fatalf("go install env %s missing required private module\nrecorded:\n%s", want, recorded)
 		}
 	}
+}
+
+func recordedGoEnvHasPattern(recorded, key, pattern string) bool {
+	for _, line := range strings.Split(recorded, "\n") {
+		name, value, ok := strings.Cut(line, "=")
+		if !ok || name != key {
+			continue
+		}
+		for _, entry := range strings.Split(value, ",") {
+			if strings.TrimSpace(entry) == pattern {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // TestEngramStopScriptIsDefensive locks in the shape of the PowerShell stop
@@ -1347,6 +1388,27 @@ func TestEngramStopScriptIsDefensive(t *testing.T) {
 	// PowerShell status left behind by defensive no-op commands.
 	if !strings.HasSuffix(strings.TrimSpace(script), "exit 0") {
 		t.Errorf("stop script must explicitly exit 0 on the clean/no-process path\nscript:\n%s", script)
+	}
+}
+
+func TestStopEngramProcessesUsesPowerShellResolver(t *testing.T) {
+	dir := t.TempDir()
+	host := "pwsh"
+	if runtime.GOOS == "windows" {
+		host += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, host), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	runner := system.NewPowerShellRunner()
+	var used string
+	runner.RunCommand = func(_ context.Context, name string, _ ...string) ([]byte, error) { used = name; return nil, nil }
+	if err := stopEngramProcessesWith(runner); err != nil {
+		t.Fatalf("stopEngramProcesses() error = %v", err)
+	}
+	if !strings.HasPrefix(filepath.Base(used), "pwsh") {
+		t.Fatalf("stopEngramProcesses() host = %q, want pwsh", used)
 	}
 }
 

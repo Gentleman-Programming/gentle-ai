@@ -7,12 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/skillregistry"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
@@ -203,7 +204,6 @@ func (a noSkillsAdapter) Tier() model.SupportTier { return model.TierFull }
 func (a noSkillsAdapter) Detect(_ context.Context, _ string) (bool, string, string, bool, error) {
 	return false, "", "", false, nil
 }
-func (a noSkillsAdapter) SupportsAutoInstall() bool { return false }
 func (a noSkillsAdapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 	return nil, nil
 }
@@ -332,6 +332,25 @@ func TestInjectRequiredBundledSkillsForEverySkillsCapableDefaultAdapter(t *testi
 	}
 }
 
+func TestInjectRDDDefectWorkflowIsRegistryDiscoverable(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+
+	_, err := Inject(home, opencodeAdapter(), []model.SkillID{model.SkillRDDDefectWorkflow})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	wantPath := filepath.Join(home, ".config", "opencode", "skills", "rdd-defect-workflow", "SKILL.md")
+	for _, entry := range skillregistry.List(project, home) {
+		if entry.Name == "rdd-defect-workflow" && entry.Path == wantPath {
+			return
+		}
+	}
+
+	t.Fatalf("skill registry did not discover rdd-defect-workflow at %q", wantPath)
+}
+
 func TestInjectSkillCreatorAndImproverInstallLocalStyleGuideReference(t *testing.T) {
 	home := t.TempDir()
 
@@ -454,5 +473,6 @@ func requiredBundledSkillIDs() []model.SkillID {
 		model.SkillJudgmentDay,
 		model.SkillSDDInit,
 		model.SkillImprover,
+		model.SkillRDDDefectWorkflow,
 	}
 }

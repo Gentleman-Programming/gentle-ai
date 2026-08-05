@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,11 +12,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 func TestInstallRuntimeStagePlanAddsCommunityToolStepsInSelectionOrder(t *testing.T) {
@@ -121,7 +122,11 @@ func TestBackupTargetsSnapshotPiManifestOverlayDuringDeselection(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(manifest), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(manifest, []byte(`{"children":{"`+overlay+`":{"after":"managed","afterHash":"hash","overlay":true}}}`), 0o600); err != nil {
+	payload, err := json.Marshal(map[string]any{"children": map[string]any{overlay: map[string]any{"after": "managed", "afterHash": "hash", "overlay": true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -159,7 +164,11 @@ func TestPiCodeGraphReconcileStepRollbackRemovesDynamicPackageOverlay(t *testing
 	if err := os.MkdirAll(filepath.Dir(manifest), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(manifest, []byte(`{"children":{"`+overlay+`":{"after":"owned overlay\n","afterHash":"c7455d95571450daf45e091de82bf35230a8016c09c60b15b2b84cfde219669f","overlay":true}}}`), 0o600); err != nil {
+	payload, err := json.Marshal(map[string]any{"children": map[string]any{overlay: map[string]any{"after": "owned overlay\n", "afterHash": "c7455d95571450daf45e091de82bf35230a8016c09c60b15b2b84cfde219669f", "overlay": true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -480,6 +489,10 @@ func TestInstallPipelineDoesNotDuplicatePiPendingWhenSelected(t *testing.T) {
 		return pending, communitytool.ErrPiCodeGraphAdapterHealthUnavailable
 	}
 	runtime := &installRuntime{
+		// newInstallRuntime never yields an empty homeDir, and the routing
+		// guidance step fails closed on one. Keep the fixture faithful to the
+		// constructor rather than relaxing that check.
+		homeDir:   t.TempDir(),
 		selection: model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph}},
 		resolved:  planner.ResolvedPlan{Agents: []model.AgentID{model.AgentPi}},
 		state:     &runtimeState{},

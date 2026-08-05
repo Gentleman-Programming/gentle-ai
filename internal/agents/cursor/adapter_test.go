@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 func TestDetect(t *testing.T) {
@@ -108,10 +108,6 @@ func TestStrategies(t *testing.T) {
 
 func TestDesktopAppNotAutoInstallable(t *testing.T) {
 	a := NewAdapter()
-
-	if a.SupportsAutoInstall() {
-		t.Fatalf("Cursor should not support auto-install (desktop app)")
-	}
 
 	_, err := a.InstallCommand(system.PlatformProfile{})
 	if err == nil {

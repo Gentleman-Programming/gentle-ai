@@ -8,8 +8,16 @@ import (
 )
 
 const (
+	// MinimumGPT56RuntimeVersion is a floor, not a pin: any installed Codex
+	// at or above this version satisfies GPT-5.6 profiles.
 	MinimumGPT56RuntimeVersion = "0.144.0"
-	codexUpdateCommand         = "npm install -g --ignore-scripts @openai/codex@0.144.0"
+	// codexUpdateCommand advises the latest release rather than pinning to
+	// the floor above. gentle-ai no longer installs anything on the user's
+	// behalf (see agentInstallStep in internal/cli/run.go), so this string is
+	// advice a human reads and runs themselves — pinning it to the exact
+	// floor value would go stale the moment a newer Codex ships and would
+	// tell users to downgrade to years-old releases as time passes.
+	codexUpdateCommand = "npm install -g --ignore-scripts @openai/codex@latest"
 )
 
 var (
@@ -48,14 +56,39 @@ func ValidateGPT56Runtime() error {
 	return nil
 }
 
+// parseCodexVersion resolves the installed version from `codex --version`
+// output. The output is not guaranteed to be the version alone: Codex prints
+// startup diagnostics (PATH-alias warnings, for instance) on the same combined
+// stream. codexOutputRE is anchored with ^...$ and Go does not enable multiline
+// mode by default, so matching the whole output at once found nothing whenever
+// any extra line was present — even when the version was the first line — and
+// gentle-ai then told users with a satisfying version to downgrade (#1794).
+//
+// Each line is matched on its own instead, and the whole line must be exactly
+// `codex[-cli] [v]<version>`. That keeps the parser closed against a
+// version-shaped substring inside prose: a warning mentioning `codex/0.1.2/bin`
+// carries surrounding text and never matches. The last matching line wins,
+// because Codex emits its diagnostics before the version it was asked for.
 func parseCodexVersion(output string) (semanticVersion, error) {
-	trimmed := strings.TrimSpace(output)
-	if match := codexOutputRE.FindStringSubmatch(trimmed); match != nil {
-		if version, err := parseSemanticVersion(match[1]); err == nil {
-			return version, nil
+	var (
+		resolved semanticVersion
+		found    bool
+	)
+	for _, line := range strings.Split(output, "\n") {
+		match := codexOutputRE.FindStringSubmatch(strings.TrimSpace(line))
+		if match == nil {
+			continue
 		}
+		version, err := parseSemanticVersion(match[1])
+		if err != nil {
+			continue
+		}
+		resolved, found = version, true
 	}
-	return semanticVersion{}, fmt.Errorf("could not parse codex --version output %q", trimmed)
+	if !found {
+		return semanticVersion{}, fmt.Errorf("could not parse codex --version output %q", strings.TrimSpace(output))
+	}
+	return resolved, nil
 }
 
 func parseSemanticVersion(raw string) (semanticVersion, error) {

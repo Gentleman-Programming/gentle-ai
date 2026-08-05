@@ -1,13 +1,16 @@
 package opencode
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // OpenCode may read both legacy config.* and opencode.* files. Merge legacy
@@ -32,41 +35,6 @@ func DefaultSettingsPath() string {
 	return filepath.Join(home, ".config", "opencode", "opencode.json")
 }
 
-// ResolveConfigPath returns the existing OpenCode config path nearest to path.
-// If path does not exist, it searches the same directory for all supported
-// OpenCode config filenames.
-func ResolveConfigPath(path string) string {
-	if path == "" {
-		return path
-	}
-	if _, err := os.Stat(path); err == nil {
-		return path
-	}
-
-	dir := path
-	if filepath.Ext(path) != "" {
-		dir = filepath.Dir(path)
-	}
-	for _, name := range supportedConfigFilenames {
-		candidate := filepath.Join(dir, name)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return path
-}
-
-// ReadConfigFile reads an OpenCode config file, resolving supported fallback
-// filenames and sanitizing JSONC syntax before callers unmarshal it as JSON.
-func ReadConfigFile(path string) ([]byte, string, error) {
-	resolved := ResolveConfigPath(path)
-	data, err := os.ReadFile(resolved)
-	if err != nil {
-		return nil, resolved, err
-	}
-	return sanitizeJSONC(data), resolved, nil
-}
-
 // ReadConfigFiles reads every supported OpenCode config file in path's directory
 // using supportedConfigFilenames order. Missing directories/files return an
 // empty slice with nil error.
@@ -75,7 +43,9 @@ func ReadConfigFiles(path string) ([]ConfigFile, error) {
 		return nil, nil
 	}
 	dir := path
-	if filepath.Ext(path) != "" {
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		dir = path
+	} else if filepath.Ext(path) != "" {
 		dir = filepath.Dir(path)
 	}
 
@@ -377,6 +347,8 @@ func EnrichWithVariants(cached map[string]Provider, variantsPath string) {
 	if err != nil {
 		return
 	}
+
+	// Pass 1: Process exact provider matches first.
 	for provID, models := range variants {
 		cachedProv, ok := cached[provID]
 		if !ok {
@@ -390,6 +362,41 @@ func EnrichWithVariants(cached map[string]Provider, variantsPath string) {
 		}
 		cached[provID] = cachedProv
 	}
+
+	// Pass 2: Deterministic fallback for models that remain unassigned.
+	// Sort keys to eliminate Go map iteration nondeterminism.
+	variantKeys := make([]string, 0, len(variants))
+	for provID := range variants {
+		variantKeys = append(variantKeys, provID)
+	}
+	sort.Strings(variantKeys)
+
+	cachedKeys := make([]string, 0, len(cached))
+	for cachedID := range cached {
+		cachedKeys = append(cachedKeys, cachedID)
+	}
+	sort.Strings(cachedKeys)
+
+	for _, provID := range variantKeys {
+		models := variants[provID]
+		modelKeys := make([]string, 0, len(models))
+		for modelID := range models {
+			modelKeys = append(modelKeys, modelID)
+		}
+		sort.Strings(modelKeys)
+
+		for _, modelID := range modelKeys {
+			levels := models[modelID]
+			for _, cachedID := range cachedKeys {
+				p := cached[cachedID]
+				if cachedModel, ok := p.Models[modelID]; ok && len(cachedModel.Variants) == 0 {
+					cachedModel.Variants = levels
+					p.Models[modelID] = cachedModel
+					cached[cachedID] = p
+				}
+			}
+		}
+	}
 }
 
 // ConfigModel represents a model entry in the opencode.json provider section.
@@ -401,6 +408,7 @@ type ConfigModel struct {
 // ConfigProvider represents a custom provider defined in OpenCode config.
 type ConfigProvider struct {
 	Name   string                 `json:"name"`
+	URL    string                 `json:"url"`
 	Models map[string]ConfigModel `json:"models"`
 }
 
@@ -409,6 +417,41 @@ type ConfigAgent struct {
 	Model    string `json:"model"`
 	Variant  string `json:"variant"`
 	ModelSet bool   `json:"-"`
+}
+
+func FetchDynamicModels(ctx context.Context, baseURL string) ([]ConfigModel, error) {
+	if baseURL == "" {
+		return nil, errors.New("empty baseURL")
+	}
+	client := &http.Client{Timeout: 1 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	var res struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+
+	models := make([]ConfigModel, 0, len(res.Data))
+	for _, m := range res.Data {
+		models = append(models, ConfigModel{Name: m.ID})
+	}
+	return models, nil
 }
 
 func (a *ConfigAgent) UnmarshalJSON(data []byte) error {
@@ -474,6 +517,9 @@ func mergeConfigProvider(base ConfigProvider, override ConfigProvider) ConfigPro
 	merged := base
 	if override.Name != "" {
 		merged.Name = override.Name
+	}
+	if override.URL != "" {
+		merged.URL = override.URL
 	}
 	if len(base.Models) > 0 || len(override.Models) > 0 {
 		merged.Models = make(map[string]ConfigModel, len(base.Models)+len(override.Models))

@@ -1,14 +1,53 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
+
+var (
+	snapshotRepoTemplateOnce sync.Once
+	snapshotRepoTemplateDir  string
+	snapshotRepoTemplateErr  error
+)
+
+func TestMain(m *testing.M) {
+	testHome, err := os.MkdirTemp("", "gentle-ai-reviewtransaction-test-home-*")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("HOME", testHome); err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("USERPROFILE", testHome); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	if snapshotRepoTemplateDir != "" {
+		_ = os.RemoveAll(snapshotRepoTemplateDir)
+	}
+	_ = os.RemoveAll(testHome)
+	os.Exit(code)
+}
+
+func TestCanonicalPathsRejectsDuplicateInput(t *testing.T) {
+	if _, err := canonicalPaths([]string{"tracked.txt", "tracked.txt"}); err == nil {
+		t.Fatal("canonicalPaths duplicate input error = nil")
+	}
+}
 
 func TestSnapshotBuilderCurrentChangesIsCompleteAndPreservesRealIndex(t *testing.T) {
 	if testing.Short() {
@@ -90,6 +129,46 @@ func TestSnapshotBuilderCurrentChangesIsCompleteAndPreservesRealIndex(t *testing
 	}
 }
 
+func TestSnapshotBuilderCurrentChangesPreservesRacyCleanDetection(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	gitSnapshot(t, repo, "config", "core.trustctime", "false")
+
+	path := filepath.Join(repo, "racy.txt")
+	fixed := time.Unix(1_700_000_000, 0)
+	writeSnapshotFile(t, repo, "racy.txt", "before\n")
+	if err := os.Chtimes(path, fixed, fixed); err != nil {
+		t.Fatalf("Chtimes(racy baseline): %v", err)
+	}
+	gitSnapshot(t, repo, "add", "--", "racy.txt")
+	gitSnapshot(t, repo, "commit", "-m", "racy baseline")
+
+	indexPath := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-path", "index"))
+	if !filepath.IsAbs(indexPath) {
+		indexPath = filepath.Join(repo, indexPath)
+	}
+	if err := os.Chtimes(indexPath, fixed, fixed); err != nil {
+		t.Fatalf("Chtimes(real index): %v", err)
+	}
+	writeSnapshotFile(t, repo, "racy.txt", "after!\n")
+	if err := os.Chtimes(path, fixed, fixed); err != nil {
+		t.Fatalf("Chtimes(racy correction): %v", err)
+	}
+	if gitSnapshotSucceeds(repo, "diff", "--quiet", "--", "racy.txt") {
+		t.Fatal("real Git index did not detect the deliberately racy-clean correction")
+	}
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, Projection: ProjectionWorkspace, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatalf("Build(racy correction) error = %v", err)
+	}
+	if got := gitSnapshot(t, repo, "show", snapshot.CandidateTree+":racy.txt"); got != "after!\n" {
+		t.Fatalf("racy candidate content = %q, want %q", got, "after!\n")
+	}
+}
+
 func TestSnapshotBuilderStagedProjectionUsesExactIndexAndPreservesWorkspace(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
@@ -154,10 +233,12 @@ func TestSnapshotBuilderStagedProjectionPreservesExactIndexFidelity(t *testing.T
 		t.Fatal(err)
 	}
 	gitSnapshot(t, repo, "add", "-A", "--", "rename-old.txt", "renamed.txt")
-	if err := os.Chmod(filepath.Join(repo, "mode.txt"), 0o755); err != nil {
-		t.Fatal(err)
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(filepath.Join(repo, "mode.txt"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gitSnapshot(t, repo, "add", "--", "mode.txt")
 	}
-	gitSnapshot(t, repo, "add", "--", "mode.txt")
 	if err := os.Symlink("tracked.txt", filepath.Join(repo, "link.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -179,8 +260,10 @@ func TestSnapshotBuilderStagedProjectionPreservesExactIndexFidelity(t *testing.T
 	if !gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":added.txt") || gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":deleted.txt") || !gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":renamed.txt") || gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":rename-old.txt") {
 		t.Fatal("staged candidate does not retain add/delete/rename index entries")
 	}
-	if got := gitSnapshot(t, repo, "ls-tree", snapshot.CandidateTree, "mode.txt"); !strings.HasPrefix(got, "100755 ") {
-		t.Fatalf("staged mode entry = %q", got)
+	if runtime.GOOS != "windows" {
+		if got := gitSnapshot(t, repo, "ls-tree", snapshot.CandidateTree, "mode.txt"); !strings.HasPrefix(got, "100755 ") {
+			t.Fatalf("staged mode entry = %q", got)
+		}
 	}
 	if got := gitSnapshot(t, repo, "ls-tree", snapshot.CandidateTree, "link.txt"); !strings.HasPrefix(got, "120000 ") {
 		t.Fatalf("staged symlink entry = %q", got)
@@ -233,6 +316,67 @@ func TestSnapshotProjectionValidationAndIdentity(t *testing.T) {
 	}
 	if _, err := builder.Build(context.Background(), Target{Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{"untracked.txt"}}); err == nil || !strings.Contains(err.Error(), "does not accept intended-untracked") {
 		t.Fatalf("staged intended-untracked error = %v", err)
+	}
+}
+
+func TestBuildStagedWorkspaceOverlayRecoveryUsesOnlyTheRealIndex(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "reviewed.txt", "reviewed\n")
+	gitSnapshot(t, repo, "add", "reviewed.txt")
+	writeSnapshotFile(t, repo, "tracked.txt", "unstaged\n")
+	writeSnapshotFile(t, repo, "untracked.txt", "untracked\n")
+	beforeIndex := gitSnapshot(t, repo, "diff", "--cached", "--binary")
+	target := Target{
+		Kind: TargetBaseWorkspaceOverlay, Projection: ProjectionStaged,
+		BaseRef: base, IntendedUntracked: []string{},
+	}
+	builder := SnapshotBuilder{Repo: repo}
+
+	if _, err := builder.Build(context.Background(), target); err == nil {
+		t.Fatal("ordinary snapshot builder accepted a staged workspace overlay")
+	}
+	snapshot, err := builder.BuildStagedWorkspaceOverlayRecovery(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.CandidateTree != strings.TrimSpace(gitSnapshot(t, repo, "write-tree")) ||
+		!equalStrings(snapshot.Paths, []string{"reviewed.txt"}) ||
+		len(snapshot.IntendedUntracked) != 0 || len(snapshot.LedgerIDs) != 0 {
+		t.Fatalf("staged recovery snapshot = %#v", snapshot)
+	}
+	if got := gitSnapshot(t, repo, "show", snapshot.CandidateTree+":reviewed.txt"); got != "reviewed\n" {
+		t.Fatalf("staged recovery snapshot reviewed.txt = %q, want authorized staged bytes", got)
+	}
+	if got := gitSnapshot(t, repo, "show", snapshot.CandidateTree+":tracked.txt"); got != "base\n" {
+		t.Fatalf("staged recovery snapshot tracked.txt = %q, want base index bytes", got)
+	}
+	if gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":untracked.txt") {
+		t.Fatal("staged recovery snapshot included unrelated untracked.txt")
+	}
+
+	writeSnapshotFile(t, repo, "tracked.txt", "more unstaged\n")
+	writeSnapshotFile(t, repo, "untracked.txt", "more untracked\n")
+	rebuilt, err := builder.BuildStagedWorkspaceOverlayRecovery(context.Background(), target)
+	if err != nil {
+		t.Fatalf("rebuild staged recovery snapshot: %v", err)
+	}
+	if rebuilt.CandidateTree != snapshot.CandidateTree || rebuilt.Identity != snapshot.Identity {
+		t.Fatalf("staged recovery identity changed with only worktree bytes: before=%#v after=%#v", snapshot, rebuilt)
+	}
+	if afterIndex := gitSnapshot(t, repo, "diff", "--cached", "--binary"); afterIndex != beforeIndex {
+		t.Fatal("staged recovery snapshot mutated the real index")
+	}
+	for _, invalid := range []Target{
+		{Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: base, IntendedUntracked: []string{}},
+		{Kind: TargetBaseWorkspaceOverlay, Projection: ProjectionWorkspace, BaseRef: base, IntendedUntracked: []string{}},
+		{Kind: TargetBaseWorkspaceOverlay, Projection: ProjectionStaged, BaseRef: base, IntendedUntracked: []string{"untracked.txt"}},
+		{Kind: TargetBaseWorkspaceOverlay, Projection: ProjectionStaged, BaseRef: base, IntendedUntracked: []string{}, LedgerIDs: []string{"R3-001"}},
+	} {
+		if _, err := builder.BuildStagedWorkspaceOverlayRecovery(context.Background(), invalid); err == nil {
+			t.Fatalf("invalid staged recovery target accepted: %#v", invalid)
+		}
 	}
 }
 
@@ -418,19 +562,162 @@ func TestBaseDiffPreservesIntendedAuthorityAfterTrackedTransition(t *testing.T) 
 	if err != nil || drifted.CandidateTree == reviewed.CandidateTree || drifted.IntendedUntrackedProof == reviewed.IntendedUntrackedProof {
 		t.Fatalf("content drift did not change authority: %#v, err=%v", drifted, err)
 	}
-	if err := os.Chmod(filepath.Join(repo, "delivery.txt"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	gitSnapshot(t, repo, "add", "delivery.txt")
-	gitSnapshot(t, repo, "commit", "-m", "mode drift")
-	modeDrifted, err := builder.Build(context.Background(), target)
-	if err != nil || modeDrifted.IntendedUntrackedProof == drifted.IntendedUntrackedProof {
-		t.Fatalf("mode drift did not change proof: %#v, err=%v", modeDrifted, err)
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(filepath.Join(repo, "delivery.txt"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gitSnapshot(t, repo, "add", "delivery.txt")
+		gitSnapshot(t, repo, "commit", "-m", "mode drift")
+		modeDrifted, err := builder.Build(context.Background(), target)
+		if err != nil || modeDrifted.IntendedUntrackedProof == drifted.IntendedUntrackedProof {
+			t.Fatalf("mode drift did not change proof: %#v, err=%v", modeDrifted, err)
+		}
 	}
 	gitSnapshot(t, repo, "rm", "delivery.txt")
 	gitSnapshot(t, repo, "commit", "-m", "path drift")
 	if _, err := builder.Build(context.Background(), target); err == nil {
 		t.Fatal("path drift retained intended-untracked authority")
+	}
+}
+
+// TestSnapshotBuilderCurrentChangesStagesLargeIntendedUntrackedWithoutExceedingArgv
+// pins the contract behind issue 1778: a large intended-untracked set must
+// reach `git add` without expanding one ":(literal)<path>" pathspec per file
+// into argv, because Windows caps a process command line at 32767
+// characters. 600 paths of 65 literal-pathspec characters each produce 39000
+// characters before separators, comfortably over that limit, while keeping
+// the hosted-Windows Git fixture bounded.
+func TestSnapshotBuilderCurrentChangesStagesLargeIntendedUntrackedWithoutExceedingArgv(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+
+	const count = 600
+	intended := make([]string, count)
+	for index := 0; index < count; index++ {
+		name := fmt.Sprintf("bulk/windows-command-line-headroom-regression-%05d.txt", index)
+		writeSnapshotFile(t, repo, name, fmt.Sprintf("bulk-%05d\n", index))
+		intended[index] = name
+	}
+
+	var captured []string
+	originalCommand := gitCommandContext
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if slicesContain(args, "--pathspec-from-file=-") {
+			captured = append([]string(nil), args...)
+		}
+		return originalCommand(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = originalCommand })
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: intended,
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	if captured == nil {
+		t.Fatal("git add was never invoked with --pathspec-from-file=-; pathspecs were not transported over stdin")
+	}
+	argvLength := 0
+	for _, arg := range captured {
+		argvLength += len(arg)
+		if strings.Contains(arg, "bulk/") {
+			t.Fatalf("git add argv still contains a literal pathspec %q; pathspecs must travel over stdin", arg)
+		}
+	}
+	if !slicesContain(captured, "add") || !slicesContain(captured, "--pathspec-from-file=-") || !slicesContain(captured, "--pathspec-file-nul") {
+		t.Fatalf("git add argv = %v, want add/--pathspec-from-file=-/--pathspec-file-nul", captured)
+	}
+	if argvLength >= 32767 {
+		t.Fatalf("git add argv length = %d, want well under the Windows 32767-character command-line limit", argvLength)
+	}
+
+	if !reflect.DeepEqual(snapshot.Paths, intended) {
+		t.Fatalf("Paths length = %d, want %d matching entries", len(snapshot.Paths), len(intended))
+	}
+	for _, index := range []int{0, count / 2, count - 1} {
+		path := intended[index]
+		want := fmt.Sprintf("bulk-%05d\n", index)
+		if got := gitSnapshot(t, repo, "show", snapshot.CandidateTree+":"+path); got != want {
+			t.Fatalf("candidate %s = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// TestSnapshotBuilderBaseDiffIntendedUntrackedTreeUnchangedByPathspecTransport
+// is the regression half of the fix: changing how pathspecs reach `git add`
+// (argv vs. stdin) must not change the resulting candidate tree. It exercises
+// buildHeadWithIntended (the base-diff call site) and compares against a
+// manually built tree using the pre-fix argv-based approach.
+func TestSnapshotBuilderBaseDiffIntendedUntrackedTreeUnchangedByPathspecTransport(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "intended.txt", "intended\n")
+
+	expectedTree := buildHeadIntendedCandidateTreeOldStyle(t, repo, []string{"intended.txt"})
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetBaseDiff, BaseRef: "HEAD", IntendedUntracked: []string{"intended.txt"},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if snapshot.CandidateTree != expectedTree {
+		t.Fatalf("CandidateTree = %q, want manually built %q", snapshot.CandidateTree, expectedTree)
+	}
+}
+
+// buildHeadIntendedCandidateTreeOldStyle mirrors buildHeadWithIntended's
+// pre-fix argv-based `git add -- :(literal)<path>...` invocation, so the
+// stdin-transport fix can be proven tree-identical to it.
+func buildHeadIntendedCandidateTreeOldStyle(t *testing.T, repo string, intended []string) string {
+	t.Helper()
+	tempIndex := filepath.Join(t.TempDir(), "index")
+	env := []string{"GIT_INDEX_FILE=" + tempIndex}
+	if _, err := runGit(context.Background(), repo, env, nil, "read-tree", "HEAD"); err != nil {
+		t.Fatalf("read-tree HEAD: %v", err)
+	}
+	args := append([]string{"add", "--"}, literalPathspecs(intended)...)
+	if _, err := runGit(context.Background(), repo, env, nil, args...); err != nil {
+		t.Fatalf("add intended paths (old style): %v", err)
+	}
+	tree, err := runGit(context.Background(), repo, env, nil, "write-tree")
+	if err != nil {
+		t.Fatalf("write-tree: %v", err)
+	}
+	return strings.TrimSpace(string(tree))
+}
+
+// TestAddIntendedPathspecsEmptySetIsNoop proves the len(intended) == 0 guard
+// still short-circuits: an empty-set call must never invoke Git at all.
+func TestAddIntendedPathspecsEmptySetIsNoop(t *testing.T) {
+	invoked := false
+	originalCommand := gitCommandContext
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		invoked = true
+		return originalCommand(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = originalCommand })
+
+	if err := addIntendedPathspecs(context.Background(), "unused-repo", nil, nil); err != nil {
+		t.Fatalf("addIntendedPathspecs(empty) error = %v", err)
+	}
+	if invoked {
+		t.Fatal("addIntendedPathspecs invoked git for an empty intended-untracked set")
+	}
+}
+
+// TestNulJoinedPathspecsEmitsNulDelimitedLiteralPathspecs is a focused unit
+// test on the new helper: no existing seam observes runGit's stdin argument
+// directly (gitCommandContext only sees argv, and Stdin is assigned after
+// the hook returns), so the NUL-joined-literal-pathspec contract is pinned
+// here instead.
+func TestNulJoinedPathspecsEmitsNulDelimitedLiteralPathspecs(t *testing.T) {
+	got := nulJoinedPathspecs([]string{"a.txt", "dir/b.txt"})
+	want := []byte(":(literal)a.txt\x00:(literal)dir/b.txt")
+	if !bytes.Equal(got, want) {
+		t.Fatalf("nulJoinedPathspecs() = %q, want %q", got, want)
 	}
 }
 
@@ -506,6 +793,59 @@ func TestSnapshotDiffStatsExcludeGeneratedGoldensOnlyFromAuthoredLines(t *testin
 	}
 	if !generated {
 		t.Fatalf("DiffStats() did not recognize generated golden: %#v", stats)
+	}
+}
+
+func TestSnapshotDiffStatsIncludesCanonicalRawModesForModeOnlyChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Git worktree executable-bit transitions are POSIX-only")
+	}
+	repo := initSnapshotRepo(t)
+	gitSnapshot(t, repo, "config", "core.filemode", "true")
+	if err := os.Chmod(filepath.Join(repo, "tracked.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := (SnapshotBuilder{Repo: repo}).DiffStats(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []DiffStat{{Path: "tracked.txt", OldMode: "100644", NewMode: "100755", ModeOnly: true}}
+	if !reflect.DeepEqual(stats, want) {
+		t.Fatalf("DiffStats() = %#v, want %#v", stats, want)
+	}
+	if lines, err := CountChangedLines(stats); err != nil || lines != 0 {
+		t.Fatalf("CountChangedLines(mode-only) = %d, %v; want 0, nil", lines, err)
+	}
+}
+
+func TestSnapshotDiffStatsDistinguishesContentAndModeChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Git worktree executable-bit transitions are POSIX-only")
+	}
+	repo := initSnapshotRepo(t)
+	gitSnapshot(t, repo, "config", "core.filemode", "true")
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	if err := os.Chmod(filepath.Join(repo, "tracked.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := (SnapshotBuilder{Repo: repo}).DiffStats(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].OldMode != "100644" || stats[0].NewMode != "100755" || stats[0].ModeOnly || stats[0].Additions != 1 || stats[0].Deletions != 1 {
+		t.Fatalf("content-plus-mode DiffStats() = %#v", stats)
 	}
 }
 
@@ -623,17 +963,728 @@ func TestSnapshotBuilderExactRevisionIgnoresReplacementObjects(t *testing.T) {
 	}
 }
 
+func TestBaseWorkspaceOverlayFreezesFullBoundaryWithoutMutation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "committed.txt", "committed\n")
+	gitSnapshot(t, repo, "add", "committed.txt")
+	gitSnapshot(t, repo, "commit", "-m", "branch")
+	writeSnapshotFile(t, repo, "tracked.txt", "staged\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	writeSnapshotFile(t, repo, "tracked.txt", "workspace wins\n")
+	writeSnapshotFile(t, repo, "new.txt", "intended\n")
+
+	beforeIndex := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
+	beforeStatus := gitSnapshot(t, repo, "status", "--porcelain=v1")
+	target := Target{Kind: TargetBaseWorkspaceOverlay, BaseRef: base, IntendedUntracked: []string{"new.txt"}}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot.Paths, []string{"committed.txt", "new.txt", "tracked.txt"}) || gitSnapshot(t, repo, "show", snapshot.CandidateTree+":tracked.txt") != "workspace wins\n" {
+		t.Fatalf("overlay snapshot = %#v", snapshot)
+	}
+	if strings.TrimSpace(gitSnapshot(t, repo, "write-tree")) != beforeIndex || gitSnapshot(t, repo, "status", "--porcelain=v1") != beforeStatus {
+		t.Fatal("overlay snapshot mutated the real index or worktree")
+	}
+
+	headBase, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetBaseWorkspaceOverlay, BaseRef: "HEAD", IntendedUntracked: []string{"new.txt"}})
+	if err != nil || headBase.CandidateTree != snapshot.CandidateTree || headBase.Identity == snapshot.Identity {
+		t.Fatalf("base identity binding = %#v, %v", headBase, err)
+	}
+	writeSnapshotFile(t, repo, "new.txt", "changed bytes\n")
+	changed, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil || changed.Identity == snapshot.Identity {
+		t.Fatalf("byte identity binding = %#v, %v", changed, err)
+	}
+}
+
+func TestBaseWorkspaceOverlayBuildsAllUntrackedCandidateFromEmptyIndex(t *testing.T) {
+	tests := []struct {
+		name         string
+		missingIndex bool
+		files        map[string]string
+		intended     []string
+	}{
+		{
+			name: "existing empty index",
+			files: map[string]string{
+				"first.txt":         "first\n",
+				"nested/second.txt": "second\n",
+			},
+			intended: []string{"first.txt", "nested/second.txt"},
+		},
+		{
+			name:         "missing index",
+			missingIndex: true,
+			files:        map[string]string{"nested/only.txt": "only\n"},
+			intended:     []string{"nested/only.txt"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := t.TempDir()
+			gitSnapshot(t, repo, "init")
+			gitSnapshot(t, repo, "config", "user.email", "test@example.com")
+			gitSnapshot(t, repo, "config", "user.name", "Test")
+			gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "empty base")
+			base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+			gitSnapshot(t, repo, "read-tree", "--empty")
+
+			indexPath := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-path", "index"))
+			if !filepath.IsAbs(indexPath) {
+				indexPath = filepath.Join(repo, indexPath)
+			}
+			if tt.missingIndex {
+				if err := os.Remove(indexPath); err != nil {
+					t.Fatalf("Remove(index): %v", err)
+				}
+			}
+
+			for name, content := range tt.files {
+				writeSnapshotFile(t, repo, name, content)
+			}
+			writeSnapshotFile(t, repo, "unrelated.txt", "outside scope\n")
+
+			beforeIndex, beforeIndexErr := os.ReadFile(indexPath)
+			if beforeIndexErr != nil && !errors.Is(beforeIndexErr, os.ErrNotExist) {
+				t.Fatalf("ReadFile(index): %v", beforeIndexErr)
+			}
+			beforeStatus := gitSnapshot(t, repo, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+			expectedTree := buildEmptyIndexCandidateTree(t, repo, tt.intended)
+
+			snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+				Kind: TargetBaseWorkspaceOverlay, BaseRef: base, IntendedUntracked: tt.intended,
+			})
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			if snapshot.CandidateTree != expectedTree {
+				t.Fatalf("CandidateTree = %q, want manually built %q", snapshot.CandidateTree, expectedTree)
+			}
+			if !reflect.DeepEqual(snapshot.Paths, tt.intended) {
+				t.Fatalf("Paths = %v, want only intended paths %v", snapshot.Paths, tt.intended)
+			}
+			if afterIndex, err := os.ReadFile(indexPath); errors.Is(err, os.ErrNotExist) != errors.Is(beforeIndexErr, os.ErrNotExist) || (err != nil && !errors.Is(err, os.ErrNotExist)) || !bytes.Equal(afterIndex, beforeIndex) {
+				t.Fatalf("real index changed: before error=%v bytes=%x, after error=%v bytes=%x", beforeIndexErr, beforeIndex, err, afterIndex)
+			}
+			if afterStatus := gitSnapshot(t, repo, "status", "--porcelain=v1", "-z", "--untracked-files=all"); afterStatus != beforeStatus {
+				t.Fatalf("worktree status changed: before=%q after=%q", beforeStatus, afterStatus)
+			}
+			for name, want := range tt.files {
+				content, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(name)))
+				if err != nil || string(content) != want {
+					t.Fatalf("worktree file %q changed: content=%q error=%v", name, content, err)
+				}
+			}
+			if content, err := os.ReadFile(filepath.Join(repo, "unrelated.txt")); err != nil || string(content) != "outside scope\n" {
+				t.Fatalf("unrelated worktree file changed: content=%q error=%v", content, err)
+			}
+		})
+	}
+}
+
+func buildEmptyIndexCandidateTree(t *testing.T, repo string, intended []string) string {
+	t.Helper()
+	tempIndex := filepath.Join(t.TempDir(), "index")
+	env := []string{"GIT_INDEX_FILE=" + tempIndex}
+	if _, err := runGit(context.Background(), repo, env, nil, "read-tree", "--empty"); err != nil {
+		t.Fatalf("read empty temporary index: %v", err)
+	}
+	args := append([]string{"add", "--"}, literalPathspecs(intended)...)
+	if _, err := runGit(context.Background(), repo, env, nil, args...); err != nil {
+		t.Fatalf("add intended paths to temporary index: %v", err)
+	}
+	tree, err := runGit(context.Background(), repo, env, nil, "write-tree")
+	if err != nil {
+		t.Fatalf("write temporary candidate tree: %v", err)
+	}
+	return strings.TrimSpace(string(tree))
+}
+
+func TestBaseWorkspaceOverlayPropagatesTemporaryIndexInventoryErrors(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "new.txt", "intended\n")
+	realIndex := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-path", "index"))
+	if !filepath.IsAbs(realIndex) {
+		realIndex = filepath.Join(repo, realIndex)
+	}
+	t.Setenv("GENTLE_AI_TEST_REAL_INDEX", realIndex)
+
+	originalCommand := gitCommandContext
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if slicesContain(args, "ls-files") && slicesContain(args, "--cached") && slicesContain(args, "-z") && !slicesContain(args, "--") {
+			return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestEmptyIndexInventoryHelperProcess$")
+		}
+		return originalCommand(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = originalCommand })
+
+	tests := []struct {
+		name     string
+		mode     string
+		wantText string
+		wantExit int
+	}{
+		{name: "diagnostic", mode: "diagnostic", wantText: "git inventory produced diagnostics: inventory diagnostic"},
+		{name: "command failure", mode: "failure", wantText: "inventory failure", wantExit: 23},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GENTLE_AI_EMPTY_INDEX_INVENTORY_HELPER", tt.mode)
+			_, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+				Kind: TargetBaseWorkspaceOverlay, BaseRef: "HEAD", IntendedUntracked: []string{"new.txt"},
+			})
+			if tt.wantExit == 0 {
+				if err == nil || err.Error() != tt.wantText {
+					t.Fatalf("Build() error = %T %v, want exact diagnostic %q", err, err, tt.wantText)
+				}
+				return
+			}
+			commandErr, ok := err.(*GitCommandError)
+			if !ok || commandErr.ExitCode != tt.wantExit || commandErr.Output != tt.wantText {
+				t.Fatalf("Build() error = %#v, want direct GitCommandError exit=%d output=%q", err, tt.wantExit, tt.wantText)
+			}
+		})
+	}
+}
+
+func TestEmptyIndexInventoryHelperProcess(t *testing.T) {
+	mode := os.Getenv("GENTLE_AI_EMPTY_INDEX_INVENTORY_HELPER")
+	if mode == "" {
+		return
+	}
+	index := os.Getenv("GIT_INDEX_FILE")
+	if index == "" || filepath.Clean(index) == filepath.Clean(os.Getenv("GENTLE_AI_TEST_REAL_INDEX")) {
+		_, _ = fmt.Fprint(os.Stderr, "temporary index environment missing")
+		os.Exit(72)
+	}
+	if mode == "diagnostic" {
+		_, _ = fmt.Fprint(os.Stderr, "inventory diagnostic")
+		os.Exit(0)
+	}
+	_, _ = fmt.Fprint(os.Stderr, "inventory failure")
+	os.Exit(23)
+}
+
+// TestResolveCurrentChangesBaseUnbornHeadSelectorFree proves 1771: a
+// selector-free (workspace-projection) status call on an unborn HEAD must
+// resolve to the repository-native empty tree, exactly as the staged
+// projection path already does, instead of surfacing the raw Git command
+// failure from `git rev-parse HEAD`.
+func TestResolveCurrentChangesBaseUnbornHeadSelectorFree(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initUnbornSnapshotRepo(t)
+	builder := SnapshotBuilder{Repo: repo}
+
+	baseTree, unborn, err := builder.resolveCurrentChangesBase(context.Background(), ProjectionWorkspace)
+	if err != nil {
+		var commandErr *GitCommandError
+		if errors.As(err, &commandErr) {
+			t.Fatalf("resolveCurrentChangesBase(workspace, unborn HEAD) surfaced a raw git failure: %v", err)
+		}
+		t.Fatalf("resolveCurrentChangesBase(workspace, unborn HEAD) error = %v, want empty-tree resolution", err)
+	}
+	if !unborn {
+		t.Fatal("resolveCurrentChangesBase(workspace, unborn HEAD) unborn = false, want true")
+	}
+	if want := gitSnapshotEmptyTree(t, repo); baseTree != want {
+		t.Fatalf("baseTree = %q, want repository-native empty tree %q", baseTree, want)
+	}
+}
+
+func TestSnapshotBuilderCurrentChangesSupportsUnbornHeadStagedProjection(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initUnbornSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "candidate.txt", "reviewed\n")
+	writeSnapshotFile(t, repo, "nested/inner.txt", "inner\n")
+	gitSnapshot(t, repo, "add", "--", "candidate.txt", "nested/inner.txt")
+	expectedCandidate := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
+	indexPath := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-path", "index"))
+	if !filepath.IsAbs(indexPath) {
+		indexPath = filepath.Join(repo, indexPath)
+	}
+	indexBefore, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatalf("Build(unborn staged) error = %v", err)
+	}
+	if want := gitSnapshotEmptyTree(t, repo); snapshot.BaseTree != want {
+		t.Fatalf("BaseTree = %q, want repository-native empty tree %q", snapshot.BaseTree, want)
+	}
+	if snapshot.CandidateTree != expectedCandidate {
+		t.Fatalf("CandidateTree = %q, want staged index tree %q", snapshot.CandidateTree, expectedCandidate)
+	}
+	if want := []string{"candidate.txt", "nested/inner.txt"}; !reflect.DeepEqual(snapshot.Paths, want) {
+		t.Fatalf("Paths = %v, want every staged candidate path %v", snapshot.Paths, want)
+	}
+	indexAfter, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(indexAfter, indexBefore) {
+		t.Fatal("snapshot construction mutated the real index")
+	}
+}
+
+func TestSnapshotBuilderUnbornHeadWithNothingStagedRefusesActionably(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initUnbornSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "untracked.txt", "not staged\n")
+	indexPath := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-path", "index"))
+	if !filepath.IsAbs(indexPath) {
+		indexPath = filepath.Join(repo, indexPath)
+	}
+	if _, err := os.Stat(indexPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("real index unexpectedly exists before snapshot construction: %v", err)
+	}
+
+	_, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "git add") {
+		t.Fatalf("unborn empty-candidate error = %v, want actionable staging guidance", err)
+	}
+	var commandErr *GitCommandError
+	if errors.As(err, &commandErr) {
+		t.Fatalf("unborn empty-candidate refusal surfaced a raw git failure: %v", err)
+	}
+	if _, err := os.Stat(indexPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("snapshot construction created the real index: %v", err)
+	}
+}
+
+// TestSnapshotBuilderCurrentChangesSupportsUnbornHeadWorkspaceProjection
+// proves 1771 at the full Build() level: a selector-free (workspace
+// projection) current-changes target on an unborn HEAD resolves to the
+// empty-tree base and the staged candidate, exactly like the existing staged
+// projection path, instead of failing with a raw Git command error.
+func TestSnapshotBuilderCurrentChangesSupportsUnbornHeadWorkspaceProjection(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initUnbornSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "candidate.txt", "reviewed\n")
+	gitSnapshot(t, repo, "add", "--", "candidate.txt")
+	expectedCandidate := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, Projection: ProjectionWorkspace, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatalf("Build(unborn workspace) error = %v", err)
+	}
+	if !snapshot.UnbornHead {
+		t.Fatal("Build(unborn workspace) UnbornHead = false, want true")
+	}
+	if want := gitSnapshotEmptyTree(t, repo); snapshot.BaseTree != want {
+		t.Fatalf("BaseTree = %q, want repository-native empty tree %q", snapshot.BaseTree, want)
+	}
+	if snapshot.CandidateTree != expectedCandidate {
+		t.Fatalf("CandidateTree = %q, want staged index tree %q", snapshot.CandidateTree, expectedCandidate)
+	}
+}
+
+func TestSnapshotBuilderRealGitFailuresAreNotTreatedAsUnborn(t *testing.T) {
+	requireSnapshotGit(t)
+	stagedTarget := Target{Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{}}
+	t.Run("detached HEAD at missing object", func(t *testing.T) {
+		repo := initUnbornSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "candidate.txt", "reviewed\n")
+		gitSnapshot(t, repo, "add", "--", "candidate.txt")
+		if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte(strings.Repeat("1", 40)+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), stagedTarget)
+		var commandErr *GitCommandError
+		if err == nil || !errors.As(err, &commandErr) {
+			t.Fatalf("detached missing-object error = %v, want the raw git failure", err)
+		}
+	})
+	t.Run("existing branch ref at missing object", func(t *testing.T) {
+		repo := initUnbornSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "candidate.txt", "reviewed\n")
+		gitSnapshot(t, repo, "add", "--", "candidate.txt")
+		ref := strings.TrimSpace(gitSnapshot(t, repo, "symbolic-ref", "HEAD"))
+		refPath := filepath.Join(repo, ".git", filepath.FromSlash(ref))
+		if err := os.MkdirAll(filepath.Dir(refPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(refPath, []byte(strings.Repeat("2", 40)+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), stagedTarget)
+		var commandErr *GitCommandError
+		if err == nil || !errors.As(err, &commandErr) {
+			t.Fatalf("existing-but-unresolvable branch error = %v, want the raw git failure", err)
+		}
+	})
+	t.Run("non-local symbolic ref", func(t *testing.T) {
+		repo := initUnbornSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "candidate.txt", "reviewed\n")
+		gitSnapshot(t, repo, "add", "--", "candidate.txt")
+		if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("ref: refs/remotes/origin/main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), stagedTarget)
+		var commandErr *GitCommandError
+		if err == nil || !errors.As(err, &commandErr) {
+			t.Fatalf("non-local symbolic HEAD error = %v, want the raw git failure", err)
+		}
+	})
+	t.Run("malformed HEAD", func(t *testing.T) {
+		repo := initUnbornSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "candidate.txt", "reviewed\n")
+		gitSnapshot(t, repo, "add", "--", "candidate.txt")
+		if err := os.WriteFile(filepath.Join(repo, ".git", "HEAD"), []byte("not a ref\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), stagedTarget)
+		var commandErr *GitCommandError
+		if err == nil || !errors.As(err, &commandErr) {
+			t.Fatalf("malformed HEAD error = %v, want the raw git failure", err)
+		}
+	})
+}
+
+func TestSnapshotRepoTemplateContracts(t *testing.T) {
+	requireSnapshotGit(t)
+	first := initSnapshotRepo(t)
+	second := initSnapshotRepo(t)
+	base := strings.TrimSpace(gitSnapshot(t, first, "rev-parse", "HEAD"))
+
+	for _, repo := range []string{first, second} {
+		if status := gitSnapshot(t, repo, "status", "--porcelain=v1"); status != "" {
+			t.Fatalf("initial status = %q, want clean", status)
+		}
+		if got := strings.TrimSpace(gitSnapshot(t, repo, "config", "user.email")); got != "snapshot@example.com" {
+			t.Fatalf("user.email = %q", got)
+		}
+		if got := strings.TrimSpace(gitSnapshot(t, repo, "config", "user.name")); got != "Snapshot Test" {
+			t.Fatalf("user.name = %q", got)
+		}
+		if got := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD")); got != base {
+			t.Fatalf("base commit = %q, want %q", got, base)
+		}
+		gitDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--absolute-git-dir"))
+		commonDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+		if !filepath.IsAbs(commonDir) {
+			t.Fatalf("common dir is not absolute: %q", commonDir)
+		}
+		if gitDir != commonDir {
+			t.Fatalf("git dir %q and common dir %q indicate a linked worktree", gitDir, commonDir)
+		}
+		for _, path := range []string{
+			filepath.Join(gitDir, "objects", "info", "alternates"),
+			filepath.Join(gitDir, "worktrees"),
+		} {
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unexpected shared Git state %q: %v", path, err)
+			}
+		}
+		if gitSnapshotSucceeds(repo, "config", "--get", "remote.origin.url") {
+			t.Fatal("fixture unexpectedly has an origin remote")
+		}
+	}
+
+	firstCommon := strings.TrimSpace(gitSnapshot(t, first, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+	secondCommon := strings.TrimSpace(gitSnapshot(t, second, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+	if firstCommon == secondCommon {
+		t.Fatalf("common dir is shared: %q", firstCommon)
+	}
+
+	writeSnapshotFile(t, first, "tracked.txt", "isolated\n")
+	gitSnapshot(t, first, "add", "--", "tracked.txt")
+	if status := gitSnapshot(t, second, "status", "--porcelain=v1"); status != "" {
+		t.Fatalf("second index changed with first fixture: %q", status)
+	}
+	gitSnapshot(t, first, "config", "fixture.isolated", "true")
+	gitSnapshot(t, first, "commit", "-m", "isolate fixture mutation")
+	if got, err := os.ReadFile(filepath.Join(second, "tracked.txt")); err != nil || string(got) != "base\n" {
+		t.Fatalf("second worktree content = %q, err=%v", got, err)
+	}
+	if status := gitSnapshot(t, second, "status", "--porcelain=v1"); status != "" {
+		t.Fatalf("second worktree status = %q", status)
+	}
+	if got := strings.TrimSpace(gitSnapshot(t, second, "rev-parse", "HEAD")); got != base {
+		t.Fatalf("second ref = %q, want %q", got, base)
+	}
+	if gitSnapshotSucceeds(second, "config", "--get", "fixture.isolated") {
+		t.Fatal("second config changed with first fixture")
+	}
+}
+
+func TestSnapshotRepoTemplateInitializesOnceConcurrently(t *testing.T) {
+	requireSnapshotGit(t)
+	const callers = 16
+	paths := make(chan string, callers)
+	errs := make(chan error, callers)
+	var group sync.WaitGroup
+	for range callers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			path, err := snapshotRepoTemplate()
+			paths <- path
+			errs <- err
+		}()
+	}
+	group.Wait()
+	close(paths)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("snapshotRepoTemplate() error = %v", err)
+		}
+	}
+	var template string
+	for path := range paths {
+		if template == "" {
+			template = path
+		} else if path != template {
+			t.Fatalf("template paths = %q and %q", template, path)
+		}
+	}
+	if template == "" {
+		t.Fatal("snapshotRepoTemplate() returned an empty path")
+	}
+}
+
+func TestUntrackedProofBatchedListingMatchesPerPathReference(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	intended := []string{"bulk/a.txt", "deep/nested/b.txt"}
+	for index := range 48 {
+		intended = append(intended, fmt.Sprintf("bulk/reference-%02d.txt", index))
+	}
+	for _, logicalPath := range intended {
+		writeSnapshotFile(t, repo, logicalPath, "reference content for "+logicalPath+"\n")
+	}
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: intended})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.New()
+	hash.Write([]byte("gentle-ai.intended-untracked/v1\x00"))
+	for _, logicalPath := range snapshot.IntendedUntracked {
+		entry, err := runGit(context.Background(), repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(logicalPath))
+		if err != nil || len(entry) == 0 {
+			t.Fatalf("per-path reference for %q = %q, %v", logicalPath, entry, err)
+		}
+		writeLengthPrefixed(hash, []byte(logicalPath))
+		writeLengthPrefixed(hash, entry)
+	}
+	want := "sha256:" + hex.EncodeToString(hash.Sum(nil))
+	if snapshot.IntendedUntrackedProof != want {
+		t.Fatalf("batched proof = %s, want per-path reference %s", snapshot.IntendedUntrackedProof, want)
+	}
+}
+
+func TestSnapshotIntendedQueriesUseConstantGitInvocations(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	intended := make([]string, 128)
+	for index := range intended {
+		intended[index] = fmt.Sprintf("bulk/file-%03d.txt", index)
+		writeSnapshotFile(t, repo, intended[index], "candidate\n")
+	}
+
+	counts := map[string]int{}
+	originalCommand := gitCommandContext
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) > 3 {
+			counts[args[3]]++
+		}
+		return originalCommand(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = originalCommand })
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: intended})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["ls-tree"] != 1 || counts["check-ignore"] != 1 || counts["ls-files"] != 2 {
+		t.Fatalf("128-path Build git queries = ls-tree:%d check-ignore:%d ls-files:%d, want 1/1/2", counts["ls-tree"], counts["check-ignore"], counts["ls-files"])
+	}
+	counts = map[string]int{}
+	if err := (SnapshotBuilder{Repo: repo}).ValidateEvidence(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if counts["ls-tree"] != 1 {
+		t.Fatalf("128-path ValidateEvidence ls-tree invocations = %d, want 1", counts["ls-tree"])
+	}
+}
+
+func TestNulSeparatedGitParsersPreserveUnusualPaths(t *testing.T) {
+	oid := strings.Repeat("a", 40)
+	paths := []string{"space name.txt", "line\nbreak.txt", "tab\tname.txt", "--leading-dash.txt"}
+	var treeOutput, pathOutput []byte
+	for _, logicalPath := range paths {
+		record := []byte("100644 blob " + oid + "\t" + logicalPath)
+		treeOutput = append(treeOutput, record...)
+		treeOutput = append(treeOutput, 0)
+		pathOutput = append(pathOutput, logicalPath...)
+		pathOutput = append(pathOutput, 0)
+	}
+	entries, err := parseTreeEntries(treeOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pathSet := nulSeparatedPathSet(pathOutput)
+	for _, logicalPath := range paths {
+		want := []byte("100644 blob " + oid + "\t" + logicalPath + "\x00")
+		if !bytes.Equal(entries[logicalPath], want) {
+			t.Fatalf("tree entry for %q = %q, want %q", logicalPath, entries[logicalPath], want)
+		}
+		if _, present := pathSet[logicalPath]; !present {
+			t.Fatalf("NUL path set lost %q", logicalPath)
+		}
+	}
+	if _, err := parseTreeEntries([]byte("malformed\x00")); err == nil {
+		t.Fatal("malformed ls-tree record was accepted")
+	}
+	unterminated := []byte("100644 blob " + oid + "\tunterminated.txt")
+	if _, err := parseTreeEntries(unterminated); err == nil {
+		t.Fatal("unterminated ls-tree record was accepted")
+	}
+}
+
+func TestBatchGitProtocolReadersRejectDiagnostics(t *testing.T) {
+	t.Setenv("GENTLE_AI_TEST_GIT_PROTOCOL_DIAGNOSTIC", "1")
+	originalCommand := gitCommandContext
+	gitCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestBatchGitProtocolDiagnosticHelperProcess$")
+	}
+	t.Cleanup(func() { gitCommandContext = originalCommand })
+
+	repo := t.TempDir()
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "ls-tree", run: func() error {
+			_, err := listTreeEntries(context.Background(), repo, "HEAD")
+			return err
+		}},
+		{name: "cat-file-batch", run: func() error {
+			_, err := batchBlobContents(context.Background(), repo, []string{strings.Repeat("a", 40)}, defaultGitOutputLimit)
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil || !strings.Contains(err.Error(), "git inventory produced diagnostics: protocol diagnostic") {
+				t.Fatalf("protocol reader error = %v, want explicit stderr diagnostic", err)
+			}
+		})
+	}
+}
+
+func TestBatchGitProtocolDiagnosticHelperProcess(t *testing.T) {
+	if os.Getenv("GENTLE_AI_TEST_GIT_PROTOCOL_DIAGNOSTIC") != "1" {
+		return
+	}
+	_, _ = fmt.Fprint(os.Stderr, "protocol diagnostic")
+}
+
+func TestSnapshotBuilderRejectsFirstIgnoredIntendedPathInCanonicalOrder(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, ".gitignore", "ignored/\n")
+	writeSnapshotFile(t, repo, "ignored/a.txt", "a\n")
+	writeSnapshotFile(t, repo, "ignored/b.txt", "b\n")
+	_, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"ignored/b.txt", "ignored/a.txt"},
+	})
+	if err == nil || !strings.Contains(err.Error(), `intended-untracked path "ignored/a.txt" is ignored`) {
+		t.Fatalf("ignored intended error = %v, want first canonical path", err)
+	}
+}
+
 func initSnapshotRepo(t *testing.T) string {
+	t.Helper()
+	template, err := snapshotRepoTemplate()
+	if err != nil {
+		t.Fatalf("snapshot repo template: %v", err)
+	}
+	// canonicalTempDir, not t.TempDir: every production resolver answers with
+	// the resolved spelling, so a fixture that keeps the raw one compares
+	// unequal to its own repository. On a Windows runner TEMP is reached
+	// through an 8.3 short name and the raw path says RUNNER~1 where the
+	// resolver correctly says runneradmin; on Darwin the same gap appears as
+	// /var versus /private/var.
+	repo := canonicalTempDir(t)
+	if err := os.CopyFS(repo, os.DirFS(template)); err != nil {
+		t.Fatalf("CopyFS(snapshot repo template): %v", err)
+	}
+	return repo
+}
+
+func snapshotRepoTemplate() (string, error) {
+	snapshotRepoTemplateOnce.Do(func() {
+		template, err := os.MkdirTemp("", "gentle-ai-snapshot-repo-*")
+		if err != nil {
+			snapshotRepoTemplateErr = fmt.Errorf("create template directory: %w", err)
+			return
+		}
+		for _, args := range [][]string{{"init"}, {"config", "user.email", "snapshot@example.com"}, {"config", "user.name", "Snapshot Test"}, {"config", "core.autocrlf", "false"}} {
+			if snapshotRepoTemplateErr = runSnapshotGit(template, args...); snapshotRepoTemplateErr != nil {
+				_ = os.RemoveAll(template)
+				return
+			}
+		}
+		for name, content := range map[string]string{"tracked.txt": "base\n", "deleted.txt": "delete me\n"} {
+			if err := os.WriteFile(filepath.Join(template, name), []byte(content), 0o644); err != nil {
+				snapshotRepoTemplateErr = fmt.Errorf("write %s fixture: %w", name, err)
+				_ = os.RemoveAll(template)
+				return
+			}
+		}
+		for _, args := range [][]string{{"add", "--", "tracked.txt", "deleted.txt"}, {"commit", "-m", "base"}} {
+			if snapshotRepoTemplateErr = runSnapshotGit(template, args...); snapshotRepoTemplateErr != nil {
+				_ = os.RemoveAll(template)
+				return
+			}
+		}
+		snapshotRepoTemplateDir = template
+	})
+	return snapshotRepoTemplateDir, snapshotRepoTemplateErr
+}
+
+func runSnapshotGit(repo string, args ...string) error {
+	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git %v: %w\n%s", args, err, output)
+	}
+	return nil
+}
+
+func initUnbornSnapshotRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
 	gitSnapshot(t, repo, "init")
 	gitSnapshot(t, repo, "config", "user.email", "snapshot@example.com")
 	gitSnapshot(t, repo, "config", "user.name", "Snapshot Test")
-	writeSnapshotFile(t, repo, "tracked.txt", "base\n")
-	writeSnapshotFile(t, repo, "deleted.txt", "delete me\n")
-	gitSnapshot(t, repo, "add", "--", "tracked.txt", "deleted.txt")
-	gitSnapshot(t, repo, "commit", "-m", "base")
 	return repo
+}
+
+func gitSnapshotEmptyTree(t *testing.T, repo string) string {
+	t.Helper()
+	cmd := exec.Command("git", "-C", repo, "mktree")
+	cmd.Stdin = strings.NewReader("")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git mktree: %v\n%s", err, output)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func requireSnapshotGit(t *testing.T) {

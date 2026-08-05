@@ -8,14 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/catalog"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 const legacyMandatoryWording = "TOTALMENTE " + "obligatorio"
@@ -67,12 +67,6 @@ type InjectOptions struct {
 	// inject into SDD phase sub-agent prompts. Empty means disabled; normal SDD
 	// installs must leave it empty unless the Community Tool path enabled CodeGraph.
 	CodeGraphGuidanceMarkdown string
-
-	// triggerRulesContent is an internal field set by step 1c in Inject()
-	// for OpenCode/Kilocode adapters. It holds the rendered trigger-rules
-	// block so inlineOpenCodeSDDPrompts can append it to the gentle-orchestrator
-	// prompt content without re-computing the render.
-	triggerRulesContent string
 }
 
 // workflowInjector is an optional adapter capability: if an adapter
@@ -294,71 +288,6 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 	}
 
-	// sectionTriggerRules is the section ID used for marker-based injection.
-	// openMarker("trigger-rules") produces <!-- gentle-ai:trigger-rules -->.
-	// No new marker constant is needed — filemerge derives it from the section ID string.
-	const sectionTriggerRules = "trigger-rules"
-
-	// 1c. Inject the trigger-rules section into every agent's system prompt.
-	// Approach mirrors the strict-tdd-mode step (1b) with an additional path for
-	// OpenCode/Kilocode whose content lives in the gentle-orchestrator agent prompt
-	// (scoped to that agent only, not in a global AGENTS.md section).
-	//
-	// Decision (4.10): OpenCode and Kilocode deliver trigger-rules inside the
-	// gentle-orchestrator prompt where all existing SDD content lives — this keeps
-	// the rules in the always-loaded scope for those agents.
-	//
-	// Decision (4.11): Only Kimi uses StrategyJinjaModules today. If a future
-	// adapter adopts Jinja modules it must add its own {% include "trigger-rules.md" %}
-	// line and will be handled by the StrategyJinjaModules branch below.
-	{
-		rendered := RenderTriggerRules(catalog.DefaultTriggerRuleSet())
-
-		if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
-			// OpenCode / Kilocode: trigger-rules is appended to the gentle-orchestrator
-			// prompt content inside opencode.json (handled by inlineOpenCodeSDDPrompts
-			// via the triggerRulesContent variable set on InjectOptions — see below).
-			// We store the rendered content in opts so inlineOpenCodeSDDPrompts can pick it up.
-			opts.triggerRulesContent = rendered
-		} else if adapter.SystemPromptStrategy() == model.StrategyJinjaModules {
-			// Jinja agents (currently only Kimi): write the rendered block as a
-			// standalone module file. The static KIMI.md template includes it via
-			// {% include "trigger-rules.md" ignore missing %}.
-			configDir := adapter.GlobalConfigDir(homeDir)
-			modulePath := filepath.Join(configDir, "trigger-rules.md")
-			writeResult, err := filemerge.WriteFileAtomic(modulePath, []byte(rendered), 0o644)
-			if err != nil {
-				return InjectionResult{}, err
-			}
-			changed = changed || writeResult.Changed
-			files = append(files, modulePath)
-		} else {
-			// All other system-prompt agents: inject via marker-based section.
-			promptPath := adapter.SystemPromptFile(homeDir)
-			existing, readErr := readFileOrEmpty(promptPath)
-			if readErr != nil {
-				return InjectionResult{}, readErr
-			}
-			updated := filemerge.InjectMarkdownSection(existing, sectionTriggerRules, rendered)
-			writeResult, writeErr := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
-			if writeErr != nil {
-				return InjectionResult{}, writeErr
-			}
-			changed = changed || writeResult.Changed
-			// Dedupe the path — it may already be present from step 1.
-			alreadyInFiles := false
-			for _, f := range files {
-				if f == promptPath {
-					alreadyInFiles = true
-					break
-				}
-			}
-			if !alreadyInFiles {
-				files = append(files, promptPath)
-			}
-		}
-	}
-
 	// 1b. If StrictTDD is enabled, inject the strict-tdd-mode marker section
 	// into the system prompt file so agents know Strict TDD is active.
 	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
@@ -416,7 +345,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					continue
 				}
 
-				content := renderBoundedReviewAsset(commandsAssetDir + "/" + entry.Name())
+				content := renderBoundedReviewAsset(adapter.Agent(), commandsAssetDir+"/"+entry.Name())
 				path := filepath.Join(commandsDir, entry.Name())
 				writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
 				if err != nil {
@@ -439,7 +368,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// os.ReadFile call due to VFS/NTFS metadata caching, which caused the spurious
 	// "post-check: .../opencode.json missing sdd-apply sub-agent" error.
 	var mergedSettingsBytes []byte
-	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
+	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
 			overlayContent, err := assets.Read(overlayAssetPath(sddMode))
@@ -476,7 +405,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				changed = changed || promptsChanged
 			}
 
-			overlayBytes, err = inlineOpenCodeSDDPrompts(overlayBytes, homeDir, settingsPath, opts.PreserveOpenCodeOrchestratorPrompt, opts.triggerRulesContent, opts.CodeGraphGuidanceMarkdown)
+			overlayBytes, err = inlineOpenCodeSDDPrompts(overlayBytes, homeDir, settingsPath, adapter.Agent(), opts.PreserveOpenCodeOrchestratorPrompt, opts.CodeGraphGuidanceMarkdown)
 			if err != nil {
 				return InjectionResult{}, fmt.Errorf("inline OpenCode SDD prompts: %w", err)
 			}
@@ -539,7 +468,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					return InjectionResult{}, fmt.Errorf("clean stale profile JD agents %q: %w", profile.Name, cleanupErr)
 				}
 				changed = changed || cleanupResult.Changed
-				profileOverlay, profileErr := GenerateProfileOverlay(profile, homeDir, opts.CodeGraphGuidanceMarkdown)
+				profileOverlay, profileErr := GenerateProfileOverlay(profile, homeDir, settingsPath, opts.OpenCodeModelAssignments, opts.CodeGraphGuidanceMarkdown)
 				if profileErr != nil {
 					return InjectionResult{}, fmt.Errorf("generate profile overlay %q: %w", profile.Name, profileErr)
 				}
@@ -565,14 +494,15 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.SupportsSkills() {
 		skillDir := adapter.SkillsDir(homeDir)
 		if skillDir != "" {
-			sharedFiles := []string{
-				"SKILL.md",
-				"persistence-contract.md",
-				"engram-convention.md",
-				"openspec-convention.md",
-				"sdd-phase-common.md",
-				"sdd-status-contract.md",
-				"skill-resolver.md",
+			// The embedded skills/_shared listing is the single source of
+			// truth for the shared inventory; deriving it here keeps a newly
+			// added shared file from silently missing this deployment path.
+			sharedFiles, sharedErr := assets.SharedSkillFileNames()
+			if sharedErr != nil {
+				return InjectionResult{}, fmt.Errorf("resolve SDD shared files: %w", sharedErr)
+			}
+			if len(sharedFiles) == 0 {
+				return InjectionResult{}, fmt.Errorf("resolve SDD shared files: embedded %s listing is empty", assets.SharedSkillDir)
 			}
 			sddSkillIDs := []model.SkillID{
 				"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
@@ -584,7 +514,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// These are written directly, not via skills.Inject, since they are
 			// not part of the skills component's injection scope.
 			for _, fileName := range sharedFiles {
-				assetPath := "skills/_shared/" + fileName
+				assetPath := assets.SharedSkillDir + "/" + fileName
 				content, readErr := assets.Read(assetPath)
 				if readErr != nil {
 					return InjectionResult{}, fmt.Errorf("required SDD shared file %q: embedded asset not found: %w", fileName, readErr)
@@ -686,7 +616,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				continue
 			}
 			// Copy all files (not just .md) to support Kimi's YAML-based agents
-			contentStr := renderBoundedReviewAsset(embeddedDir + "/" + entry.Name())
+			contentStr := renderBoundedReviewAsset(adapter.Agent(), embeddedDir+"/"+entry.Name())
 
 			// Resolve {{KIRO_MODEL}} placeholder for adapters that support it (e.g. Kiro).
 			// Non-Kiro adapters (Cursor, etc.) don't implement kiroModelResolver and are unaffected.
@@ -852,7 +782,7 @@ func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) 
 	return nil
 }
 
-func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string, preserveExistingOrchestratorPrompt bool, triggerRulesContent string, codeGraphGuidance string) ([]byte, error) {
+func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string, agent model.AgentID, preserveExistingOrchestratorPrompt bool, codeGraphGuidance string) ([]byte, error) {
 	var overlay map[string]any
 	if err := json.Unmarshal(overlayBytes, &overlay); err != nil {
 		return nil, fmt.Errorf("unmarshal OpenCode SDD overlay: %w", err)
@@ -896,27 +826,30 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 			}
 		}
 		if existingPrompt != "" {
-			orchestratorMap["prompt"] = migratePreservedOpenCodeOrchestratorPrompt(existingPrompt)
+			orchestratorMap["prompt"] = renderPreservedOpenCodeOrchestratorPrompt(existingPrompt, agent)
 		} else {
-			orchestratorMap["prompt"] = renderSDDOrchestratorAsset(model.AgentOpenCode)
+			orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent)
 		}
 	} else {
-		orchestratorMap["prompt"] = renderSDDOrchestratorAsset(model.AgentOpenCode)
+		orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent)
 	}
 
-	// Append the trigger-rules section to the orchestrator prompt when provided.
-	// This keeps the rules in the always-loaded scope for OpenCode/Kilocode agents
-	// (the orchestrator prompt is the only per-agent content they read at session start).
-	if triggerRulesContent != "" {
-		if existingPrompt, ok := orchestratorMap["prompt"].(string); ok {
-			orchestratorMap["prompt"] = filemerge.InjectMarkdownSection(existingPrompt, "trigger-rules", triggerRulesContent)
-		}
+	// Carry the organic routing guidance across the wholesale prompt assignment
+	// above. The orchestrator prompt is the only always-loaded scope OpenCode and
+	// Kilocode read, and every branch above replaces it in full, so guidance that
+	// is not re-injected here is destroyed by an SDD install.
+	//
+	// Preserving is deliberately chosen over merely ordering the installers: the
+	// SDD injector is reachable from install, sync, and profile refresh, and an
+	// order-only fix would still rewrite the settings document on every run,
+	// turning an already-current install into a reported change.
+	if err := preserveOpenCodeRoutingGuidance(settingsPath, orchestratorMap); err != nil {
+		return nil, err
 	}
 
-	// Replace sub-agent prompt placeholders with {file:<absolutePath>} references.
+	// Replace sub-agent prompt placeholders with settings-relative file references.
 	// The placeholder format is __PROMPT_FILE_{phase}__ where {phase} is the agent name.
 	if homeDir != "" {
-		promptDir := SharedPromptDir(homeDir)
 		for _, phase := range subAgentPhaseOrder {
 			agentRaw, exists := agentsMap[phase]
 			if !exists {
@@ -928,7 +861,11 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 			}
 			placeholder := "__PROMPT_FILE_" + phase + "__"
 			if prompt, _ := agentMap["prompt"].(string); prompt == placeholder {
-				agentMap["prompt"] = "{file:" + filepath.ToSlash(filepath.Join(promptDir, phase+".md")) + "}"
+				promptRef, err := SharedPromptFileRef(settingsPath, homeDir, phase)
+				if err != nil {
+					return nil, fmt.Errorf("build shared prompt file reference for %q: %w", phase, err)
+				}
+				agentMap["prompt"] = promptRef
 			}
 		}
 	}
@@ -948,15 +885,78 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 	return append(result, '\n'), nil
 }
 
+// preserveOpenCodeRoutingGuidance re-injects the routing guidance section that
+// the managed orchestrator prompt already carried on disk.
+//
+// Routing guidance is owned by the agentguidance component, not by SDD: SDD only
+// has to avoid destroying it. Re-injecting the previously delivered bytes keeps
+// this component from becoming a second author of routing content, so removing
+// or disabling SDD can never change what an agent is told about routing.
+func preserveOpenCodeRoutingGuidance(settingsPath string, orchestratorMap map[string]any) error {
+	previous, err := readOpenCodeAgentPrompt(settingsPath, opencodedefault.ManagedAgent)
+	if err != nil {
+		return err
+	}
+
+	guidance := extractManagedSection(previous, agentguidance.RoutingSectionID)
+	if guidance == "" {
+		return nil
+	}
+
+	prompt, ok := orchestratorMap["prompt"].(string)
+	if !ok {
+		// A non-string prompt is not something this component may rewrite; the
+		// guidance owner reports the malformed document on its own pass.
+		return nil
+	}
+
+	orchestratorMap["prompt"] = filemerge.InjectMarkdownSection(prompt, agentguidance.RoutingSectionID, guidance)
+	return nil
+}
+
+// extractManagedSection returns the content of one gentle-ai managed section.
+//
+// An absent or malformed marker pair yields the empty string. That fail-closed
+// default matters here: filemerge.ExtractHTMLCommentSection serves a different
+// marker syntax and returns the whole document when it finds no section, which
+// would smuggle an entire orchestrator prompt into a guidance block.
+func extractManagedSection(content, sectionID string) string {
+	open := "<!-- gentle-ai:" + sectionID + " -->"
+	closing := "<!-- /gentle-ai:" + sectionID + " -->"
+
+	start := strings.Index(content, open)
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(content, closing)
+	if end <= start {
+		return ""
+	}
+
+	return strings.Trim(content[start+len(open):end], "\n")
+}
+
+// expandOpenCodeBoundedReviewAgents renders the OpenCode-shaped review-lens
+// sub-agents shared by the OpenCode and Kilocode overlays. Both identities
+// get the identical shell-less, read-less shape: the OpenCode plugin
+// (review-result-artifacts.ts) asks `review lens-context` for all immutable
+// candidate evidence through its provider-owned native channel and injects it
+// into each reviewer task's prompt before the reviewer ever launches, so the lens
+// itself needs no bash and no read tool — this provider-injected block is
+// its only byte source. Kilocode is not RDD-eligible and never receives the
+// capturing plugin, so review never starts there; it gets the identical
+// denied shape rather than a permissive one that a fresh Kilocode-specific
+// entry point could someday reach.
 func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 	for _, name := range opencode.ReviewLensPhases() {
 		agent, ok := agentsMap[name].(map[string]any)
 		if !ok {
 			continue
 		}
-		prompt, _ := reviewerPrompt(name)
+		prompt, _ := openCodeProviderInjectedReviewerPrompt(name)
 		agent["prompt"] = prompt
-		agent["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": false, "task": false}
+		agent["tools"] = map[string]any{"*": false, "read": false, "write": false, "edit": false, "bash": false, "task": false}
+		agent["permission"] = map[string]any{"edit": "deny", "bash": "deny"}
 	}
 
 	for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
@@ -965,12 +965,12 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 			continue
 		}
 		agent["prompt"] = judgmentDayReviewerContract()
-		agent["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": false, "task": false}
+		agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
 	}
 
 	if refuter, ok := agentsMap[opencode.ReviewRefuterAgent].(map[string]any); ok {
 		refuter["prompt"] = "You are the detached read-only refuter for exactly ONE transaction-wide inferential batch. Receive every inferential severe neutral claim and proof reference, return one corroborated | refuted | inconclusive result per finding, add no findings, modify nothing, return one complete result, and terminate. Missing or malformed entries are inconclusive."
-		refuter["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": false, "task": false}
+		refuter["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
 	}
 }
 
@@ -997,6 +997,14 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 	migrated = ensurePreservedOpenCodeOrchestratorPreflight(migrated)
 	migrated = ensurePreservedOpenCodeDelegationHardGates(migrated)
 	return ensurePreservedOpenCodeReviewExecutionContract(migrated)
+}
+
+func renderPreservedOpenCodeOrchestratorPrompt(
+	prompt string,
+	agent model.AgentID,
+) string {
+	migrated := migratePreservedOpenCodeOrchestratorPrompt(prompt)
+	return strings.ReplaceAll(migrated, runtimeAgentIDPlaceholder, string(agent))
 }
 
 func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {
@@ -1045,6 +1053,12 @@ func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {
 		"D2 800 líneas",
 		"D3 Otro",
 		"Map answers to canonical values: A1/Interactive",
+		// Retired delivery-strategy vocabulary. These canonical values were
+		// produced by the preflight but matched no consumer branch, so a
+		// preserved prompt must lose the stale mapping rather than keep it
+		// alongside the re-injected corrected one.
+		"Ask me -> `ask-always`",
+		"`auto-forecast`, `ask-always`, `single-pr-default`, or `force-chained`",
 	}
 
 	lines := strings.Split(prompt, "\n")
@@ -1064,21 +1078,34 @@ func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {
 	return strings.Join(kept, "\n")
 }
 
+// nativeReviewAuthorityRule is rule 7 of the managed delegation block. It
+// replaces a rule that pointed at retired work-routing contracts: those commands
+// no longer exist, so a prompt naming them sends the orchestrator after dead
+// authority. What survives is the local review receipt plus the native review
+// status/validate surface, and the ownership boundary the old rule protected --
+// the orchestrator still never selects lenses or authors PASS itself.
+const nativeReviewAuthorityRule = "7. **Authority rule**: read native review state with `gentle-ai review status`" +
+	" and let `gentle-ai review validate --gate <gate>` check the exact owner-issued receipt at every lifecycle gate." +
+	" Never select lenses, synthesize transitions, or infer PASS from prose."
+
 func ensurePreservedOpenCodeDelegationHardGates(prompt string) string {
+	prompt = removeRetiredWorkRoutingAuthorityRule(prompt)
 	prompt = migrateLegacyMandatoryWordingInDelegationHardGates(prompt)
+	// Unmarked v1 prompts predate managed ownership boundaries. Migrate only
+	// exact generated sentences here; never infer that every byte after the
+	// legacy heading belongs to gentle-ai because users may have appended H4 or
+	// plain-text policy beneath it.
 	prompt = strings.NewReplacer(
 		"run a fresh-context review unless the diff is trivial docs/text",
-		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)",
-		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial docs/text",
-		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)",
+		"validate the exact owner-issued receipt; never launch prompt-owned review at the gate",
 		"stop and run a fresh audit before continuing",
-		"prove code, configuration, generated-artifact, and provenance targets remain immutable, then validate the existing receipt",
+		"stop with one typed Needs your decision result until native authority validates the immutable candidate",
 		"use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents",
-		"run fresh adversarial lenses only inside one explicit review/start(target); PR readiness and incidents validate the receipt",
-		"before commit, push, or PR after code changes, run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)",
-		"before commit, push, PR, or release, validate the same content-bound receipt with native `gentle-ai review validate --gate <gate> --cwd <repo>`; never create a review budget at the gate",
-		"after wrong `cwd`, accidental repo/worktree mutation, merge recovery, confusing test command, or environment workaround, stop and run the concrete audit/review lens(es) selected by Review Lens Selection before continuing",
-		"after a workflow incident, prove code, configuration, generated-artifact, and provenance targets remain immutable, then validate the existing receipt",
+		"let native RAR schedule adversarial review; PR readiness and incidents validate the same receipt",
+		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial docs/text",
+		"validate the exact owner-issued receipt; never launch prompt-owned review at the gate",
+		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)",
+		"validate the exact owner-issued receipt; never launch prompt-owned review at the gate",
 	).Replace(prompt)
 
 	delegation := `
@@ -1086,67 +1113,35 @@ func ensurePreservedOpenCodeDelegationHardGates(prompt string) string {
 <!-- gentle-ai:delegation-hard-gates-migration -->
 ### Mandatory Delegation Triggers (Non-Skippable)
 
-These gates are non-skippable hard gates, not recommendations. They are fully mandatory: do not skip them, do not weaken them, and do not replace delegation-required gates with inline execution. Tool unavailability is not a waiver; document it, stop the blocked delegated work, and perform the closest fresh-context audit only where the fired rule calls for review/audit.
+These routing boundaries are fully mandatory. They protect context quality without making SDD the universal implementation workflow.
 
 Semantic guard: **delegate** means using OpenCode's native Task tool to invoke a configured sub-agent. Running local scripts, Python, or Bash inline is execution, not delegation.
 
 Do not pass these rules to child agents as permission to spawn more agents; children receive concrete role work and must not orchestrate.
 
-1. **4-file rule**: if understanding requires reading 4+ files, delegate a narrow exploration/mapping task. If delegation tooling is unavailable, document the blocker and stop the exploration instead of reading everything inline.
-2. **Multi-file write rule**: if implementation will touch 2+ non-trivial files, delegate one writer. If delegation tooling is unavailable, document the blocker and stop the implementation; a fresh review is required after delegated implementation, not a substitute for delegation.
-3. **Lifecycle receipt rule**: before commit, push, PR, or release, run one native ` + "`gentle-ai review validate --gate <gate> --cwd <repo>`" + ` command for the same content-bound receipt; let the facade discover authority and artifacts, follow missing/scope-changed/invalidated/escalated action, and never launch a lens, Judgment Day, or new budget at the gate.
-4. **Incident rule**: after a workflow incident, prove code, configuration, generated-artifact, and provenance targets remain immutable, then validate the existing receipt. Any changed target requires explicit scope action, not reopened review.
-5. **Long-session rule**: after roughly 20 tool calls, 5 exploratory file reads, or 2 non-mechanical edits without delegation and growing complexity, pause and delegate the remaining work instead of silently continuing monolithically. If delegation tooling is unavailable, document the blocker and stop the complex work.
-6. **Fresh review rule**: fresh adversarial lenses run only inside one explicit ` + "`review/start(target)`" + `. PR readiness and incidents validate the receipt and never create another budget.
-
-#### Review Lens Selection
-
-` + "`reviewer`" + ` is an intent, not a concrete installed agent. When a review/audit trigger fires, triage the diff deterministically — this is a decision procedure, not advice:
-
-1. **Trivial diff** (ONLY documentation, comments, formatting, or typo fixes in strings — zero executable code and zero configuration changes): run no lens. Any diff touching executable code or configuration is at least standard tier.
-2. **Standard diff**: run exactly ONE lens — the row in the table below that matches the dominant risk. If multiple rows match, pick the single highest-impact row; do not add lenses.
-3. **Hot path** (the diff touches auth/update/security/payments paths) **or >400 changed lines**: run the full 4R set — ` + "`review-risk`" + `, ` + "`review-resilience`" + `, ` + "`review-readability`" + `, ` + "`review-reliability`" + `.
-
-| Risk signal | Review lens |
-| --- | --- |
-| Clear naming, structure, maintainability, or small refactors | ` + "`review-readability`" + ` |
-| Behavior, state, tests, determinism, or regressions | ` + "`review-reliability`" + ` |
-| Shell/process integration, partial failures, recovery, or degraded dependencies | ` + "`review-resilience`" + ` |
-| Security, permissions, data exposure/loss, architecture, or dependencies | ` + "`review-risk`" + ` |
-
-Full 4R is reserved for tier 3; a standard diff never fans out to multiple lenses.
+1. **Bounded read rule**: read 1–3 files inline to decide or verify.
+2. **4-file rule**: if understanding requires 4+ files, delegate one narrow exploration/mapping task.
+3. **Write rule**: keep one mechanical, already-understood file inline; delegate one writer for 2+ non-trivial files.
+4. **Context rule**: delegate reading that prepares a write and broad research.
+5. **Optional SDD rule**: propose SDD only when durable proposal/spec/design/tasks materially reduce substantial ambiguity. Select it only after explicit request or accepted proposal.
+6. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route or creating SDD state.
+` + nativeReviewAuthorityRule + `
 <!-- /gentle-ai:delegation-hard-gates-migration -->
 `
 
-	if strings.Contains(prompt, "Mandatory Delegation Triggers") &&
-		strings.Contains(prompt, "non-skippable hard gates") &&
+	if strings.Contains(prompt, "<!-- gentle-ai:delegation-hard-gates-migration -->") &&
 		strings.Contains(prompt, "fully mandatory") &&
+		strings.Contains(prompt, "Bounded read rule") &&
 		strings.Contains(prompt, "4-file rule") &&
-		strings.Contains(prompt, "Multi-file write rule") &&
-		strings.Contains(prompt, "Lifecycle receipt rule") &&
-		strings.Contains(prompt, "Incident rule") &&
-		strings.Contains(prompt, "Long-session rule") &&
-		strings.Contains(prompt, "Fresh review rule") &&
+		strings.Contains(prompt, "Write rule") &&
+		strings.Contains(prompt, "Context rule") &&
+		strings.Contains(prompt, "Optional SDD rule") &&
+		strings.Contains(prompt, "Per-action rule") &&
+		strings.Contains(prompt, "Authority rule") &&
 		strings.Contains(prompt, "Semantic guard") &&
 		strings.Contains(prompt, "execution, not delegation") &&
-		strings.Contains(prompt, "fresh review is required after delegated implementation, not a substitute for delegation") &&
-		strings.Contains(prompt, "validate the same content-bound receipt") &&
-		strings.Contains(prompt, "generated-artifact, and provenance targets remain immutable") &&
-		strings.Contains(prompt, "fresh adversarial lenses run only inside one explicit") &&
-		strings.Contains(prompt, "#### Review Lens Selection") &&
-		strings.Contains(prompt, "`reviewer` is an intent, not a concrete installed agent") &&
-		// 4R v2 deterministic-triage markers: their absence means the prompt
-		// carries the v1 advisory lens table (or a pre-objective-boundary v2
-		// block) and must be re-migrated.
-		strings.Contains(prompt, "triage the diff deterministically") &&
-		strings.Contains(prompt, "**Trivial diff**") &&
-		strings.Contains(prompt, "zero executable code and zero configuration changes") &&
-		strings.Contains(prompt, "run exactly ONE lens") &&
-		strings.Contains(prompt, "Full 4R is reserved for tier 3") &&
-		strings.Contains(prompt, "`review-readability`") &&
-		strings.Contains(prompt, "`review-reliability`") &&
-		strings.Contains(prompt, "`review-resilience`") &&
-		strings.Contains(prompt, "`review-risk`") {
+		strings.Contains(prompt, nativeReviewAuthorityRule) &&
+		!strings.Contains(prompt, "#### Review Lens Selection") {
 		return prompt
 	}
 
@@ -1158,15 +1153,38 @@ Full 4R is reserved for tier 3; a standard diff never fans out to multiple lense
 			return strings.TrimRight(prompt[:startIdx], "\n") + delegation + prompt[endIdx:]
 		}
 	}
+	const legacyHeading = "### Mandatory Delegation Triggers (Non-Skippable)"
+	if strings.Contains(prompt, legacyHeading) {
+		return strings.TrimRight(prompt, "\n") + delegation
+	}
 
 	return strings.TrimRight(prompt, "\n") + delegation
+}
+
+// removeRetiredWorkRoutingAuthorityRule drops the authority bullet written by an
+// earlier install. Inside the managed markers the block is rebuilt anyway, but a
+// stray copy left outside them would survive as a second, retired authority rule
+// contradicting the managed one, so the line is dropped wherever it sits. Only a
+// bullet that both claims authority and names a retired work-routing contract
+// matches; unrelated user-authored prose is never touched.
+func removeRetiredWorkRoutingAuthorityRule(prompt string) string {
+	lines := strings.Split(prompt, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		retired := strings.Contains(line, "**Authority rule**") &&
+			(strings.Contains(line, "gentle-ai.work-") || strings.Contains(line, "WorkRun"))
+		if retired {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 func migrateLegacyMandatoryWordingInDelegationHardGates(prompt string) string {
 	const (
 		startMarker = "<!-- gentle-ai:delegation-hard-gates-migration -->"
 		endMarker   = "<!-- /gentle-ai:delegation-hard-gates-migration -->"
-		heading     = "### Mandatory Delegation Triggers (Non-Skippable)"
 	)
 
 	start := strings.Index(prompt, startMarker)
@@ -1177,20 +1195,10 @@ func migrateLegacyMandatoryWordingInDelegationHardGates(prompt string) string {
 		}
 	}
 	if end < 0 {
-		start = strings.Index(prompt, heading)
-		if start < 0 {
-			return prompt
-		}
-		end = len(prompt)
-		remainder := prompt[start+len(heading):]
-		for _, nextHeading := range []string{"\n### ", "\n## ", "\n# "} {
-			if relativeEnd := strings.Index(remainder, nextHeading); relativeEnd >= 0 {
-				candidateEnd := start + len(heading) + relativeEnd
-				if candidateEnd < end {
-					end = candidateEnd
-				}
-			}
-		}
+		// Without markers there is no trustworthy ownership boundary. Preserve
+		// the legacy block byte-for-byte; the managed replacement is appended by
+		// ensurePreservedOpenCodeDelegationHardGates.
+		return prompt
 	}
 
 	managed := strings.ReplaceAll(prompt[start:end], legacyMandatoryWording, "fully mandatory")
@@ -1276,7 +1284,7 @@ The single ` + "`question`" + ` tool call must contain these four localized grou
 
 1. Pace: Interactive, Automatic.
 2. Artifacts: OpenSpec, Engram, Both.
-3. PRs: Ask me, Single PR, Chained, Auto.
+3. PRs: Ask me, Single PR, Auto.
 4. Review: 400 lines, 800 lines, Other.
 
 Match the user's current language and active persona for question labels and descriptions. Treat the preflight UI as direct orchestrator conversation, not as a generated technical artifact. Technical artifacts still default to English, but this UI follows the user's conversation language/persona. Do NOT mix languages inside one grouped question.
@@ -1289,7 +1297,9 @@ If Other is selected for review budget, ask one follow-up question for the numer
 
 Only after all four preflight choices are collected, summarize them as the ` + "`SDD Session Preflight`" + ` decision block and continue with the SDD init guard/requested phase.
 
-Map answers to canonical values: Interactive -> ` + "`interactive`" + `; Automatic -> ` + "`auto`" + `; OpenSpec -> ` + "`openspec`" + `; Engram -> ` + "`engram`" + `; Both -> ` + "`both`" + `; Ask me -> ` + "`ask-always`" + `; Single PR -> ` + "`single-pr-default`" + `; Chained -> ` + "`force-chained`" + `; Auto -> ` + "`auto-forecast`" + `; 400 lines -> ` + "`review_budget_lines: 400`" + `; 800 lines -> ` + "`review_budget_lines: 800`" + `; Other -> ask one follow-up for the number.
+Map answers to canonical values: Interactive -> ` + "`interactive`" + `; Automatic -> ` + "`auto`" + `; OpenSpec -> ` + "`openspec`" + `; Engram -> ` + "`engram`" + `; Both -> ` + "`both`" + `; Ask me -> ` + "`ask-on-risk`" + `; Single PR -> ` + "`single-pr`" + `; Auto -> ` + "`auto-chain`" + `; 400 lines -> ` + "`review_budget_lines: 400`" + `; 800 lines -> ` + "`review_budget_lines: 800`" + `; Other -> ask one follow-up for the number.
+
+The PR canonical values are exactly the ` + "`delivery_strategy`" + ` domain ` + "`sdd-tasks`" + ` and ` + "`sdd-apply`" + ` accept (` + "`ask-on-risk | auto-chain | single-pr | exception-ok`" + `); never emit a value outside it. The preflight offers no separate chained option because ` + "`delivery_strategy`" + ` is only consulted once the tasks forecast flags review-budget risk: below that line there is nothing to chain, and above it ` + "`Auto`" + ` already resolves to ` + "`auto-chain`" + `.
 
 Hard gate rules:
 
@@ -1311,6 +1321,19 @@ Hard gate rules:
 		strings.Contains(prompt, "Do NOT run this as a sequential wizard") &&
 		strings.Contains(prompt, "Do NOT mix languages inside one grouped question") &&
 		strings.Contains(prompt, "map the selected human labels to canonical values internally") &&
+		// A preserved prompt written before the delivery-strategy vocabularies
+		// were reconciled still maps the PR options to `ask-always`,
+		// `single-pr-default`, `force-chained`, and `auto-forecast`, none of
+		// which any consumer branch matches. Every other clause here is
+		// satisfied by that stale text, so without this the broken mapping
+		// would survive every future sync.
+		strings.Contains(prompt, "Ask me -> `ask-on-risk`") &&
+		// The retired `Chained` PR option shipped alongside that corrected
+		// mapping, so a prompt still offering it satisfies every clause above,
+		// including the one directly overhead. Without this the four-option menu
+		// would survive every future sync and the asset-only removal would be
+		// reverted on the operator's next install.
+		strings.Contains(prompt, "3. PRs: Ask me, Single PR, Auto.") &&
 		strings.Contains(prompt, "pause after each delegated phase returns") &&
 		strings.Contains(prompt, "ask before launching the next phase via the `question` tool") &&
 		strings.Contains(prompt, "approve only the immediate next phase") &&
@@ -1591,6 +1614,100 @@ func claudeHookListContains(hookEntries []any, command string) bool {
 	return false
 }
 
+// ManagedOpenCodePluginNames lists every OpenCode plugin gentle-ai manages as
+// versioned runtime artifacts. Their content is tied to the installed binary
+// version: install writes them and sync must keep already-installed copies
+// byte-equal to the embedded assets (issue #1440).
+func ManagedOpenCodePluginNames() []string {
+	return managedOpenCodePluginNames(model.AgentOpenCode)
+}
+
+func managedOpenCodePluginNames(agent model.AgentID) []string {
+	switch agent {
+	case model.AgentOpenCode:
+		return []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"}
+	case model.AgentKilocode:
+		return []string{"model-variants.ts", "skill-registry.ts"}
+	default:
+		return nil
+	}
+}
+
+// AgentReceivesManagedOpenCodePlugins reports whether the SDD injector
+// installs the managed OpenCode-compatible plugins for the given agent.
+// Inject's settings/plugins gate and sync's plugin refresh both use this
+// predicate so the two gates cannot drift (issue #1440).
+func AgentReceivesManagedOpenCodePlugins(agent model.AgentID) bool {
+	return agent == model.AgentOpenCode || agent == model.AgentKilocode
+}
+
+// RefreshInstalledOpenCodePlugins rewrites managed OpenCode plugins that are
+// already installed on disk so they track the embedded assets of the running
+// binary. It never creates a plugin that was not previously installed — users
+// who never received the SDD/OpenCode plugins must not get them from a plain
+// sync. Managed plugins carry no user content, so drift is resolved by
+// overwriting, matching installOpenCodePlugins.
+func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+
+	var files []string
+	var changed bool
+	if adapter.Agent() == model.AgentKilocode {
+		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		if removed {
+			changed = true
+			files = append(files, path)
+		}
+	}
+
+	for _, name := range managedOpenCodePluginNames(adapter.Agent()) {
+		pluginPath := filepath.Join(pluginsDir, name)
+		info, err := os.Lstat(pluginPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return InjectionResult{}, fmt.Errorf("stat managed OpenCode plugin %s: %w", pluginPath, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+
+		content := assets.MustRead("opencode/plugins/" + name)
+		writeResult, err := filemerge.WriteFileAtomic(pluginPath, []byte(content), 0o644)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("refresh managed OpenCode plugin %s: %w", name, err)
+		}
+		if writeResult.Changed {
+			changed = true
+			files = append(files, pluginPath)
+		}
+	}
+
+	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+func removeOpenCodeOnlyReviewPlugin(pluginsDir string) (string, bool, error) {
+	path := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return path, false, nil
+		}
+		return path, false, fmt.Errorf("stat OpenCode-only review plugin %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return path, false, nil
+	}
+	if err := os.Remove(path); err != nil {
+		return path, false, fmt.Errorf("remove OpenCode-only review plugin %s: %w", path, err)
+	}
+	return path, true, nil
+}
+
 // installOpenCodePlugins copies the OpenCode-compatible plugins that gentle-ai
 // still manages by default. Native OpenCode subagents replace the legacy
 // background-agents plugin, so that legacy cleanup is scoped to OpenCode only.
@@ -1617,7 +1734,18 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 		}
 	}
 
-	for _, name := range []string{"model-variants.ts", "skill-registry.ts"} {
+	if adapter.Agent() == model.AgentKilocode {
+		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		if removed {
+			changed = true
+			files = append(files, path)
+		}
+	}
+
+	for _, name := range managedOpenCodePluginNames(adapter.Agent()) {
 		content := assets.MustRead("opencode/plugins/" + name)
 		pluginPath := filepath.Join(pluginsDir, name)
 

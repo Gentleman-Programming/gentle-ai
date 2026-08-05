@@ -11,20 +11,20 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
-	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/internal/skillregistry"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/tui"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
-	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
-	"github.com/gentleman-programming/gentle-ai/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/skillregistry"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
 
 // Version is set from main via ldflags at build time.
@@ -69,7 +69,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 	// --yes as a global CLI flag for self-update is handled via GENTLE_AI_YES=1.
 	// Per-subcommand --yes flags (e.g. restore --yes) are parsed by each subcommand.
 
-	// Info commands: no system detection, no self-update, no platform validation.
+	// Platform-independent commands: no system detection, self-update, or
+	// platform validation.
 	if len(args) > 0 {
 		switch args[0] {
 		case "version", "--version", "-v":
@@ -83,17 +84,26 @@ func RunArgs(args []string, stdout io.Writer) error {
 				_, err := cli.RunUninstallOpenCodePlugin(args[2:], stdout)
 				return err
 			}
-			_, err := cli.RunUninstall(args[1:], stdout)
-			return err
+			return runUninstall(args[1:], stdout)
 		case "skill-registry":
 			return runSkillRegistry(args[1:], stdout)
 		case "sdd-status":
 			return cli.RunSDDStatus(args[1:], stdout)
 		case "sdd-continue":
 			return cli.RunSDDContinue(args[1:], stdout)
+		case "sdd-attempt":
+			// Content digests canonicalize at this boundary (#2523); the ledger stays strict (#2395).
+			return cli.RunSDDAttempt(cli.CanonicalizeSDDAttemptRevisionArgs(args[1:]), stdout)
+		case "sdd-verify-validate":
+			return cli.RunSDDVerifyValidate(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
 		case "review":
+			// The kill switch must stay reachable even when review authority
+			// itself is disabled, so it is dispatched ahead of the facade.
+			if len(args) >= 2 && args[1] == "mode" {
+				return cli.RunReviewMode(args[2:], stdout)
+			}
 			return cli.RunReview(args[1:], stdout)
 		case "review-start":
 			return cli.RunReviewStart(args[1:], stdout)
@@ -243,20 +253,6 @@ func RunArgs(args []string, stdout io.Writer) error {
 
 		_, _ = fmt.Fprintln(stdout, cli.RenderSyncReport(syncResult))
 		return nil
-	case "uninstall":
-		uninstallResult, err := cli.RunUninstall(args[1:], stdout)
-		if err != nil {
-			// If a backup was created before the failure, surface it so
-			// the user can restore safely.
-			if uninstallResult.Manifest.ID != "" {
-				_, _ = fmt.Fprintln(stdout, cli.RenderUninstallReport(uninstallResult))
-			}
-			return err
-		}
-		if uninstallResult.Manifest.ID != "" {
-			_, _ = fmt.Fprintln(stdout, cli.RenderUninstallReport(uninstallResult))
-		}
-		return nil
 	case "restore":
 		return cli.RunRestore(args[1:], stdout)
 	case "doctor":
@@ -264,6 +260,14 @@ func RunArgs(args []string, stdout io.Writer) error {
 	default:
 		return fmt.Errorf("unknown command %q — run 'gentle-ai help' for available commands", args[0])
 	}
+}
+
+func runUninstall(args []string, stdout io.Writer) error {
+	result, err := cli.RunUninstall(args, stdout)
+	if result.Manifest.ID != "" {
+		_, _ = fmt.Fprintln(stdout, cli.RenderUninstallReport(result))
+	}
+	return err
 }
 
 func hasHelpFlag(args []string) bool {
@@ -437,7 +441,7 @@ func runUpdate(ctx context.Context, currentVersion string, profile system.Platfo
 //   - Snapshots agent config paths before execution (config preservation by design)
 //   - Executes binary-only upgrades; does NOT invoke install or sync pipelines
 //   - Skips gentle-ai itself when running as a dev build (version="dev")
-//   - Falls back to manual guidance for unsafe platforms (Windows binary self-replace)
+//   - Falls back to source-install guidance where official binaries are unavailable
 func runUpgrade(ctx context.Context, args []string, detection system.DetectionResult, stdout io.Writer) error {
 	dryRun := false
 	noBackup := false

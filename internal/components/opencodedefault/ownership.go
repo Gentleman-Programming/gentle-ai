@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/components/mutationjournal"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mutationjournal"
 )
 
 const (
@@ -17,6 +17,7 @@ const (
 	schema       = "gentle-ai.opencode-default-agent"
 	version      = 1
 )
+
 type ownership struct {
 	Schema          string `json:"schema"`
 	Version         int    `json:"version"`
@@ -39,6 +40,7 @@ type UninstallPlan struct {
 	current       fieldValue
 	owned         *ownership
 }
+
 func OwnershipPath(settingsPath string) string {
 	return filepath.Join(filepath.Dir(settingsPath), ".gentle-ai-default-agent.json")
 }

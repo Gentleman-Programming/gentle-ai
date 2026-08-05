@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 )
 
 // TestPrepareBackupStep_SkipsDuplicateBackup verifies that when the new checksum
@@ -62,6 +62,10 @@ func TestPrepareBackupStep_SkipsDuplicateBackup(t *testing.T) {
 	}
 	if err := secondStep.Run(); err != nil {
 		t.Fatalf("second prepareBackupStep.Run() error = %v", err)
+	}
+	t.Cleanup(secondState.cleanupRollbackSnapshot)
+	if len(secondState.manifest.Entries) == 0 || secondState.rollbackSnapshotDir == "" {
+		t.Fatal("duplicate backup must retain a transaction snapshot for rollback")
 	}
 
 	// The second snapshot directory must NOT have been created.

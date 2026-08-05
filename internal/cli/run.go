@@ -13,29 +13,32 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	codexagent "github.com/gentleman-programming/gentle-ai/internal/agents/codex"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/internal/components/mcp"
-	"github.com/gentleman-programming/gentle-ai/internal/components/opencodedefault"
-	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
-	"github.com/gentleman-programming/gentle-ai/internal/components/permissions"
-	"github.com/gentleman-programming/gentle-ai/internal/components/persona"
-	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
-	"github.com/gentleman-programming/gentle-ai/internal/components/theme"
-	"github.com/gentleman-programming/gentle-ai/internal/installcmd"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
-	"github.com/gentleman-programming/gentle-ai/internal/planner"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/verify"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	codexagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/permissions"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
 
 type InstallResult struct {
@@ -63,9 +66,10 @@ var (
 	pathEnvEntries               = func(profile system.PlatformProfile) []string {
 		return splitPathForOS(os.Getenv("PATH"), profile.OS)
 	}
-	addUserPath         = system.AddToUserPath
-	ensureUserPathFirst = system.PrioritizeUserPath
-	userPathEntries     = system.UserPathEntries
+	addUserPath          = system.AddToUserPath
+	ensureUserPathFirst  = system.PrioritizeUserPath
+	userPathEntries      = system.UserPathEntries
+	cleanupGGAInstallDir = gga.CleanupInstallDir
 
 	// ggaAvailableCheck is an optional override for ggaAvailable behavior.
 	// When set, it is called instead of the default filesystem check.
@@ -175,6 +179,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy())
 	result.Execution = orchestrator.Execute(stagePlan)
+	runtime.state.cleanupRollbackSnapshot()
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute install pipeline: %w", result.Execution.Err)
 	}
@@ -221,9 +226,9 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	}
 	newState.SetSelection(input.Selection)
 	if len(flags.Agents) > 0 {
-		merged, ok := mergeExplicitAgentInstallState(homeDir, newState, agentIDs, flags)
-		if !ok {
-			return result, nil
+		merged, err := mergeExplicitAgentInstallState(homeDir, newState, agentIDs, flags)
+		if err != nil {
+			return result, fmt.Errorf("merge explicit agent install state: %w", err)
 		}
 		newState = merged
 	}
@@ -234,13 +239,26 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	return result, nil
 }
 
-func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState, agentIDs []string, flags InstallFlags) (state.InstallState, bool) {
+// mergeExplicitAgentInstallState merges a fresh single-agent install's state
+// into the previously persisted ~/.gentle-ai/state.json (so `install --agent
+// X` preserves other previously installed agents and model assignments).
+//
+// When the existing state file is simply absent (first install, or an agent
+// installed before state persistence existed), there is nothing to merge
+// from — newState is used as-is. Any OTHER read failure (corrupted JSON,
+// unreadable file) returns an error instead of silently falling through: the
+// caller must not report a successful install while never persisting state
+// (install/sync surface audit finding 2). Blindly merging from unreadable
+// data would itself be wrong, so this does not attempt best-effort recovery
+// — it fails loudly instead, matching the original conservative intent of
+// refusing to merge from data that cannot be trusted.
+func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState, agentIDs []string, flags InstallFlags) (state.InstallState, error) {
 	existing, readErr := state.Read(homeDir)
 	if readErr != nil {
 		if errors.Is(readErr, os.ErrNotExist) {
-			return newState, true
+			return newState, nil
 		}
-		return newState, false
+		return state.InstallState{}, fmt.Errorf("read existing install state to merge agents %v: %w", agentIDs, readErr)
 	}
 
 	merged := state.MergeAgents(existing, agentIDs)
@@ -286,16 +304,85 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	if flags.Persona != "" || merged.Persona == "" {
 		merged.Persona = newState.Persona
 	}
-	return merged, true
+	return merged, nil
 }
 
 func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
+	report = withReadyAgentRunNote(report, resolved)
+	report = withFailedVerificationNote(report, resolved)
 	if hasComponent(resolved.OrderedComponents, model.ComponentGGA) && report.Ready {
 		report.FinalNote = report.FinalNote + "\n\nGGA is now installed globally. To enable project hooks, run in each repo:\n- gga init\n- gga install"
 	}
 	report = withGoInstallPathNote(report, resolved)
 	report = withOpenCodeExperimentalNote(report, resolved)
 	return report
+}
+
+// readyAgentRunCommands is the fixed, ordered set of installable agents that
+// have a standalone runnable CLI command a user types to start building, and
+// the exact command name checked by each adapter's own Detect (e.g.
+// claude/adapter.go's lookPath("claude")). Kept intentionally narrow to the
+// two agents the completion line originally named -- fisidj's finding
+// (organic-dx Phase 3f task 3f.4) was specifically about those two, and
+// expanding to every agent with a CLI binary is a separate, unreviewed
+// decision left for a future task.
+var readyAgentRunCommands = []struct {
+	ID      model.AgentID
+	Command string
+}{
+	{model.AgentClaudeCode, "claude"},
+	{model.AgentOpenCode, "opencode"},
+}
+
+// withReadyAgentRunNote replaces the generic verify.ReadyMessage with one
+// naming only the runnable agent commands actually selected this run. It is
+// scoped to exactly that generic text so it never clobbers a FinalNote that
+// was already customized (by a test fixture or an earlier note-builder).
+func withReadyAgentRunNote(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
+	if !report.Ready || report.FinalNote != verify.ReadyMessage {
+		return report
+	}
+	report.FinalNote = verify.ReadyMessageForCommands(runnableAgentCommands(resolved.Agents))
+	return report
+}
+
+// withFailedVerificationNote replaces the generic verify.VerificationIssuesMessage
+// with one naming the concrete command that retries the install for the
+// agents that were actually resolved this run: `gentle-ai install --agent
+// <agent1>,<agent2>`. There is no `repair` case in the CLI dispatcher
+// (internal/app/app.go), so the old generic text named a command that could
+// never succeed -- a false continuation worse than no note at all.
+//
+// It is scoped to exactly the generic failure text so it never clobbers a
+// FinalNote that was already customized (by a test fixture or an earlier
+// note-builder), mirroring withReadyAgentRunNote's ready-path guard.
+func withFailedVerificationNote(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
+	if report.Ready || report.FinalNote != verify.VerificationIssuesMessage {
+		return report
+	}
+	if len(resolved.Agents) == 0 {
+		return report
+	}
+	names := make([]string, len(resolved.Agents))
+	for i, agent := range resolved.Agents {
+		names[i] = string(agent)
+	}
+	report.FinalNote = verify.VerificationIssuesMessageForCommand("gentle-ai install --agent " + strings.Join(names, ","))
+	return report
+}
+
+func runnableAgentCommands(agentIDs []model.AgentID) []string {
+	selected := make(map[model.AgentID]bool, len(agentIDs))
+	for _, id := range agentIDs {
+		selected[id] = true
+	}
+	commands := make([]string, 0, len(readyAgentRunCommands))
+	for _, entry := range readyAgentRunCommands {
+		if selected[entry.ID] {
+			commands = append(commands, entry.Command)
+		}
+	}
+	return commands
 }
 
 // withOpenCodeExperimentalNote appends guidance to enable OpenCode
@@ -353,7 +440,9 @@ func goInstallBinDir() string {
 
 func defaultGoEnv(keys ...string) (map[string]string, error) {
 	args := append([]string{"env"}, keys...)
-	out, err := exec.Command("go", args...).Output()
+	cmd := exec.Command("go", args...)
+	system.EnsureCommandDir(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
@@ -464,8 +553,9 @@ type installRuntime struct {
 }
 
 type runtimeState struct {
-	manifest    backup.Manifest
-	piCodeGraph *communitytool.PiCodeGraphResult
+	manifest            backup.Manifest
+	rollbackSnapshotDir string
+	piCodeGraph         *communitytool.PiCodeGraphResult
 
 	// engramVersionResolved, engramVersion, and engramVersionErr cache the
 	// single `engram version` invocation performed by componentApplyStep.Run
@@ -475,6 +565,17 @@ type runtimeState struct {
 	engramVersionResolved bool
 	engramVersion         string
 	engramVersionErr      error
+}
+
+func (s *runtimeState) cleanupRollbackSnapshot() {
+	if s == nil || s.rollbackSnapshotDir == "" {
+		return
+	}
+	if err := os.RemoveAll(s.rollbackSnapshotDir); err != nil {
+		log.Printf("backup: remove transaction snapshot: %v", err)
+		return
+	}
+	s.rollbackSnapshotDir = ""
 }
 
 func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChannel, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (*installRuntime, error) {
@@ -517,7 +618,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	apply := make([]pipeline.Step, 0, len(r.resolved.Agents)+len(r.selection.CommunityTools)+len(r.resolved.OrderedComponents)+1)
-	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state})
+	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir})
 
 	// Before installing components, ensure modular agents have their system prompt hub.
 	// This ensures that SDD or Engram can inject their modules even if Persona is skipped.
@@ -556,6 +657,22 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			state:        r.state,
 		})
 	}
+
+	// Routing guidance is scheduled per agent and outside the component loop:
+	// an agent that cannot choose between direct, delegated, and proposed work is
+	// unusable, so guidance must never depend on the optional SDD component being
+	// selected. It runs after the components so the freshly written SDD assets are
+	// already on disk when guidance is merged into the same scope.
+	for _, agent := range r.resolved.Agents {
+		apply = append(apply, agentRoutingGuidanceStep{
+			id:           "agent-guidance:" + string(agent),
+			agent:        agent,
+			homeDir:      r.homeDir,
+			workspaceDir: r.workspaceDir,
+			scope:        r.scope,
+		})
+	}
+
 	if containsAgent(r.resolved.Agents, model.AgentPi) {
 		selected := r.selection.HasCommunityTool(model.CommunityToolCodeGraph)
 		stepID := "community-tool:pi-codegraph-reconcile"
@@ -566,6 +683,190 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
+}
+
+// legacyTriggerRulesSection is the retired managed section that used to carry
+// prompt-owned WorkRun ceremony. Nothing authors it anymore, so any copy still
+// on disk is a stale instruction to invoke authority that no longer exists —
+// it has to be removed, not refreshed.
+const legacyTriggerRulesSection = "trigger-rules"
+
+// agentRoutingGuidanceStep delivers the organic routing guidance for one agent.
+//
+// It is deliberately not a component step. Routing guidance is what lets an
+// agent choose between direct, delegated, and proposed work at all, so every
+// configured agent receives it whether or not the optional SDD component was
+// selected (issue #1794).
+type agentRoutingGuidanceStep struct {
+	id           string
+	agent        model.AgentID
+	homeDir      string
+	workspaceDir string
+	scope        InstallScope
+
+	// changedFiles is the shared sync accumulator. Install leaves it nil and
+	// reports progress through the pipeline instead.
+	changedFiles *[]string
+}
+
+func (s agentRoutingGuidanceStep) ID() string { return s.id }
+
+func (s agentRoutingGuidanceStep) Run() error {
+	adapter, err := agents.NewAdapter(s.agent)
+	if err != nil {
+		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
+	}
+	targetDir := routingGuidanceDir(s.homeDir, s.workspaceDir, s.scope, adapter)
+
+	// Strip first: an installation upgraded from an older release still carries
+	// the retired block, and leaving it beside fresh guidance would hand the
+	// agent two conflicting sets of instructions.
+	stripped, err := stripLegacyTriggerRules(targetDir, adapter)
+	if err != nil {
+		return err
+	}
+
+	injected, err := agentguidance.InjectRouting(targetDir, s.agent)
+	if err != nil {
+		return fmt.Errorf("inject routing guidance for %q: %w", s.agent, err)
+	}
+
+	s.recordChanged(stripped)
+	s.recordChanged(injected)
+	return nil
+}
+
+func (s agentRoutingGuidanceStep) recordChanged(result agentguidance.Result) {
+	if s.changedFiles == nil || !result.Changed {
+		return
+	}
+	*s.changedFiles = append(*s.changedFiles, result.Files...)
+}
+
+// stripLegacyTriggerRules removes the retired section from the scope the agent
+// actually loads, mirroring the three delivery strategies routing guidance uses.
+//
+// Removal reuses filemerge.InjectMarkdownSection with empty content, which is
+// already the defined "delete this section" operation, so no second merge
+// implementation exists that could drift from the injector.
+func stripLegacyTriggerRules(targetDir string, adapter agents.Adapter) (agentguidance.Result, error) {
+	switch {
+	case adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode:
+		return stripLegacyTriggerRulesFromOrchestrator(adapter.SettingsPath(targetDir))
+	case adapter.SystemPromptStrategy() == model.StrategyJinjaModules:
+		return removeLegacyTriggerRulesModule(filepath.Join(adapter.GlobalConfigDir(targetDir), legacyTriggerRulesSection+".md"))
+	default:
+		return stripLegacyTriggerRulesFromPrompt(adapter.SystemPromptFile(targetDir))
+	}
+}
+
+func stripLegacyTriggerRulesFromPrompt(promptPath string) (agentguidance.Result, error) {
+	if strings.TrimSpace(promptPath) == "" {
+		return agentguidance.Result{}, nil
+	}
+
+	existing, err := os.ReadFile(promptPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return agentguidance.Result{}, nil
+		}
+		return agentguidance.Result{}, fmt.Errorf("read system prompt %q: %w", promptPath, err)
+	}
+
+	updated := filemerge.InjectMarkdownSection(string(existing), legacyTriggerRulesSection, "")
+	if updated == string(existing) {
+		return agentguidance.Result{}, nil
+	}
+
+	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+	if err != nil {
+		return agentguidance.Result{}, err
+	}
+	return agentguidance.Result{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
+}
+
+// removeLegacyTriggerRulesModule deletes the standalone include module used by
+// Jinja adapters. Their router template includes it with "ignore missing", so
+// deleting the file is exactly the section removal for that strategy.
+func removeLegacyTriggerRulesModule(modulePath string) (agentguidance.Result, error) {
+	if strings.TrimSpace(modulePath) == "" {
+		return agentguidance.Result{}, nil
+	}
+
+	if err := os.Remove(modulePath); err != nil {
+		if os.IsNotExist(err) {
+			return agentguidance.Result{}, nil
+		}
+		return agentguidance.Result{}, fmt.Errorf("remove legacy %q module %q: %w", legacyTriggerRulesSection, modulePath, err)
+	}
+	return agentguidance.Result{Changed: true, Files: []string{modulePath}}, nil
+}
+
+// stripLegacyTriggerRulesFromOrchestrator removes the section from the managed
+// orchestrator prompt inside an agent settings document.
+//
+// Every unexpected shape yields a silent no-op rather than an error: this is
+// best-effort cleanup, and the routing injector that runs immediately after is
+// the fail-closed authority on an unreadable settings document.
+func stripLegacyTriggerRulesFromOrchestrator(settingsPath string) (agentguidance.Result, error) {
+	if strings.TrimSpace(settingsPath) == "" {
+		return agentguidance.Result{}, nil
+	}
+
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return agentguidance.Result{}, nil
+		}
+		return agentguidance.Result{}, fmt.Errorf("read agent settings %q: %w", settingsPath, err)
+	}
+
+	prompt, ok := managedOrchestratorPromptFromSettings(raw)
+	if !ok {
+		return agentguidance.Result{}, nil
+	}
+
+	updated := filemerge.InjectMarkdownSection(prompt, legacyTriggerRulesSection, "")
+	if updated == prompt {
+		return agentguidance.Result{}, nil
+	}
+
+	overlay, err := json.Marshal(map[string]any{
+		"agent": map[string]any{
+			opencodedefault.ManagedAgent: map[string]any{"prompt": updated},
+		},
+	})
+	if err != nil {
+		return agentguidance.Result{}, fmt.Errorf("encode legacy %q removal for %q: %w", legacyTriggerRulesSection, settingsPath, err)
+	}
+
+	merged, err := filemerge.MergeJSONObjects(raw, overlay)
+	if err != nil {
+		return agentguidance.Result{}, fmt.Errorf("merge legacy %q removal into %q: %w", legacyTriggerRulesSection, settingsPath, err)
+	}
+
+	writeResult, err := filemerge.WriteFileAtomic(settingsPath, merged, 0o644)
+	if err != nil {
+		return agentguidance.Result{}, err
+	}
+	return agentguidance.Result{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
+}
+
+func managedOrchestratorPromptFromSettings(raw []byte) (string, bool) {
+	settings, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		return "", false
+	}
+	agentsMap, ok := settings["agent"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	orchestrator, ok := agentsMap[opencodedefault.ManagedAgent].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	prompt, ok := orchestrator["prompt"].(string)
+	return prompt, ok
 }
 
 type piCodeGraphReconcileStep struct {
@@ -629,8 +930,17 @@ func (s prepareBackupStep) Run() error {
 			if dup, dupErr := backup.IsDuplicate(s.backupRoot, checksum); dupErr != nil {
 				log.Printf("backup: check duplicate: %v", dupErr)
 			} else if dup {
-				// Content is identical to the most recent backup — skip creation.
-				// state.manifest is left at its zero value; rollback is a no-op.
+				rollbackDir, err := os.MkdirTemp("", "gentle-ai-rollback-*")
+				if err != nil {
+					return fmt.Errorf("create transaction snapshot directory: %w", err)
+				}
+				manifest, err := s.snapshotter.Create(rollbackDir, s.targets)
+				if err != nil {
+					_ = os.RemoveAll(rollbackDir)
+					return fmt.Errorf("create transaction snapshot: %w", err)
+				}
+				s.state.manifest = manifest
+				s.state.rollbackSnapshotDir = rollbackDir
 				return nil
 			}
 		}
@@ -669,8 +979,10 @@ func (s prepareBackupStep) Run() error {
 }
 
 type rollbackRestoreStep struct {
-	id    string
-	state *runtimeState
+	id           string
+	state        *runtimeState
+	homeDir      string
+	workspaceDir string
 }
 
 func (s rollbackRestoreStep) ID() string {
@@ -682,11 +994,32 @@ func (s rollbackRestoreStep) Run() error {
 }
 
 func (s rollbackRestoreStep) Rollback() error {
+	defer s.state.cleanupRollbackSnapshot()
 	if len(s.state.manifest.Entries) == 0 {
 		return nil
 	}
 
-	return backup.RestoreService{}.Restore(s.state.manifest)
+	return backup.RestoreService{Roots: rollbackRoots(s.homeDir, s.workspaceDir)}.Restore(s.state.manifest)
+}
+
+// rollbackRoots returns the directories this install/sync run could
+// legitimately have written under, for validating rollback's manifest
+// entries against a caller-known root instead of anything the manifest
+// itself declares.
+//
+// homeDir is always included. workspaceDir is included too when set and
+// distinct from homeDir: componentInjectionDirScoped resolves most
+// component targets there under ScopeWorkspace, and OpenClaw resolves its
+// workspace independent of --scope entirely (resolveOpenClawWorkspaceDir).
+// Both values are exactly what backupTargets/syncBackupTargets used to
+// compute what this run actually snapshotted, so allowing rollback to
+// write within them is not wider than what this run could already do.
+func rollbackRoots(homeDir, workspaceDir string) []string {
+	roots := []string{homeDir}
+	if workspaceDir != "" && workspaceDir != homeDir {
+		roots = append(roots, workspaceDir)
+	}
+	return roots
 }
 
 type agentInstallStep struct {
@@ -713,14 +1046,21 @@ func (s agentInstallStep) ID() string {
 	return s.id
 }
 
+// Run adapts the runtime already on the machine; it never acquires or
+// executes anything to put one there on the user's behalf. If the agent's
+// runtime is not detected, this refuses and names the exact command the
+// user would need to run themselves, instead of running it for them.
+//
+// Pi is the one exception, by design: the `pi` binary itself is never
+// installed by gentle-ai (validatePiInstallPreflight refuses if it is not
+// already on PATH), but once it is present, its own `pi install ...`
+// subcommands install gentle-ai's own Pi package stack through that
+// already-present tool — the same shape as running `npm install` inside a
+// project that already has npm, not an agent-runtime install.
 func (s agentInstallStep) Run() error {
 	adapter, err := agents.NewAdapter(s.agent)
 	if err != nil {
 		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
-	}
-
-	if !adapter.SupportsAutoInstall() {
-		return nil
 	}
 
 	installed, _, _, _, err := adapter.Detect(context.Background(), s.homeDir)
@@ -729,6 +1069,10 @@ func (s agentInstallStep) Run() error {
 	}
 	if installed && s.agent != model.AgentPi {
 		return nil
+	}
+
+	if s.agent != model.AgentPi {
+		return refuseMissingAgentRuntime(s.agent, s.profile, adapter)
 	}
 
 	if err := installcmd.ValidateAgentInstallPreflight(s.profile, s.agent); err != nil {
@@ -744,6 +1088,39 @@ func (s agentInstallStep) Run() error {
 	}
 
 	return runCommandSequence(commands)
+}
+
+// refuseMissingAgentRuntime reports that an agent's runtime is not present
+// instead of installing it. When the adapter can resolve the exact command a
+// user would run themselves (an npm/uv install), that command is named
+// verbatim so the refusal is actionable. When the agent cannot be installed
+// this way at all (a desktop app, a vendor-managed tool), the adapter's own
+// explanation — e.g. "agent cursor is a desktop app and cannot be installed
+// via CLI" — is surfaced instead of a silent no-op.
+func refuseMissingAgentRuntime(agent model.AgentID, profile system.PlatformProfile, adapter agents.Adapter) error {
+	commands, err := adapter.InstallCommand(profile)
+	if err != nil {
+		return err
+	}
+	if len(commands) == 0 {
+		// refusal:by-design world-action: there is no install command to name for this platform; the exit is a manual install the user performs outside Gentle-AI, not a gentle-ai command.
+		return fmt.Errorf("agent %q is not installed and Gentle-AI has no install command to suggest for this platform", agent)
+	}
+	// refusal:by-design world-action: the exit is the printed external command the user runs themselves; Gentle-AI never runs it on their behalf, so no gentle-ai command can name the resolution.
+	return fmt.Errorf(
+		"agent %q is not installed. Gentle-AI does not install agent runtimes; run this yourself, then retry:\n%s",
+		agent, formatCommandSequenceForRefusal(commands),
+	)
+}
+
+// formatCommandSequenceForRefusal renders a resolved install command
+// sequence as the human-runnable lines shown in a refusal message.
+func formatCommandSequenceForRefusal(commands [][]string) string {
+	lines := make([]string, len(commands))
+	for i, command := range commands {
+		lines[i] = "  " + strings.Join(command, " ")
+	}
+	return strings.Join(lines, "\n")
 }
 
 type kimiSystemPromptHubStep struct {
@@ -1055,7 +1432,11 @@ func (s componentApplyStep) Run() error {
 				_, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
 			} else {
 				targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
-				_, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+				if s.scope == ScopeWorkspace {
+					_, err = engram.InjectWorkspaceWithOptions(targetDir, adapter, engramOpts)
+				} else {
+					_, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+				}
 			}
 			if err != nil {
 				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
@@ -1064,7 +1445,8 @@ func (s componentApplyStep) Run() error {
 		return nil
 	case model.ComponentContext7:
 		for _, adapter := range adapters {
-			if _, err := mcp.Inject(s.homeDir, adapter); err != nil {
+			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
+			if _, err := mcp.Inject(s.homeDir, targetDir, adapter); err != nil {
 				return fmt.Errorf("inject context7 for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -1119,6 +1501,11 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentGGA:
 		if !ggaAvailable(s.profile) {
 			// GGA not found on any known PATH — install it.
+			if s.profile.OS == "windows" {
+				if err := cleanupGGAInstallDir(); err != nil {
+					return err
+				}
+			}
 			commands, err := gga.InstallCommand(s.profile)
 			if err != nil {
 				return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
@@ -1253,6 +1640,7 @@ func ExecuteTUIInstall(homeDir string, selection model.Selection, resolved plann
 	}
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress))
 	result := orchestrator.Execute(runtime.stagePlan())
+	runtime.state.cleanupRollbackSnapshot()
 	if runtime.state.piCodeGraph != nil {
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
 	}
@@ -1344,6 +1732,7 @@ func runCommandSequence(commands [][]string) error {
 
 func executeCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
+	system.EnsureCommandDir(cmd)
 
 	if streamCommandOutput {
 		cmd.Stdout = os.Stdout
@@ -1380,6 +1769,19 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		for _, path := range componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
+		if component == model.ComponentEngram && scope == ScopeGlobal {
+			for _, adapter := range adapters {
+				if adapter.Agent() == model.AgentClaudeCode {
+					paths[adapter.MCPConfigPath(homeDir, "engram")] = struct{}{}
+				}
+			}
+		}
+	}
+	// Routing guidance is delivered per agent outside the component loop, so a
+	// selection whose components do not happen to cover the same file would be
+	// rewritten without ever having been snapshotted (issue #1794).
+	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, adapters) {
+		paths[path] = struct{}{}
 	}
 	if containsAgent(resolved.Agents, model.AgentPi) {
 		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
@@ -1400,6 +1802,28 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	return targets
 }
 
+// routingGuidancePaths declares the files agentRoutingGuidanceStep rewrites for
+// the given adapters.
+//
+// The target directory is resolved exactly the way that step resolves it, and
+// the paths themselves come from the injector's own delivery dispatch, so the
+// backup contract cannot drift from what is actually written.
+func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
+	paths := []string{}
+	for _, adapter := range adapters {
+		targetDir := routingGuidanceDir(homeDir, workspaceDir, scope, adapter)
+		routing, err := agentguidance.RoutingPaths(targetDir, adapter.Agent())
+		if err != nil {
+			// The guidance step resolves the same delivery and fails loudly when
+			// it runs. Declaring a target we could not resolve would only add a
+			// path to the snapshot that is never written.
+			continue
+		}
+		paths = append(paths, routing...)
+	}
+	return paths
+}
+
 func componentPaths(homeDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {
 	return componentPathsWithWorkspace(homeDir, "", selection, adapters, component)
 }
@@ -1416,7 +1840,11 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 		case model.ComponentEngram:
 			switch adapter.MCPStrategy() {
 			case model.StrategySeparateMCPFiles:
-				paths = append(paths, adapter.MCPConfigPath(targetDir, "engram"))
+				if adapter.Agent() == model.AgentClaudeCode && scope == ScopeGlobal {
+					paths = append(paths, claude.UserConfigPath(homeDir))
+				} else {
+					paths = append(paths, adapter.MCPConfigPath(targetDir, "engram"))
+				}
 			case model.StrategyMergeIntoSettings:
 				// MCP settings are always merged into the global config file, not the
 				// workspace-scoped directory. For OpenClaw, SettingsPath(targetDir)
@@ -1478,13 +1906,18 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			if adapter.SupportsSkills() {
 				skillDir := adapter.SkillsDir(targetDir)
 				if skillDir != "" {
+					// The embedded skills/_shared listing is the single source of
+					// truth for the shared inventory; deriving it here keeps a
+					// newly added shared file from silently missing a sync.
+					// A listing error can only mean the embedded directory is
+					// gone, which Inject reports as a hard failure. This
+					// function has no error channel, so it contributes no
+					// shared paths rather than inventing them.
+					sharedFiles, _ := assets.SharedSkillFileNames()
+					for _, relPath := range sharedFiles {
+						paths = append(paths, filepath.Join(skillDir, "_shared", filepath.FromSlash(relPath)))
+					}
 					paths = append(paths,
-						filepath.Join(skillDir, "_shared", "persistence-contract.md"),
-						filepath.Join(skillDir, "_shared", "engram-convention.md"),
-						filepath.Join(skillDir, "_shared", "openspec-convention.md"),
-						filepath.Join(skillDir, "_shared", "sdd-phase-common.md"),
-						filepath.Join(skillDir, "_shared", "sdd-status-contract.md"),
-						filepath.Join(skillDir, "_shared", "skill-resolver.md"),
 						filepath.Join(skillDir, "sdd-init", "SKILL.md"),
 						filepath.Join(skillDir, "sdd-explore", "SKILL.md"),
 						filepath.Join(skillDir, "sdd-propose", "SKILL.md"),
@@ -1515,22 +1948,26 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			switch adapter.MCPStrategy() {
 			case model.StrategySeparateMCPFiles:
 				if adapter.Agent() == model.AgentClaudeCode {
-					if p := adapter.SettingsPath(homeDir); p != "" {
+					if targetDir == homeDir {
+						// Context7 injection writes ~/.claude.json (issue #1868).
+						paths = append(paths, claude.UserConfigPath(homeDir))
+					} else if p := adapter.SettingsPath(targetDir); p != "" {
+						// Workspace scope keeps the scoped settings merge.
 						paths = append(paths, p)
 					}
 					break
 				}
-				paths = append(paths, adapter.MCPConfigPath(homeDir, "context7"))
+				paths = append(paths, adapter.MCPConfigPath(targetDir, "context7"))
 			case model.StrategyMergeIntoSettings:
-				if p := adapter.SettingsPath(homeDir); p != "" {
+				if p := adapter.SettingsPath(targetDir); p != "" {
 					paths = append(paths, p)
 				}
 			case model.StrategyMCPConfigFile:
-				if p := adapter.MCPConfigPath(homeDir, "context7"); p != "" {
+				if p := adapter.MCPConfigPath(targetDir, "context7"); p != "" {
 					paths = append(paths, p)
 				}
 			case model.StrategyTOMLFile:
-				if p := adapter.MCPConfigPath(homeDir, "context7"); p != "" {
+				if p := adapter.MCPConfigPath(targetDir, "context7"); p != "" {
 					paths = append(paths, p)
 				}
 			}
@@ -1591,6 +2028,21 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 
 func componentInjectionDir(homeDir, workspaceDir string, adapter agents.Adapter) string {
 	return componentInjectionDirScoped(homeDir, workspaceDir, ScopeGlobal, adapter)
+}
+
+// routingGuidanceDir resolves the installation root routing guidance is
+// delivered under. Agents that deliver through the managed orchestrator prompt
+// only ever load the home-level settings document, so a workspace-scoped
+// install must still resolve them against the home directory — a workspace
+// .config tree is a scope those agents never read (issue #1825). Every other
+// agent keeps the ordinary scoped resolution. The guidance step and the backup
+// contract both resolve through here so the snapshot cannot drift from what
+// the injector writes.
+func routingGuidanceDir(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter) string {
+	if agentguidance.DeliversThroughOrchestratorPrompt(adapter.Agent()) {
+		return homeDir
+	}
+	return componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
 }
 
 // componentInjectionDirScoped returns the directory to inject component files for the given adapter,
@@ -1675,7 +2127,7 @@ func componentPathDir(homeDir, workspaceDir string, adapter agents.Adapter, comp
 
 func componentPathDirScoped(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter, component model.ComponentID) string {
 	switch component {
-	case model.ComponentEngram, model.ComponentSDD, model.ComponentPersona, model.ComponentSkills:
+	case model.ComponentEngram, model.ComponentSDD, model.ComponentPersona, model.ComponentSkills, model.ComponentContext7:
 		return componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
 	default:
 		return homeDir
@@ -1704,11 +2156,13 @@ func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
 }
 
 func openCodeSDDPluginPaths(targetDir string) []string {
-	return []string{
-		filepath.Join(targetDir, ".config", "opencode", "plugins", "background-agents.ts"),
-		filepath.Join(targetDir, ".config", "opencode", "plugins", "model-variants.ts"),
-		filepath.Join(targetDir, ".config", "opencode", "plugins", "skill-registry.ts"),
+	// Legacy plugin first: installOpenCodePlugins removes it, and verification
+	// asserts its absence (isLegacyOpenCodeBackgroundAgentsPlugin).
+	paths := []string{filepath.Join(targetDir, ".config", "opencode", "plugins", "background-agents.ts")}
+	for _, name := range sdd.ManagedOpenCodePluginNames() {
+		paths = append(paths, filepath.Join(targetDir, ".config", "opencode", "plugins", name))
 	}
+	return paths
 }
 
 type postApplyVerificationInput struct {
@@ -1933,13 +2387,20 @@ func (s checkDependenciesStep) Run() error {
 	// failing with real error messages.
 	_ = system.DetectDependencies(context.Background(), s.profile)
 	for _, agent := range s.selection.Agents {
+		// Only Pi still executes anything on the user's behalf (its own
+		// already-present `pi` subcommands, which need npm/pnpm — see
+		// agentInstallStep). Every other agent's "not installed" outcome is
+		// now a printed refusal, which needs no local dependency at all, so
+		// failing this whole pipeline early over an unrelated agent's
+		// missing npm/uv would abort work agentInstallStep would otherwise
+		// complete correctly by just naming the command.
+		if agent != model.AgentPi {
+			continue
+		}
+
 		adapter, err := agents.NewAdapter(agent)
 		if err != nil {
 			return fmt.Errorf("create adapter for %q: %w", agent, err)
-		}
-
-		if !adapter.SupportsAutoInstall() {
-			continue
 		}
 
 		if s.homeDir != "" {

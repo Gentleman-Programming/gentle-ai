@@ -47,12 +47,27 @@ type prePRCITrust struct {
 	Ed25519PublicKey string `json:"ed25519_public_key"`
 }
 
+const (
+	baseAdvanceCompatibleStatus            = "base-advanced-compatible"
+	currentChangesBoundaryCompatibleStatus = "current-changes-boundary-compatible"
+	currentChangesBoundaryCIStatus         = "not-required"
+)
+
 func (proof BaseAdvanceCompatibility) valid() bool {
-	return proof.Status == "base-advanced-compatible" && proof.Compatible && validGitTree(proof.OriginalMergeBaseTree) && validGitTree(proof.NewBaseTree) &&
+	core := proof.Compatible && validGitTree(proof.OriginalMergeBaseTree) && validGitTree(proof.NewBaseTree) &&
 		validSHA256(proof.OriginalPatchIdentity) && proof.OriginalPatchIdentity == proof.DeliveredPatchIdentity &&
 		validSHA256(proof.DeliveredPathsDigest) && validSHA256(proof.BaseAdvancePathsDigest) && proof.PathsDisjoint &&
-		validGitTree(proof.MergedResultTree) && validSHA256(proof.CIAttestationArtifactHash) &&
-		strings.TrimSpace(proof.CIAttestationIssuer) != "" && proof.CIStatus == "success"
+		validGitTree(proof.MergedResultTree)
+	switch proof.Status {
+	case baseAdvanceCompatibleStatus:
+		return core && validSHA256(proof.CIAttestationArtifactHash) &&
+			strings.TrimSpace(proof.CIAttestationIssuer) != "" && proof.CIStatus == "success"
+	case currentChangesBoundaryCompatibleStatus:
+		return core && proof.CIAttestationArtifactHash == "" && proof.CIAttestationIssuer == "" &&
+			proof.CIStatus == currentChangesBoundaryCIStatus
+	default:
+		return false
+	}
 }
 
 func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Receipt, request GateRequest, snapshot Snapshot, refs *resolvedPrePRRefs, preimages gateArtifactPreimages) (BaseAdvanceCompatibility, error) {
@@ -126,7 +141,7 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 		return BaseAdvanceCompatibility{}, errors.New("HEAD advanced during validation")
 	}
 	proof := BaseAdvanceCompatibility{
-		Status: "base-advanced-compatible", Compatible: true, OriginalMergeBaseTree: receipt.BaseTree, NewBaseTree: snapshot.BaseTree,
+		Status: baseAdvanceCompatibleStatus, Compatible: true, OriginalMergeBaseTree: receipt.BaseTree, NewBaseTree: snapshot.BaseTree,
 		OriginalPatchIdentity: originalPatch, DeliveredPatchIdentity: currentPatch,
 		DeliveredPathsDigest: receipt.PathsDigest, BaseAdvancePathsDigest: digestPaths(basePaths), PathsDisjoint: true,
 		MergedResultTree: mergedFields[0], CIAttestationArtifactHash: attestationHash,
@@ -134,6 +149,104 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 	}
 	if !proof.valid() {
 		return BaseAdvanceCompatibility{}, errors.New("compatible base advance proof is incomplete")
+	}
+	return proof, nil
+}
+
+// deriveCurrentChangesBoundaryCompatibility reconciles an approved
+// current-changes receipt with a pre-PR publication boundary that advanced
+// past the frozen base (issue #1376). It is derived gate evidence only and
+// never mutates the receipt. It allows only when the approved bytes provably
+// reach the publication boundary unchanged:
+//   - the reviewed genesis scope is non-empty (an empty self-diff review can
+//     never authorize a non-empty publication),
+//   - the publication head tree is byte-identical to the approved candidate
+//     tree,
+//   - the frozen review base tree is exactly the publication merge-base tree,
+//   - the delivered paths are non-empty, stay inside the immutable genesis
+//     scope, and are disjoint from the boundary advance,
+//   - every path touched by the publication range stays inside the genesis
+//     scope (nothing unreviewed rides along in intermediate commits), and
+//   - the merge against the advanced boundary is conflict-free.
+func deriveCurrentChangesBoundaryCompatibility(ctx context.Context, repo string, state CompactState, request GateRequest, snapshot Snapshot, refs *resolvedPrePRRefs) (BaseAdvanceCompatibility, error) {
+	if refs == nil {
+		return BaseAdvanceCompatibility{}, errors.New("resolved pre-PR refs are missing")
+	}
+	if request.ExternalEvidence != ExternalEvidenceNone {
+		return BaseAdvanceCompatibility{}, errors.New("external evidence invalidates or escalates compatibility")
+	}
+	if state.InitialSnapshot.Kind != TargetCurrentChanges {
+		return BaseAdvanceCompatibility{}, errors.New("boundary reconciliation is limited to current-changes receipts")
+	}
+	if refs.DeliveredCommitCount != 1 {
+		return BaseAdvanceCompatibility{}, errors.New("boundary reconciliation requires exactly one delivery commit")
+	}
+	if len(state.GenesisPaths) == 0 {
+		return BaseAdvanceCompatibility{}, errors.New("an empty reviewed scope cannot authorize a publication")
+	}
+	frozenBaseTree := state.InitialSnapshot.BaseTree
+	if snapshot.CandidateTree != state.CurrentSnapshot.CandidateTree {
+		return BaseAdvanceCompatibility{}, errors.New("publication head does not match the approved candidate tree")
+	}
+	mergeBase, err := runGit(ctx, repo, nil, nil, "merge-base", refs.Selection.Commit, refs.HeadCommit)
+	if err != nil {
+		return BaseAdvanceCompatibility{}, fmt.Errorf("derive publication merge-base: %w", err)
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	mergeBaseTree, err := builder.resolveTree(ctx, strings.TrimSpace(string(mergeBase)))
+	if err != nil || mergeBaseTree != frozenBaseTree {
+		return BaseAdvanceCompatibility{}, errors.New("approved review base is not the publication merge-base")
+	}
+	deliveredPaths, err := builder.changedPaths(ctx, frozenBaseTree, snapshot.CandidateTree)
+	if err != nil {
+		return BaseAdvanceCompatibility{}, err
+	}
+	if len(deliveredPaths) == 0 || pathsAreSubset(deliveredPaths, state.GenesisPaths) != nil {
+		return BaseAdvanceCompatibility{}, errors.New("delivered paths do not stay inside the reviewed genesis scope")
+	}
+	patch, err := patchIdentity(ctx, repo, frozenBaseTree, snapshot.CandidateTree)
+	if err != nil {
+		return BaseAdvanceCompatibility{}, err
+	}
+	basePaths, err := builder.changedPaths(ctx, frozenBaseTree, snapshot.BaseTree)
+	if err != nil {
+		return BaseAdvanceCompatibility{}, err
+	}
+	if !disjointPaths(deliveredPaths, basePaths) {
+		return BaseAdvanceCompatibility{}, errors.New("boundary advance overlaps delivered paths")
+	}
+	if err := validateReviewedPublicationRange(ctx, repo, state.GenesisPaths, refs); err != nil {
+		return BaseAdvanceCompatibility{}, err
+	}
+	mergedOutput, err := runGit(ctx, repo, nil, nil, "merge-tree", "--write-tree", refs.Selection.Commit, refs.HeadCommit)
+	if err != nil {
+		return BaseAdvanceCompatibility{}, errors.New("merge against the advanced boundary is not conflict-free")
+	}
+	mergedFields := strings.Fields(string(mergedOutput))
+	if len(mergedFields) == 0 || !validGitTree(mergedFields[0]) {
+		return BaseAdvanceCompatibility{}, errors.New("merged result tree cannot be derived")
+	}
+	selector := ""
+	if refs.Selection.Source == PrePRBoundaryExplicit {
+		selector = refs.Selection.Selector
+	}
+	selectionNow, err := selectPrePRBoundary(ctx, repo, selector)
+	if err != nil || selectionNow != refs.Selection {
+		return BaseAdvanceCompatibility{}, errors.New("pre-PR base ref advanced during validation")
+	}
+	headNow, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil || headNow != refs.HeadCommit {
+		return BaseAdvanceCompatibility{}, errors.New("HEAD advanced during validation")
+	}
+	proof := BaseAdvanceCompatibility{
+		Status: currentChangesBoundaryCompatibleStatus, Compatible: true,
+		OriginalMergeBaseTree: frozenBaseTree, NewBaseTree: snapshot.BaseTree,
+		OriginalPatchIdentity: patch, DeliveredPatchIdentity: patch,
+		DeliveredPathsDigest: digestPaths(deliveredPaths), BaseAdvancePathsDigest: digestPaths(basePaths), PathsDisjoint: true,
+		MergedResultTree: mergedFields[0], CIStatus: currentChangesBoundaryCIStatus,
+	}
+	if !proof.valid() {
+		return BaseAdvanceCompatibility{}, errors.New("current-changes boundary proof is incomplete")
 	}
 	return proof, nil
 }

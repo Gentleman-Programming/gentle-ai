@@ -60,7 +60,7 @@ func DiscoverConfigFiles(opts ConfigLoadOptions) ([]ConfigFile, error) {
 		if dir == "" {
 			return nil
 		}
-		dirFiles, err := readConfigFilesInDir(dir)
+		dirFiles, err := ReadConfigFiles(dir)
 		if err != nil {
 			return err
 		}
@@ -133,21 +133,6 @@ func DiscoverConfigFiles(opts ConfigLoadOptions) ([]ConfigFile, error) {
 		}
 	}
 
-	return files, nil
-}
-
-func readConfigFilesInDir(dir string) ([]ConfigFile, error) {
-	files := make([]ConfigFile, 0, len(supportedConfigFilenames))
-	for _, name := range supportedConfigFilenames {
-		file, err := readSingleConfigFile(filepath.Join(dir, name))
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, err
-		}
-		files = append(files, file)
-	}
 	return files, nil
 }
 

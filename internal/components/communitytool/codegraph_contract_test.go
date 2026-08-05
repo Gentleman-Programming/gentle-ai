@@ -2,15 +2,17 @@ package communitytool
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 func TestCodeGraphCompatibilityTableIsExhaustive(t *testing.T) {
@@ -132,13 +134,23 @@ func TestAntigravityRequiresCanonicalCodeGraphEntry(t *testing.T) {
 	reg, _ := agents.NewDefaultRegistry()
 	adapter, _ := reg.Get(model.AgentAntigravity)
 	path := filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")
+	absoluteCommand := filepath.Join(home, "bin", "codegraph")
+	absoluteWindowsCommand := filepath.Join(home, "bin", "CODEGRAPH.EXE")
 	for _, tt := range []struct {
 		name, data string
 		want       bool
 	}{
-		{"valid", `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`, true},
+		{"valid bare command", `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`, true},
+		{"valid absolute command", fmt.Sprintf(`{"mcpServers":{"codegraph":{"command":%q,"args":["serve","--mcp"]}}}`, absoluteCommand), true},
+		{"valid absolute Windows executable", fmt.Sprintf(`{"mcpServers":{"codegraph":{"command":%q,"args":["serve","--mcp"]}}}`, absoluteWindowsCommand), true},
+		{"bare Windows executable", `{"mcpServers":{"codegraph":{"command":"codegraph.exe","args":["serve","--mcp"]}}}`, false},
+		{"relative dot command", `{"mcpServers":{"codegraph":{"command":"./codegraph","args":["serve","--mcp"]}}}`, false},
+		{"relative nested command", `{"mcpServers":{"codegraph":{"command":"tools/codegraph","args":["serve","--mcp"]}}}`, false},
+		{"relative trailing separator", `{"mcpServers":{"codegraph":{"command":"codegraph/","args":["serve","--mcp"]}}}`, false},
 		{"unrelated key", `{"mcpServers":{"not-codegraph":{"command":"codegraph"}}}`, false},
-		{"wrong command", `{"mcpServers":{"codegraph":{"command":"other-codegraph"}}}`, false},
+		{"wrong command", `{"mcpServers":{"codegraph":{"command":"other-codegraph","args":["serve","--mcp"]}}}`, false},
+		{"missing args", `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`, false},
+		{"wrong args", `{"mcpServers":{"codegraph":{"command":"codegraph","args":["mcp"]}}}`, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			mustWrite(t, path, tt.data)
@@ -204,7 +216,7 @@ func TestCodeGraphRollbackRestoresBytesModesAndRemovesCreatedFiles(t *testing.T)
 	}
 	data, _ := os.ReadFile(global)
 	info, _ := os.Stat(global)
-	if string(data) != `{"theme":"dark"}` || info.Mode().Perm() != 0o600 {
+	if string(data) != `{"theme":"dark"}` || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("rollback global = %q mode %o", data, info.Mode().Perm())
 	}
 	if _, err := os.Stat(prompt); !os.IsNotExist(err) {
@@ -282,7 +294,7 @@ func TestCodeGraphSnapshotRoundTripIsIdempotent(t *testing.T) {
 	}
 	data, _ := os.ReadFile(path)
 	info, _ := os.Stat(path)
-	if string(data) != `{"mcpServers":{"sibling":{"command":"x"}}}` || info.Mode().Perm() != 0o640 {
+	if string(data) != `{"mcpServers":{"sibling":{"command":"x"}}}` || runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
 		t.Fatalf("round trip = %q mode %o", data, info.Mode().Perm())
 	}
 }

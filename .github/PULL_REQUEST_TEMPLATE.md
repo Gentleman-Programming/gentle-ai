@@ -46,12 +46,22 @@ What kind of change does this PR introduce?
 go test ./...
 ```
 
+**Go Format**
+```bash
+go run ./internal/gofmtcheck
+```
+
 **E2E Tests** (Docker required)
 ```bash
 cd e2e && ./docker-test.sh
 ```
 
+**Benchmark Validation**
+
+See the [benchmark guide](../bench/README.md). Benchmark validation applies to review-lifecycle, gates, recovery, delivery, benchmark implementation/corpus/classifier, and benchmark-claim changes. For unrelated changes, explain `N/A` in the Test Plan.
+
 - [ ] Unit tests pass (`go test ./...`)
+- [ ] Go format passes (`go run ./internal/gofmtcheck`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
 - [ ] Manually tested locally
 
@@ -70,6 +80,7 @@ The following checks run automatically on this PR:
 | Check Issue Has `status:approved` | ⏳ | Linked issue must have been approved before work began |
 | Check PR Has `type:*` Label | ⏳ | Exactly one `type:*` label must be applied |
 | Unit Tests | ⏳ | `go test ./...` must pass |
+| Go Format | ⏳ | `go run ./internal/gofmtcheck` must pass |
 | E2E Tests | ⏳ | `cd e2e && ./docker-test.sh` must pass |
 
 ---
@@ -80,7 +91,9 @@ The following checks run automatically on this PR:
 - [ ] PR stays within 400 changed lines, or I have requested/obtained maintainer-applied `size:exception` with rationale documented
 - [ ] I have added the appropriate `type:*` label to this PR
 - [ ] Unit tests pass (`go test ./...`)
+- [ ] Go format passes (`go run ./internal/gofmtcheck`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
+- [ ] Benchmark validation completed, or this change is not applicable to the benchmark (explain why in the Test Plan).
 - [ ] I have updated documentation if necessary
 - [ ] My commits follow [Conventional Commits](https://www.conventionalcommits.org/) format
 - [ ] My commits do not include `Co-Authored-By` trailers
@@ -90,3 +103,9 @@ The following checks run automatically on this PR:
 ## 💬 Notes for Reviewers
 
 <!-- Optional: anything you want reviewers to pay special attention to. -->
+
+For production Go changes in `internal/cli`, `internal/reviewtransaction`, or `internal/sddstatus`:
+
+- [ ] Identify any qualifying security, integrity, admission, repair, or governance guard and challenge its legitimate input population against real-world evidence.
+- [ ] Confirm its `guard:population` direction and claim are adjacent and accurate, and that `.guard-population-baseline.txt` changed only when the guard contract intentionally changed.
+- [ ] Do not treat a passing declaration/registry check as proof that no qualifying guard was omitted or that the population claim is semantically complete.

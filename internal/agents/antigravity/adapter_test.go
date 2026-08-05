@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 // makeStatFn returns a statPath function that reports the given paths as existing
@@ -282,14 +282,6 @@ func TestInstallCommand(t *testing.T) {
 
 	if notInstallable.Agent != model.AgentAntigravity {
 		t.Fatalf("AgentNotInstallableError.Agent = %q, want %q", notInstallable.Agent, model.AgentAntigravity)
-	}
-}
-
-func TestSupportsAutoInstall(t *testing.T) {
-	a := NewAdapter()
-
-	if a.SupportsAutoInstall() {
-		t.Fatal("SupportsAutoInstall() = true, want false for Antigravity")
 	}
 }
 

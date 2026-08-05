@@ -642,18 +642,18 @@ func TestLoadConfigProvidersMergesAllFilesWithDeterministicPrecedence(t *testing
 	dir := t.TempDir()
 	files := map[string]string{
 		"config.json": `{
-			"provider": {"shared": {"name": "config json", "models": {"shared-model": {"name": "config json model"}, "config-only": {"name": "config only"}}}}
+			"provider": {"shared": {"name": "config json", "url": "http://config-json.example/v1", "models": {"shared-model": {"name": "config json model"}, "config-only": {"name": "config only"}}}}
 		}`,
 		"config.jsonc": `{
 			// JSONC overrides JSON in the legacy family.
-			"provider": {"shared": {"name": "config jsonc", "models": {"shared-model": {"name": "config jsonc model"}, "config-jsonc-only": {"name": "config jsonc only"}}}}
+			"provider": {"shared": {"name": "config jsonc", "url": "http://config-jsonc.example/v1", "models": {"shared-model": {"name": "config jsonc model"}, "config-jsonc-only": {"name": "config jsonc only"}}}}
 		}`,
 		"opencode.json": `{
-			"provider": {"shared": {"name": "opencode json", "models": {"shared-model": {"name": "opencode json model"}, "opencode-only": {"name": "opencode only"}}}}
+			"provider": {"shared": {"name": "opencode json", "url": "http://opencode-json.example/v1", "models": {"shared-model": {"name": "opencode json model"}, "opencode-only": {"name": "opencode only"}}}}
 		}`,
 		"opencode.jsonc": `{
 			// Final override.
-			"provider": {"shared": {"name": "opencode jsonc", "models": {"shared-model": {"name": "opencode jsonc model"}, "opencode-jsonc-only": {"name": "opencode jsonc only"}}}}
+			"provider": {"shared": {"name": "opencode jsonc", "url": "http://opencode-jsonc.example/v1", "models": {"shared-model": {"name": "opencode jsonc model"}, "opencode-jsonc-only": {"name": "opencode jsonc only"}}}}
 		}`,
 	}
 	for name, content := range files {
@@ -669,6 +669,9 @@ func TestLoadConfigProvidersMergesAllFilesWithDeterministicPrecedence(t *testing
 	shared := config["shared"]
 	if shared.Name != "opencode jsonc" {
 		t.Fatalf("shared provider name = %q, want opencode jsonc", shared.Name)
+	}
+	if shared.URL != "http://opencode-jsonc.example/v1" {
+		t.Fatalf("shared provider url = %q, want opencode jsonc URL", shared.URL)
 	}
 	if got := shared.Models["shared-model"].Name; got != "opencode jsonc model" {
 		t.Fatalf("shared model name = %q, want opencode jsonc model", got)
@@ -1278,4 +1281,58 @@ func TestFixOpenRouterModels(t *testing.T) {
 			t.Fatalf("remapped variants = %v, want [free latest]", got.Variants)
 		}
 	})
+}
+
+func TestEnrichWithVariantsFallbackProviderMismatch(t *testing.T) {
+	dir := t.TempDir()
+	variantsPath := filepath.Join(dir, "model-variants.json")
+	// Plugin cached variants under provider "openai"
+	variantsData := `{
+		"openai": {
+			"gpt-5.6-luna": ["low", "medium", "high", "max"]
+		}
+	}`
+	if err := os.WriteFile(variantsPath, []byte(variantsData), 0o644); err != nil {
+		t.Fatalf("write variants fixture: %v", err)
+	}
+
+	// Cached providers in gentle-ai has both "openai" (exact match) and "opencode" (built-in/custom alias)
+	cached := map[string]Provider{
+		"openai": {
+			ID:   "openai",
+			Name: "OpenAI",
+			Models: map[string]Model{
+				"gpt-5.6-luna": {
+					ID:       "gpt-5.6-luna",
+					Name:     "GPT-5.6 Luna",
+					ToolCall: true,
+				},
+			},
+		},
+		"opencode": {
+			ID:   "opencode",
+			Name: "OpenCode",
+			Models: map[string]Model{
+				"gpt-5.6-luna": {
+					ID:       "gpt-5.6-luna",
+					Name:     "GPT-5.6 Luna",
+					ToolCall: true,
+				},
+			},
+		},
+	}
+
+	EnrichWithVariants(cached, variantsPath)
+
+	wantLevels := []string{"low", "medium", "high", "max"}
+
+	modelOpenAI := cached["openai"].Models["gpt-5.6-luna"]
+	if !reflect.DeepEqual(modelOpenAI.Variants, wantLevels) {
+		t.Fatalf("exact match openai model variants = %v, want %v", modelOpenAI.Variants, wantLevels)
+	}
+
+	modelOpenCode := cached["opencode"].Models["gpt-5.6-luna"]
+	if !reflect.DeepEqual(modelOpenCode.Variants, wantLevels) {
+		t.Fatalf("fallback opencode model variants = %v, want %v", modelOpenCode.Variants, wantLevels)
+	}
 }

@@ -15,8 +15,10 @@ Commands that select, continue, apply, verify, or archive an SDD change MUST fir
 
 ## Native Engine
 
-- When the session artifact store is `openspec` or `hybrid` and the `gentle-ai` binary is available, prefer `gentle-ai sdd-status [change] --cwd <repo> --json --instructions` for read-only status and `gentle-ai sdd-continue [change] --cwd <repo>` for dispatcher output. When the store is `engram`, do not invoke the binary at all (see the next bullet).
-- The native engine reads only OpenSpec file artifacts and always emits `artifactStore: openspec`; it cannot observe Engram-backed changes. Treat native status as authoritative only when the selected artifact store is `openspec` or `hybrid`. When the selected store is `engram`, do not invoke the native dispatcher at all — resolve status from Engram (`mem_search` + `mem_get_observation` on the change topic keys) using the manual status schema below, and disregard any `blocked`, `Active OpenSpec change not found`, or `nextRecommended: sdd-new` it emits for an Engram change that exists.
+- When the session artifact store is `openspec` or `hybrid` and the `gentle-ai` binary is available, prefer `gentle-ai sdd-status [change] --cwd <repo> --json --instructions` for read-only status and `gentle-ai sdd-continue [change] --cwd <repo>` for dispatcher output. When the store is `engram`, do not invoke those OpenSpec dispatcher commands (see the next bullet).
+- The native dispatcher reads only OpenSpec file artifacts and always emits `artifactStore: openspec`; it cannot observe Engram-backed changes. Treat dispatcher status as authoritative only when the selected artifact store is `openspec` or `hybrid`. When the selected store is `engram`, resolve artifact status from Engram (`mem_search` + `mem_get_observation` on the change topic keys) using the manual status schema below, and disregard any dispatcher `blocked`, `Active OpenSpec change not found`, or `nextRecommended: sdd-new` result for an Engram change that exists.
+- Runtime-attempt authority is different from artifact dispatch: normal runtime-bearing OpenSpec and Engram continuations MUST bracket external execution with `gentle-ai sdd-attempt acquire|settle --cwd <repo> --change <change>`. Their bounded result contains only `proceed`, `blocked`, or `complete` plus an opaque continuation token when required. The Git-common-dir immutable chain remains the sole authority for ordinals, cumulative attempt/line budgets, runtime evidence, and atomic bound remediation. Full `status|begin|finish|reset` operations remain diagnostic/compatibility surfaces; their payload MUST NOT be embedded in the SDD v1 status document. Never create OpenSpec attempt-ledger files or Engram attempt-ledger topics.
+- A phase actor launched BY a parent that already holds a `proceed`-state acquire for that exact work unit is a distinct call/process, not a fresh continuation: it MUST NOT `acquire` again blind. Colliding with its own parent's active attempt is not a genuine `blocked: active_attempt` (#2291). It authenticates as that SAME attempt by passing the parent's returned token on its own `acquire --token <token>` call: a token matching the ledger's live active attempt returns `proceed` with that same token and zero mutation, while a non-matching token gets the ordinary `blocked: active_attempt` naming the real active token.
 - For `openspec` and `hybrid` stores, treat native status JSON as authoritative over prompt inference or manually reconstructed state.
 - When `blockedReasons` is non-empty, do not proceed to terminal, archive, or apply work. Return or report `blockedReasons` and stop unless `nextRecommended` is `verify`, in which case verification may run only to remediate or refresh evidence for the blockers. When `nextRecommended` is `resolve-blockers`, always report `blockedReasons` and stop. When `nextRecommended` is a planning token (`propose`, `spec`, `design`, or `tasks`), launch the corresponding planning phase — missing planning artifacts are the expected output of those phases, not genuine blockers.
 - `nextRecommended` is a bounded machine token for routing, not human prose. Route only by `nextRecommended` and dependency states.
@@ -25,13 +27,13 @@ Commands that select, continue, apply, verify, or archive an SDD change MUST fir
 
 ## Status Schema
 
-Return status as markdown with these fields, or as equivalent JSON when the host supports it:
+Return status as markdown with these fields, or as equivalent JSON when the host supports it. This is the exact frozen external `StatusV1Projection`, not the extensible internal aggregate:
 
 ```yaml
 schemaName: gentle-ai.sdd-status
 schemaVersion: 1
 changeName: <change-name-or-null>
-artifactStore: openspec | engram | hybrid
+artifactStore: openspec | engram | none
 planningHome:
   mode: repo-local
   path: <absolute path to openspec>
@@ -43,6 +45,7 @@ artifactPaths:
   tasks: [<absolute path>]
   applyProgress: [<absolute path>]
   verifyReport: [<absolute path>]
+  reviewPolicy: [<absolute path>]
   reviewLedger: [<absolute path>]
   reviewReceipt: [<absolute path>]
   reviewBundle: [<absolute path to reviews/chain-bundle.json>]
@@ -55,6 +58,7 @@ contextFiles:
   tasks: [<absolute readable files>]
   applyProgress: [<absolute readable files>]
   verifyReport: [<absolute readable files>]
+  reviewPolicy: [<absolute readable files>]
   reviewLedger: [<absolute readable files>]
   reviewReceipt: [<absolute readable files>]
   reviewBundle: [<absolute readable files>]
@@ -67,6 +71,7 @@ artifacts:
   tasks: missing | done | partial
   applyProgress: missing | done | partial
   verifyReport: missing | done | partial
+  reviewPolicy: missing | done | partial
   reviewLedger: missing | done | partial
   reviewReceipt: missing | done | partial
   reviewBundle: missing | done | partial
@@ -107,6 +112,7 @@ remediationState:
 reviewGate:
   result: allow | scope-changed | invalidated | escalated
   reason: <deterministic explanation>
+reviewTransaction: <optional exact gentle-ai.review-transaction/v1 object>
 phaseInstructions:
   apply: [<instruction strings>]
   verify: [<instruction strings>]
@@ -116,7 +122,7 @@ nextRecommended: propose | spec | design | tasks | apply | review | verify | rem
 blockedReasons: []
 ```
 
-`phaseInstructions` is optional and appears only when instructions are requested. It carries execution-phase keys (`apply`, `verify`, `remediate`, `archive`); planning-phase instructions (`propose`, `spec`, `design`, `tasks`) are surfaced in dispatcher markdown. `reviewGate` is omitted until final archive gating runs; when present, its result uses only the four listed values. Empty path fields MUST be arrays, not null. `changeName` and `changeRoot` are nullable; all other non-optional sections should be present in fallback output so consumers can parse native and manual status the same way.
+`phaseInstructions` is optional and appears only when instructions are requested. It carries execution-phase keys (`apply`, `verify`, `remediate`, `archive`); planning-phase instructions (`propose`, `spec`, `design`, `tasks`) are surfaced in dispatcher markdown. `reviewGate` is a structurally absent key — not merely omitted early — whenever the kill switch is off, or whenever it is on with no review ever discovered for this candidate; both proceed to archive under ordinary policy with no `reviewGate` to check. When present (a review was actually discovered), its result uses only the four listed values. `reviewTransaction` is omitted until the review owner supplies the exact `gentle-ai.review-transaction/v1` object; manual fallback MUST NOT reconstruct it. `reviewPolicy` is present in `artifactPaths` and `contextFiles`; its artifact-state entry is present only for Engram status and omitted otherwise. A hybrid session projects file-backed legacy status as `artifactStore: openspec`; `hybrid` is not an SDD v1 wire token. Empty path fields MUST be arrays, not null. `changeName` and `changeRoot` are nullable; all other non-optional sections should be present in fallback output so consumers can parse native and manual status the same way.
 
 ## Apply State
 
@@ -131,8 +137,9 @@ blockedReasons: []
 - `verify` is `ready` only after every task is complete and the persisted bounded transaction reaches `ready_final_verification` (or has begun `final_verifying`). Missing or active review state routes to `review`; apply-progress and focused work-unit checks never make final verification ready.
 - Verify routing parses only the strict leading `gentle-ai.verify-result/v1` envelope. It compares measured requirement/scenario totals with actual specs and requires current test/build commands, zero passing exit codes, and output hashes. Human prose never controls readiness.
 - Failed evidence may route to `remediate` only when an exact persisted transaction lineage/generation has remaining mode-specific fix budget and names the same failed evidence revision. Remediation completion requires concrete focused-test, runtime-harness (or justified N/A), and rollback evidence bound to that transaction; a bare envelope never passes.
-- `archive` is `ready` only when tasks are complete, strict verification passes, and an approved receipt exactly matches the final candidate tree, paths, policy, frozen ledger, and current evidence. Missing, pending, or invalid receipts block archive. Scope change requires an explicit new lineage; new external evidence may invalidate or escalate without reopening review.
+- `archive` is `ready` when tasks are complete and strict verification passes, AND either no review was ever discovered for this candidate (`reviewGate` absent — the kill switch is off, or it is on with no receipt at all; a present `reviewOffer` in the same output is an invitation, not a gate, and declining is proceeding without acting on it) or a discovered receipt exactly matches the final candidate tree, paths, policy, frozen ledger, and current evidence (`reviewGate.result: allow`). A discovered-but-broken receipt (`reviewGate` present with pending, scope-changed, invalidated, or escalated) still blocks archive. Scope change requires an explicit new lineage; new external evidence may invalidate or escalate without reopening review.
 - OpenSpec review artifacts use `openspec/changes/{change-name}/reviews/{transaction,ledger,receipt,chain-bundle,gate-context}.json`. Engram uses exact topics `sdd/{change-name}/review/{transaction,ledger,receipt,chain-bundle,gate-context}`. The chain bundle is a portable non-authoritative recovery source and requires explicit validated import into the repository-derived store. Do not substitute prompt-only state when these native artifacts are available.
+- Before a runtime-bearing continuation, call compact `sdd-attempt acquire` with `<acquire-id>` and launch only for `state: proceed`; retain its opaque token and call compact `sdd-attempt settle` after the external run with a distinct `<settle-id>`. Reuse each operation's own request ID only for its idempotent replay. `blocked` or `complete` stops the launch, and settle's three states alone control whether another bounded acquire is allowed. Settle derives current binding and failed-evidence authority internally unless legacy status lacks that revision, in which case pass the exact failed revision with `--remediates-evidence-revision`; pass `--successor-lineage` only when review approved a distinct successor. Reset remains an explicit maintainer scope decision and never occurs automatically. A passed remediation attempt routes to fresh verification only when its remediated-evidence revision exactly equals the strict failed verify envelope and its atomically selected compact successor still validates live.
 - Planning phases never auto-launch ordinary 4R or Judgment Day. Post-apply may explicitly start ordinary `review/start(target)` only when no valid receipt exists. Pre-commit, pre-push, and pre-PR validate the same receipt through the native validator and never create a new review budget. A release whose tag target is proven to be the current protected `origin/main` SHA may use the release fast path only with successful required CI for that exact SHA, an immediate remote-head recheck before tag push, and no fresh risk evidence; otherwise it falls back to native receipt validation. Major or post-incident releases always require explicit extraordinary review.
 
 ## Action Context Guard

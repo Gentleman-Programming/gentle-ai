@@ -8,8 +8,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 const codeGraphUpstreamVersion = "1.4.1"
@@ -115,12 +115,9 @@ func hasCodeGraphToolWiring(homeDir string, adapter agents.Adapter) (string, boo
 		return path, hasCanonicalCodeGraphServer(data)
 	}
 	if adapter.Agent() == model.AgentAntigravity {
-		path := filepath.Join(homeDir, ".gemini", "antigravity", "mcp_config.json")
-		if _, err := os.Stat(filepath.Join(homeDir, ".gemini", "config", ".migrated")); err == nil {
-			path = filepath.Join(homeDir, ".gemini", "config", "mcp_config.json")
-		}
+		path := antigravityCodeGraphMCPConfigPath(homeDir)
 		data, err := os.ReadFile(path)
-		return path, err == nil && hasCanonicalCodeGraphServer(data)
+		return path, err == nil && hasCanonicalAntigravityCodeGraphServer(data)
 	}
 	if detector, ok := adapter.(agents.EffectiveCodeGraphWiringDetector); ok {
 		return detector.EffectiveCodeGraphWiring(homeDir)
@@ -132,6 +129,21 @@ func hasCodeGraphToolWiring(homeDir string, adapter agents.Adapter) (string, boo
 		}
 	}
 	return "", false
+}
+
+// antigravityCodeGraphMCPConfigPath mirrors CodeGraph's Antigravity target:
+// current Antigravity uses the unified config when either its migration marker
+// or the unified MCP file exists. Older installations use the legacy path.
+func antigravityCodeGraphMCPConfigPath(homeDir string) string {
+	unifiedDir := filepath.Join(homeDir, ".gemini", "config")
+	unifiedPath := filepath.Join(unifiedDir, "mcp_config.json")
+	if _, err := os.Stat(filepath.Join(unifiedDir, ".migrated")); err == nil {
+		return unifiedPath
+	}
+	if _, err := os.Stat(unifiedPath); err == nil {
+		return unifiedPath
+	}
+	return filepath.Join(homeDir, ".gemini", "antigravity", "mcp_config.json")
 }
 
 func hasCanonicalCodeGraphServer(data []byte) bool {
@@ -146,6 +158,33 @@ func hasCanonicalCodeGraphServer(data []byte) bool {
 	}
 	raw, ok := config.MCPServers["codegraph"]
 	return ok && json.Unmarshal(raw, &server) == nil && server.Command == "codegraph"
+}
+
+func hasCanonicalAntigravityCodeGraphServer(data []byte) bool {
+	var config struct {
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	if json.Unmarshal(data, &config) != nil {
+		return false
+	}
+	var server struct {
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	}
+	raw, ok := config.MCPServers["codegraph"]
+	if !ok || json.Unmarshal(raw, &server) != nil {
+		return false
+	}
+	if server.Command != "codegraph" {
+		if !filepath.IsAbs(server.Command) {
+			return false
+		}
+		command := filepath.Base(server.Command)
+		if command != "codegraph" && !strings.EqualFold(command, "codegraph.exe") {
+			return false
+		}
+	}
+	return slices.Equal(server.Args, []string{"serve", "--mcp"})
 }
 
 func detectedCodeGraphTargets(homeDir string) []string {

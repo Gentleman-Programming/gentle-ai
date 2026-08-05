@@ -36,6 +36,41 @@ var syncReviewDirectory = func(path string) error {
 	return directory.Close()
 }
 
+type directorySyncError struct {
+	path  string
+	cause error
+}
+
+func (err *directorySyncError) Error() string {
+	return fmt.Sprintf("sync parent directory for %q: %v", err.path, err.cause)
+}
+
+func (err *directorySyncError) Unwrap() error { return err.cause }
+
+// ImmutablePublicationConflictError requires maintainer action because replay
+// cannot replace a conflicting immutable artifact.
+type ImmutablePublicationConflictError struct{ Cause error }
+
+func (err *ImmutablePublicationConflictError) Error() string {
+	return fmt.Sprintf("immutable review publication conflict: %v", err.Cause)
+}
+
+func (err *ImmutablePublicationConflictError) Unwrap() error { return err.Cause }
+
+// SyncReviewDirectory persists a directory entry when the platform supports it.
+// Windows filesystems may reject directory handles; in that case the file rename
+// remains atomic, but power-loss durability of the directory entry is not claimed.
+func SyncReviewDirectory(path string) error {
+	if err := syncReviewDirectory(path); err != nil {
+		unsupported := errors.Is(err, syscall.EINVAL) || errors.Is(err, errors.ErrUnsupported) ||
+			reviewRuntimeGOOS() == "windows" && errors.Is(err, os.ErrPermission)
+		if !unsupported {
+			return err
+		}
+	}
+	return nil
+}
+
 type Record struct {
 	Schema           string      `json:"schema"`
 	Operation        string      `json:"operation"`
@@ -44,10 +79,11 @@ type Record struct {
 }
 
 type Store struct {
-	Dir       string
-	lineageID string
-	repo      string
-	readOnly  bool
+	Dir                 string
+	lineageID           string
+	repo                string
+	maintenanceLockPath string
+	readOnly            bool
 }
 
 type ValidatedChain struct {
@@ -74,7 +110,7 @@ func AuthoritativeStore(ctx context.Context, repo, lineageID string) (Store, err
 		return Store{}, errors.New("lineage_id escapes the repository review store")
 	}
 	_, statErr := os.Stat(filepath.Join(dir, "HEAD"))
-	return Store{Dir: dir, lineageID: lineageID, repo: root, readOnly: statErr == nil}, nil
+	return Store{Dir: dir, lineageID: lineageID, repo: root, maintenanceLockPath: filepath.Join(filepath.Dir(filepath.Dir(authorityRoot)), "REVIEW-MAINTENANCE.lock"), readOnly: statErr == nil}, nil
 }
 
 // DiscoverAuthoritativeStores returns every canonical lineage rooted in the
@@ -97,9 +133,8 @@ func DiscoverAuthoritativeStores(ctx context.Context, repo string) ([]Store, err
 		if !entry.IsDir() || validateLineageID(entry.Name()) != nil {
 			continue
 		}
-		stores = append(stores, Store{
-			Dir: filepath.Join(authorityRoot, entry.Name()), lineageID: entry.Name(), repo: root, readOnly: true,
-		})
+		stores = append(stores, Store{Dir: filepath.Join(authorityRoot, entry.Name()), lineageID: entry.Name(), repo: root,
+			maintenanceLockPath: filepath.Join(filepath.Dir(filepath.Dir(authorityRoot)), "REVIEW-MAINTENANCE.lock"), readOnly: true})
 	}
 	return stores, nil
 }
@@ -117,20 +152,12 @@ func reviewAuthorityRoot(ctx context.Context, repo string) (string, string, erro
 	if err != nil {
 		return "", "", fmt.Errorf("resolve authoritative review repository: %w", err)
 	}
-	output, err := runGit(ctx, root, nil, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	identity, err := reviewRepositoryIdentityAtRoot(ctx, root)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve repository Git common directory: %w", err)
+		return "", "", fmt.Errorf("resolve repository Git identity: %w", err)
 	}
-	commonDir := strings.TrimSpace(string(output))
-	if !filepath.IsAbs(commonDir) {
-		commonDir = filepath.Join(root, commonDir)
-	}
-	commonDir, err = filepath.Abs(commonDir)
-	if err != nil {
-		return "", "", err
-	}
-	authorityRoot := filepath.Join(filepath.Clean(commonDir), "gentle-ai", "review-transactions")
-	return authorityRoot, root, nil
+	authorityRoot := filepath.Join(identity.GitCommonDir, "gentle-ai", "review-transactions")
+	return authorityRoot, identity.RepositoryRoot, nil
 }
 
 func validateLineageID(lineageID string) error {
@@ -141,12 +168,16 @@ func validateLineageID(lineageID string) error {
 }
 
 func (store Store) Append(expectedRevision string, record Record) (string, error) {
-	return store.append(expectedRevision, record, false)
+	return store.append(expectedRevision, record)
 }
 
-func (store Store) append(expectedRevision string, record Record, allowInvalidate bool) (string, error) {
-	if store.readOnly && !allowInvalidate {
-		return "", ErrLegacyReadOnly
+func (store Store) append(expectedRevision string, record Record) (string, error) {
+	if store.readOnly {
+		operation := strings.TrimSpace(record.Operation)
+		if operation == "" {
+			operation = "review/append"
+		}
+		return "", NewLegacyReadOnlyError(operation, store.lineageID)
 	}
 	if strings.TrimSpace(store.Dir) == "" {
 		return "", errors.New("review store directory is required")
@@ -160,11 +191,20 @@ func (store Store) append(expectedRevision string, record Record, allowInvalidat
 	if store.lineageID != "" && record.Transaction.LineageID != store.lineageID {
 		return "", fmt.Errorf("%w: transaction lineage does not match authoritative store lineage", ErrInvalidSuccessor)
 	}
+	var maintenance *MaintenanceLock
+	var err error
+	if store.maintenanceLockPath != "" {
+		maintenance, err = acquireMaintenanceLock(context.Background(), store.maintenanceLockPath, maintenanceShared)
+		if err != nil {
+			return "", err
+		}
+		defer maintenance.Release()
+	}
 	if err := os.MkdirAll(filepath.Join(store.Dir, "events"), 0o755); err != nil {
 		return "", err
 	}
 	lockPath := filepath.Join(store.Dir, "LOCK")
-	lock, err := acquireStoreLock(lockPath)
+	lock, err := acquireLocalStoreLock(lockPath)
 	if err != nil {
 		return "", err
 	}
@@ -258,7 +298,7 @@ func (store Store) append(expectedRevision string, record Record, allowInvalidat
 		return "", err
 	}
 	eventPath := filepath.Join(store.Dir, "events", strings.TrimPrefix(revision, "sha256:")+".json")
-	if err := os.Link(tempPath, eventPath); err != nil {
+	if err := publishNoReplace(tempPath, eventPath); err != nil {
 		if os.IsExist(err) {
 			existing, readErr := os.ReadFile(eventPath)
 			if readErr != nil {
@@ -277,31 +317,10 @@ func (store Store) append(expectedRevision string, record Record, allowInvalidat
 	return revision, nil
 }
 
-// InvalidatePristine is the sole legacy write compatibility path. It appends
-// exactly review/invalidate without remarshal or modification of prior events.
+// InvalidatePristine is retained as a compatibility entry point, but ordinary
+// legacy-v1 authority is immutable once created.
 func (store Store) InvalidatePristine(expectedRevision, reason string, snapshot Snapshot) (string, error) {
-	chain, err := store.LoadChain()
-	if err != nil {
-		return "", err
-	}
-	current := chain.Records[len(chain.Records)-1].Transaction
-	if current.State == StateInvalidated {
-		if len(chain.Revisions) == 2 && expectedRevision == chain.Revisions[0] && current.InvalidationReason == strings.TrimSpace(reason) && snapshotsEqual(current.Snapshot, snapshot) {
-			return chain.HeadRevision, nil
-		}
-		return "", ErrConcurrentUpdate
-	}
-	if chain.HeadRevision != expectedRevision || !snapshotsEqual(current.Snapshot, snapshot) {
-		return "", ErrConcurrentUpdate
-	}
-	if err := rebuildCurrentSnapshotEvidence(context.Background(), store.repo, snapshot); err != nil {
-		return "", err
-	}
-	next := current
-	if err := next.Invalidate(reason); err != nil {
-		return "", err
-	}
-	return store.append(expectedRevision, Record{Operation: "review/invalidate", Transaction: next}, true)
+	return "", NewLegacyReadOnlyError("review/invalidate", store.lineageID)
 }
 
 func (store Store) Load() (Record, string, error) {
@@ -630,8 +649,22 @@ func validateHistoricalFreezeFindings(previous, next Transaction) error {
 	if !validSHA256(next.LedgerHash) {
 		return fmt.Errorf("%w: historical findings freeze requires a ledger hash", ErrInvalidSuccessor)
 	}
+	expected := historicalFreezeFindingsExpected(previous, next)
+	if !transactionsEqual(expected, next) {
+		return fmt.Errorf("%w: historical findings freeze changed unrelated transaction state", ErrInvalidSuccessor)
+	}
+	return nil
+}
+
+func historicalFreezeFindingsExpected(previous, next Transaction) Transaction {
 	expected := previous
-	expected.Findings = append([]Finding(nil), next.Findings...)
+	expected.Findings = nil
+	if next.Findings != nil {
+		// v1.49 hashed an explicit empty findings array differently from null.
+		// Preserve that published representation while deriving the hash.
+		expected.Findings = make([]Finding, len(next.Findings))
+		copy(expected.Findings, next.Findings)
+	}
 	expected.Outcomes = cloneOutcomes(previous.Outcomes)
 	for _, finding := range expected.Findings {
 		if !isSevereSeverity(finding.Severity) {
@@ -641,10 +674,7 @@ func validateHistoricalFreezeFindings(previous, next Transaction) error {
 	expected.LedgerHash = next.LedgerHash
 	expected.LedgerFindingsHash = findingsHash(expected.Findings)
 	expected.State = StateFindingsFrozen
-	if !transactionsEqual(expected, next) {
-		return fmt.Errorf("%w: historical findings freeze changed unrelated transaction state", ErrInvalidSuccessor)
-	}
-	return nil
+	return expected
 }
 
 // transactionsEqual compares persisted transaction state. JSON omits empty
@@ -756,6 +786,13 @@ func snapshotsEqual(previous, next Snapshot) bool {
 		equalStrings(previous.IntendedUntracked, next.IntendedUntracked) &&
 		equalStrings(previous.LedgerIDs, next.LedgerIDs) &&
 		equalStrings(previous.Paths, next.Paths)
+}
+
+// SnapshotsEqualExact is the public post-check seam. Unlike the historical
+// store comparison above it includes every Snapshot field, including
+// UnbornHead, so a source-mutating verifier cannot silently change its subject.
+func SnapshotsEqualExact(previous, next Snapshot) bool {
+	return previous.UnbornHead == next.UnbornHead && snapshotsEqual(previous, next)
 }
 
 func validInitialStoreRecord(record Record) bool {
@@ -882,6 +919,16 @@ func WriteTransactionAtomic(path string, transaction Transaction) error {
 	return writeAtomic(path, append(payload, '\n'), 0o644)
 }
 
+// PublishFileNoReplace atomically publishes source only when destination is absent.
+func PublishFileNoReplace(source, destination string) error {
+	return publishNoReplace(source, destination)
+}
+
+// ReplaceFileAtomic atomically replaces destination with source.
+func ReplaceFileAtomic(source, destination string) error {
+	return replaceFileAtomic(source, destination)
+}
+
 func readRevision(path string) (string, error) {
 	payload, err := os.ReadFile(path)
 	if err != nil {
@@ -922,16 +969,66 @@ func writeAtomic(path string, payload []byte, mode os.FileMode) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tempPath, path); err != nil {
+	if err := replaceFileAtomic(tempPath, path); err != nil {
 		return err
 	}
-	if err := syncReviewDirectory(filepath.Dir(path)); err != nil {
-		// NTFS and some filesystems do not support syncing directory handles.
-		unsupported := errors.Is(err, syscall.EINVAL) || errors.Is(err, errors.ErrUnsupported) ||
-			reviewRuntimeGOOS() == "windows" && errors.Is(err, os.ErrPermission)
-		if !unsupported {
-			return fmt.Errorf("sync parent directory for %q: %w", path, err)
+	if err := SyncReviewDirectory(filepath.Dir(path)); err != nil {
+		return &directorySyncError{path: path, cause: err}
+	}
+	return nil
+}
+
+func publishImmutable(path string, payload []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(dir, ".publish-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(mode); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if _, err := temp.Write(payload); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := publishNoReplace(tempPath, path); err != nil {
+		if !os.IsExist(err) {
+			return err
 		}
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return &ImmutablePublicationConflictError{Cause: errors.New("non-regular existing path")}
+		}
+		existing, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if !bytes.Equal(existing, payload) {
+			return &ImmutablePublicationConflictError{Cause: errors.New("existing content differs")}
+		}
+		if err := SyncReviewDirectory(dir); err != nil {
+			return &directorySyncError{path: path, cause: err}
+		}
+		return nil
+	}
+	if err := SyncReviewDirectory(dir); err != nil {
+		return &directorySyncError{path: path, cause: err}
 	}
 	return nil
 }

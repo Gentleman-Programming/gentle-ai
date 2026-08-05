@@ -6,9 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/versions"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 var LookPathOverride = exec.LookPath
@@ -65,14 +65,18 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 
 // --- Installation ---
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return true
+func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.MustForAgent(model.AgentQwenCode)
 }
 
+// InstallCommand returns the display-only command shown when Qwen Code is
+// not detected — gentle-ai never executes this (see agentInstallStep in
+// internal/cli/run.go). Qwen Code installs via npm on all platforms;
+// postinstall scripts are blocked to mitigate supply-chain risk. The version
+// advises "latest" rather than a pin: a human reads and runs this, and a
+// hardcoded version goes stale the moment a newer Qwen Code ships.
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
-	// Qwen Code installs via npm on all platforms. Version is pinned and
-	// postinstall scripts are blocked to mitigate supply-chain risk.
-	pkg := "@qwen-code/qwen-code@" + versions.QwenCode
+	const pkg = "@qwen-code/qwen-code@latest"
 	if profile.OS == "linux" && !profile.NpmWritable {
 		return [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 	}
@@ -120,7 +124,7 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 // --- Optional capabilities ---
 
 func (a *Adapter) SupportsOutputStyles() bool {
-	return false
+	return a.CapabilityManifest().Features.OutputStyles
 }
 
 func (a *Adapter) OutputStyleDir(_ string) string {
@@ -130,7 +134,7 @@ func (a *Adapter) OutputStyleDir(_ string) string {
 // SupportsSlashCommands returns true because Qwen Code supports custom slash
 // commands via markdown files in ~/.qwen/commands/.
 func (a *Adapter) SupportsSlashCommands() bool {
-	return true
+	return a.CapabilityManifest().Features.SlashCommands
 }
 
 // CommandsDir returns the directory where custom slash command .md files
@@ -141,7 +145,7 @@ func (a *Adapter) CommandsDir(homeDir string) string {
 }
 
 func (a *Adapter) SupportsSubAgents() bool {
-	return false
+	return a.CapabilityManifest().Features.FileSubAgents
 }
 
 func (a *Adapter) SubAgentsDir(_ string) string {
@@ -153,15 +157,15 @@ func (a *Adapter) EmbeddedSubAgentsDir() string {
 }
 
 func (a *Adapter) SupportsSkills() bool {
-	return true
+	return a.CapabilityManifest().Features.Skills
 }
 
 func (a *Adapter) SupportsSystemPrompt() bool {
-	return true
+	return a.CapabilityManifest().Features.SystemPrompt
 }
 
 func (a *Adapter) SupportsMCP() bool {
-	return true
+	return a.CapabilityManifest().Features.MCP
 }
 
 func defaultStat(path string) statResult {

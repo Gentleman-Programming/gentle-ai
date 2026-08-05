@@ -1,6 +1,7 @@
 package sddstatus
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,27 +10,37 @@ import (
 	"testing"
 )
 
-func TestListActiveOpenSpecChanges(t *testing.T) {
+func TestResolveSharesOneNormalizedWorkspaceWithReviewMode(t *testing.T) {
 	root := t.TempDir()
-	mkdir(t, filepath.Join(root, "openspec", "changes", "z-change"))
-	mkdir(t, filepath.Join(root, "openspec", "changes", "a-change"))
-	mkdir(t, filepath.Join(root, "openspec", "changes", "archive", "2026-01-01-old"))
+	mkdir(t, filepath.Join(root, "openspec", "changes"))
+	t.Chdir(root)
 
-	changes, err := ListActiveOpenSpecChanges(root)
+	modeLookups := 0
+	status, err := Resolve(ResolveOptions{
+		ReviewDisabledForWorkspace: func(workspaceRoot string) bool {
+			modeLookups++
+			if workspaceRoot != root {
+				t.Fatalf("review mode workspace = %q, want %q", workspaceRoot, root)
+			}
+			return true
+		},
+	})
 	if err != nil {
-		t.Fatalf("ListActiveOpenSpecChanges() error = %v", err)
+		t.Fatalf("Resolve() error = %v", err)
 	}
-
-	want := []string{"a-change", "z-change"}
-	if !reflect.DeepEqual(changes, want) {
-		t.Fatalf("ListActiveOpenSpecChanges() = %v, want %v", changes, want)
+	if modeLookups != 1 {
+		t.Fatalf("review mode lookups = %d, want 1", modeLookups)
+	}
+	if status.ActionContext.WorkspaceRoot != root {
+		t.Fatalf("status workspace = %q, want shared root %q", status.ActionContext.WorkspaceRoot, root)
 	}
 }
 
 func TestResolveUsesEngramArtifactsWhenOpenSpecIsAbsent(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, filepath.Join(root, ".engram"))
-	write(t, filepath.Join(root, ".git", "config"), "[remote \"origin\"]\n\turl = git@github.com:Gentleman-Programming/gentle-ai.git\n")
+	runRuntimeLedgerGit(t, root, "init", "-q")
+	runRuntimeLedgerGit(t, root, "remote", "add", "origin", "git@github.com:Gentleman-Programming/gentle-ai.git")
 
 	restore := stubEngramExport(t, []engramObservation{
 		{Title: "sdd/add-auth/proposal", Content: "## Proposal\nAdd auth", Project: "gentle-ai", Scope: "project"},
@@ -131,6 +142,31 @@ func TestResolveSelectionStates(t *testing.T) {
 	}
 }
 
+func TestDispatcherMarkdownRendersSelectChangeInstructions(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, "openspec", "changes", "first"))
+	mkdir(t, filepath.Join(root, "openspec", "changes", "second"))
+
+	status, err := Resolve(ResolveOptions{CWD: root})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended != "select-change" {
+		t.Fatalf("NextRecommended = %q, want select-change", status.NextRecommended)
+	}
+
+	// next_recommended == "select-change" is a routing state, not a Phase, so
+	// nextRecommendedPhase() does not recognize it. Without an explicit
+	// continuation, the blocked reason ("Change selection is ambiguous: ...")
+	// is the entire guidance and names no way out.
+	dispatcher := RenderDispatcherMarkdown(status)
+	for _, want := range []string{"### Next Selection Operation", "gentle-ai sdd-status --cwd", "gentle-ai sdd-continue --cwd", "<change-name>"} {
+		if !strings.Contains(dispatcher, want) {
+			t.Fatalf("dispatcher missing %q for select-change:\n%s", want, dispatcher)
+		}
+	}
+}
+
 func TestResolveBlockedStatusJSONUsesEmptyArraysForPathFields(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, filepath.Join(root, "openspec", "changes"))
@@ -186,6 +222,205 @@ func TestResolveStatusJSONUsesEmptyBlockedReasonsArray(t *testing.T) {
 	}
 }
 
+func TestBlockerReasonsForRoute(t *testing.T) {
+	expected := []string{
+		"proposal.md is missing or partial.",
+		"specs/**/spec.md is missing or partial.",
+		"design.md is missing or partial.",
+		"tasks.md is missing or partial.",
+	}
+	genuine := []string{
+		"tasks.md has no markdown task checkboxes.",
+		"proposal.md is missing or partial.",
+	}
+	reasons := blockerReasons{expectedPlanning: expected, genuine: genuine}
+
+	tests := []struct {
+		name  string
+		route string
+		want  []string
+	}{
+		{name: "propose omits all expected planning blockers", route: "propose", want: genuine},
+		{name: "spec omits expected planning blockers", route: "spec", want: genuine},
+		{name: "design omits expected planning blockers", route: "design", want: genuine},
+		{name: "tasks omits expected planning blockers", route: "tasks", want: genuine},
+		{name: "apply preserves expected then genuine order", route: "apply", want: append(append([]string{}, expected...), genuine...)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := reasons.forRoute(tt.route)
+			if got == nil {
+				t.Fatal("forRoute() returned a nil slice")
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("forRoute(%q) = %v, want %v", tt.route, got, tt.want)
+			}
+		})
+	}
+
+	got := reasons.forRoute("propose")
+	got[0] = "mutated"
+	if next := reasons.forRoute("propose"); !reflect.DeepEqual(next, genuine) {
+		t.Fatalf("forRoute() reused its backing slice: next = %v, want %v", next, genuine)
+	}
+}
+
+func TestResolvePlanningRoutesOmitExpectedBlockersForBothStores(t *testing.T) {
+	routes := []struct {
+		name  string
+		route string
+	}{
+		{name: "propose", route: "propose"},
+		{name: "spec", route: "spec"},
+		{name: "design", route: "design"},
+		{name: "tasks", route: "tasks"},
+	}
+
+	for _, store := range []string{"openspec", "engram"} {
+		for _, tt := range routes {
+			t.Run(store+"/"+tt.name, func(t *testing.T) {
+				root := t.TempDir()
+				if store == "openspec" {
+					seedPlanningRoute(t, root, "thin", tt.route)
+				} else {
+					mkdir(t, filepath.Join(root, ".engram"))
+					runRuntimeLedgerGit(t, root, "init", "-q")
+					runRuntimeLedgerGit(t, root, "remote", "add", "origin", "git@github.com:Gentleman-Programming/gentle-ai.git")
+					restore := stubEngramExport(t, engramPlanningRoute("thin", tt.route))
+					t.Cleanup(restore)
+				}
+
+				status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+				if err != nil {
+					t.Fatalf("Resolve() error = %v", err)
+				}
+				if status.NextRecommended != tt.route {
+					t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, tt.route)
+				}
+				if want := []string{}; !reflect.DeepEqual(status.BlockedReasons, want) {
+					t.Fatalf("BlockedReasons = %v, want %v", status.BlockedReasons, want)
+				}
+			})
+		}
+	}
+}
+
+func TestResolveTaskIntegrityBlockerSurvivesPlanningAndResolveBlockersRoutes(t *testing.T) {
+	tests := []struct {
+		name     string
+		seed     func(t *testing.T, root string)
+		wantNext string
+	}{
+		{
+			name: "planning route",
+			seed: func(t *testing.T, root string) {
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "tasks.md"), "not a checklist\n")
+			},
+			wantNext: "propose",
+		},
+		{
+			name: "all planning artifacts complete",
+			seed: func(t *testing.T, root string) {
+				seedReadyChange(t, root, "thin", "not a checklist\n")
+			},
+			wantNext: "resolve-blockers",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			tt.seed(t, root)
+
+			status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			if status.NextRecommended != tt.wantNext {
+				t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, tt.wantNext)
+			}
+			want := []string{"tasks.md has no markdown task checkboxes."}
+			if !reflect.DeepEqual(status.BlockedReasons, want) {
+				t.Fatalf("BlockedReasons = %v, want %v", status.BlockedReasons, want)
+			}
+		})
+	}
+}
+
+func TestResolveEngramPlanningRouteRetainsGenuineBlocker(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".engram"))
+	runRuntimeLedgerGit(t, root, "init", "-q")
+	runRuntimeLedgerGit(t, root, "remote", "add", "origin", "git@github.com:Gentleman-Programming/gentle-ai.git")
+	restore := stubEngramExport(t, []engramObservation{
+		{Title: "sdd/thin/tasks", Content: "not a checklist\n", Project: "gentle-ai", Scope: "project"},
+	})
+	defer restore()
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended != "propose" {
+		t.Fatalf("NextRecommended = %q, want propose", status.NextRecommended)
+	}
+	want := []string{"tasks.md has no markdown task checkboxes."}
+	if !reflect.DeepEqual(status.BlockedReasons, want) {
+		t.Fatalf("BlockedReasons = %v, want %v", status.BlockedReasons, want)
+	}
+}
+
+func TestResolveRuntimeOverrideRestoresExpectedPlanningBlockersForBothStores(t *testing.T) {
+	for _, store := range []string{"openspec", "engram"} {
+		t.Run(store, func(t *testing.T) {
+			root := initRuntimeLedgerRepo(t)
+			if store == "openspec" {
+				seedPlanningRoute(t, root, "thin", "propose")
+			} else {
+				mkdir(t, filepath.Join(root, ".engram"))
+				runRuntimeLedgerGit(t, root, "remote", "add", "origin", "git@github.com:Gentleman-Programming/gentle-ai.git")
+				restore := stubEngramExport(t, engramPlanningRoute("thin", "propose"))
+				t.Cleanup(restore)
+			}
+			// A maintainer decision is the runtime state that still overrides
+			// routing to a final route. An active attempt stopped overriding in
+			// #2463: compact acquire admits its own token holder, so status has
+			// no standing to refuse that launch.
+			store := mustRuntimeStore(t, root, "thin")
+			active, err := store.Begin(context.Background(), BeginAttemptRequest{
+				ExpectedRevision: "", RequestID: "begin-thin", WorkUnit: "apply",
+				EvidenceGoal: "prove final-route blocker filtering", MaxAttempts: 1, MaxChangedLines: 20,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Finish(context.Background(), FinishAttemptRequest{
+				ExpectedRevision: active.Revision, RequestID: "finish-thin", Outcome: AttemptFailed,
+				EvidenceRevision: runtimeTestHash('4'), Diagnosis: "bounded runtime reproduced the failure",
+				HarnessDisposition: HarnessReused, CleanupEvidence: "runtime process group exited",
+				ProcessEvidence: "post-run scan found no descendants",
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			if status.NextRecommended != "resolve-blockers" {
+				t.Fatalf("NextRecommended = %q, want resolve-blockers", status.NextRecommended)
+			}
+			reasons := strings.Join(status.BlockedReasons, "\n")
+			for _, want := range []string{"proposal.md is missing or partial.", "blocked(maintainer_decision)"} {
+				if !strings.Contains(reasons, want) {
+					t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, want)
+				}
+			}
+		})
+	}
+}
+
 func TestResolveArtifactStatesAndTaskProgress(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "add-auth", strings.Join([]string{
@@ -235,12 +470,12 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			seed: func(t *testing.T, root string) {
 				write(t, filepath.Join(root, "openspec", "changes", "thin", "tasks.md"), "- [ ] 1.1 Work\n")
 			},
-			wantApply:   ApplyBlocked,
-			wantApplyD:  DependencyBlocked,
-			wantVerify:  DependencyBlocked,
-			wantArchive: DependencyBlocked,
-			wantNext:    "propose",
-			wantBlocked: "proposal.md is missing or partial.",
+			wantApply:         ApplyBlocked,
+			wantApplyD:        DependencyBlocked,
+			wantVerify:        DependencyBlocked,
+			wantArchive:       DependencyBlocked,
+			wantNext:          "propose",
+			wantBlockedAbsent: "proposal.md is missing or partial.",
 		},
 		{
 			name: "apply ready when core artifacts are done and tasks are pending",
@@ -254,15 +489,19 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			wantNext:    "apply",
 		},
 		{
-			name: "apply all done requires explicit review before verify",
+			// Wave 4 S3 (design.md decision 3, proposal.md's #1 success
+			// criterion): RDD no longer supervises SDD before verify. Apply
+			// done, no verify report yet => verify is immediately ready, no
+			// review transaction required. The offer point is post-verify.
+			name: "apply all done makes verify ready immediately with no pre-verify review supervision",
 			seed: func(t *testing.T, root string) {
 				seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
-			wantVerify:  DependencyBlocked,
+			wantVerify:  DependencyReady,
 			wantArchive: DependencyBlocked,
-			wantNext:    "review",
+			wantNext:    "verify",
 		},
 		{
 			name: "apply progress does not make final verify ready before all tasks complete",
@@ -635,8 +874,8 @@ func TestResolveNextRecommendedUsesStableTokenForCoreArtifactBlockers(t *testing
 	if status.NextRecommended == blockedProse || strings.Contains(status.NextRecommended, blockedProse) {
 		t.Fatalf("NextRecommended = %q, must not contain blocked reason prose %q", status.NextRecommended, blockedProse)
 	}
-	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), blockedProse) {
-		t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, blockedProse)
+	if len(status.BlockedReasons) != 0 {
+		t.Fatalf("BlockedReasons = %v, want no expected planning blockers", status.BlockedReasons)
 	}
 }
 
@@ -740,16 +979,17 @@ func TestRenderDispatcherMarkdownIncludesBlockedReasonsSeparately(t *testing.T) 
 	}
 	markdown := RenderDispatcherMarkdown(status)
 
-	// Missing proposal now routes to "propose", not "resolve-blockers".
-	// Blocked prose lives in blockedReasons, separate from nextRecommended.
 	for _, want := range []string{
 		"next_recommended: propose",
-		"### Blocked Reasons",
-		"proposal.md is missing or partial.",
 		`"nextRecommended": "propose"`,
 	} {
 		if !strings.Contains(markdown, want) {
 			t.Fatalf("RenderDispatcherMarkdown() missing %q:\n%s", want, markdown)
+		}
+	}
+	for _, unwanted := range []string{"### Blocked Reasons", "proposal.md is missing or partial."} {
+		if strings.Contains(markdown, unwanted) {
+			t.Fatalf("RenderDispatcherMarkdown() unexpectedly included %q:\n%s", unwanted, markdown)
 		}
 	}
 }
@@ -769,7 +1009,6 @@ func TestRenderNativePhasePromptIncludesAuthorityInstructionsJSONAndBlockedGuida
 		"Native status is authoritative over prompt inference.",
 		"If this phase is blocked, return the blockers instead of acting.",
 		"dependency_state: blocked",
-		"proposal.md is missing or partial.",
 		"Read proposal, specs, design, and tasks before editing.",
 		"```json",
 		`"schemaName": "gentle-ai.sdd-status"`,
@@ -778,6 +1017,38 @@ func TestRenderNativePhasePromptIncludesAuthorityInstructionsJSONAndBlockedGuida
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("RenderNativePhasePrompt() missing %q:\n%s", want, prompt)
 		}
+	}
+	for _, unwanted := range []string{"### Blocked Reasons", "proposal.md is missing or partial."} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("RenderNativePhasePrompt() unexpectedly included %q:\n%s", unwanted, prompt)
+		}
+	}
+}
+
+func TestPlanningRouteRenderersOmitExpectedBlockersAndRetainGenuineBlockers(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "openspec", "changes", "thin", "tasks.md"), "not a checklist\n")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", IncludeInstructions: true})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended != "propose" {
+		t.Fatalf("NextRecommended = %q, want propose", status.NextRecommended)
+	}
+	for name, rendered := range map[string]string{
+		"status markdown":     RenderMarkdown(status),
+		"dispatcher markdown": RenderDispatcherMarkdown(status),
+		"native phase prompt": RenderNativePhasePrompt(status, PhasePropose),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(rendered, "tasks.md has no markdown task checkboxes.") {
+				t.Fatalf("rendered output did not retain the genuine blocker:\n%s", rendered)
+			}
+			if strings.Contains(rendered, "proposal.md is missing or partial.") {
+				t.Fatalf("rendered output retained an expected planning blocker:\n%s", rendered)
+			}
+		})
 	}
 }
 
@@ -821,6 +1092,40 @@ func seedReadyChange(t *testing.T, root string, name string, tasks string) strin
 	write(t, filepath.Join(changeRoot, "design.md"), "# Design\n")
 	write(t, filepath.Join(changeRoot, "tasks.md"), tasks)
 	return changeRoot
+}
+
+func seedPlanningRoute(t *testing.T, root string, name string, route string) {
+	t.Helper()
+	changeRoot := filepath.Join(root, "openspec", "changes", name)
+	if route != "propose" {
+		write(t, filepath.Join(changeRoot, "proposal.md"), "# Proposal\n")
+	}
+	if route == "design" || route == "tasks" {
+		write(t, filepath.Join(changeRoot, "specs", "core", "spec.md"), "# Spec\n")
+	}
+	if route == "tasks" {
+		write(t, filepath.Join(changeRoot, "design.md"), "# Design\n")
+	}
+	if route == "propose" {
+		write(t, filepath.Join(changeRoot, "tasks.md"), "- [ ] 1.1 Work\n")
+	}
+}
+
+func engramPlanningRoute(name string, route string) []engramObservation {
+	observations := []engramObservation{}
+	if route != "propose" {
+		observations = append(observations, engramObservation{Title: "sdd/" + name + "/proposal", Content: "# Proposal\n", Project: "gentle-ai", Scope: "project"})
+	}
+	if route == "design" || route == "tasks" {
+		observations = append(observations, engramObservation{Title: "sdd/" + name + "/spec", Content: "# Spec\n", Project: "gentle-ai", Scope: "project"})
+	}
+	if route == "tasks" {
+		observations = append(observations, engramObservation{Title: "sdd/" + name + "/design", Content: "# Design\n", Project: "gentle-ai", Scope: "project"})
+	}
+	if route == "propose" {
+		observations = append(observations, engramObservation{Title: "sdd/" + name + "/tasks", Content: "- [ ] 1.1 Work\n", Project: "gentle-ai", Scope: "project"})
+	}
+	return observations
 }
 
 func write(t *testing.T, path string, content string) {

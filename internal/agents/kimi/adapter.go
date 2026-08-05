@@ -1,8 +1,8 @@
 // Package kimi provides Kimi Code CLI agent integration.
 //
 // Integration Note:
-// This adapter natively relies on Astral's `uv` package manager 
-// (`uv tool install kimi-cli`) to securely download and run Kimi CLI, 
+// This adapter natively relies on Astral's `uv` package manager
+// (`uv tool install kimi-cli`) to securely download and run Kimi CLI,
 // avoiding upstream's pipe-to-shell bootstrap scripts.
 package kimi
 
@@ -14,11 +14,12 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/installcmd"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 var LookPathOverride = exec.LookPath
@@ -110,8 +111,8 @@ func (a *Adapter) findKimi() (string, error) {
 
 // --- Installation ---
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return true
+func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifest {
+	return capabilitymanifest.MustForAgent(model.AgentKimi)
 }
 
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
@@ -178,7 +179,7 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 // --- Optional capabilities ---
 
 func (a *Adapter) SupportsOutputStyles() bool {
-	return false
+	return a.CapabilityManifest().Features.OutputStyles
 }
 
 func (a *Adapter) OutputStyleDir(_ string) string {
@@ -186,19 +187,19 @@ func (a *Adapter) OutputStyleDir(_ string) string {
 }
 
 func (a *Adapter) SupportsSlashCommands() bool {
-	return false
+	return a.CapabilityManifest().Features.SlashCommands
 }
 
 func (a *Adapter) SupportsSkills() bool {
-	return true
+	return a.CapabilityManifest().Features.Skills
 }
 
 func (a *Adapter) SupportsSystemPrompt() bool {
-	return true
+	return a.CapabilityManifest().Features.SystemPrompt
 }
 
 func (a *Adapter) SupportsMCP() bool {
-	return true
+	return a.CapabilityManifest().Features.MCP
 }
 
 // --- Sub-agent support (optional interface) ---
@@ -207,7 +208,7 @@ func (a *Adapter) SupportsMCP() bool {
 // The SDD component copies all files from the embedded agents directory.
 
 func (a *Adapter) SupportsSubAgents() bool {
-	return true
+	return a.CapabilityManifest().Features.FileSubAgents
 }
 
 func (a *Adapter) SubAgentsDir(homeDir string) string {
@@ -243,7 +244,6 @@ Skills root:
   "%s"`, gentlemanYaml, skillsRoot)
 }
 
-
 // --- Helpers ---
 
 func defaultStat(path string) statResult {
@@ -272,7 +272,7 @@ func binaryName() string {
 }
 
 // BootstrapTemplate ensures the base KIMI.md template exists in the agent's config directory.
-// It is used by the installation pipeline to guarantee that modular components 
+// It is used by the installation pipeline to guarantee that modular components
 // (SDD, Engram) can be included even if the Persona component is not installed.
 func (a *Adapter) BootstrapTemplate(homeDir string) error {
 	kimiDir := a.GlobalConfigDir(homeDir)
@@ -281,9 +281,9 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 	}
 
 	skeletonPath := a.SystemPromptFile(homeDir)
-	
+
 	// We always write the skeleton to ensure any missing includes are restored.
-	// Since KIMI.md is the 'router' for modular Jinja components, it should 
+	// Since KIMI.md is the 'router' for modular Jinja components, it should
 	// remain managed by the framework.
 	content := assets.MustRead("kimi/KIMI.md")
 	if _, err := filemerge.WriteFileAtomic(skeletonPath, []byte(content), 0o644); err != nil {
@@ -301,5 +301,3 @@ func (a *Adapter) BootstrapTemplate(homeDir string) error {
 
 	return nil
 }
-
-

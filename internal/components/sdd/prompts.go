@@ -4,9 +4,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
 const (
@@ -19,10 +20,29 @@ func readSkillContent(phase string) (string, error) {
 	return assets.Read("skills/" + phase + "/SKILL.md")
 }
 
-// SharedPromptDir returns the directory where shared SDD prompt files are stored.
-// The path is {homeDir}/.config/opencode/prompts/sdd.
+// SharedPromptDir returns the shared SDD prompt directory beside OpenCode's
+// settings file, including when XDG_CONFIG_HOME overrides the default root.
 func SharedPromptDir(homeDir string) string {
-	return filepath.Join(homeDir, ".config", "opencode", "prompts", "sdd")
+	return filepath.Join(opencode.ConfigPath(homeDir), "prompts", "sdd")
+}
+
+// SharedPromptFileRef returns a prompt file reference relative to the settings
+// file that will contain it.
+func SharedPromptFileRef(settingsPath, homeDir, phase string) (string, error) {
+	return sharedPromptFileRef(settingsPath, homeDir, phase, filepath.Rel)
+}
+
+func sharedPromptFileRef(settingsPath, homeDir, phase string, rel func(string, string) (string, error)) (string, error) {
+	promptPath := filepath.Join(SharedPromptDir(homeDir), phase+".md")
+	relativePath, err := rel(filepath.Dir(settingsPath), promptPath)
+	if err != nil {
+		return "{file:" + filepath.ToSlash(promptPath) + "}", nil
+	}
+	relativePath = filepath.ToSlash(relativePath)
+	if !strings.HasPrefix(relativePath, ".") {
+		relativePath = "./" + relativePath
+	}
+	return "{file:" + relativePath + "}", nil
 }
 
 // subAgentPhaseOrder is an alias for profilePhaseOrder (defined in profiles.go),
