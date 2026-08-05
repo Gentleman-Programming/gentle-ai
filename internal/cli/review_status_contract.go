@@ -386,7 +386,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 		if request := result.NextTransition.CorrectionRequest; request != nil {
 			if result.Authority == nil || result.Frozen == nil || result.Authority.Version != reviewtransaction.AuthorityVersionCompact ||
 				result.Authority.State != reviewtransaction.StateCorrectionRequired || request.LineageID != result.Authority.LineageID ||
-				request.ExpectedRevision != result.Authority.Revision || request.TargetIdentity != result.TargetIdentity ||
+				request.ExpectedRevision != result.Authority.Revision || request.TargetIdentity != reviewAuthorityTargetIdentity(result) ||
 				request.CorrectionBudget != result.Frozen.CorrectionBudget {
 				return errors.New("negotiated status correction request binding is invalid") // refusal:by-design world-action: provider-generated status and request bindings require a code fix when they disagree
 			}
