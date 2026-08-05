@@ -65,6 +65,9 @@ const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 //   - script method + windows → manualFallback
 //   - OpenCode plugin method → update materialized package in ~/.config/opencode when possible
 //   - unknown method → manualFallback with explicit message
+//
+// The beta channel is checked before that routing: its LatestVersion is a
+// `main@<commit>` ref, which no version-pinning strategy can install.
 func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (bool, error) {
 	ownership := update.HomebrewNone
 	if profile.PackageManager == "brew" && r.Tool.InstallMethod != update.InstallOpenCodePlugin {
@@ -74,7 +77,7 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 			return false, fmt.Errorf("detect Homebrew ownership for %s: %w", r.Tool.Name, err)
 		}
 	}
-	if isBetaGentleAIUpgrade(r) && profile.OS != "windows" && ownership == update.HomebrewNone {
+	if isBetaGentleAIUpgrade(r) && ownership == update.HomebrewNone && betaGoInstallMainAvailable(r.Tool, profile) {
 		return false, goInstallMainUpgrade(r.Tool)
 	}
 
@@ -560,6 +563,27 @@ func isBetaGentleAIUpgrade(r update.UpdateResult) bool {
 		strings.EqualFold(r.Tool.Owner, "Gentleman-Programming") &&
 		r.Tool.Repo == "gentle-ai" &&
 		strings.HasPrefix(strings.TrimSpace(r.LatestVersion), "main@")
+}
+
+// betaGoInstallMainAvailable reports whether the beta `@main` path can actually
+// run on this platform.
+//
+// Linux and macOS always reach it. Windows reaches it only when the resolved
+// self-upgrade method is already go-install — that is, Go on PATH plus a
+// declared GoImportPath, which is also the condition
+// preflightWindowsGentleAIUpgrades uses to run the provenance check before this
+// point. Without Go there is no toolchain to install with, so the request keeps
+// falling through to binaryUpgrade's signed-distribution refusal, which already
+// names `@main` as the runnable source command for this channel.
+//
+// Windows used to be excluded from the beta path outright, which routed it into
+// goInstallUpgrade's `@v` + LatestVersion pin and produced `@vmain@<commit>` —
+// a target `go install` always rejects as an unknown revision.
+func betaGoInstallMainAvailable(tool update.ToolInfo, profile system.PlatformProfile) bool {
+	if profile.OS != "windows" {
+		return true
+	}
+	return effectiveMethod(tool, profile) == update.InstallGoInstall
 }
 
 // goInstallMainUpgrade installs gentle-ai from HEAD on the beta channel. It runs

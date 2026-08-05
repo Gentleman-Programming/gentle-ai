@@ -150,6 +150,98 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 	}
 }
 
+// TestRunStrategy_BetaGentleAISelfUpgradeOnWindowsUsesGoInstallMain covers the
+// beta channel on Windows, where the resolved self-upgrade method is already
+// go-install (Go on PATH plus a declared GoImportPath).
+//
+// Excluding Windows from the beta path routed the request into goInstallUpgrade,
+// which pins `@v` + LatestVersion. On this channel LatestVersion is a
+// `main@<commit>` ref, so the pin produced `@vmain@<commit>` — never a valid
+// `go install` version, and the upgrade failed with "unknown revision".
+func TestRunStrategy_BetaGentleAISelfUpgradeOnWindowsUsesGoInstallMain(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	goPath := t.TempDir()
+	destination := filepath.Join(goPath, "bin", "gentle-ai.exe")
+
+	var gotInstallArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "go" && len(args) == 2 && args[0] == "env" {
+			switch args[1] {
+			case "GOBIN":
+				return mockCmd("echo", "")
+			case "GOPATH":
+				return mockCmd("echo", goPath)
+			}
+		}
+		if name == "go" && len(args) == 2 && args[0] == "install" {
+			gotInstallArgs = args
+			return mockCmd("true")
+		}
+		t.Fatalf("Windows beta upgrade executed unexpected command %s %v", name, args)
+		return nil
+	}
+
+	origLookPath := lookPathFn
+	t.Cleanup(func() { lookPathFn = origLookPath })
+	lookPathFn = func(string) (string, error) { return destination, nil }
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gentle-ai",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentle-ai",
+			InstallMethod: update.InstallBinary,
+			GoImportPath:  "github.com/Gentleman-Programming/gentle-ai/v2/cmd/gentle-ai",
+		},
+		LatestVersion: "main@919ea3daf2af",
+		Status:        update.UpdateAvailable,
+	}
+	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true, GoAvailable: true}
+
+	_, err := runStrategy(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("runStrategy beta gentle-ai on Windows: unexpected error: %v", err)
+	}
+
+	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main"}
+	if len(gotInstallArgs) != len(wantArgs) || gotInstallArgs[0] != wantArgs[0] || gotInstallArgs[1] != wantArgs[1] {
+		t.Fatalf("go install args = %v, want %v", gotInstallArgs, wantArgs)
+	}
+}
+
+// TestRunStrategy_BetaGentleAIOnWindowsWithoutGoStaysManual guards the other
+// half of the Windows beta routing: without Go on PATH there is no go-install
+// method to resolve, so the request must keep falling through to the existing
+// signed-distribution refusal instead of shelling out to a `go` that is absent.
+func TestRunStrategy_BetaGentleAIOnWindowsWithoutGoStaysManual(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		t.Fatalf("unexpected command %q %v: Windows without Go must not run go install", name, args)
+		return nil
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gentle-ai",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentle-ai",
+			InstallMethod: update.InstallBinary,
+		},
+		LatestVersion: "main@919ea3daf2af",
+		Status:        update.UpdateAvailable,
+	}
+	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true, GoAvailable: false}
+
+	_, err := runStrategy(context.Background(), r, profile)
+	if _, ok := AsManualFallback(err); !ok {
+		t.Fatalf("runStrategy beta gentle-ai on Windows without Go: err = %v, want ManualFallbackError", err)
+	}
+}
+
 func envContains(env []string, want string) bool {
 	for _, entry := range env {
 		if entry == want {
