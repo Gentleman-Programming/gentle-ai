@@ -101,6 +101,9 @@ func TestReadCurrentModelAssignmentsNoFile(t *testing.T) {
 }
 
 func TestReadCurrentModelAssignmentsSupportedFallbackFilenamesAndJSONC(t *testing.T) {
+	t.Setenv("OPENCODE_CONFIG", "")
+	t.Setenv("OPENCODE_CONFIG_CONTENT", "")
+
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "config.jsonc")
 	content := `{
@@ -124,6 +127,9 @@ func TestReadCurrentModelAssignmentsSupportedFallbackFilenamesAndJSONC(t *testin
 }
 
 func TestReadCurrentModelAssignmentsMergesSupportedFilesWithPrecedence(t *testing.T) {
+	t.Setenv("OPENCODE_CONFIG", "")
+	t.Setenv("OPENCODE_CONFIG_CONTENT", "")
+
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{
 		"agent": {
@@ -154,6 +160,9 @@ func TestReadCurrentModelAssignmentsMergesSupportedFilesWithPrecedence(t *testin
 }
 
 func TestReadCurrentModelAssignmentsKeepsUsableAgentsWithParseWarning(t *testing.T) {
+	t.Setenv("OPENCODE_CONFIG", "")
+	t.Setenv("OPENCODE_CONFIG_CONTENT", "")
+
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{
 		"agent": {"sdd-apply": {"model": "openai/gpt-4o"}}
