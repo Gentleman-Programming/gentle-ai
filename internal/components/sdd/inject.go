@@ -215,6 +215,83 @@ func overlayAssetPath(sddMode model.SDDModeID) string {
 	return "opencode/sdd-overlay-single.json"
 }
 
+var compatibilitySDDSkillIDs = []model.SkillID{
+	"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
+	"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
+	"sdd-onboard", "judgment-day",
+}
+
+// SkillDirectoryPaths returns every file that InjectSkillDirectory may write.
+func SkillDirectoryPaths(skillDir, capability string) ([]string, error) {
+	sharedFiles, err := assets.SharedSkillFileNames()
+	if err != nil {
+		return nil, fmt.Errorf("resolve SDD shared files: %w", err)
+	}
+	if len(sharedFiles) == 0 {
+		return nil, fmt.Errorf("resolve SDD shared files: embedded %s listing is empty", assets.SharedSkillDir)
+	}
+	paths := make([]string, 0, len(sharedFiles))
+	for _, fileName := range sharedFiles {
+		paths = append(paths, filepath.Join(skillDir, "_shared", fileName))
+	}
+	if capability == "" {
+		capability = "capable"
+	}
+	skillPaths, err := skills.DirectoryPaths(skillDir, compatibilitySDDSkillIDs, capability)
+	if err != nil {
+		return nil, fmt.Errorf("enumerate SDD skills: %w", err)
+	}
+	return append(paths, skillPaths...), nil
+}
+
+// InjectSkillDirectory refreshes the SDD skills and their shared references in
+// an already-selected skills directory. It is separate from adapter injection
+// so compatibility paths can be refreshed once per operation.
+func InjectSkillDirectory(skillDir, capability string) (InjectionResult, error) {
+	return InjectSkillDirectoryWithWriter(skillDir, capability, filemerge.WriteFileAtomic)
+}
+
+// InjectSkillDirectoryWithWriter refreshes SDD skills with a caller-selected writer.
+func InjectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
+	sharedFiles, err := assets.SharedSkillFileNames()
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("resolve SDD shared files: %w", err)
+	}
+	if len(sharedFiles) == 0 {
+		return InjectionResult{}, fmt.Errorf("resolve SDD shared files: embedded %s listing is empty", assets.SharedSkillDir)
+	}
+	result := InjectionResult{}
+	for _, fileName := range sharedFiles {
+		assetPath := assets.SharedSkillDir + "/" + fileName
+		content, err := assets.Read(assetPath)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("required SDD shared file %q: embedded asset not found: %w", fileName, err)
+		}
+		if len(content) == 0 {
+			return InjectionResult{}, fmt.Errorf("required SDD shared file %q: embedded asset is empty", fileName)
+		}
+
+		path := filepath.Join(skillDir, "_shared", fileName)
+		writeResult, err := writeFile(path, []byte(content), 0o644)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		result.Changed = result.Changed || writeResult.Changed
+		result.Files = append(result.Files, path)
+	}
+
+	if capability == "" {
+		capability = "capable"
+	}
+	sddResult, err := skills.InjectDirectoryWithCapabilityWithWriter(skillDir, compatibilitySDDSkillIDs, capability, writeFile)
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("inject SDD skills: %w", err)
+	}
+	result.Changed = result.Changed || sddResult.Changed
+	result.Files = append(result.Files, sddResult.Files...)
+	return result, nil
+}
+
 func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, options ...InjectOptions) (InjectionResult, error) {
 	if !adapter.SupportsSystemPrompt() {
 		return InjectionResult{}, nil
@@ -494,58 +571,12 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.SupportsSkills() {
 		skillDir := adapter.SkillsDir(homeDir)
 		if skillDir != "" {
-			// The embedded skills/_shared listing is the single source of
-			// truth for the shared inventory; deriving it here keeps a newly
-			// added shared file from silently missing this deployment path.
-			sharedFiles, sharedErr := assets.SharedSkillFileNames()
-			if sharedErr != nil {
-				return InjectionResult{}, fmt.Errorf("resolve SDD shared files: %w", sharedErr)
+			skillResult, skillErr := InjectSkillDirectory(skillDir, opts.Capability)
+			if skillErr != nil {
+				return InjectionResult{}, skillErr
 			}
-			if len(sharedFiles) == 0 {
-				return InjectionResult{}, fmt.Errorf("resolve SDD shared files: embedded %s listing is empty", assets.SharedSkillDir)
-			}
-			sddSkillIDs := []model.SkillID{
-				"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
-				"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
-				"sdd-onboard", "judgment-day",
-			}
-
-			// Write shared skill files (not SDD-specific, but needed by SDD).
-			// These are written directly, not via skills.Inject, since they are
-			// not part of the skills component's injection scope.
-			for _, fileName := range sharedFiles {
-				assetPath := assets.SharedSkillDir + "/" + fileName
-				content, readErr := assets.Read(assetPath)
-				if readErr != nil {
-					return InjectionResult{}, fmt.Errorf("required SDD shared file %q: embedded asset not found: %w", fileName, readErr)
-				}
-				if len(content) == 0 {
-					return InjectionResult{}, fmt.Errorf("required SDD shared file %q: embedded asset is empty", fileName)
-				}
-
-				path := filepath.Join(skillDir, "_shared", fileName)
-				writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
-				if err != nil {
-					return InjectionResult{}, err
-				}
-
-				changed = changed || writeResult.Changed
-				files = append(files, path)
-			}
-
-			// Write SDD skill files using skills.InjectWithCapability, which
-			// extracts the appropriate model section from each skill file based on capability.
-			// Default to "capable" when no specific capability is set.
-			capability := opts.Capability
-			if capability == "" {
-				capability = "capable"
-			}
-			sddResult, sddErr := skills.InjectWithCapability(homeDir, adapter, sddSkillIDs, capability)
-			if sddErr != nil {
-				return InjectionResult{}, fmt.Errorf("inject SDD skills: %w", sddErr)
-			}
-			changed = changed || sddResult.Changed
-			files = append(files, sddResult.Files...)
+			changed = changed || skillResult.Changed
+			files = append(files, skillResult.Files...)
 		}
 	}
 

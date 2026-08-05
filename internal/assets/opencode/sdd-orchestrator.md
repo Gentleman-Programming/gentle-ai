@@ -31,6 +31,10 @@ Before losslessly relaying any blocking choice envelope, classify its semantic a
 - Report observed evidence, not an unconfirmed root cause. Include or reuse sanitized version/build, OS/architecture/client, the operation shape without secrets, bounded attempts and outcomes, failure envelopes, mutation outcome, expected and actual behavior, a minimal reproduction, safe opaque reason/revision identifiers, and preserved-state evidence.
 - Resume only after an installed published fix, then re-enter through native status. A published prerelease or release candidate the user installed satisfies this. Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request.
 
+#### SDD Edit-Authority Consent Relay (MANDATORY)
+
+When native SDD status reports `blocked(edit_authority_missing)`, its structured output may carry the typed `gentle-ai.sdd-integration.consent/v1` envelope as the optional `consent` block. Treat that envelope as a Lossless Blocking Prompt under this contract, with the same discipline as the review consent relay. Present the complete envelope once in the active conversation language: faithfully translate the headline, reason, `value`, the missing-root evidence, choice labels, every choice `effect`, and the off-path note, while preserving the original choices, order, selection mode, exact allowed-answer domain, and answer tokens. Never translate or alter the machine answer tokens (`granted`, `declined`), commands, paths, or invocations. Never summarize, reshape, reorder, merge, or omit any part. The human decides: never answer on the human's behalf and never run the grant unprompted. Only after the human's explicit `granted` answer, execute the envelope's exact grant invocation verbatim, exactly once, then re-enter through native status; the granted roots project into `allowedEditRoots`, and the grant is per-change, audited, and dies with archive. On `declined`, run the envelope's decline invocation: nothing is persisted, the change stays `blocked(edit_authority_missing)`, and the blocked reason names both exits (edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority). A blocked status without a `consent` block names the same two exits; relay them and stop.
+
 
 ### Language Domain Contract
 
@@ -93,6 +97,21 @@ The canonical native bounded-review contract is injected from the shared provide
 - Use a single writer thread for implementation; do not run parallel writers unless isolated worktrees are explicitly approved.
 - Let the native review and delivery providers select checking and delivery actions; repeated gates reuse exact authority and never reopen review for unchanged content.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
+
+<!-- gentle-ai:opencode-desktop-delegation-progress -->
+#### Delegation Visibility (OpenCode Desktop)
+
+For every native `delegate` or `task` call, emit exactly one concise, assistant-visible status line immediately before the call:
+
+`⏳ Delegating {phase} to {agent}...`
+
+When the call returns, emit exactly one concise, assistant-visible status line with the returned status:
+
+- Success: `✅ {agent} completed — {status}`
+- Blocked or failure: `⚠️ {agent} returned {status} — {short reason}`
+
+Keep pre-call lines to 15 tokens or fewer and post-call lines to 25 tokens or fewer. Use the actual phase, agent, status, and short reason. Do not emit multi-line narration, structured blocks, or these status lines from executor prompts.
+<!-- /gentle-ai:opencode-desktop-delegation-progress -->
 
 ## SDD Workflow (Spec-Driven Development)
 

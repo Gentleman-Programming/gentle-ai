@@ -65,7 +65,7 @@ const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 //   - script method + windows → manualFallback
 //   - OpenCode plugin method → update materialized package in ~/.config/opencode when possible
 //   - unknown method → manualFallback with explicit message
-func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) (bool, error) {
+func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (bool, error) {
 	ownership := update.HomebrewNone
 	if profile.PackageManager == "brew" && r.Tool.InstallMethod != update.InstallOpenCodePlugin {
 		var err error
@@ -87,7 +87,7 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 	case update.InstallBrew:
 		return false, brewUpgrade(ctx, r, ownership)
 	case update.InstallGoInstall:
-		return false, goInstallUpgrade(ctx, r.Tool, r.LatestVersion)
+		return false, goInstallUpgrade(ctx, r, profile, firstString(preflightDestination))
 	case update.InstallBinary:
 		return false, binaryUpgrade(ctx, r, profile)
 	case update.InstallScript:
@@ -460,13 +460,13 @@ func homebrewFailureAdvice(toolName string, output string, detected ...update.Ho
 
 // goInstallUpgrade runs `go install <importPath>@v<version>`.
 //
-// `go install` writes to GOBIN (or GOPATH/bin), which is not necessarily the
-// directory the user's shell resolves for the tool. After a successful install
-// the destination is compared against the effective binary so a silent no-op
-// upgrade cannot pass as a clean success. A mismatch, or a destination that
-// cannot be resolved, is reported as a warning — never as a failure, because
-// the new binary genuinely was written.
-func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion string) error {
+// Generic Go-managed tools retain the post-install warning because the new
+// binary was genuinely written. Windows gentle-ai self-upgrades are different:
+// they must prove that Go owns the active executable before writing, or skip to
+// a manual recovery instead of creating a second PATH-visible binary.
+func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination string) error {
+	tool := r.Tool
+	latestVersion := r.LatestVersion
 	if tool.GoImportPath == "" {
 		return fmt.Errorf("upgrade %q: GoImportPath is empty — cannot run go install", tool.Name)
 	}
@@ -474,7 +474,14 @@ func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion s
 	// GOBIN/GOPATH are static Go configuration that `go install` does not
 	// change, so they are read up front; the PATH lookup happens afterwards so
 	// a first-time install resolves correctly.
-	destDir, destErr := goInstallDestinationDir()
+	destDir := preflightDestination
+	var destErr error
+	if destDir == "" {
+		destDir, destErr = goInstallDestinationDir()
+		if err := preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr); err != nil {
+			return err
+		}
+	}
 
 	// Pin to the exact release version.
 	target := fmt.Sprintf("%s@v%s", tool.GoImportPath, latestVersion)
@@ -486,6 +493,66 @@ func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion s
 
 	warnGoInstallDestination(tool.Name, detectOS(), destDir, destErr)
 	return nil
+}
+
+func preflightWindowsGentleAIGoInstall(r update.UpdateResult, profile system.PlatformProfile) (string, error) {
+	if profile.OS != "windows" || r.Tool.Name != "gentle-ai" {
+		return "", nil
+	}
+	destDir, destErr := goInstallDestinationDir()
+	if err := preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr); err != nil {
+		return "", err
+	}
+	return destDir, nil
+}
+
+func firstString(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func preflightWindowsGentleAIGoInstallWithDestination(r update.UpdateResult, profile system.PlatformProfile, destDir string, destErr error) error {
+	if profile.OS != "windows" || r.Tool.Name != "gentle-ai" {
+		return nil
+	}
+	if destErr != nil {
+		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, "", "")}
+	}
+
+	destination := absoluteBinaryPath(filepath.Join(destDir, goInstallBinaryName(r.Tool.Name, profile.OS)))
+	active, err := lookPathFn(r.Tool.Name)
+	if err != nil {
+		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, destination, "")}
+	}
+	active = absoluteBinaryPath(active)
+	if !sameBinaryPathForOS(destination, active, profile.OS) {
+		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, destination, active)}
+	}
+	return nil
+}
+
+func gentleAIWindowsGoInstallProvenanceHint(r update.UpdateResult, destination, active string) string {
+	details := "could not determine the Go installation destination"
+	switch {
+	case destination != "" && active == "":
+		details = fmt.Sprintf("could not resolve the active gentle-ai executable before Go would write to %s", destination)
+	case destination != "" && active != "":
+		details = fmt.Sprintf("resolves gentle-ai to %s, but Go would write to %s", active, destination)
+	}
+
+	hint := fmt.Sprintf("Windows self-upgrade %s. No files were changed. ", details)
+	if active != "" {
+		hint += fmt.Sprintf("Keep %s as the active installation, or intentionally migrate to %s with:\n  ", active, destination)
+	} else {
+		hint += "Confirm the active installation, then intentionally migrate with:\n  "
+	}
+	hint += update.GentleAISourceInstallCommand(r.LatestVersion)
+	if destination != "" {
+		hint += fmt.Sprintf("\nAfter a successful migration, ensure only %s resolves for gentle-ai on PATH.", destination)
+	}
+	return hint
 }
 
 func isBetaGentleAIUpgrade(r update.UpdateResult) bool {

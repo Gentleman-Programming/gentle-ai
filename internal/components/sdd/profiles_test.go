@@ -842,6 +842,35 @@ func TestGenerateProfileOverlay_OrchestratorPromptSuffixed(t *testing.T) {
 	}
 }
 
+func TestGenerateProfileOverlay_ExcludesDesktopDelegationVisibility(t *testing.T) {
+	home := t.TempDir()
+
+	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, openCodeSettingsPathForTest(home), nil, "")
+	if err != nil {
+		t.Fatalf("GenerateProfileOverlay() error = %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(overlay, &root); err != nil {
+		t.Fatalf("overlay is not valid JSON: %v", err)
+	}
+	agentMap := root["agent"].(map[string]any)
+	prompt := agentMap["sdd-orchestrator-cheap"].(map[string]any)["prompt"].(string)
+
+	for _, unwanted := range []string{
+		"<!-- gentle-ai:opencode-desktop-delegation-progress -->",
+		"#### Delegation Visibility (OpenCode Desktop)",
+		"⏳ Delegating {phase} to {agent}...",
+		"✅ {agent} completed — {status}",
+		"⚠️ {agent} returned {status} — {short reason}",
+		"<!-- /gentle-ai:opencode-desktop-delegation-progress -->",
+	} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("named profile orchestrator prompt contains default Desktop progress wording %q", unwanted)
+		}
+	}
+}
+
 // ─── RemoveProfileAgents ─────────────────────────────────────────────────
 
 func buildSettingsWithProfiles(t *testing.T) (path string) {

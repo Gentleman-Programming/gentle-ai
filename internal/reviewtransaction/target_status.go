@@ -415,12 +415,7 @@ func inspectLegacyTargetReceipt(store Store, transaction Transaction) (string, e
 	if err != nil {
 		return "", fmt.Errorf("derive terminal legacy receipt: %w", err)
 	}
-	canonical, err := json.MarshalIndent(expected, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("canonicalize legacy target receipt: %w", err)
-	}
-	canonical = append(canonical, '\n')
-	if !reflect.DeepEqual(existing, expected) || !bytes.Equal(payload, canonical) {
+	if !reflect.DeepEqual(existing, expected) {
 		return "", errors.New("legacy target receipt does not equal the canonical derived receipt")
 	}
 	sum := sha256.Sum256(payload)

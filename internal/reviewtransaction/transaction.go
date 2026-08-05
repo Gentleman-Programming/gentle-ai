@@ -19,7 +19,6 @@ type Mode string
 const (
 	ModeOrdinary4R      Mode = "ordinary_4r"
 	ModeOrdinaryBounded Mode = "ordinary_bounded"
-	ModeJudgmentDay     Mode = "judgment_day"
 )
 
 const (
@@ -36,7 +35,6 @@ type State string
 const (
 	StateUnreviewed             State = "unreviewed"
 	StateReviewing              State = "reviewing"
-	StateJudgesConfirmed        State = "judges_confirmed"
 	StateFindingsFrozen         State = "findings_frozen"
 	StateEvidenceClassified     State = "evidence_classified"
 	StateFixRequired            State = "fix_required"
@@ -83,13 +81,27 @@ type Counters struct {
 	FixBatches            int `json:"fix_batches"`
 	ScopedFixValidations  int `json:"scoped_fix_validations"`
 	FinalVerifications    int `json:"final_verifications"`
-	FixRounds             int `json:"fix_rounds"`
-	ScopedRejudgments     int `json:"scoped_rejudgments"`
-	JudgeExecutions       int `json:"judge_executions"`
 	RiskExecutions        int `json:"risk_executions,omitempty"`
 	ResilienceExecutions  int `json:"resilience_executions,omitempty"`
 	ReadabilityExecutions int `json:"readability_executions,omitempty"`
 	ReliabilityExecutions int `json:"reliability_executions,omitempty"`
+}
+
+func (counters *Counters) UnmarshalJSON(payload []byte) error {
+	type persistedCounters Counters
+	var decoded struct {
+		persistedCounters
+		LegacyFixCount     int `json:"fix_rounds"`
+		LegacyRecheckCount int `json:"scoped_rejudgments"`
+		LegacyJudgeCount   int `json:"judge_executions"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	*counters = Counters(decoded.persistedCounters)
+	return nil
 }
 
 type Start struct {
@@ -157,14 +169,6 @@ type RefuterClaim struct {
 	Proof            string `json:"proof"`
 }
 
-type JudgeProof struct {
-	JudgeID       string `json:"judge_id"`
-	ExecutionHash string `json:"execution_hash"`
-	ResultHash    string `json:"result_hash"`
-	Blind         bool   `json:"blind"`
-	Confirmed     bool   `json:"confirmed"`
-}
-
 type EvidenceRoute struct {
 	RefuterClaims     []RefuterClaim `json:"refuter_claims"`
 	AutoFixFindingIDs []string       `json:"auto_fix_finding_ids"`
@@ -194,9 +198,6 @@ type Transaction struct {
 	LedgerFindingsHash      string                     `json:"ledger_findings_hash"`
 	EvidenceHash            string                     `json:"evidence_hash"`
 	InvalidationReason      string                     `json:"invalidation_reason,omitempty"`
-	JudgeProofHash          string                     `json:"judge_proof_hash,omitempty"`
-	JudgeAgreementHash      string                     `json:"judge_agreement_hash,omitempty"`
-	JudgeProofs             []JudgeProof               `json:"judge_proofs"`
 	Release                 *ReleaseEvidence           `json:"release,omitempty"`
 	FailedEvidenceRevision  string                     `json:"failed_evidence_revision,omitempty"`
 	Counters                Counters                   `json:"counters"`
@@ -224,7 +225,7 @@ func NewTransaction(start Start) (*Transaction, error) {
 	if err := validateLineageID(start.LineageID); err != nil {
 		return nil, err
 	}
-	if start.Mode != ModeOrdinary4R && start.Mode != ModeOrdinaryBounded && start.Mode != ModeJudgmentDay {
+	if start.Mode != ModeOrdinary4R && start.Mode != ModeOrdinaryBounded {
 		return nil, fmt.Errorf("unsupported review mode %q", start.Mode)
 	}
 	selectedLenses, err := validateSelectedLenses(start.Mode, start.RiskLevel, start.SelectedLenses)
@@ -249,7 +250,7 @@ func NewTransaction(start Start) (*Transaction, error) {
 		FixDeltaHash: EmptyFixDeltaHash, PolicyHash: start.PolicyHash,
 		Findings: []Finding{}, Classifications: map[string]FindingEvidence{},
 		Outcomes: map[string]EvidenceOutcome{}, FixFindingIDs: []string{}, PendingRefuterIDs: []string{},
-		FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, JudgeProofs: []JudgeProof{},
+		FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
 	}
 	if start.Mode == ModeOrdinaryBounded {
 		if start.OriginalChangedLines == nil {
@@ -437,28 +438,8 @@ func validateLensFinding(finding Finding, allowMissingSevereLocation bool) error
 	return validateStructuredFinding(finding)
 }
 
-func (transaction *Transaction) RecordJudgeProofs(proofs []JudgeProof, agreementHash string) error {
-	if transaction.Mode != ModeJudgmentDay || transaction.State != StateReviewing {
-		return transaction.invalidTransition("record Judgment Day judge proofs")
-	}
-	validated, proofHash, err := validateJudgeProofs(proofs, agreementHash)
-	if err != nil {
-		return err
-	}
-	transaction.JudgeProofs = validated
-	transaction.JudgeProofHash = proofHash
-	transaction.JudgeAgreementHash = agreementHash
-	transaction.Counters.JudgeExecutions = len(validated)
-	transaction.State = StateJudgesConfirmed
-	return nil
-}
-
 func (transaction *Transaction) FreezeFindings(findings []Finding, ledger []byte, suppliedLedgerHash string) error {
-	expectedState := StateReviewing
-	if transaction.Mode == ModeJudgmentDay {
-		expectedState = StateJudgesConfirmed
-	}
-	if transaction.State != expectedState {
+	if transaction.State != StateReviewing {
 		return transaction.invalidTransition("freeze findings")
 	}
 	if findings == nil {
@@ -576,12 +557,6 @@ func (transaction *Transaction) ClassifyEvidence(evidence []FindingEvidence) (Ev
 			fixFindingIDs = addUniqueSorted(fixFindingIDs, finding.ID)
 			route.AutoFixFindingIDs = append(route.AutoFixFindingIDs, finding.ID)
 		case EvidenceInferential:
-			if transaction.Mode == ModeJudgmentDay {
-				outcomes[finding.ID] = OutcomeCorroborated
-				fixFindingIDs = addUniqueSorted(fixFindingIDs, finding.ID)
-				route.AutoFixFindingIDs = append(route.AutoFixFindingIDs, finding.ID)
-				continue
-			}
 			pendingRefuterIDs = append(pendingRefuterIDs, finding.ID)
 			route.RefuterClaims = append(route.RefuterClaims, RefuterClaim{
 				FindingID: finding.ID, SnapshotIdentity: transaction.Snapshot.Identity, Proof: item.Proof,
@@ -692,18 +667,10 @@ func (transaction *Transaction) BeginFix(failedEvidenceRevision string, proposed
 	} else if len(proposedCorrectionLines) != 0 {
 		return errors.New("correction-line forecasts apply only to new ordinary_bounded transactions")
 	}
-	switch transaction.Mode {
-	case ModeOrdinary4R, ModeOrdinaryBounded:
-		if transaction.Counters.FixBatches >= 1 {
-			return transaction.escalateBudget("fix batch")
-		}
-		transaction.Counters.FixBatches++
-	case ModeJudgmentDay:
-		if transaction.Counters.FixRounds >= 2 {
-			return transaction.escalateBudget("judgment-day fix round")
-		}
-		transaction.Counters.FixRounds++
+	if transaction.Counters.FixBatches >= 1 {
+		return transaction.escalateBudget("fix batch")
 	}
+	transaction.Counters.FixBatches++
 	transaction.FailedEvidenceRevision = failedEvidenceRevision
 	if transaction.hasCorrectionBudget() {
 		forecast := proposedCorrectionLines[0]
@@ -852,36 +819,14 @@ func (transaction *Transaction) ValidateFixDeltaResult(result ScopedValidationRe
 	}
 	transaction.FixCausedFindings = append(transaction.FixCausedFindings, validated...)
 	transaction.FollowUps = append(transaction.FollowUps, result.FollowUps...)
-	if transaction.Mode == ModeJudgmentDay && severeFixCaused > 0 {
-		for _, finding := range validated {
-			if isSevereSeverity(finding.Severity) {
-				transaction.FixFindingIDs = addUniqueSorted(transaction.FixFindingIDs, finding.ID)
-			}
-		}
+	if transaction.Counters.ScopedFixValidations >= 1 {
+		return transaction.escalateBudget("scoped fix validation")
 	}
-	switch transaction.Mode {
-	case ModeOrdinary4R, ModeOrdinaryBounded:
-		if transaction.Counters.ScopedFixValidations >= 1 {
-			return transaction.escalateBudget("scoped fix validation")
-		}
-		transaction.Counters.ScopedFixValidations++
-		if result.Approved {
-			transaction.State = StateReadyFinalVerification
-		} else {
-			transaction.State = StateEscalated
-		}
-	case ModeJudgmentDay:
-		if transaction.Counters.ScopedRejudgments >= 2 {
-			return transaction.escalateBudget("scoped re-judgment")
-		}
-		transaction.Counters.ScopedRejudgments++
-		if result.Approved {
-			transaction.State = StateReadyFinalVerification
-		} else if transaction.Counters.FixRounds >= 2 {
-			transaction.State = StateEscalated
-		} else {
-			transaction.State = StateFixRequired
-		}
+	transaction.Counters.ScopedFixValidations++
+	if result.Approved {
+		transaction.State = StateReadyFinalVerification
+	} else {
+		transaction.State = StateEscalated
 	}
 	return nil
 }
@@ -984,7 +929,12 @@ func (transaction *Transaction) UnmarshalJSON(payload []byte) error {
 	type persistedTransaction Transaction
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
-	var decoded persistedTransaction
+	var decoded struct {
+		persistedTransaction
+		LegacyProofHash     string            `json:"judge_proof_hash"`
+		LegacyAgreementHash string            `json:"judge_agreement_hash"`
+		LegacyProofs        []json.RawMessage `json:"judge_proofs"`
+	}
 	if err := decoder.Decode(&decoded); err != nil {
 		return err
 	}
@@ -992,7 +942,7 @@ func (transaction *Transaction) UnmarshalJSON(payload []byte) error {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return errors.New("multiple JSON values in review transaction")
 	}
-	*transaction = Transaction(decoded)
+	*transaction = Transaction(decoded.persistedTransaction)
 	if transaction.Mode == ModeOrdinaryBounded && transaction.OriginalChangedLines == nil && transaction.CorrectionBudget == nil {
 		transaction.legacyCorrectionBudget = true
 	}
@@ -1026,7 +976,7 @@ func (transaction *Transaction) validate() error {
 	if transaction.Generation < 1 {
 		return errors.New("transaction requires a positive generation")
 	}
-	if transaction.Mode != ModeOrdinary4R && transaction.Mode != ModeOrdinaryBounded && transaction.Mode != ModeJudgmentDay {
+	if transaction.Mode != ModeOrdinary4R && transaction.Mode != ModeOrdinaryBounded {
 		return errors.New("invalid transaction mode")
 	}
 	if err := transaction.validateCorrectionBudget(); err != nil {
@@ -1063,7 +1013,7 @@ func (transaction *Transaction) validate() error {
 			return errors.New("transaction release tree must match final candidate tree")
 		}
 	}
-	if transaction.Findings == nil || transaction.Classifications == nil || transaction.Outcomes == nil || transaction.FixFindingIDs == nil || transaction.PendingRefuterIDs == nil || transaction.FixCausedFindings == nil || transaction.FollowUps == nil || transaction.JudgeProofs == nil {
+	if transaction.Findings == nil || transaction.Classifications == nil || transaction.Outcomes == nil || transaction.FixFindingIDs == nil || transaction.PendingRefuterIDs == nil || transaction.FixCausedFindings == nil || transaction.FollowUps == nil {
 		return errors.New("transaction collections must be explicit arrays or objects")
 	}
 	if transaction.GenesisPaths != nil {
@@ -1099,7 +1049,7 @@ func (transaction *Transaction) validate() error {
 		return err
 	}
 	switch transaction.State {
-	case StateUnreviewed, StateReviewing, StateJudgesConfirmed, StateFindingsFrozen, StateEvidenceClassified,
+	case StateUnreviewed, StateReviewing, StateFindingsFrozen, StateEvidenceClassified,
 		StateFixRequired, StateFixing, StateFixValidating, StateReadyFinalVerification,
 		StateFinalVerifying, StateApproved, StateEscalated, StateInvalidated:
 	default:
@@ -1122,18 +1072,12 @@ func (transaction *Transaction) validate() error {
 	if err := transaction.validateLensState(); err != nil {
 		return err
 	}
-	if err := transaction.validateJudgeState(); err != nil {
-		return err
-	}
 	if transaction.State == StateFixing || transaction.State == StateFixValidating {
 		if !validSHA256(transaction.FailedEvidenceRevision) {
 			return errors.New("active fix state requires an exact failed evidence revision")
 		}
 		if isOrdinaryMode(transaction.Mode) && transaction.Counters.FixBatches != 1 {
 			return errors.New("ordinary active fix state requires its single fix batch")
-		}
-		if transaction.Mode == ModeJudgmentDay && (transaction.Counters.FixRounds < 1 || transaction.Counters.FixRounds > 2) {
-			return errors.New("judgment-day active fix state requires a bounded fix round")
 		}
 	}
 	if transaction.State == StateApproved && (!validSHA256(transaction.LedgerHash) || !validSHA256(transaction.EvidenceHash)) {
@@ -1148,12 +1092,12 @@ func (transaction *Transaction) hasCorrectionBudget() bool {
 
 func pristineReviewing(transaction Transaction) bool {
 	if transaction.State != StateReviewing || transaction.LedgerHash != "" || transaction.LedgerFindingsHash != "" ||
-		transaction.EvidenceHash != "" || transaction.JudgeProofHash != "" || transaction.JudgeAgreementHash != "" ||
+		transaction.EvidenceHash != "" ||
 		transaction.Release != nil || transaction.FailedEvidenceRevision != "" || transaction.FixDeltaHash != EmptyFixDeltaHash ||
 		!snapshotsEqual(transaction.Snapshot, Snapshot{Kind: transaction.Snapshot.Kind, BaseTree: transaction.BaseTree, CandidateTree: transaction.InitialReviewTree, PathsDigest: transaction.PathsDigest, IntendedUntracked: transaction.Snapshot.IntendedUntracked, IntendedUntrackedProof: transaction.Snapshot.IntendedUntrackedProof, LedgerIDs: transaction.Snapshot.LedgerIDs, Paths: transaction.Snapshot.Paths, Identity: transaction.Snapshot.Identity}) ||
 		transaction.FinalCandidateTree != transaction.InitialReviewTree || len(transaction.LensResults) != 0 || len(transaction.Findings) != 0 ||
 		len(transaction.Classifications) != 0 || len(transaction.Outcomes) != 0 || len(transaction.FixFindingIDs) != 0 || len(transaction.PendingRefuterIDs) != 0 ||
-		len(transaction.FixCausedFindings) != 0 || len(transaction.FollowUps) != 0 || len(transaction.JudgeProofs) != 0 ||
+		len(transaction.FixCausedFindings) != 0 || len(transaction.FollowUps) != 0 ||
 		transaction.OriginalCriteria != nil || transaction.CorrectionRegression != nil || transaction.ProposedCorrectionLines != nil || transaction.ActualCorrectionLines != nil {
 		return false
 	}
@@ -1263,7 +1207,7 @@ func validateSnapshotKinds(snapshot Snapshot, allowStagedOverlay bool) error {
 }
 
 func validateCounters(mode Mode, counters Counters) error {
-	values := []int{counters.FullReviews, counters.RefuterBatches, counters.FixBatches, counters.ScopedFixValidations, counters.FinalVerifications, counters.FixRounds, counters.ScopedRejudgments, counters.JudgeExecutions, counters.RiskExecutions, counters.ResilienceExecutions, counters.ReadabilityExecutions, counters.ReliabilityExecutions}
+	values := []int{counters.FullReviews, counters.RefuterBatches, counters.FixBatches, counters.ScopedFixValidations, counters.FinalVerifications, counters.RiskExecutions, counters.ResilienceExecutions, counters.ReadabilityExecutions, counters.ReliabilityExecutions}
 	for _, value := range values {
 		if value < 0 {
 			return errors.New("review counters cannot be negative")
@@ -1271,7 +1215,7 @@ func validateCounters(mode Mode, counters Counters) error {
 	}
 	switch mode {
 	case ModeOrdinary4R, ModeOrdinaryBounded:
-		if counters.FullReviews > 1 || counters.RefuterBatches > 1 || counters.FixBatches > 1 || counters.ScopedFixValidations > 1 || counters.FinalVerifications > 1 || counters.FixRounds != 0 || counters.ScopedRejudgments != 0 || counters.JudgeExecutions != 0 || counters.RiskExecutions > 1 || counters.ResilienceExecutions > 1 || counters.ReadabilityExecutions > 1 || counters.ReliabilityExecutions > 1 {
+		if counters.FullReviews > 1 || counters.RefuterBatches > 1 || counters.FixBatches > 1 || counters.ScopedFixValidations > 1 || counters.FinalVerifications > 1 || counters.RiskExecutions > 1 || counters.ResilienceExecutions > 1 || counters.ReadabilityExecutions > 1 || counters.ReliabilityExecutions > 1 {
 			return errors.New("ordinary review budget exceeded")
 		}
 		if mode == ModeOrdinary4R && (counters.RiskExecutions != 0 || counters.ResilienceExecutions != 0 || counters.ReadabilityExecutions != 0 || counters.ReliabilityExecutions != 0) {
@@ -1279,10 +1223,6 @@ func validateCounters(mode Mode, counters Counters) error {
 		}
 		if mode == ModeOrdinaryBounded && counters.FullReviews != 0 {
 			return errors.New("ordinary_bounded cannot consume the legacy full review counter")
-		}
-	case ModeJudgmentDay:
-		if counters.FixRounds > 2 || counters.ScopedRejudgments > 2 || counters.RefuterBatches != 0 || counters.FixBatches != 0 || counters.ScopedFixValidations != 0 || counters.FinalVerifications > 1 || (counters.JudgeExecutions != 0 && counters.JudgeExecutions != 2) || counters.RiskExecutions != 0 || counters.ResilienceExecutions != 0 || counters.ReadabilityExecutions != 0 || counters.ReliabilityExecutions != 0 {
-			return errors.New("judgment_day budget exceeded")
 		}
 	}
 	return nil
@@ -1434,62 +1374,6 @@ func setLensCounter(counters *Counters, lens string, value int) {
 	}
 }
 
-func validateJudgeProofs(proofs []JudgeProof, agreementHash string) ([]JudgeProof, string, error) {
-	if len(proofs) != 2 || !validSHA256(agreementHash) {
-		return nil, "", errors.New("Judgment Day requires exactly two blind confirmed judge results and an agreement hash")
-	}
-	validated := append([]JudgeProof(nil), proofs...)
-	sort.Slice(validated, func(i, j int) bool { return validated[i].JudgeID < validated[j].JudgeID })
-	seenJudges := map[string]struct{}{}
-	seenExecutions := map[string]struct{}{}
-	seenResults := map[string]struct{}{}
-	hasher := sha256.New()
-	hasher.Write([]byte("gentle-ai.judgment-day-proof/v1\x00"))
-	for _, proof := range validated {
-		proof.JudgeID = strings.TrimSpace(proof.JudgeID)
-		if proof.JudgeID == "" || !validSHA256(proof.ExecutionHash) || !validSHA256(proof.ResultHash) || !proof.Blind || !proof.Confirmed {
-			return nil, "", errors.New("each Judgment Day judge proof must be distinct, blind, confirmed, and content-hashed")
-		}
-		if _, exists := seenJudges[proof.JudgeID]; exists {
-			return nil, "", errors.New("Judgment Day judge identities must be distinct")
-		}
-		if _, exists := seenExecutions[proof.ExecutionHash]; exists {
-			return nil, "", errors.New("Judgment Day judge execution proofs must be distinct")
-		}
-		if _, exists := seenResults[proof.ResultHash]; exists {
-			return nil, "", errors.New("Judgment Day judge result proofs must be distinct")
-		}
-		seenJudges[proof.JudgeID] = struct{}{}
-		seenExecutions[proof.ExecutionHash] = struct{}{}
-		seenResults[proof.ResultHash] = struct{}{}
-		for _, value := range []string{proof.JudgeID, proof.ExecutionHash, proof.ResultHash} {
-			writeLengthPrefixed(hasher, []byte(value))
-		}
-	}
-	writeLengthPrefixed(hasher, []byte(agreementHash))
-	return validated, "sha256:" + hex.EncodeToString(hasher.Sum(nil)), nil
-}
-
-func (transaction *Transaction) validateJudgeState() error {
-	if isOrdinaryMode(transaction.Mode) {
-		if len(transaction.JudgeProofs) != 0 || transaction.JudgeProofHash != "" || transaction.JudgeAgreementHash != "" || transaction.Counters.JudgeExecutions != 0 || transaction.State == StateJudgesConfirmed {
-			return errors.New("ordinary review cannot contain Judgment Day judge proof")
-		}
-		return nil
-	}
-	if transaction.State == StateUnreviewed || transaction.State == StateReviewing {
-		if len(transaction.JudgeProofs) != 0 || transaction.Counters.JudgeExecutions != 0 || transaction.JudgeProofHash != "" || transaction.JudgeAgreementHash != "" {
-			return errors.New("unconfirmed Judgment Day state cannot contain partial judge proof")
-		}
-		return nil
-	}
-	proofs, proofHash, err := validateJudgeProofs(transaction.JudgeProofs, transaction.JudgeAgreementHash)
-	if err != nil || proofHash != transaction.JudgeProofHash || len(proofs) != transaction.Counters.JudgeExecutions {
-		return errors.New("Judgment Day state requires exactly two immutable distinct judge proofs")
-	}
-	return nil
-}
-
 func (transaction *Transaction) validateFindingRouting() error {
 	findings := make(map[string]Finding, len(transaction.Findings))
 	severe := make(map[string]Finding, len(transaction.Findings))
@@ -1564,7 +1448,7 @@ func (transaction *Transaction) validateFindingRouting() error {
 	if hasStringIntersection(fixIDs, pendingIDs) {
 		return errors.New("a severe finding cannot be both correction-bound and pending refutation")
 	}
-	if transaction.State != StateUnreviewed && transaction.State != StateReviewing && transaction.State != StateJudgesConfirmed && transaction.State != StateInvalidated && (!validSHA256(transaction.LedgerHash) || !validSHA256(transaction.LedgerFindingsHash) || transaction.LedgerFindingsHash != findingsHash(transaction.Findings)) {
+	if transaction.State != StateUnreviewed && transaction.State != StateReviewing && transaction.State != StateInvalidated && (!validSHA256(transaction.LedgerHash) || !validSHA256(transaction.LedgerFindingsHash) || transaction.LedgerFindingsHash != findingsHash(transaction.Findings)) {
 		return errors.New("frozen review state requires a content-bound ledger hash")
 	}
 	return transaction.validateFindingState(findings, severe)
@@ -1577,7 +1461,7 @@ func findingsHash(findings []Finding) string {
 }
 
 func (transaction *Transaction) validateFindingState(findings, severe map[string]Finding) error {
-	beforeFreeze := transaction.State == StateUnreviewed || transaction.State == StateReviewing || transaction.State == StateJudgesConfirmed || transaction.State == StateInvalidated
+	beforeFreeze := transaction.State == StateUnreviewed || transaction.State == StateReviewing || transaction.State == StateInvalidated
 	if beforeFreeze {
 		if len(findings) != 0 || len(transaction.Classifications) != 0 || len(transaction.Outcomes) != 0 || len(transaction.FixFindingIDs) != 0 || len(transaction.PendingRefuterIDs) != 0 {
 			return errors.New("pre-freeze transaction cannot contain findings or evidence routing")
@@ -1635,13 +1519,6 @@ func (transaction *Transaction) validateFindingState(findings, severe map[string
 			}
 			corroborated[id] = struct{}{}
 		case EvidenceInferential:
-			if transaction.Mode == ModeJudgmentDay {
-				if !hasOutcome || outcome != OutcomeCorroborated || !fix || pending {
-					return fmt.Errorf("Judgment Day inferential finding %q must remain corroborated and correction-bound", id)
-				}
-				corroborated[id] = struct{}{}
-				continue
-			}
 			if pending {
 				if transaction.State != StateEvidenceClassified || hasOutcome || transaction.Counters.RefuterBatches != 0 {
 					return fmt.Errorf("inferential finding %q is pending outside the single unconsumed refuter state", id)
@@ -1711,26 +1588,15 @@ func (transaction *Transaction) validateResolutionCounters(hasCorrections bool) 
 		if len(transaction.PendingRefuterIDs) != 0 {
 			return errors.New("final verification states cannot contain pending refuter IDs")
 		}
-		switch transaction.Mode {
-		case ModeOrdinary4R, ModeOrdinaryBounded:
-			want := 0
-			if hasCorrections {
-				want = 1
-			}
-			if transaction.Counters.FixBatches != want || transaction.Counters.ScopedFixValidations != want {
-				return errors.New("ordinary final verification readiness requires coherent correction and scoped-validation counters")
-			}
-		case ModeJudgmentDay:
-			if hasCorrections {
-				if transaction.Counters.FixRounds < 1 || transaction.Counters.FixRounds != transaction.Counters.ScopedRejudgments {
-					return errors.New("Judgment Day final verification readiness requires coherent fix and scoped re-judgment counters")
-				}
-			} else if transaction.Counters.FixRounds != 0 || transaction.Counters.ScopedRejudgments != 0 {
-				return errors.New("uncorrected Judgment Day readiness cannot consume fix counters")
-			}
+		want := 0
+		if hasCorrections {
+			want = 1
+		}
+		if transaction.Counters.FixBatches != want || transaction.Counters.ScopedFixValidations != want {
+			return errors.New("ordinary final verification readiness requires coherent correction and scoped-validation counters")
 		}
 		if hasCorrections {
-			wrongBase := isOrdinaryMode(transaction.Mode) && transaction.Snapshot.BaseTree != transaction.InitialReviewTree
+			wrongBase := transaction.Snapshot.BaseTree != transaction.InitialReviewTree
 			if !validSHA256(transaction.FailedEvidenceRevision) || transaction.Snapshot.Kind != TargetFixDiff || wrongBase || transaction.Snapshot.CandidateTree != transaction.FinalCandidateTree || !equalStrings(transaction.Snapshot.LedgerIDs, transaction.FixFindingIDs) || transaction.FixDeltaHash != FixDeltaHashForSnapshot(transaction.Snapshot) {
 				return errors.New("corrected final verification readiness requires a complete ledger-bound fix snapshot")
 			}

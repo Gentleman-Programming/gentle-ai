@@ -20,6 +20,7 @@ var sddSkills = []model.SkillID{
 // foundationSkills are baseline learning skills for the "recommended" tier.
 var foundationSkills = []model.SkillID{
 	model.SkillGoTesting,
+	model.SkillGentleAIBench,
 	model.SkillCreator,
 	model.SkillImprover,
 	model.SkillBranchPR,
@@ -30,6 +31,7 @@ var foundationSkills = []model.SkillID{
 	model.SkillCommentWriter,
 	model.SkillWorkUnitCommits,
 	model.SkillRDDDefectWorkflow,
+	model.SkillSystemicIssueTriage,
 }
 
 // SkillsForPreset returns which skills should be installed for a given preset.

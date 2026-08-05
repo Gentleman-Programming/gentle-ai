@@ -239,9 +239,8 @@ func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 
 // TestJudgmentDayPromptsDoNotClaimTheLensEnvelope pins the resolution of the
 // contradiction between the two documents: a judgment-day judge result is a
-// different artifact (Transaction mode judgment_day records judge proofs and
-// selects no lenses), so it must NOT carry the capture-result envelope, and it
-// must say so rather than leaving a reader to infer which shape wins.
+// separate standalone artifact, so it must NOT carry the capture-result
+// envelope and must say so rather than leaving a reader to infer which shape wins.
 func TestJudgmentDayPromptsDoNotClaimTheLensEnvelope(t *testing.T) {
 	envelope := reviewtransaction.NewReviewerResultEnvelope()
 	judgePaths := []string{}

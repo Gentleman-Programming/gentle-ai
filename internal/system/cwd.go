@@ -5,6 +5,10 @@ import (
 	"os/exec"
 )
 
+// getwd is replaceable in tests so the public fallback remains testable where
+// an active working directory cannot be removed, such as Windows.
+var getwd = os.Getwd
+
 // EnsureCommandDir pins cmd to a working directory that still exists on disk.
 //
 // A child process inherits the parent's working directory whenever cmd.Dir is
@@ -21,7 +25,18 @@ func EnsureCommandDir(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Dir != "" {
 		return
 	}
-	if wd, err := os.Getwd(); err == nil && dirExists(wd) {
+	wd, err := getwd()
+	ensureCommandDir(cmd, wd, err)
+}
+
+// ensureCommandDir applies the fallback after the inherited directory has
+// been resolved. Keeping this decision separate lets Windows tests exercise
+// the deleted-CWD behavior without attempting an operation Windows forbids.
+func ensureCommandDir(cmd *exec.Cmd, wd string, wdErr error) {
+	if cmd == nil || cmd.Dir != "" {
+		return
+	}
+	if wdErr == nil && dirExists(wd) {
 		return
 	}
 	if home, err := os.UserHomeDir(); err == nil && dirExists(home) {

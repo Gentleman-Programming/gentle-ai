@@ -347,6 +347,8 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/skill-improver/references/skill-style-guide.md",
 		"skills/chained-pr/references/chaining-details.md",
 		"skills/rdd-defect-workflow/SKILL.md",
+		"skills/systemic-issue-triage/SKILL.md",
+		"skills/gentle-ai-bench/SKILL.md",
 	}
 
 	for _, path := range expectedFiles {
@@ -875,6 +877,35 @@ func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 		if !strings.Contains(content, required) {
 			t.Fatalf("opencode/sdd-orchestrator.md missing required preflight wording %q", required)
 		}
+	}
+}
+
+func TestOpenCodeSDDOrchestratorDelegationVisibility(t *testing.T) {
+	content := MustRead("opencode/sdd-orchestrator.md")
+
+	for _, required := range []string{
+		"<!-- gentle-ai:opencode-desktop-delegation-progress -->",
+		"#### Delegation Visibility (OpenCode Desktop)",
+		"`delegate` or `task`",
+		"assistant-visible status line immediately before the call",
+		"When the call returns",
+		"⏳ Delegating {phase} to {agent}...",
+		"✅ {agent} completed — {status}",
+		"⚠️ {agent} returned {status} — {short reason}",
+		"15 tokens or fewer",
+		"25 tokens or fewer",
+		"executor prompts",
+		"<!-- /gentle-ai:opencode-desktop-delegation-progress -->",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("opencode/sdd-orchestrator.md missing delegation visibility wording %q", required)
+		}
+	}
+
+	visibilityIndex := strings.Index(content, "#### Delegation Visibility (OpenCode Desktop)")
+	workflowIndex := strings.Index(content, "## SDD Workflow")
+	if visibilityIndex < 0 || workflowIndex < 0 || visibilityIndex > workflowIndex {
+		t.Fatal("delegation visibility must appear before the SDD workflow")
 	}
 }
 
@@ -1629,9 +1660,9 @@ func TestEmbeddedAssetCount(t *testing.T) {
 		}
 	}
 
-	// We expect 24 skill directories (10 SDD + judgment-day + 6 foundation + 5 sustainable-review + hermes-ephemeral-delegation + _shared).
-	if skillDirs != 24 {
-		t.Fatalf("expected 24 skill directories, got %d", skillDirs)
+	// We expect 26 skill directories (10 SDD + judgment-day + 13 foundation/review + hermes-ephemeral-delegation + _shared).
+	if skillDirs != 26 {
+		t.Fatalf("expected 26 skill directories, got %d", skillDirs)
 	}
 
 	// Verify each skill directory has a SKILL.md.

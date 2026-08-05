@@ -63,14 +63,15 @@ func AdmitAuthorityDispositionClosure(plan AuthorityDispositionPlan) error {
 // (compact_reconcile.go): the recorded binding itself stays byte-preserved
 // in the quarantined residue.
 type AuthorityDispositionProof struct {
-	Schema                     string            `json:"schema"`
-	PlanDigest                 string            `json:"plan_digest"`
-	AuthorityInventoryRevision string            `json:"authority_inventory_revision"`
-	AnomalyClass               string            `json:"anomaly_class"`
-	SeedSet                    []string          `json:"ordered_seed_set"`
-	Closure                    []string          `json:"ordered_closure"`
-	ExpectedRevisions          map[string]string `json:"expected_revisions"`
-	AuthorizationSHA256        string            `json:"authorization_sha256"`
+	Schema                     string                        `json:"schema"`
+	PlanDigest                 string                        `json:"plan_digest"`
+	AuthorityInventoryRevision string                        `json:"authority_inventory_revision"`
+	AnomalyClass               string                        `json:"anomaly_class"`
+	Selector                   *AuthorityDispositionSelector `json:"selector,omitempty"`
+	SeedSet                    []string                      `json:"ordered_seed_set"`
+	Closure                    []string                      `json:"ordered_closure"`
+	ExpectedRevisions          map[string]string             `json:"expected_revisions"`
+	AuthorizationSHA256        string                        `json:"authorization_sha256"`
 }
 
 // executeAuthorityDisposition is the one executor that consumes an
@@ -195,7 +196,11 @@ func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *Mainte
 			return CompactReclaimRecord{}, err
 		}
 		records = freshRecords
-		currentPlan, err := deriveAuthorityDispositionPlan(report, records, binding, plan.Actor, plan.Reason)
+		requested := []AuthorityDispositionSelector{}
+		if plan.Selector != nil {
+			requested = append(requested, *plan.Selector)
+		}
+		currentPlan, err := deriveAuthorityDispositionPlan(report, records, binding, plan.Actor, plan.Reason, requested...)
 		if err != nil {
 			return CompactReclaimRecord{}, fmt.Errorf("authority disposition execution refused: re-derivation under lock did not reproduce a closed classification: %w", err)
 		}
@@ -297,7 +302,8 @@ func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *Mainte
 			AuthorityDisposition: &AuthorityDispositionProof{
 				Schema: AuthorityDispositionProofSchema, PlanDigest: plan.PlanDigest,
 				AuthorityInventoryRevision: plan.AuthorityInventoryRevision, AnomalyClass: plan.AnomalyClass,
-				SeedSet: append([]string(nil), plan.SeedSet...), Closure: append([]string(nil), plan.Closure...),
+				Selector: plan.Selector,
+				SeedSet:  append([]string(nil), plan.SeedSet...), Closure: append([]string(nil), plan.Closure...),
 				ExpectedRevisions:   cloneAuthorityDispositionRevisions(plan.ExpectedRevisions),
 				AuthorizationSHA256: "sha256:" + hex.EncodeToString(recordedAuthorization[:]),
 			},
@@ -584,9 +590,8 @@ func resumeAuthorityDispositionRecord(ctx context.Context, record CompactReclaim
 }
 
 // readBackAuthorityDisposition re-runs classification over the retained
-// graph and refuses to report success unless it revalidates as
-// Complete && Valid with no dangling reference to ANY closure member — not
-// only record.LineageID (the seed). This is called once, only after
+// graph and refuses to report success unless it is `Complete` — the intentional sequential-repair
+// postcondition — with no dangling reference to ANY closure member, not only record.LineageID (the seed). This is called once, only after
 // executeAuthorityDisposition's ordered loop has committed every closure
 // member (rdd-closure-disposition-execution / "Descendant-First Ordered
 // Disposition"'s readback gate), and its over-collection guard widens
@@ -602,8 +607,8 @@ func readBackAuthorityDisposition(ctx context.Context, root string, record Compa
 	if err != nil {
 		return record, fmt.Errorf("authority disposition readback: %w", err)
 	}
-	if !report.Complete || !report.Valid {
-		return record, fmt.Errorf("authority disposition execution refused: retained-graph readback did not revalidate cleanly; run `gentle-ai review inspect-authority --cwd %s` and escalate the report", pathquote.Quote(root))
+	if !report.Complete {
+		return record, fmt.Errorf("authority disposition execution refused: retained-graph readback is incomplete; run `gentle-ai review inspect-authority --cwd %s` and escalate the report", pathquote.Quote(root))
 	}
 	closureMembers := authorityDispositionClosureMembers(record)
 	for _, edge := range report.Edges {

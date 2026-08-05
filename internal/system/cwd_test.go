@@ -2,10 +2,12 @@ package system
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -45,6 +47,9 @@ func helperGetwdArgv(t *testing.T) []string {
 // directory when the test finishes.
 func chdirIntoDeletedDir(t *testing.T) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows keeps a process current directory open, so the deleted-CWD integration setup is impossible")
+	}
 	gone := filepath.Join(t.TempDir(), "gone")
 	if err := os.Mkdir(gone, 0o755); err != nil {
 		t.Fatal(err)
@@ -52,6 +57,21 @@ func chdirIntoDeletedDir(t *testing.T) {
 	t.Chdir(gone)
 	if err := os.Remove(gone); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWindowsDeletedWorkingDirectorySetupIsInadmissible(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only filesystem behavior")
+	}
+
+	current := filepath.Join(t.TempDir(), "current")
+	if err := os.Mkdir(current, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(current)
+	if err := os.Remove(current); err == nil {
+		t.Fatal("Windows unexpectedly removed the process current working directory")
 	}
 }
 
@@ -95,6 +115,37 @@ func TestEnsureCommandDir(t *testing.T) {
 
 	t.Run("tolerates a nil command", func(t *testing.T) {
 		EnsureCommandDir(nil)
+	})
+}
+
+func TestEnsureCommandDirHandlesUnavailableWorkingDirectory(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home directory available: %v", err)
+	}
+
+	originalGetwd := getwd
+	getwd = func() (string, error) {
+		return "", errors.New("current working directory no longer exists")
+	}
+	t.Cleanup(func() { getwd = originalGetwd })
+
+	t.Run("falls back to the home directory through the public API", func(t *testing.T) {
+		cmd := exec.Command(os.Args[0])
+		EnsureCommandDir(cmd)
+		if cmd.Dir != home {
+			t.Fatalf("cmd.Dir = %q, want home fallback %q", cmd.Dir, home)
+		}
+	})
+
+	t.Run("preserves an explicit command directory", func(t *testing.T) {
+		explicit := t.TempDir()
+		cmd := exec.Command(os.Args[0])
+		cmd.Dir = explicit
+		EnsureCommandDir(cmd)
+		if cmd.Dir != explicit {
+			t.Fatalf("cmd.Dir = %q, want explicit %q preserved", cmd.Dir, explicit)
+		}
 	})
 }
 

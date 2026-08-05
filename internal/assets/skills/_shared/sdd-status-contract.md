@@ -113,6 +113,7 @@ reviewGate:
   result: allow | scope-changed | invalidated | escalated
   reason: <deterministic explanation>
 reviewTransaction: <optional exact gentle-ai.review-transaction/v1 object>
+consent: <optional exact gentle-ai.sdd-integration.consent/v1 envelope>
 phaseInstructions:
   apply: [<instruction strings>]
   verify: [<instruction strings>]
@@ -122,7 +123,7 @@ nextRecommended: propose | spec | design | tasks | apply | review | verify | rem
 blockedReasons: []
 ```
 
-`phaseInstructions` is optional and appears only when instructions are requested. It carries execution-phase keys (`apply`, `verify`, `remediate`, `archive`); planning-phase instructions (`propose`, `spec`, `design`, `tasks`) are surfaced in dispatcher markdown. `reviewGate` is a structurally absent key — not merely omitted early — whenever the kill switch is off, or whenever it is on with no review ever discovered for this candidate; both proceed to archive under ordinary policy with no `reviewGate` to check. When present (a review was actually discovered), its result uses only the four listed values. `reviewTransaction` is omitted until the review owner supplies the exact `gentle-ai.review-transaction/v1` object; manual fallback MUST NOT reconstruct it. `reviewPolicy` is present in `artifactPaths` and `contextFiles`; its artifact-state entry is present only for Engram status and omitted otherwise. A hybrid session projects file-backed legacy status as `artifactStore: openspec`; `hybrid` is not an SDD v1 wire token. Empty path fields MUST be arrays, not null. `changeName` and `changeRoot` are nullable; all other non-optional sections should be present in fallback output so consumers can parse native and manual status the same way.
+`phaseInstructions` is optional and appears only when instructions are requested. It carries execution-phase keys (`apply`, `verify`, `remediate`, `archive`); planning-phase instructions (`propose`, `spec`, `design`, `tasks`) are surfaced in dispatcher markdown. `reviewGate` is a structurally absent key — not merely omitted early — whenever the kill switch is off, or whenever it is on with no review ever discovered for this candidate; both proceed to archive under ordinary policy with no `reviewGate` to check. When present (a review was actually discovered), its result uses only the four listed values. `reviewTransaction` is omitted until the review owner supplies the exact `gentle-ai.review-transaction/v1` object; manual fallback MUST NOT reconstruct it. `consent` is structurally absent everywhere except an OpenSpec-backed native status that reports `blocked(edit_authority_missing)` (see Edit Authority Consent below); manual fallback MUST NOT reconstruct it. `reviewPolicy` is present in `artifactPaths` and `contextFiles`; its artifact-state entry is present only for Engram status and omitted otherwise. A hybrid session projects file-backed legacy status as `artifactStore: openspec`; `hybrid` is not an SDD v1 wire token. Empty path fields MUST be arrays, not null. `changeName` and `changeRoot` are nullable; all other non-optional sections should be present in fallback output so consumers can parse native and manual status the same way.
 
 ## Apply State
 
@@ -149,6 +150,16 @@ The orchestrator MUST carry `actionContext` into any phase launch.
 - If manually reconstructed context cannot prove edit ownership or allowed edit roots, stop before editing.
 - If `allowedEditRoots` is present, only edit files within those roots.
 - If a command cannot prove a file is inside the authoritative workspace or allowed edit roots, stop and ask for clarification.
+
+## Edit Authority Consent
+
+A change whose tasks.md work units target Git repository roots outside `allowedEditRoots` never reports apply ready. Native status reports `applyState: blocked` and `blockedReasons` carries a `blocked(edit_authority_missing)` reason naming each unauthorized root and both exits: edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority for those repositories.
+
+- Detection is conservative prose inspection: backticked path-like tokens inside markdown checkbox lines that resolve to a real Git repository root outside the authorized roots. A context reference can raise a false consent question; the consequence is a question, never silent authority.
+- An OpenSpec-backed native status that reports `blocked(edit_authority_missing)` also carries the typed `gentle-ai.sdd-integration.consent/v1` envelope as the optional `consent` block: headline, reason, `value`, the missing roots as evidence, exactly two choices with answer tokens `granted` and `declined` (each with label, effect, and an exact invocation), and an off-path note. The granted choice names the exact runnable `gentle-ai sdd-attempt grant` invocation, bound to this change instance; the declined choice's invocation is native status re-entry. An Engram-backed change keeps the honest block without an envelope; both exits still apply.
+- Answer flow: the orchestrator relays the COMPLETE envelope losslessly as a blocking prompt, with the same discipline as the review consent relay. Preserve the choices, order, selection mode, exact allowed-answer domain, and answer tokens; translate labels only within the lossless rules; never summarize or reshape. The human answers in conversation. Only on the human's explicit `granted` answer does the agent execute the envelope's named grant invocation, verbatim and exactly once, then re-enter through native status. The agent NEVER runs the grant unprompted and NEVER answers on the human's behalf.
+- Decline stays blocked: the agent runs the envelope's decline invocation, nothing is persisted, the change stays `blocked(edit_authority_missing)`, and the reason names both exits.
+- The grant is per-change and audited (who, when, which roots). It lives in the change's runtime ledger, is bound to the change instance, and dies with archive; a recreated change with the same name never inherits it. After a covering grant, status reports `allowedEditRoots` as the planning root plus the granted roots, apply becomes ready, and the `consent` block disappears.
 
 ## Status Output
 

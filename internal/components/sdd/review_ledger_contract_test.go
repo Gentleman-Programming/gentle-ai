@@ -276,10 +276,22 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// difference in the rendered settings, so the hash moved a fourth time.
 	// Deliberate, not drift.
 	//
+	// SDD edit-authority consent relay (#2570, S6 of #2540): the orchestrator
+	// contract gained the byte-identical "SDD Edit-Authority Consent Relay
+	// (MANDATORY)" clause teaching the lossless relay of the typed
+	// gentle-ai.sdd-integration.consent/v1 envelope. Kilocode embeds the same
+	// orchestrator contract in `agent.gentle-orchestrator.prompt`, so the
+	// hash moved a fifth time. Deliberate, not drift.
+	//
+	// OpenCode Desktop delegation visibility (#633): Kilocode renders the same
+	// OpenCode orchestrator asset in `agent.gentle-orchestrator.prompt`, so the
+	// new assistant-visible native delegation status lines move this hash too.
+	// Deliberate, not drift.
+	//
 	// This baseline combines #2485's answer-validation contract, #2417's
 	// provider-injected reviewer shape, and #2440's runtime-bound identity.
 	// It is recomputed from the merged tree.
-	const want = "a946dfda5f9802887043e5a7c88e2ce744cd864da86926dbc92b8396306f641e"
+	const want = "c99e8c54abf04d3bf495e48c169196cc2c7cdfcc6e78a93f7a030c521111fc98"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

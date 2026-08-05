@@ -67,6 +67,11 @@ type ExecuteOptions struct {
 	SkipBackup        bool
 }
 
+type executableUpdate struct {
+	result               update.UpdateResult
+	goInstallDestination string
+}
+
 // backupExcludeSubdirs lists subdirectory base names that should be skipped
 // when walking agent config root directories for backup. These directories
 // contain runtime state, caches, or session data that is not configuration
@@ -412,8 +417,10 @@ func writeBackupDiagnostic(w io.Writer, format string, args ...any) {
 //   - Status UpToDate, NotInstalled, CheckFailed → omitted from report
 //   - dryRun=true → no exec; eligible tools reported as UpgradeSkipped
 //
-// The backup snapshot is created before any exec call — this is the architectural
-// guarantee that config is safe even if an upgrade fails mid-way.
+// The backup snapshot is created before any executable upgrade — this is the
+// architectural guarantee that config is safe even if an upgrade fails mid-way.
+// Windows gentle-ai provenance is preflighted first because its manual fallback
+// must remain a true zero-mutation outcome.
 func Execute(ctx context.Context, results []update.UpdateResult, profile system.PlatformProfile, homeDir string, dryRun bool, progress ...io.Writer) UpgradeReport {
 	options := ExecuteOptions{}
 	if len(progress) > 0 && progress[0] != nil {
@@ -429,13 +436,13 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	// dev-build (DevBuild), and version-unknown tools. Non-actionable but user-visible
 	// states are included in the report as UpgradeSkipped so the upgrade flow never
 	// fails silently.
-	var executable []update.UpdateResult
+	var executable []executableUpdate
 	var devBuilds []update.UpdateResult
 	var versionUnknowns []update.UpdateResult
 	for _, r := range results {
 		switch r.Status {
 		case update.UpdateAvailable, update.RegisteredNotMaterialized:
-			executable = append(executable, r)
+			executable = append(executable, executableUpdate{result: r})
 		case update.DevBuild:
 			devBuilds = append(devBuilds, r)
 		case update.VersionUnknown:
@@ -447,6 +454,11 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	// If nothing is executable, dev-built, or version-unknown, return empty report.
 	if len(executable) == 0 && len(devBuilds) == 0 && len(versionUnknowns) == 0 {
 		return UpgradeReport{DryRun: dryRun}
+	}
+
+	var preflightSkips []ToolUpgradeResult
+	if !dryRun {
+		executable, preflightSkips = preflightWindowsGentleAIUpgrades(executable, profile)
 	}
 
 	// Create backup snapshot BEFORE any execution (only when there are executables).
@@ -489,7 +501,7 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	}
 
 	// Build results slice: dev-build skips first (no exec), then executable tools.
-	toolResults := make([]ToolUpgradeResult, 0, len(executable)+len(devBuilds)+len(versionUnknowns))
+	toolResults := make([]ToolUpgradeResult, 0, len(executable)+len(devBuilds)+len(versionUnknowns)+len(preflightSkips))
 
 	// Dev-build tools: always UpgradeSkipped with a source-build hint.
 	for _, r := range devBuilds {
@@ -516,12 +528,15 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 		})
 	}
 
+	toolResults = append(toolResults, preflightSkips...)
+
 	// Executable tools: run upgrade strategy.
-	for _, r := range executable {
+	for _, candidate := range executable {
+		r := candidate.result
 		method := effectiveMethod(r.Tool, profile)
 		msg := fmt.Sprintf("Upgrading %s via %s (%s → %s)", r.Tool.Name, method, r.InstalledVersion, r.LatestVersion)
 		sp := NewSpinner(pw, msg)
-		toolResult := executeOne(ctx, r, profile, dryRun)
+		toolResult := executeOne(ctx, r, profile, dryRun, candidate.goInstallDestination)
 
 		// Check if the upgrade succeeded but requires immediate exit.
 		// This must be handled BEFORE calling sp.Finish() so the spinner can terminate properly.
@@ -559,6 +574,40 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	}
 }
 
+// preflightWindowsGentleAIUpgrades removes unsafe Windows self-upgrades before
+// the backup phase. A manual fallback must not create or prune a backup because
+// no upgrade will be attempted.
+func preflightWindowsGentleAIUpgrades(executable []executableUpdate, profile system.PlatformProfile) ([]executableUpdate, []ToolUpgradeResult) {
+	remaining := make([]executableUpdate, 0, len(executable))
+	skipped := make([]ToolUpgradeResult, 0)
+	for _, candidate := range executable {
+		r := candidate.result
+		if profile.OS != "windows" || r.Tool.Name != "gentle-ai" || effectiveMethod(r.Tool, profile) != update.InstallGoInstall {
+			remaining = append(remaining, candidate)
+			continue
+		}
+
+		destination, err := preflightWindowsGentleAIGoInstall(r, profile)
+		if err != nil {
+			if hint, ok := AsManualFallback(err); ok {
+				skipped = append(skipped, ToolUpgradeResult{
+					ToolName:   r.Tool.Name,
+					OldVersion: r.InstalledVersion,
+					NewVersion: r.LatestVersion,
+					Method:     effectiveMethod(r.Tool, profile),
+					Status:     UpgradeSkipped,
+					ManualHint: hint,
+				})
+				continue
+			}
+		}
+
+		candidate.goInstallDestination = destination
+		remaining = append(remaining, candidate)
+	}
+	return remaining, skipped
+}
+
 func detectCommandHint(tool update.ToolInfo) string {
 	if len(tool.DetectCmd) == 0 {
 		return tool.Name
@@ -568,7 +617,7 @@ func detectCommandHint(tool update.ToolInfo) string {
 }
 
 // executeOne runs the upgrade for a single tool.
-func executeOne(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, dryRun bool) ToolUpgradeResult {
+func executeOne(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, dryRun bool, preflightDestination ...string) ToolUpgradeResult {
 	base := ToolUpgradeResult{
 		ToolName:   r.Tool.Name,
 		OldVersion: r.InstalledVersion,
@@ -581,7 +630,7 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 		return base
 	}
 
-	exitReq, err := runStrategy(ctx, r, profile)
+	exitReq, err := runStrategy(ctx, r, profile, preflightDestination...)
 	if err != nil {
 		// Distinguish manual fallback (informational skip) from real failures.
 		if hint, ok := AsManualFallback(err); ok {

@@ -38,17 +38,25 @@ const AuthorityDispositionPlanSchema = "gentle-ai.review-authority-disposition-p
 // exactly the digest a later execution (with the real actor/reason) validates
 // against, for the same graph state.
 type AuthorityDispositionPlan struct {
-	Schema                     string            `json:"schema"`
-	RepositoryBinding          string            `json:"repository_id"`
-	AuthorityInventoryRevision string            `json:"authority_inventory_revision"`
-	AnomalyClass               string            `json:"anomaly_class"`
-	SeedSet                    []string          `json:"ordered_seed_set"`
-	Closure                    []string          `json:"ordered_closure"`
-	ExpectedRevisions          map[string]string `json:"expected_revisions"`
-	PlanDigest                 string            `json:"plan_digest"`
-	Actor                      string            `json:"actor"`
-	Reason                     string            `json:"reason"`
-	Authorization              string            `json:"authorization"`
+	Schema                     string                        `json:"schema"`
+	RepositoryBinding          string                        `json:"repository_id"`
+	AuthorityInventoryRevision string                        `json:"authority_inventory_revision"`
+	AnomalyClass               string                        `json:"anomaly_class"`
+	Selector                   *AuthorityDispositionSelector `json:"selector,omitempty"`
+	SeedSet                    []string                      `json:"ordered_seed_set"`
+	Closure                    []string                      `json:"ordered_closure"`
+	ExpectedRevisions          map[string]string             `json:"expected_revisions"`
+	PlanDigest                 string                        `json:"plan_digest"`
+	Actor                      string                        `json:"actor"`
+	Reason                     string                        `json:"reason"`
+	Authorization              string                        `json:"authorization"`
+}
+
+type AuthorityDispositionSelector struct {
+	PredecessorLineageID        string `json:"predecessor_lineage_id"`
+	PredecessorExpectedRevision string `json:"predecessor_expected_revision"`
+	SuccessorLineageID          string `json:"successor_lineage_id"`
+	SuccessorExpectedRevision   string `json:"successor_expected_revision"`
 }
 
 // compactContentMismatchedRecoveryAuthorizationClass is the one closed
@@ -70,6 +78,32 @@ const compactContentMismatchedRecoveryAuthorizationClass = "content_mismatched_r
 // incomplete inspection. There is never a generic fallback plan.
 var errAuthorityDispositionPlanNotDerivable = errors.New("authority disposition plan refused: anomaly classification is not closed") // refusal:by-design human-authority: an unclassifiable or ambiguous graph shape needs a maintainer's diagnosis before any plan can be derived, not a command this refusal can name
 
+func authorityDispositionSelectors(report CompactRecoveryInspectionReport, records map[string]CompactRecord) ([]AuthorityDispositionSelector, error) {
+	if !report.Complete || len(report.EntryDiagnostics) > 0 {
+		return nil, fmt.Errorf("%w: inspection carries %d entry diagnostic(s)", errAuthorityDispositionPlanNotDerivable, len(report.EntryDiagnostics))
+	}
+	selectors := []AuthorityDispositionSelector{}
+	for _, edge := range report.Edges {
+		if edge.Valid {
+			continue
+		}
+		predecessor, foundPredecessor := records[edge.PredecessorLineageID]
+		successor, foundSuccessor := records[edge.SuccessorLineageID]
+		if !foundPredecessor || !foundSuccessor ||
+			classifyCompactRecoveryEdgeAnomalies(predecessor, successor).DispositionClass != compactContentMismatchedRecoveryAuthorizationClass {
+			continue
+		}
+		selectors = append(selectors, AuthorityDispositionSelector{
+			PredecessorLineageID: edge.PredecessorLineageID, PredecessorExpectedRevision: predecessor.Revision,
+			SuccessorLineageID: edge.SuccessorLineageID, SuccessorExpectedRevision: successor.Revision,
+		})
+	}
+	slices.SortFunc(selectors, func(left, right AuthorityDispositionSelector) int {
+		return cmp.Or(cmp.Compare(left.PredecessorLineageID, right.PredecessorLineageID), cmp.Compare(left.SuccessorLineageID, right.SuccessorLineageID))
+	})
+	return selectors, nil
+}
+
 // deriveAuthorityDispositionPlan derives a generic AuthorityDispositionPlan
 // deterministically from report and records — both of which MUST come from
 // the single loadCompactRecoveryRecords seam (compact_inspect.go), so no
@@ -77,29 +111,28 @@ var errAuthorityDispositionPlanNotDerivable = errors.New("authority disposition 
 // obligation (a)). It refuses (no plan) unless the inspection that produced
 // report carried no entry diagnostics and exactly one report edge re-derives
 // into the one closed content_mismatched_recovery_authorization class.
-func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, records map[string]CompactRecord, binding, actor, reason string) (AuthorityDispositionPlan, error) {
-	if !report.Complete || len(report.EntryDiagnostics) > 0 {
-		return AuthorityDispositionPlan{}, fmt.Errorf("%w: inspection carries %d entry diagnostic(s)", errAuthorityDispositionPlanNotDerivable, len(report.EntryDiagnostics))
+func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, records map[string]CompactRecord, binding, actor, reason string, requested ...AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
+	if len(requested) > 1 {
+		return AuthorityDispositionPlan{}, fmt.Errorf("%w: multiple exact content-mismatch selectors supplied", errAuthorityDispositionPlanNotDerivable)
 	}
-	seed, seedCount := "", 0
-	for _, edge := range report.Edges {
-		if edge.Valid {
-			continue
-		}
-		predecessor, foundPredecessor := records[edge.PredecessorLineageID]
-		successor, foundSuccessor := records[edge.SuccessorLineageID]
-		if !foundPredecessor || !foundSuccessor {
-			continue
-		}
-		if classifyCompactRecoveryEdgeAnomalies(predecessor, successor).DispositionClass == "" {
-			continue
-		}
-		seed = edge.SuccessorLineageID
-		seedCount++
+	selectors, err := authorityDispositionSelectors(report, records)
+	if err != nil {
+		return AuthorityDispositionPlan{}, err
 	}
-	if seedCount != 1 {
-		return AuthorityDispositionPlan{}, fmt.Errorf("%w: found %d closed content-mismatch edge(s), want exactly 1", errAuthorityDispositionPlanNotDerivable, seedCount)
+	var selector *AuthorityDispositionSelector
+	if len(requested) == 1 {
+		if index := slices.Index(selectors, requested[0]); index >= 0 {
+			selector = &selectors[index]
+		}
+		if selector == nil {
+			return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact content-mismatch selector no longer matches the inspected graph", ErrConcurrentUpdate)
+		}
+	} else if len(selectors) == 1 {
+		selector = &selectors[0]
+	} else {
+		return AuthorityDispositionPlan{}, fmt.Errorf("%w: found %d closed content-mismatch edge(s), want exactly 1 or an exact selector", errAuthorityDispositionPlanNotDerivable, len(selectors))
 	}
+	seed := selector.SuccessorLineageID
 	closure := authorityDispositionClosure(report, seed)
 	expectedRevisions := make(map[string]string, len(closure))
 	for _, lineage := range closure {
@@ -119,6 +152,9 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 		SeedSet: []string{seed}, Closure: closure, ExpectedRevisions: expectedRevisions,
 		Actor: strings.TrimSpace(actor), Reason: strings.TrimSpace(reason),
 	}
+	if len(requested) == 1 {
+		plan.Selector = selector
+	}
 	digest, err := authorityDispositionPlanDigest(plan)
 	if err != nil {
 		return AuthorityDispositionPlan{}, err
@@ -135,7 +171,7 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 // has no CLI entrypoint of its own in this slice (rdd-authority-disposition-plan
 // / "No New Public Repair Verb") — Slice S3 wires it behind the existing
 // `review repair` verb.
-func deriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reason string) (AuthorityDispositionPlan, error) {
+func deriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reason string, requested ...AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
 	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
 		return AuthorityDispositionPlan{}, err
@@ -148,7 +184,7 @@ func deriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reas
 	if err != nil {
 		return AuthorityDispositionPlan{}, err
 	}
-	return deriveAuthorityDispositionPlan(report, records, binding, actor, reason)
+	return deriveAuthorityDispositionPlan(report, records, binding, actor, reason, requested...)
 }
 
 // authorityDispositionClosure derives ordered_closure for one seed by
@@ -231,17 +267,18 @@ func authorityInventoryRevision(records map[string]CompactRecord) (string, error
 // Content").
 func authorityDispositionPlanDigest(plan AuthorityDispositionPlan) (string, error) {
 	canonical := struct {
-		Schema                     string            `json:"schema"`
-		RepositoryBinding          string            `json:"repository_id"`
-		AuthorityInventoryRevision string            `json:"authority_inventory_revision"`
-		AnomalyClass               string            `json:"anomaly_class"`
-		SeedSet                    []string          `json:"ordered_seed_set"`
-		Closure                    []string          `json:"ordered_closure"`
-		ExpectedRevisions          map[string]string `json:"expected_revisions"`
+		Schema                     string                        `json:"schema"`
+		RepositoryBinding          string                        `json:"repository_id"`
+		AuthorityInventoryRevision string                        `json:"authority_inventory_revision"`
+		AnomalyClass               string                        `json:"anomaly_class"`
+		Selector                   *AuthorityDispositionSelector `json:"selector,omitempty"`
+		SeedSet                    []string                      `json:"ordered_seed_set"`
+		Closure                    []string                      `json:"ordered_closure"`
+		ExpectedRevisions          map[string]string             `json:"expected_revisions"`
 	}{
 		Schema: plan.Schema, RepositoryBinding: plan.RepositoryBinding,
 		AuthorityInventoryRevision: plan.AuthorityInventoryRevision, AnomalyClass: plan.AnomalyClass,
-		SeedSet: plan.SeedSet, Closure: plan.Closure, ExpectedRevisions: plan.ExpectedRevisions,
+		Selector: plan.Selector, SeedSet: plan.SeedSet, Closure: plan.Closure, ExpectedRevisions: plan.ExpectedRevisions,
 	}
 	return classifiedAuthorityRepairDigest("gentle-ai.review-disposition-plan-digest/v1", canonical)
 }
@@ -337,6 +374,19 @@ func compactRepairCommandText(repo string, plan AuthorityDispositionPlan) string
 // wiring — a read-only plan derivation with no CLI entrypoint of its own
 // (rdd-authority-disposition-plan / "No New Public Repair Verb": this is a Go
 // API surface behind the existing verb, not a new command).
-func DeriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reason string) (AuthorityDispositionPlan, error) {
-	return deriveAuthorityDispositionPlanAtRepo(ctx, repo, actor, reason)
+func DeriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reason string, requested ...AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
+	return deriveAuthorityDispositionPlanAtRepo(ctx, repo, actor, reason, requested...)
+}
+
+// ListAuthorityDispositionSelectorsAtRepo exposes exact choices for multi-edge content mismatch.
+func ListAuthorityDispositionSelectorsAtRepo(ctx context.Context, repo string) ([]AuthorityDispositionSelector, error) {
+	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	report, records, err := loadCompactRecoveryRecords(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	return authorityDispositionSelectors(report, records)
 }
