@@ -19,8 +19,6 @@ func RunSDDAttempt(args []string, stdout io.Writer) error {
 	return runSDDAttempt(context.Background(), args, stdout)
 }
 
-const sddAttemptFinishHelpHint = "rerun `gentle-ai sdd-attempt finish --help` for the authoritative finish contract"
-
 func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	if requested, operation := sddAttemptHelpRequest(args); requested {
 		return renderSDDAttemptHelp(operation, stdout)
@@ -83,12 +81,12 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		})
 	case "finish":
 		if missing := missingSDDAttemptFlags(args[1:], "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence"); len(missing) != 0 {
-			return fmt.Errorf("sdd-attempt finish requires %s; %s", strings.Join(missing, ", "), sddAttemptFinishHelpHint)
+			return fmt.Errorf("sdd-attempt finish requires %s; rerun `gentle-ai sdd-attempt finish --help` for the authoritative finish contract", strings.Join(missing, ", "))
 		}
 		remediationFlags := presentSDDAttemptFlags(args[1:], "expected-binding-revision", "successor-lineage", "remediates-evidence-revision")
 		unmanagedRemediation := values.string("expected-binding-revision") == "" && values.string("successor-lineage") == "" && values.string("remediates-evidence-revision") != ""
 		if remediationFlags != 0 && remediationFlags != 3 && !unmanagedRemediation {
-			return fmt.Errorf("remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together; %s", sddAttemptFinishHelpHint)
+			return fmt.Errorf("remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together; rerun `gentle-ai sdd-attempt finish --help` for the authoritative finish contract")
 		}
 		result, err = store.Finish(ctx, sddstatus.FinishAttemptRequest{
 			ExpectedRevision: values.string("expected-revision"), RequestID: values.string("request-id"), Outcome: sddstatus.AttemptOutcome(values.string("outcome")),
@@ -483,7 +481,7 @@ func validateSDDAttemptOperationFlags(operation string, args []string) error {
 		}
 		if !allowed[name] {
 			if operation == "finish" {
-				return fmt.Errorf("flag provided but not defined: -%s; %s", name, sddAttemptFinishHelpHint)
+				return fmt.Errorf("flag provided but not defined: -%s; rerun `gentle-ai sdd-attempt finish --help` for the authoritative finish contract", name)
 			}
 			return fmt.Errorf("flag provided but not defined: -%s", name)
 		}

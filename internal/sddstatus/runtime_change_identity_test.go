@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -129,6 +130,299 @@ func TestOpenRuntimeStoreSeparatesCaseVariantChangeDirectories(t *testing.T) {
 	}
 	if strings.EqualFold(upper.Dir, lower.Dir) {
 		t.Fatalf("case variants share ledger directory %q on a case-insensitive filesystem", upper.Dir)
+	}
+}
+
+func TestOpenRuntimeStoreDoesNotSelectNonMaterialLegacyDirectory(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*testing.T, string)
+	}{
+		{name: "empty", setup: func(t *testing.T, path string) {
+			if err := os.MkdirAll(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "records scaffold", setup: func(t *testing.T, path string) {
+			if err := os.MkdirAll(filepath.Join(path, "records"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "lock only", setup: func(t *testing.T, path string) {
+			if err := os.MkdirAll(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(path, "LOCK"), []byte("stale\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := initRuntimeLedgerRepo(t)
+			change := "Empty_Legacy"
+			canonical, err := OpenRuntimeStore(context.Background(), repo, change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			legacy := filepath.Join(canonical.commonDir, "gentle-ai", "sdd-runtime", "v1", change)
+			test.setup(t, legacy)
+			reopened, err := OpenRuntimeStore(context.Background(), repo, change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reopened.Dir != canonical.Dir {
+				t.Fatalf("reopened path = %q, want canonical %q", reopened.Dir, canonical.Dir)
+			}
+		})
+	}
+}
+
+func TestOpenRuntimeStoreRejectsSymlinkedCompatibilityComponents(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*testing.T, string, string)
+	}{
+		{name: "runtime root", setup: func(t *testing.T, base, _ string) {
+			outside := t.TempDir()
+			if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, base); err != nil {
+				t.Skipf("symlink fixture unavailable: %v", err)
+			}
+		}},
+		{name: "legacy root", setup: func(t *testing.T, base, _ string) {
+			outside := t.TempDir()
+			if err := os.MkdirAll(base, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, filepath.Join(base, "v1")); err != nil {
+				t.Skipf("symlink fixture unavailable: %v", err)
+			}
+		}},
+		{name: "records component", setup: func(t *testing.T, base, change string) {
+			legacy := filepath.Join(base, "v1", change)
+			if err := os.MkdirAll(legacy, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(t.TempDir(), filepath.Join(legacy, "records")); err != nil {
+				t.Skipf("symlink fixture unavailable: %v", err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := initRuntimeLedgerRepo(t)
+			change := "Symlinked_Legacy"
+			store, err := OpenRuntimeStore(context.Background(), repo, change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			base := filepath.Join(store.commonDir, "gentle-ai", "sdd-runtime")
+			test.setup(t, base, change)
+			if _, err := OpenRuntimeStore(context.Background(), repo, change); err == nil {
+				t.Fatal("OpenRuntimeStore accepted a symlinked compatibility path")
+			}
+		})
+	}
+}
+
+func TestOpenRuntimeStoreRefusesCaseFoldedLegacyIdentityCollision(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	upper, err := OpenRuntimeStore(context.Background(), repo, "Case-Variant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := upper
+	// Put the uppercase record at the lowercase spelling to model the same
+	// directory that a case-insensitive filesystem would expose.
+	legacy.Dir = filepath.Join(legacy.commonDir, "gentle-ai", "sdd-runtime", "v1", "case-variant")
+	if _, err := legacy.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "case-folded-legacy", WorkUnit: "case-folded", EvidenceGoal: "reject identity alias", MaxAttempts: 1, MaxChangedLines: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenRuntimeStore(context.Background(), repo, "case-variant"); err == nil {
+		t.Fatal("OpenRuntimeStore accepted a legacy record belonging to a case-variant identity")
+	}
+}
+
+func TestOpenRuntimeStorePreservesLogicalIdentityInRecords(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	for _, change := range []string{"lowercase-change", "Uppercase-Change", "underscore_change"} {
+		t.Run(change, func(t *testing.T) {
+			store, err := OpenRuntimeStore(context.Background(), repo, change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status, err := store.Begin(context.Background(), BeginAttemptRequest{
+				RequestID: "identity-" + strings.ToLower(strings.ReplaceAll(change, "_", "-")),
+				WorkUnit:  "identity-record", EvidenceGoal: "preserve exact change identity", MaxAttempts: 1, MaxChangedLines: 1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status.Change != change || status.ActiveAttempt == nil {
+				t.Fatalf("begin status = %#v, want exact change %q", status, change)
+			}
+			reopened, err := OpenRuntimeStore(context.Background(), repo, change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replayed, err := reopened.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if replayed.Change != change || replayed.ActiveAttempt == nil {
+				t.Fatalf("replayed status = %#v, want exact change %q", replayed, change)
+			}
+		})
+	}
+}
+
+func TestOpenRuntimeStoreReopensAndWritesLegacyLedger(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	change := "Legacy_Case"
+	canonical, err := OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := canonical
+	legacy.Dir = filepath.Join(legacy.commonDir, "gentle-ai", "sdd-runtime", "v1", change)
+	started, err := legacy.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "legacy-begin", WorkUnit: "legacy-compatibility", EvidenceGoal: "reopen old ledger", MaxAttempts: 2, MaxChangedLines: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy.Dir, ".head-crashed"), []byte("partial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy.Dir, "records", ".record-crashed"), []byte("partial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	appendRuntimeLedgerFile(t, repo, "legacy-attempt\n")
+	reopened, err := OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Dir != legacy.Dir || reopened.Change != change {
+		t.Fatalf("reopened store = %#v, want legacy path %q and exact identity", reopened, legacy.Dir)
+	}
+	reopened.ReviewDisabled = true
+	finished, err := reopened.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "legacy-finish", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('1'), Diagnosis: "legacy ledger remained writable",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup complete", ProcessEvidence: "no process remained",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finished.Change != change || countRuntimeRecords(t, legacy.Dir) != 2 {
+		t.Fatalf("finished legacy status = %#v, records = %d", finished, countRuntimeRecords(t, legacy.Dir))
+	}
+	if _, err := os.Stat(canonical.Dir); !os.IsNotExist(err) {
+		t.Fatalf("compatibility write created canonical ledger %q: %v", canonical.Dir, err)
+	}
+}
+
+func TestOpenRuntimeStoreRejectsMalformedLegacySibling(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	change := "Malformed_Legacy"
+	canonical, err := OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := canonical
+	legacy.Dir = filepath.Join(legacy.commonDir, "gentle-ai", "sdd-runtime", "v1", change)
+	if _, err := legacy.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "malformed-begin", WorkUnit: "malformed", EvidenceGoal: "reject sibling", MaxAttempts: 1, MaxChangedLines: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	malformed := filepath.Join(legacy.Dir, "records", strings.Repeat("a", 64)+".json")
+	if err := os.WriteFile(malformed, []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenRuntimeStore(context.Background(), repo, change); err == nil {
+		t.Fatal("OpenRuntimeStore adopted a legacy ledger with a malformed sibling record")
+	}
+}
+
+func TestOpenRuntimeStoreRejectsOrphanedLegacyRecord(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	change := "orphaned-legacy"
+	canonical, err := OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := canonical
+	legacy.Dir = filepath.Join(legacy.commonDir, "gentle-ai", "sdd-runtime", "v1", change)
+	if _, err := legacy.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "orphaned-begin", WorkUnit: "orphaned", EvidenceGoal: "reject orphan", MaxAttempts: 1, MaxChangedLines: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	head, exists, err := readRuntimeHead(filepath.Join(legacy.Dir, "HEAD"))
+	if err != nil || !exists {
+		t.Fatalf("legacy HEAD = %q/%v, err=%v", head, exists, err)
+	}
+	record, err := legacy.loadRecord(head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.RequestID = "orphaned-record"
+	record.PreviousRevision = ""
+	revision, payload, err := runtimeRecordRevision(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.publishRecord(revision, payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenRuntimeStore(context.Background(), repo, change); err == nil {
+		t.Fatal("OpenRuntimeStore adopted a legacy ledger with an orphaned final record")
+	}
+}
+
+func TestOpenRuntimeStoreUsesExistingCanonicalLedger(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	change := "Canonical_Case"
+	canonical, err := OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := canonical.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "canonical-begin", WorkUnit: "canonical", EvidenceGoal: "prefer canonical", MaxAttempts: 1, MaxChangedLines: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Dir != canonical.Dir {
+		t.Fatalf("reopened canonical path = %q, want %q", reopened.Dir, canonical.Dir)
+	}
+}
+
+func TestOpenRuntimeStoreRefusesMateriallyAmbiguousLegacyAndCanonicalLedgers(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	change := "Ambiguous_Case"
+	canonical, err := OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := canonical
+	legacy.Dir = filepath.Join(legacy.commonDir, "gentle-ai", "sdd-runtime", "v1", change)
+	for index, store := range []RuntimeStore{canonical, legacy} {
+		if _, err := store.Begin(context.Background(), BeginAttemptRequest{
+			RequestID: fmt.Sprintf("ambiguous-begin-%d", index), WorkUnit: "ambiguous", EvidenceGoal: "refuse split brain", MaxAttempts: 1, MaxChangedLines: 1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := OpenRuntimeStore(context.Background(), repo, change); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("OpenRuntimeStore with both ledgers = %v, want an ambiguity refusal", err)
 	}
 }
 

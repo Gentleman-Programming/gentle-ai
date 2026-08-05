@@ -110,6 +110,10 @@ var (
 	// changed_lines: 0 when real work happened, or a wildly inflated delta —
 	// so this refuses before any candidate capture, not after.
 	ErrRuntimeWorktreeMismatch = errors.New("SDD runtime attempt began in a different linked worktree than this finish is running from")
+	// refusal:by-design world-action: repairing or quarantining an unsafe compatibility path is a filesystem action, not a safe command
+	errRuntimeLedgerUnsafeCompatibilityPath = errors.New("SDD runtime compatibility path contains a symlink or non-directory component")
+	// refusal:by-design world-action: repairing or quarantining an unexpected runtime ledger artifact is a filesystem action, not a safe command
+	errRuntimeLedgerUnexpectedArtifact = errors.New("legacy SDD runtime ledger contains an unexpected or orphaned artifact")
 
 	runtimeGitTreePattern = regexp.MustCompile(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`)
 
@@ -511,7 +515,11 @@ func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, e
 		return RuntimeStore{}, err
 	}
 	commonDir := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(probe.Dir))))
-	dir := runtimeChangeLedgerDir(filepath.Join(commonDir, "gentle-ai", "sdd-runtime"), change)
+	base := filepath.Join(commonDir, "gentle-ai", "sdd-runtime")
+	dir, err := resolveRuntimeChangeLedgerDir(base, change)
+	if err != nil {
+		return RuntimeStore{}, err
+	}
 	return RuntimeStore{Dir: dir, Repo: root, Workspace: workspace, Change: change, commonDir: commonDir}, nil
 }
 
@@ -545,6 +553,267 @@ func runtimeChangeLedgerDir(base, change string) string {
 	}
 	digest := strings.TrimPrefix(runtimeValueHash("gentle-ai.sdd-runtime-change-identity/v1", change), "sha256:")
 	return filepath.Join(base, "v1", encodedRuntimeChangeNamespace, strings.ToLower(change)+"-"+digest[:encodedRuntimeChangeDigestWidth])
+}
+
+// resolveRuntimeChangeLedgerDir discovers a pre-encoding ledger without
+// renaming or copying it. OpenRuntimeStore is a path-resolution operation, so
+// compatibility stays read-only and the first subsequent mutation keeps using
+// the selected directory.
+func resolveRuntimeChangeLedgerDir(base, change string) (string, error) {
+	canonical := runtimeChangeLedgerDir(base, change)
+	legacy := filepath.Join(base, "v1", change)
+	if filepath.Clean(canonical) == filepath.Clean(legacy) {
+		_, material, err := runtimeLedgerPathState(canonical)
+		if err != nil {
+			return "", err
+		}
+		if material {
+			// Preserve the established higher-level diagnostic for a corrupt HEAD,
+			// while still rejecting valid-HEAD orphan records before adoption.
+			if err := runtimeLegacyLedgerMatchesChangeMode(canonical, change, true); err != nil {
+				return "", err
+			}
+		}
+		return canonical, nil
+	}
+
+	_, canonicalMaterial, err := runtimeLedgerPathState(canonical)
+	if err != nil {
+		return "", err
+	}
+	_, legacyMaterial, err := runtimeLedgerPathState(legacy)
+	if err != nil {
+		return "", err
+	}
+	if canonicalMaterial && legacyMaterial {
+		// refusal:by-design human-authority: only the operator can decide which materially conflicting ledger history is authoritative
+		return "", fmt.Errorf("ambiguous SDD runtime ledger for change %q: canonical %q and legacy %q both contain data", change, canonical, legacy)
+	}
+	if canonicalMaterial {
+		return canonical, nil
+	}
+	if legacyMaterial {
+		if err := runtimeLegacyLedgerMatchesChange(legacy, change); err != nil {
+			return "", fmt.Errorf("legacy SDD runtime ledger for change %q cannot be selected safely: %w", change, err)
+		}
+		return legacy, nil
+	}
+	return canonical, nil
+}
+
+// runtimeLedgerPathState treats only HEAD or final record files as material.
+// Empty scaffolds, locks, and interrupted temporary publications are safe to
+// leave behind while selecting the canonical path; unknown entries fail closed.
+func runtimeLedgerPathState(path string) (exists, material bool, err error) {
+	if err := runtimeCheckNoSymlinkComponents(path); err != nil {
+		return false, false, err
+	}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return true, false, errRuntimeLedgerUnsafeCompatibilityPath
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return true, false, err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		switch {
+		case name == "HEAD":
+			if err := runtimeValidateLedgerArtifact(filepath.Join(path, name), maximumRuntimeRecordBytes); err != nil {
+				return true, false, err
+			}
+			material = true
+		case name == "LOCK":
+			if err := runtimeValidateLedgerArtifact(filepath.Join(path, name), 0); err != nil {
+				return true, false, err
+			}
+		case name == "records":
+			recordsPath := filepath.Join(path, name)
+			if err := runtimeCheckNoSymlinkComponents(recordsPath); err != nil {
+				return true, false, err
+			}
+			records, err := os.ReadDir(recordsPath)
+			if err != nil {
+				return true, false, err
+			}
+			for _, record := range records {
+				recordName := record.Name()
+				recordPath := filepath.Join(recordsPath, recordName)
+				if strings.HasPrefix(recordName, ".record-") {
+					if err := runtimeValidateLedgerArtifact(recordPath, maximumRuntimeRecordBytes); err != nil {
+						return true, false, err
+					}
+					continue
+				}
+				if _, ok := runtimeRecordRevisionFromFilename(recordName); !ok {
+					return true, false, errRuntimeLedgerUnexpectedArtifact
+				}
+				if err := runtimeValidateLedgerArtifact(recordPath, maximumRuntimeRecordBytes); err != nil {
+					return true, false, err
+				}
+				material = true
+			}
+		case strings.HasPrefix(name, ".head-"):
+			if err := runtimeValidateLedgerArtifact(filepath.Join(path, name), maximumRuntimeRecordBytes); err != nil {
+				return true, false, err
+			}
+		default:
+			return true, false, errRuntimeLedgerUnexpectedArtifact
+		}
+	}
+	return true, material, nil
+}
+
+// runtimeLegacyLedgerMatchesChange proves that a material legacy path belongs
+// to the requested logical identity. This matters on case-insensitive stores:
+// an old v1/Case-Variant directory can be reached by v1/case-variant, but its
+// record must not be opened as the other identity.
+func runtimeLegacyLedgerMatchesChange(path, change string) error {
+	return runtimeLegacyLedgerMatchesChangeMode(path, change, false)
+}
+
+func runtimeLegacyLedgerMatchesChangeMode(path, change string, ignoreMalformedHead bool) error {
+	_, material, err := runtimeLedgerPathState(path)
+	if err != nil {
+		return err
+	}
+	if !material {
+		return errRuntimeLedgerUnexpectedArtifact
+	}
+	recordsPath := filepath.Join(path, "records")
+	if err := runtimeCheckNoSymlinkComponents(recordsPath); err != nil {
+		return err
+	}
+	records, err := os.ReadDir(recordsPath)
+	if err != nil {
+		return err
+	}
+	revisions := map[string]struct{}{}
+	for _, record := range records {
+		if strings.HasPrefix(record.Name(), ".record-") {
+			continue
+		}
+		revision, ok := runtimeRecordRevisionFromFilename(record.Name())
+		if !ok {
+			return errRuntimeLedgerUnexpectedArtifact
+		}
+		revisions[revision] = struct{}{}
+	}
+	head, exists, err := readRuntimeHead(filepath.Join(path, "HEAD"))
+	if err != nil {
+		if ignoreMalformedHead {
+			return nil
+		}
+		return err
+	}
+	store := RuntimeStore{Dir: path, Change: change}
+	if exists {
+		chain := map[string]struct{}{}
+		for revision := head; revision != ""; {
+			if len(chain) >= maximumRuntimeChainRecords {
+				return errRuntimeLedgerUnexpectedArtifact
+			}
+			if _, duplicate := chain[revision]; duplicate {
+				return errRuntimeLedgerUnexpectedArtifact
+			}
+			record, err := store.loadRecord(revision)
+			if err != nil {
+				return err
+			}
+			chain[revision] = struct{}{}
+			revision = record.PreviousRevision
+		}
+		if len(chain) != len(revisions) {
+			return errRuntimeLedgerUnexpectedArtifact
+		}
+		for revision := range revisions {
+			if _, linked := chain[revision]; !linked {
+				return errRuntimeLedgerUnexpectedArtifact
+			}
+		}
+		if _, err := store.load(); err != nil {
+			return err
+		}
+		return nil
+	}
+	if exists || len(revisions) == 0 {
+		return errRuntimeLedgerUnexpectedArtifact
+	}
+	for revision := range revisions {
+		record, err := store.loadRecord(revision)
+		if err != nil {
+			return err
+		}
+		if err := validateRuntimeRecordShape(record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runtimeCheckNoSymlinkComponents(path string) error {
+	clean := filepath.Clean(path)
+	if clean == "." || !filepath.IsAbs(clean) {
+		return errRuntimeLedgerUnsafeCompatibilityPath
+	}
+	root := filepath.VolumeName(clean) + string(filepath.Separator)
+	if root == "" {
+		root = string(filepath.Separator)
+	}
+	current := root
+	for {
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return errRuntimeLedgerUnsafeCompatibilityPath
+		}
+		if current == clean {
+			return nil
+		}
+		relative, err := filepath.Rel(current, clean)
+		if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return errRuntimeLedgerUnsafeCompatibilityPath
+		}
+		segment := strings.Split(relative, string(filepath.Separator))[0]
+		if segment == "" || segment == "." || segment == ".." {
+			return errRuntimeLedgerUnsafeCompatibilityPath
+		}
+		current = filepath.Join(current, segment)
+	}
+}
+
+func runtimeValidateLedgerArtifact(path string, maximum int64) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errRuntimeLedgerUnsafeCompatibilityPath
+	}
+	if !info.Mode().IsRegular() || maximum > 0 && info.Size() > maximum {
+		return errRuntimeLedgerUnexpectedArtifact
+	}
+	return nil
+}
+
+func runtimeRecordRevisionFromFilename(name string) (string, bool) {
+	if !strings.HasSuffix(name, ".json") {
+		return "", false
+	}
+	revision := "sha256:" + strings.TrimSuffix(name, ".json")
+	return revision, runtimeRevisionPattern.MatchString(revision)
 }
 
 func (store RuntimeStore) Status() (RuntimeStatus, error) {
