@@ -385,6 +385,118 @@ func TestUnknownRDDModeFailsClosedAsDisabled(t *testing.T) {
 	}
 }
 
+// TestSetCloneLocalRDDModeRedundantEnableWriteDoesNotAdvanceGeneration is
+// the transaction-level proof of issue #2231: with global=off and no
+// clone-local opinion, re-recording "inherit" must refuse as a no-op and
+// must not advance revision or append a generation. The no-op guard lives
+// here so every caller of SetCloneLocalRDDMode inherits the property.
+func TestSetCloneLocalRDDModeRedundantEnableWriteDoesNotAdvanceGeneration(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	ctx := context.Background()
+	global := RDDGlobalMode{Value: "off"}
+
+	first, err := SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, "", global)
+	if err != nil {
+		t.Fatalf("first SetCloneLocalRDDMode(enable -> inherit) error = %v", err)
+	}
+	if first.Revision == "" {
+		t.Fatalf("first enable produced no revision: %#v", first)
+	}
+	dir := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	beforeCount := rddModeGenerationCount(t, dir)
+	if beforeCount != 1 {
+		t.Fatalf("first enable produced %d generations, want 1", beforeCount)
+	}
+
+	second, err := SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, first.Revision, global)
+	if err == nil {
+		t.Fatalf("redundant enable returned success instead of a typed non-success: %#v", second)
+	}
+	var redundant *RDDModeRedundantWriteError
+	if !errors.As(err, &redundant) {
+		t.Fatalf("redundant enable error = %v, want *RDDModeRedundantWriteError", err)
+	}
+	if redundant.Status.Effective != first.Effective || redundant.Status.Source != RDDModeSourceGlobal {
+		t.Fatalf("redundant write status = %#v, want %q decided by global",
+			redundant.Status, first.Effective)
+	}
+	if redundant.Status.Revision != first.Revision {
+		t.Fatalf("redundant write changed revision: before=%q after=%q",
+			first.Revision, redundant.Status.Revision)
+	}
+	if afterCount := rddModeGenerationCount(t, dir); afterCount != beforeCount {
+		t.Fatalf("redundant write advanced generation count: before=%d after=%d", beforeCount, afterCount)
+	}
+}
+
+// TestSetCloneLocalRDDModeRedundantDisableWriteDoesNotAdvanceGeneration pins
+// the symmetric property: disabling an already-disabled clone-local override
+// must also refuse as a no-op, and the fix must not regress the legitimate
+// disable path -- a fresh disable, or a clearing from inherit to off, still
+// publishes a generation.
+func TestSetCloneLocalRDDModeRedundantDisableWriteDoesNotAdvanceGeneration(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	ctx := context.Background()
+	global := RDDGlobalMode{Value: "on"}
+
+	disabled, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, "", global)
+	if err != nil {
+		t.Fatalf("first SetCloneLocalRDDMode(disable) error = %v", err)
+	}
+	if disabled.Effective != RDDModeOff || disabled.Source != RDDModeSourceCloneLocal {
+		t.Fatalf("first disable did not take effect: %#v", disabled)
+	}
+	dir := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	if count := rddModeGenerationCount(t, dir); count != 1 {
+		t.Fatalf("first disable produced %d generations, want 1", count)
+	}
+
+	second, err := SetCloneLocalRDDMode(ctx, repo, RDDModeOff, disabled.Revision, global)
+	if err == nil {
+		t.Fatalf("redundant disable returned success instead of a typed non-success: %#v", second)
+	}
+	var redundant *RDDModeRedundantWriteError
+	if !errors.As(err, &redundant) {
+		t.Fatalf("redundant disable error = %v, want *RDDModeRedundantWriteError", err)
+	}
+	if redundant.Status.Revision != disabled.Revision {
+		t.Fatalf("redundant disable changed revision: before=%q after=%q",
+			disabled.Revision, redundant.Status.Revision)
+	}
+	if count := rddModeGenerationCount(t, dir); count != 1 {
+		t.Fatalf("redundant disable advanced generation count: now=%d, want 1", count)
+	}
+
+	cleared, err := SetCloneLocalRDDMode(ctx, repo, RDDModeUnset, disabled.Revision, global)
+	if err != nil {
+		t.Fatalf("cleared override error = %v", err)
+	}
+	if cleared.Revision == disabled.Revision || cleared.Effective != RDDModeOn {
+		t.Fatalf("clearing the override did not advance revision or re-enable: %#v", cleared)
+	}
+	if count := rddModeGenerationCount(t, dir); count != 2 {
+		t.Fatalf("clearing advanced generation count = %d, want 2", count)
+	}
+}
+
+// rddModeGenerationCount counts the gen-NNNNNNNNNN.json files under the
+// clone-local RDD mode directory. The consent latch (asked.json) and lock
+// (LOCK) are excluded by the same generation name pattern the read head uses.
+func rddModeGenerationCount(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read rdd-mode directory: %v", err)
+	}
+	count := 0
+	for _, entry := range entries {
+		if _, ok := rddModeGenerationOf(entry.Name()); ok {
+			count++
+		}
+	}
+	return count
+}
+
 func TestRDDDeliveryDispositionNeverFabricatesApproval(t *testing.T) {
 	disabled := RDDModeStatus{Effective: RDDModeOff}
 	if got := RDDDeliveryDisposition(disabled, false); got != RDDDeliveryDisabledUnmanaged {

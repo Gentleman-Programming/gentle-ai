@@ -110,6 +110,172 @@ func TestReviewModeCloneScopeRejectsForcingOn(t *testing.T) {
 	}
 }
 
+// TestReviewModeEnableCloneIsNoOpWhenDecidedGlobally is the CLI-level proof
+// of issue #2231: re-running `review mode enable --scope clone` against a
+// clone whose effective mode is already decided by global must refuse as a
+// no-op and not advance the generation. The CAS subtest re-runs the same
+// write with --expected-revision set to the existing head and pins the same
+// contract for the explicit-token path.
+func TestReviewModeEnableCloneIsNoOpWhenDecidedGlobally(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := state.Write(home, state.InstallState{RDDMode: "off"}); err != nil {
+		t.Fatalf("seed global off: %v", err)
+	}
+
+	var first bytes.Buffer
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--json"}, &first); err != nil {
+		t.Fatalf("first enable clone error = %v\n%s", err, first.String())
+	}
+	firstResult := decodeReviewModeResult(t, first.Bytes()).Status
+	if firstResult.Effective != reviewtransaction.RDDModeOff || firstResult.Source != reviewtransaction.RDDModeSourceGlobal {
+		t.Fatalf("first enable result = %#v, want off decided by global", firstResult)
+	}
+	if firstResult.Revision == "" {
+		t.Fatalf("first enable produced no revision: %#v", firstResult)
+	}
+	dir := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	if count := reviewModeGenerationCount(t, dir); count != 1 {
+		t.Fatalf("first enable produced %d generations, want 1", count)
+	}
+
+	redundantEnable := func(args ...string) error {
+		var output bytes.Buffer
+		full := append([]string{"enable", "--cwd", repo, "--scope", "clone"}, args...)
+		full = append(full, "--json")
+		err := RunReviewMode(full, &output)
+		if err == nil {
+			t.Fatalf("redundant enable %v returned success:\n%s", args, output.String())
+		}
+		var redundant *reviewtransaction.RDDModeRedundantWriteError
+		if !errors.As(err, &redundant) {
+			t.Fatalf("redundant enable %v error = %v, want *RDDModeRedundantWriteError", args, err)
+		}
+		if redundant.Status.Source != reviewtransaction.RDDModeSourceGlobal {
+			t.Fatalf("redundant enable %v source = %q, want global", args, redundant.Status.Source)
+		}
+		if redundant.Status.Revision != firstResult.Revision {
+			t.Fatalf("redundant enable %v changed revision: before=%q after=%q",
+				args, firstResult.Revision, redundant.Status.Revision)
+		}
+		if !strings.Contains(err.Error(), "gentle-ai review mode enable --scope=global") {
+			t.Fatalf("redundant enable %v refusal does not name the deciding scope:\n%s", args, err.Error())
+		}
+		return err
+	}
+
+	if err := redundantEnable(); err == nil {
+		t.Fatal("redundant enable without --expected-revision returned nil error")
+	}
+	if err := redundantEnable("--expected-revision", firstResult.Revision); err == nil {
+		t.Fatal("redundant enable with --expected-revision returned nil error")
+	}
+	if count := reviewModeGenerationCount(t, dir); count != 1 {
+		t.Fatalf("redundant enable advanced generation count: now=%d, want 1", count)
+	}
+}
+
+// TestReviewModeEnableCloneStillWritesWhenGlobalIsOn is the anti-drift guard
+// for the legitimate use case: when global=on and clone-local holds an Off
+// opinion, enabling the clone clears the opinion so global decides. The
+// mode flips (Off -> On, decided by clone -> decided by global) and a
+// generation must be published.
+func TestReviewModeEnableCloneStillWritesWhenGlobalIsOn(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := state.Write(home, state.InstallState{RDDMode: "on"}); err != nil {
+		t.Fatalf("seed global on: %v", err)
+	}
+
+	var disableOutput bytes.Buffer
+	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone", "--json"}, &disableOutput); err != nil {
+		t.Fatalf("disable clone error = %v\n%s", err, disableOutput.String())
+	}
+	disabled := decodeReviewModeResult(t, disableOutput.Bytes()).Status
+	if disabled.Effective != reviewtransaction.RDDModeOff || disabled.Source != reviewtransaction.RDDModeSourceCloneLocal {
+		t.Fatalf("disable did not pin effective=off decided by clone: %#v", disabled)
+	}
+	dir := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	if count := reviewModeGenerationCount(t, dir); count != 1 {
+		t.Fatalf("disable produced %d generations, want 1", count)
+	}
+
+	var enableOutput bytes.Buffer
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--json"}, &enableOutput); err != nil {
+		t.Fatalf("enable clone error = %v\n%s", err, enableOutput.String())
+	}
+	reEnabled := decodeReviewModeResult(t, enableOutput.Bytes()).Status
+	if reEnabled.Effective != reviewtransaction.RDDModeOn || reEnabled.Source != reviewtransaction.RDDModeSourceGlobal {
+		t.Fatalf("re-enable did not flip effective=on decided by global: %#v", reEnabled)
+	}
+	if reEnabled.Revision == disabled.Revision {
+		t.Fatalf("re-enable did not advance revision: before=%q after=%q", disabled.Revision, reEnabled.Revision)
+	}
+	if count := reviewModeGenerationCount(t, dir); count != 2 {
+		t.Fatalf("re-enable advanced generation count = %d, want 2", count)
+	}
+}
+
+// TestReviewModeDisableCloneIsNoOpWhenAlreadyOff pins the symmetric guard
+// for `review mode disable --scope clone`: re-disabling an already-disabled
+// clone-local override must also refuse as a no-op.
+func TestReviewModeDisableCloneIsNoOpWhenAlreadyOff(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := state.Write(home, state.InstallState{RDDMode: "on"}); err != nil {
+		t.Fatalf("seed global on: %v", err)
+	}
+
+	var first bytes.Buffer
+	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone", "--json"}, &first); err != nil {
+		t.Fatalf("first disable clone error = %v\n%s", err, first.String())
+	}
+	disabled := decodeReviewModeResult(t, first.Bytes()).Status
+	dir := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	if count := reviewModeGenerationCount(t, dir); count != 1 {
+		t.Fatalf("first disable produced %d generations, want 1", count)
+	}
+
+	var second bytes.Buffer
+	err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone", "--json"}, &second)
+	if err == nil {
+		t.Fatalf("redundant disable returned success instead of a typed non-success:\n%s", second.String())
+	}
+	var redundant *reviewtransaction.RDDModeRedundantWriteError
+	if !errors.As(err, &redundant) {
+		t.Fatalf("redundant disable error = %v, want *RDDModeRedundantWriteError", err)
+	}
+	if redundant.Status.Revision != disabled.Revision {
+		t.Fatalf("redundant disable changed revision: before=%q after=%q",
+			disabled.Revision, redundant.Status.Revision)
+	}
+	if count := reviewModeGenerationCount(t, dir); count != 1 {
+		t.Fatalf("redundant disable advanced generation count: now=%d, want 1", count)
+	}
+}
+
+// reviewModeGenerationCount counts the gen-NNNNNNNNNN.json files under the
+// clone-local RDD mode directory. The consent latch and lock live next to
+// them but do not match the generation pattern.
+func reviewModeGenerationCount(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0
+		}
+		t.Fatalf("read rdd-mode directory: %v", err)
+	}
+	count := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "gen-") && strings.HasSuffix(name, ".json") {
+			count++
+		}
+	}
+	return count
+}
+
 func TestReviewModeReportsUnknownPersistedModeAsDisabled(t *testing.T) {
 	home := reviewModeHome(t)
 	repo := initReviewCLIRepo(t)

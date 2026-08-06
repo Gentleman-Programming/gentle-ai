@@ -66,6 +66,15 @@ var (
 	// impose receipt-driven development on every clone that checks it out.
 	ErrRDDModeRepositoryForcedOn = errors.New("clone-local review mode override may only disable")
 
+	// ErrRDDModeRedundantWrite reports that a clone-local write would resolve
+	// to the mode already in force, so the transaction layer refused to
+	// advance revision (issue #2231). The persisted record would be
+	// byte-identical except for its timestamp -- the exact shape of "the
+	// write cannot take effect but the tool reports success".
+	//
+	// refusal:by-design human-authority: a sentinel, not a user-facing message. Callers wrap it with the deciding scope and the exact `gentle-ai review mode enable` invocation; the override is off-only, so the only scope that can move the decision is the one that already decided it.
+	ErrRDDModeRedundantWrite = errors.New("clone-local review mode write would not change the effective mode")
+
 	// ErrRDDConsentCorrupt reports an unreadable one-shot consent latch.
 	ErrRDDConsentCorrupt = errors.New("clone-local review consent latch is corrupt")
 
@@ -222,6 +231,41 @@ func reviewModeScopeForSource(source RDDModeSource) string {
 
 func (err *RDDDisabledError) Unwrap() error { return ErrRDDDisabled }
 
+// RDDModeRedundantWriteError is the typed non-success returned when a
+// clone-local write would resolve to the mode already in force. The
+// transaction layer refuses to publish a new generation and refuses to
+// advance revision (issue #2231). The override is off-only: when the
+// deciding source already says what the override would say, the write is
+// a no-op, and the operator has reached the only runnable way forward:
+// change the deciding source itself, not the override that already mirrors it.
+type RDDModeRedundantWriteError struct {
+	Status RDDModeStatus
+	Source RDDModeSource
+}
+
+func (err *RDDModeRedundantWriteError) Unwrap() error { return ErrRDDModeRedundantWrite }
+
+// Error names the runnable continuation: the deciding scope and the exact
+// `gentle-ai review mode enable --scope=<scope>` invocation that could move
+// the decision. When the deciding source is the default, naming a scope
+// would invent a continuation for a state that cannot occur -- mirroring
+// the same guard RDDDisabledError.Error() uses, so the two refusal
+// envelopes cannot drift.
+func (err *RDDModeRedundantWriteError) Error() string {
+	message := fmt.Sprintf(
+		"%v: the %s mode source already says %s, so re-recording the clone-local override changes nothing",
+		ErrRDDModeRedundantWrite, err.Source, err.Status.Effective,
+	)
+	scope := reviewModeScopeForSource(err.Source)
+	if scope == "" {
+		return message + "; no command can change what the default already decided"
+	}
+	return fmt.Sprintf(
+		"%s; change the deciding source with `gentle-ai review mode enable --scope=%s`",
+		message, scope,
+	)
+}
+
 // ResolveRDDMode combines the global user mode with this clone's off-only
 // override. Any off wins, a repository can never force on, and every failure
 // projects a disabled status so a caller that drops the error still fails safe.
@@ -299,6 +343,23 @@ func SetCloneLocalRDDMode(
 	}
 	if head.Generation >= rddModeMaxGeneration {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), errors.New("clone-local review mode generation space is exhausted")
+	}
+	// Issue #2231: a clone-local write whose persisted mode equals the
+	// current head mode would resolve to state already in force. Every
+	// record carries a fresh timestamp, so its SHA differs from the head
+	// and the no-replace publish would not refuse it -- the caller would
+	// receive a success-shaped envelope for a write that cannot take
+	// effect. The override is off-only, so same persisted value, same
+	// effective mode, same deciding source is the only shape that cannot
+	// be a legitimate change. Any other shape (clearing, force-on, CAS
+	// mismatch, corrupt-head repair) falls through to the ordinary record.
+	if present && head.Mode == persisted {
+		globalMode, globalErr := normalizeRDDMode(global.Value)
+		if globalErr != nil {
+			return failedClosedRDDModeStatus(RDDModeSourceGlobal), globalErr
+		}
+		status := rddModeStatus(globalMode, head, true)
+		return status, &RDDModeRedundantWriteError{Status: status, Source: status.Source}
 	}
 
 	record := rddModeOverrideRecord{
