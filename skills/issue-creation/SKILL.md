@@ -19,7 +19,7 @@ Load this skill whenever you need to:
 ## Critical Rules
 
 1. **Blank issues are DISABLED** — `blank_issues_enabled: false` in `.github/ISSUE_TEMPLATE/config.yml`. You MUST use a template.
-2. **`status:needs-review` is applied automatically** — every new issue gets this label; you do NOT add it manually.
+2. **Template auto-labels require the web form** — use the web-form URLs below to receive the template's type label and `status:needs-review`. GitHub CLI 2.96.0 supports Markdown issue templates, not YAML issue forms, so CLI-created issues do not inherit these labels. Fork contributors using the CLI must list the missing labels in the issue body for a maintainer.
 3. **`status:approved` is REQUIRED before ANY work begins** — a maintainer must label the issue before you or anyone opens a PR.
 4. **Questions go to Discussions** — use [GitHub Discussions](https://github.com/Gentleman-Programming/gentle-ai/discussions), NOT issues, for questions and general conversation.
 5. **No Co-Authored-By trailers** — never add AI attribution to commits.
@@ -52,7 +52,7 @@ Intentionally public identifiers are NOT redacted: tool names (`gentle-ai`, `eng
    - Bug   → .github/ISSUE_TEMPLATE/bug_report.yml
    - Feat  → .github/ISSUE_TEMPLATE/feature_request.yml
 
-3. Submit the issue → status:needs-review is applied automatically
+3. Submit through the web form → template labels are applied automatically
 
 4. Wait — a maintainer reviews and adds status:approved (or closes)
 
@@ -66,7 +66,7 @@ Intentionally public identifiers are NOT redacted: tool names (`gentle-ai`, `eng
 ## Bug Report
 
 **Template path**: `.github/ISSUE_TEMPLATE/bug_report.yml`
-**Auto-labels**: `bug`, `status:needs-review`
+**Web-form auto-labels**: `bug`, `status:needs-review`
 
 ### Required Fields
 
@@ -86,18 +86,23 @@ Intentionally public identifiers are NOT redacted: tool names (`gentle-ai`, `eng
 
 `CLI (commands, flags)` · `TUI (terminal UI)` · `Installation Pipeline` · `Agent Detection` · `System Detection` · `Catalog/Steps` · `Documentation` · `Other`
 
+### Recommended Web Form
+
+Use the web form when the template's auto-labels matter:
+
+```
+https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=bug_report.yml
+```
+
 ### Example CLI Command
+
+CLI filing does not load the YAML issue form or apply its labels. Prepare a body with every required field and list `bug` and `status:needs-review` as maintainer-owed labels.
 
 ```bash
 gh issue create \
   --repo Gentleman-Programming/gentle-ai \
-  --template bug_report.yml \
+  --body-file bug-report.md \
   --title "fix(agent): Claude Code not detected on Linux Arch"
-```
-
-Or open the web form directly:
-```
-https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=bug_report.yml
 ```
 
 ---
@@ -105,7 +110,7 @@ https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=bug_repor
 ## Feature Request
 
 **Template path**: `.github/ISSUE_TEMPLATE/feature_request.yml`
-**Auto-labels**: `enhancement`, `status:needs-review`
+**Web-form auto-labels**: `enhancement`, `status:needs-review`
 
 ### Required Fields
 
@@ -118,18 +123,23 @@ https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=bug_repor
 | Alternatives Considered | (optional) Other approaches you thought about |
 | Additional Context | (optional) Screenshots, config files, etc. |
 
+### Recommended Web Form
+
+Use the web form when the template's auto-labels matter:
+
+```
+https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=feature_request.yml
+```
+
 ### Example CLI Command
+
+CLI filing does not load the YAML issue form or apply its labels. Prepare a body with every required field and list `enhancement` and `status:needs-review` as maintainer-owed labels.
 
 ```bash
 gh issue create \
   --repo Gentleman-Programming/gentle-ai \
-  --template feature_request.yml \
+  --body-file feature-request.md \
   --title "feat(tui): add keyboard shortcut help overlay"
-```
-
-Or open the web form directly:
-```
-https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=feature_request.yml
 ```
 
 ---
@@ -231,19 +241,23 @@ gh issue list --repo Gentleman-Programming/gentle-ai --state all --search "your 
 
 ### Create a Bug Report
 
+The body must include the required template fields and identify `bug` and `status:needs-review` as maintainer-owed labels.
+
 ```bash
 gh issue create \
   --repo Gentleman-Programming/gentle-ai \
-  --template bug_report.yml \
+  --body-file bug-report.md \
   --title "fix(<scope>): <short description>"
 ```
 
 ### Create a Feature Request
 
+The body must include the required template fields and identify `enhancement` and `status:needs-review` as maintainer-owed labels.
+
 ```bash
 gh issue create \
   --repo Gentleman-Programming/gentle-ai \
-  --template feature_request.yml \
+  --body-file feature-request.md \
   --title "feat(<scope>): <short description>"
 ```
 
