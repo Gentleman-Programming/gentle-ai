@@ -371,9 +371,17 @@ func equalStringSlices(left, right []string) bool {
 func authorityWithProviderCarrier(lineageID string) (NewLineageAuthority, ProviderCausalCarrier) {
 	authority := fixtureNewLineageAuthority(lineageID, NewLineageStateApproved)
 	authority.SelectedLenses = []string{"lint"}
+	manifest := []ChangedPathManifestEntry{}
+	manifestDigest, _ := ChangedPathManifestDigest(manifest)
+	subjectHash := NewLineageArtifactSubjectHash(authority, "lint", 0)
+	binding := NewLineageArtifactBinding{
+		Subject:    NewLineageArtifactSubject{Schema: "gentle-ai.new-lineage-artifact-subject/v1", SubjectHash: subjectHash, LineageID: authority.LineageID, RepositoryID: authority.CandidateIdentity.RepositoryID, BaseTree: authority.CandidateIdentity.BaseTree, CandidateTree: authority.CandidateIdentity.CandidateTree, ChangedPathManifestSHA256: manifestDigest, Lens: "lint", SelectedOrder: 0},
+		Inspection: ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: []string{}}, Manifest: manifest,
+	}
 	carrier := ProviderCausalCarrier{
-		SubjectHash:       "sha256:" + strings.Repeat("1", 64),
+		SubjectHash:       subjectHash,
 		CandidateIdentity: authority.CandidateIdentity,
+		ArtifactBinding:   binding,
 	}
 	carrier.AggregateDigest = providerAggregateDigest(carrier)
 	authority.CapturedResults = []NewLineageCapturedResult{{

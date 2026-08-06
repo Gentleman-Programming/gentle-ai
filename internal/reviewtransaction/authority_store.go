@@ -213,8 +213,11 @@ func (authority NewLineageAuthority) Validate() error {
 	}
 	seenCapturedLenses := make(map[string]bool, len(authority.CapturedResults))
 	for _, captured := range authority.CapturedResults {
-		if strings.TrimSpace(captured.Lens) == "" || captured.Order < 0 || !validSHA256(captured.SubjectHash) {
+		if strings.TrimSpace(captured.Lens) == "" || captured.Order < 0 || captured.Order >= len(authority.SelectedLenses) || authority.SelectedLenses[captured.Order] != captured.Lens || !validSHA256(captured.SubjectHash) {
 			return errors.New("new-lineage authority captured results must carry a non-empty lens, a non-negative order, and a canonical subject hash") // refusal:by-design world-action: captured results are only ever written by AuthorityStore.CaptureLensResult after validating them; malformed entries here mean in-process corruption, not something an operator command repairs
+		}
+		if captured.SubjectHash != NewLineageArtifactSubjectHash(authority, captured.Lens, captured.Order) {
+			return errors.New("new-lineage authority captured result subject hash does not match its lens/order binding") // refusal:by-design operator-knowledge: a manipulated capture binding requires a fresh capture and cannot be repaired during load
 		}
 		if seenCapturedLenses[captured.Lens] {
 			return errors.New("new-lineage authority captured results must name each lens at most once") // refusal:by-design world-action: CaptureLensResult enforces one-shot-per-lens before ever appending; a duplicate here means in-process corruption, not something an operator command repairs
@@ -249,6 +252,9 @@ func (authority NewLineageAuthority) Validate() error {
 			}
 			if captured.Provider.AggregateDigest != providerAggregateDigest(captured.Provider) {
 				return errors.New("new-lineage authority provider causal aggregate digest does not match its findings") // refusal:by-design operator-knowledge: aggregate integrity failure requires fresh provider evidence
+			}
+			if err := captured.Provider.ArtifactBinding.Validate(authority, captured.Lens, captured.Order, captured.SubjectHash); err != nil {
+				return fmt.Errorf("new-lineage authority provider artifact binding is invalid: %w", err)
 			}
 		}
 	}

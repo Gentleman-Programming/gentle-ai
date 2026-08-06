@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -80,7 +81,27 @@ func captureNewLineageLensResults(t *testing.T, repo, lineage string, lenses []s
 		}
 
 		inputPath := filepath.Join(t.TempDir(), lens+".json")
-		payload := `{"subject_hash":"` + preflight.SubjectHash + `","findings":[],"evidence":["reviewed"]}`
+		store, err := reviewtransaction.NewLineageAuthorityStore(context.Background(), repo, lineage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := reviewtransaction.NewLineageArtifactManifestForAuthority(context.Background(), repo, record.Authority)
+		if err != nil {
+			t.Fatal(err)
+		}
+		paths := make([]string, len(manifest))
+		for index, entry := range manifest {
+			paths[index] = entry.Path
+		}
+		pathsJSON, err := json.Marshal(paths)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload := `{"subject_hash":"` + preflight.SubjectHash + `","inspection":{"status":"completed","paths":` + string(pathsJSON) + `},"findings":[],"evidence":["reviewed"]}`
 		if err := os.WriteFile(inputPath, []byte(payload), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -97,6 +118,31 @@ func captureNewLineageLensResults(t *testing.T, repo, lineage string, lenses []s
 			t.Fatalf("capture-result for lens %q did not echo the preflight subject hash: got %q want %q", lens, result.SubjectHash, preflight.SubjectHash)
 		}
 	}
+}
+
+func newLineageInspectionJSON(t *testing.T, repo, lineage string) string {
+	t.Helper()
+	store, err := reviewtransaction.NewLineageAuthorityStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := reviewtransaction.NewLineageArtifactManifestForAuthority(context.Background(), repo, record.Authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := make([]string, len(manifest))
+	for index, entry := range manifest {
+		paths[index] = entry.Path
+	}
+	payload, err := json.Marshal(reviewtransaction.ArtifactInspection{Status: reviewtransaction.ArtifactInspectionCompleted, Paths: paths})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(payload)
 }
 
 // TestReviewFacadeCaptureResultNewLineage_MediumTierFinalizeAllowsAllFiveGates
@@ -188,6 +234,7 @@ func TestReviewFacadeCaptureResultNewLineage_ReviewerClassificationIsNotConsumed
 	inputPath := filepath.Join(t.TempDir(), "blocker.json")
 	payload := `{
 		"subject_hash": "` + preflight.SubjectHash + `",
+		"inspection": ` + newLineageInspectionJSON(t, repo, lineage) + `,
 		"findings": [{
 			"id": "R3-boom-div-zero",
 			"lens": "` + lens + `",
@@ -266,6 +313,7 @@ func TestReviewFacadeCaptureResultNewLineage_NonCausalFindingDoesNotBlock(t *tes
 	inputPath := filepath.Join(t.TempDir(), "pre-existing.json")
 	payload := `{
 		"subject_hash": "` + preflight.SubjectHash + `",
+		"inspection": ` + newLineageInspectionJSON(t, repo, lineage) + `,
 		"findings": [{
 			"id": "pre-existing-finding",
 			"lens": "` + lens + `",

@@ -97,6 +97,80 @@ func TestCaptureLensResult_RejectsSubjectHashMismatch(t *testing.T) {
 	}
 }
 
+func TestNewLineageAuthorityValidateRejectsCapturedBindingTampering(t *testing.T) {
+	_, record := newLineageCaptureFixtureStore(t, []string{"review-reliability", "review-risk"})
+	subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
+	valid := record.Authority
+	valid.CapturedResults = []NewLineageCapturedResult{{Lens: "review-reliability", Order: 0, SubjectHash: subject}}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid captured binding: %v", err)
+	}
+	for _, tt := range []struct {
+		name   string
+		mutate func(*NewLineageAuthority)
+	}{
+		{name: "order mismatch", mutate: func(authority *NewLineageAuthority) { authority.CapturedResults[0].Order = 1 }},
+		{name: "derived subject hash mismatch", mutate: func(authority *NewLineageAuthority) {
+			authority.CapturedResults[0].SubjectHash = "sha256:" + strings.Repeat("f", 64)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := valid
+			tt.mutate(&candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("accepted manipulated captured binding")
+			}
+		})
+	}
+}
+
+func TestNewLineageArtifactBindingRequiresCompleteOrderedInspection(t *testing.T) {
+	_, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
+	manifest := []ChangedPathManifestEntry{{Path: "a.go", Status: CandidatePathModified, OldMode: "100644", NewMode: "100644"}}
+	digest, err := ChangedPathManifestDigest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjectHash := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
+	binding := NewLineageArtifactBinding{
+		Subject:    NewLineageArtifactSubject{Schema: "gentle-ai.new-lineage-artifact-subject/v1", SubjectHash: subjectHash, LineageID: record.Authority.LineageID, RepositoryID: record.Authority.CandidateIdentity.RepositoryID, BaseTree: record.Authority.CandidateIdentity.BaseTree, CandidateTree: record.Authority.CandidateIdentity.CandidateTree, ChangedPathManifestSHA256: digest, Lens: "review-reliability", SelectedOrder: 0},
+		Inspection: ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: []string{"a.go"}}, Manifest: manifest,
+	}
+	if err := binding.Validate(record.Authority, "review-reliability", 0, subjectHash); err != nil {
+		t.Fatalf("valid binding: %v", err)
+	}
+	for _, mutate := range []struct {
+		name string
+		edit func(*NewLineageArtifactBinding)
+	}{
+		{name: "incomplete", edit: func(value *NewLineageArtifactBinding) { value.Inspection.Paths = nil }},
+		{name: "out of order", edit: func(value *NewLineageArtifactBinding) { value.Inspection.Paths = []string{"z.go", "a.go"} }},
+		{name: "manifest tampered", edit: func(value *NewLineageArtifactBinding) { value.Manifest[0].Path = "tampered.go" }},
+		{name: "subject tampered", edit: func(value *NewLineageArtifactBinding) { value.Subject.CandidateTree = "tampered" }},
+	} {
+		t.Run(mutate.name, func(t *testing.T) {
+			candidate := binding
+			mutate.edit(&candidate)
+			if err := candidate.Validate(record.Authority, "review-reliability", 0, subjectHash); err == nil {
+				t.Fatal("accepted altered or incomplete artifact binding")
+			}
+		})
+	}
+}
+
+func TestCaptureLensResultWithProviderEvidencePersistsArtifactBinding(t *testing.T) {
+	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
+	subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
+	updated, err := store.CaptureLensResultWithProviderEvidenceAndInspection(context.Background(), record.Revision, "review-reliability", 0, subject, ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: []string{}}, nil)
+	if err != nil {
+		t.Fatalf("capture with complete inspection: %v", err)
+	}
+	captured := updated.Authority.CapturedResults[0]
+	if captured.Provider.ArtifactBinding.Subject.SubjectHash != subject || captured.Provider.ArtifactBinding.Inspection.Status != ArtifactInspectionCompleted || captured.Provider.AggregateDigest == "" {
+		t.Fatalf("persisted artifact binding = %#v", captured.Provider.ArtifactBinding)
+	}
+}
+
 // TestCaptureLensResult_OneShotNoReopen proves C-A's explicit scope
 // boundary: recapturing the SAME lens with the IDENTICAL subject hash is an
 // idempotent no-op (Mutate's own byte-identical replay path), but a

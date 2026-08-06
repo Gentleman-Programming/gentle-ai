@@ -245,6 +245,7 @@ func TestReviewCoreFinalizeRejectsForgedAdmittedFindingIDs(t *testing.T) {
 		"lens-a": {ProviderCandidateCausal}, "lens-b": nil,
 	})
 	authority.LineageID = "finalize-forged-id-lineage"
+	refreshProviderArtifactBindings(&authority)
 	_, err := (ReviewCore{}).Next(context.Background(), authority, CoreRequest{
 		Kind: CoreRequestFinalize,
 		AdvanceRequest: &FinalizeAdvanceRequest{
@@ -261,6 +262,7 @@ func TestReviewCoreFinalizeUsesProviderDerivedCandidateIDs(t *testing.T) {
 		"lens-a": {ProviderCandidateCausal}, "lens-b": nil,
 	})
 	authority.LineageID = "finalize-provider-id-lineage"
+	refreshProviderArtifactBindings(&authority)
 	transition, err := (ReviewCore{}).Next(context.Background(), authority, CoreRequest{
 		Kind:           CoreRequestFinalize,
 		AdvanceRequest: &FinalizeAdvanceRequest{CapturedLensResults: []string{"lens-a", "lens-b"}},

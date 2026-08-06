@@ -30,8 +30,102 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 )
+
+// NewLineageArtifactSubject is the small v3 subject adapter. It carries the
+// provider-owned identity needed by the carrier without importing compact-v2's
+// authority, admission, or reopen lifecycle.
+type NewLineageArtifactSubject struct {
+	Schema                    string `json:"schema"`
+	SubjectHash               string `json:"subject_hash"`
+	LineageID                 string `json:"lineage_id"`
+	RepositoryID              string `json:"repository_id"`
+	BaseTree                  string `json:"base_tree"`
+	CandidateTree             string `json:"candidate_tree"`
+	ChangedPathManifestSHA256 string `json:"changed_path_manifest_sha256"`
+	Lens                      string `json:"lens"`
+	SelectedOrder             int    `json:"selected_order"`
+}
+
+type NewLineageArtifactBinding struct {
+	Subject    NewLineageArtifactSubject  `json:"subject"`
+	Inspection ArtifactInspection         `json:"inspection"`
+	Manifest   []ChangedPathManifestEntry `json:"manifest"`
+}
+
+func (binding NewLineageArtifactBinding) Validate(authority NewLineageAuthority, lens string, order int, subjectHash string) error {
+	if binding.Subject.Schema != "gentle-ai.new-lineage-artifact-subject/v1" || binding.Subject.SubjectHash != subjectHash || binding.Subject.SubjectHash != NewLineageArtifactSubjectHash(authority, lens, order) || binding.Subject.LineageID != authority.LineageID || binding.Subject.RepositoryID != authority.CandidateIdentity.RepositoryID || binding.Subject.BaseTree != authority.CandidateIdentity.BaseTree || binding.Subject.CandidateTree != authority.CandidateIdentity.CandidateTree || binding.Subject.Lens != lens || binding.Subject.SelectedOrder != order {
+		return errors.New("new-lineage artifact subject does not bind the frozen authority") // refusal:by-design operator-knowledge: altered provider identity requires a fresh capture
+	}
+	if err := ValidateChangedPathManifest(binding.Manifest); err != nil {
+		return fmt.Errorf("new-lineage artifact manifest is invalid: %w", err)
+	}
+	manifestDigest, err := ChangedPathManifestDigest(binding.Manifest)
+	if err != nil || manifestDigest != binding.Subject.ChangedPathManifestSHA256 {
+		return errors.New("new-lineage artifact subject manifest digest does not match") // refusal:by-design operator-knowledge: altered frozen-path evidence cannot be repaired during replay
+	}
+	if binding.Inspection.Status != ArtifactInspectionCompleted {
+		return errors.New("new-lineage artifact inspection is not completed") // refusal:by-design operator-knowledge: incomplete provider inspection requires a fresh completed capture
+	}
+	want := make([]string, len(binding.Manifest))
+	for index, entry := range binding.Manifest {
+		want[index] = entry.Path
+	}
+	paths, err := canonicalPaths(binding.Inspection.Paths)
+	if err != nil || !equalStrings(paths, binding.Inspection.Paths) || !equalStrings(paths, want) {
+		return errors.New("new-lineage artifact inspection does not cover the frozen manifest in order") // refusal:by-design operator-knowledge: the provider must resubmit exact ordered inspection coverage
+	}
+	return nil
+}
+
+func NewLineageArtifactBindingForAuthority(ctx context.Context, repo string, authority NewLineageAuthority, lens string, order int, inspection ArtifactInspection) (NewLineageArtifactBinding, error) {
+	if order < 0 || order >= len(authority.SelectedLenses) || authority.SelectedLenses[order] != lens {
+		return NewLineageArtifactBinding{}, ErrNewLineageCaptureLensNotSelected
+	}
+	manifest, err := NewLineageArtifactManifestForAuthority(ctx, repo, authority)
+	if err != nil {
+		return NewLineageArtifactBinding{}, err
+	}
+	if err := ValidateChangedPathManifest(manifest); err != nil {
+		return NewLineageArtifactBinding{}, err
+	}
+	manifestDigest, err := ChangedPathManifestDigest(manifest)
+	if err != nil {
+		return NewLineageArtifactBinding{}, err
+	}
+	binding := NewLineageArtifactBinding{Subject: NewLineageArtifactSubject{Schema: "gentle-ai.new-lineage-artifact-subject/v1", SubjectHash: NewLineageArtifactSubjectHash(authority, lens, order), LineageID: authority.LineageID, RepositoryID: authority.CandidateIdentity.RepositoryID, BaseTree: authority.CandidateIdentity.BaseTree, CandidateTree: authority.CandidateIdentity.CandidateTree, ChangedPathManifestSHA256: manifestDigest, Lens: lens, SelectedOrder: order}, Inspection: inspection, Manifest: manifest}
+	if err := binding.Validate(authority, lens, order, binding.Subject.SubjectHash); err != nil {
+		return NewLineageArtifactBinding{}, err
+	}
+	return binding, nil
+}
+
+func NewLineageArtifactManifestForAuthority(ctx context.Context, repo string, authority NewLineageAuthority) ([]ChangedPathManifestEntry, error) {
+	raw, err := runGitIsolated(ctx, repo, nil, nil, "diff", "--raw", "-z", "--full-index", "--no-renames", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", authority.CandidateIdentity.BaseTree, authority.CandidateIdentity.CandidateTree, "--")
+	if err != nil {
+		return nil, fmt.Errorf("render frozen new-lineage manifest: %w", err)
+	}
+	modes, err := parseRawDiffModes(raw)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(modes))
+	for path := range modes {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	manifest := make([]ChangedPathManifestEntry, 0, len(paths))
+	for _, path := range paths {
+		diff := modes[path]
+		manifest = append(manifest, ChangedPathManifestEntry{Path: path, Status: diff.status, OldMode: diff.oldMode, NewMode: diff.newMode, Deleted: diff.status == CandidatePathDeleted, TypeChanged: diff.status == CandidatePathTypeChanged, ModeOnly: diff.status == CandidatePathModified && diff.oldObject == diff.newObject && diff.oldMode != diff.newMode})
+	}
+	if err := ValidateChangedPathManifest(manifest); err != nil {
+		return nil, err
+	}
+	return manifest, nil
+}
 
 // NewLineageArtifactSubjectHash is C-A's minimal provider-owned binding: it
 // proves a reviewer result was computed against THIS exact frozen authority
@@ -153,7 +247,15 @@ func (store AuthorityStore) CaptureLensResult(ctx context.Context, expectedRevis
 // seam. Reviewer classifications are claims only; DeriveProviderCausalCarrier
 // computes the persisted authority from the frozen candidate identity.
 func (store AuthorityStore) CaptureLensResultWithProviderEvidence(ctx context.Context, expectedRevision, lens string, order int, subjectHash string, claims []ProviderCausalEvidence) (NewLineageRecord, error) {
+	return store.CaptureLensResultWithProviderEvidenceAndInspection(ctx, expectedRevision, lens, order, subjectHash, ArtifactInspection{}, claims)
+}
+
+func (store AuthorityStore) CaptureLensResultWithProviderEvidenceAndInspection(ctx context.Context, expectedRevision, lens string, order int, subjectHash string, inspection ArtifactInspection, claims []ProviderCausalEvidence) (NewLineageRecord, error) {
 	record, err := store.Load()
+	if err != nil {
+		return NewLineageRecord{}, err
+	}
+	binding, err := NewLineageArtifactBindingForAuthority(ctx, store.repo, record.Authority, lens, order, inspection)
 	if err != nil {
 		return NewLineageRecord{}, err
 	}
@@ -172,6 +274,9 @@ func (store AuthorityStore) CaptureLensResultWithProviderEvidence(ctx context.Co
 		if subjectHash != want {
 			return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureSubjectMismatch, next.LineageID, lens)
 		}
+		if err := binding.Validate(*next, lens, order, subjectHash); err != nil {
+			return err
+		}
 		for _, existing := range next.CapturedResults {
 			if existing.Lens != lens {
 				continue
@@ -181,6 +286,8 @@ func (store AuthorityStore) CaptureLensResultWithProviderEvidence(ctx context.Co
 			}
 			return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureConflict, next.LineageID, lens)
 		}
+		carrier.ArtifactBinding = binding
+		carrier.AggregateDigest = providerAggregateDigest(carrier)
 		next.CapturedResults = append(next.CapturedResults, NewLineageCapturedResult{Lens: lens, Order: order, SubjectHash: subjectHash, Provider: carrier})
 		return nil
 	}); err != nil {

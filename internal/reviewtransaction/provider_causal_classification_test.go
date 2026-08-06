@@ -18,16 +18,32 @@ func providerAdmissionFixture(t *testing.T, findingsByLens map[string][]Provider
 	candidate := CandidateIdentity{RepositoryID: "provider-admission", BaseTree: strings.TrimSpace(string(treeOutput)), CandidateTree: strings.TrimSpace(string(treeOutput))}
 	authority := NewLineageAuthority{LineageID: "provider-admission", State: NewLineageStateReviewing, CandidateIdentity: candidate, Tier: RiskMedium, SelectedLenses: []string{"lens-a", "lens-b"}}
 	for lens, classifications := range findingsByLens {
-		carrier := ProviderCausalCarrier{SubjectHash: "sha256:" + strings.Repeat(string(lens[len(lens)-1]), 64), CandidateIdentity: candidate}
+		order := stringIndex(authority.SelectedLenses, lens)
+		binding, err := NewLineageArtifactBindingForAuthority(context.Background(), repo, authority, lens, order, ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: []string{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		carrier := ProviderCausalCarrier{SubjectHash: binding.Subject.SubjectHash, CandidateIdentity: candidate, ArtifactBinding: binding}
 		for index, classification := range classifications {
-			finding := ProviderCausalFinding{FindingID: "finding-" + string(lens[len(lens)-1]) + string(rune('0'+index)), Classification: classification}
+			finding := ProviderCausalFinding{FindingID: "finding-" + string(lens[len(lens)-1]) + string(rune('0'+index)), Location: "fixture.go:1", ProofRefs: []string{"fixture.go:1"}, Classification: classification}
 			finding.EvidenceDigest = providerFindingDigest(finding)
 			carrier.Findings = append(carrier.Findings, finding)
 		}
 		carrier.AggregateDigest = providerAggregateDigest(carrier)
-		authority.CapturedResults = append(authority.CapturedResults, NewLineageCapturedResult{Lens: lens, SubjectHash: carrier.SubjectHash, Provider: carrier})
+		authority.CapturedResults = append(authority.CapturedResults, NewLineageCapturedResult{Lens: lens, Order: order, SubjectHash: carrier.SubjectHash, Provider: carrier})
 	}
 	return authority, authority.CapturedResults[0].Provider
+}
+
+func refreshProviderArtifactBindings(authority *NewLineageAuthority) {
+	for index := range authority.CapturedResults {
+		captured := &authority.CapturedResults[index]
+		captured.SubjectHash = NewLineageArtifactSubjectHash(*authority, captured.Lens, captured.Order)
+		captured.Provider.SubjectHash = captured.SubjectHash
+		captured.Provider.ArtifactBinding.Subject.LineageID = authority.LineageID
+		captured.Provider.ArtifactBinding.Subject.SubjectHash = captured.SubjectHash
+		captured.Provider.AggregateDigest = providerAggregateDigest(captured.Provider)
+	}
 }
 
 func TestProviderCausalAdmissionTable(t *testing.T) {
@@ -167,10 +183,13 @@ func TestDeriveProviderCausalCarrier(t *testing.T) {
 		claim ProviderCausalEvidence
 		want  ProviderCausalClassification
 	}{
-		{name: "changed line is candidate causal", claim: ProviderCausalEvidence{FindingID: "changed", Location: "changed.go:3", Classification: ProviderProvenNonCandidate}, want: ProviderCandidateCausal},
+		{name: "changed line is candidate causal with affirmative proof", claim: ProviderCausalEvidence{FindingID: "changed", Location: "changed.go:3", ProofRefs: []string{"changed.go:3"}, Classification: ProviderProvenNonCandidate}, want: ProviderCandidateCausal},
+		{name: "changed line without proof is unknown", claim: ProviderCausalEvidence{FindingID: "changed-empty-proof", Location: "changed.go:3", Classification: ProviderCandidateCausal}, want: ProviderUnknown},
+		{name: "changed line with free-form proof is unknown", claim: ProviderCausalEvidence{FindingID: "changed-free-form-proof", Location: "changed.go:3", ProofRefs: []string{"reviewer-note"}, Classification: ProviderCandidateCausal}, want: ProviderUnknown},
 		{name: "unchanged line in changed file is unknown", claim: ProviderCausalEvidence{FindingID: "stable", Location: "changed.go:4", Classification: ProviderProvenNonCandidate}, want: ProviderUnknown},
 		{name: "unchanged path is non candidate", claim: ProviderCausalEvidence{FindingID: "same", Location: "same.go:3", Classification: ProviderCandidateCausal}, want: ProviderProvenNonCandidate},
-		{name: "behavior claim without differential proof is unknown", claim: ProviderCausalEvidence{FindingID: "behavior", Location: "changed.go:4", Classification: "behavior-activated"}, want: ProviderUnknown},
+		{name: "behavior claim on changed line without verifiable proof is unknown", claim: ProviderCausalEvidence{FindingID: "behavior", Location: "changed.go:3", ProofRefs: []string{"reviewer-note"}, Classification: "behavior-activated"}, want: ProviderUnknown},
+		{name: "behavior claim with two refs is still only ordinary proof", claim: ProviderCausalEvidence{FindingID: "behavior-two-refs", Location: "changed.go:3", ProofRefs: []string{"changed.go:3", "same.go:3"}, Classification: "behavior-activated"}, want: ProviderCandidateCausal},
 	}
 	repo, candidate := providerCandidateFixture(t)
 	for _, tt := range table {
@@ -232,16 +251,26 @@ func TestDeriveProviderCausalCarrierRejectsConflictingDuplicateIDs(t *testing.T)
 func TestProviderReviewerClassificationDoesNotChangeCarrier(t *testing.T) {
 	repo, candidate := providerCandidateFixture(t)
 	base := ProviderCausalEvidence{FindingID: "same", Location: "same.go:3", ProofRefs: []string{"same.go:3"}}
-	first, err := DeriveProviderCausalCarrier(context.Background(), repo, "sha256:"+strings.Repeat("a", 64), candidate, []ProviderCausalEvidence{{FindingID: base.FindingID, Location: base.Location, ProofRefs: base.ProofRefs, Classification: ProviderCandidateCausal}})
+	for _, claim := range []ProviderCausalEvidence{
+		{FindingID: "same", Location: "same.go:3", ProofRefs: []string{"same.go:3"}},
+		{FindingID: "changed", Location: "changed.go:3", ProofRefs: []string{"changed.go:3"}},
+		{FindingID: "unproven-behavior", Location: "changed.go:3", ProofRefs: []string{"reviewer-note"}},
+	} {
+		first, err := DeriveProviderCausalCarrier(context.Background(), repo, "sha256:"+strings.Repeat("a", 64), candidate, []ProviderCausalEvidence{{FindingID: claim.FindingID, Location: claim.Location, ProofRefs: claim.ProofRefs, Classification: ProviderCandidateCausal}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := DeriveProviderCausalCarrier(context.Background(), repo, "sha256:"+strings.Repeat("a", 64), candidate, []ProviderCausalEvidence{{FindingID: claim.FindingID, Location: claim.Location, ProofRefs: claim.ProofRefs, Classification: "behavior-activated"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first.AggregateDigest != second.AggregateDigest || first.Findings[0].Classification != second.Findings[0].Classification {
+			t.Fatalf("reviewer classification changed provider result for %q: first=%#v second=%#v", claim.FindingID, first, second)
+		}
+	}
+	first, err := DeriveProviderCausalCarrier(context.Background(), repo, "sha256:"+strings.Repeat("a", 64), candidate, []ProviderCausalEvidence{{FindingID: "same", Location: "same.go:3", ProofRefs: []string{"same.go:3"}, Classification: ProviderCandidateCausal}})
 	if err != nil {
 		t.Fatal(err)
-	}
-	second, err := DeriveProviderCausalCarrier(context.Background(), repo, "sha256:"+strings.Repeat("a", 64), candidate, []ProviderCausalEvidence{{FindingID: base.FindingID, Location: base.Location, ProofRefs: base.ProofRefs, Classification: "behavior-activated"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.AggregateDigest != second.AggregateDigest || first.Findings[0].Classification != ProviderProvenNonCandidate || second.Findings[0].Classification != ProviderProvenNonCandidate {
-		t.Fatalf("reviewer classification changed provider result: first=%#v second=%#v", first, second)
 	}
 	changedProof, err := DeriveProviderCausalCarrier(context.Background(), repo, "sha256:"+strings.Repeat("a", 64), candidate, []ProviderCausalEvidence{{FindingID: base.FindingID, Location: base.Location, ProofRefs: []string{"other-proof"}}})
 	if err != nil {
@@ -280,5 +309,43 @@ func TestDeriveProviderCausalCarrierUnknownFailClosed(t *testing.T) {
 	}
 	if carrier.Findings[0].Classification != ProviderUnknown {
 		t.Fatalf("classification = %q, want unknown", carrier.Findings[0].Classification)
+	}
+}
+
+func TestProviderCausalCarrierRejectsNonCanonicalPersistedEvidence(t *testing.T) {
+	base := ProviderCausalFinding{FindingID: "a", Location: "changed.go:3", ProofRefs: []string{"changed.go:3"}, Classification: ProviderCandidateCausal}
+	second := ProviderCausalFinding{FindingID: "b", Location: "changed.go:3", ProofRefs: []string{"changed.go:3"}, Classification: ProviderCandidateCausal}
+	for _, tt := range []struct {
+		name   string
+		mutate func(*ProviderCausalCarrier)
+	}{
+		{name: "findings out of order", mutate: func(carrier *ProviderCausalCarrier) {
+			carrier.Findings[0], carrier.Findings[1] = carrier.Findings[1], carrier.Findings[0]
+		}},
+		{name: "duplicate finding ids", mutate: func(carrier *ProviderCausalCarrier) {
+			carrier.Findings[1].FindingID = carrier.Findings[0].FindingID
+		}},
+		{name: "proof refs out of order", mutate: func(carrier *ProviderCausalCarrier) {
+			carrier.Findings[0].ProofRefs = []string{"z.go:3", "a.go:3"}
+		}},
+		{name: "duplicate proof refs", mutate: func(carrier *ProviderCausalCarrier) {
+			carrier.Findings[0].ProofRefs = []string{"changed.go:3", "changed.go:3"}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			carrier := ProviderCausalCarrier{SubjectHash: "sha256:" + strings.Repeat("a", 64), Findings: []ProviderCausalFinding{base, second}}
+			for index := range carrier.Findings {
+				carrier.Findings[index].EvidenceDigest = providerFindingDigest(carrier.Findings[index])
+			}
+			carrier.AggregateDigest = providerAggregateDigest(carrier)
+			tt.mutate(&carrier)
+			for index := range carrier.Findings {
+				carrier.Findings[index].EvidenceDigest = providerFindingDigest(carrier.Findings[index])
+			}
+			carrier.AggregateDigest = providerAggregateDigest(carrier)
+			if err := carrier.Validate(); err == nil {
+				t.Fatal("accepted non-canonical persisted provider evidence")
+			}
+		})
 	}
 }

@@ -21,8 +21,9 @@ import (
 // `review status` -> all-five-gates journey, using a fully deterministic
 // fixture (fixed tracked content, fixed lineage name) so the resulting Git
 // tree/blob hashes -- and therefore every downstream digest except the
-// path-bound authority revision, which the comparison normalizes (see
-// byteEquivalenceCommitARevisionPlaceholder) -- are byte-stable across
+// path/revision-bound digests, which the comparison normalizes (see
+// byteEquivalenceCommitARevisionPlaceholder and
+// byteEquivalenceCommitAProviderAggregateDigestPlaceholder) -- are byte-stable across
 // machines and runs. WU18 re-runs the identical fixture switch-free and
 // diffs against these exact golden files under the same normalization; any
 // divergence is a defect signal (design decision 4), never a golden-update
@@ -58,6 +59,7 @@ const byteEquivalenceCommitALineage = "byte-equivalence-commit-a-lineage"
 // switch-free under this same normalization; divergence in any
 // path-independent byte remains a defect signal, never a golden-update task.
 const byteEquivalenceCommitARevisionPlaceholder = "sha256:{{path-dependent-authority-revision}}"
+const byteEquivalenceCommitAProviderAggregateDigestPlaceholder = "sha256:{{path-dependent-provider-causal-aggregate-digest}}"
 
 var byteEquivalenceCommitARevisionPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
@@ -83,7 +85,7 @@ func byteEquivalenceCommitAFixturePath(t *testing.T) string {
 // the five gates requires to ever allow. It returns the repository path and
 // the authority revision digest captured from the finalize receipt; every
 // later surface must echo exactly that digest for its golden to match.
-func byteEquivalenceCommitAFixture(t *testing.T) (string, string) {
+func byteEquivalenceCommitAFixture(t *testing.T) (string, string, string) {
 	t.Helper()
 	reviewModeHome(t)
 	repo := byteEquivalenceCommitAFixturePath(t)
@@ -119,55 +121,59 @@ func byteEquivalenceCommitAFixture(t *testing.T) (string, string) {
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", byteEquivalenceCommitALineage}, &startOut); err != nil {
 		t.Fatalf("byte-equivalence fixture start: %v\n%s", err, startOut.String())
 	}
-	assertByteEquivalenceCommitAGolden(t, filepath.Join("testdata", "byte_equivalence_commit_a", "start.golden.json"), startOut.Bytes(), "")
+	assertByteEquivalenceCommitAGolden(t, filepath.Join("testdata", "byte_equivalence_commit_a", "start.golden.json"), startOut.Bytes(), "", "")
 
 	var finalizeOut bytes.Buffer
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", byteEquivalenceCommitALineage}, &finalizeOut); err != nil {
 		t.Fatalf("byte-equivalence fixture finalize: %v\n%s", err, finalizeOut.String())
 	}
-	revision := byteEquivalenceCommitAReceiptRevision(t, finalizeOut.Bytes())
-	assertByteEquivalenceCommitAGolden(t, filepath.Join("testdata", "byte_equivalence_commit_a", "finalize.golden.json"), finalizeOut.Bytes(), revision)
+	revision, aggregateDigest := byteEquivalenceCommitAReceiptDigests(t, finalizeOut.Bytes())
+	assertByteEquivalenceCommitAGolden(t, filepath.Join("testdata", "byte_equivalence_commit_a", "finalize.golden.json"), finalizeOut.Bytes(), revision, aggregateDigest)
 
-	return repo, revision
+	return repo, revision, aggregateDigest
 }
 
-// byteEquivalenceCommitAReceiptRevision extracts and validates the authority
-// revision digest from the finalize response. This is the one value the
-// golden comparison normalizes, so it must at least prove it is a
-// well-formed sha256 digest before it earns the placeholder.
-func byteEquivalenceCommitAReceiptRevision(t *testing.T, finalizeResponse []byte) string {
+// byteEquivalenceCommitAReceiptDigests extracts and validates the
+// path/revision-dependent digests from the finalize response before they earn
+// placeholders.
+func byteEquivalenceCommitAReceiptDigests(t *testing.T, finalizeResponse []byte) (string, string) {
 	t.Helper()
 	var response struct {
 		Receipt struct {
-			AuthorityRevision string `json:"authority_revision"`
+			AuthorityRevision             string `json:"authority_revision"`
+			ProviderCausalAggregateDigest string `json:"provider_causal_aggregate_digest"`
 		} `json:"receipt"`
 	}
 	if err := json.Unmarshal(finalizeResponse, &response); err != nil {
-		t.Fatalf("decode finalize response for authority revision: %v\n%s", err, finalizeResponse)
+		t.Fatalf("decode finalize response for path/revision-dependent digests: %v\n%s", err, finalizeResponse)
 	}
 	revision := response.Receipt.AuthorityRevision
 	if !byteEquivalenceCommitARevisionPattern.MatchString(revision) {
 		t.Fatalf("finalize receipt authority_revision = %q, want sha256:<64 hex>", revision)
 	}
-	return revision
+	aggregateDigest := response.Receipt.ProviderCausalAggregateDigest
+	if !byteEquivalenceCommitARevisionPattern.MatchString(aggregateDigest) {
+		t.Fatalf("finalize receipt provider_causal_aggregate_digest = %q, want sha256:<64 hex>", aggregateDigest)
+	}
+	return revision, aggregateDigest
 }
 
 // TestReviewByteEquivalenceCommitAUnnegotiatedStartAndFinalize proves the
 // start/finalize response bytes are byte-stable now, at Commit A time.
 func TestReviewByteEquivalenceCommitAUnnegotiatedStartAndFinalize(t *testing.T) {
-	_, _ = byteEquivalenceCommitAFixture(t)
+	_, _, _ = byteEquivalenceCommitAFixture(t)
 }
 
 // TestReviewByteEquivalenceCommitAStatus proves `review status`'s response
 // bytes for the terminal (approved, receipted) lineage are byte-stable.
 func TestReviewByteEquivalenceCommitAStatus(t *testing.T) {
-	repo, revision := byteEquivalenceCommitAFixture(t)
+	repo, revision, aggregateDigest := byteEquivalenceCommitAFixture(t)
 
 	var statusOut bytes.Buffer
 	if err := RunReviewStatus([]string{"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--lineage", byteEquivalenceCommitALineage}, &statusOut); err != nil {
 		t.Fatalf("byte-equivalence fixture status: %v\n%s", err, statusOut.String())
 	}
-	assertByteEquivalenceCommitAGolden(t, filepath.Join("testdata", "byte_equivalence_commit_a", "status.golden.json"), statusOut.Bytes(), revision)
+	assertByteEquivalenceCommitAGolden(t, filepath.Join("testdata", "byte_equivalence_commit_a", "status.golden.json"), statusOut.Bytes(), revision, aggregateDigest)
 }
 
 func TestReviewByteEquivalenceCommitAGatePostApply(t *testing.T) {
@@ -192,7 +198,7 @@ func TestReviewByteEquivalenceCommitAGateRelease(t *testing.T) {
 
 func assertReviewByteEquivalenceCommitAGate(t *testing.T, gate reviewtransaction.GateKind) {
 	t.Helper()
-	repo, revision := byteEquivalenceCommitAFixture(t)
+	repo, revision, aggregateDigest := byteEquivalenceCommitAFixture(t)
 
 	args := []string{"--cwd", repo, "--lineage", byteEquivalenceCommitALineage, "--gate", string(gate)}
 	if gate == reviewtransaction.GateRelease {
@@ -222,7 +228,7 @@ func assertReviewByteEquivalenceCommitAGate(t *testing.T, gate reviewtransaction
 		t.Fatalf("byte-equivalence fixture gate %s: %v\n%s", gate, err, gateOut.String())
 	}
 	assertReviewGateResult(t, gateOut.Bytes(), reviewtransaction.GateAllow)
-	assertByteEquivalenceCommitAGolden(t, filepath.Join("testdata", "byte_equivalence_commit_a", "gate-"+string(gate)+".golden.json"), gateOut.Bytes(), revision)
+	assertByteEquivalenceCommitAGolden(t, filepath.Join("testdata", "byte_equivalence_commit_a", "gate-"+string(gate)+".golden.json"), gateOut.Bytes(), revision, aggregateDigest)
 }
 
 // assertByteEquivalenceCommitAGolden is the identical -update convention
@@ -230,14 +236,17 @@ func assertReviewByteEquivalenceCommitAGate(t *testing.T, gate reviewtransaction
 // (`reviewNewLineageSwitchOffGolden`), reused under a distinct flag so
 // regenerating Commit A's baseline is a deliberate, separately-named action
 // from regenerating the switch-off goldens. A non-empty revision is the
-// digest captured from this run's finalize receipt: exactly that value is
-// replaced with byteEquivalenceCommitARevisionPlaceholder before comparison,
-// so a surface that emits any OTHER revision still diverges byte-for-byte.
-func assertByteEquivalenceCommitAGolden(t *testing.T, path string, got []byte, revision string) {
+// digests captured from this run's finalize receipt: exactly those values are
+// replaced with their respective placeholders before comparison, so a surface
+// that emits any OTHER path/revision-dependent digest still diverges byte-for-byte.
+func assertByteEquivalenceCommitAGolden(t *testing.T, path string, got []byte, revision, aggregateDigest string) {
 	t.Helper()
 	normalized := append(bytes.TrimRight(got, "\n"), '\n')
 	if revision != "" {
 		normalized = bytes.ReplaceAll(normalized, []byte(revision), []byte(byteEquivalenceCommitARevisionPlaceholder))
+	}
+	if aggregateDigest != "" {
+		normalized = bytes.ReplaceAll(normalized, []byte(aggregateDigest), []byte(byteEquivalenceCommitAProviderAggregateDigestPlaceholder))
 	}
 	if *updateReviewByteEquivalenceCommitAGolden {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

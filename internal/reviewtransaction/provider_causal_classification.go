@@ -44,10 +44,11 @@ type ProviderCausalFinding struct {
 }
 
 type ProviderCausalCarrier struct {
-	SubjectHash       string                  `json:"subject_hash"`
-	CandidateIdentity CandidateIdentity       `json:"candidate_identity"`
-	Findings          []ProviderCausalFinding `json:"findings"`
-	AggregateDigest   string                  `json:"aggregate_digest"`
+	SubjectHash       string                    `json:"subject_hash"`
+	CandidateIdentity CandidateIdentity         `json:"candidate_identity"`
+	ArtifactBinding   NewLineageArtifactBinding `json:"artifact_binding"`
+	Findings          []ProviderCausalFinding   `json:"findings"`
+	AggregateDigest   string                    `json:"aggregate_digest"`
 }
 
 var (
@@ -60,9 +61,16 @@ func (carrier ProviderCausalCarrier) Validate() error {
 		return errors.New("provider causal carrier requires a canonical subject hash") // refusal:by-design operator-knowledge: malformed persisted provider authority is an in-process integrity failure, not an operator-repairable state
 	}
 	seen := make(map[string]bool, len(carrier.Findings))
-	for _, finding := range carrier.Findings {
+	var previous ProviderCausalFinding
+	for index, finding := range carrier.Findings {
 		if finding.FindingID == "" || seen[finding.FindingID] {
 			return errors.New("provider causal carrier finding ids must be non-empty and unique") // refusal:by-design operator-knowledge: provider findings are canonicalized before persistence and malformed authority cannot be repaired safely in place
+		}
+		if index > 0 && (finding.FindingID < previous.FindingID || (finding.FindingID == previous.FindingID && finding.Location < previous.Location)) {
+			return errors.New("provider causal carrier findings must be in canonical order") // refusal:by-design operator-knowledge: persisted ordering is part of the canonical carrier and cannot be repaired during replay
+		}
+		if finding.Location != strings.TrimSpace(finding.Location) || !canonicalProviderProofRefsOrdered(finding.ProofRefs) {
+			return errors.New("provider causal carrier findings and proof refs must be canonical") // refusal:by-design operator-knowledge: persisted whitespace or duplicated evidence changes canonical authority
 		}
 		seen[finding.FindingID] = true
 		switch finding.Classification {
@@ -70,12 +78,19 @@ func (carrier ProviderCausalCarrier) Validate() error {
 		default:
 			return errors.New("provider causal carrier classification is unsupported") // refusal:by-design operator-knowledge: the provider classification domain is closed and unsupported persisted values indicate in-process corruption
 		}
+		if finding.Classification == ProviderCandidateCausal && (len(finding.ProofRefs) == 0 || !canonicalProviderProofRefsParseable(finding.ProofRefs)) {
+			return errors.New("provider causal carrier candidate-causal findings require proof refs") // refusal:by-design operator-knowledge: candidate causality requires affirmative evidence
+		}
 		if finding.EvidenceDigest != providerFindingDigest(finding) {
 			return errors.New("provider causal carrier finding digest does not match its content") // refusal:by-design operator-knowledge: a mismatched digest proves persisted authority corruption and must not be repaired by an operator
 		}
+		previous = finding
 	}
 	if carrier.AggregateDigest != providerAggregateDigest(carrier) {
 		return errors.New("provider causal carrier aggregate digest does not match its findings") // refusal:by-design operator-knowledge: aggregate integrity failure requires a fresh provider capture, not in-place operator repair
+	}
+	if carrier.ArtifactBinding.Subject.SubjectHash != "" && carrier.ArtifactBinding.Subject.SubjectHash != carrier.SubjectHash {
+		return errors.New("provider causal carrier artifact binding does not match its subject") // refusal:by-design operator-knowledge: a changed carrier binding requires fresh provider capture
 	}
 	return nil
 }
@@ -104,6 +119,9 @@ func (authority NewLineageAuthority) ProviderCausalAdmission() (admittedIDs []st
 		}
 		if captured.Provider.SubjectHash != captured.SubjectHash || captured.Provider.CandidateIdentity != authority.CandidateIdentity {
 			return nil, false, fmt.Errorf("invalid provider causal carrier binding for lens %q", captured.Lens) // refusal:by-design operator-knowledge: a binding mismatch proves persisted authority corruption
+		}
+		if err := captured.Provider.ArtifactBinding.Validate(authority, captured.Lens, captured.Order, captured.SubjectHash); err != nil {
+			return nil, false, fmt.Errorf("invalid provider artifact binding for lens %q: %w", captured.Lens, err)
 		}
 		byLens[captured.Lens] = captured.Provider
 	}
@@ -149,7 +167,7 @@ func (authority NewLineageAuthority) ProviderCausalAdmission() (admittedIDs []st
 // authority whose revision is being computed.
 func (authority NewLineageAuthority) ProviderCausalCarrierDigest() (string, error) {
 	type entry struct {
-		Lens, SubjectHash, AggregateDigest string
+		Lens, SubjectHash, AggregateDigest, ArtifactBindingDigest string
 	}
 	entries := make([]entry, 0, len(authority.CapturedResults))
 	for _, captured := range authority.CapturedResults {
@@ -159,7 +177,9 @@ func (authority NewLineageAuthority) ProviderCausalCarrierDigest() (string, erro
 		if captured.Provider.SubjectHash != captured.SubjectHash || captured.Provider.CandidateIdentity != authority.CandidateIdentity {
 			return "", errors.New("provider causal authority aggregate has an invalid carrier binding") // refusal:by-design operator-knowledge: replay must use the exact persisted provider binding
 		}
-		entries = append(entries, entry{captured.Lens, captured.SubjectHash, captured.Provider.AggregateDigest})
+		bindingPayload, _ := json.Marshal(captured.Provider.ArtifactBinding)
+		bindingSum := sha256.Sum256(append([]byte("gentle-ai.new-lineage-artifact-binding/v1\x00"), bindingPayload...))
+		entries = append(entries, entry{captured.Lens, captured.SubjectHash, captured.Provider.AggregateDigest, "sha256:" + hex.EncodeToString(bindingSum[:])})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Lens < entries[j].Lens })
 	payload, _ := json.Marshal(struct {
@@ -210,6 +230,27 @@ func canonicalProviderProofRefs(refs []string) []string {
 	return result
 }
 
+func canonicalProviderProofRefsOrdered(refs []string) bool {
+	for index, ref := range refs {
+		if ref == "" || ref != strings.TrimSpace(ref) {
+			return false
+		}
+		if index > 0 && refs[index-1] >= ref {
+			return false
+		}
+	}
+	return true
+}
+
+func canonicalProviderProofRefsParseable(refs []string) bool {
+	for _, ref := range refs {
+		if _, _, err := parseFindingLocation(ref); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func canonicalProviderClaims(claims []ProviderCausalEvidence) ([]ProviderCausalEvidence, error) {
 	result := append([]ProviderCausalEvidence(nil), claims...)
 	for i := range result {
@@ -256,10 +297,11 @@ func providerAggregateDigest(carrier ProviderCausalCarrier) string {
 		parts[i] = finding.EvidenceDigest
 	}
 	payload, _ := json.Marshal(struct {
-		SubjectHash string
-		Candidate   CandidateIdentity
-		Findings    []string
-	}{carrier.SubjectHash, carrier.CandidateIdentity, parts})
+		SubjectHash     string
+		Candidate       CandidateIdentity
+		ArtifactBinding NewLineageArtifactBinding
+		Findings        []string
+	}{carrier.SubjectHash, carrier.CandidateIdentity, carrier.ArtifactBinding, parts})
 	sum := sha256.Sum256(append([]byte("gentle-ai.provider-causal-aggregate/v1\x00"), payload...))
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
@@ -296,10 +338,13 @@ func DeriveProviderCausalCarrier(ctx context.Context, repo, subjectHash string, 
 }
 
 func frozenProofRefsValid(ctx context.Context, repo string, candidate CandidateIdentity, refs []string) bool {
+	if len(refs) == 0 {
+		return false
+	}
 	for _, ref := range refs {
 		path, line, err := parseFindingLocation(ref)
 		if err != nil {
-			continue // Free-form refs remain claims; location claims are checked below.
+			return false
 		}
 		if line <= 0 {
 			return false

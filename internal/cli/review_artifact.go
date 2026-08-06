@@ -1030,7 +1030,7 @@ func runReviewFacadeCaptureResultNewLineage(
 	if err != nil {
 		return err
 	}
-	if _, err := store.CaptureLensResultWithProviderEvidence(ctx, record.Revision, lens, order, result.SubjectHash, newLineageProviderClaims(result.Findings)); err != nil {
+	if _, err := store.CaptureLensResultWithProviderEvidenceAndInspection(ctx, record.Revision, lens, order, result.SubjectHash, result.Inspection, newLineageProviderClaims(result.Findings)); err != nil {
 		return reviewPreflightError(err)
 	}
 	return encodeReviewJSON(stdout, ReviewFacadeCaptureResultNewLineageResult{

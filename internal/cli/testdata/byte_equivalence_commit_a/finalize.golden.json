@@ -4,6 +4,7 @@
   "state": "approved",
   "receipt": {
     "lineage_id": "byte-equivalence-commit-a-lineage",
-    "authority_revision": "sha256:{{path-dependent-authority-revision}}"
+    "authority_revision": "sha256:{{path-dependent-authority-revision}}",
+    "provider_causal_aggregate_digest": "sha256:{{path-dependent-provider-causal-aggregate-digest}}"
   }
 }
