@@ -20,6 +20,9 @@ func RunSDDAttempt(args []string, stdout io.Writer) error {
 }
 
 func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
+	if operation, requested := sddAttemptHelpOperation(args); requested {
+		return renderSDDAttemptHelp(operation, stdout)
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("sdd-attempt requires %s", joinSDDAttemptOperations())
 	}
@@ -33,29 +36,29 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 
 	flags := flag.NewFlagSet("sdd-attempt "+operation, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	cwd := flags.String("cwd", "", "repository path")
-	change := flags.String("change", "", "SDD change")
-	expected := flags.String("expected-revision", "", "exact native runtime revision")
-	token := flags.String("token", "", "opaque compact attempt continuation")
-	requestID := flags.String("request-id", "", "idempotency request identifier")
-	workUnit := flags.String("work-unit", "", "caller-facing work-unit label")
-	evidenceGoal := flags.String("evidence-goal", "", "stable runtime evidence objective")
-	maxAttempts := flags.Int("max-attempts", 0, "bounded attempts for a new objective")
-	maxChangedLines := flags.Int("max-changed-lines", 0, "bounded changed lines for a new objective")
-	outcome := flags.String("outcome", "", "failed, interrupted, or passed")
-	evidenceRevision := flags.String("evidence-revision", "", "native evidence revision")
-	diagnosis := flags.String("diagnosis", "", "proven runtime diagnosis")
-	harnessDisposition := flags.String("harness-disposition", "", "reused or invalidated")
-	cleanupEvidence := flags.String("cleanup-evidence", "", "bounded cleanup evidence")
-	processEvidence := flags.String("process-evidence", "", "bounded process evidence")
-	expectedBindingRevision := flags.String("expected-binding-revision", "", "exact populated binding revision for atomic remediation")
-	successorLineage := flags.String("successor-lineage", "", "approved compact recovery successor lineage")
-	remediatesEvidenceRevision := flags.String("remediates-evidence-revision", "", "failed evidence revision repaired by the successor")
-	reason := flags.String("reason", "", "explicit objective reset reason")
-	actor := flags.String("actor", "", "explicit reset actor")
+	cwd := registerSDDAttemptStringFlag(flags, operation, "cwd")
+	change := registerSDDAttemptStringFlag(flags, operation, "change")
+	expected := registerSDDAttemptStringFlag(flags, operation, "expected-revision")
+	token := registerSDDAttemptStringFlag(flags, operation, "token")
+	requestID := registerSDDAttemptStringFlag(flags, operation, "request-id")
+	workUnit := registerSDDAttemptStringFlag(flags, operation, "work-unit")
+	evidenceGoal := registerSDDAttemptStringFlag(flags, operation, "evidence-goal")
+	maxAttempts := registerSDDAttemptIntFlag(flags, operation, "max-attempts")
+	maxChangedLines := registerSDDAttemptIntFlag(flags, operation, "max-changed-lines")
+	outcome := registerSDDAttemptStringFlag(flags, operation, "outcome")
+	evidenceRevision := registerSDDAttemptStringFlag(flags, operation, "evidence-revision")
+	diagnosis := registerSDDAttemptStringFlag(flags, operation, "diagnosis")
+	harnessDisposition := registerSDDAttemptStringFlag(flags, operation, "harness-disposition")
+	cleanupEvidence := registerSDDAttemptStringFlag(flags, operation, "cleanup-evidence")
+	processEvidence := registerSDDAttemptStringFlag(flags, operation, "process-evidence")
+	expectedBindingRevision := registerSDDAttemptStringFlag(flags, operation, "expected-binding-revision")
+	successorLineage := registerSDDAttemptStringFlag(flags, operation, "successor-lineage")
+	remediatesEvidenceRevision := registerSDDAttemptStringFlag(flags, operation, "remediates-evidence-revision")
+	reason := registerSDDAttemptStringFlag(flags, operation, "reason")
+	actor := registerSDDAttemptStringFlag(flags, operation, "actor")
 	var roots sddAttemptRootList
-	flags.Var(&roots, "root", "repository root receiving per-change edit authority (repeatable)")
-	changeInstance := flags.String("change-instance", "", "opaque caller-owned change-instance identity; mint one token per change instance, reuse that exact token for widening grants within the same change lifecycle, and mint a fresh one for a recreated change so an archived name's grants never resurrect (required for grant; optional projection scope for status)")
+	registerSDDAttemptRootFlag(flags, operation, &roots)
+	changeInstance := registerSDDAttemptStringFlag(flags, operation, "change-instance")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -90,6 +93,9 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	// attempt must not demand a review obligation the operator has no way to
 	// satisfy.
 	store.ReviewDisabled = reviewDrivenDevelopmentDisabled(ctx, *cwd)
+	if missing := missingSDDAttemptOperationFlags(args[1:], operation); len(missing) != 0 {
+		return missingSDDAttemptOperationError(operation, missing)
+	}
 	var result any
 	switch operation {
 	case "status":
@@ -104,17 +110,11 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		result, err = store.Status()
 	case "begin":
-		if missing := missingSDDAttemptFlags(args[1:], "expected-revision", "request-id", "work-unit", "evidence-goal"); len(missing) != 0 {
-			return fmt.Errorf("sdd-attempt begin requires %s", strings.Join(missing, ", "))
-		}
 		result, err = store.Begin(ctx, sddstatus.BeginAttemptRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
 		})
 	case "finish":
-		if missing := missingSDDAttemptFlags(args[1:], "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence"); len(missing) != 0 {
-			return fmt.Errorf("sdd-attempt finish requires %s", strings.Join(missing, ", "))
-		}
 		remediationFlags := presentSDDAttemptFlags(args[1:], "expected-binding-revision", "successor-lineage", "remediates-evidence-revision")
 		unmanagedRemediation := *expectedBindingRevision == "" && *successorLineage == "" && *remediatesEvidenceRevision != ""
 		if remediationFlags != 0 && remediationFlags != 3 && !unmanagedRemediation {
@@ -129,24 +129,15 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
 		})
 	case "reset":
-		if missing := missingSDDAttemptFlags(args[1:], "expected-revision", "request-id", "reason", "actor"); len(missing) != 0 {
-			return fmt.Errorf("sdd-attempt reset requires %s", strings.Join(missing, ", "))
-		}
 		result, err = store.Reset(ctx, sddstatus.ResetObjectiveRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, Reason: *reason, Actor: *actor,
 		})
 	case "rescope":
-		if missing := missingSDDAttemptFlags(args[1:], "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"); len(missing) != 0 {
-			return fmt.Errorf("sdd-attempt rescope requires %s", strings.Join(missing, ", "))
-		}
 		result, err = store.Rescope(ctx, sddstatus.RescopeObjectiveRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, Reason: *reason, Actor: *actor,
 		})
 	case "acquire":
-		if missing := missingSDDAttemptFlags(args[1:], "request-id", "work-unit", "evidence-goal"); len(missing) != 0 {
-			return fmt.Errorf("sdd-attempt acquire requires %s; rerun `gentle-ai sdd-attempt acquire` with those missing flags", strings.Join(missing, ", "))
-		}
 		result, err = store.Acquire(ctx, sddstatus.CompactAcquireRequest{
 			BeginAttemptRequest: sddstatus.BeginAttemptRequest{
 				RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
@@ -156,9 +147,6 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
 		})
 	case "settle":
-		if missing := missingSDDAttemptFlags(args[1:], "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence"); len(missing) != 0 {
-			return fmt.Errorf("sdd-attempt settle requires %s; rerun `gentle-ai sdd-attempt settle` with those missing flags", strings.Join(missing, ", "))
-		}
 		result, err = store.Settle(ctx, sddstatus.CompactSettleRequest{
 			Token: *token, RequestID: *requestID, Outcome: sddstatus.AttemptOutcome(*outcome),
 			EvidenceRevision: *evidenceRevision, Diagnosis: *diagnosis,
@@ -172,9 +160,6 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		// "empty or sha256"), which matches exactly the fresh pre-attempt
 		// ledger the consent flow grants against; a later widening grant
 		// chains the exact committed revision like every sibling mutation.
-		if missing := missingSDDAttemptFlags(args[1:], "root", "change-instance", "request-id", "actor", "reason"); len(missing) != 0 {
-			return fmt.Errorf("sdd-attempt grant requires %s; rerun `gentle-ai sdd-attempt grant` with those missing flags", strings.Join(missing, ", "))
-		}
 		// The grant binds the caller-owned change-instance identity (#2540
 		// S5): the ledger digest-binds it into the record and replay projects
 		// the grant only for the same identity, so an archived name's reuse
@@ -197,53 +182,246 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	return encoder.Encode(result)
 }
 
-// sddAttemptOperationsInOrder is the single ordered source of truth for
-// every valid sdd-attempt operation. validSDDAttemptOperation and any
-// refusal that must enumerate the valid set both derive from it, so the
-// accepted values and the values a message names can never drift apart.
-// Mirrors reviewIntegrationGatesInOrder / reviewIntegrationGateNames in
-// review_operation_contract.go.
-var sddAttemptOperationsInOrder = []string{"status", "begin", "finish", "reset", "rescope", "acquire", "settle", "grant"}
+type sddAttemptFlagKind uint8
 
-func validSDDAttemptOperation(operation string) bool {
-	for _, valid := range sddAttemptOperationsInOrder {
-		if operation == valid {
+const (
+	sddAttemptStringFlag sddAttemptFlagKind = iota
+	sddAttemptIntFlag
+	sddAttemptRepeatableStringFlag
+)
+
+type sddAttemptFlagDefinition struct {
+	name     string
+	kind     sddAttemptFlagKind
+	required bool
+	usage    string
+}
+
+type sddAttemptOperationContract struct {
+	name, purpose string
+	flags         []sddAttemptFlagDefinition
+}
+
+var (
+	sddAttemptCWDFlag    = sddAttemptFlagDefinition{name: "cwd", required: true, usage: "required; repository working directory"}
+	sddAttemptChangeFlag = sddAttemptFlagDefinition{name: "change", required: true, usage: "required; SDD change identifier"}
+)
+
+// sddAttemptOperationDefinitions is the single source for operation flags.
+// Help, registration, and validation consume it so a new operation cannot
+// silently inherit only the common flags.
+var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
+	{name: "status", purpose: "Read the native runtime state", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "change-instance", usage: "optional; caller-owned token, at most 128 bytes; scopes granted_roots"},
+	}},
+	{name: "begin", purpose: "Start a bounded runtime attempt", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "expected-revision", required: true, usage: "required; empty only initially, otherwise sha256:<64 lowercase hex>"},
+		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
+		{name: "work-unit", required: true, usage: "required; single-line label, at most 160 bytes"},
+		{name: "evidence-goal", required: true, usage: "required; single-line objective, at most 240 bytes"},
+		{name: "max-attempts", kind: sddAttemptIntFlag, usage: "optional; default 2, limit 1..100"},
+		{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "optional; default 200, limit 1..1000000"},
+	}},
+	{name: "finish", purpose: "Complete the active runtime attempt", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "expected-revision", required: true, usage: "required; exact sha256:<64 lowercase hex> runtime revision"},
+		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
+		{name: "outcome", required: true, usage: "required; failed, interrupted, or passed"},
+		{name: "evidence-revision", required: true, usage: "required; sha256:<64 lowercase hex>, never none"},
+		{name: "diagnosis", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
+		{name: "harness-disposition", required: true, usage: "required; reused or invalidated"},
+		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
+		{name: "process-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
+		{name: "expected-binding-revision", usage: "optional; with successor-lineage and remediates-evidence-revision"},
+		{name: "successor-lineage", usage: "optional; lowercase approved lineage, at most 128 bytes"},
+		{name: "remediates-evidence-revision", usage: "optional; repaired sha256:<64 lowercase hex> failed evidence"},
+	}},
+	{name: "reset", purpose: "Reset a decision-required or complete objective", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "expected-revision", required: true, usage: "required; exact sha256:<64 lowercase hex> runtime revision"},
+		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
+		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
+		{name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
+	}},
+	{name: "rescope", purpose: "Narrow a terminal zero-drift objective", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "expected-revision", required: true, usage: "required; exact sha256:<64 lowercase hex> runtime revision"},
+		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
+		{name: "work-unit", required: true, usage: "required; narrower single-line label, at most 160 bytes"},
+		{name: "evidence-goal", required: true, usage: "required; narrower single-line objective, at most 240 bytes"},
+		{name: "max-attempts", kind: sddAttemptIntFlag, required: true, usage: "required; explicit limit 1..100, cannot exceed current objective"},
+		{name: "max-changed-lines", kind: sddAttemptIntFlag, required: true, usage: "required; explicit limit 1..1000000, cannot exceed current objective"},
+		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
+		{name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
+	}},
+	{name: "acquire", purpose: "Claim a bounded attempt and return its token", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "token", usage: "optional; token from an earlier acquire to continue that active attempt"},
+		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
+		{name: "work-unit", required: true, usage: "required; single-line label, at most 160 bytes"},
+		{name: "evidence-goal", required: true, usage: "required; single-line objective, at most 240 bytes"},
+		{name: "max-attempts", kind: sddAttemptIntFlag, usage: "optional; default 2, limit 1..100"},
+		{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "optional; default 200, limit 1..1000000"},
+		{name: "remediates-evidence-revision", usage: "optional; sha256:<64 lowercase hex> failed evidence for unmanaged remediation"},
+	}},
+	{name: "settle", purpose: "Complete the attempt selected by its token", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "token", required: true, usage: "required; opaque token returned by acquire"},
+		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
+		{name: "outcome", required: true, usage: "required; failed, interrupted, or passed"},
+		{name: "evidence-revision", required: true, usage: "required; sha256:<64 lowercase hex>, never none"},
+		{name: "diagnosis", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
+		{name: "harness-disposition", required: true, usage: "required; reused or invalidated"},
+		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
+		{name: "process-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
+		{name: "successor-lineage", usage: "optional; lowercase distinct approved lineage, at most 128 bytes"},
+		{name: "remediates-evidence-revision", usage: "optional; repaired sha256:<64 lowercase hex> failed evidence"},
+	}},
+	{name: "grant", purpose: "Record per-change edit authority for roots", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "expected-revision", usage: "optional; empty initially, otherwise sha256:<64 lowercase hex>"},
+		{name: "root", kind: sddAttemptRepeatableStringFlag, required: true, usage: "required and repeatable; 1..32 canonical roots, each at most 4096 bytes"},
+		{name: "change-instance", required: true, usage: "required; caller-owned token, at most 128 bytes"},
+		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
+		{name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
+		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
+	}},
+}
+
+var sddAttemptHelpAliases = []string{"--help", "-h"}
+
+func sddAttemptOperationDefinition(operation string) (sddAttemptOperationContract, bool) {
+	for _, definition := range sddAttemptOperationDefinitions {
+		if operation == definition.name {
+			return definition, true
+		}
+	}
+	return sddAttemptOperationContract{}, false
+}
+
+func sddAttemptOperationNames() []string {
+	names := make([]string, 0, len(sddAttemptOperationDefinitions))
+	for _, definition := range sddAttemptOperationDefinitions {
+		names = append(names, definition.name)
+	}
+	return names
+}
+
+func sddAttemptHelpOperation(args []string) (string, bool) {
+	operation := ""
+	requested := false
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		if sddAttemptHelpAlias(argument) {
+			requested = true
+			continue
+		}
+		if hasInlineValue, known := sddAttemptKnownHelpFlag(argument); known {
+			if hasInlineValue {
+				continue
+			}
+			// Keep help position-independent while ensuring a following operation
+			// name remains the missing flag's value rather than a help target.
+			for index+1 < len(args) && sddAttemptHelpAlias(args[index+1]) {
+				requested = true
+				index++
+			}
+			if index+1 < len(args) {
+				_, nextIsKnownFlag := sddAttemptKnownHelpFlag(args[index+1])
+				if !nextIsKnownFlag {
+					index++
+				}
+			}
+			continue
+		}
+		if validSDDAttemptOperation(argument) {
+			operation = argument
+		}
+	}
+	return operation, requested
+}
+
+func sddAttemptHelpAlias(argument string) bool {
+	for _, alias := range sddAttemptHelpAliases {
+		if argument == alias {
 			return true
 		}
 	}
 	return false
 }
 
-// joinSDDAttemptOperations renders sddAttemptOperationsInOrder as an
-// English "a, b, c, or d" list for refusal messages that must name the
-// valid operation values.
+// sddAttemptKnownHelpFlag derives its vocabulary from the same operation
+// contracts used for registration and validation; all current flags take values.
+func sddAttemptKnownHelpFlag(argument string) (hasInlineValue, known bool) {
+	if !strings.HasPrefix(argument, "--") {
+		return false, false
+	}
+	name := strings.TrimPrefix(argument, "--")
+	if separator := strings.IndexByte(name, '='); separator >= 0 {
+		name = name[:separator]
+		hasInlineValue = true
+	}
+	for _, definition := range sddAttemptOperationDefinitions {
+		for _, flagDefinition := range definition.flags {
+			if flagDefinition.name == name {
+				return hasInlineValue, true
+			}
+		}
+	}
+	return false, false
+}
+
+func renderSDDAttemptHelp(operation string, stdout io.Writer) error {
+	if operation == "" {
+		_, _ = fmt.Fprintf(stdout, "Usage: gentle-ai sdd-attempt <%s> [flags]\n", strings.Join(sddAttemptOperationNames(), "|"))
+		_, _ = fmt.Fprintln(stdout, "\nOperations:")
+		for _, definition := range sddAttemptOperationDefinitions {
+			_, _ = fmt.Fprintf(stdout, "  %-7s %s\n", definition.name, definition.purpose)
+		}
+		_, _ = fmt.Fprintf(stdout, "\nUse gentle-ai sdd-attempt <operation> %s for flags, required inputs, defaults, and limits.\n", strings.Join(sddAttemptHelpAliases, " or "))
+		return nil
+	}
+	definition, _ := sddAttemptOperationDefinition(operation)
+	_, _ = fmt.Fprintf(stdout, "Usage: gentle-ai sdd-attempt %s [flags]\n\n%s.\n\nFlags:\n", operation, definition.purpose)
+	for _, flagDefinition := range definition.flags {
+		value := "<value>"
+		if flagDefinition.kind == sddAttemptIntFlag {
+			value = "<n>"
+		} else if flagDefinition.kind == sddAttemptRepeatableStringFlag {
+			value = "<path>..."
+		}
+		_, _ = fmt.Fprintf(stdout, "  --%-29s %s\n", flagDefinition.name+" "+value, flagDefinition.usage)
+	}
+	return nil
+}
+
+func validSDDAttemptOperation(operation string) bool {
+	_, ok := sddAttemptOperationDefinition(operation)
+	return ok
+}
+
 func joinSDDAttemptOperations() string {
-	switch len(sddAttemptOperationsInOrder) {
+	operations := sddAttemptOperationNames()
+	switch len(operations) {
 	case 0:
 		return ""
 	case 1:
-		return sddAttemptOperationsInOrder[0]
+		return operations[0]
 	case 2:
-		return sddAttemptOperationsInOrder[0] + " or " + sddAttemptOperationsInOrder[1]
+		return operations[0] + " or " + operations[1]
 	default:
-		last := len(sddAttemptOperationsInOrder) - 1
-		return strings.Join(sddAttemptOperationsInOrder[:last], ", ") + ", or " + sddAttemptOperationsInOrder[last]
+		last := len(operations) - 1
+		return strings.Join(operations[:last], ", ") + ", or " + operations[last]
 	}
 }
 
 func validateSDDAttemptOperationFlags(operation string, args []string) error {
-	allowed := map[string]bool{"cwd": true, "change": true}
-	for _, name := range map[string][]string{
-		"begin":   {"expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"},
-		"finish":  {"expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "expected-binding-revision", "successor-lineage", "remediates-evidence-revision"},
-		"reset":   {"expected-revision", "request-id", "reason", "actor"},
-		"rescope": {"expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"},
-		"acquire": {"request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "token", "remediates-evidence-revision"},
-		"settle":  {"token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "successor-lineage", "remediates-evidence-revision"},
-		"grant":   {"expected-revision", "request-id", "root", "change-instance", "actor", "reason"},
-		"status":  {"change-instance"},
-	}[operation] {
-		allowed[name] = true
+	definition, _ := sddAttemptOperationDefinition(operation)
+	allowed := make(map[string]bool, len(definition.flags))
+	for _, flagDefinition := range definition.flags {
+		allowed[flagDefinition.name] = true
 	}
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
@@ -267,6 +445,61 @@ func validateSDDAttemptOperationFlags(operation string, args []string) error {
 		}
 	}
 	return nil
+}
+
+func sddAttemptOperationFlag(operation, name string) (sddAttemptFlagDefinition, bool) {
+	definition, ok := sddAttemptOperationDefinition(operation)
+	if !ok {
+		return sddAttemptFlagDefinition{}, false
+	}
+	for _, flagDefinition := range definition.flags {
+		if flagDefinition.name == name {
+			return flagDefinition, true
+		}
+	}
+	return sddAttemptFlagDefinition{}, false
+}
+
+func registerSDDAttemptStringFlag(flags *flag.FlagSet, operation, name string) *string {
+	definition, ok := sddAttemptOperationFlag(operation, name)
+	if !ok {
+		return new(string)
+	}
+	return flags.String(name, "", definition.usage)
+}
+
+func registerSDDAttemptIntFlag(flags *flag.FlagSet, operation, name string) *int {
+	definition, ok := sddAttemptOperationFlag(operation, name)
+	if !ok {
+		return new(int)
+	}
+	return flags.Int(name, 0, definition.usage)
+}
+
+func registerSDDAttemptRootFlag(flags *flag.FlagSet, operation string, roots *sddAttemptRootList) {
+	if definition, ok := sddAttemptOperationFlag(operation, "root"); ok {
+		flags.Var(roots, definition.name, definition.usage)
+	}
+}
+
+func missingSDDAttemptOperationFlags(args []string, operation string) []string {
+	definition, _ := sddAttemptOperationDefinition(operation)
+	names := make([]string, 0, len(definition.flags))
+	for _, flagDefinition := range definition.flags {
+		if flagDefinition.required {
+			names = append(names, flagDefinition.name)
+		}
+	}
+	return missingSDDAttemptFlags(args, names...)
+}
+
+func missingSDDAttemptOperationError(operation string, missing []string) error {
+	message := fmt.Sprintf("sdd-attempt %s requires %s", operation, strings.Join(missing, ", "))
+	switch operation {
+	case "acquire", "settle", "grant":
+		message += fmt.Sprintf("; rerun `gentle-ai sdd-attempt %s` with those missing flags", operation)
+	}
+	return errors.New(message)
 }
 
 func missingSDDAttemptFlags(args []string, names ...string) []string {

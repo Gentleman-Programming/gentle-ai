@@ -18,11 +18,8 @@ import (
 // hex, unprefixed so each step can spell it its own way.
 const canonEvidenceDigest = "27a44ad82d6e4f1d9f2c3b4a5d6e7f8091a2b3c4d5e6f70818293a4b5c6d7e8f"
 
-// The compact acquire/settle operations reject `--help` like every other
-// sdd-attempt operation, so both capabilities carry probe argvs that fail on
-// state in a build that has them. A build that predates the compact surface
-// answers `unknown sdd-attempt operation "..."`, which IsUnsupported reads
-// as a missing surface.
+// These stateful compact capabilities keep their explicit probes so the
+// benchmark can distinguish a missing operation from a valid state refusal.
 var sddAttemptAcquireCapability = &Capability{
 	Verb:  []string{"sdd-attempt", "acquire"},
 	Probe: []string{"sdd-attempt", "acquire", "--work-unit=probe", "--evidence-goal=probe", "--max-attempts=1", "--max-changed-lines=1"},

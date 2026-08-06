@@ -146,8 +146,8 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 // reviewIntegrationGateNames pattern in review_operation_contract.go.
 func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T) {
 	want := []string{"status", "begin", "finish", "reset", "rescope", "acquire", "settle", "grant"}
-	if !reflect.DeepEqual(sddAttemptOperationsInOrder, want) {
-		t.Fatalf("sddAttemptOperationsInOrder = %v, want %v", sddAttemptOperationsInOrder, want)
+	if got := sddAttemptOperationNames(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("sddAttemptOperationNames() = %v, want %v", got, want)
 	}
 	for _, operation := range want {
 		if !validSDDAttemptOperation(operation) {
@@ -237,6 +237,123 @@ func TestRunSDDAttemptGrantPersistsAndReplaysThroughTheCLI(t *testing.T) {
 	if !reflect.DeepEqual(accumulated.GrantedRoots, []string{sibling, second}) {
 		t.Fatalf("accumulated CLI granted roots = %#v, want [%q %q]", accumulated.GrantedRoots, sibling, second)
 	}
+}
+
+func TestRunSDDAttemptHelpContractsCoverEveryOperation(t *testing.T) {
+	tests := []struct {
+		operation string
+		flags     []string
+		contracts []string
+	}{
+		{"status", []string{"cwd", "change", "change-instance"}, []string{"optional", "128 bytes"}},
+		{"begin", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"}, []string{"default 2", "default 200", "1..100", "1..1000000"}},
+		{"finish", []string{"cwd", "change", "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "expected-binding-revision", "successor-lineage", "remediates-evidence-revision"}, []string{"failed, interrupted, or passed", "reused or invalidated", "never none", "500 bytes"}},
+		{"reset", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"500 bytes", "128 bytes"}},
+		{"rescope", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"}, []string{"explicit limit", "cannot exceed current objective"}},
+		{"acquire", []string{"cwd", "change", "token", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "remediates-evidence-revision"}, []string{"default 2", "default 200", "unmanaged remediation"}},
+		{"settle", []string{"cwd", "change", "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "successor-lineage", "remediates-evidence-revision"}, []string{"opaque token returned by acquire", "never none"}},
+		{"grant", []string{"cwd", "change", "expected-revision", "root", "change-instance", "request-id", "actor", "reason"}, []string{"repeatable", "1..32", "4096 bytes"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.operation, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunSDDAttempt([]string{tt.operation, "--help"}, &output); err != nil {
+				t.Fatalf("RunSDDAttempt(%s --help): %v", tt.operation, err)
+			}
+			if want := "Usage: gentle-ai sdd-attempt " + tt.operation + " [flags]"; !strings.Contains(output.String(), want) {
+				t.Fatalf("help missing %q:\n%s", want, output.String())
+			}
+			if got := sddAttemptHelpFlagNames(output.String()); !reflect.DeepEqual(got, tt.flags) {
+				t.Fatalf("help flags = %v, want %v\n%s", got, tt.flags, output.String())
+			}
+			for _, contract := range tt.contracts {
+				if !strings.Contains(output.String(), contract) {
+					t.Fatalf("help missing contract %q:\n%s", contract, output.String())
+				}
+			}
+		})
+	}
+
+	var overview bytes.Buffer
+	if err := RunSDDAttempt([]string{"--help"}, &overview); err != nil {
+		t.Fatalf("RunSDDAttempt(--help): %v", err)
+	}
+	for _, operation := range sddAttemptOperationNames() {
+		if !strings.Contains(overview.String(), operation) {
+			t.Fatalf("overview omits %q:\n%s", operation, overview.String())
+		}
+	}
+}
+
+func TestRunSDDAttemptHelpAliasesArePositionIndependentAndRepositoryFree(t *testing.T) {
+	missingRepository := filepath.Join(t.TempDir(), "does-not-exist")
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"parent long alias", []string{"--help", "--cwd", missingRepository}, "Usage: gentle-ai sdd-attempt <"},
+		{"parent short alias", []string{"-h", "--change", "missing"}, "Usage: gentle-ai sdd-attempt <"},
+		{"operation after help", []string{"--help", "begin", "--cwd", missingRepository, "--change", "missing"}, "Usage: gentle-ai sdd-attempt begin [flags]"},
+		{"operation before short alias", []string{"finish", "--cwd", missingRepository, "-h", "--change", "missing"}, "Usage: gentle-ai sdd-attempt finish [flags]"},
+		{"help between status inputs", []string{"status", "--change-instance", "instance", "--help", "--cwd", missingRepository, "--change", "missing"}, "Usage: gentle-ai sdd-attempt status [flags]"},
+		{"trailing grant help", []string{"grant", "--cwd", missingRepository, "--root", missingRepository, "--change", "missing", "--help"}, "Usage: gentle-ai sdd-attempt grant [flags]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunSDDAttempt(tt.args, &output); err != nil {
+				t.Fatalf("RunSDDAttempt(%v): %v", tt.args, err)
+			}
+			if !strings.Contains(output.String(), tt.want) {
+				t.Fatalf("help missing %q:\n%s", tt.want, output.String())
+			}
+		})
+	}
+}
+
+func TestRunSDDAttemptHelpDoesNotSelectOperationLikeFlagValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		args  []string
+		value string
+	}{
+		{"path", []string{"--help", "--cwd", "status"}, "status"},
+		{"change", []string{"--help", "--change", "begin"}, "begin"},
+		{"revision", []string{"--help", "--expected-revision", "finish"}, "finish"},
+		{"request ID", []string{"--help", "--request-id", "reset"}, "reset"},
+		{"work unit", []string{"--help", "--work-unit", "rescope"}, "rescope"},
+		{"reason", []string{"--help", "--reason", "acquire"}, "acquire"},
+		{"actor", []string{"--help", "--actor", "settle"}, "settle"},
+		{"outcome", []string{"--help", "--outcome", "grant"}, "grant"},
+		{"missing value before help", []string{"--change", "--help", "begin"}, "begin"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunSDDAttempt(tt.args, &output); err != nil {
+				t.Fatalf("RunSDDAttempt(%v): %v", tt.args, err)
+			}
+			if !strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt <") {
+				t.Fatalf("operation-like value %q selected operation help:\n%s", tt.value, output.String())
+			}
+		})
+	}
+}
+
+func sddAttemptHelpFlagNames(output string) []string {
+	flags := []string{}
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.HasPrefix(line, "  --") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 0 {
+			flags = append(flags, strings.TrimPrefix(fields[0], "--"))
+		}
+	}
+	return flags
 }
 
 func runSDDAttemptStatus(t *testing.T, args []string) sddstatus.RuntimeStatus {

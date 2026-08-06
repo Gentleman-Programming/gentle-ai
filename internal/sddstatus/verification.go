@@ -11,7 +11,43 @@ import (
 
 const VerifyResultSchema = "gentle-ai.verify-result/v1"
 const RemediationResultSchema = "gentle-ai.remediation-result/v1"
-const verifyEmptyOutputHash = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+const MaxVerifyReportBytes = 1 << 20
+const VerifyEmptyOutputHash = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+// VerifyReportContract is the stable, user-facing shape validated before an
+// SDD verify report is admitted. It contains no artifact or repository state.
+type VerifyReportContract struct {
+	Schema              string
+	MaxBytes            int
+	RequiredFields      []string
+	Verdicts            []string
+	AuthorityOnlyFields []string
+	EmptyOutputHash     string
+}
+
+var verifyReportRequiredFields = []string{
+	"schema", "evidence_revision", "verdict", "blockers", "critical_findings",
+	"requirements", "scenarios", "test_command", "test_exit_code", "test_output_hash",
+	"build_command", "build_exit_code", "build_output_hash",
+}
+
+var verifyReportAuthorityOnlyFields = []string{
+	"authority_only_failure", "missing_review_authority", "substantive_failure",
+	"command_failed", "observed_authority_revision",
+}
+
+var verifyReportVerdicts = []string{"pass", "pass_with_warnings", "fail"}
+
+func VerifyReportValidationContract() VerifyReportContract {
+	return VerifyReportContract{
+		Schema:              VerifyResultSchema,
+		MaxBytes:            MaxVerifyReportBytes,
+		RequiredFields:      append([]string(nil), verifyReportRequiredFields...),
+		Verdicts:            append([]string(nil), verifyReportVerdicts...),
+		AuthorityOnlyFields: append([]string(nil), verifyReportAuthorityOnlyFields...),
+		EmptyOutputHash:     VerifyEmptyOutputHash,
+	}
+}
 
 type SpecCounts struct {
 	Requirements int
@@ -157,10 +193,8 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	if reason != "" {
 		return verifyReport{}, reason
 	}
-	base := []string{"schema", "evidence_revision", "verdict", "blockers", "critical_findings", "requirements", "scenarios", "test_command", "test_exit_code", "test_output_hash", "build_command", "build_exit_code", "build_output_hash"}
-	extension := []string{"authority_only_failure", "missing_review_authority", "substantive_failure", "command_failed", "observed_authority_revision"}
-	allowed := make(map[string]bool, len(base)+len(extension))
-	for _, field := range append(base, extension...) {
+	allowed := make(map[string]bool, len(verifyReportRequiredFields)+len(verifyReportAuthorityOnlyFields))
+	for _, field := range append(append([]string{}, verifyReportRequiredFields...), verifyReportAuthorityOnlyFields...) {
 		allowed[field] = true
 	}
 	fields, reason := parseScalarFields(lines[1:end], allowed, "verify result")
@@ -171,19 +205,19 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	if reason != "" {
 		return report, reason
 	}
-	for _, required := range base {
+	for _, required := range verifyReportRequiredFields {
 		if _, ok := fields[required]; !ok {
 			return report, fmt.Sprintf("missing %s in verify result envelope", required)
 		}
 	}
 	extensionCount := 0
-	for _, field := range extension {
+	for _, field := range verifyReportAuthorityOnlyFields {
 		if _, ok := fields[field]; ok {
 			extensionCount++
 		}
 	}
-	if extensionCount != 0 && extensionCount != len(extension) {
-		return report, "authority-only extension must contain exactly five fields"
+	if extensionCount != 0 && extensionCount != len(verifyReportAuthorityOnlyFields) {
+		return report, fmt.Sprintf("authority-only extension must contain exactly %d fields", len(verifyReportAuthorityOnlyFields))
 	}
 	if fields["schema"] != VerifyResultSchema {
 		return report, fmt.Sprintf("unsupported verify result schema %s", fields["schema"])
@@ -214,7 +248,7 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	if report.Scenarios, ok = parseVerifyCompletion(fields["scenarios"]); !ok {
 		return report, "invalid scenarios in verify result envelope"
 	}
-	if report.Verdict != "pass" && report.Verdict != "pass_with_warnings" && report.Verdict != "fail" {
+	if !validVerifyReportVerdict(report.Verdict) {
 		return report, fmt.Sprintf("invalid verdict %s", report.Verdict)
 	}
 	if report.AuthorityOnly {
@@ -223,11 +257,20 @@ func parseVerifyReport(text string) (verifyReport, string) {
 				return report, "invalid authority-only extension"
 			}
 		}
-		if report.Verdict != "fail" || report.TestExit != 125 || report.BuildExit != 125 || report.Blockers == 0 || report.Critical == 0 || fields["test_output_hash"] != verifyEmptyOutputHash || fields["build_output_hash"] != verifyEmptyOutputHash || !sha256IdentityPattern.MatchString(fields["observed_authority_revision"]) {
+		if report.Verdict != "fail" || report.TestExit != 125 || report.BuildExit != 125 || report.Blockers == 0 || report.Critical == 0 || fields["test_output_hash"] != VerifyEmptyOutputHash || fields["build_output_hash"] != VerifyEmptyOutputHash || !sha256IdentityPattern.MatchString(fields["observed_authority_revision"]) {
 			return report, "invalid authority-only extension"
 		}
 	}
 	return report, ""
+}
+
+func validVerifyReportVerdict(verdict string) bool {
+	for _, valid := range verifyReportVerdicts {
+		if verdict == valid {
+			return true
+		}
+	}
+	return false
 }
 
 func parseLeadingEnvelope(text string) ([]string, int, string) {

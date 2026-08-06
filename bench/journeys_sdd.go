@@ -33,11 +33,8 @@ import (
 //     journey loudly when the state is not what it claims. A journey that set its
 //     own premise up wrongly and then reported a clean number would be worse than
 //     no journey at all.
-//   - Several verbs here cannot be capability-probed with `--help`, because the
-//     `sdd-attempt` operations parse `--help` as an ordinary flag and reject it
-//     with the same words a missing flag produces. Those steps declare
-//     Capability.Probe instead: an argv that names the flag under test and can
-//     only fail on state.
+//   - State-transition steps use Capability.Probe to test their continuation
+//     shape without charging instrumentation to the measured journey.
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -1565,11 +1562,6 @@ func sddApprovedAuthoritySteps(fixture func(*Sandbox) error) []Step {
 // Capabilities
 // ---------------------------------------------------------------------------
 
-// The sdd-attempt operations reject `--help` as an undefined flag, which is
-// byte-identical to how they reject a flag they do not have — so each of these
-// probes runs an argv that carries the flag under test and can only fail on
-// state. A build with the flag answers "sdd-attempt requires --cwd"; a build
-// without it answers "flag provided but not defined".
 var sddAttemptStatusCapability = &Capability{
 	Verb:  []string{"sdd-attempt", "status"},
 	Probe: []string{"sdd-attempt", "status"},

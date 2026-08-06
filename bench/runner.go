@@ -285,12 +285,8 @@ func (s *Sandbox) readBack(args ...string) Observation {
 // Capability is the CLI surface a step needs. It is probed before the step
 // runs so a build without that surface records `unsupported` and never a pass.
 //
-// The default probe is `<verb> --help`, read for the flag names. That works for
-// every verb whose `--help` really is a help surface. Some are not: the
-// `sdd-attempt` operations parse `--help` as an ordinary flag and reject it with
-// `flag provided but not defined: -help`, which the unsupported patterns match —
-// so the default probe would report a build that fully supports the verb as
-// lacking it. Probe exists for exactly that case.
+// The default probe is `<verb> --help`, read for the flag names. Probe exists
+// for legacy surfaces whose invocation cannot render user-facing help.
 type Capability struct {
 	Verb  []string
 	Flags []string
