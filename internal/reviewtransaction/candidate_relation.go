@@ -3,25 +3,19 @@
 // This file used to be shadow_relation.go, part of the read-only shadow of
 // the target RDD relation model
 // (docs/architecture/rdd-root-simplification-design.md). Promotion means it
-// now serves both the shadow observer (shadow_observer.go, still gated by
-// GENTLE_AI_RDD_SHADOW) and the live ReviewCore (Wave 3 Slice 3+) — one
-// implementation, not two names for the same function. It compares a
-// frozen CandidateIdentity with a live one and returns exactly one of seven
-// target-architecture relations, in a fixed fail-closed order (design
-// decision 5). It must still never mutate authority state, a Store, or a
-// CompactState — see candidate_readonly_guard_test.go (promoted files) and
-// shadow_readonly_guard_test.go (remaining shadow_*.go files) for the AST
-// guards that enforce this.
+// now serves the live ReviewCore (Wave 3 Slice 3+) directly — the Wave 1
+// shadow observer that also called it (shadow_observer.go,
+// GENTLE_AI_RDD_SHADOW) retired in Wave 7 S2a; this file's algebra is
+// unaffected. It compares a frozen CandidateIdentity with a live one and
+// returns exactly one of seven target-architecture relations, in a fixed
+// fail-closed order (design decision 5). It must still never mutate
+// authority state, a Store, or a CompactState — see
+// candidate_readonly_guard_test.go for the AST guard that enforces this.
 //
 // CandidateRelation is the second symbol this slice exports (design
 // decision 1, after Slice 2's CandidateIdentity); everything else here
-// stays unexported until the observer (Slice 5) or ReviewCore need it.
+// stays unexported until ReviewCore needs it.
 package reviewtransaction
-
-import (
-	"context"
-	"sync"
-)
 
 // CandidateRelation is the exact seven-value relation vocabulary
 // (Requirement: Seven-Value Relation Output,
@@ -29,8 +23,10 @@ import (
 // No eighth value is ever produced.
 //
 // ShadowRelation is a type alias (Wave 3 Slice 1, design decision 2) kept
-// so shadow_observer.go and Wave 1's tests keep compiling unchanged after
-// the promotion rename — it is the exact same type, not a distinct one.
+// so Wave 1's remaining tests keep compiling unchanged after the promotion
+// rename — it is the exact same type, not a distinct one. Its own retiring
+// is deferred past Wave 7 S2a/S2b/S2c pending a rename pass across the
+// tests that still spell it out (see Wave 7 apply-progress).
 type CandidateRelation string
 
 type ShadowRelation = CandidateRelation
@@ -73,11 +69,11 @@ type shadowRelationInput struct {
 // no Git call, no mutation, no I/O. Every input needed to derive an earlier
 // relation in the order has already been resolved by the caller (identity
 // resolution in candidate_identity.go, base-advance delegation via
-// shadowDeriveBaseAdvance below).
+// deriveBaseAdvanceCompatibility, prepr.go).
 //
 // This was shadowRelate before Wave 3 Slice 1's promotion (design decision
-// 2): renamed, not wrapped, so the shadow observer and the live ReviewCore
-// call the exact same function instead of two names for one algorithm.
+// 2): renamed, not wrapped, so the live ReviewCore calls one function, not
+// two names for one algorithm.
 func relateCandidates(input shadowRelationInput) CandidateRelation {
 	if input.ApplicableAuthorities > 1 {
 		return ShadowRelationAmbiguous
@@ -135,58 +131,6 @@ func shadowBaseAdvanceApplies(input shadowRelationInput) bool {
 		proof.OriginalMergeBaseTree == input.Frozen.BaseTree &&
 		proof.NewBaseTree == input.Live.BaseTree &&
 		input.Frozen.CandidateTree == input.Live.CandidateTree
-}
-
-// shadowDeriveBaseAdvance is Amendment A's delegation seam
-// (spec.md:25-41): it calls deriveBaseAdvanceCompatibility (prepr.go:73)
-// directly — constructing that function's unexported *resolvedPrePRRefs and
-// gateArtifactPreimages argument types in-package — and never reimplements
-// any of its seven conditions. A derivation error means "not compatible"
-// and is reported as nil, so the caller falls through the ordered
-// evaluation instead of the shadow package asserting its own opinion about
-// why: no shadow-local override of the delegated result ever exists.
-func shadowDeriveBaseAdvance(
-	ctx context.Context,
-	repo string,
-	receipt Receipt,
-	request GateRequest,
-	snapshot Snapshot,
-	refs *resolvedPrePRRefs,
-	preimages gateArtifactPreimages,
-) *BaseAdvanceCompatibility {
-	shadowDeriveBaseAdvanceMu.Lock()
-	shadowDeriveBaseAdvanceCallCount++
-	shadowDeriveBaseAdvanceMu.Unlock()
-
-	proof, err := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, refs, preimages)
-	if err != nil {
-		return nil
-	}
-	return &proof
-}
-
-var (
-	shadowDeriveBaseAdvanceMu        sync.Mutex
-	shadowDeriveBaseAdvanceCallCount int
-)
-
-// shadowDeriveBaseAdvanceCallCountForTest and
-// shadowResetDeriveBaseAdvanceCallCountForTest exist only for this package's
-// own tests. They mirror shadow_observer.go's shadowObserverCallCountForTest
-// idiom: the cheapest possible proof that the live gate path (gate.go) pays
-// zero shadow-side merge-base/changedPaths/patchIdentity/merge-tree cost
-// when GENTLE_AI_RDD_SHADOW is unset — "Off by Default in Live Paths"
-// (spec.md).
-func shadowDeriveBaseAdvanceCallCountForTest() int {
-	shadowDeriveBaseAdvanceMu.Lock()
-	defer shadowDeriveBaseAdvanceMu.Unlock()
-	return shadowDeriveBaseAdvanceCallCount
-}
-
-func shadowResetDeriveBaseAdvanceCallCountForTest() {
-	shadowDeriveBaseAdvanceMu.Lock()
-	defer shadowDeriveBaseAdvanceMu.Unlock()
-	shadowDeriveBaseAdvanceCallCount = 0
 }
 
 // shadowFindingReferencesExcludedPath reports whether any admitted finding

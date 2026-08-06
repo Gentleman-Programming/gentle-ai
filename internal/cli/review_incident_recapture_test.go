@@ -139,7 +139,7 @@ func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.
 func TestReviewCaptureResultRecapturesSameLensAfterPreInspectionAccessFailure(t *testing.T) {
 	repo, started, store, record := newArtifactReview(t, false)
 	statusArgs := []string{
-		"status", "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition",
+		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
 		"--cwd", repo, "--lineage", started.LineageID,
 	}
 	readStatus := func() ReviewTargetStatusResult {

@@ -38,6 +38,7 @@ var errCapturedFinalEvidenceMissing = errors.New("captured final evidence is una
 func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review capture-evidence", stdout, "Capture outcome-bearing verification evidence bound to one compact authority and candidate.")
 	cwd := flags.String("cwd", ".", "repository path")
+	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context; supplied by the collect transition and mutually exclusive with --cwd, pass one or the other and not both")
 	lineage := flags.String("lineage", "", "exact review lineage identifier")
 	target := flags.String("target", "", "exact frozen target identity")
 	revision := flags.String("expected-revision", "", "exact validating or correction authority revision")
@@ -50,15 +51,30 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 		return nil
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*target) == "" || strings.TrimSpace(*revision) == "" || strings.TrimSpace(*outcome) == "" || strings.TrimSpace(*input) == "" {
-		return reviewPreflightError(errors.New("review capture-evidence requires exact --cwd, --lineage, --target, --expected-revision, --outcome, and --input")) // refusal:by-design operator-knowledge: the current STATUS transition supplies the authority-bound values and the verifier supplies the outcome and input
+		return reviewPreflightError(errors.New("review capture-evidence requires one exact repository resolver: --repository-context or --cwd, plus --lineage, --target, --expected-revision, --outcome, and --input")) // refusal:by-design operator-knowledge: the current STATUS transition supplies the authority-bound values and the verifier supplies the outcome and input
 	}
 	ctx := context.Background()
-	root, err := resolveReviewMutationRoot(ctx, *cwd)
+	contextHandle := strings.TrimSpace(*repositoryContext)
+	if contextHandle != "" && reviewFlagWasProvided(flags, "cwd") {
+		return reviewPreflightError(errors.New("review capture-evidence accepts either --repository-context or --cwd, not both")) // refusal:by-design operator-knowledge: the provider-issued transition chooses the opaque context, while direct callers retain --cwd
+	}
+	var root string
+	var err error
+	if contextHandle != "" {
+		root, err = resolveOpaqueReviewRepositoryRoot(ctx, contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
+			LineageID: *lineage, TargetIdentity: *target, Revision: *revision,
+		})
+	} else {
+		root, err = resolveReviewMutationRoot(ctx, *cwd)
+	}
 	if err != nil {
 		return err
 	}
 	store, record, err := discoverCompactFacadeReview(ctx, root, *lineage, false)
 	if err != nil {
+		if contextHandle != "" {
+			return reviewOpaqueContextCause("repository_context_authority_unavailable", "refresh the exact native next_transition before retrying", err)
+		}
 		return reviewPreflightError(err)
 	}
 	state := record.State
@@ -101,9 +117,6 @@ func facadeVerificationEvidenceTarget(ctx context.Context, repo string, state re
 	case reviewtransaction.StateCorrectionRequired:
 		if state.ProposedCorrectionLines == nil {
 			return reviewtransaction.Snapshot{}, errors.New("verification evidence requires a forecasted correction") // refusal:by-design operator-knowledge: correction planning is an external prerequisite whose exact line forecast must be finalized first
-		}
-		if err := rejectFacadeCorrectionUntracked(ctx, repo, state); err != nil {
-			return reviewtransaction.Snapshot{}, err
 		}
 		projection := state.InitialSnapshot.Projection
 		if projection == "" {
@@ -290,7 +303,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	}
 	if err != nil {
 		if contextHandle != "" {
-			return reviewOpaqueContextFailure("repository_context_authority_unavailable", "refresh the exact native next_transition before retrying")
+			return reviewOpaqueContextCause("repository_context_authority_unavailable", "refresh the exact native next_transition before retrying", err)
 		}
 		return reviewPreflightError(fmt.Errorf("resolve reviewing authority for lineage %q under %s: %w; if the review was started in a different repository (for example a nested one), re-run with --cwd set to that repository", *lineage, repositoryDescription, err))
 	}
@@ -408,14 +421,15 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 			err = fmt.Errorf("%w; a different reviewer result already occupies this slot — decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)", reviewerResultSlotConflictError)
 		}
 		if contextHandle != "" {
-			return reviewOpaqueContextFailure("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status")
+			return reviewOpaqueContextCause("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status", err)
 		}
 		return reviewPreflightError(err)
 	}
 	published, _, err := readPrivateReviewerFile(path, reviewResultArtifactLimit)
 	if err != nil {
 		if contextHandle != "" {
-			return reviewOpaqueContextFailure("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status")
+			return reviewOpaqueContextCause("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status",
+				fmt.Errorf("read published reviewer result: %w", err))
 		}
 		return reviewPreflightError(fmt.Errorf("read published reviewer result: %w", err))
 	}
@@ -670,6 +684,30 @@ func discoverCapturedReviewerArtifacts(ctx context.Context, repo, storeDir strin
 		})
 	}
 	return artifacts, nil
+}
+
+// discoverReviewerContextLevel resolves the mechanism that produced this
+// review's reviewer lens contexts, from what the provider itself recorded when
+// it produced them. It is never declared by whoever finalizes: a caller cannot
+// make a receipt claim a mechanism that never ran.
+//
+// It resolves a level only when every selected lens has a captured artifact and
+// a bound emission naming the same mechanism. Anything else resolves to no
+// level, which the receipt records as absence — "not established" — and never
+// as a mechanism.
+func discoverReviewerContextLevel(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) reviewtransaction.ReviewerContextLevel {
+	artifacts, err := discoverCapturedReviewerArtifacts(ctx, repo, storeDir, state, revision)
+	if err != nil || len(artifacts) != len(state.SelectedLenses) {
+		return ""
+	}
+	subjects := make([]string, len(artifacts))
+	for index, artifact := range artifacts {
+		if artifact.SelectedOrder != index || artifact.Lens != state.SelectedLenses[index] {
+			return ""
+		}
+		subjects[index] = artifact.SubjectHash
+	}
+	return reviewtransaction.DiscoverReviewerContextLevel(storeDir, state.LineageID, state.InitialSnapshot.Identity, revision, state.SelectedLenses, subjects)
 }
 
 func readCapturedReviewerResults(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) ([]facadeReviewerResult, error) {

@@ -7,46 +7,18 @@ import (
 
 // This file is coverage closure for spec rdd-new-lineage-activation ->
 // "Distinct Env Switch, Default Off, Legacy Path When Disabled" ->
-// "Switch identity never overloads another switch": GENTLE_AI_RDD_NEW_LINEAGE,
-// GENTLE_AI_RDD_SHADOW, and the user-owned RDD kill switch are three
-// independent reads (NewLineageActivationEnabled, shadowObservationEnabled,
-// ResolveRDDMode). No production behavior changes here — these are new
-// tests only.
+// "Switch identity never overloads another switch": GENTLE_AI_RDD_NEW_LINEAGE
+// and the user-owned RDD kill switch are independent reads
+// (NewLineageActivationEnabled, ResolveRDDMode). No production behavior
+// changes here — these are new tests only.
+//
+// The third pairing this file originally proved -- GENTLE_AI_RDD_SHADOW
+// (shadowObservationEnabled) never overloading the activation switch --
+// retired with the shadow observer itself (Wave 7 S2a): with no shadow
+// switch left to read, there is nothing left to prove non-overloaded
+// against for that pairing.
 
-// TestNewLineageActivationSwitchIdentityNeverOverloadsAnotherSwitch drives
-// NewLineageActivationEnabled and shadowObservationEnabled — the switch's own
-// single readers — across all four combinations of the two env vars, proving
-// each reader answers for its own variable alone.
-func TestNewLineageActivationSwitchIdentityNeverOverloadsAnotherSwitch(t *testing.T) {
-	cases := []struct {
-		name           string
-		newLineageEnv  string
-		shadowEnv      string
-		wantActivation bool
-		wantShadow     bool
-	}{
-		{"both unset", "", "", false, false},
-		{"only shadow set", "", "1", false, true},
-		{"only activation set", "1", "", true, false},
-		{"both set", "1", "1", true, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(newLineageActivationEnvVar, tc.newLineageEnv)
-			t.Setenv(shadowObservationEnvVar, tc.shadowEnv)
-			if got := NewLineageActivationEnabled(); got != tc.wantActivation {
-				t.Fatalf("NewLineageActivationEnabled() with %s=%q %s=%q = %v, want %v (the shadow switch must never activate new-lineage starts)",
-					newLineageActivationEnvVar, tc.newLineageEnv, shadowObservationEnvVar, tc.shadowEnv, got, tc.wantActivation)
-			}
-			if got := shadowObservationEnabled(); got != tc.wantShadow {
-				t.Fatalf("shadowObservationEnabled() with %s=%q %s=%q = %v, want %v (the activation switch must never enable shadow observation)",
-					newLineageActivationEnvVar, tc.newLineageEnv, shadowObservationEnvVar, tc.shadowEnv, got, tc.wantShadow)
-			}
-		})
-	}
-}
-
-// TestNewLineageActivationSwitchIndependentOfKillSwitch proves the third
+// TestNewLineageActivationSwitchIndependentOfKillSwitch proves the
 // pairing the scenario names: the user-owned RDD kill switch — persisted,
 // resolved through ResolveRDDMode, never an environment variable — is
 // unaffected by the new-lineage activation env var, and the reverse: setting

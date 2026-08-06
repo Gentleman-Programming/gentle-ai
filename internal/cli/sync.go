@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,6 +33,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
 
@@ -454,12 +457,12 @@ type syncRuntime struct {
 
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
 	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
-	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
-	}
-
 	workspaceDir, _ := os.Getwd()
 	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, selection.Agents)
+	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, selection.Components, selection)
+	if err != nil {
+		return nil, err
+	}
 
 	return &syncRuntime{
 		homeDir:      homeDir,
@@ -467,13 +470,13 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 		selection:    selection,
 		agentIDs:     selection.Agents,
 		backupRoot:   backupRoot,
-		state:        &runtimeState{},
+		state:        &runtimeState{compatibilityTransaction: compatibilityTransaction},
 	}, nil
 }
 
 func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	adapters := resolveAdapters(r.agentIDs)
-	targets := syncBackupTargets(r.homeDir, r.workspaceDir, r.selection, adapters)
+	targets, targetErr := syncBackupTargets(r.homeDir, r.workspaceDir, r.selection, adapters)
 	r.managedPaths = targets
 
 	prepare := []pipeline.Step{
@@ -482,6 +485,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			snapshotter: backup.NewSnapshotter(),
 			snapshotDir: filepath.Join(r.backupRoot, time.Now().UTC().Format("20060102150405.000000000")),
 			targets:     targets,
+			targetErr:   targetErr,
 			state:       r.state,
 			backupRoot:  r.backupRoot,
 			source:      backup.BackupSourceSync,
@@ -491,7 +495,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	apply := []pipeline.Step{
-		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state},
+		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir},
 	}
 
 	for _, component := range r.selection.Components {
@@ -503,6 +507,17 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			agents:       r.agentIDs,
 			selection:    r.selection,
 			changedFiles: &r.changedFiles,
+		})
+	}
+	if needsCompatibilitySkillsRefresh(r.selection.Components) {
+		apply = append(apply, compatibilitySkillsRefreshStep{
+			id:           "sync:compatibility-skills-refresh",
+			homeDir:      r.homeDir,
+			components:   r.selection.Components,
+			selection:    r.selection,
+			changedFiles: &r.changedFiles,
+			transaction:  r.state.compatibilityTransaction,
+			anchored:     usesAnchoredCompatibilityTransaction(),
 		})
 	}
 
@@ -555,7 +570,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 // before sync executes. Uses syncComponentPaths so that the backup/verify
 // contract matches the actual files sync touches (which differ from install
 // for ComponentPersona — see syncComponentPaths).
-func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) []string {
+func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
 	paths := map[string]struct{}{}
 	for _, component := range selection.Components {
 		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
@@ -589,6 +604,28 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 			paths[filepath.Join(pluginsDir, name)] = struct{}{}
 		}
 	}
+	adapterSkillPaths, err := syncAdapterSkillBackupTargets(homeDir, workspaceDir, selection, adapters)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range adapterSkillPaths {
+		paths[path] = struct{}{}
+	}
+	if !usesAnchoredCompatibilityTransaction() && needsCompatibilitySkillsRefresh(selection.Components) {
+		skillDir, ok, err := compatibilitySkillsDir(homeDir)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			compatibilityPaths, err := compatibilitySkillFiles(skillDir, selection.Components, selection)
+			if err != nil {
+				return nil, err
+			}
+			for _, path := range compatibilityPaths {
+				paths[path] = struct{}{}
+			}
+		}
+	}
 	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
 			paths[path] = struct{}{}
@@ -602,7 +639,40 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 	for path := range paths {
 		targets = append(targets, path)
 	}
-	return targets
+	sort.Strings(targets)
+	return targets, nil
+}
+
+func syncAdapterSkillBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
+	var paths []string
+	for _, adapter := range adapters {
+		if !adapter.SupportsSkills() {
+			continue
+		}
+		if slices.Contains(selection.Components, model.ComponentSkills) {
+			skillDir := adapter.SkillsDir(homeDir)
+			if skillDir == "" {
+				continue
+			}
+			ordinary, err := skills.DirectoryPaths(skillDir, selectedSkillIDs(selection), "")
+			if err != nil {
+				return nil, fmt.Errorf("enumerate %s skill backup targets: %w", adapter.Agent(), err)
+			}
+			paths = append(paths, ordinary...)
+		}
+		if slices.Contains(selection.Components, model.ComponentSDD) {
+			skillDir := adapter.SkillsDir(componentInjectionDir(homeDir, workspaceDir, adapter))
+			if skillDir == "" {
+				continue
+			}
+			sddPaths, err := sdd.SkillDirectoryPaths(skillDir, "")
+			if err != nil {
+				return nil, fmt.Errorf("enumerate %s SDD backup targets: %w", adapter.Agent(), err)
+			}
+			paths = append(paths, sddPaths...)
+		}
+	}
+	return paths, nil
 }
 
 // syncComponentPaths declares the file paths sync writes for a given component.
@@ -822,6 +892,7 @@ type codeGraphHomeRunner struct {
 
 func (r codeGraphHomeRunner) Run(name string, args ...string) error {
 	command := exec.Command(name, args...)
+	system.EnsureCommandDir(command)
 	actualHome, _ := os.UserHomeDir()
 	if filepath.Clean(r.homeDir) != filepath.Clean(actualHome) {
 		command.Env = overrideCommandEnvironment(os.Environ(), map[string]string{
@@ -1332,18 +1403,16 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 		Selection: selection,
 	}
 
-	// No-op path: no agents were discovered or provided.
-	// Per spec: "No managed assets to sync — system completes without modifying
-	// unrelated files and reports that no managed sync actions were needed."
-	if len(agentIDs) == 0 {
-		result.NoOp = true
-		return result, nil
+	result, noOp, err := zeroAgentSyncNoOp(homeDir, selection, result)
+	if err != nil || noOp {
+		return result, err
 	}
 
 	rt, err := newSyncRuntime(homeDir, selection)
 	if err != nil {
 		return result, err
 	}
+	defer rt.state.cleanupCompatibilityTransaction()
 
 	stagePlan := rt.stagePlan()
 	result.Plan = stagePlan
@@ -1354,6 +1423,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy())
 	result.Execution = orchestrator.Execute(stagePlan)
+	compatibilityChanged := rt.state.compatibilityChangedFiles()
 	rt.state.cleanupRollbackSnapshot()
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute sync pipeline: %w", result.Execution.Err)
@@ -1366,6 +1436,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	if err != nil {
 		return result, err
 	}
+	result.ChangedFiles = dedupPaths(append(result.ChangedFiles, compatibilityChanged...))
 	result.FilesChanged = len(result.ChangedFiles)
 
 	// True no-op: agents were discovered but all managed assets were already
@@ -1510,15 +1581,21 @@ func RunSync(args []string) (SyncResult, error) {
 			Selection: selection,
 			DryRun:    true,
 		}
-		if len(agentIDs) == 0 {
-			result.NoOp = true
-			return result, nil
+		result, noOp, err := zeroAgentSyncNoOp(homeDir, selection, result)
+		if err != nil || noOp {
+			return result, err
 		}
 		rt, err := newSyncRuntime(homeDir, selection)
 		if err != nil {
 			return result, err
 		}
+		defer rt.state.cleanupCompatibilityTransaction()
 		result.Plan = rt.stagePlan()
+		for _, step := range result.Plan.Prepare {
+			if prepare, ok := step.(prepareBackupStep); ok && prepare.targetErr != nil {
+				return result, fmt.Errorf("resolve backup targets: %w", prepare.targetErr)
+			}
+		}
 		return result, nil
 	}
 
@@ -1528,6 +1605,23 @@ func RunSync(args []string) (SyncResult, error) {
 	}
 	result.DryRun = false
 	return result, nil
+}
+
+// zeroAgentSyncNoOp reports whether a sync without agents has no compatible
+// shared-skill work to perform.
+func zeroAgentSyncNoOp(homeDir string, selection model.Selection, result SyncResult) (SyncResult, bool, error) {
+	if len(result.Agents) != 0 {
+		return result, false, nil
+	}
+	refreshable, err := compatibilitySkillsRefreshable(homeDir, selection)
+	if err != nil {
+		return result, false, err
+	}
+	if refreshable {
+		return result, false, nil
+	}
+	result.NoOp = true
+	return result, true, nil
 }
 
 func restorePersistedCommunityTools(homeDir string, selection *model.Selection, persisted state.InstallState) {

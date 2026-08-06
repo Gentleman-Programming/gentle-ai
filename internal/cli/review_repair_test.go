@@ -432,10 +432,18 @@ func TestReviewRepairHelpRecommendsGenericClassifiedFlow(t *testing.T) {
 	if err := RunReview([]string{"repair", "--help"}, &help); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--preflight", "provider-owned", reviewtransaction.AuthorityRepairAuthorizationSchema, "repair-legacy-alias"} {
+	for _, want := range []string{"--preflight", "provider-owned", reviewtransaction.AuthorityRepairAuthorizationSchema} {
 		if !strings.Contains(help.String(), want) {
 			t.Fatalf("generic repair help missing %q: %s", want, help.String())
 		}
+	}
+	// repair-legacy-alias retired in Wave 7 S5a (WU14): the compatibility CLI
+	// verb is gone, so its own help text must no longer advertise it as an
+	// available continuation. The provider it wrapped (repairHistoricalLegacyAlias)
+	// stays live underneath the classified flow this help text describes --
+	// only the compatibility CLI surface and its exported wrapper retired.
+	if strings.Contains(help.String(), "repair-legacy-alias") {
+		t.Fatalf("generic repair help still advertises the retired repair-legacy-alias verb: %s", help.String())
 	}
 }
 
@@ -517,8 +525,44 @@ func TestReviewRepairPreflightOmitsAuthorityDispositionPlanForMultiNodeShape(t *
 	if err := preflight.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if preflight.DispositionProviderInputs != nil {
-		t.Fatalf("multi-node shape surfaced a disposition plan: %#v", preflight)
+	if preflight.DispositionProviderInputs != nil || len(preflight.DispositionSelectors) != 2 {
+		t.Fatalf("multi-edge preflight = %#v, want two exact selectors", preflight)
+	}
+	digest := preflight.DispositionSelectors[0].PredecessorExpectedRevision
+	for _, test := range []struct {
+		name   string
+		mutate func(*ReviewRepairResult)
+	}{
+		{"stopped assessment", func(result *ReviewRepairResult) {
+			result.Assessment.Status = reviewtransaction.AuthorityRepairAmbiguous
+		}},
+		{"provider inputs", func(result *ReviewRepairResult) {
+			result.DispositionProviderInputs = &ReviewRepairDispositionProviderInputs{PlanDigest: digest, AuthorityInventoryRevision: digest}
+		}},
+		{"malformed lineage", func(result *ReviewRepairResult) {
+			result.DispositionSelectors[0].PredecessorLineageID = "alpha--invalid"
+		}},
+		{"missing revision", func(result *ReviewRepairResult) { result.DispositionSelectors[0].SuccessorExpectedRevision = "" }},
+		{"duplicate edge", func(result *ReviewRepairResult) {
+			result.DispositionSelectors = append(result.DispositionSelectors, result.DispositionSelectors[0])
+		}},
+		{"inconsistent revision", func(result *ReviewRepairResult) {
+			result.DispositionSelectors[1].PredecessorLineageID = result.DispositionSelectors[0].SuccessorLineageID
+			result.DispositionSelectors[1].PredecessorExpectedRevision = "sha256:" + strings.Repeat("b", 64)
+		}},
+		{"unordered edges", func(result *ReviewRepairResult) {
+			result.DispositionSelectors[0], result.DispositionSelectors[1] = result.DispositionSelectors[1], result.DispositionSelectors[0]
+		}},
+		{"execute mode", func(result *ReviewRepairResult) { result.Mode = ReviewRepairModeExecute }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := preflight
+			candidate.DispositionSelectors = append([]reviewtransaction.AuthorityDispositionSelector(nil), preflight.DispositionSelectors...)
+			test.mutate(&candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("invalid disposition selectors accepted")
+			}
+		})
 	}
 }
 

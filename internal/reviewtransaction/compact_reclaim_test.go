@@ -50,9 +50,9 @@ func TestInventoryClassifiesIncompleteCompactStoreEntry(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if report.Complete || report.Authoritative {
-				t.Fatalf("incomplete store entry left inventory authoritative: %#v", report)
-			}
+			// The entry states its own condition. It no longer states the
+			// whole repository's, because it never knew it: an incomplete
+			// store entry says nothing about any other lineage.
 			if !hasAuthorityInventoryStatus(report.Entries, "reclaim-audit", tt.status) {
 				t.Fatalf("inventory entries = %#v", report.Entries)
 			}

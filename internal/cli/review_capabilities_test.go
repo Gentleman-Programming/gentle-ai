@@ -106,6 +106,9 @@ func TestReviewCapabilitiesV22MatchesConformanceFixture(t *testing.T) {
 	if err := json.Unmarshal(fixture, &want); err != nil {
 		t.Fatal(err)
 	}
+	if got.Bootstrap == nil || strings.Contains(got.Bootstrap.Command, " --agent ") {
+		t.Fatalf("v2.2 capability bootstrap must not declare an unavailable runtime identity: %#v", got.Bootstrap)
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("v2.2 capabilities do not match conformance fixture:\ngot=%#v\nwant=%#v", got, want)
 	}
@@ -670,7 +673,7 @@ func TestReviewIntegrationDocumentationMatchesRuntimeContract(t *testing.T) {
 		"`one_shot_final_verification_retry`", "`outcome_bound_verification_evidence`", "`review.retry_final_verification`", "`procedural_tooling_failure`",
 		"`artifact_subjects`", "`subject_hash`", "`admission_decision: completed`",
 		"`native_low_risk_verification`", "`selected_lenses: []`", "`receipt_scope_changed`",
-		"25-second aggregate budget", "15-second budget", "20-second budget", "one-second wait delay",
+		"25-second aggregate budget", "120-second budget", "180-second budget", "one-second wait delay",
 		"Persistent compact `LOCK` JSON is advisory diagnostics", "`context.scope_change`", "`review.recover`",
 	} {
 		if !strings.Contains(document, required) {

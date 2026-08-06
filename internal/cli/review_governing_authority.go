@@ -179,9 +179,9 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 
 // governingAuthorityLiveEvidence resolves the live candidate identity and
 // validate evidence ReviewCore.Next(validate) needs, reusing the same
-// workspace-selector resolution ObserveShadowRelation already uses at every
-// one of its five gate call sites (shadow_observer.go) rather than
-// rebuilding a gate-specific target a second time.
+// workspace-selector resolution the live gate call sites already build
+// (SnapshotBuilder) rather than rebuilding a gate-specific target a second
+// time.
 //
 // Task 6.7 widens S4's own documented scope cut one step: pre-commit reads
 // the STAGED (index) projection, exactly matching

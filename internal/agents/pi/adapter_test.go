@@ -29,7 +29,6 @@ func TestAdapterIdentityAndCapabilities(t *testing.T) {
 		got  bool
 		want bool
 	}{
-		{"SupportsAutoInstall", a.SupportsAutoInstall(), true},
 		{"SupportsSkills", a.SupportsSkills(), false},
 		{"SupportsMCP", a.SupportsMCP(), true},
 		{"SupportsSystemPrompt", a.SupportsSystemPrompt(), true},

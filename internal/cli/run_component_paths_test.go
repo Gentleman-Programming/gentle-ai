@@ -885,7 +885,10 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 	selection := model.Selection{Agents: []model.AgentID{agent}}
 	resolved := planner.ResolvedPlan{Agents: selection.Agents}
 
-	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
 
 	routing, err := agentguidance.RoutingPaths(home, agent)
 	if err != nil {
@@ -906,7 +909,10 @@ func TestBackupTargetsEngramClaudeIncludeRegistryAndLegacyMigrationSource(t *tes
 	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Components: []model.ComponentID{model.ComponentEngram}}
 	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
 
-	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
 	for _, want := range []string{
 		filepath.Join(home, ".claude.json"),
 		filepath.Join(home, ".claude", "mcp", "engram.json"),
@@ -927,7 +933,10 @@ func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	}
 	resolved := planner.ResolvedPlan{Agents: agentIDs, OrderedComponents: selection.Components}
 
-	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
 
 	assertNoDuplicatePaths(t, "backupTargets", targets)
 }

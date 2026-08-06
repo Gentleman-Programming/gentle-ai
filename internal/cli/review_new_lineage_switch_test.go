@@ -59,13 +59,7 @@ func TestReviewStartNewLineageSwitchOnFreezesV3Authority(t *testing.T) {
 	for index := range lines {
 		lines[index] = "ordinary documentation line"
 	}
-	path := filepath.Join(repo, "docs", "kill-switch-on.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(joinReviewCLILines(lines)), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "docs/kill-switch-on.md", joinReviewCLILines(lines), 0o644)
 
 	var out bytes.Buffer
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "new-lineage-switch-on"}, &out); err != nil {

@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 const CompactReclaimRecordSchema = "gentle-ai.review-reclaim-record/v1"
@@ -180,53 +182,40 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 // compactReclaimAuthorityRefusal explains why reclaim does not apply to a
 // store entry holding an authoritative artifact, and names the operation that
 // actually admits THIS entry's shape. Reclaim only quarantines entries that
-// never held authority, so the historical one-size pointer at
-// review reconcile-authority named an operation that refuses (a forged
-// binding), or cannot even load its target (a half-written record) — a named
-// dead end, which is worse than naming nothing. The honest continuation is
-// derived read-only from the entry itself:
+// never held authority. The honest continuation is derived read-only from
+// the entry itself:
 //
-//   - a recovery successor whose edge classifies into a reconcilable anomaly
-//     class is admitted by `review reconcile-authority`, rendered runnably
-//     with the exact persisted revisions;
 //   - a pristine entry the abandonment gate's own read-only prediction accepts
 //     is quarantined whole with `review abandon`;
-//   - an unreadable record, and every other shape no advertised operation
-//     admits, gets the precise diagnosis and the inspection to capture, never
-//     a command that would then refuse.
+//   - an unreadable record, a recovery successor whose edge classifies into
+//     one of reconciliation's former anomaly classes (Wave 7 S3a: the
+//     `review reconcile-authority` verb that used to admit these retired
+//     with no replacement — see compact_inspect.go's
+//     SanctionedCompactRecoveryExits), and every other shape no advertised
+//     operation admits, gets the precise diagnosis and the inspection to
+//     capture, never a command that would then refuse.
 func compactReclaimAuthorityRefusal(ctx context.Context, repo, dir, lineageID, artifact string) error {
 	refused := fmt.Sprintf("review reclaim refused: store entry %q holds authoritative artifact %q, and reclaim only quarantines entries that never held authority.", lineageID, artifact)
 	record, loadErr := (CompactStore{Dir: dir, lineageID: lineageID}).Load()
 	if loadErr != nil {
 		if os.IsNotExist(loadErr) {
 			return fmt.Errorf("%s The entry holds no readable review-state.json beside that artifact, so nothing can prove the artifact never carried authority, and no advertised operation admits this shape today."+
-				" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %q` and escalate that report", refused, repo)
+				" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %s` and escalate that report", refused, pathquote.Quote(repo))
 		}
 		return fmt.Errorf("%s Its record cannot be loaded (%v) — inspection classifies it %s, which an interrupted write leaves behind — and no advertised operation admits an unreadable record:"+
 			" reconciliation re-derives its proof from readable state, and admitting bytes that can prove nothing is a maintainer policy decision, not a repair."+
-			" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %q` and escalate that report",
-			refused, loadErr, compactRecoveryEntryProblem(loadErr), repo)
-	}
-	if recovery := record.State.Recovery; recovery != nil {
-		predecessor, predecessorErr := (CompactStore{Dir: filepath.Join(filepath.Dir(dir), recovery.PredecessorLineageID), lineageID: recovery.PredecessorLineageID}).Load()
-		if predecessorErr == nil {
-			classification := classifyCompactRecoveryEdgeAnomalies(predecessor, record)
-			if !classification.Valid && len(classification.Anomalies) > 0 {
-				return fmt.Errorf("%s Its recovery edge classifies as %s, which `gentle-ai review reconcile-authority` admits: %s",
-					refused, strings.Join(classification.Anomalies, ","),
-					compactReconcileCommandText(repo, recovery.PredecessorLineageID, predecessor.Revision, record.State.LineageID, record.Revision, classification.Anomalies))
-			}
-		}
+			" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %s` and escalate that report",
+			refused, loadErr, compactRecoveryEntryProblem(loadErr), pathquote.Quote(repo))
 	}
 	eligibility, eligibilityErr := InspectCompactPristineAbandonment(ctx, repo, lineageID)
 	if eligibilityErr == nil && eligibility.Eligible {
 		return fmt.Errorf("%s The entry is pristine, so `gentle-ai review abandon` quarantines it whole: %s",
 			refused, compactAbandonCommandText(repo, lineageID, eligibility))
 	}
-	return fmt.Errorf("%s No advertised operation admits it: reconciliation does not classify it into a supported anomaly class, and `review abandon` refuses because %s."+
+	return fmt.Errorf("%s No advertised operation admits it: %s."+
 		" Nothing quarantines this shape today; the entry stays exactly as persisted."+
-		" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %q` and escalate that report",
-		refused, compactAbandonBlockerText(record.State), repo)
+		" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %s` and escalate that report",
+		refused, compactAbandonBlockerText(record.State), pathquote.Quote(repo))
 }
 
 // quarantineCompactStoreEntry runs the shared two-phase audited move for one

@@ -21,7 +21,15 @@ import (
 
 const reviewBindingSchema = "gentle-ai.sdd-review-binding/v1"
 
-var reviewBindingChange = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+// A change identity is whatever sdd-status already resolves: an OpenSpec
+// directory name or an Engram change ID such as DEC-EXAMPLE-CHANGE. It stays
+// path-safe by construction, since alphanumeric segments joined by single
+// hyphens or underscores can express neither a separator nor a dot segment.
+var reviewBindingChange = regexp.MustCompile(`^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$`)
+
+// legacyRuntimeChange is the shape the runtime ledger stored directly at
+// v1/<change> before identities widened. It must never change.
+var legacyRuntimeChange = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var reviewBindingLineage = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var reviewBindingHash = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
@@ -679,6 +687,12 @@ func bindingDigest(b ReviewBinding) string {
 
 func validReviewBindingChange(change string) bool {
 	return len(change) <= 96 && reviewBindingChange.MatchString(change)
+}
+
+// legacyRuntimeChangeDir reports whether a change identity is one the runtime
+// ledger has always stored directly at v1/<change>.
+func legacyRuntimeChangeDir(change string) bool {
+	return len(change) <= 96 && legacyRuntimeChange.MatchString(change)
 }
 
 func validReviewBindingLineage(lineage string) bool {

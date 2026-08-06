@@ -603,15 +603,24 @@ func RetryCompactFinalVerification(ctx context.Context, repo string, request Fin
 	}
 	records := make(map[string]CompactRecord, len(stores))
 	storeByLineage := make(map[string]CompactStore, len(stores))
+	unreadable := map[string]struct{}{}
 	for _, store := range stores {
 		record, loadErr := store.loadCompactRecordLocked()
 		if loadErr != nil {
-			return CompactRecord{}, denyFinalVerificationRetry("ambiguous_authority", "compact authority graph cannot be loaded exactly")
+			// An entry outside this retry's own ancestry is not this retry's
+			// business. The ancestry check below still requires the exact
+			// predecessor chain to be readable and to validate.
+			unreadable[store.lineageID] = struct{}{}
+			continue
 		}
 		records[record.State.LineageID], storeByLineage[record.State.LineageID] = record, store
 	}
-	if _, err := compactAuthorityLeaves(records, storeByLineage); err != nil {
-		return CompactRecord{}, denyFinalVerificationRetry("ambiguous_authority", err.Error())
+	if _, missing := unreadable[predecessor.State.LineageID]; missing {
+		return CompactRecord{}, denyFinalVerificationRetry("ambiguous_authority", "compact authority graph cannot be loaded exactly")
+	}
+	violations, _ := compactAuthorityGraphViolations(records)
+	if carrier, cause := compactAuthorityBlockingCause(records, violations, predecessor.State.LineageID); cause != nil {
+		return CompactRecord{}, denyFinalVerificationRetry("ambiguous_authority", compactBlockedLineageError(predecessor.State.LineageID, carrier, cause).Error())
 	}
 	if err := finalVerificationRetryAncestryEligible(predecessor, records); err != nil {
 		return CompactRecord{}, err

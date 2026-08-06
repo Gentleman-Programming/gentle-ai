@@ -107,24 +107,6 @@ func TestOrdinaryScopedValidatorRejectsFixCausedDefects(t *testing.T) {
 	}
 }
 
-func TestJudgmentDayCarriesEarlierSevereFixCausedFindingIntoNextCorrection(t *testing.T) {
-	tx := newTestTransaction(t, ModeJudgmentDay)
-	_ = tx.StartReview()
-	_ = tx.RecordJudgeProofs([]JudgeProof{{JudgeID: "a", ExecutionHash: hash("1"), ResultHash: hash("2"), Blind: true, Confirmed: true}, {JudgeID: "b", ExecutionHash: hash("3"), ResultHash: hash("4"), Blind: true, Confirmed: true}}, hash("5"))
-	_ = freezeTestFindings(tx, []Finding{{ID: "JD-001", Severity: "CRITICAL"}})
-	_, _ = tx.ClassifyEvidence([]FindingEvidence{{FindingID: "JD-001", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "reproduced"}})
-	_ = tx.BeginFix(hash("7"))
-	fix := tx.Snapshot
-	fix.Kind, fix.BaseTree, fix.CandidateTree, fix.LedgerIDs, fix.Identity = TargetFixDiff, tx.FinalCandidateTree, tree("c"), []string{"JD-001"}, hash("8")
-	_ = tx.CompleteFix(fix, hash("9"), []string{"JD-001"})
-	if err := tx.ValidateFixDeltaResult(ScopedValidationResult{LedgerIDs: []string{"JD-001"}, FixCausedFindings: []Finding{{ID: "FIX-001", Lens: "scoped", Location: "x.go:1", Severity: "CRITICAL", Claim: "new defect", ProofRefs: []string{"test failure"}}}}); err != nil {
-		t.Fatal(err)
-	}
-	if tx.State != StateFixRequired || !equalStrings(tx.FixFindingIDs, []string{"FIX-001", "JD-001"}) {
-		t.Fatalf("severe earlier fix-caused finding was not correction-bound: state=%q ids=%v", tx.State, tx.FixFindingIDs)
-	}
-}
-
 func TestFrozenLedgerFindingsHashDetectsTamperedFrozenFindings(t *testing.T) {
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	_ = tx.StartReview()
@@ -345,37 +327,6 @@ func TestClassifyEvidenceRejectsMissingOrInvalidCausalityBeforeMutation(t *testi
 	}
 }
 
-func TestJudgmentDayCorroborationDoesNotBypassCausalScope(t *testing.T) {
-	tests := []struct {
-		name      string
-		class     EvidenceClass
-		causality CausalDisposition
-		wantState State
-		wantFix   bool
-	}{
-		{name: "candidate causal inferential agreement", class: EvidenceInferential, causality: CausalBehaviorActivated, wantState: StateFixRequired, wantFix: true},
-		{name: "pre-existing deterministic agreement", class: EvidenceDeterministic, causality: CausalPreExisting, wantState: StateReadyFinalVerification},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tx := newTestTransaction(t, ModeJudgmentDay)
-			_ = tx.StartReview()
-			_ = tx.RecordJudgeProofs([]JudgeProof{
-				{JudgeID: "judge-a", ExecutionHash: hash("1"), ResultHash: hash("2"), Blind: true, Confirmed: true},
-				{JudgeID: "judge-b", ExecutionHash: hash("3"), ResultHash: hash("4"), Blind: true, Confirmed: true},
-			}, hash("5"))
-			_ = freezeTestFindings(tx, []Finding{{ID: "JD-001", Severity: "CRITICAL", Claim: "agreed defect"}})
-			route, err := tx.ClassifyEvidence([]FindingEvidence{{FindingID: "JD-001", Class: tt.class, Causality: tt.causality, Proof: "two-judge concrete scope proof"}})
-			if err != nil {
-				t.Fatalf("ClassifyEvidence() error = %v", err)
-			}
-			if tx.State != tt.wantState || (len(tx.FixFindingIDs) == 1) != tt.wantFix || (len(route.AutoFixFindingIDs) == 1) != tt.wantFix || len(route.RefuterClaims) != 0 {
-				t.Fatalf("Judgment Day causal route = %#v state=%q fixes=%v", route, tx.State, tx.FixFindingIDs)
-			}
-		})
-	}
-}
-
 func TestTransactionCausalityRoundTripAndLegacyReadCompatibility(t *testing.T) {
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	_ = tx.StartReview()
@@ -473,86 +424,6 @@ func TestOnlySevereFindingsEnterEvidenceRouting(t *testing.T) {
 		if tx.Outcomes[id] != OutcomeInfo {
 			t.Fatalf("Outcomes[%s] = %q, want info", id, tx.Outcomes[id])
 		}
-	}
-}
-
-func TestJudgmentDayRequiresTwoDistinctBlindJudgeProofs(t *testing.T) {
-	proofA := JudgeProof{JudgeID: "judge-a", ExecutionHash: hash("1"), ResultHash: hash("2"), Blind: true, Confirmed: true}
-	proofB := JudgeProof{JudgeID: "judge-b", ExecutionHash: hash("3"), ResultHash: hash("4"), Blind: true, Confirmed: true}
-
-	tests := []struct {
-		name   string
-		proofs []JudgeProof
-	}{
-		{name: "zero judges", proofs: nil},
-		{name: "one judge", proofs: []JudgeProof{proofA}},
-		{name: "duplicate execution", proofs: []JudgeProof{proofA, {JudgeID: "judge-b", ExecutionHash: proofA.ExecutionHash, ResultHash: hash("4"), Blind: true, Confirmed: true}}},
-		{name: "duplicate result", proofs: []JudgeProof{proofA, {JudgeID: "judge-b", ExecutionHash: hash("3"), ResultHash: proofA.ResultHash, Blind: true, Confirmed: true}}},
-		{name: "not blind", proofs: []JudgeProof{proofA, {JudgeID: "judge-b", ExecutionHash: hash("3"), ResultHash: hash("4"), Confirmed: true}}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tx := newTestTransaction(t, ModeJudgmentDay)
-			_ = tx.StartReview()
-			if len(tt.proofs) > 0 {
-				if err := tx.RecordJudgeProofs(tt.proofs, hash("5")); err == nil {
-					t.Fatal("RecordJudgeProofs() accepted incomplete or duplicate judge proof")
-				}
-			}
-			if err := freezeTestFindings(tx, []Finding{{ID: "JD-001", Severity: "CRITICAL"}}); err == nil {
-				t.Fatal("FreezeFindings() accepted Judgment Day without two confirmed judges")
-			}
-		})
-	}
-
-	tx := newTestTransaction(t, ModeJudgmentDay)
-	_ = tx.StartReview()
-	if err := tx.RecordJudgeProofs([]JudgeProof{proofA, proofB}, hash("5")); err != nil {
-		t.Fatalf("RecordJudgeProofs(valid) error = %v", err)
-	}
-	if err := freezeTestFindings(tx, []Finding{{ID: "JD-001", Severity: "CRITICAL"}}); err != nil {
-		t.Fatalf("FreezeFindings(valid proof) error = %v", err)
-	}
-	if tx.Counters.JudgeExecutions != 2 || tx.JudgeProofHash == "" {
-		t.Fatalf("judge proof = %q counters=%#v", tx.JudgeProofHash, tx.Counters)
-	}
-}
-
-func TestJudgmentDayHasExactlyTwoFixAndScopedRejudgmentRounds(t *testing.T) {
-	tx := newTestTransaction(t, ModeJudgmentDay)
-	_ = tx.StartReview()
-	if err := tx.RecordJudgeProofs([]JudgeProof{
-		{JudgeID: "judge-a", ExecutionHash: hash("a"), ResultHash: hash("b"), Blind: true, Confirmed: true},
-		{JudgeID: "judge-b", ExecutionHash: hash("c"), ResultHash: hash("d"), Blind: true, Confirmed: true},
-	}, hash("e")); err != nil {
-		t.Fatal(err)
-	}
-	_ = freezeTestFindings(tx, []Finding{{ID: "JD-001", Severity: "CRITICAL"}})
-	if _, err := tx.ClassifyEvidence([]FindingEvidence{{FindingID: "JD-001", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "confirmed by both judges"}}); err != nil {
-		t.Fatalf("ClassifyEvidence() error = %v", err)
-	}
-	for round := 1; round <= 2; round++ {
-		if err := tx.BeginFix(hash(string(rune('1' + round)))); err != nil {
-			t.Fatalf("BeginFix(round %d) error = %v", round, err)
-		}
-		fix := tx.Snapshot
-		fix.Kind = TargetFixDiff
-		fix.BaseTree = tx.FinalCandidateTree
-		fix.CandidateTree = tree(string(rune('c' + round)))
-		fix.LedgerIDs = []string{"JD-001"}
-		fix.Identity = hash(string(rune('5' + round)))
-		if err := tx.CompleteFix(fix, hash(string(rune('7'+round))), []string{"JD-001"}); err != nil {
-			t.Fatalf("CompleteFix(round %d) error = %v", round, err)
-		}
-		if err := tx.ValidateFixDelta([]string{"JD-001"}, false); err != nil {
-			t.Fatalf("ValidateFixDelta(round %d) error = %v", round, err)
-		}
-	}
-	if tx.Counters.FixRounds != 2 || tx.Counters.ScopedRejudgments != 2 || tx.State != StateEscalated {
-		t.Fatalf("final judgment-day state = %q counters=%#v", tx.State, tx.Counters)
-	}
-	if err := tx.BeginFix(hash("f")); err == nil {
-		t.Fatal("Judgment Day allowed a third fix round")
 	}
 }
 

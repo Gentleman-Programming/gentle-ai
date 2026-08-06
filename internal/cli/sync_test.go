@@ -1022,7 +1022,10 @@ func TestSyncBackupTargetsIncludeManagedOpenCodePluginsWithoutSDD(t *testing.T) 
 		Components: []model.ComponentID{model.ComponentEngram},
 	}
 
-	targets := syncBackupTargets(home, "", sel, resolveAdapters(sel.Agents))
+	targets, err := syncBackupTargets(home, "", sel, resolveAdapters(sel.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
 
 	for _, configDir := range []string{"opencode", "kilo"} {
 		for _, plugin := range []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
@@ -1037,7 +1040,10 @@ func TestSyncBackupTargetsIncludeManagedOpenCodePluginsWithoutSDD(t *testing.T) 
 func TestSyncBackupTargetsIncludeClaudeEngramLegacyMigrationSource(t *testing.T) {
 	home := t.TempDir()
 	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Components: []model.ComponentID{model.ComponentEngram}}
-	targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
 	want := filepath.Join(home, ".claude", "mcp", "engram.json")
 	if !containsPath(targets, want) {
 		t.Fatalf("sync backup targets missing legacy migration source %q: %v", want, targets)
@@ -1121,6 +1127,65 @@ func TestRunSyncRollbackRestoresClaudeEngramMigrationSource(t *testing.T) {
 	}
 	if len(backups) != 1 {
 		t.Fatalf("persistent backup count = %d, want 1 after duplicate transaction", len(backups))
+	}
+}
+
+func TestSyncSkillBackupRollsBackGlobalWritersAndOpenClawWorkspace(t *testing.T) {
+	home := temporaryUserHome(t)
+	workspace := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode, model.AgentOpenClaw},
+		Components: []model.ComponentID{model.ComponentSkills, model.ComponentSDD},
+		Skills:     []model.SkillID{model.SkillGoTesting},
+		SDDMode:    model.SDDModeSingle,
+	}
+
+	claudeSkills := filepath.Join(home, ".claude", "skills")
+	openClawGlobalSkills := filepath.Join(home, ".openclaw", "skills")
+	openClawWorkspaceSkills := filepath.Join(workspace, ".openclaw", "skills")
+	existing := []string{
+		filepath.Join(claudeSkills, "go-testing", "references", "examples.md"),
+		filepath.Join(claudeSkills, "sdd-apply", "strict-tdd.md"),
+		filepath.Join(claudeSkills, "judgment-day", "SKILL.md"),
+		filepath.Join(claudeSkills, "_shared", "SKILL.md"),
+		filepath.Join(openClawGlobalSkills, "go-testing", "SKILL.md"),
+		filepath.Join(openClawWorkspaceSkills, "judgment-day", "SKILL.md"),
+	}
+	for _, path := range existing {
+		writeStale(t, path)
+	}
+	created := []string{
+		filepath.Join(claudeSkills, "judgment-day", "references", "prompts-and-formats.md"),
+		filepath.Join(claudeSkills, "_shared", "review-ledger-contract.md"),
+		filepath.Join(openClawGlobalSkills, "go-testing", "references", "examples.md"),
+		filepath.Join(openClawWorkspaceSkills, "sdd-apply", "strict-tdd.md"),
+		filepath.Join(openClawWorkspaceSkills, "_shared", "SKILL.md"),
+	}
+
+	runtime, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := runtime.stagePlan()
+	plan.Apply = append(plan.Apply, failingCompatibilityStep{})
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+	if result.Err == nil {
+		t.Fatal("injected later failure did not trigger sync rollback")
+	}
+	for _, path := range existing {
+		content, readErr := os.ReadFile(path)
+		if readErr != nil || string(content) != "stale" {
+			t.Errorf("sync rollback did not restore %q: content=%q error=%v", path, content, readErr)
+		}
+	}
+	for _, path := range created {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Errorf("sync rollback left newly created skill file %q: %v", path, statErr)
+		}
 	}
 }
 
@@ -1654,7 +1719,10 @@ func TestSyncRuntimeAddsCodeGraphStepsOnlyWhenSelected(t *testing.T) {
 		t.Fatal("sync plan included Pi CodeGraph without explicit selection")
 	}
 
-	paths := syncBackupTargets(home, "", selected, resolveAdapters([]model.AgentID{model.AgentOpenCode}))
+	paths, err := syncBackupTargets(home, "", selected, resolveAdapters([]model.AgentID{model.AgentOpenCode}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, path := range paths {
 		if path == filepath.Join(home, ".config", "opencode", "AGENTS.md") {
 			return
@@ -2808,8 +2876,14 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 		"orchestrator": settings.Agent["gentle-orchestrator"].Prompt,
 		"post-apply":   string(applyPayload),
 	} {
-		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition") {
-			t.Errorf("synced OpenCode %s controller does not use negotiated STATUS routing", name)
+		// The identity must be OpenCode's own: these are the exact bytes an
+		// OpenCode user installs, and telling them to declare claude-code is
+		// what let a false identity through the transport gate (issue #2440).
+		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent "+string(model.AgentOpenCode)+" --next-transition") {
+			t.Errorf("synced OpenCode %s controller does not use negotiated STATUS routing under its own runtime identity", name)
+		}
+		if strings.Contains(content, "--agent "+string(model.AgentClaudeCode)) {
+			t.Errorf("synced OpenCode %s controller tells an OpenCode user to declare Claude Code's identity", name)
 		}
 		for _, stale := range []string{
 			"Call `gentle-ai review start` once.",
@@ -4590,7 +4664,10 @@ func TestSyncBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *test
 	agent := model.AgentClaudeCode
 	selection := model.Selection{Agents: []model.AgentID{agent}}
 
-	targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
 
 	routing, err := agentguidance.RoutingPaths(home, agent)
 	if err != nil {
@@ -4614,7 +4691,10 @@ func TestSyncBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 		SDDMode:    model.SDDModeSingle,
 	}
 
-	targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
 
 	assertNoDuplicatePaths(t, "syncBackupTargets", targets)
 }

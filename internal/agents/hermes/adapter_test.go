@@ -123,13 +123,6 @@ func TestInstallCommand(t *testing.T) {
 	}
 }
 
-func TestSupportsAutoInstall(t *testing.T) {
-	a := NewAdapter()
-	if a.SupportsAutoInstall() {
-		t.Fatalf("SupportsAutoInstall() = true, want false")
-	}
-}
-
 func TestConfigPaths(t *testing.T) {
 	a := NewAdapter()
 	homeDir := filepath.Join(string(filepath.Separator), "home", "test")

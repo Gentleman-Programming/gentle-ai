@@ -2909,6 +2909,7 @@ func runCommunityToolCommand(name string, args ...string) error {
 
 func executeExternalCommand(commandFn func(string, ...string) *exec.Cmd, name string, args ...string) error {
 	cmd := commandFn(name, args...)
+	system.EnsureCommandDir(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if len(output) > 0 {

@@ -145,6 +145,9 @@ func TestDisabledRDDRejectsStartsAndFreezesActiveAuthority(t *testing.T) {
 	if _, err := AuthorizeRDDOperation(context.Background(), repo, global, RDDOperationRead); err != nil {
 		t.Fatalf("disabled mode broke read-only authority: %v", err)
 	}
+	if _, err := AuthorizeRDDOperation(context.Background(), repo, global, RDDOperationAbandon); err != nil {
+		t.Fatalf("disabled mode rejected sanctioned abandonment: %v", err)
+	}
 	if err := receipt.Validate(); err != nil {
 		t.Fatalf("disabled mode broke receipt validation: %v", err)
 	}

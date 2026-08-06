@@ -449,11 +449,13 @@ func seedStaleEvidenceReadyChange(t *testing.T, root string) string {
 	return changeRoot
 }
 
-// TestEnabledStaleEvidenceWithNoReceiptNamesReviewStart pins today's enabled
-// behaviour for the exact fixture the disabled test below relaxes: with no
-// governing receipt anywhere, the discovery walk finds nothing, and the
-// change is blocked pending a fresh review.
-func TestEnabledStaleEvidenceWithNoReceiptNamesReviewStart(t *testing.T) {
+// TestEnabledStaleEvidenceWithNoReceiptRestartsVerification covers the
+// enabled behaviour for the exact fixture the disabled test below relaxes:
+// with no governing receipt anywhere, the discovery walk finds nothing, and
+// absent authority is decline-by-absence (issue #2137): stale non-FAIL
+// evidence re-enters verification instead of blocking at resolve-review
+// demanding a bounded review transaction that never existed.
+func TestEnabledStaleEvidenceWithNoReceiptRestartsVerification(t *testing.T) {
 	root := t.TempDir()
 	seedStaleEvidenceReadyChange(t, root)
 
@@ -461,11 +463,11 @@ func TestEnabledStaleEvidenceWithNoReceiptNamesReviewStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-review" {
-		t.Fatalf("enabled stale-evidence archive=%q next=%q, want blocked/resolve-review", status.Dependencies.Archive, status.NextRecommended)
+	if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
+		t.Fatalf("enabled stale-evidence verify=%q archive=%q next=%q, want ready/blocked/verify", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
 	}
-	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "gentle-ai review start") {
-		t.Fatalf("enabled stale-evidence BlockedReasons = %v, want it to name the fresh review", status.BlockedReasons)
+	if reasons := strings.Join(status.BlockedReasons, "\n"); strings.Contains(reasons, "gentle-ai review start") || strings.Contains(reasons, "bounded review transaction is missing") {
+		t.Fatalf("enabled stale-evidence BlockedReasons = %v, want no review-start or missing-transaction demand", status.BlockedReasons)
 	}
 }
 

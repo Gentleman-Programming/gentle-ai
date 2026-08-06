@@ -234,9 +234,6 @@ func TestCapabilities(t *testing.T) {
 	if !a.SupportsMCP() {
 		t.Fatal("Trae should support MCP")
 	}
-	if a.SupportsAutoInstall() {
-		t.Fatal("Trae should NOT support auto-install (desktop app)")
-	}
 	if a.SupportsOutputStyles() {
 		t.Fatal("Trae should NOT support output styles")
 	}

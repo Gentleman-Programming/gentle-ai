@@ -237,67 +237,66 @@ func TestOrganicDirectoryIdentityAcceptsCanonicalAliases(t *testing.T) {
 // "proposed" leg. Every configured agent is told the same thing through its own
 // delivery strategy: three routes exist, SDD is only ever proposed, and it is
 // selected only by an explicit request or an accepted proposal.
-func TestOrganicConfiguredAgentReceivesRoutingGuidance(t *testing.T) {
+// organicRoutingGuidanceRequiredFragments is the routing-guidance content
+// every configured agent must receive, shared between this file's Cursor
+// case and organic_runtime_real_agent_detection_test.go's Claude Code /
+// OpenCode cases (see that file for why they're split).
+var organicRoutingGuidanceRequiredFragments = []string{
+	"Direct inline",
+	"Delegated direct",
+	"Optional SDD",
+	"never selects SDD",
+	"never create SDD artifacts",
+	"gentle-ai review mode enable|disable|status",
+	"disabled/unmanaged",
+}
+
+// TestOrganicConfiguredAgentReceivesRoutingGuidanceCursor proves the
+// markdown-rules delivery strategy for Cursor. Cursor's Detect is
+// config-dir-only (~/.cursor, no PATH lookup — see
+// internal/agents/cursor/adapter.go), so this case needs no real agent
+// binary and runs unconditionally in the ordinary unit sweep.
+//
+// Claude Code and OpenCode's equivalent cases used to live in this same
+// table-driven test, but their detection follows the inherited PATH to a
+// real installed binary — install refuses instead of installing a missing
+// runtime now (agentInstallStep in internal/cli/run.go) — so running them
+// here depended on those binaries happening to be on the machine running
+// `go test ./...`, which is true on developer machines but not on every CI
+// runner. They now live in
+// organic_runtime_real_agent_detection_test.go, gated behind the
+// real_agent_e2e build tag so they run only in the organic-runtime-e2e CI
+// job, which installs both runtimes first.
+func TestOrganicConfiguredAgentReceivesRoutingGuidanceCursor(t *testing.T) {
 	t.Parallel()
-	// One row per adapter delivery strategy: a markdown section, an always-loaded
-	// orchestrator prompt inside agent settings, and a markdown rules file. The
-	// orchestrator prompt lives in the home settings document even under
-	// workspace scope, because that is the only settings document the OpenCode
-	// family ever loads (issue #1825).
-	agents := []struct {
-		name    string
-		agentID string
-		path    string
-		inHome  bool
-	}{
-		{name: "markdown section", agentID: "claude-code", path: ".claude/CLAUDE.md"},
-		{name: "orchestrator prompt", agentID: "opencode", path: ".config/opencode/opencode.json", inHome: true},
-		{name: "markdown rules", agentID: "cursor", path: ".cursor/rules/gentle-ai.mdc"},
+	workspace := t.TempDir()
+	home := t.TempDir()
+	if _, err := organicGitOutput(context.Background(), workspace, "init", "--quiet", "--initial-branch=main", "."); err != nil {
+		t.Fatal(err)
 	}
-	required := []string{
-		"Direct inline",
-		"Delegated direct",
-		"Optional SDD",
-		"never selects SDD",
-		"never create SDD artifacts",
-		"gentle-ai review mode enable|disable|status",
-		"disabled/unmanaged",
+	// Cursor's Detect looks for ~/.cursor, which this fake isolated HOME
+	// never has. Simulate Cursor as already installed so gentle-ai does not
+	// correctly refuse an undetected agent here — this test targets
+	// routing-guidance delivery, not agent install behavior.
+	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	for _, agent := range agents {
-		t.Run(agent.name, func(t *testing.T) {
-			t.Parallel()
-			workspace := t.TempDir()
-			home := t.TempDir()
-			if _, err := organicGitOutput(context.Background(), workspace, "init", "--quiet", "--initial-branch=main", "."); err != nil {
-				t.Fatal(err)
-			}
-			output, stderr, err := runOrganicCommand(
-				t, organicBinary, workspace, organicEnvironment(home),
-				"install", "--agent", agent.agentID, "--scope", "workspace", "--components", "permissions",
-			)
-			if err != nil {
-				t.Fatalf("install %s: %v\nstdout:\n%s\nstderr:\n%s", agent.agentID, err, output, stderr)
-			}
-			root := workspace
-			if agent.inHome {
-				root = home
-			}
-			rendered, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(agent.path)))
-			if readErr != nil {
-				t.Fatalf("configured agent %s received no routing guidance at %s: %v", agent.agentID, agent.path, readErr)
-			}
-			for _, fragment := range required {
-				if !bytes.Contains(rendered, []byte(fragment)) {
-					t.Fatalf("routing guidance for %s omits %q:\n%s", agent.agentID, fragment, rendered)
-				}
-			}
-			if agent.inHome {
-				stranded := filepath.Join(workspace, filepath.FromSlash(agent.path))
-				if _, statErr := os.Stat(stranded); !os.IsNotExist(statErr) {
-					t.Fatalf("workspace-scoped install stranded a settings document the agent never loads at %s (stat err = %v)", stranded, statErr)
-				}
-			}
-		})
+	const path = ".cursor/rules/gentle-ai.mdc"
+	output, stderr, err := runOrganicCommand(
+		t, organicBinary, workspace, organicEnvironment(home),
+		"install", "--agent", "cursor", "--scope", "workspace", "--components", "permissions",
+	)
+	if err != nil {
+		t.Fatalf("install cursor: %v\nstdout:\n%s\nstderr:\n%s", err, output, stderr)
+	}
+	rendered, readErr := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(path)))
+	if readErr != nil {
+		t.Fatalf("configured agent cursor received no routing guidance at %s: %v", path, readErr)
+	}
+	for _, fragment := range organicRoutingGuidanceRequiredFragments {
+		if !bytes.Contains(rendered, []byte(fragment)) {
+			t.Fatalf("routing guidance for cursor omits %q:\n%s", fragment, rendered)
+		}
 	}
 }
 
@@ -1151,6 +1150,11 @@ func organicEnvironment(home string) []string {
 	if value := os.Getenv("TMPDIR"); value != "" {
 		environment = append(environment, "TMPDIR="+value)
 	}
+	for _, name := range []string{"OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS"} {
+		if value := os.Getenv(name); value != "" {
+			environment = append(environment, name+"="+value)
+		}
+	}
 	return environment
 }
 
@@ -1591,6 +1595,10 @@ func (harness *organicHarness) runActor(role, path, body, message, marker string
 	}
 }
 
+// writeFiles writes candidate files and declares them. Since #2394 a new file
+// only enters the review candidate once the user put it in the index, so a
+// journey that means to have its files reviewed has to say so the same way a
+// real user does.
 func (harness *organicHarness) writeFiles(files map[string]string) {
 	harness.t.Helper()
 	for relative, body := range files {
@@ -1601,6 +1609,7 @@ func (harness *organicHarness) writeFiles(files map[string]string) {
 		if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
 			harness.t.Fatal(err)
 		}
+		harness.git("add", "--", relative)
 	}
 }
 

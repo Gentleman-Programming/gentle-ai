@@ -89,7 +89,7 @@ func RunReviewAbandon(args []string, stdout io.Writer) error {
 			return reviewAbandonInputsRefusal(*cwd, *incomplete)
 		}
 	}
-	root, err := resolveReviewMutationRoot(context.Background(), *cwd)
+	root, err := resolveReviewOperationRoot(context.Background(), *cwd, reviewtransaction.RDDOperationAbandon)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
 	}

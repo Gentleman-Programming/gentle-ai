@@ -325,15 +325,29 @@ func buildShadowBaseAdvanceFixture(t *testing.T, breakMergeBasePreservation bool
 	return repo, receipt, request, snapshot, refs, preimages
 }
 
+// deriveBaseAdvanceCompatibilityPtr adapts deriveBaseAdvanceCompatibility's
+// (BaseAdvanceCompatibility, error) return to the nil-on-error shape
+// relateCandidates' BaseAdvance input expects — the exact conversion the
+// retired shadowDeriveBaseAdvance wrapper (Wave 7 S2a) used to perform, kept
+// here only for this file's own direct characterization of Amendment A
+// delegation, independent of any observer.
+func deriveBaseAdvanceCompatibilityPtr(ctx context.Context, repo string, receipt Receipt, request GateRequest, snapshot Snapshot, refs *resolvedPrePRRefs, preimages gateArtifactPreimages) *BaseAdvanceCompatibility {
+	proof, err := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, refs, preimages)
+	if err != nil {
+		return nil
+	}
+	return &proof
+}
+
 // TestShadowRelateDelegatesCompatibleBaseAdvanceToDeriveBaseAdvanceCompatibility
-// is Amendment A's "all seven conditions hold" scenario: shadowDeriveBaseAdvance
-// calls deriveBaseAdvanceCompatibility directly, and relateCandidates attributes
-// compatible_base_advance to that delegated proof.
+// is Amendment A's "all seven conditions hold" scenario: relateCandidates
+// attributes compatible_base_advance to deriveBaseAdvanceCompatibility's own
+// delegated proof.
 func TestShadowRelateDelegatesCompatibleBaseAdvanceToDeriveBaseAdvanceCompatibility(t *testing.T) {
 	repo, receipt, request, snapshot, refs, preimages := buildShadowBaseAdvanceFixture(t, false)
-	proof := shadowDeriveBaseAdvance(context.Background(), repo, receipt, request, snapshot, refs, preimages)
+	proof := deriveBaseAdvanceCompatibilityPtr(context.Background(), repo, receipt, request, snapshot, refs, preimages)
 	if proof == nil || !proof.valid() {
-		t.Fatalf("shadowDeriveBaseAdvance() = %#v, want a valid delegated proof", proof)
+		t.Fatalf("deriveBaseAdvanceCompatibility() = %#v, want a valid delegated proof", proof)
 	}
 	frozen := fixtureCandidateIdentity(receipt.BaseTree, receipt.FinalCandidateTree, "a", "b")
 	live := fixtureCandidateIdentity(snapshot.BaseTree, snapshot.CandidateTree, "c", "d")
@@ -345,14 +359,14 @@ func TestShadowRelateDelegatesCompatibleBaseAdvanceToDeriveBaseAdvanceCompatibil
 
 // TestShadowRelateAmendmentANeverOverridesAFailedDelegatedCondition is
 // Amendment A's "any condition fails" scenario: breaking condition 1 (merge-
-// base tree preservation) makes deriveBaseAdvanceCompatibility fail, so
-// shadowDeriveBaseAdvance reports nil and relateCandidates never fabricates
-// compatible_base_advance from a shadow-local override.
+// base tree preservation) makes deriveBaseAdvanceCompatibility fail (nil
+// proof), and relateCandidates never fabricates compatible_base_advance from
+// a local override.
 func TestShadowRelateAmendmentANeverOverridesAFailedDelegatedCondition(t *testing.T) {
 	repo, receipt, request, snapshot, refs, preimages := buildShadowBaseAdvanceFixture(t, true)
-	proof := shadowDeriveBaseAdvance(context.Background(), repo, receipt, request, snapshot, refs, preimages)
+	proof := deriveBaseAdvanceCompatibilityPtr(context.Background(), repo, receipt, request, snapshot, refs, preimages)
 	if proof != nil {
-		t.Fatalf("shadowDeriveBaseAdvance() = %#v, want nil on a broken delegated condition", proof)
+		t.Fatalf("deriveBaseAdvanceCompatibility() = %#v, want nil on a broken delegated condition", proof)
 	}
 	frozen := fixtureCandidateIdentity(receipt.BaseTree, receipt.FinalCandidateTree, "a", "b")
 	live := fixtureCandidateIdentity(snapshot.BaseTree, snapshot.CandidateTree, "c", "d")

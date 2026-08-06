@@ -229,8 +229,8 @@ func TestGlobalReviewModeOffRefusesBeforeV2Consent(t *testing.T) {
 
 	var output bytes.Buffer
 	startArgs := transitionStartArgs(repo, status)
-	if !strings.Contains(strings.Join(startArgs, " "), "--agent=claude-code") {
-		t.Fatalf("v2 disabled START lost its runtime identity: %v", startArgs)
+	if strings.Contains(strings.Join(startArgs, " "), "--agent=") {
+		t.Fatalf("manual v2 disabled START invented a runtime identity: %v", startArgs)
 	}
 	err := RunReview(startArgs, &output)
 	if err == nil || strings.Contains(output.String(), reviewConsentActionRequired) {
@@ -507,7 +507,7 @@ func TestV21ConsentInvocationMustMatchProviderOwnedRequest(t *testing.T) {
 	if err := json.Unmarshal(fixture, &question); err != nil {
 		t.Fatal(err)
 	}
-	base := reviewConsentFollowUpBase("/repo", question.TargetIdentity, question.Projection, "review-consent-fixture", "", "", "reliability", "", false, false, ReviewIntegrationContractV2, "claude-code", "")
+	base := reviewConsentFollowUpBase("/repo", question.TargetIdentity, question.Projection, "review-consent-fixture", "", "", "reliability", "", false, false, ReviewIntegrationContractV2, "", "")
 	if err := validateReviewConsentInvocations(question, base); err != nil {
 		t.Fatalf("canonical v2.1 consent invocation: %v", err)
 	}
@@ -516,10 +516,9 @@ func TestV21ConsentInvocationMustMatchProviderOwnedRequest(t *testing.T) {
 		name       string
 		invocation string
 	}{
-		{name: "missing agent", invocation: strings.Replace(question.Choices[0].Invocation, " --agent claude-code", "", 1)},
-		{name: "alternate agent", invocation: strings.Replace(question.Choices[0].Invocation, "--agent claude-code", "--agent opencode", 1)},
-		{name: "duplicate supported agent", invocation: strings.Replace(question.Choices[0].Invocation, "--agent claude-code", "--agent claude-code --agent claude-code", 1)},
-		{name: "duplicate alternate agent", invocation: strings.Replace(question.Choices[0].Invocation, "--agent claude-code", "--agent claude-code --agent opencode", 1)},
+		{name: "unexpected Claude agent", invocation: strings.Replace(question.Choices[0].Invocation, " --consent granted", " --agent claude-code --consent granted", 1)},
+		{name: "unexpected OpenCode agent", invocation: strings.Replace(question.Choices[0].Invocation, " --consent granted", " --agent opencode --consent granted", 1)},
+		{name: "duplicate unexpected agent", invocation: strings.Replace(question.Choices[0].Invocation, " --consent granted", " --agent claude-code --agent opencode --consent granted", 1)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mutated := question

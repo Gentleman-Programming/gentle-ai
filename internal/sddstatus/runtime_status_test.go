@@ -12,7 +12,7 @@ import (
 )
 
 func TestResolveEmbedsAndRoutesNativeRuntimeAuthority(t *testing.T) {
-	t.Run("OpenSpec active attempt blocks a second continuation", func(t *testing.T) {
+	t.Run("OpenSpec active attempt names its own continuation without stopping the caller", func(t *testing.T) {
 		repo := initRuntimeLedgerRepo(t)
 		seedReadyChange(t, repo, "active-runtime", "- [ ] 1.1 Work\n")
 		store := mustRuntimeStore(t, repo, "active-runtime")
@@ -32,7 +32,7 @@ func TestResolveEmbedsAndRoutesNativeRuntimeAuthority(t *testing.T) {
 		if status.RuntimeStatus.ActiveAttempt == nil || status.RuntimeStatus.ActiveAttempt.Ordinal != 1 {
 			t.Fatalf("runtime status = %#v, want active ordinal 1", status.RuntimeStatus)
 		}
-		assertRuntimeContinuationBlocked(t, status, "blocked(active_attempt)")
+		assertRuntimeContinuationOffered(t, status, active.Revision)
 		if instructions := strings.Join(status.PhaseInstructions.Apply, "\n"); !strings.Contains(instructions, "gentle-ai sdd-attempt acquire") ||
 			!strings.Contains(instructions, "gentle-ai sdd-attempt settle") {
 			t.Fatalf("apply instructions omit native runtime commands:\n%s", instructions)
@@ -133,7 +133,7 @@ func TestResolveEngramUsesTheSameNativeRuntimeAuthority(t *testing.T) {
 		t.Fatalf("artifact store = %q, want engram", status.ArtifactStore)
 	}
 	assertRuntimeStatusRevision(t, status, active.Revision)
-	assertRuntimeContinuationBlocked(t, status, "blocked(active_attempt)")
+	assertRuntimeContinuationOffered(t, status, active.Revision)
 	payload, err := json.Marshal(status)
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +239,7 @@ func TestMissingEvidenceRevisionPreservesStrictParserReasonBeforeLegacyTransacti
 	)
 	verify := parseVerifyResult(report, SpecCounts{Requirements: 1, Scenarios: 1})
 	transaction := &reviewtransaction.Transaction{FailedEvidenceRevision: runtimeTestHash('e')}
-	remediation := resolveBoundedRemediation(true, verify, transaction, nil, "", "")
+	remediation := resolveBoundedRemediation(true, false, verify, transaction, nil, "", "")
 	const want = "verify evidence cannot enter remediation: missing evidence_revision in verify result envelope"
 	if remediation.Reason != want {
 		t.Fatalf("missing evidence remediation reason = %q, want %q", remediation.Reason, want)
@@ -288,6 +288,24 @@ func assertRuntimeStatusRevision(t *testing.T, status Status, revision string) {
 	t.Helper()
 	if status.RuntimeStatus == nil || status.RuntimeStatus.Revision != revision {
 		t.Fatalf("RuntimeStatus = %#v, want revision %q", status.RuntimeStatus, revision)
+	}
+}
+
+// assertRuntimeContinuationOffered is the active-attempt counterpart of
+// assertRuntimeContinuationBlocked after #2463. A live attempt is not a stop:
+// compact acquire admits the holder of that attempt's token, so status names
+// the same continuation acquire names and leaves routing to the artifacts.
+func assertRuntimeContinuationOffered(t *testing.T, status Status, activeToken string) {
+	t.Helper()
+	if status.NextRecommended == "resolve-blockers" || status.Dependencies.Apply == DependencyBlocked {
+		t.Fatalf("live attempt stopped a caller compact acquire admits: next=%q dependencies=%#v blocked=%v",
+			status.NextRecommended, status.Dependencies, status.BlockedReasons)
+	}
+	if reasons := strings.Join(status.BlockedReasons, "\n"); strings.Contains(reasons, "active_attempt") {
+		t.Fatalf("live attempt was published as a blocker: %v", status.BlockedReasons)
+	}
+	if guidance := activeAttemptGuidance(t, status); !strings.Contains(guidance, "--token "+activeToken) {
+		t.Fatalf("apply instructions omit the live attempt's own token continuation:\n%s", guidance)
 	}
 }
 

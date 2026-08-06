@@ -48,6 +48,9 @@ type Sandbox struct {
 	Target   string
 	Revision string
 	Scratch  map[string]string
+	// UnavailableProcessTemp is set by a journey after fixture setup to prove
+	// product commands do not depend on the parent process temp directory.
+	UnavailableProcessTemp string
 
 	traceOffset int64
 }
@@ -100,7 +103,28 @@ func (s *Sandbox) env() []string {
 	if s.NewLineageActivation {
 		env = append(env, "GENTLE_AI_RDD_NEW_LINEAGE=1")
 	}
+	// Set last so a journey that poisons the process temp directory overrides
+	// the sandbox's own writable TMP/TEMP/TMPDIR defaults above.
+	if s.UnavailableProcessTemp != "" {
+		env = append(env,
+			"TEMP="+s.UnavailableProcessTemp,
+			"TMP="+s.UnavailableProcessTemp,
+			"TMPDIR="+s.UnavailableProcessTemp,
+		)
+	}
 	return env
+}
+
+func unavailableProcessTemp(sandbox *Sandbox) error {
+	path := filepath.Join(sandbox.Root, "unavailable-process-temp")
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("unavailable process temp path already exists: %s", path)
+	}
+	sandbox.UnavailableProcessTemp = path
+	return nil
 }
 
 // git runs a fixture git command. Fixture commands are sandbox setup, not user
@@ -340,8 +364,11 @@ func (p *capabilityProbe) probed(argv []string) (bool, string) {
 // Step is one unit of a journey. Journeys are data: adding one is adding a
 // Step to a slice.
 type Step struct {
-	Name     string
-	Fixture  func(*Sandbox) error
+	Name    string
+	Fixture func(*Sandbox) error
+	// Skip reports why an externally-backed step cannot run in this environment.
+	// The runner records the journey as unsupported rather than a false pass.
+	Skip     func(*Sandbox) string
 	Requires *Capability
 	Args     func(*Sandbox) ([]string, error)
 	// Composite drives a multi-command sub-flow (a lens loop, a rejected
@@ -482,6 +509,13 @@ func runJourney(binary string, journey Journey) JourneyResult {
 
 	for _, step := range journey.Steps {
 		run.step = step.Name
+		if step.Skip != nil {
+			if reason := step.Skip(run.sandbox); reason != "" {
+				result.Status = StatusUnsupported
+				result.UnsupportedSteps = append(result.UnsupportedSteps, step.Name+" ("+reason+")")
+				break
+			}
+		}
 
 		if step.Fixture != nil {
 			if err := step.Fixture(sandbox); err != nil {
@@ -550,6 +584,15 @@ func runJourney(binary string, journey Journey) JourneyResult {
 		if step.AbortOnBlock && record.Block != NotABlock && record.Block != BlockSelfRecovered {
 			break
 		}
+	}
+
+	// A product that emitted an execute transition with nothing to run fails
+	// the journey outright, whatever else the journey managed to do. It is not
+	// a friction number: no honest metric can be reported about a flow whose
+	// stated continuation the reader cannot follow.
+	if len(accumulator.deadTransitions) > 0 && result.Status != StatusFailed {
+		result.Status = StatusFailed
+		result.FailureReason = strings.Join(accumulator.deadTransitions, "; ")
 	}
 
 	result.Metrics = accumulator.metrics("")

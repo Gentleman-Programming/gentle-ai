@@ -142,18 +142,42 @@ const ReviewStartConsentDeclinedThisCandidate = "declined_this_candidate"
 // and the fix is to name the base to compare against, not to redo the work.
 const reviewStartEmptyCandidateHint = "the candidate has no pending changes; already-committed work can be reviewed by rerunning review start with --base-ref <commit> naming the base to compare against"
 
-// reviewStartNegotiateContractHint makes the negotiated contract path
-// discoverable from the plain START response.
-func reviewStartNegotiateContractHint(snapshot reviewtransaction.Snapshot) string {
+// reviewUndeclaredRuntimeIdentitySlot is what the printed continuation carries
+// when no runtime declared itself. The direct route refuses `--agent` outright
+// ("review start --agent requires a negotiated --contract"), so on that path
+// the caller's identity is genuinely unknown, and a slot is the only honest
+// thing to print: naming a concrete runtime there would be this CLI asserting
+// an identity on the caller's behalf.
+const reviewUndeclaredRuntimeIdentitySlot = "<your-runtime-identity>"
+
+// reviewNegotiatedStartCommand builds the exact negotiated `review start`
+// invocation for a frozen snapshot. It is the single source of the runnable
+// continuation the direct route names when it refuses (issue #2447): every
+// direct-route refusal must name a command that actually runs, so the
+// command shape lives here once instead of being reconstructed per call site.
+//
+// runtimeAgent is the identity the caller itself declared, never a constant.
+// This message is printed at the exact moment a reader is most likely to copy
+// it verbatim, so a baked-in `claude-code` would invite every other runtime to
+// declare a false identity and pass the transport admission check in
+// review_transport_capability.go under Claude Code's capability profile
+// (issue #2440). Naming the caller's own runtime keeps that check meaningful:
+// a runtime whose transport is unsupported is then refused, which is the
+// correct outcome for this build.
+func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAgent string) string {
+	identity := strings.TrimSpace(runtimeAgent)
+	if identity == "" {
+		identity = reviewUndeclaredRuntimeIdentitySlot
+	}
 	command := fmt.Sprintf("gentle-ai review start --contract %s --agent %s --target %s --projection %s",
-		ReviewIntegrationContractV2, model.AgentClaudeCode, snapshot.Identity, facadeProjection(snapshot.Projection))
+		ReviewIntegrationContractV2, identity, snapshot.Identity, facadeProjection(snapshot.Projection))
 	switch snapshot.Kind {
 	case reviewtransaction.TargetBaseDiff:
 		command += " --base-ref " + snapshot.BaseTree + " --committed-only"
 	case reviewtransaction.TargetBaseWorkspaceOverlay:
 		command += " --base-ref " + snapshot.BaseTree + " --workspace-overlay"
 	}
-	return "this response's selected lenses require the frozen Git trees, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `" + command + "` to receive them"
+	return command
 }
 
 // ReviewFacadeLensBinding pairs one selected lens with its frozen zero-based
@@ -518,12 +542,13 @@ var reviewFacadeCommandRunner = runReviewCommandContext
 var reviewFacadePlannedTransitionHook = func(context.Context, string, string, string) error { return nil }
 var reviewFacadeCommittedTransitionHook = func(context.Context, string, string, string) error { return nil }
 
-// reviewFacadeDiscoverIntendedUntracked is the injectable seam over START's
-// untracked-scope discovery, so tests can force an unanticipated internal
-// fault at the exact choke point issue #1881 crashed through and prove the
-// failure envelope and defect-report treatment both fire.
-var reviewFacadeDiscoverIntendedUntracked = func(ctx context.Context, builder reviewtransaction.SnapshotBuilder) ([]string, error) {
-	return builder.DiscoverIntendedUntracked(ctx)
+// reviewFacadeBuildStartSnapshot is the injectable seam over START's candidate
+// freeze, so tests can force an unanticipated internal fault at a real choke
+// point on the mutating path -- before any authority exists -- and prove the
+// failure envelope and defect-report treatment both fire. It replaced the
+// untracked-scope discovery seam that #2394 deleted from START.
+var reviewFacadeBuildStartSnapshot = func(ctx context.Context, builder reviewtransaction.SnapshotBuilder, target reviewtransaction.Target) (reviewtransaction.Snapshot, error) {
+	return builder.Build(ctx, target)
 }
 var renderReviewStartFrozenCandidateContext = func(ctx context.Context, builder reviewtransaction.SnapshotBuilder, snapshot reviewtransaction.Snapshot) (reviewtransaction.FrozenCandidateContext, error) {
 	return builder.FrozenCandidateContext(ctx, snapshot)
@@ -595,7 +620,7 @@ func (err *reviewStartContextError) Unwrap() error { return err.Cause }
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|reconcile-authority|reconcile-authority-batch|dispose-result|reopen-results|quarantine-legacy|quarantine-legacy-fix-scope|repair-legacy-alias|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Use review retry-final-verification only for a provider-proven completed failed final-verification tooling incident. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair; repair-legacy-alias is compatibility-only.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Use review retry-final-verification only for a provider-proven completed failed final-verification tooling incident. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
 		_, _ = fmt.Fprintln(stdout, "Additive headless capabilities: gentle-ai review capture-result (with --preflight), gentle-ai review inspect-candidate, and gentle-ai review preserve-result.")
 		return nil
 	}
@@ -677,8 +702,6 @@ func runReviewCommandContext(ctx context.Context, args []string, stdout io.Write
 		return runReviewFacadeValidate(ctx, args[1:], stdout)
 	case "bind-sdd":
 		return runReviewBindSDD(ctx, args[1:], stdout)
-	case "reconcile-authority-batch":
-		return runReviewReconcileAuthorityBatch(ctx, args[1:], stdout)
 	default:
 		return runReviewCommand(args, stdout)
 	}
@@ -690,6 +713,8 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewCaptureResult(args[1:], stdout)
 	case "inspect-candidate":
 		return RunReviewInspectCandidate(args[1:], stdout)
+	case "lens-context":
+		return RunReviewLensContext(args[1:], stdout)
 	case "capture-evidence":
 		return RunReviewCaptureEvidence(args[1:], stdout)
 	case "preserve-result":
@@ -718,20 +743,10 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewReclaim(args[1:], stdout)
 	case "inspect-authority":
 		return RunReviewInspectAuthority(args[1:], stdout)
-	case "reconcile-authority":
-		return RunReviewReconcileAuthority(args[1:], stdout)
-	case "reconcile-authority-batch":
-		return RunReviewReconcileAuthorityBatch(args[1:], stdout)
 	case "dispose-result":
 		return RunReviewDisposeResult(args[1:], stdout)
 	case "reopen-results":
 		return RunReviewReopenResults(args[1:], stdout)
-	case "quarantine-legacy":
-		return RunReviewLegacyQuarantine(args[1:], stdout)
-	case "quarantine-legacy-fix-scope":
-		return RunReviewLegacyFixScopeQuarantine(args[1:], stdout)
-	case "repair-legacy-alias":
-		return RunReviewLegacyAliasRepair(args[1:], stdout)
 	case "schema":
 		return RunReviewSchema(args[1:], stdout)
 	case "bind-sdd":
@@ -779,9 +794,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			return err
 		}
 		var runtime model.AgentID
-		if *contract == ReviewIntegrationContractV2 {
+		// A declared runtime identity is validated exactly as before, so an
+		// unsupported transport still stops here. An undeclared one is the
+		// manual/non-agent compatibility path runReviewFacadeStart already
+		// names: a read-only STATUS creates no authority, tier, budget, or
+		// collection state, so it has no state to fail closed over, and the
+		// documented route never declares an identity.
+		if *contract == ReviewIntegrationContractV2 && reviewRuntimeAgentCount(args) != 0 {
 			if reviewRuntimeAgentCount(args) != 1 {
-				// refusal:by-design world-action: a lifecycle route without one generated runtime identity cannot safely select a review transport
+				// refusal:by-design world-action: an ambiguous runtime identity cannot safely select a review transport
 				return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, errors.New("negotiated lifecycle STATUS requires exactly one generated runtime identity"))
 			}
 			var runtimeErr error
@@ -818,14 +839,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if err != nil {
 			return fmt.Errorf("resolve negotiated review repository root: %w", err)
 		}
-		intended := []string{}
-		if selectedProjection != reviewtransaction.ProjectionStaged {
-			intended, err = (reviewtransaction.SnapshotBuilder{Repo: root}).DiscoverIntendedUntracked(ctx)
-			if err != nil {
-				return fmt.Errorf("discover negotiated review target: %w", err)
-			}
-		}
-		target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: intended}
+		// Issue #2394: review scope is declared, never inferred from the
+		// worktree. STATUS derives the same target START will freeze, so it
+		// declares no untracked scope either.
+		target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: []string{}}
 		if selectedBaseRef != "" {
 			target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, selectedBaseRef
 		}
@@ -848,13 +865,6 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if err != nil {
 			return fmt.Errorf("assess negotiated review target: %w", err)
 		}
-		// Wave 1 shadow observation (rdd-shadow-evaluation): outcome-neutral,
-		// advisory-only, and a true no-op unless GENTLE_AI_RDD_SHADOW is set —
-		// see internal/reviewtransaction/shadow_observer.go. status has no
-		// authoritative receipt to freeze against yet, so both frozen tree
-		// arguments are honestly empty rather than fabricated.
-		reviewtransaction.ObserveShadowRelation(ctx, root, reviewtransaction.GateKind(*gate),
-			"", "", "", "", liveSnapshot, "", "", nil, nil)
 		if selectedBaseTree != "" && native.Projection.BaseTree != selectedBaseTree {
 			return errors.New("--base-tree does not identify an exact Git tree object")
 		}
@@ -941,7 +951,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								result.ValidationRequest = validationRequest
 							}
 						}
-						if *contract == ReviewIntegrationContractV2 && record.State.State == reviewtransaction.StateCorrectionRequired {
+						if *contract == ReviewIntegrationContractV2 && (record.State.State == reviewtransaction.StateCorrectionRequired || record.State.State == reviewtransaction.StateValidating) {
 							contextTarget := record.State.CurrentSnapshot.Identity
 							if validationRequest != nil {
 								contextTarget = validationRequest.CorrectionTargetIdentity
@@ -1006,7 +1016,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// surface (spec "Three-Tier Narration Contract"), written to
 			// stderr only, never mixed into the parsed stream.
 			if transition.Kind == reviewNextTransitionStop {
-				reviewNarrateStopReason(transition.ReasonCode)
+				reviewNarrateStopReason(transition.ReasonCode, runtime)
 			}
 		}
 		if err := result.Validate(); err != nil {
@@ -1114,13 +1124,9 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 			return fmt.Errorf("unsupported review recovery projection %q", selected)
 		}
 	}
+	// Issue #2394: a recovery successor declares scope exactly the way a fresh
+	// START does, so it never re-sweeps the worktree either.
 	intended := []string{}
-	if projection != reviewtransaction.ProjectionStaged {
-		intended, err = builder.DiscoverIntendedUntracked(context.Background())
-		if err != nil {
-			return err
-		}
-	}
 	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
 	if *committedOnly {
 		target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, base
@@ -1480,9 +1486,13 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			return reviewPreflightRefusal(reviewTransportCapabilityUnsupportedReason, err)
 		}
 	}
-	if negotiated && (*contract == ReviewIntegrationContractV2 || runtimeRequested) {
+	// The same admission as the capability gate above: an absent agent
+	// identity is the manual/non-agent compatibility path and is not gated,
+	// so the provider-returned START of an undeclared route stays runnable.
+	// Every declared identity is still proven before authority is created.
+	if negotiated && runtimeRequested {
 		if reviewRuntimeAgentCount(args) != 1 {
-			// refusal:by-design world-action: a START without one generated runtime identity cannot safely create review authority
+			// refusal:by-design world-action: an ambiguous runtime identity cannot safely create review authority
 			return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, errors.New("negotiated START requires exactly one generated runtime identity"))
 		}
 		if _, err := reviewRuntimeWithImmutableTransport(*runtimeAgent); err != nil {
@@ -1528,24 +1538,16 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			return errors.New("review start with --base-ref omits dirty tracked changes; rerun with --committed-only to acknowledge committed-only review scope")
 		}
 	}
+	// Issue #2394: START used to sweep every unignored untracked path in the
+	// worktree into the frozen candidate. Existing on disk is not a
+	// declaration, and the sweep handed a reviewer the exact bytes of files
+	// the user never submitted -- two unrelated credential files, in the
+	// reported occurrence. Review scope is now only what the user declared
+	// through Git's own mechanism: tracked modifications, plus new files put
+	// in the index with `git add`, which the candidate is already built from.
+	// Nothing here has to be configured for that to be safe, because there is
+	// no longer anything to configure: the sweep is gone rather than filtered.
 	intended := []string{}
-	if selectedProjection != reviewtransaction.ProjectionStaged {
-		intended, err = reviewFacadeDiscoverIntendedUntracked(ctx, builder)
-		if err != nil {
-			wrapped := fmt.Errorf("discover intended untracked files: %w", err)
-			// Discovery runs before Build and before any authority mutation, so
-			// its NAMED refusals classify as a not_started preflight in the
-			// negotiated envelope. Typed Git subprocess failures keep their own
-			// stronger git_command_* classification through this wrapper's
-			// chain, and anything else is unanticipated residue that must stay
-			// untyped so the defect-report treatment can see it for what it is.
-			var refusal *reviewtransaction.UntrackedScopeRefusalError
-			if errors.As(err, &refusal) {
-				return reviewPreflightRefusal(reviewPreflightUntrackedScopeReason, wrapped)
-			}
-			return wrapped
-		}
-	}
 	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: intended}
 	if strings.TrimSpace(*baseRef) != "" {
 		target.Kind = reviewtransaction.TargetBaseDiff
@@ -1554,20 +1556,23 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if *workspaceOverlay {
 		target.Kind = reviewtransaction.TargetBaseWorkspaceOverlay
 	}
-	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: root}).Build(ctx, target)
+	snapshot, err := reviewFacadeBuildStartSnapshot(ctx, reviewtransaction.SnapshotBuilder{Repo: root}, target)
 	if err != nil {
 		return fmt.Errorf("build facade review target: %w", err)
 	}
-	// Wave 1 shadow observation (rdd-shadow-evaluation): outcome-neutral,
-	// advisory-only, and a true no-op unless GENTLE_AI_RDD_SHADOW is set —
-	// see internal/reviewtransaction/shadow_observer.go. start has no prior
-	// authoritative receipt to freeze against, so both frozen tree
-	// arguments are honestly empty rather than fabricated.
-	reviewtransaction.ObserveShadowRelation(ctx, root, "",
-		"", "", "", "", snapshot, "", "", nil, nil)
 	if negotiated && snapshot.Identity != *targetIdentity {
 		return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
 			errors.New("review start target does not match the freshly built snapshot"))
+	}
+	// A negotiated TargetCurrentChanges candidate with zero changed paths
+	// (a clean, fully-committed worktree) would otherwise freeze as an empty
+	// candidate, pass risk assessment and consent, and only fail late and
+	// misleadingly at pre-push. Refuse it here, before any authority is
+	// created, and name --base-ref as the way to review committed work
+	// instead of silently deriving one.
+	if negotiated && snapshot.Kind == reviewtransaction.TargetCurrentChanges && len(snapshot.Paths) == 0 {
+		return reviewPreflightRefusal(reviewPreflightEmptyCandidateReason,
+			errors.New(reviewStartEmptyCandidateHint))
 	}
 	assessment, err := (reviewtransaction.SnapshotBuilder{Repo: root}).AssessSnapshotRisk(ctx, snapshot)
 	if err != nil {
@@ -1577,6 +1582,27 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	lenses, err := facadeSelectedLenses(assessment, *focus)
 	if err != nil {
 		return err
+	}
+	// Issue #2447. The direct route's own response type
+	// (ReviewFacadeStartResult) never carries repository_context -- only the
+	// negotiated ReviewIntegrationStartResult does -- so no reviewer lens can
+	// ever capture a result against a lineage this call would create, and
+	// the negotiated facade does not rediscover a lineage the direct route
+	// created. Refusing here, before the candidate is frozen into any
+	// lineage, authority, tier freeze, or budget, leaves nothing behind to
+	// strand. The maintainer decision recorded on #2447 made this the
+	// permanent shape of the direct route, not a stopgap: carrying
+	// repository_context on this path was considered and cancelled.
+	// Lineages the direct route created before this fix landed are a
+	// separate, still-open recovery/visibility gap tracked on #2447 and
+	// rdd-single-lifecycle-cutover; this refusal only stops new ones. The
+	// error below names the exact runnable negotiated continuation, so the
+	// refusal-resolution ratchet resolves it by naming, needing no by-design
+	// annotation.
+	if !negotiated && target.Kind != reviewtransaction.TargetCurrentChanges && len(lenses) > 0 {
+		return reviewPreflightRefusal(reviewPreflightDirectRouteUncompletableReason,
+			fmt.Errorf("review start without --contract cannot produce a completable review because its %d selected lens(es) require repository_context, which only the negotiated contract form publishes; rerun with `gentle-ai review start %s` instead",
+				len(lenses), strings.TrimPrefix(reviewNegotiatedStartCommand(snapshot, *runtimeAgent), "gentle-ai review start ")))
 	}
 	// The candidate is frozen and the tier is classified, so this is the one
 	// point where the kill switch can stop a start and consent can name the real
@@ -1616,14 +1642,144 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return err
 	}
 	// Wave 3 Slice 3 activation branch (design decision 5): every input this
-	// call needs — snapshot, risk assessment, tier, lenses, and the fact that
-	// authorizeReviewStart already returned nil (consent granted, or tier 0's
-	// carve-out) — was already computed by the exact same reused code the
-	// legacy branch below still uses unchanged. GENTLE_AI_RDD_NEW_LINEAGE
-	// unset or empty (the default) never reaches this branch at all, so the
-	// legacy start path stays byte-identical.
+	// call needs -- snapshot, risk assessment, tier, lenses, and the fact
+	// that authorizeReviewStart already returned nil (consent granted, or
+	// tier 0's carve-out) -- was already computed by the exact same reused
+	// code the legacy branch below still uses unchanged.
+	// GENTLE_AI_RDD_NEW_LINEAGE unset or empty (the default) never reaches
+	// this branch at all, so the legacy start path stays byte-identical.
+	//
+	// Wave 7 S7 (WU18) attempted removing this switch and reverted (see
+	// newLineageActivationEnvVar's own doc comment and
+	// openspec/changes/rdd-root-simplification-wave7/specs/rdd-single-lifecycle
+	// for the full rationale: v3 negotiated START never gained
+	// repository_context support, and removing the switch would make every
+	// negotiated START take that gapped path unconditionally). WU18a (S7a)
+	// kept the genuinely additive work that attempt produced: the v1/v2
+	// legacy-collision start guards below (a real gap the switch-ON path
+	// had -- before WU18a, a switch-ON review start never checked for
+	// EITHER kind of existing legacy authority under the same lineage id at
+	// all) and negotiated-form support for a NEW v3 lineage (frozen
+	// candidate context; repository_context stays nil for v3, the
+	// remaining, disclosed gap).
 	if reviewtransaction.NewLineageActivationEnabled() {
-		return runReviewFacadeStartNewLineage(ctx, stdout, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), snapshot, assessment, changedLines, lenses)
+		// This exact "choose a new lineage for compact authority" wording is
+		// a deliberately shared, standardized route across every
+		// legacy-read-only collision this codebase names
+		// (review_operation_contract_test.go,
+		// review_stop_discoverability_test.go,
+		// review_failure_contract_test.go, review_status_contract_test.go
+		// all assert this literal phrase for their own call sites too) --
+		// kept byte-identical here. v1 legacy authority genuinely has no
+		// OTHER CLI-reachable continuation verb (review recover's own
+		// predecessor lookup is compact-v2-only,
+		// reviewtransaction.CompactAuthoritativeStore, and never accepts a
+		// v1 chain), so "choose a new lineage" already names the one real,
+		// resolving exit for this specific collision.
+		trimmedLineage := strings.TrimSpace(*lineage)
+		if legacy, err := reviewtransaction.AuthoritativeStore(ctx, root, trimmedLineage); err == nil {
+			if _, loadErr := legacy.LoadChain(); loadErr == nil {
+				return fmt.Errorf("%w: choose a new lineage for compact authority", reviewtransaction.NewLegacyReadOnlyError("review/start", trimmedLineage))
+			}
+		}
+		// v2 (compact) collision check, new in Wave 7 S7a (WU18a): before
+		// this wave, a switch-ON `review start`
+		// (runReviewFacadeStartNewLineage, called directly) never checked
+		// for an existing compact-v2 lineage under the same id at all --
+		// only the legacy branch below's own StartCompactAuthority has
+		// internal v2-vs-v2 conflict detection, and that code path never
+		// runs when the switch is on. This gap would let a v3 record be
+		// silently created alongside a LIVE v2 lineage of the same name for
+		// a genuinely DIFFERENT candidate -- exactly the kind of
+		// dual-authority collision the v1 guard above exists to prevent,
+		// just for the other legacy store. Unlike v1, a v2 predecessor IS
+		// `review recover`'s own supported shape
+		// (CompactAuthoritativeStore), so the exit named here is real and
+		// resolving, not aspirational.
+		//
+		// Scoped to a genuine content conflict only, not the exact same
+		// candidate: a caller replaying a start hint verbatim over a v2
+		// lineage that already exactly matches this candidate (the
+		// documented, intended use of every emitted Hint field) must not be
+		// refused just because that exact content happens to already be
+		// governed by v2 -- v3 freezing its own, separate authority for
+		// identical bytes is not a collision in any harmful sense, and
+		// refusing it would strand every pre-wave repository's existing v2
+		// lineages out of the hint-replay workflow entirely.
+		if compact, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, trimmedLineage); err == nil {
+			if record, loadErr := compact.Load(); loadErr == nil && record.State.InitialSnapshot.Identity != snapshot.Identity {
+				return fmt.Errorf("compact authority %q already governs this lineage id for a different candidate: recover it into a successor first (fill in --successor-lineage and --disposition): %s ; or retry `review start` with a different --lineage to start independently",
+					trimmedLineage, reviewRecoverCommand(*cwd, trimmedLineage, record.Revision, "<new-lineage>", "<scope_changed|invalidated|escalated>"))
+			}
+		}
+		record, err := runReviewFacadeStartNewLineage(ctx, root, trimmedLineage, strings.TrimSpace(*policySource), snapshot, assessment, changedLines, lenses)
+		if err != nil {
+			return err
+		}
+		if !negotiated {
+			result := ReviewFacadeStartNewLineageResult{
+				Operation: "review/start", LineageID: record.Authority.LineageID, State: record.Authority.State,
+				RiskLevel: record.Authority.Tier, SelectedLenses: append([]string{}, record.Authority.SelectedLenses...),
+				CorrectionBudget: record.Authority.CorrectionBudgetLines, ChangedLines: changedLines,
+				TargetIdentity: snapshot.Identity, BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree,
+			}
+			return encodeReviewJSON(stdout, result)
+		}
+		legacyResult := reviewFacadeStartResultForNewLineage(record.Authority, snapshot, changedLines)
+		legacyResult.RiskEvidence = reviewConsentRiskEvidence(assessment)
+		switch {
+		case legacyResult.ChangedFiles == 0 && target.Kind == reviewtransaction.TargetCurrentChanges:
+			legacyResult.Hint = reviewStartEmptyCandidateHint
+		case legacyResult.LensesRequired:
+			legacyResult.Hint = "this response's selected lenses require the frozen Git trees, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `" +
+				reviewNegotiatedStartCommand(snapshot, *runtimeAgent) + "` to receive them"
+		}
+		// Negotiated envelope, new in Wave 7 S7a (WU18a): runReviewFacadeStartNewLineage
+		// never had negotiated-form support before this (it was called
+		// unconditionally, ignoring --contract, even when the switch was
+		// on -- see that function's own doc comment). This closes that gap
+		// using the same frozen-candidate-context/newReviewIntegrationStartResult
+		// production machinery the legacy branch's own negotiated path
+		// below uses, simplified for v3's always-fresh-create semantics (no
+		// resume/recover drift to reconcile against).
+		//
+		// repository_context is deliberately left nil for v3 authority: its
+		// own production validator, validateLiveReviewRepositoryContext
+		// (repository_locator.go), is compact-v2-only by construction -- it
+		// loads through CompactAuthoritativeStore and compares
+		// binding.TargetIdentity (Snapshot.Identity, one combined hash)
+		// against record.State.InitialSnapshot.Identity, a legacy-v2-only
+		// field. v3's own NewLineageAuthority carries CandidateIdentity
+		// instead -- a structurally different hash
+		// (RepositoryID/BaseTree/CandidateTree/ChangedPathsModesDigest/PolicyHash,
+		// no combined Snapshot.Identity equivalent stored anywhere) -- so
+		// there is no safe way to verify a TargetIdentity match against it
+		// without either a v3 authority schema change or re-deriving
+		// Snapshot.Identity from Git at validation time, neither of which
+		// belongs inside an under-pressure patch to a security-sensitive
+		// binding validator. Building genuine v3 repository-context support
+		// (a real, standalone capability this wave never scoped) is exactly
+		// the follow-up this discovery drives -- see the spec amendment.
+		// capture-result and finalize both also accept --target/--lineage
+		// directly, so this omission costs only the cross-process-cwd
+		// convenience, never correctness.
+		var frozenContext *reviewtransaction.FrozenCandidateContext
+		if len(record.Authority.SelectedLenses) > 0 {
+			contextBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
+			contextResult, contextErr := renderReviewStartFrozenCandidateContext(ctx, contextBuilder, snapshot)
+			if contextErr == nil && *contract == ReviewIntegrationContractV1 {
+				contextResult, contextErr = contextBuilder.WithLegacyCandidateDiff(ctx, snapshot, contextResult)
+			}
+			if contextErr != nil {
+				return &reviewStartContextError{AuthoritySelected: true, LineageID: record.Authority.LineageID, StoreRevision: record.Revision, Cause: contextErr}
+			}
+			frozenContext = &contextResult
+		}
+		negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment, snapshot.Kind, frozenContext, nil, *contract)
+		if err != nil {
+			return &reviewStartContextError{AuthoritySelected: true, LineageID: record.Authority.LineageID, StoreRevision: record.Revision, Cause: err}
+		}
+		return encodeReviewJSON(stdout, negotiatedResult)
 	}
 	explicitLineage := strings.TrimSpace(*lineage) != ""
 	if !explicitLineage {
@@ -1730,11 +1886,22 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		// reporting a different frozen authority keeps the previous shape.
 		if authority.InitialSnapshot.Identity == snapshot.Identity {
 			legacyResult.RiskEvidence = reviewConsentRiskEvidence(assessment)
+			// A base-diff direct start that would select lenses now refuses
+			// up front (issue #2447), before this point ever runs, so
+			// LensesRequired only reads true here for a workspace-mode
+			// candidate -- the one shape issue #2447 left untouched, since a
+			// bare `review status --next-transition` rediscovers it from the
+			// live workspace with no extra flags. It still completes through
+			// the direct route, so it keeps the informational hint pointing
+			// at the negotiated form for callers who want the frozen Git
+			// trees, changed-path manifest, and artifact subjects a plain
+			// response cannot carry.
 			switch {
 			case legacyResult.ChangedFiles == 0 && target.Kind == reviewtransaction.TargetCurrentChanges:
 				legacyResult.Hint = reviewStartEmptyCandidateHint
 			case legacyResult.LensesRequired:
-				legacyResult.Hint = reviewStartNegotiateContractHint(authority.InitialSnapshot)
+				legacyResult.Hint = "this response's selected lenses require the frozen Git trees, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `" +
+					reviewNegotiatedStartCommand(authority.InitialSnapshot, *runtimeAgent) + "` to receive them"
 			}
 		}
 		return encodeReviewJSON(stdout, legacyResult)
@@ -1791,7 +1958,6 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	return encodeReviewJSON(stdout, negotiatedResult)
 }
-
 func validateReviewStartBinding(args []string, negotiated bool, target, projection, baseRef, lineage string, committedOnly, workspaceOverlay bool, consent, locale string) error {
 	counts := reviewStartBindingFlagCounts(args)
 	switch reviewStartConsentMode(strings.TrimSpace(consent)) {
@@ -2195,7 +2361,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			// pipeline these other flags name.
 			for _, unsupported := range []string{"result", "result-artifact", "result-artifact-file", "captured-evidence", "validation", "refuter", "evidence"} {
 				if reviewFinalizeFlagProvided(args, unsupported) {
-					return reviewPreflightError(fmt.Errorf("new-lineage finalize does not yet support --%s; retry with `gentle-ai review finalize --lineage %s` and, if needed, --failed or --admission-findings", unsupported, *lineage))
+					return reviewPreflightError(fmt.Errorf("new-lineage finalize does not yet support --%s; retry with `gentle-ai review finalize --lineage %s` and, if needed, --failed or persisted provider capture", unsupported, *lineage))
 				}
 			}
 			if strings.TrimSpace(*admissionFindingsPath) != "" {
@@ -2327,6 +2493,12 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		reviewerResults, err = readCapturedReviewerResults(ctx, root, store.Dir, state, record.Revision)
 		if err != nil {
 			return reviewPreflightError(err)
+		}
+		// Observed here, at the one moment the captured artifacts and the
+		// frozen authority are both in hand, and carried onto the receipt by
+		// the review completion below. Record only: nothing reads it back.
+		if state.State == reviewtransaction.StateReviewing {
+			state.ReviewerContextLevel = discoverReviewerContextLevel(ctx, root, store.Dir, state, record.Revision)
 		}
 	}
 	var validation *facadeValidationResult
@@ -2597,6 +2769,9 @@ func validateReviewFinalizeSubmission(ctx context.Context, repo string, state re
 	if submission == nil {
 		return errors.New("review finalize submission is unavailable") // refusal:by-design world-action: the provider must issue a complete descriptor before a submission can be executed
 	}
+	if submission.Value == nil {
+		return errors.New("review finalize submission has no value slot") // refusal:by-design world-action: a finalize request cannot execute a capture-evidence descriptor
+	}
 	expected := append([]string{}, submission.ArgumentTokens...)
 	slot := submission.Value.SubstitutionLocation
 	expected[slot] = strings.Replace(expected[slot], reviewSubmissionValuePlaceholder, value, 1)
@@ -2690,9 +2865,6 @@ func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state
 		appendState("review/escalate-correction-verification")
 	}
 	if state.State == reviewtransaction.StateCorrectionRequired && validation != nil && entryState == reviewtransaction.StateCorrectionRequired && entryProposed {
-		if err := rejectFacadeCorrectionUntracked(ctx, repo, state); err != nil {
-			return plan, err
-		}
 		if captured == nil {
 			return plan, errors.New("compact correction acceptance requires captured repository verification evidence") // refusal:by-design operator-knowledge: repository verification is an external prerequisite captured from the current STATUS transition
 		}
@@ -2904,6 +3076,9 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	}
 	if strings.TrimSpace(*gate) == "" {
 		return fmt.Errorf("review validate requires --gate: one of %s", strings.Join(reviewIntegrationGateNames(), ", "))
+	}
+	if !validReviewIntegrationGate(reviewtransaction.GateKind(*gate)) {
+		return reviewPreflightError(fmt.Errorf("review validate requires --gate: one of %s", strings.Join(reviewIntegrationGateNames(), ", ")))
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -3629,7 +3804,19 @@ func discoverCompactFacadeFinalize(ctx context.Context, repo, lineage string) (r
 	if len(candidates) > 1 {
 		exact := candidates[:0]
 		for _, candidate := range candidates {
-			if (reviewtransaction.SnapshotBuilder{Repo: repo}).ValidateLiveSnapshot(ctx, candidate.record.State.CurrentSnapshot) == nil {
+			validationErr := (reviewtransaction.SnapshotBuilder{Repo: repo}).ValidateLiveSnapshot(ctx, candidate.record.State.CurrentSnapshot)
+			if validationErr != nil && reviewtransaction.IsCompactAuthorityOperationalFailure(validationErr) {
+				return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, validationErr
+			}
+			matches := validationErr == nil
+			if !matches {
+				_, rebuildErr := reviewtransaction.RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, candidate.record.State)
+				if rebuildErr != nil && (reviewtransaction.IsCompactAuthorityOperationalFailure(rebuildErr) || reviewtransaction.IsCorrectionBudgetExceeded(rebuildErr)) {
+					return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, rebuildErr
+				}
+				matches = rebuildErr == nil
+			}
+			if matches {
 				exact = append(exact, candidate)
 			}
 		}
@@ -3866,7 +4053,7 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 				}
 			}
 		}
-		if nextTransition && contract == ReviewIntegrationContractV2 && state.State == reviewtransaction.StateCorrectionRequired {
+		if nextTransition && contract == ReviewIntegrationContractV2 && (state.State == reviewtransaction.StateCorrectionRequired || state.State == reviewtransaction.StateValidating) {
 			contextTarget := state.CurrentSnapshot.Identity
 			if validationRequest != nil {
 				contextTarget = validationRequest.CorrectionTargetIdentity
@@ -3933,30 +4120,6 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 		Eligibility: eligibility, NextTransition: transition, ValidationRequest: validationRequest,
 	}
 	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationFinalize, result, public, contract)
-}
-
-func rejectFacadeCorrectionUntracked(ctx context.Context, repo string, state reviewtransaction.CompactState) error {
-	if state.InitialSnapshot.Projection == reviewtransaction.ProjectionStaged {
-		return nil
-	}
-	live, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).DiscoverIntendedUntracked(ctx)
-	if err != nil {
-		return fmt.Errorf("discover correction untracked paths: %w", err)
-	}
-	allowed := make(map[string]struct{}, len(state.CurrentSnapshot.IntendedUntracked))
-	for _, path := range state.CurrentSnapshot.IntendedUntracked {
-		allowed[path] = struct{}{}
-	}
-	unexpected := make([]string, 0)
-	for _, path := range live {
-		if _, ok := allowed[path]; !ok {
-			unexpected = append(unexpected, path)
-		}
-	}
-	if len(unexpected) != 0 {
-		return fmt.Errorf("correction contains untracked paths outside the frozen review scope: %s", strings.Join(unexpected, ", "))
-	}
-	return nil
 }
 
 // reviewDisabledUnmanagedReason is the shipped disposition sentence, unchanged

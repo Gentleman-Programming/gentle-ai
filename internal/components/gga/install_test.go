@@ -110,10 +110,12 @@ func TestInstallCommandByProfile(t *testing.T) {
 			},
 		},
 		{
-			name: "unsupported package manager returns error",
+			// Issue #2499: the probe (#2493) accepts any Linux package manager
+			// on PATH; only a probe-rejected profile (no manager found) errors.
+			name: "linux without package manager returns error",
 			profile: system.PlatformProfile{
 				OS:             "linux",
-				PackageManager: "zypper",
+				PackageManager: "",
 			},
 			wantErr: true,
 		},

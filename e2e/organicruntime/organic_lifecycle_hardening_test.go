@@ -24,7 +24,7 @@ import (
 func currentChangesTargetIdentity(t *testing.T, repo string) string {
 	t.Helper()
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
-	intended, err := builder.DiscoverIntendedUntracked(context.Background())
+	intended, err := builder.DiscoverUnignoredUntracked(context.Background())
 	if err != nil {
 		t.Fatalf("discover intended untracked candidate: %v", err)
 	}

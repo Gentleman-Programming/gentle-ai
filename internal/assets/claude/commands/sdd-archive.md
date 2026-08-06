@@ -32,6 +32,8 @@ STEP B — RETRIEVE FULL CONTENT (mandatory):
   mem_get_observation(id: verify_id) → full verification report
 Record all observation IDs in the archive report for traceability.
 Treat `verify-report` and `apply-progress` as intermediate snapshots: the archive report records the state at close per the skill's Final-State Authority section, and explicit final-state facts in your launch prompt outrank stale snapshot claims.
+
+Archival is a MECHANICAL filesystem operation: copy/move artifacts with `cp -R`/`mv`/`git mv` via the shell only — NEVER via model Read/Write, which can truncate bytes silently while reporting success. After every copy/move, run `diff -r` (source vs. destination, archive-report additive-only) and include its verbatim output in the result; an empty diff is the only passing evidence, and a skipped/missing `diff -r` FAILS the phase. If shell access is unavailable, STOP and report `blocked` — do NOT fall back to Read/Write copying.
 Save:
   mem_save(title: "sdd/{change-name}/archive-report", topic_key: "sdd/{change-name}/archive-report", type: "architecture", project: "{project}", capture_prompt: false, content: "{archive report with observation IDs}")
   Set capture_prompt: false when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.

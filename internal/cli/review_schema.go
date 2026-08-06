@@ -15,13 +15,15 @@ import (
 // agent prompts, and the admission logic cannot describe different envelopes.
 const reviewReviewerSchema = reviewtransaction.ReviewerResultSchema
 
+const reviewVerificationEvidenceSchemaID = "https://gentle-ai.dev/schema/review/verification-evidence/v1"
+
 // reviewVerificationEvidenceSchema describes the input review capture-evidence
 // actually accepts and readCapturedFinalEvidence actually enforces: raw,
 // non-empty final test/verification evidence content, not a structured JSON
 // object, bounded by the same native artifact limit every captured artifact
 // uses (reviewResultArtifactLimit).
 var reviewVerificationEvidenceSchema = fmt.Sprintf(
-	`{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://gentle-ai.dev/schema/review/verification-evidence/v1","title":"Gentle AI captured final verification evidence","description":"Raw final test or verification evidence content captured by review capture-evidence. It is not a structured JSON document: any non-empty content up to the native artifact bound is accepted.","type":"string","minLength":1,"maxLength":%d}`,
+	`{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"`+reviewVerificationEvidenceSchemaID+`","title":"Gentle AI captured final verification evidence","description":"Raw final test or verification evidence content captured by review capture-evidence. It is not a structured JSON document: any non-empty content up to the native artifact bound is accepted.","type":"string","minLength":1,"maxLength":%d}`,
 	reviewResultArtifactLimit,
 )
 

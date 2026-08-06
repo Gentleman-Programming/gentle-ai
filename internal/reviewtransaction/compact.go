@@ -104,6 +104,23 @@ type CompactState struct {
 	CumulativeCorrectionLines    int                          `json:"cumulative_correction_lines,omitempty"`
 	ResultDispositions           []CompactResultDisposition   `json:"result_dispositions,omitempty"`
 	ResultReopens                []CompactResultReopen        `json:"result_reopens,omitempty"`
+	ReviewerContextLevel         ReviewerContextLevel         `json:"reviewer_context_level,omitempty"`
+}
+
+// CorrectionBudgetExceededError identifies a repository-derived correction
+// whose changed lines exceed the authority's remaining correction budget.
+type CorrectionBudgetExceededError struct {
+	Actual    int
+	Remaining int
+}
+
+func (err *CorrectionBudgetExceededError) Error() string {
+	return fmt.Sprintf("actual correction is %d changed lines, exceeding the remaining budget of %d", err.Actual, err.Remaining)
+}
+
+func IsCorrectionBudgetExceeded(err error) bool {
+	var budgetErr *CorrectionBudgetExceededError
+	return errors.As(err, &budgetErr)
 }
 
 // CompactResultReopenSlot binds one selected lens artifact at the exact
@@ -279,6 +296,18 @@ type CompactReceipt struct {
 	SelectedLenses            []string            `json:"selected_lenses"`
 	ResolvedFindingIDs        []string            `json:"resolved_finding_ids"`
 	TerminalState             TerminalState       `json:"terminal_state"`
+	// ReviewerContextLevel records the mechanism that put the immutable
+	// candidate evidence in front of this review's reviewers. It is recorded
+	// only, never gated on, and never compared to another level: whether any
+	// delivery gate ever requires a particular mechanism is a separate
+	// decision, and this field exists now because it cannot be backfilled — a
+	// receipt issued without it can never be classified later.
+	//
+	// It is omitempty, and absence means "not recorded" rather than any
+	// particular mechanism. That keeps every receipt issued before this field
+	// existed re-derivable byte-identically, which its immutable publication
+	// requires.
+	ReviewerContextLevel ReviewerContextLevel `json:"reviewer_context_level,omitempty"`
 }
 
 type CompactReviewInput struct {
@@ -1529,6 +1558,7 @@ func (state CompactState) Receipt() (CompactReceipt, error) {
 		EvidenceTargetIdentity: state.EvidenceTargetIdentity, EvidenceAuthorityRevision: state.EvidenceAuthorityRevision,
 		RiskLevel: state.RiskLevel, SelectedLenses: append([]string{}, state.SelectedLenses...),
 		ResolvedFindingIDs: append([]string(nil), state.FixFindingIDs...), TerminalState: terminal,
+		ReviewerContextLevel: state.ReviewerContextLevel,
 	}
 	if err := receipt.Validate(); err != nil {
 		return CompactReceipt{}, err
@@ -1609,6 +1639,11 @@ func (receipt CompactReceipt) Validate() error {
 	}
 	if receipt.TerminalState != TerminalApproved && receipt.TerminalState != TerminalEscalated {
 		return errors.New("compact receipt terminal state is invalid")
+	}
+	// Shape only, deliberately never membership: an unknown level recorded by a
+	// later release must stay readable here. See ReviewerContextLevel.
+	if receipt.ReviewerContextLevel != "" && !ReviewerContextLevelWellFormed(receipt.ReviewerContextLevel) {
+		return errors.New("compact receipt reviewer context level is malformed") // refusal:by-design world-action: a persisted receipt carrying unreadable bytes in an audit field requires storage repair, not an operator command
 	}
 	hasRecordBinding := receipt.EvidenceRecordDigest != "" || receipt.EvidenceOutcome != "" ||
 		receipt.EvidenceTargetIdentity != "" || receipt.EvidenceAuthorityRevision != ""

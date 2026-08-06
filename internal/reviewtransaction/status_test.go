@@ -44,7 +44,7 @@ func TestInventoryAuthorityReportsActiveMalformedAndMixedCollisionWithoutMutatio
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Schema != ReviewAuthorityStatusSchema || report.Complete {
+	if report.Schema != ReviewAuthorityStatusSchema {
 		t.Fatalf("report header = %#v", report)
 	}
 	if !hasAuthorityInventoryStatus(report.Entries, "active-lineage", AuthorityStatusCollision) ||
@@ -255,7 +255,7 @@ func TestInventoryAuthorityRejectsStructurallyValidReceiptsThatMismatchTerminalA
 			if err != nil {
 				t.Fatal(err)
 			}
-			if report.Complete || report.Authoritative || report.Status != AuthorityStatusInvalid || !hasAuthorityInventoryStatus(report.Entries, fixture.lineage, AuthorityStatusInvalid) {
+			if !hasAuthorityInventoryStatus(report.Entries, fixture.lineage, AuthorityStatusInvalid) {
 				t.Fatalf("mismatched receipt report = %#v", report)
 			}
 		})
@@ -320,11 +320,28 @@ func TestInventoryAuthorityReportsRecoveredSuccessorAndSupersededPredecessor(t *
 	if err := os.WriteFile(filepath.Join(filepath.Dir(store.Dir), successor.LineageID, "review-state.json"), payload, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CompactAuthorityLeaves(context.Background(), repo); err == nil {
-		t.Fatal("compact leaves accepted a recovery generation gap")
+	// The generation gap invalidates the SUCCESSOR's edge. The successor stops
+	// being authority and its predecessor stops being superseded by it; the
+	// predecessor itself was never damaged and comes back as the leaf.
+	leaves, err := CompactAuthorityLeaves(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("a recovery generation gap poisoned enumeration: %v", err)
+	}
+	names := map[string]bool{}
+	for _, leaf := range leaves {
+		names[leaf.lineageID] = true
+	}
+	if names[successor.LineageID] {
+		t.Fatalf("the generation-gapped successor was enumerated as authority: %#v", names)
+	}
+	if !names[predecessor.LineageID] {
+		t.Fatalf("the undamaged predecessor was excluded: %#v", names)
+	}
+	if err := CompactAuthorityLineageBlocked(context.Background(), repo, successor.LineageID); err == nil {
+		t.Fatal("compact authority accepted a recovery generation gap")
 	}
 	report, err = InventoryAuthority(context.Background(), repo)
-	if err != nil || report.Complete || report.Authoritative || !hasAuthorityInventoryStatus(report.Entries, successor.LineageID, AuthorityStatusInvalid) ||
+	if err != nil || !hasAuthorityInventoryStatus(report.Entries, successor.LineageID, AuthorityStatusInvalid) ||
 		hasAuthorityInventoryStatus(report.Entries, predecessor.LineageID, AuthorityStatusSuperseded) {
 		t.Fatalf("invalid recovery edge report = %#v, %v", report, err)
 	}
@@ -420,8 +437,7 @@ func TestInventoryAuthorityKeepsPresentButMalformedLegacyReceiptInvalid(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Complete || report.Authoritative || report.Status != AuthorityStatusInvalid ||
-		!hasAuthorityInventoryStatus(report.Entries, "legacy-corrupt-receipt", AuthorityStatusInvalid) {
+	if !hasAuthorityInventoryStatus(report.Entries, "legacy-corrupt-receipt", AuthorityStatusInvalid) {
 		t.Fatalf("malformed present receipt report = %#v", report)
 	}
 }

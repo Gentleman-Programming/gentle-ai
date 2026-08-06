@@ -17,10 +17,72 @@ package cli
 
 import (
 	"bytes"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
+
+func TestReviewValidateRejectsUnsupportedGateBeforeRepositoryAndModeResolution(t *testing.T) {
+	fixtures := []struct {
+		name string
+		cwd  func(*testing.T) string
+	}{
+		{
+			name: "repository discovery",
+			cwd: func(t *testing.T) string {
+				return filepath.Join(t.TempDir(), "missing")
+			},
+		},
+		{
+			name: "disabled mode bypass with corrupt authority",
+			cwd:  killSwitchOrderingFixture,
+		},
+	}
+	forms := []struct {
+		name       string
+		negotiated bool
+	}{
+		{name: "plain"},
+		{name: "negotiated", negotiated: true},
+	}
+
+	for _, fixture := range fixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			for _, form := range forms {
+				t.Run(form.name, func(t *testing.T) {
+					args := []string{"validate", "--cwd", fixture.cwd(t), "--gate", "unsupported"}
+					if form.negotiated {
+						args = append(args, "--contract", ReviewIntegrationContractV1)
+					}
+					var output bytes.Buffer
+					err := RunReview(args, &output)
+					if err == nil {
+						t.Fatalf("unsupported gate succeeded:\n%s", output.String())
+					}
+
+					reason := err.Error()
+					if form.negotiated {
+						failure := decodeReviewIntegrationFailure(t, output.Bytes())
+						if failure.Phase != "preflight" || failure.Code != reviewIntegrationInvalidRequestCode ||
+							failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "not_evaluated" {
+							t.Fatalf("unsupported gate failure = %#v", failure)
+						}
+						reason = failure.Cause
+					} else if output.Len() != 0 {
+						t.Fatalf("plain unsupported gate emitted output before refusal: %q", output.String())
+					}
+					for _, gate := range reviewIntegrationGateNames() {
+						if !strings.Contains(reason, gate) {
+							t.Fatalf("unsupported gate refusal = %q, missing supported gate %q", reason, gate)
+						}
+					}
+				})
+			}
+		})
+	}
+}
 
 // killSwitchOrderingFixture builds a repo with a corrupted authority decoy
 // and returns it disabled, ready for a validate call at any gate.

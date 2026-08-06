@@ -158,12 +158,71 @@ func TestRunSDDAttemptCompactBlocksWithoutMutation(t *testing.T) {
 			if !reflect.DeepEqual(before, after) {
 				t.Fatalf("blocked operation mutated authority\nbefore=%v\nafter=%v", before, after)
 			}
-			keys := []string{"state", "reason"}
+			// Exit-naming audit fix #2: compactBlocked now names a runnable
+			// continuation for every reason it produces (previously a bare
+			// {"state":"blocked","reason":"<code>"} with nothing behind it —
+			// 21 call sites, zero tests). Every blocked result therefore
+			// carries non-empty exit/detail alongside state/reason.
+			if result.Exit == "" || result.Detail == "" {
+				t.Fatalf("blocked result = %#v, want non-empty Exit/Detail", result)
+			}
+			keys := []string{"state", "reason", "exit", "detail"}
 			if wantToken != "" {
 				keys = append(keys, "token")
 			}
 			assertCompactPayloadKeys(t, payload, keys...)
 		})
+	}
+}
+
+// TestActiveAttemptBlockedExitNamesAGenuinelyRunnableCommand is the
+// execution-based RED-first proof for adversarial finding F2: the
+// active_attempt Exit text used to print `gentle-ai sdd-attempt acquire
+// --token <t>` and `gentle-ai sdd-attempt settle --token <t>` as if those
+// were complete commands, when both actually require five more required
+// flags each (--cwd, --change, then either --request-id/--work-unit/
+// --evidence-goal for acquire or --request-id/--outcome/--evidence-revision/
+// --diagnosis/--harness-disposition/--cleanup-evidence/--process-evidence
+// for settle) -- confirmed by executing both against this real CLI. This
+// test triggers a genuine active_attempt block, then actually EXECUTES the
+// one command the fixed text is required to name in full
+// (`sdd-attempt status --cwd <repo> --change <change>`, with real values
+// substituted for the placeholders) through RunSDDAttempt -- the same
+// dispatch path the compiled binary uses -- and requires the text to never
+// claim the acquire/settle forms are complete on their own.
+func TestActiveAttemptBlockedExitNamesAGenuinelyRunnableCommand(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	const change = "active-attempt-exit-text"
+	started, _ := runCompactSDDAttempt(t, compactAcquireArgs(repo, change, "exit-text-owner", 2))
+	blocked, _ := runCompactSDDAttempt(t, compactAcquireArgs(repo, change, "exit-text-contender", 2))
+	if blocked.State != "blocked" || blocked.Reason != "active_attempt" || blocked.Token != started.Token {
+		t.Fatalf("active-attempt setup = %#v, want blocked/active_attempt/%s", blocked, started.Token)
+	}
+	if blocked.Exit == "" {
+		t.Fatal("active_attempt result carries no Exit text to verify")
+	}
+
+	// The text must never claim the bare acquire/settle forms are complete:
+	// that is exactly the class of defect this test exists to catch.
+	for _, incomplete := range []string{
+		"run `gentle-ai sdd-attempt acquire --token",
+		"run `gentle-ai sdd-attempt settle --token",
+	} {
+		if strings.Contains(blocked.Exit, incomplete) {
+			t.Fatalf("active_attempt Exit still claims an incomplete command is runnable as printed (%q): %q", incomplete, blocked.Exit)
+		}
+	}
+
+	// The one command the text is allowed to print as complete must
+	// actually run. Extract it with real placeholder substitution and
+	// execute it through RunSDDAttempt -- not just parse its flags.
+	const wantCommand = "gentle-ai sdd-attempt status --cwd <repo> --change <change>"
+	if !strings.Contains(blocked.Exit, wantCommand) {
+		t.Fatalf("active_attempt Exit does not name %q: %q", wantCommand, blocked.Exit)
+	}
+	var statusOutput bytes.Buffer
+	if err := RunSDDAttempt([]string{"status", "--cwd", repo, "--change", change}, &statusOutput); err != nil {
+		t.Fatalf("executing the named command with real --cwd/--change substituted for <repo>/<change> failed: %v\n%s", err, statusOutput.String())
 	}
 }
 

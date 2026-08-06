@@ -13,7 +13,7 @@ When a sub-agent or tool returns a user-facing blocking prompt or menu, preserve
 - Never summarize, abbreviate, reorder, relabel, merge, or omit choices. Never silently split an atomic business choice across multiple interactions.
 - Native route: The classified native question UI is `question`. Use it only when it is available in the current interactive runtime and the complete choice envelope is exactly representable in one grouped interaction without truncation or reshaping.
 - Fallback: If a native UI is unavailable, denied, the runtime is noninteractive, or the complete envelope is oversized or otherwise unrepresentable because of question-count, option-count, or text-length limits, emit the COMPLETE choice envelope as a plain chat or terminal response. Include the required answer syntax and why the input blocks progress. Then STOP. Do not choose, default, infer, launch dependent work, or continue. Native-tool-only wording elsewhere never disables this fallback.
-- Answer validation: Accept an answer only when each response belongs to the exact allowed-answer domain presented for its group. Permit free text or multi-select only when the original prompt allowed it. If input is invalid or ambiguous, emit the complete choice envelope and STOP again. Return a valid answer to the same blocked actor exactly once.
+- Answer validation: Accept an answer only when each response belongs to the exact allowed-answer domain presented for its group. Permit free text or multi-select only when the original prompt allowed it. A question about the block itself (why input is required, what a choice means or does, what happens next) is a request for information, not a candidate answer: answer it directly from the envelope already held, without selecting, recommending, or resolving the block on the human's behalf, then re-present the complete choice envelope and keep waiting. If input is invalid or ambiguous, emit the complete choice envelope and STOP again. Return a valid answer to the same blocked actor exactly once.
 
 #### Gentle AI Provider Defect Handoff (MANDATORY)
 
@@ -29,7 +29,11 @@ Before losslessly relaying any blocking choice envelope, classify its semantic a
      - On retry, perform a fresh final privacy scan first, then re-resolve that exact created issue identity, inspect whether `gentle-report` is already present, and apply only a missing label idempotently. Never search and label an arbitrary equivalent/pre-existing issue. If the exact created issue identity cannot be proven, STOP and require a human decision, with no label or duplicate issue/comment. Then STOP with all consumer state preserved.
   2. **Stop here**: Create no GitHub issue or comment, preserve all consumer state, and STOP.
 - Report observed evidence, not an unconfirmed root cause. Include or reuse sanitized version/build, OS/architecture/client, the operation shape without secrets, bounded attempts and outcomes, failure envelopes, mutation outcome, expected and actual behavior, a minimal reproduction, safe opaque reason/revision identifiers, and preserved-state evidence.
-- Resume only after an installed released fix, then re-enter through native status. Never resume against a source checkout or unmerged pull request.
+- Resume only after an installed published fix, then re-enter through native status. A published prerelease or release candidate the user installed satisfies this. Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request.
+
+#### SDD Edit-Authority Consent Relay (MANDATORY)
+
+When native SDD status reports `blocked(edit_authority_missing)`, its structured output may carry the typed `gentle-ai.sdd-integration.consent/v1` envelope as the optional `consent` block. Treat that envelope as a Lossless Blocking Prompt under this contract, with the same discipline as the review consent relay. Present the complete envelope once in the active conversation language: faithfully translate the headline, reason, `value`, the missing-root evidence, choice labels, every choice `effect`, and the off-path note, while preserving the original choices, order, selection mode, exact allowed-answer domain, and answer tokens. Never translate or alter the machine answer tokens (`granted`, `declined`), commands, paths, or invocations. Never summarize, reshape, reorder, merge, or omit any part. The human decides: never answer on the human's behalf and never run the grant unprompted. Only after the human's explicit `granted` answer, execute the envelope's exact grant invocation verbatim, exactly once, then re-enter through native status; the granted roots project into `allowedEditRoots`, and the grant is per-change, audited, and dies with archive. On `declined`, run the envelope's decline invocation: nothing is persisted, the change stays `blocked(edit_authority_missing)`, and the blocked reason names both exits (edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority). A blocked status without a `consent` block names the same two exits; relay them and stop.
 
 
 ### Language Domain Contract
@@ -93,6 +97,21 @@ The canonical native bounded-review contract is injected from the shared provide
 - Use a single writer thread for implementation; do not run parallel writers unless isolated worktrees are explicitly approved.
 - Let the native review and delivery providers select checking and delivery actions; repeated gates reuse exact authority and never reopen review for unchanged content.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
+
+<!-- gentle-ai:opencode-desktop-delegation-progress -->
+#### Delegation Visibility (OpenCode Desktop)
+
+For every native `delegate` or `task` call, emit exactly one concise, assistant-visible status line immediately before the call:
+
+`⏳ Delegating {phase} to {agent}...`
+
+When the call returns, emit exactly one concise, assistant-visible status line with the returned status:
+
+- Success: `✅ {agent} completed — {status}`
+- Blocked or failure: `⚠️ {agent} returned {status} — {short reason}`
+
+Keep pre-call lines to 15 tokens or fewer and post-call lines to 25 tokens or fewer. Use the actual phase, agent, status, and short reason. Do not emit multi-line narration, structured blocks, or these status lines from executor prompts.
+<!-- /gentle-ai:opencode-desktop-delegation-progress -->
 
 ## SDD Workflow (Spec-Driven Development)
 
@@ -252,6 +271,8 @@ In **Automatic** mode the orchestrator is the gatekeeper between phases. The gat
 **On gate PASS:** continue automatically to the next phase. Auto stays auto on the happy path.
 
 **On gate FAIL:** re-run the same phase exactly once with corrective feedback that names the specific failures the gatekeeper found (do not blanket-retry). Re-run the gate on the new result. If it passes, continue the chain. If it fails again, STOP the automatic chain and surface a report to the user naming the phase, what the gatekeeper caught, both attempts, and the recommended fix. Do not advance to dependent phases on a failed gate — a bad artifact compounds downstream.
+
+An `sdd_task_result_empty` or `sdd_task_result_malformed` failure is a transport failure, not a gate failure: do NOT retry it automatically, create or promote artifacts, or launch another SDD phase. The failure begins with `GENTLE_AI_SDD_FAILURE ` followed by a `gentle-ai.sdd-task-result-failure/v1` JSON handoff. Preserve that JSON unchanged, run its `continuation` exactly once to read the current state, then surface the typed terminal failure and wait for an explicit user decision.
 
 The gatekeeper runs in addition to the Review Workload Guard and the Mandatory Delegation Triggers; it never relaxes them and never auto-marks anything reviewed in engram.
 

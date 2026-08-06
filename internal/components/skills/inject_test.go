@@ -204,7 +204,6 @@ func (a noSkillsAdapter) Tier() model.SupportTier { return model.TierFull }
 func (a noSkillsAdapter) Detect(_ context.Context, _ string) (bool, string, string, bool, error) {
 	return false, "", "", false, nil
 }
-func (a noSkillsAdapter) SupportsAutoInstall() bool { return false }
 func (a noSkillsAdapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 	return nil, nil
 }
@@ -333,23 +332,31 @@ func TestInjectRequiredBundledSkillsForEverySkillsCapableDefaultAdapter(t *testi
 	}
 }
 
-func TestInjectRDDDefectWorkflowIsRegistryDiscoverable(t *testing.T) {
-	home := t.TempDir()
-	project := t.TempDir()
+func TestInjectBundledSkillsAreRegistryDiscoverable(t *testing.T) {
+	for _, skill := range []model.SkillID{
+		model.SkillRDDDefectWorkflow,
+		model.SkillSystemicIssueTriage,
+		model.SkillGentleAIBench,
+	} {
+		t.Run(string(skill), func(t *testing.T) {
+			home := t.TempDir()
+			project := t.TempDir()
 
-	_, err := Inject(home, opencodeAdapter(), []model.SkillID{model.SkillRDDDefectWorkflow})
-	if err != nil {
-		t.Fatalf("Inject() error = %v", err)
+			_, err := Inject(home, opencodeAdapter(), []model.SkillID{skill})
+			if err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+
+			wantPath := filepath.Join(home, ".config", "opencode", "skills", string(skill), "SKILL.md")
+			for _, entry := range skillregistry.List(project, home) {
+				if entry.Name == string(skill) && entry.Path == wantPath {
+					return
+				}
+			}
+
+			t.Fatalf("skill registry did not discover %q at %q", skill, wantPath)
+		})
 	}
-
-	wantPath := filepath.Join(home, ".config", "opencode", "skills", "rdd-defect-workflow", "SKILL.md")
-	for _, entry := range skillregistry.List(project, home) {
-		if entry.Name == "rdd-defect-workflow" && entry.Path == wantPath {
-			return
-		}
-	}
-
-	t.Fatalf("skill registry did not discover rdd-defect-workflow at %q", wantPath)
 }
 
 func TestInjectSkillCreatorAndImproverInstallLocalStyleGuideReference(t *testing.T) {
@@ -475,5 +482,7 @@ func requiredBundledSkillIDs() []model.SkillID {
 		model.SkillSDDInit,
 		model.SkillImprover,
 		model.SkillRDDDefectWorkflow,
+		model.SkillSystemicIssueTriage,
+		model.SkillGentleAIBench,
 	}
 }

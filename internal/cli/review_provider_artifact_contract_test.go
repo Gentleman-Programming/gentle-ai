@@ -17,7 +17,7 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 	want := map[string]string{
 		"fixtures/capabilities-v1.4.fixture.json": "84e0db457b76b97b35c2be772dfc647f9eab66810ea98f64fed85645c3c266ba",
 		"fixtures/start.fixture.json":             "f369160ac26eb3427b57de2dd01c9d8c81e51c8a2bd546446780129d31b1945b",
-		"fixtures/start-v2.fixture.json":          "388c7c21374b89afe2d42d64bd1987d17ec0e2c7151cab1c56a08969ffb2ea0e",
+		"fixtures/start-v2.fixture.json":          "688614bccff748975d5d9b3cce3c7f771cf3920e3cfd2d37fff61a5240f0364a",
 		"fixtures/status.fixture.json":            "555054d8046a896162995dcb117752f9cd1ef903fb9ebaad29af1b7e7f319bb3",
 		"fixtures/status-v2.fixture.json":         "5410d8bbae1b7152a43b3a5c4c880e9e98a5e47b76d910456f5ef13f19836f3a",
 		"fixtures/status-ambiguous.fixture.json":  "ee695fd58ba72adfb3b51dfd16432a177498173a45bfcb594d6bdc53bfa32e6e",
@@ -71,10 +71,28 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/capabilities-v2.1.fixture.json": "4bbcbaed1b20e6ea8f9c615f35ff17b13ee69b4648784a4906191880751c668d",
-		"fixtures/consent-v3.fixture.json":        "ead7d16aa1dabe9db4b7675d7e3b3de5594d7856f98960d8ec9bba99f91c0e31",
+		"fixtures/consent-v3.fixture.json":        "aeac956b9800023449e0a9f78457425429c61813205f05501ef091638441d660",
 		"schemas/capabilities-v2.1.schema.json":   "9ede8ebbe3e169cf6ca4f4a6882c9c4e588a6d1073d8e22a155649cd41d38cd0",
 		"schemas/consent-v3.schema.json":          "80915f5f4f43a494826253d1e7251fc463989f41d2cf163a6a52a8b4328c023c",
 		"schemas/status.schema.json":              "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
+	}
+	for name, expected := range want {
+		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		if actual := hex.EncodeToString(digest[:]); actual != expected {
+			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
+		}
+	}
+}
+
+func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
+	want := map[string]string{
+		"fixtures/status-v5.fixture.json": "905ad204feb2b69d0361cf5b420ddb8b143e21896b74bde9f65df85e1ebb1541",
+		"schemas/status-v5.schema.json":   "2eb135187074df16a34c8b792cfff16993d580b0132faec607ac3ceb890a4291",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -186,7 +204,8 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "admitted-result.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/admitted-result.schema.json"},
 		{name: "start.schema.json", id: ReviewIntegrationStartSchemaID},
 		{name: "status.schema.json", id: ReviewIntegrationStatusSchemaIDV3},
-		{name: "status-v4.schema.json", id: ReviewIntegrationStatusSchemaID},
+		{name: "status-v4.schema.json", id: ReviewIntegrationStatusSchemaIDV4},
+		{name: "status-v5.schema.json", id: ReviewIntegrationStatusSchemaIDV5},
 		{name: "capabilities.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV2},
 		{name: "capabilities-v2.1.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV21},
 		{name: "capabilities-v2.2.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV22},
@@ -247,6 +266,17 @@ func TestReviewProviderArtifactV2FixturesValidate(t *testing.T) {
 	}
 	if err := status.Validate(); err != nil {
 		t.Fatalf("v2 STATUS fixture: %v", err)
+	}
+	v5StatusPayload, err := os.ReadFile(filepath.Join(root, "status-v5.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v5Status ReviewTargetStatusResult
+	if err := json.Unmarshal(v5StatusPayload, &v5Status); err != nil {
+		t.Fatal(err)
+	}
+	if err := v5Status.Validate(); err != nil {
+		t.Fatalf("v5 STATUS fixture: %v", err)
 	}
 	consentPayload, err := os.ReadFile(filepath.Join(root, "consent.fixture.json"))
 	if err != nil {

@@ -38,7 +38,7 @@
           "gentle-ai.review-integration.projection/v1",
           "gentle-ai.review-integration.repair/v2",
           "gentle-ai.review-integration.start/v3",
-          "gentle-ai.review-integration.status/v4",
+          "gentle-ai.review-integration.status/v5",
           "gentle-ai.review-receipt/v1",
           "gentle-ai.review-receipt/v2",
           "gentle-ai.review-result-artifact/v2",
@@ -100,7 +100,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["command", "target_selector_variants", "required_feature", "unsupported_outcome", "parent_only"],
       "properties": {
-        "command": {"const": "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition"},
+        "command": {"const": "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition"},
         "target_selector_variants": {"$ref": "../../v1/schemas/capabilities-v1.4.schema.json#/$defs/bootstrap/properties/target_selector_variants"},
         "required_feature": {"const": "native_next_transition"},
         "unsupported_outcome": {"const": "unsupported-capability"},

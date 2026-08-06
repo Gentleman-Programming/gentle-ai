@@ -70,7 +70,7 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	if err != nil {
 		return assessment, fmt.Errorf("derive compact gate target: %w", err)
 	}
-	if err := validateCompactUntrackedScope(ctx, repo, state, request); err != nil {
+	if err := validateCompactReceiptMirrorScope(ctx, repo, state, request); err != nil {
 		assessment.Applicability = CompactGateTargetScopeChanged
 		return assessment, nil
 	}
@@ -189,7 +189,12 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if err != nil {
 		return invalid("compact review authority cannot be loaded: "+err.Error(), err)
 	}
-	if _, err := CompactAuthorityLeaves(ctx, repo); err != nil {
+	// Scoped to the receipt's own lineage: the gate is authorizing exactly
+	// this candidate through exactly this authority chain, so a defect on a
+	// branch that chain never inherits from is not evidence about it. Asking
+	// the whole repository instead is what let one historical entry deny
+	// delivery for every unrelated candidate in every worktree (2086, 2241).
+	if err := CompactAuthorityLineageBlocked(ctx, repo, receipt.LineageID); err != nil {
 		return invalid(err.Error(), err)
 	}
 	superseded, err := CompactLineageSuperseded(ctx, repo, receipt.LineageID)
@@ -264,8 +269,8 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		denialContext.Denial = &GateDenial{Stage: "scope-validation", Code: "intended-untracked-mismatch"}
 		return invalid("current repository target does not retain the authoritative intended-untracked paths")
 	}
-	if err := validateCompactUntrackedScope(ctx, repo, record.State, request); err != nil {
-		denialContext.Denial = &GateDenial{Stage: "scope-validation", Code: "untracked-out-of-scope"}
+	if err := validateCompactReceiptMirrorScope(ctx, repo, record.State, request); err != nil {
+		denialContext.Denial = &GateDenial{Stage: "scope-validation", Code: "receipt-mirror-mismatch"}
 		if compactGateInfrastructureFailure(err) {
 			return invalid(err.Error(), err)
 		}
@@ -283,7 +288,7 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		// A snapshot derivation failure is either a genuine infrastructure
 		// fault (git/process/context) or a semantic scope denial such as an
 		// intended-untracked path that is now tracked or only partially
-		// staged. Guard exactly like validateCompactUntrackedScope above:
+		// staged. Guard exactly like validateCompactReceiptMirrorScope above:
 		// attach Cause only for infrastructure faults so they still fail
 		// closed, and otherwise mark a semantic denial so the invalidation
 		// persists through compactInvalidationDenialBound.
@@ -468,12 +473,12 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	finalGateAuthorizationHook()
 	finalRecord, loadErr := store.Load()
 	finalSnapshot, finalRefs, snapshotErr := buildCompactLifecycleSnapshot(ctx, repo, request)
-	finalUntrackedErr := validateCompactUntrackedScope(ctx, repo, record.State, request)
+	finalMirrorErr := validateCompactReceiptMirrorScope(ctx, repo, record.State, request)
 	finalTrackedErr := validateCompactCommittedTrackedScope(ctx, repo, request)
-	_, graphErr := CompactAuthorityLeaves(ctx, repo)
+	graphErr := CompactAuthorityLineageBlocked(ctx, repo, receipt.LineageID)
 	finalSuperseded, supersededErr := CompactLineageSuperseded(ctx, repo, receipt.LineageID)
-	if loadErr != nil || snapshotErr != nil || finalUntrackedErr != nil || finalTrackedErr != nil || graphErr != nil || supersededErr != nil || finalSuperseded || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalSnapshot, snapshot) || !sameResolvedPrePRRefs(finalRefs, resolvedPrePR) {
-		cause := errors.Join(loadErr, snapshotErr, finalUntrackedErr, finalTrackedErr, graphErr, supersededErr)
+	if loadErr != nil || snapshotErr != nil || finalMirrorErr != nil || finalTrackedErr != nil || graphErr != nil || supersededErr != nil || finalSuperseded || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalSnapshot, snapshot) || !sameResolvedPrePRRefs(finalRefs, resolvedPrePR) {
+		cause := errors.Join(loadErr, snapshotErr, finalMirrorErr, finalTrackedErr, graphErr, supersededErr)
 		if cause == nil {
 			cause = ErrConcurrentUpdate
 		}
@@ -549,13 +554,6 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 			return invalid("release evidence changed during final authorization", cause)
 		}
 	}
-	// Wave 1 shadow observation (rdd-shadow-evaluation): outcome-neutral,
-	// advisory-only, and a true no-op unless GENTLE_AI_RDD_SHADOW is set —
-	// see shadow_observer.go. compatibility is already-derived Amendment A
-	// evidence for this exact allow, reused rather than re-derived.
-	ObserveShadowRelation(ctx, repo, request.Gate,
-		receipt.BaseTree, receipt.FinalCandidateTree, receipt.PathsDigest, receipt.PolicyHash,
-		snapshot, record.State.PolicyHash, GateAllow, resolvedPrePR, compatibility)
 	return NativeGateEvaluation{Result: GateAllow, Reason: nativeGateReason(GateAllow), Context: gateContext}
 }
 
@@ -879,26 +877,29 @@ func compactStillUntrackedIntended(ctx context.Context, repo string, intended []
 	return remaining, nil
 }
 
-func validateCompactUntrackedScope(ctx context.Context, repo string, state CompactState, request GateRequest) error {
+// validateCompactReceiptMirrorScope is what survives of the untracked-scope
+// gate after #2394. The gate used to deny whenever ANY unignored untracked
+// path was absent from the frozen intended set, which only ever passed because
+// START had swept every such path into that set. With the sweep gone, an
+// untracked path cannot enter the derived candidate and therefore cannot
+// violate scope, so the generic denial became a pure false blocker: one stray
+// file in the worktree would have blocked every commit.
+//
+// A change-local receipt mirror is different in kind. It is not scope, it is
+// authority evidence a later reader may believe, so a mirror that contradicts
+// the authoritative receipt still fails closed.
+func validateCompactReceiptMirrorScope(ctx context.Context, repo string, state CompactState, request GateRequest) error {
 	if request.Target.Projection == ProjectionStaged || request.Gate != GatePostApply && request.Gate != GatePreCommit {
 		return nil
 	}
-	live, err := (SnapshotBuilder{Repo: repo}).DiscoverIntendedUntracked(ctx)
+	live, err := (SnapshotBuilder{Repo: repo}).DiscoverUnignoredUntracked(ctx)
 	if err != nil {
 		return fmt.Errorf("discover current untracked paths: %w", err)
 	}
-	allowed := make(map[string]struct{}, len(state.CurrentSnapshot.IntendedUntracked))
-	for _, path := range state.CurrentSnapshot.IntendedUntracked {
-		allowed[path] = struct{}{}
-	}
 	for _, path := range live {
-		if _, ok := allowed[path]; ok || isPostReviewLifecycleArtifact(path) {
-			continue
+		if isChangeLocalReceiptMirror(path) && !matchesAuthoritativeReceipt(repo, state, path) {
+			return errors.New("change-local review receipt mirror does not match the authoritative receipt") // refusal:by-design world-action: only the operator can decide whether the divergent mirror file should be deleted or replaced, and no command of this product may overwrite evidence a human placed
 		}
-		if isChangeLocalReceiptMirror(path) && matchesAuthoritativeReceipt(repo, state, path) {
-			continue
-		}
-		return errors.New("current repository contains untracked paths outside the authoritative review scope")
 	}
 	return nil
 }
@@ -1036,11 +1037,6 @@ func collectReviewedPublicationPaths(ctx context.Context, repo string, revisions
 		result = append(result, path)
 	}
 	return canonicalPaths(result)
-}
-
-func isPostReviewLifecycleArtifact(path string) bool {
-	parts := strings.Split(path, "/")
-	return len(parts) == 4 && parts[0] == "openspec" && parts[1] == "changes" && parts[3] == "verify-report.md"
 }
 
 func isChangeLocalReceiptMirror(path string) bool {

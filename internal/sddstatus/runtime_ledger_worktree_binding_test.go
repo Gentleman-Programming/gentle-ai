@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 // TestRuntimeLedgerRefusesFinishFromADifferentLinkedWorktreeThanBegin is the
@@ -54,11 +56,13 @@ func TestRuntimeLedgerRefusesFinishFromADifferentLinkedWorktreeThanBegin(t *test
 		t.Fatalf("cross-worktree finish error = %v, want ErrRuntimeWorktreeMismatch", finishErr)
 	}
 	message := finishErr.Error()
-	if !strings.Contains(message, repo) {
-		t.Fatalf("refusal %q does not name the begin worktree %q to rerun finish from", message, repo)
+	beginWorktree := canonicalRuntimeLedgerWorktreePath(t, repo)
+	if !strings.Contains(message, beginWorktree) {
+		t.Fatalf("refusal %q does not name the begin worktree %q to rerun finish from", message, beginWorktree)
 	}
-	if !strings.Contains(message, worktree) {
-		t.Fatalf("refusal %q does not name the current mismatched worktree %q", message, worktree)
+	currentWorktree := canonicalRuntimeLedgerWorktreePath(t, worktree)
+	if !strings.Contains(message, currentWorktree) {
+		t.Fatalf("refusal %q does not name the current mismatched worktree %q", message, currentWorktree)
 	}
 
 	// Mutation proof: the refusal fires before any candidate capture/diff, so
@@ -85,6 +89,19 @@ func TestRuntimeLedgerRefusesFinishFromADifferentLinkedWorktreeThanBegin(t *test
 	if len(finished.Attempts) != 1 || finished.Attempts[0].ChangedLines != 1 {
 		t.Fatalf("same-worktree finish attempts = %#v, want exactly one changed line", finished.Attempts)
 	}
+}
+
+func canonicalRuntimeLedgerWorktreePath(t *testing.T, path string) string {
+	t.Helper()
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pathquote.Quote(filepath.Clean(canonical))
 }
 
 // TestRuntimeLedgerBeginRecordsTheCanonicalBeginWorktreeEndToEnd is the

@@ -85,7 +85,6 @@ func TestAdapter_Capabilities(t *testing.T) {
 		{"SupportsSlashCommands", a.SupportsSlashCommands(), false},
 		{"SupportsOutputStyles", a.SupportsOutputStyles(), false},
 		{"SupportsSubAgents", a.SupportsSubAgents(), true},
-		{"SupportsAutoInstall", a.SupportsAutoInstall(), true},
 	}
 
 	for _, tc := range tests {

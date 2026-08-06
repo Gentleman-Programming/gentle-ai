@@ -174,14 +174,20 @@ func TestReviewInspectAuthorityReportsMixedCorruptionDeterministicallyWithoutMut
 		result.EntryDiagnostics[0].Problem != "malformed_compact_state" {
 		t.Fatalf("inspect-authority entry diagnostics = %#v", result.EntryDiagnostics)
 	}
-	// Every invalid edge names the operation that would accept it, and only
-	// invalid edges do; both of these are reconcilable anomaly classes.
-	wantExits := []reviewtransaction.CompactRecoverySanctionedExit{
-		{SuccessorLineageID: "b-unchanged-successor", Operation: reviewtransaction.CompactRecoveryEdgeExitReconcile},
-		{SuccessorLineageID: "c-malformed-successor", Operation: reviewtransaction.CompactRecoveryEdgeExitReconcile},
+	// Wave 7 S3a: reconciliation's two anomaly classes (unchanged_target,
+	// malformed_recovery_authorization) have no surviving admitting
+	// operation now that `review reconcile-authority` is gone — neither
+	// successor here is pristine (both hold escalated recovery
+	// provenance), so both fall all the way through to Blocked, honestly,
+	// rather than naming a command that would refuse.
+	if len(result.SanctionedExits) != 2 {
+		t.Fatalf("inspect-authority sanctioned exits = %#v, want 2 entries", result.SanctionedExits)
 	}
-	if !reflect.DeepEqual(result.SanctionedExits, wantExits) {
-		t.Fatalf("inspect-authority sanctioned exits = %#v, want %#v", result.SanctionedExits, wantExits)
+	for index, wantSuccessor := range []string{"b-unchanged-successor", "c-malformed-successor"} {
+		exit := result.SanctionedExits[index]
+		if exit.SuccessorLineageID != wantSuccessor || exit.Operation != "" || !strings.Contains(exit.Blocked, "no advertised operation admits this edge") {
+			t.Fatalf("sanctioned exit[%d] = %#v, want SuccessorLineageID %q, empty Operation, and a Blocked reason", index, exit, wantSuccessor)
+		}
 	}
 }
 

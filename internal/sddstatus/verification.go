@@ -49,7 +49,7 @@ type verifyReport struct {
 }
 
 var sha256IdentityPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-var requirementHeadingPattern = regexp.MustCompile(`(?m)^### Requirement:\s+\S`)
+var requirementHeadingPattern = regexp.MustCompile(`(?m)^### (?:Requirement|REQ-[0-9]+):\s+\S`)
 var scenarioHeadingPattern = regexp.MustCompile(`(?m)^#### Scenario:\s+\S`)
 
 func countSpecRequirementsAndScenarios(specs []string) SpecCounts {

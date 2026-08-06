@@ -224,12 +224,35 @@ func readReviewTransaction(path, content string) (*reviewtransaction.Transaction
 // sddstatus-qualified name working unchanged for both remaining consumers.
 const EscalationAccountingReasonTemplate = reviewtransaction.EscalationAccountingReasonTemplate
 
-func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, transaction *reviewtransaction.Transaction, compact *reviewtransaction.CompactState, transactionReason, applyProgress string) RemediationState {
+func resolveBoundedRemediation(required, reviewDisabled bool, verify verifyResultEvaluation, transaction *reviewtransaction.Transaction, compact *reviewtransaction.CompactState, transactionReason, applyProgress string) RemediationState {
 	if !required {
 		return RemediationState{}
 	}
 	if verify.EvidenceRevision == "" && strings.Contains(verify.Reason, "evidence_revision") {
 		return RemediationState{Reason: fmt.Sprintf("verify evidence cannot enter remediation: %s", verify.Reason)}
+	}
+	// #2182: the kill switch already gates the review authority LOOKUP at the
+	// call site; without this it did not gate the classification that consumes
+	// the absence of what that lookup would have found, so an admitted failure
+	// was refused for missing a bounded review transaction that policy itself
+	// prevented from existing. A kill switch a downstream check overrides is not
+	// a kill switch.
+	//
+	// Correction proceeds unmanaged: bound to the failed evidence, and carrying
+	// none of the lineage, generation, fix-batch or budget fields that only a
+	// review authority can issue. Those stay zero rather than fabricated,
+	// because no path may report or imply review approval while review is off.
+	// Completion stays review-independent too: the runtime ledger already
+	// settles it through nativeRuntimeCompletesRemediation.
+	if reviewDisabled {
+		return RemediationState{
+			Required:               true,
+			FailedEvidenceRevision: verify.EvidenceRevision,
+			Reason: fmt.Sprintf(
+				"verify evidence requires unmanaged remediation for %s: %s; receipt-driven review is disabled, so this correction is bounded by the native runtime attempt budget alone",
+				verify.EvidenceRevision, verify.Reason,
+			),
+		}
 	}
 	if transaction == nil && compact != nil {
 		if compact.State == reviewtransaction.StateEscalated {
@@ -281,11 +304,6 @@ func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, tra
 		if fixBatch != 1 {
 			return RemediationState{Reason: "ordinary remediation requires its single persisted fix batch"}
 		}
-	case reviewtransaction.ModeJudgmentDay:
-		fixBatch = transaction.Counters.FixRounds
-		if fixBatch < 1 || fixBatch > 2 {
-			return RemediationState{Reason: "Judgment Day remediation requires a persisted fix round within its two-round budget"}
-		}
 	default:
 		return RemediationState{Reason: "unsupported remediation transaction mode"}
 	}
@@ -320,6 +338,9 @@ type reviewAuthorityEvaluation struct {
 	Result       reviewtransaction.GateResult
 	Reason       string
 	CompactState *reviewtransaction.CompactState
+	// Blocking distinguishes a discovered non-allow authority from an absent
+	// governing receipt, so stale verification can preserve its resolution path.
+	Blocking bool
 	// Absent reports that no review authority GOVERNS this change: the change
 	// supplied no review artifact, and discovery found either no terminal native
 	// receipt or only receipts whose terminal evaluation cannot govern the
@@ -463,6 +484,10 @@ func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluat
 	if evaluation.Missing {
 		return
 	}
+	if status.Dependencies.Verify != DependencyAllDone {
+		status.ReviewGate = &ReviewGateState{Result: evaluation.Result, Reason: evaluation.Reason}
+		return
+	}
 	blockReviewGate(status, evaluation.Result, evaluation.Reason)
 }
 
@@ -536,6 +561,7 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 	if len(blockers) > 0 {
 		selected := blockers[0]
 		selected.Absent = !explicit
+		selected.Blocking = true
 		return selected
 	}
 	selected := stale[0]

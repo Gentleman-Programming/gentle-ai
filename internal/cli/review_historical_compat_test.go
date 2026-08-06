@@ -54,7 +54,7 @@ func TestReviewFacadeStartResumesHistoricalCandidateArtifactRequiredWithoutRewri
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
 	args := []string{"--cwd", repo, "--projection", "staged", "--lineage", "candidate-artifact-required"}
 	var createdOutput bytes.Buffer
-	if err := RunReviewFacadeStart(args, &createdOutput); err != nil {
+	if err := runLegacyFacadeStartForTest(t, args, &createdOutput); err != nil {
 		t.Fatal(err)
 	}
 	var created ReviewFacadeStartResult
@@ -72,7 +72,7 @@ func TestReviewFacadeStartResumesHistoricalCandidateArtifactRequiredWithoutRewri
 	}
 
 	var resumedOutput bytes.Buffer
-	if err := RunReviewFacadeStart(args, &resumedOutput); err != nil {
+	if err := runLegacyFacadeStartForTest(t, args, &resumedOutput); err != nil {
 		t.Fatalf("review start with historical candidate_artifact_required authority: %v", err)
 	}
 	var resumed ReviewFacadeStartResult

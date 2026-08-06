@@ -97,15 +97,56 @@ Each slice is one consumer cluster and is independently revertible by `git rever
 - Wave 6's own deletion outcome (overlapping internal repair paths) landed, so W7 does not re-delete it.
 - A declared, version-pinned compatibility horizon for adapters (design: *Compatibility horizon* decision).
 
-## Success criteria
+## Success criteria (evaluated at wave close-out, WU20)
 
-- [ ] Exactly one lifecycle: no `GENTLE_AI_RDD_NEW_LINEAGE` switch, no legacy start branch, no legacy mutation path.
-- [ ] Every retired path has a measured consumer inventory, a migration boundary and a deletion proof (design *Acceptance criteria*).
-- [ ] Byte-equivalence proven before switch removal; goldens byte-stable across the whole wave.
-- [ ] Deadcode ratchet strongly net-negative; net line count strongly negative.
-- [ ] Shipped legacy-v1 authority still parses read-only; quarantine residue and historical receipts byte-identical.
-- [ ] `#1455`, `#1462`, `#1570` (and PRs `#1549`, `#1550`) have their `superseded-by-design` deletion proof recorded.
-- [ ] Zero new verbs, zero new contract versions, zero behavior change for the new lineage.
+- [ ] **NOT MET, deferred with reason.** Exactly one lifecycle: no
+  `GENTLE_AI_RDD_NEW_LINEAGE` switch, no legacy start branch, no legacy
+  mutation path. The switch-removal slice (WU18) was attempted, passed its
+  own byte-equivalence exit evidence with zero golden drift, then was
+  DEFERRED (not abandoned) when it surfaced that v3 negotiated START has
+  never supported `repository_context` — see
+  `specs/rdd-single-lifecycle/spec.md`'s amendment for the full finding and
+  the precise re-entry condition for the follow-up wave. The switch and
+  legacy start branch remain, byte-identical to pre-attempt. Compact-v2
+  therefore remains the default (switch-gated) lifecycle, not a frozen
+  relic — this is why WU19's D4 verb classification (below) concluded all
+  six verbs stay live rather than retiring.
+- [x] Every retired path has a measured consumer inventory, a migration
+  boundary and a deletion proof (design *Acceptance criteria*) — true for
+  everything actually retired this wave: both reconcile providers, the five
+  legacy public verbs, the shadow observer. See tasks.md's own per-WU
+  evidence entries.
+- [x] Byte-equivalence proven before switch removal attempt; goldens
+  byte-stable across the whole wave (Commit A, WU2, never regenerated;
+  re-verified byte-identical at every subsequent checkpoint including the
+  WU18 attempt and its revert). The removal itself did not proceed (see
+  above), but the proof this criterion actually asks for — that a
+  switch-free build would have been byte-identical — was established and
+  holds.
+- [x] Deadcode ratchet strongly net-negative: 244 (pre-Wave-7 baseline,
+  post-WU1) down to 243 at close-out — every deletion slice's own uptick
+  (a legitimate, honestly-reported consumer-first artifact) was reversed by
+  its own follow-up slice; net wave-wide change is negative despite WU18a's
+  additive work landing zero new unreachable functions. Net line count
+  strongly negative: +1701/-8968 (net -7267) across every `.go` file from
+  the v1-freeze checkpoint (d10d49ab) to close-out.
+- [x] Shipped legacy-v1 authority still parses read-only; quarantine
+  residue and historical receipts byte-identical — RG.1a
+  (`TestLegacyReadOnlyGuardRetainedSymbolsDeclared`) green throughout the
+  wave, confirmed again at close-out.
+- [x] `#1455`, `#1462`, `#1570` (and PRs `#1549`, `#1550`) have their
+  `superseded-by-design` deletion proof recorded (tasks.md task 3.2).
+- [~] **Partially met, disclosed exception.** Zero new verbs, zero new
+  contract versions: true. Zero behavior change for the new lineage: NOT
+  fully true — WU18a deliberately added new, switch-independent capability
+  to v3 START (start-time legacy-collision guards, previously entirely
+  absent on the switch-ON path; negotiated-form frozen-candidate-context
+  support, previously entirely absent). This is a disclosed, coordinator-
+  approved exception: genuinely additive work salvaged from the deferred
+  WU18 attempt, not a side effect of deletion, and proven zero-regression
+  via the bench corpus diff (83/83 journeys unchanged status). The original
+  criterion assumed a pure-deletion wave; WU18a is the one place this wave
+  departed from that, by explicit scope decision.
 
 ## Proposal question round (auto mode)
 

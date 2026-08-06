@@ -18,13 +18,19 @@ A `DispositionPlan` MUST carry exactly `repository_id`, `authority_inventory_rev
 
 ### Requirement: Deterministic Closure Derivation From the Graph Source of Record
 
-`ordered_seed_set` and `ordered_closure` MUST be derived deterministically from `InspectCompactRecoveryEdges` (`compact_inspect.go`). Plan derivation MUST NOT re-derive graph state independently or from a cached/inferred view.
+`ordered_seed_set` and `ordered_closure` MUST be derived deterministically from `InspectCompactRecoveryEdges` (`compact_inspect.go`). Plan derivation MUST NOT re-derive graph state independently or from a cached/inferred view. As of Wave 6, `ordered_closure` ordering is normative: entries MUST be ordered deepest-descendant-first with the seed last, so any executor consuming the closure (e.g. `rdd-closure-disposition-execution`) can rely on order for interruption safety, not just for determinism.
 
 #### Scenario: Same graph state derives the same closure
 
 - GIVEN the same authority graph inspected twice with no state change
 - WHEN a plan is derived both times for the same anomaly
 - THEN `ordered_seed_set` and `ordered_closure` are identical both times
+
+#### Scenario: Ordering is descendant-first, seed-last
+
+- GIVEN a derived plan for a multi-node closure
+- WHEN `ordered_closure` is inspected
+- THEN entries appear deepest-descendant-first, with the seed entry last
 
 ### Requirement: Closed Anomaly Classification Required for Derivation
 
@@ -76,7 +82,7 @@ Plan derivation MUST refuse (produce no plan) when `anomaly_class` is unknown, m
 
 ### Requirement: Cardinality Is an Executor Admission Policy, Not a Plan-Shape Constraint
 
-The plan shape MUST NOT hard-code closure cardinality. Cardinality restrictions (e.g. Wave 2's leaf-only, cardinality-one admission) are enforced by the consuming executor, so a future wave (#2014, #1656) can admit larger closures without a new plan shape.
+The plan shape MUST NOT hard-code closure cardinality. Cardinality restrictions are enforced by the consuming executor: Wave 2 admitted only cardinality-one closures (`rdd-leaf-disposition-execution`); Wave 6 admits cardinality `>= 1` for closed anomaly classes (`rdd-closure-disposition-execution`) using the identical plan shape.
 
 #### Scenario: Same plan shape serves a single-node closure
 

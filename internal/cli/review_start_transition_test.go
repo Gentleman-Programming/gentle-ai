@@ -76,7 +76,7 @@ func TestNegotiatedV2FreshStatusIncludesExactConsentRelay(t *testing.T) {
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
 
 	status := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV2, "--lineage", "status-v2-consent-relay")
-	assertStartTransition(t, status, []string{"contract", "target", "projection", "lineage", "agent", "consent"})
+	assertStartTransition(t, status, []string{"contract", "target", "projection", "lineage", "consent"})
 	consent := status.NextTransition.Execute.Arguments[len(status.NextTransition.Execute.Arguments)-1]
 	if consent != (ReviewTransitionArgument{Name: "consent", Value: "relay", Token: "--consent=relay"}) {
 		t.Fatalf("v2 START consent argument = %#v", consent)
@@ -86,7 +86,6 @@ func TestNegotiatedV2FreshStatusIncludesExactConsentRelay(t *testing.T) {
 		" --target=" + status.TargetIdentity +
 		" --projection=workspace" +
 		" --lineage=status-v2-consent-relay" +
-		" --agent=claude-code" +
 		" --consent=relay"
 	if status.NextTransition.Execute.Command != wantCommand {
 		t.Fatalf("v2 START command = %q, want %q", status.NextTransition.Execute.Command, wantCommand)
@@ -247,9 +246,6 @@ func negotiatedStartStatus(t *testing.T, repo string, selectors ...string) Revie
 func negotiatedStartStatusForContract(t *testing.T, repo, contract string, selectors ...string) ReviewTargetStatusResult {
 	t.Helper()
 	args := []string{"status", "--contract", contract, "--next-transition", "--action-eligibility", "--cwd", repo}
-	if contract == ReviewIntegrationContractV2 {
-		args = append(args, "--agent", "claude-code")
-	}
 	args = append(args, selectors...)
 	var output bytes.Buffer
 	if err := RunReview(args, &output); err != nil {

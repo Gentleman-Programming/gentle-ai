@@ -56,7 +56,11 @@ func newReviewFlagSet(name string, stdout io.Writer, details string) *flag.FlagS
 	flags.Usage = func() {
 		_, _ = fmt.Fprintf(stdout, "Usage: gentle-ai %s [flags]\n\n%s\n\nFlags:\n", name, details)
 		flags.VisitAll(func(current *flag.Flag) {
-			_, _ = fmt.Fprintf(stdout, "  --%s <value>\n      %s", current.Name, current.Usage)
+			placeholder := " <value>"
+			if boolean, ok := current.Value.(interface{ IsBoolFlag() bool }); ok && boolean.IsBoolFlag() {
+				placeholder = ""
+			}
+			_, _ = fmt.Fprintf(stdout, "  --%s%s\n      %s", current.Name, placeholder, current.Usage)
 			if current.DefValue != "" {
 				_, _ = fmt.Fprintf(stdout, " (default %q)", current.DefValue)
 			}

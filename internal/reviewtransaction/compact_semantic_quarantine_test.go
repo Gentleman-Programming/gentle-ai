@@ -221,12 +221,18 @@ func TestAuthorityInventoryDiagnosticQuarantine(t *testing.T) {
 	}
 }
 
-// TestCompactQuarantineNeverAppliesToNonTerminalOrStructuralCorruption proves
-// issue-1813's negative boundary (task 7.11): quarantine applies ONLY to a
-// TERMINAL-for-lineage state (Approved, Escalated, Invalidated) failing pure
-// semantic validation. A genuinely corrupt ACTIVE (non-terminal: Reviewing)
-// lineage still fails closed end-to-end through every enumeration path this
-// change touched, exactly like before.
+// TestCompactQuarantineNeverAppliesToNonTerminalOrStructuralCorruption is
+// issue-1813's negative boundary after the scoping change. 1813 drew the line
+// at WHICH corrupt lineages could be left out of enumeration; the line now
+// runs somewhere else, because enumeration is no longer a repository-wide
+// verdict that a corrupt entry could poison.
+//
+// What survives untouched, and is what this test now pins, is the boundary
+// that actually protects anything: a corrupt ACTIVE lineage is never
+// loadable, never enumerable as authority, and always fails closed when an
+// operation names it. The state it is in makes no difference to any of that,
+// which is the simplification -- there is no longer a quarantinable set to
+// belong to.
 func TestCompactQuarantineNeverAppliesToNonTerminalOrStructuralCorruption(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	healthy := quarantineFixtureHealthyLineage(t, repo, "quarantine-boundary-healthy", "healthy candidate\n")
@@ -258,26 +264,39 @@ func TestCompactQuarantineNeverAppliesToNonTerminalOrStructuralCorruption(t *tes
 		t.Fatal("corrupted reviewing-state lineage loaded without error")
 	}
 
-	if _, err := CompactAuthorityLeaves(context.Background(), repo); err == nil {
-		t.Fatal("CompactAuthorityLeaves silently tolerated a corrupt non-terminal lineage")
+	leaves, err := CompactAuthorityLeaves(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("a corrupt non-terminal lineage poisoned enumeration: %v", err)
+	}
+	for _, leaf := range leaves {
+		if leaf.lineageID == corrupted {
+			t.Fatal("the corrupt non-terminal lineage was enumerated as authority")
+		}
+	}
+	if err := CompactAuthorityLineageBlocked(context.Background(), repo, corrupted); err == nil {
+		t.Fatal("the corrupt non-terminal lineage reports no block of its own")
 	}
 
-	if _, err := loadCompactTargetStatusCandidates(context.Background(), repo, ""); err == nil {
-		t.Fatal("selector-free target status silently tolerated a corrupt non-terminal lineage")
+	candidates, err := loadCompactTargetStatusCandidates(context.Background(), repo, "")
+	if err != nil {
+		t.Fatalf("a corrupt non-terminal lineage poisoned selector-free target status: %v", err)
+	}
+	if _, offered := candidates[corrupted]; offered {
+		t.Fatal("the corrupt non-terminal lineage was offered as a status candidate")
+	}
+	if _, err := loadCompactTargetStatusCandidates(context.Background(), repo, corrupted); err == nil {
+		t.Fatal("an explicit selector on the corrupt non-terminal lineage was admitted")
 	}
 
 	report, err := InventoryAuthority(context.Background(), repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Complete || report.Authoritative {
-		t.Fatalf("corrupt non-terminal lineage did not flip report.Complete/Authoritative: %#v", report)
-	}
 	if !hasAuthorityInventoryStatus(report.Entries, corrupted, AuthorityStatusInvalid) {
 		t.Fatalf("corrupt non-terminal lineage missing its Invalid entry: %#v", report.Entries)
 	}
 	if !hasAuthorityInventoryStatus(report.Entries, healthy, AuthorityStatusApproved) {
-		t.Fatalf("healthy lineage still reported inventory-readable alongside the failed-closed corruption: %#v", report.Entries)
+		t.Fatalf("healthy lineage lost its entry alongside the failed-closed corruption: %#v", report.Entries)
 	}
 }
 

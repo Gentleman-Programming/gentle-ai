@@ -34,9 +34,12 @@ func pristineReviewingFixture(t *testing.T, repo, lineage string) (CompactRecord
 // TestStalePristineReviewingLineageHasNoSanctionedExit reproduces the #1441
 // deadlock on the pre-abandon remedy surface: once HEAD advances past a
 // pristine reviewing lineage, review/invalidate refuses because the live
-// snapshot no longer matches, reclaim refuses because the entry holds
-// review-state.json, and reconcile-authority refuses because the entry is not
-// a recovery successor. The lineage is permanently unretirable.
+// snapshot no longer matches, and reclaim refuses because the entry holds
+// review-state.json. (A third refusal used to be checked here:
+// reconcile-authority, because the entry is not a recovery successor --
+// that verb and its provider retired in Wave 7 S3a/S3b, so there is one
+// fewer surface to try, not one more exit.) The lineage is permanently
+// unretirable.
 func TestStalePristineReviewingLineageHasNoSanctionedExit(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\naccidental change\n")
@@ -59,15 +62,6 @@ func TestStalePristineReviewingLineageHasNoSanctionedExit(t *testing.T) {
 		LineageID: "abandon-stale-pristine", Reason: "retire accidental lineage", Actor: "maintainer@example.com",
 	}); err == nil || !strings.Contains(err.Error(), "holds authoritative artifact") {
 		t.Fatalf("reclaim refusal = %v", err)
-	}
-
-	if _, err := ReconcileInvalidRecoveryEdge(context.Background(), repo, CompactReconcileRequest{
-		PredecessorLineageID: "abandon-unrelated-predecessor", ExpectedPredecessorRevision: record.Revision,
-		SuccessorLineageID: "abandon-stale-pristine", ExpectedSuccessorRevision: record.Revision,
-		Reason: "retire accidental lineage", Actor: "maintainer@example.com",
-		MaintainerAuthorization: "irrelevant",
-	}); err == nil || !strings.Contains(err.Error(), "is not a recovery successor") {
-		t.Fatalf("reconcile-authority refusal = %v", err)
 	}
 }
 

@@ -22,12 +22,25 @@ import (
 
 // newLineageActivationEnvVar is the start-only activation switch (design
 // decision 5): unset or empty means OFF (legacy `review start` stays
-// byte-identical); any other value means ON. Read fresh on every start,
-// mirroring shadowObservationEnvVar's read-fresh convention
-// (shadow_observer.go) — no process restart is needed to toggle it between
-// runs. It is a distinct switch from GENTLE_AI_RDD_SHADOW (read-only
-// observation) and the user-owned RDD kill switch (delivery-gate scope);
-// none of the three substitutes for another.
+// byte-identical); any other value means ON. Read fresh on every start —
+// no process restart is needed to toggle it between runs. It is a distinct
+// switch from the user-owned RDD kill switch (delivery-gate scope); neither
+// substitutes for the other. (The read-only shadow observer's own
+// independent switch, GENTLE_AI_RDD_SHADOW, retired in Wave 7 S2a.)
+//
+// Wave 7 S7 (WU18) attempted removal and reverted it (design decision,
+// coordinator amendment): v3's negotiated START never gained
+// repository_context support (see runReviewFacadeStartNewLineage's own doc
+// comment and openspec/changes/rdd-root-simplification-wave7/specs/
+// rdd-single-lifecycle for the full rationale) — removing the switch would
+// make every negotiated START take the gapped v3 path unconditionally,
+// turning a narrow, rarely-reached gap into a universal one. Non-negotiable
+// #3 (never remove a switch over a known capability gap) blocks removal
+// until that gap closes. Kept here deliberately: v3 stays opt-in, which is
+// also the safer posture for the upcoming release candidate's community
+// testing. WU18a (S7a) kept the genuinely additive work this attempt
+// produced -- the v1/v2 legacy-collision start guards and v3's new frozen-
+// candidate-context negotiated support -- both live and switch-independent.
 const newLineageActivationEnvVar = "GENTLE_AI_RDD_NEW_LINEAGE"
 
 // NewLineageActivationEnabled reports the start-only activation switch. It

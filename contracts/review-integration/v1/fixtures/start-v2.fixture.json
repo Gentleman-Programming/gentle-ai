@@ -27,45 +27,45 @@
   "artifact_subjects": [
     {
       "schema": "gentle-ai.review-artifact-subject/v1",
-      "subject_hash": "sha256:38a55988f6b3ae6f520690d52fd29255f425a4048b0f8694de3a80c5daf265cd",
+      "subject_hash": "sha256:ac757ec4df5376b6d5b28a15672e6b98e44c22699b8804a29840293dc6a5e447",
       "lineage_id": "review-start-fixture",
-      "authority_revision": "sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c",
-      "target_identity": "sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5",
+      "authority_revision": "sha256:6a7b523b3aa544078586ec8a249dcde4d0c7a7eca1e025e4f25268abeb6d19e9",
+      "target_identity": "sha256:ddc783ecb013d1610c3f35fb7f8655051669a762ea9fd04af55999763a57496b",
       "candidate_diff_sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
-      "changed_path_manifest_sha256": "sha256:049219ea30e21c409608ea8527e65bcc6774d764363031a6cf0cb05e35c734ef",
+      "changed_path_manifest_sha256": "sha256:dc754e73f2d661e2f914fdc5dd8d2a399be18567481137f43ae9d8d45aae3397",
       "lens": "review-risk",
       "selected_order": 0
     },
     {
       "schema": "gentle-ai.review-artifact-subject/v1",
-      "subject_hash": "sha256:06d86f981a8c0b16c2179696d467c8157580214ad72c952adee423fe596d2c21",
+      "subject_hash": "sha256:8f414f2d456c8fd53f442b759426143dca04f4d45c26deeb3223b67e5fa56df0",
       "lineage_id": "review-start-fixture",
-      "authority_revision": "sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c",
-      "target_identity": "sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5",
+      "authority_revision": "sha256:6a7b523b3aa544078586ec8a249dcde4d0c7a7eca1e025e4f25268abeb6d19e9",
+      "target_identity": "sha256:ddc783ecb013d1610c3f35fb7f8655051669a762ea9fd04af55999763a57496b",
       "candidate_diff_sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
-      "changed_path_manifest_sha256": "sha256:049219ea30e21c409608ea8527e65bcc6774d764363031a6cf0cb05e35c734ef",
+      "changed_path_manifest_sha256": "sha256:dc754e73f2d661e2f914fdc5dd8d2a399be18567481137f43ae9d8d45aae3397",
       "lens": "review-resilience",
       "selected_order": 1
     },
     {
       "schema": "gentle-ai.review-artifact-subject/v1",
-      "subject_hash": "sha256:beacbf1eed52620ef7686087f8944cbc2304d71abf13281267efe9e4de20fb1e",
+      "subject_hash": "sha256:33b45eec49608043e6d1135fbbc57f602646ee22379fd6cc340d9323d4294f53",
       "lineage_id": "review-start-fixture",
-      "authority_revision": "sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c",
-      "target_identity": "sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5",
+      "authority_revision": "sha256:6a7b523b3aa544078586ec8a249dcde4d0c7a7eca1e025e4f25268abeb6d19e9",
+      "target_identity": "sha256:ddc783ecb013d1610c3f35fb7f8655051669a762ea9fd04af55999763a57496b",
       "candidate_diff_sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
-      "changed_path_manifest_sha256": "sha256:049219ea30e21c409608ea8527e65bcc6774d764363031a6cf0cb05e35c734ef",
+      "changed_path_manifest_sha256": "sha256:dc754e73f2d661e2f914fdc5dd8d2a399be18567481137f43ae9d8d45aae3397",
       "lens": "review-readability",
       "selected_order": 2
     },
     {
       "schema": "gentle-ai.review-artifact-subject/v1",
-      "subject_hash": "sha256:61a10b133e3f7a8ccad1d0f1d58989df75d2330ad530690137de625bfd10eec8",
+      "subject_hash": "sha256:5a1c35c5ca9bec1aa6802bcbd0e48039ce1daf25dde665a0b96e4c8dcf166513",
       "lineage_id": "review-start-fixture",
-      "authority_revision": "sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c",
-      "target_identity": "sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5",
+      "authority_revision": "sha256:6a7b523b3aa544078586ec8a249dcde4d0c7a7eca1e025e4f25268abeb6d19e9",
+      "target_identity": "sha256:ddc783ecb013d1610c3f35fb7f8655051669a762ea9fd04af55999763a57496b",
       "candidate_diff_sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
-      "changed_path_manifest_sha256": "sha256:049219ea30e21c409608ea8527e65bcc6774d764363031a6cf0cb05e35c734ef",
+      "changed_path_manifest_sha256": "sha256:dc754e73f2d661e2f914fdc5dd8d2a399be18567481137f43ae9d8d45aae3397",
       "lens": "review-reliability",
       "selected_order": 3
     }
@@ -85,13 +85,13 @@
       "deleted": false,
       "type_changed": false,
       "mode_only": false,
-      "intended_untracked": true
+      "intended_untracked": false
     }
   ],
   "repository_context": {
     "capability": "review.opaque_repository_context",
     "handle": "rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "revision": "sha256:3411d049f39e891b50adfc76473199b473927d10245a227a3bc967eae0caf68c",
-    "target_identity": "sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5"
+    "revision": "sha256:6a7b523b3aa544078586ec8a249dcde4d0c7a7eca1e025e4f25268abeb6d19e9",
+    "target_identity": "sha256:ddc783ecb013d1610c3f35fb7f8655051669a762ea9fd04af55999763a57496b"
   }
 }

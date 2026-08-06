@@ -256,7 +256,9 @@ func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func(
 	if objectFormat != "sha1" && objectFormat != "sha256" {
 		return nil, func() {}, fmt.Errorf("unsupported Git object format %q", objectFormat)
 	}
-	gitDir, err := os.MkdirTemp("", "gentle-ai-frozen-git-*")
+	// The repository Git directory is the reliable writable location when a
+	// sandboxed caller does not expose an accessible process temp directory.
+	gitDir, err := os.MkdirTemp(identity.GitDir, ".gentle-ai-frozen-git-*")
 	if err != nil {
 		return nil, func() {}, err
 	}

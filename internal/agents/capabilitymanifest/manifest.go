@@ -28,6 +28,11 @@ const ContractWorkRoutingV1 ContractID = "gentle-ai.work-routing/v1"
 // claim fails closed.
 const ContractReviewTransportV1 ContractID = "gentle-ai.review-transport/v1"
 
+// ContractImmutableReviewExecutorV1 is independent of host/orchestrator
+// support. It is advertised only when a provider can launch a fresh,
+// constrained reviewer and prove that boundary before review START.
+const ContractImmutableReviewExecutorV1 ContractID = "gentle-ai.immutable-review-executor/v1"
+
 type ContractExposure string
 
 const (
@@ -56,7 +61,6 @@ type AgentCapabilityManifest struct {
 // means the adapter consumes Gentle AI's file-based subagent projection; it
 // does not infer whether the runtime can perform some other form of delegation.
 type AgentFeatureClaims struct {
-	AutoInstall   bool `json:"autoInstall"`
 	OutputStyles  bool `json:"outputStyles"`
 	SlashCommands bool `json:"slashCommands"`
 	FileSubAgents bool `json:"fileSubAgents"`
@@ -98,8 +102,9 @@ type SDDProposalFacts struct {
 }
 
 type ContractClaims struct {
-	WorkRoutingV1     ContractClaim `json:"workRoutingV1"`
-	ReviewTransportV1 ContractClaim `json:"reviewTransportV1"`
+	WorkRoutingV1             ContractClaim `json:"workRoutingV1"`
+	ReviewTransportV1         ContractClaim `json:"reviewTransportV1"`
+	ImmutableReviewExecutorV1 ContractClaim `json:"immutableReviewExecutorV1"`
 }
 
 type ContractClaim struct {
@@ -128,6 +133,10 @@ func ForAgent(agent model.AgentID) (AgentCapabilityManifest, error) {
 				ID:       ContractReviewTransportV1,
 				Exposure: reviewTransportExposureByAgent[agent],
 			},
+			ImmutableReviewExecutorV1: ContractClaim{
+				ID:       ContractImmutableReviewExecutorV1,
+				Exposure: immutableReviewExecutorExposureByAgent[agent],
+			},
 		},
 	}, nil
 }
@@ -147,6 +156,23 @@ var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
 		exposure[agent] = ContractExposureAdvertised
 	}
 	exposure[model.AgentPi] = ContractExposureDormant
+	return exposure
+}()
+
+// immutableReviewExecutorExposureByAgent declares only providers with an
+// enforceable fresh-reviewer boundary. Claude launches a generated subagent
+// with no live tools and receives only the native prompt-carried evidence;
+// OpenCode replaces the task prompt through its provider plugin and requires
+// its process-isolation controls before the reviewer launches. Codex, Kilo,
+// and every other runtime remain explicitly dormant until they own an
+// equivalent native boundary.
+var immutableReviewExecutorExposureByAgent = func() map[model.AgentID]ContractExposure {
+	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
+	for agent := range featureClaimsByAgent {
+		exposure[agent] = ContractExposureDormant
+	}
+	exposure[model.AgentClaudeCode] = ContractExposureAdvertised
+	exposure[model.AgentOpenCode] = ContractExposureAdvertised
 	return exposure
 }()
 
@@ -205,6 +231,9 @@ func (m AgentCapabilityManifest) Advertises(contract ContractID) bool {
 	case ContractReviewTransportV1:
 		return m.Contracts.ReviewTransportV1.ID == contract &&
 			m.Contracts.ReviewTransportV1.Exposure == ContractExposureAdvertised
+	case ContractImmutableReviewExecutorV1:
+		return m.Contracts.ImmutableReviewExecutorV1.ID == contract &&
+			m.Contracts.ImmutableReviewExecutorV1.Exposure == ContractExposureAdvertised
 	default:
 		return false
 	}
@@ -253,26 +282,26 @@ var featureClaimsByAgent = map[model.AgentID]AgentFeatureClaims{
 		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentClaudeCode: {
-		AutoInstall: true, OutputStyles: true, SlashCommands: true,
+		OutputStyles: true, SlashCommands: true,
 		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentCodex: {
-		AutoInstall: true, Skills: true, SystemPrompt: true, MCP: true,
+		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentCursor: {
 		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentGeminiCLI: {
-		AutoInstall: true, Skills: true, SystemPrompt: true, MCP: true,
+		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentHermes: {
 		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentKilocode: {
-		AutoInstall: true, SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
+		SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentKimi: {
-		AutoInstall: true, FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
+		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentKiroIDE: {
 		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
@@ -281,13 +310,13 @@ var featureClaimsByAgent = map[model.AgentID]AgentFeatureClaims{
 		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentOpenCode: {
-		AutoInstall: true, SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
+		SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentPi: {
-		AutoInstall: true, SystemPrompt: true, MCP: true,
+		SystemPrompt: true, MCP: true,
 	},
 	model.AgentQwenCode: {
-		AutoInstall: true, SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
+		SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentTrae: {
 		Skills: true, SystemPrompt: true, MCP: true,

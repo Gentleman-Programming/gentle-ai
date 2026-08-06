@@ -115,7 +115,7 @@ func TestLensAgentPromptsStateTheAdmissionEnvelope(t *testing.T) {
 				runtime, len(paths), paths, len(envelope.LensAgentNames), envelope.LensAgentNames)
 		}
 		for _, path := range paths {
-			prompt := renderBoundedReviewAsset(path)
+			prompt := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
 
 			for _, field := range envelope.RequiredTopLevelFields {
 				if !strings.Contains(prompt, field) {
@@ -207,7 +207,7 @@ func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 	// The orchestrator contract is the source for the current immutable
 	// inspection route that rendered reviewer prompts must preserve.
 	contract := assets.MustRead(boundedReviewContractAsset)
-	if !strings.Contains(contract, "Claude Code carries immutable candidate evidence only in its provider-built prompt") ||
+	if !strings.Contains(contract, "Claude Code and OpenCode advertise immutable reviewer execution") ||
 		!strings.Contains(contract, "read-only native Git commands") {
 		t.Fatalf("%s no longer requires native-Git frozen-tree inspection; update the guard's derivation", boundedReviewContractAsset)
 	}
@@ -217,7 +217,7 @@ func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 			if strings.HasPrefix(path, "claude/agents/") {
 				continue // Claude's separate prompt transport is pinned in bounded_review_contract_test.go.
 			}
-			prompt := strings.ToLower(renderBoundedReviewAsset(path))
+			prompt := strings.ToLower(renderBoundedReviewAsset(agentForAssetPath(t, path), path))
 			for claim, why := range map[string]string{
 				"artifact_subject":      "does not name the bound artifact subject",
 				"changed_path_manifest": "does not name the ordered manifest",
@@ -239,9 +239,8 @@ func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 
 // TestJudgmentDayPromptsDoNotClaimTheLensEnvelope pins the resolution of the
 // contradiction between the two documents: a judgment-day judge result is a
-// different artifact (Transaction mode judgment_day records judge proofs and
-// selects no lenses), so it must NOT carry the capture-result envelope, and it
-// must say so rather than leaving a reader to infer which shape wins.
+// separate standalone artifact, so it must NOT carry the capture-result
+// envelope and must say so rather than leaving a reader to infer which shape wins.
 func TestJudgmentDayPromptsDoNotClaimTheLensEnvelope(t *testing.T) {
 	envelope := reviewtransaction.NewReviewerResultEnvelope()
 	judgePaths := []string{}
@@ -264,7 +263,7 @@ func TestJudgmentDayPromptsDoNotClaimTheLensEnvelope(t *testing.T) {
 	sort.Strings(judgePaths)
 
 	for _, path := range judgePaths {
-		prompt := renderBoundedReviewAsset(path)
+		prompt := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
 		// Match the JSON key forms, not the English words: a judge prompt may
 		// legitimately talk about inspecting a target.
 		if strings.Contains(prompt, `"subject_hash"`) || strings.Contains(prompt, `"inspection"`) {

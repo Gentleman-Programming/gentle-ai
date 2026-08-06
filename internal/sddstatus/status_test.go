@@ -383,10 +383,23 @@ func TestResolveRuntimeOverrideRestoresExpectedPlanningBlockersForBothStores(t *
 				restore := stubEngramExport(t, engramPlanningRoute("thin", "propose"))
 				t.Cleanup(restore)
 			}
+			// A maintainer decision is the runtime state that still overrides
+			// routing to a final route. An active attempt stopped overriding in
+			// #2463: compact acquire admits its own token holder, so status has
+			// no standing to refuse that launch.
 			store := mustRuntimeStore(t, root, "thin")
-			if _, err := store.Begin(context.Background(), BeginAttemptRequest{
+			active, err := store.Begin(context.Background(), BeginAttemptRequest{
 				ExpectedRevision: "", RequestID: "begin-thin", WorkUnit: "apply",
-				EvidenceGoal: "prove final-route blocker filtering", MaxAttempts: 2, MaxChangedLines: 20,
+				EvidenceGoal: "prove final-route blocker filtering", MaxAttempts: 1, MaxChangedLines: 20,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Finish(context.Background(), FinishAttemptRequest{
+				ExpectedRevision: active.Revision, RequestID: "finish-thin", Outcome: AttemptFailed,
+				EvidenceRevision: runtimeTestHash('4'), Diagnosis: "bounded runtime reproduced the failure",
+				HarnessDisposition: HarnessReused, CleanupEvidence: "runtime process group exited",
+				ProcessEvidence: "post-run scan found no descendants",
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -399,7 +412,7 @@ func TestResolveRuntimeOverrideRestoresExpectedPlanningBlockersForBothStores(t *
 				t.Fatalf("NextRecommended = %q, want resolve-blockers", status.NextRecommended)
 			}
 			reasons := strings.Join(status.BlockedReasons, "\n")
-			for _, want := range []string{"proposal.md is missing or partial.", "native SDD runtime attempt 1 is active"} {
+			for _, want := range []string{"proposal.md is missing or partial.", "blocked(maintainer_decision)"} {
 				if !strings.Contains(reasons, want) {
 					t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, want)
 				}

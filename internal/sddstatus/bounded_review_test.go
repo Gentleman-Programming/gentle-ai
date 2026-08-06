@@ -1077,6 +1077,123 @@ func TestResolveRoutesStaleVerifyEvidenceToVerifyUnderApprovedCompactAuthority(t
 	}
 }
 
+func TestResolveRoutesChangeLocalStalePassWithoutRemediation(t *testing.T) {
+	tests := []struct {
+		name              string
+		report            string
+		withAuthority     bool
+		blockingAuthority bool
+		explicitAuthority bool
+		reviewDisabled    bool
+		wantNext          string
+		wantVerify        DependencyState
+		wantRemediation   bool
+	}{
+		{
+			// Wave 4 S3 removed pre-verify review supervision: absent
+			// authority is decline-by-absence, so stale PASS evidence
+			// re-enters verification directly instead of demanding review.
+			name:            "historical requirement PASS mismatch restarts verification without review supervision",
+			report:          strings.Replace(boundedVerifyEnvelope(shaID("d"), "pass"), "requirements: 1/1", "requirements: 0/0", 1),
+			wantNext:        "verify",
+			wantVerify:      DependencyReady,
+			wantRemediation: false,
+		},
+		{
+			name:            "historical requirement PASS mismatch restarts verification while review is disabled",
+			report:          strings.Replace(boundedVerifyEnvelope(shaID("d"), "pass"), "requirements: 1/1", "requirements: 0/0", 1),
+			reviewDisabled:  true,
+			wantNext:        "verify",
+			wantVerify:      DependencyReady,
+			wantRemediation: false,
+		},
+		{
+			name:              "historical requirement PASS mismatch with discovered blocking authority resolves review",
+			report:            strings.Replace(boundedVerifyEnvelope(shaID("d"), "pass"), "requirements: 1/1", "requirements: 0/0", 1),
+			blockingAuthority: true,
+			wantNext:          "resolve-review",
+			wantVerify:        DependencyBlocked,
+			wantRemediation:   false,
+		},
+		{
+			name:              "historical requirement PASS mismatch with disabled discovered blocking authority restarts verification",
+			report:            strings.Replace(boundedVerifyEnvelope(shaID("d"), "pass"), "requirements: 1/1", "requirements: 0/0", 1),
+			blockingAuthority: true,
+			reviewDisabled:    true,
+			wantNext:          "verify",
+			wantVerify:        DependencyReady,
+			wantRemediation:   false,
+		},
+		{
+			// While the kill switch is off, zero review code executes:
+			// even an explicit escalated receipt never blocks SDD routing.
+			name:              "historical requirement PASS mismatch with disabled explicit blocking authority restarts verification",
+			report:            strings.Replace(boundedVerifyEnvelope(shaID("d"), "pass"), "requirements: 1/1", "requirements: 0/0", 1),
+			blockingAuthority: true,
+			explicitAuthority: true,
+			reviewDisabled:    true,
+			wantNext:          "verify",
+			wantVerify:        DependencyReady,
+			wantRemediation:   false,
+		},
+		{
+			name:            "genuine FAIL evidence keeps bounded remediation",
+			report:          strings.Replace(boundedVerifyEnvelope(shaID("d"), "fail"), "test_exit_code: 0", "test_exit_code: 1", 1),
+			withAuthority:   true,
+			wantNext:        "remediate",
+			wantVerify:      DependencyBlocked,
+			wantRemediation: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+			write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### REQ-1: Auth\n#### Scenario: Valid login\n")
+			write(t, filepath.Join(changeRoot, "verify-report.md"), tt.report)
+			if tt.withAuthority {
+				writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
+			}
+			if tt.blockingAuthority {
+				writeApprovedReviewArtifacts(t, changeRoot)
+				if !tt.explicitAuthority {
+					if err := os.RemoveAll(filepath.Join(changeRoot, "reviews")); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.Remove(filepath.Join(changeRoot, "reviews", "transaction.json")); err != nil {
+					t.Fatal(err)
+				}
+				original := evaluateNativeReviewGate
+				evaluateNativeReviewGate = func(context.Context, string, reviewtransaction.Receipt, reviewtransaction.GateRequest) reviewtransaction.NativeGateEvaluation {
+					return reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateEscalated}
+				}
+				t.Cleanup(func() { evaluateNativeReviewGate = original })
+			}
+
+			status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: tt.reviewDisabled})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status.NextRecommended != tt.wantNext || status.Dependencies.Verify != tt.wantVerify || status.RemediationState.Required != tt.wantRemediation {
+				t.Fatalf("status = next %q verify %q remediation %#v, want %q/%q/remediation=%v", status.NextRecommended, status.Dependencies.Verify, status.RemediationState, tt.wantNext, tt.wantVerify, tt.wantRemediation)
+			}
+			if tt.blockingAuthority && !tt.reviewDisabled && (status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateEscalated) {
+				t.Fatalf("ReviewGate = %#v, want escalated blocking authority", status.ReviewGate)
+			}
+			if tt.reviewDisabled && status.ReviewGate != nil {
+				t.Fatalf("disabled ReviewGate = %#v, want structural absence while the switch is off", status.ReviewGate)
+			}
+			if !tt.wantRemediation {
+				reasons := strings.Join(status.BlockedReasons, "\n")
+				if strings.Contains(reasons, "bounded review transaction is missing") || strings.Contains(reasons, "remediation") {
+					t.Fatalf("stale PASS entered failed-evidence routing: %v", status.BlockedReasons)
+				}
+			}
+		})
+	}
+}
+
 func TestResolveRejectsForeignCompactAuthorityForStaleVerifyEvidence(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
@@ -1154,6 +1271,81 @@ func TestResolveEngramRoutesStaleVerifyEvidenceToVerifyUnderApprovedCompactAutho
 	}
 }
 
+func TestResolveEngramRoutesStalePassWithDisabledBlockingAuthority(t *testing.T) {
+	// While the kill switch is off, zero review code executes: neither
+	// discovered nor explicit review artifacts may block SDD routing or
+	// project a review gate, and stale PASS evidence re-enters verification.
+	tests := []struct {
+		name              string
+		explicitAuthority bool
+		wantNext          string
+		wantVerify        DependencyState
+	}{
+		{
+			name:       "discovered authority is unmanaged",
+			wantNext:   "verify",
+			wantVerify: DependencyReady,
+		},
+		{
+			name:              "explicit authority is unmanaged while disabled",
+			explicitAuthority: true,
+			wantNext:          "verify",
+			wantVerify:        DependencyReady,
+		},
+	}
+
+	original := evaluateNativeReviewGate
+	t.Cleanup(func() { evaluateNativeReviewGate = original })
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+			write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("d"), "pass"))
+			writeApprovedReviewArtifacts(t, changeRoot)
+			receipt := readText(filepath.Join(changeRoot, "reviews", "receipt.json"))
+			if !tt.explicitAuthority {
+				if err := os.RemoveAll(filepath.Join(changeRoot, "reviews")); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Remove(filepath.Join(changeRoot, "reviews", "transaction.json")); err != nil {
+				t.Fatal(err)
+			}
+			evaluateNativeReviewGate = func(context.Context, string, reviewtransaction.Receipt, reviewtransaction.GateRequest) reviewtransaction.NativeGateEvaluation {
+				return reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateEscalated}
+			}
+
+			mkdir(t, filepath.Join(root, ".engram"))
+			project := strings.ToLower(filepath.Base(root))
+			observations := []engramObservation{
+				{Title: "sdd/thin/proposal", Content: "# Proposal\n", Project: project, Scope: "project"},
+				{Title: "sdd/thin/spec", Content: "### REQ-1: Auth\n#### Scenario: Valid login\n", Project: project, Scope: "project"},
+				{Title: "sdd/thin/design", Content: "# Design\n", Project: project, Scope: "project"},
+				{Title: "sdd/thin/tasks", Content: "- [x] 1.1 Done\n", Project: project, Scope: "project"},
+				{Title: "sdd/thin/verify-report", Content: strings.Replace(boundedVerifyEnvelope(shaID("d"), "pass"), "requirements: 1/1", "requirements: 0/0", 1), Project: project, Scope: "project"},
+			}
+			if tt.explicitAuthority {
+				observations = append(observations, engramObservation{Title: "sdd/thin/review/receipt", Content: receipt, Project: project, Scope: "project"})
+			}
+			restore := stubEngramExport(t, observations)
+			defer restore()
+
+			status, ok, err := resolveEngramStatus(root, "thin", false, true)
+			if err != nil || !ok {
+				t.Fatalf("resolveEngramStatus() = ok %v, error %v", ok, err)
+			}
+			if status.NextRecommended != tt.wantNext || status.Dependencies.Verify != tt.wantVerify || status.Dependencies.Archive != DependencyBlocked {
+				t.Fatalf("status = next %q verify %q archive %q, want %q/%q/blocked", status.NextRecommended, status.Dependencies.Verify, status.Dependencies.Archive, tt.wantNext, tt.wantVerify)
+			}
+			if status.ReviewGate != nil {
+				t.Fatalf("disabled ReviewGate = %#v, want structural absence while the switch is off", status.ReviewGate)
+			}
+			if reasons := strings.Join(status.BlockedReasons, "\n"); strings.Contains(reasons, "escalated the receipt") || strings.Contains(reasons, "remediation") {
+				t.Fatalf("disabled BlockedReasons = %v, want no review or remediation blocking", status.BlockedReasons)
+			}
+		})
+	}
+}
+
 func TestResolveEngramRejectsForeignCompactAuthorityForStaleVerifyEvidence(t *testing.T) {
 	root := t.TempDir()
 	foreignRoot := seedReadyChange(t, root, "other", "- [x] 1.1 Done\n")
@@ -1227,7 +1419,7 @@ func TestResolveRejectsCompactRemediationWhenFrozenBudgetIsZero(t *testing.T) {
 		LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateApproved,
 		CorrectionBudget: 2, CumulativeCorrectionLines: 2,
 	}
-	state := resolveBoundedRemediation(true, verifyResultEvaluation{
+	state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 		EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 	}, nil, &compact, "bounded review transaction is missing", "")
 
@@ -1242,7 +1434,7 @@ func TestResolveRejectsCompactRemediationAfterSingleConsumedAttempt(t *testing.T
 		CorrectionBudget: 10, CumulativeCorrectionLines: 1,
 		CorrectionAttempts: []reviewtransaction.CompactCorrectionAttempt{{ActualLines: 1}},
 	}
-	state := resolveBoundedRemediation(true, verifyResultEvaluation{
+	state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 		EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 	}, nil, &compact, "bounded review transaction is missing", "")
 
@@ -1256,7 +1448,7 @@ func TestResolveBoundedRemediationExposesUnambiguousRemainingAndTotalBudget(t *t
 		LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateApproved,
 		CorrectionBudget: 10, CumulativeCorrectionLines: 3,
 	}
-	state := resolveBoundedRemediation(true, verifyResultEvaluation{
+	state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 		EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 	}, nil, &compact, "bounded review transaction is missing", "")
 
@@ -1306,7 +1498,7 @@ func TestResolveBoundedRemediationSurfacesEscalationAccountingForAlreadyEscalate
 			LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateEscalated,
 			CorrectionBudget: 10, CumulativeCorrectionLines: 12,
 		}
-		state := resolveBoundedRemediation(true, verifyResultEvaluation{
+		state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 			EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 		}, nil, &compact, "bounded review transaction is missing", "")
 
@@ -1328,7 +1520,7 @@ func TestResolveBoundedRemediationSurfacesEscalationAccountingForAlreadyEscalate
 			CorrectionBudget: 10, CumulativeCorrectionLines: 3,
 			OriginalCriteria: &originalFailed, CorrectionRegression: &regressionPassed,
 		}
-		state := resolveBoundedRemediation(true, verifyResultEvaluation{
+		state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 			EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 		}, nil, &compact, "bounded review transaction is missing", "")
 
@@ -1357,7 +1549,7 @@ func TestEscalationAccountingReasonTemplateKeepsSDDBoundOutputByteIdentical(t *t
 		LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateEscalated,
 		CorrectionBudget: 10, CumulativeCorrectionLines: 12,
 	}
-	state := resolveBoundedRemediation(true, verifyResultEvaluation{
+	state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 		EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 	}, nil, &compact, "bounded review transaction is missing", "")
 	const want = "compact review authority is escalated (budget_exceeded): spent 12, remaining 0, total 10 correction lines"
@@ -1394,7 +1586,7 @@ func TestResolveBoundedRemediationNoCorrectionBudgetGuardNeverPopulatesRemaining
 				LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateApproved,
 				CorrectionBudget: test.correctionBudget, CumulativeCorrectionLines: test.cumulativeCorrectionLines,
 			}
-			state := resolveBoundedRemediation(true, verifyResultEvaluation{
+			state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 				EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 			}, nil, &compact, "bounded review transaction is missing", "")
 

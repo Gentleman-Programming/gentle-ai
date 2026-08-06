@@ -10,61 +10,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
-
-// TestNativePrePRGateWithShadowDisabledDerivesBaseAdvanceZeroTimes is
-// CRITICAL-1/2's regression guard (gate.go:350): the shadow base-advance
-// delegation seam (shadowDeriveBaseAdvance, shadow_relation.go) must pay
-// zero derivation cost — no merge-base, no changedPaths, no patchIdentity,
-// no `merge-tree --write-tree` — on the live pre-PR gate path when
-// GENTLE_AI_RDD_SHADOW is unset. It reuses the exact fixture and
-// attested-compatible-base-advance scenario from
-// TestNativePrePRGateAllowsOnlyCryptographicallyAttestedCompatibleBaseAdvance,
-// where the live path itself derives the compatibility proof once
-// (gate.go:296-299) — the shadow derivation call-count hook must still read
-// zero, because the shadow derivation is a distinct, disable-switch-gated
-// call site (spec.md "Off by Default in Live Paths").
-func TestNativePrePRGateWithShadowDisabledDerivesBaseAdvanceZeroTimes(t *testing.T) {
-	t.Setenv(shadowObservationEnvVar, "")
-	shadowResetDeriveBaseAdvanceCallCountForTest()
-	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
-
-	evaluation := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, fixture.request)
-	if evaluation.Result != GateAllow || evaluation.Context.BaseAdvance == nil || !evaluation.Context.BaseAdvance.valid() {
-		t.Fatalf("compatible base advance = %#v", evaluation)
-	}
-	if got := shadowDeriveBaseAdvanceCallCountForTest(); got != 0 {
-		t.Fatalf("shadowDeriveBaseAdvanceCallCount = %d, want 0 with GENTLE_AI_RDD_SHADOW unset", got)
-	}
-}
-
-// TestNativePrePRGateShadowOnOffByteIdenticalForCompatibleBaseAdvance is
-// WARNING-2's regression guard: unlike
-// TestShadowObservationSwitchIsRollbackBoundaryGateByteIdentical
-// (shadow_observer_test.go), which only exercises the post-apply gate kind
-// where resolvedPrePR is nil, this covers the pre-PR gate kind — the one
-// where shadow Git work (shadowDeriveBaseAdvance) actually runs when the
-// switch is ON. The live NativeGateEvaluation must be byte-identical
-// whether the switch is off or on.
-func TestNativePrePRGateShadowOnOffByteIdenticalForCompatibleBaseAdvance(t *testing.T) {
-	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
-
-	t.Setenv(shadowObservationEnvVar, "")
-	resultOff := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, fixture.request)
-	if resultOff.Result != GateAllow || resultOff.Context.BaseAdvance == nil || !resultOff.Context.BaseAdvance.valid() {
-		t.Fatalf("baseline (shadow off) = %#v", resultOff)
-	}
-
-	t.Setenv(shadowObservationEnvVar, "1")
-	resultOn := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, fixture.request)
-
-	if resultOff.Result != resultOn.Result || resultOff.Reason != resultOn.Reason || !reflect.DeepEqual(resultOff.Context, resultOn.Context) {
-		t.Fatalf("shadow off/on diverged on a pre-PR compatible-base-advance scenario:\noff=%#v\non=%#v", resultOff, resultOn)
-	}
-}
 
 func TestNativePrePRGateAllowsOnlyCryptographicallyAttestedCompatibleBaseAdvance(t *testing.T) {
 	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")

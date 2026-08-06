@@ -106,8 +106,9 @@ func TestInventoryAuthorityKeepsMalformedInvalidatedAuthorityFailClosed(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Complete || report.Authoritative ||
-		!hasAuthorityInventoryStatus(report.Entries, state.LineageID, AuthorityStatusInvalid) {
+	// Scoped: the malformed invalidated lineage is reported invalid on its
+	// own entry, and carries no verdict about the rest of the inventory.
+	if !hasAuthorityInventoryStatus(report.Entries, state.LineageID, AuthorityStatusInvalid) {
 		t.Fatalf("malformed invalidated report = %#v", report)
 	}
 }

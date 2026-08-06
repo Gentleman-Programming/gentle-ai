@@ -18,10 +18,10 @@ import (
 
 // gateVerdictWorkspaceChangedFixture builds a workspace (current-changes)
 // approved receipt over tracked.txt, then drifts the candidate by changing
-// tracked.txt's own content (never an untracked addition, which would trip
-// the earlier untracked-out-of-scope check instead of the
-// candidate-or-paths-mismatch check this fixture targets). Suitable for
-// post-apply and pre-commit.
+// tracked.txt's own content. Since #2394 an undeclared untracked addition is
+// not review scope at all, so drifting a declared path is the only way to
+// reach the candidate-or-paths-mismatch check this fixture targets. Suitable
+// for post-apply and pre-commit.
 func gateVerdictWorkspaceChangedFixture(t *testing.T, gate GateKind, stage bool) (string, CompactReceipt, NativeGateRequestInput) {
 	t.Helper()
 	repo := initSnapshotRepo(t)

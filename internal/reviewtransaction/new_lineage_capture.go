@@ -82,6 +82,14 @@ var (
 	// captured result under a DIFFERENT subject hash -- one-shot per lens, no
 	// reopen machinery (C-A's explicit scope boundary).
 	ErrNewLineageCaptureConflict = errors.New("lens already captured with a different binding; capture is one-shot per lens") // refusal:by-design world-action: v3 has no reviewer-artifact reopen concept (that is v2-only, Wave 7 deletion scope); the fix is a fresh review start for a corrected candidate, not an operator command that reopens this capture
+	// ErrNewLineageCaptureIncompleteSeverity is refused when a severe
+	// (BLOCKER/CRITICAL) finding is captured without a supported
+	// evidence_class and causal_disposition -- W-10 (Wave 7 S1, design
+	// decision 3a). The message is verbatim identical to
+	// artifact_admission.go's own --admission-findings-channel refusal for
+	// the same shape, so v3 fails the same way v2 already does for the same
+	// operator mistake.
+	ErrNewLineageCaptureIncompleteSeverity = errors.New("severe reviewer finding requires supported evidence_class and causal_disposition") // refusal:by-design operator-knowledge: the reviewer must submit a supported evidence_class and causal_disposition for every BLOCKER/CRITICAL finding; there is no operator command that fabricates that classification on the reviewer's behalf
 )
 
 // CaptureLensResult persists one captured reviewer result onto a v3
@@ -109,6 +117,19 @@ func (store AuthorityStore) CaptureLensResult(ctx context.Context, expectedRevis
 			return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureSubjectMismatch, next.LineageID, lens)
 		}
 		normalizedFindings := append([]FindingEvidence(nil), findings...)
+		// W-10 (Wave 7 S1, design decision 3a): refuse a severe finding at
+		// capture time if it lacks a supported evidence_class or
+		// causal_disposition -- previously this was silently accepted
+		// because Severity itself was dropped before reaching this store
+		// (review_artifact.go's newLineageCapturedFindings), so nothing
+		// downstream could even detect the gap. Reuses the identical
+		// in-package vocabulary artifact_admission.go's --admission-findings
+		// channel already enforces for the same shape.
+		for _, finding := range normalizedFindings {
+			if isSevereSeverity(finding.Severity) && (!isSupportedEvidenceClass(finding.Class) || !isSupportedCausalDisposition(finding.Causality)) {
+				return fmt.Errorf("%w: lineage %q lens %q finding %q", ErrNewLineageCaptureIncompleteSeverity, next.LineageID, lens, finding.FindingID)
+			}
+		}
 		for _, existing := range next.CapturedResults {
 			if existing.Lens != lens {
 				continue

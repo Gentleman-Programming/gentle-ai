@@ -36,11 +36,11 @@ type ReviewFacadeFinalizeNewLineageResult struct {
 //
 // It is the tier-0 minimum-viable finalize path (no reviewer-lens execution,
 // no correction plan — those are Wave 4+ territory per this wave's own
-// documented scope, apply-progress task 6.7): a lineage with no admitted
-// candidate-causal blocker (task C2, reviewtransaction.AdmitCandidateCausalFindings)
-// and no --failed evidence advances reviewing/validating straight through
-// validating to approved; an admitted blocker or --failed advances it to
-// escalated instead. Both routes issue the terminal receipt through the
+// documented scope, apply-progress task 6.7): a lineage with no provider-
+// admitted candidate-causal blocker and no --failed evidence advances
+// reviewing/validating straight through validating to approved; a
+// provider-admitted blocker or --failed advances it to escalated instead.
+// Both routes issue the terminal receipt through the
 // identical ReviewCore.Next(finalize) + AuthorityStore.WriteReceipt call the
 // rollback-safety test (review_new_lineage_rollback_safety_test.go) already
 // drives directly against the Go API — this function is the CLI wiring that

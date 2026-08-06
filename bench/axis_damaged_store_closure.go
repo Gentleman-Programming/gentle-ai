@@ -274,7 +274,7 @@ func requireClosureShape(sandbox *Sandbox) error {
 	if invalidCount != 1 {
 		return fmt.Errorf("fixture claims exactly one invalid edge, inspect-authority reports %d", invalidCount)
 	}
-	return requireStoreNotAuthoritative(sandbox)
+	return requireDamagedStoreReportsItsDamage(sandbox)
 }
 
 // closureMemberLineages is the fixture's whole closure, in construction
@@ -759,8 +759,17 @@ func closureDispositionJourneys() []Journey {
 			Steps: []Step{
 				{Name: "fixture: one damaged recovery edge, non-pristine successor, plus an unrelated witness lineage",
 					Fixture: damagedLeafEligibleForDisposition},
-				{Name: "ask the negotiated surface what happens next", Requires: statusCapability,
-					Args: productArgs("review", "status", "--contract", reviewContract, "--next-transition"),
+				{Name: "ask the negotiated surface what happens next for the damaged leaf", Requires: statusCapability,
+					// The selector is the whole point after authority
+					// validation became lineage-scoped: an operator asking
+					// what happens next for their own live candidate is now
+					// answered about that candidate (ds13), so reaching the
+					// disposition route means naming the entry the
+					// disposition is about. The route itself is unchanged --
+					// the same collect, the same two values, the same execute
+					// form -- which is what this journey has always measured.
+					Args: productArgs("review", "status", "--contract", reviewContract, "--next-transition",
+						"--lineage", damagedSuccessor),
 					After: func(sandbox *Sandbox, observation Observation) error {
 						var envelope statusEnvelope
 						if err := decodeWaveObservation(observation, &envelope, "review status --next-transition over a closed content-mismatched leaf"); err != nil {
@@ -789,6 +798,7 @@ func closureDispositionJourneys() []Journey {
 						authorization := dispositionAuthorization(binding, planDigest, inventoryRevision, actor, reason)
 						return []string{
 							"review", "status", "--cwd", sandbox.Repo, "--contract", reviewContract, "--next-transition",
+							"--lineage", damagedSuccessor,
 							"--repair-actor", actor, "--repair-reason", reason, "--repair-authorization", authorization,
 						}, nil
 					},

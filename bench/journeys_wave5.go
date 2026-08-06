@@ -51,8 +51,12 @@ func requirePrePRMultiSegmentDenialNamesRunnableNextStep(_ *Sandbox, observation
 	return nil
 }
 
+// waveFiveJourneys also carries the revision-canonicalization registrar from
+// journeys_revision_canon.go: the central aggregator in journeys.go was owned
+// by an open pull request when j62 landed, and this is the nearest registrar
+// that was not.
 func waveFiveJourneys() []Journey {
-	return []Journey{
+	journeys := []Journey{
 		{
 			ID:     "j61-pre-pr-multi-segment-delivery-denies-without-composition",
 			Title:  "Pre-PR multi-segment delivery composition used to rescue now denies, naming a runnable next step",
@@ -82,4 +86,5 @@ func waveFiveJourneys() []Journey {
 			},
 		},
 	}
+	return append(journeys, revisionCanonJourneys()...)
 }

@@ -130,7 +130,10 @@ func TestBackupTargetsSnapshotPiManifestOverlayDuringDeselection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	targets := backupTargets(home, "", ScopeGlobal, model.Selection{}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentPi}})
+	targets, err := backupTargets(home, "", ScopeGlobal, model.Selection{}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentPi}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !slices.Contains(targets, manifest) || !slices.Contains(targets, overlay) {
 		t.Fatalf("backup targets = %v, want manifest and discovered overlay during deselection", targets)
 	}
@@ -143,7 +146,10 @@ func TestBackupTargetsSnapshotCrossAgentCodeGraphGuidance(t *testing.T) {
 		t.Fatal(err)
 	}
 	selection := model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph}}
-	targets := backupTargets(home, "", ScopeGlobal, selection, planner.ResolvedPlan{})
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, planner.ResolvedPlan{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	guidancePaths := communitytool.CodeGraphGuidancePaths(home)
 	if len(guidancePaths) == 0 {
 		t.Fatal("CodeGraphGuidancePaths() = empty; Claude fixture was not detected")

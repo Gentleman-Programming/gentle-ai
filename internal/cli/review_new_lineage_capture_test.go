@@ -38,13 +38,7 @@ import (
 func startMediumTierNewLineage(t *testing.T, repo, lineage string) ReviewFacadeStartNewLineageResult {
 	t.Helper()
 	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "1")
-	path := filepath.Join(repo, "lib", lineage+".go")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("package lib\n\nfunc Example() int { return 1 }\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "lib/"+lineage+".go", "package lib\n\nfunc Example() int { return 1 }\n", 0o644)
 	var out bytes.Buffer
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, &out); err != nil {
 		t.Fatalf("medium-tier new-lineage start: %v\n%s", err, out.String())

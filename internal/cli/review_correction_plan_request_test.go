@@ -40,9 +40,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
-			if err := os.WriteFile(filepath.Join(repo, tt.path), []byte(tt.content), 0o644); err != nil {
-				t.Fatal(err)
-			}
+			writeReviewStartCandidate(t, repo, tt.path, tt.content, 0o644)
 			started := runNegotiatedReviewStart(t, repo, "correction-findings-"+strings.ReplaceAll(tt.name, " ", "-"))
 			if started.RiskLevel != tt.wantRisk || len(started.SelectedLenses) != tt.wantSelectedLens {
 				t.Fatalf("review routing = risk %q lenses %v", started.RiskLevel, started.SelectedLenses)
@@ -92,7 +90,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 			}
 
 			args := []string{
-				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "claude-code",
+				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
 				"--next-transition", "--lineage", started.LineageID,
 			}
 			var first, restarted bytes.Buffer

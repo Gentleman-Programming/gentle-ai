@@ -787,16 +787,34 @@ func requireInvalidEdges(sandbox *Sandbox, edges int, problemFragment string) er
 				problemFragment, edge.SuccessorLineageID, edge.Problems)
 		}
 	}
-	return requireStoreNotAuthoritative(sandbox)
+	return requireDamagedStoreReportsItsDamage(sandbox)
 }
 
-func requireStoreNotAuthoritative(sandbox *Sandbox) error {
-	status, err := proveStoreStatus(sandbox)
+// requireDamagedStoreReportsItsDamage is the proof every fixture in this axis
+// runs before spending a counted command.
+//
+// It used to require `review status` to report the whole store
+// non-authoritative, which is how the product described damage when authority
+// validation was repository-global. It is no longer how the product describes
+// damage, and the old assertion was never what these journeys were about: what
+// they measure is whether an operator holding a damaged entry can SEE it and
+// act on it, not whether the entry took the repository down with it. So the
+// proof moved to the surface that owns per-entry truth -- the store must still
+// describe exactly this damage, in its own words, on the entry that carries
+// it.
+func requireDamagedStoreReportsItsDamage(sandbox *Sandbox) error {
+	inspection, err := proveInspection(sandbox)
 	if err != nil {
 		return err
 	}
-	if status.Authoritative {
-		return errors.New("fixture claims a damaged store but review status still reports it authoritative")
+	if inspection.Valid && inspection.Totals.EntryDiagnostics == 0 {
+		return errors.New("fixture claims a damaged store but inspect-authority reports no invalid edge and no entry diagnostic")
+	}
+	// Status must still be answerable. A store that cannot be read at all is a
+	// different fixture from a store holding one damaged entry, and a journey
+	// that confused the two would measure the wrong thing.
+	if _, err := proveStoreStatus(sandbox); err != nil {
+		return fmt.Errorf("review status is unavailable over a store holding one damaged entry: %w", err)
 	}
 	return nil
 }
@@ -977,57 +995,12 @@ func halfWrittenSuccessor(sandbox *Sandbox) error {
 	if inspection.Totals.Edges != 0 {
 		return fmt.Errorf("fixture claims the truncated entry never becomes an edge but inspect-authority reports %d", inspection.Totals.Edges)
 	}
-	return requireStoreNotAuthoritative(sandbox)
+	return requireDamagedStoreReportsItsDamage(sandbox)
 }
 
 // ---------------------------------------------------------------------------
 // Counted operator work
 // ---------------------------------------------------------------------------
-
-// reconcileArgs assembles the one operation whose entire job is quarantining a
-// recovery edge that does not re-derive. The authorization is built by hand
-// from values the product published, which is what the CLI help asks for — so
-// the refusal, when it comes, is never a refusal of a malformed request.
-func reconcileArgs(predecessorKey, predecessorRevisionKey, successorKey, successorRevisionKey, reason string) func(*Sandbox) ([]string, error) {
-	return func(sandbox *Sandbox) ([]string, error) {
-		predecessor, err := scratchValue(sandbox, predecessorKey)
-		if err != nil {
-			return nil, err
-		}
-		predecessorRevision, err := scratchValue(sandbox, predecessorRevisionKey)
-		if err != nil {
-			return nil, err
-		}
-		successor, err := scratchValue(sandbox, successorKey)
-		if err != nil {
-			return nil, err
-		}
-		successorRevision, err := scratchValue(sandbox, successorRevisionKey)
-		if err != nil {
-			return nil, err
-		}
-		const actor = "bench"
-		authorization := strings.Join([]string{
-			"gentle-ai.review-reconcile-authorization/v1",
-			"predecessor_lineage=" + predecessor,
-			"predecessor_revision=" + predecessorRevision,
-			"successor_lineage=" + successor,
-			"successor_revision=" + successorRevision,
-			"actor=" + actor,
-			"reason=" + reason,
-		}, "\n")
-		return []string{
-			"review", "reconcile-authority", "--cwd", sandbox.Repo,
-			"--predecessor-lineage", predecessor,
-			"--expected-predecessor-revision", predecessorRevision,
-			"--successor-lineage", successor,
-			"--expected-successor-revision", successorRevision,
-			"--actor", actor,
-			"--reason", reason,
-			"--maintainer-authorization", authorization,
-		}, nil
-	}
-}
 
 // abandonArgs assembles the exit that DOES clear a pristine damaged successor,
 // and it costs the same six-line hand-built binding `review abandon` always
@@ -1178,13 +1151,25 @@ func proveStoreRecovered(r *journeyRun) error {
 		return fmt.Errorf("the exit ran but review status still reports complete=%v authoritative=%v",
 			status.Complete, status.Authoritative)
 	}
+	// The store staying authoritative is no longer evidence on its own: it was
+	// authoritative while the damage was present too, because the damage was
+	// confined to its own entry. What proves the exit worked is that the
+	// damage is gone from the surface that reported it.
+	inspection, err := proveInspection(r.sandbox)
+	if err != nil {
+		return err
+	}
+	if !inspection.Valid || !inspection.Complete || inspection.Totals.InvalidEdges != 0 || inspection.Totals.EntryDiagnostics != 0 {
+		return fmt.Errorf("the exit ran but inspect-authority still reports the damage: valid=%v complete=%v totals=%+v",
+			inspection.Valid, inspection.Complete, inspection.Totals)
+	}
 	return nil
 }
 
 // proveStoreStillDamaged is its mirror, for the steps that claim an operation
 // changed nothing.
 func proveStoreStillDamaged(r *journeyRun) error {
-	return requireStoreNotAuthoritative(r.sandbox)
+	return requireDamagedStoreReportsItsDamage(r.sandbox)
 }
 
 // repairAssessment is the subset of `review repair --preflight` that says
@@ -1264,6 +1249,12 @@ type dispositionRepairResult struct {
 		PlanDigest                 string `json:"plan_digest"`
 		AuthorityInventoryRevision string `json:"authority_inventory_revision"`
 	} `json:"disposition_execution"`
+	DispositionSelectors []struct {
+		PredecessorLineageID        string `json:"predecessor_lineage_id"`
+		PredecessorExpectedRevision string `json:"predecessor_expected_revision"`
+		SuccessorLineageID          string `json:"successor_lineage_id"`
+		SuccessorExpectedRevision   string `json:"successor_expected_revision"`
+	} `json:"disposition_selectors"`
 }
 
 // authorityDispositionPlanSchema and authorityDispositionAuthorizationSchema
@@ -1283,6 +1274,10 @@ const (
 	scratchDispositionInventoryRevision         = "damaged-store/disposition-inventory-revision"
 	scratchDispositionWitnessLineage            = "damaged-store/disposition-witness-lineage"
 	scratchDispositionWitnessBytes              = "damaged-store/disposition-witness-bytes"
+	scratchDispositionSelector                  = "damaged-store/disposition-selector"
+	scratchDispositionRemainingSelector         = "damaged-store/disposition-remaining-selector"
+	scratchDispositionRemainingBytes            = "damaged-store/disposition-remaining-bytes"
+	scratchDispositionRemainingDigest           = "damaged-store/disposition-remaining-digest"
 )
 
 // validDispositionSHA256 is this axis's own check for the shape
@@ -1406,15 +1401,52 @@ func requireDispositionPlanEligible(sandbox *Sandbox, observation Observation) e
 // must NOT admit a disposition plan: more than one closed content-mismatch
 // edge (design decision 5, "cardinality is executor policy" — derivation
 // itself refuses ambiguity before admission is ever asked).
-func requireNoDispositionPlanSurfaced(_ *Sandbox, observation Observation) error {
+func requireNoDispositionPlanSurfaced(sandbox *Sandbox, observation Observation) error {
 	var result dispositionRepairResult
 	if err := decodeWaveObservation(observation, &result, "review repair --preflight multi-edge shape"); err != nil {
 		return err
 	}
-	if result.DispositionProviderInputs != nil {
-		return fmt.Errorf("review repair --preflight surfaced a disposition plan for an ambiguous multi-edge shape: %+v", result)
+	if result.DispositionProviderInputs != nil || len(result.DispositionSelectors) != 2 {
+		return fmt.Errorf("review repair --preflight did not enumerate two exact selectors for the multi-edge shape: %+v", result)
 	}
+	selected, remaining := result.DispositionSelectors[0], result.DispositionSelectors[1]
+	if selected.SuccessorLineageID != damagedSuccessor {
+		selected, remaining = remaining, selected
+	}
+	if selected.PredecessorLineageID != sandbox.Scratch[scratchMiddle] || selected.PredecessorExpectedRevision != sandbox.Scratch[scratchMiddleRevision] || selected.SuccessorLineageID != sandbox.Scratch[scratchSuccessor] || selected.SuccessorExpectedRevision != sandbox.Scratch[scratchSuccessorRevision] || remaining.PredecessorLineageID != sandbox.Scratch[scratchPredecessor] || remaining.PredecessorExpectedRevision != sandbox.Scratch[scratchPredecessorRevision] || remaining.SuccessorLineageID != sandbox.Scratch[scratchMiddle] || remaining.SuccessorExpectedRevision != sandbox.Scratch[scratchMiddleRevision] {
+		return errors.New("review repair --preflight selectors do not bind the damaged edges the fixture proved")
+	}
+	sandbox.Scratch[scratchDispositionSelector] = strings.Join([]string{selected.PredecessorLineageID, selected.PredecessorExpectedRevision, selected.SuccessorLineageID, selected.SuccessorExpectedRevision}, "\n")
+	sandbox.Scratch[scratchDispositionRemainingSelector] = strings.Join([]string{remaining.PredecessorLineageID, remaining.PredecessorExpectedRevision, remaining.SuccessorLineageID, remaining.SuccessorExpectedRevision}, "\n")
+	path, err := storeStatePath(sandbox, remaining.SuccessorLineageID)
+	if err != nil {
+		return err
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(payload)
+	sandbox.Scratch[scratchDispositionRemainingBytes] = string(payload)
+	sandbox.Scratch[scratchDispositionRemainingDigest] = "sha256:" + hex.EncodeToString(digest[:])
 	return nil
+}
+
+func dispositionSelectorArgs(sandbox *Sandbox) ([]string, error) {
+	value, err := scratchValue(sandbox, scratchDispositionSelector)
+	if err != nil {
+		return nil, err
+	}
+	selector := strings.Split(value, "\n")
+	if len(selector) != 4 {
+		return nil, errors.New("ds07 retained an incomplete emitted selector")
+	}
+	return []string{"--predecessor-lineage", selector[0], "--predecessor-revision", selector[1], "--successor-lineage", selector[2], "--successor-revision", selector[3]}, nil
+}
+
+func dispositionSelectorPreflightArgs(sandbox *Sandbox) ([]string, error) {
+	selector, err := dispositionSelectorArgs(sandbox)
+	return append([]string{"review", "repair", "--preflight=true", "--cwd", sandbox.Repo}, selector...), err
 }
 
 // dispositionRepairExecutionInputs gathers everything both
@@ -1448,12 +1480,44 @@ func dispositionRepairArgs(reason string) func(*Sandbox) ([]string, error) {
 		}
 		const actor = "bench"
 		authorization := dispositionAuthorization(binding, planDigest, inventoryRevision, actor, reason)
-		return []string{
+		args := []string{
 			"review", "repair", "--cwd", sandbox.Repo,
 			"--plan-digest", planDigest, "--inventory-revision", inventoryRevision,
 			"--actor", actor, "--reason", reason, "--authorization", authorization,
-		}, nil
+		}
+		return args, nil
 	}
+}
+
+func dispositionRepairWithSelectorArgs(reason string, replacementRevision ...string) func(*Sandbox) ([]string, error) {
+	return func(sandbox *Sandbox) ([]string, error) {
+		args, err := dispositionRepairArgs(reason)(sandbox)
+		if err != nil {
+			return nil, err
+		}
+		selector, err := dispositionSelectorArgs(sandbox)
+		if err != nil {
+			return nil, err
+		}
+		if len(replacementRevision) > 0 {
+			selector[len(selector)-1] = replacementRevision[0]
+		}
+		return append(args, selector...), nil
+	}
+}
+
+func requireWrongDispositionSelectorRefusal(sandbox *Sandbox, observation Observation) error {
+	if observation.ExitCode == 0 || !strings.Contains(observation.Stderr, "review transaction changed concurrently: exact content-mismatch selector no longer matches the inspected graph") {
+		return fmt.Errorf("altered emitted selector did not produce the typed preflight refusal; rerun `gentle-ai review repair --preflight`")
+	}
+	base, err := reviewTransactionsBase(sandbox)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(base, "quarantine")); !os.IsNotExist(err) {
+		return fmt.Errorf("altered emitted selector changed quarantine state; rerun `gentle-ai review repair --preflight`")
+	}
+	return requireInvalidEdges(sandbox, 2, theExactBindingProblem)
 }
 
 // forgedDispositionRepairArgs is dispositionRepairArgs with the CORRECT
@@ -1498,6 +1562,28 @@ func requireDispositionQuarantineCommitted(sandbox *Sandbox, observation Observa
 	}
 	if strings.Contains(observation.Stdout, sandbox.Repo) {
 		return errors.New("leaf authority disposition execution leaked the repository path")
+	}
+	if remaining, ok := sandbox.Scratch[scratchDispositionRemainingSelector]; ok {
+		selector, err := dispositionSelectorArgs(sandbox)
+		if err != nil {
+			return err
+		}
+		path, err := storeStatePath(sandbox, selector[5])
+		if err != nil {
+			return err
+		}
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			return fmt.Errorf("selected edge was not quarantined: %v", statErr)
+		}
+		remainingSelector := strings.Split(remaining, "\n")
+		path, err = storeStatePath(sandbox, remainingSelector[2])
+		after, readErr := os.ReadFile(path)
+		digest := sha256.Sum256(after)
+		if err != nil || readErr != nil || string(after) != sandbox.Scratch[scratchDispositionRemainingBytes] || "sha256:"+hex.EncodeToString(digest[:]) != sandbox.Scratch[scratchDispositionRemainingDigest] {
+			return errors.New("selected repair changed the unselected edge")
+		}
+		sandbox.Scratch[scratchDispositionSelector] = remaining
+		delete(sandbox.Scratch, scratchDispositionRemainingSelector)
 	}
 	return nil
 }
@@ -1551,12 +1637,6 @@ var inspectAuthorityCapability = &Capability{
 	Flags: []string{"--cwd"},
 }
 
-var reconcileAuthorityCapability = &Capability{
-	Verb: []string{"review", "reconcile-authority"},
-	Flags: []string{"--cwd", "--predecessor-lineage", "--expected-predecessor-revision",
-		"--successor-lineage", "--expected-successor-revision", "--maintainer-authorization"},
-}
-
 var reclaimAuthorityCapability = &Capability{
 	Verb:  []string{"review", "reclaim"},
 	Flags: []string{"--cwd", "--lineage", "--actor", "--reason"},
@@ -1601,12 +1681,18 @@ func damagedStoreJourneys() []Journey {
 			// Expected: the operator can SEE the damage — inspect-authority
 			// describes both edges precisely, which is the product at its best
 			// — and then every advertised surface refuses. The gate refuses,
-			// `review start` refuses, the one operation whose entire job is
-			// quarantining an edge that does not re-derive refuses on both
-			// edges, reclaim refuses, classified repair reports it does not
-			// cover this, and the abandonment that clears the single-edge
-			// shape in ds02 refuses here before it even reaches the successor:
-			// it will not leave the remaining graph invalid.
+			// `review start` refuses, reclaim refuses, classified repair
+			// reports it does not cover this, and the abandonment that clears
+			// the single-edge shape in ds02 refuses here before it even
+			// reaches the successor: it will not leave the remaining graph
+			// invalid.
+			//
+			// Wave 7 S3a: the reconciliation quarantine operation this journey
+			// used to drive here (which also refused both edges — their
+			// anomaly_classes are empty, outside its two supported classes)
+			// retired with no replacement; the step is removed rather than
+			// left to report `unsupported` forever, per D2 (retarget the
+			// journey to the surviving surfaces, never delete the shape).
 			//
 			// So this journey declares `dead_end`, and the declaration is
 			// carried by its own steps rather than by an opinion. Whether any
@@ -1624,13 +1710,6 @@ func damagedStoreJourneys() []Journey {
 					Args: productArgs("review", "validate", "--gate", "post-apply")},
 				{Name: "start a fresh review instead", Requires: startCapability,
 					Args: productArgs("review", "start")},
-				{Name: "reconcile the newest edge, which is the operation for exactly this",
-					Requires: reconcileAuthorityCapability,
-					Args: reconcileArgs(scratchMiddle, scratchMiddleRevision, scratchSuccessor, scratchSuccessorRevision,
-						"the recovery edge does not re-derive")},
-				{Name: "reconcile the older edge", Requires: reconcileAuthorityCapability,
-					Args: reconcileArgs(scratchPredecessor, scratchPredecessorRevision, scratchMiddle, scratchMiddleRevision,
-						"the recovery edge does not re-derive")},
 				{Name: "reclaim the newest successor entry", Requires: reclaimAuthorityCapability,
 					Args: reclaimArgs(scratchSuccessor, "the recovery edge does not re-derive")},
 				{Name: "ask classified repair whether it covers this", Requires: repairPreflightCapability,
@@ -1659,12 +1738,18 @@ func damagedStoreJourneys() []Journey {
 			// it, quarantines it, and the approved predecessor is back in
 			// charge.
 			//
-			// Expected: the gate and the reconciliation refuse, neither naming
-			// the abandonment; the abandonment then works. The defect this
-			// journey measures is not that the operator is stuck — it is that
-			// they cannot get out by running only what the messages named, and
-			// the last step proves the exit was real by requiring the store to
-			// govern again.
+			// Expected: the gate refuses without naming the abandonment; the
+			// abandonment then works. The defect this journey measures is not
+			// that the operator is stuck — it is that they cannot get out by
+			// running only what the messages named, and the last step proves
+			// the exit was real by requiring the store to govern again.
+			//
+			// Wave 7 S3a: the reconciliation quarantine step this journey used
+			// to drive here retired with no replacement (this edge's
+			// anomaly_classes were always empty — outside reconciliation's two
+			// supported classes even before it retired, so reconciliation
+			// always refused this exact shape); removed per D2 rather than
+			// left to report `unsupported`.
 			Steps: []Step{
 				{Name: "fixture: one damaged recovery edge, pristine successor", Fixture: damagedEdgePristine},
 				{Name: "inspect the authority", Requires: inspectAuthorityCapability,
@@ -1673,10 +1758,6 @@ func damagedStoreJourneys() []Journey {
 						invalidEdgesWithNoAnomalyClass(1))},
 				{Name: "the delivery gate over a damaged store", Requires: validateCapability,
 					Args: productArgs("review", "validate", "--gate", "post-apply")},
-				{Name: "reconcile the edge, which is the operation for exactly this",
-					Requires: reconcileAuthorityCapability,
-					Args: reconcileArgs(scratchPredecessor, scratchPredecessorRevision, scratchSuccessor, scratchSuccessorRevision,
-						"the recovery edge does not re-derive")},
 				{Name: "abandon the successor, which nothing named", Requires: abandonAxisCapability,
 					Args: abandonArgs(scratchSuccessor, scratchSuccessorRevision, scratchSuccessorSnapshot,
 						"the recovery edge cannot be admitted")},
@@ -1690,9 +1771,10 @@ func damagedStoreJourneys() []Journey {
 			// Same damage, one difference: the successor holds a reviewer
 			// result the product itself wrote. `review abandon` is right to
 			// refuse — abandoning a lineage that holds captured review work
-			// would discard it — and reconciliation is right to refuse an edge
-			// outside its two classes. Both guards are correct and together
-			// they leave nothing.
+			// would discard it. Reconciliation used to also refuse an edge
+			// outside its two classes here (Wave 7 S3a: it retired with no
+			// replacement, so that step is gone — see below). Every remaining
+			// guard is correct and together they leave nothing.
 			//
 			// This is the one journey in the axis that declares `dead_end`, and
 			// the declaration is the most expensive claim this benchmark
@@ -1701,7 +1783,6 @@ func damagedStoreJourneys() []Journey {
 			// in front of it, which drive every advertised authority-repair
 			// surface in turn and record what each one answered:
 			//
-			//   reconcile-authority  refuses: the edge is outside its classes
 			//   reclaim              refuses: the entry holds authority
 			//   repair --preflight   exits 0 reporting `unsupported`
 			//   invalidate           exits 0 and changes nothing
@@ -1716,17 +1797,15 @@ func damagedStoreJourneys() []Journey {
 			// diagnosis with `review inspect-authority` and escalate it — so the
 			// last refusal in the chain leaves the operator somewhere and this
 			// journey no longer declares a dead end. The steps stay exactly as
-			// they were: they still drive every advertised repair surface, and
-			// they are what would catch the exit going away again.
+			// they were (minus the retired reconciliation step): they still
+			// drive every advertised repair surface, and they are what would
+			// catch the exit going away again.
 			Steps: []Step{
 				{Name: "fixture: one damaged recovery edge, successor holds a captured result", Fixture: damagedEdgeWithResults},
 				{Name: "inspect the authority", Requires: inspectAuthorityCapability,
 					Args: productArgs("review", "inspect-authority"),
 					After: inspectionAssertion("one edge outside every anomaly class",
 						invalidEdgesWithNoAnomalyClass(1))},
-				{Name: "reconcile the edge", Requires: reconcileAuthorityCapability,
-					Args: reconcileArgs(scratchPredecessor, scratchPredecessorRevision, scratchSuccessor, scratchSuccessorRevision,
-						"the recovery edge does not re-derive")},
 				{Name: "reclaim the entry instead", Requires: reclaimAuthorityCapability,
 					Args: reclaimArgs(scratchSuccessor, "the recovery edge cannot be admitted")},
 				{Name: "ask classified repair whether it covers this", Requires: repairPreflightCapability,
@@ -1769,19 +1848,22 @@ func damagedStoreJourneys() []Journey {
 		},
 		{
 			ID:     "ds05-half-written-successor-record",
-			Title:  "A record truncated mid-write: the refusal names a continuation that cannot load it",
+			Title:  "A record truncated mid-write: the refusal names the diagnosis, not a command that cannot load it",
 			Source: "interrupted write + shape 4",
 			// The third distinct path: the entry never parses, so it never
 			// becomes an edge. It lands in the inspection's entry diagnostics
 			// as `malformed_compact_state`, and `review reclaim` — the
-			// operation for an incomplete entry — refuses it and names
-			// `review reconcile-authority` as the operation that handles it
-			// instead.
+			// operation for an incomplete entry — refuses it and names the
+			// machine-readable diagnosis to capture (a prior fix, predating
+			// Wave 7, already corrected reclaim away from naming a
+			// continuation that could not even load its target here).
 			//
-			// Expected: that named continuation does not work here. It cannot
-			// load the successor either, because loading it is the thing that
-			// fails. This is shape 4 in its purest form and it is the reason
-			// this journey is in the axis at all.
+			// Wave 7 S3a: the extra step this journey used to add — driving
+			// `review reconcile-authority` anyway, to prove even that named
+			// alternative also could not load the record — retired with the
+			// verb itself; removed per D2 rather than left to report
+			// `unsupported`. This is shape 4 in its purest form and it is the
+			// reason this journey is in the axis at all.
 			Steps: []Step{
 				{Name: "fixture: a successor record truncated mid-write", Fixture: halfWrittenSuccessor},
 				{Name: "inspect the authority", Requires: inspectAuthorityCapability,
@@ -1800,10 +1882,6 @@ func damagedStoreJourneys() []Journey {
 					Args: productArgs("review", "validate", "--gate", "post-apply")},
 				{Name: "reclaim the incomplete entry", Requires: reclaimAuthorityCapability,
 					Args: reclaimArgs(scratchSuccessor, "the record is half written")},
-				{Name: "reconcile it, which is what the reclaim refusal named",
-					Requires: reconcileAuthorityCapability,
-					Args: reconcileArgs(scratchPredecessor, scratchPredecessorRevision, scratchSuccessor, scratchSuccessorRevision,
-						"the record is half written")},
 				{Name: "the store is exactly as damaged as it was", Composite: proveStoreStillDamaged},
 			},
 		},
@@ -1812,11 +1890,12 @@ func damagedStoreJourneys() []Journey {
 			Title:  "A non-pristine content-mismatched leaf: the leaf authority disposition plan repairs it black-box, and the rest of the graph never moves",
 			Source: "rdd-root-simplification-wave2 Slice S2/S3 + community report shape 3",
 			// ds03 above proves the guards around this exact shape are each
-			// individually correct — reconcile refuses (outside its two
-			// classes), reclaim refuses (the entry holds authority),
-			// classified repair reports unsupported, invalidate changes
-			// nothing, and abandon refuses because the successor holds a
-			// captured reviewer result.
+			// individually correct — reclaim refuses (the entry holds
+			// authority), classified repair reports unsupported, invalidate
+			// changes nothing, and abandon refuses because the successor
+			// holds a captured reviewer result. (Reconciliation used to also
+			// refuse this shape as outside its two classes; it retired in
+			// Wave 7 S3a with no replacement.)
 			//
 			// What ds03 could not prove, because it predates this wave, is
 			// Wave 2's own answer to that closed door: a leaf authority
@@ -1848,17 +1927,9 @@ func damagedStoreJourneys() []Journey {
 			},
 		},
 		{
-			ID:     "ds07-two-content-mismatched-edges-no-disposition-plan",
-			Title:  "Two closed content-mismatch edges in one chain: the disposition plan refuses to pick one, and nothing is quarantined",
-			Source: "rdd-root-simplification-wave2 design decision 5/6 (cardinality is executor policy) + shape 4",
-			// ds01 above drives every legacy-era recovery surface over this
-			// exact two-edge shape and finds none of them admit it. Wave 2
-			// adds one more surface to check: whether the new leaf
-			// authority disposition plan picks a side. It does not —
-			// derivation itself refuses the moment it finds more than one
-			// closed-class edge, so `review repair --preflight` never
-			// surfaces a plan for either edge, and nothing about the store
-			// changes for having asked.
+			ID:     "ds07-two-content-mismatched-edges-repaired-sequentially",
+			Title:  "Two closed content-mismatch edges in one chain: preflight enumerates an exact leaf selector and repair proceeds one edge at a time",
+			Source: "issue 1892 accepted sequential repair scope",
 			Steps: []Step{
 				{Name: "fixture: two damaged recovery edges", Fixture: damagedEdgePair},
 				{Name: "inspect the authority", Requires: inspectAuthorityCapability,
@@ -1867,7 +1938,19 @@ func damagedStoreJourneys() []Journey {
 						invalidEdgesWithNoAnomalyClass(2))},
 				{Name: "ask what review repair would do", Requires: repairPreflightCapability,
 					Args: productArgs("review", "repair", "--preflight=true"), After: requireNoDispositionPlanSurfaced},
-				{Name: "the store is still not in charge", Composite: proveStoreStillDamaged},
+				{Name: "select the emitted leaf and derive its exact plan", Requires: repairPreflightCapability,
+					Args: dispositionSelectorPreflightArgs, After: requireDispositionPlanEligible},
+				{Name: "a wrong emitted selector revision is rejected", Requires: repairDispositionExecuteCapability,
+					Args: dispositionRepairWithSelectorArgs("reject the altered emitted selector", "sha256:"+strings.Repeat("f", 64)), After: requireWrongDispositionSelectorRefusal},
+				{Name: "repair only the selected leaf", Requires: repairDispositionExecuteCapability,
+					Args: dispositionRepairWithSelectorArgs("quarantine the selected content-mismatched leaf"), After: requireDispositionQuarantineCommitted},
+				{Name: "the unselected edge remains for the next preflight", Requires: inspectAuthorityCapability,
+					Args: productArgs("review", "inspect-authority"), After: inspectionAssertion("one remaining damaged edge", invalidEdgesWithNoAnomalyClass(1))},
+				{Name: "rerun preflight for the remaining emitted selector", Requires: repairPreflightCapability,
+					Args: dispositionSelectorPreflightArgs, After: requireDispositionPlanEligible},
+				{Name: "repair the remaining edge", Requires: repairDispositionExecuteCapability,
+					Args: dispositionRepairWithSelectorArgs("quarantine the remaining content-mismatched leaf"), After: requireDispositionQuarantineCommitted},
+				{Name: "the store governs again", Composite: proveStoreRecovered},
 			},
 		},
 		{
@@ -1896,5 +1979,57 @@ func damagedStoreJourneys() []Journey {
 				{Name: "the store is still not in charge", Composite: proveStoreStillDamaged},
 			},
 		},
+		{
+			ID:     "ds13-damaged-entry-does-not-govern-unrelated-work",
+			Title:  "One damaged entry, and work that has nothing to do with it: the store still answers about the candidate",
+			Source: "issues 1892, 2014, 2167, 2234, 2270, 2456 (repository-global authority validation)",
+			// Every other journey in this axis measures what an operator can do
+			// ABOUT the damage. This one measures what the damage does to
+			// everybody else, which is the thing the reports were actually
+			// about: worktrees of one repository share a Git common directory
+			// and therefore one review store, so a verdict issued over that
+			// store is a verdict issued to every worktree at once.
+			//
+			// The fixture is ds02's exactly — one damaged recovery edge, a
+			// pristine successor — and then the operator does something with no
+			// relation to it: they write a new file and ask the product what to
+			// do next. The measurement is whether they get an answer about
+			// their candidate or an answer about somebody else's history.
+			//
+			// The damage is deliberately NOT repaired here. A journey that had
+			// to clear the entry first would be measuring the repair, and the
+			// whole claim is that no repair should be needed to keep working.
+			Steps: []Step{
+				{Name: "fixture: one damaged recovery edge", Fixture: damagedEdgePristine},
+				{Name: "the operator writes something unrelated", Fixture: stageProse("", "unrelated")},
+				{Name: "ask the negotiated surface what happens next", Requires: statusCapability,
+					Args:  productArgs("review", "status", "--contract", reviewContract, "--next-transition"),
+					After: requireUnrelatedTargetIsRouted},
+				{Name: "start a review of the unrelated candidate", Requires: startCapability,
+					Args: productArgs("review", "start")},
+				{Name: "the damaged entry is still reported, and still damaged", Requires: inspectAuthorityCapability,
+					Args: productArgs("review", "inspect-authority"),
+					After: inspectionAssertion("the damage survived the unrelated work",
+						invalidEdgesWithNoAnomalyClass(1))},
+			},
+		},
 	}, closureDispositionJourneys()...)
+}
+
+// requireUnrelatedTargetIsRouted is ds13's measurement. The negotiated surface
+// must publish a transition for the live candidate. Stopping over an entry the
+// candidate does not inherit from is the reported defect: it leaves the
+// harness with nothing to run and the operator with a blocked push.
+func requireUnrelatedTargetIsRouted(_ *Sandbox, observation Observation) error {
+	var envelope statusEnvelope
+	if err := decodeWaveObservation(observation, &envelope, "review status --next-transition beside a damaged entry"); err != nil {
+		return err
+	}
+	if envelope.NextTransition.Kind == "" {
+		return errors.New("the negotiated surface published no transition for the live candidate")
+	}
+	if envelope.NextTransition.Kind == "stop" {
+		return errors.New("the negotiated surface stopped an unrelated candidate over a damaged entry")
+	}
+	return nil
 }

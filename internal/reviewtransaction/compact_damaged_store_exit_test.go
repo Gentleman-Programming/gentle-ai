@@ -1,27 +1,26 @@
 package reviewtransaction
 
-// The damaged-store friction benchmark (bench/journeys ds01–ds05) measured
-// four refusals that stop the operator without naming what actually clears the
-// block, plus one continuation that names an operation which then cannot even
-// load its target. These tests pin the honest replacements:
+// The damaged-store friction benchmark (bench/journeys ds01-ds05) measured
+// four refusals that stop the operator without naming what actually clears
+// the block. These tests pin the honest replacements:
 //
 //   - `review reclaim` on an entry holding authority names the operation that
-//     admits THAT entry's shape — reconcile for a reconcilable anomaly class,
-//     abandon for a pristine entry the abandonment gate's own prediction
-//     accepts — and, when nothing admits it, says so precisely and names the
-//     machine-readable diagnosis instead of a command that would then refuse.
-//   - `review reconcile-authority` on a half-written record refuses with the
-//     inspection's own classification (malformed_compact_state) rather than
-//     dying on the JSON decoder's `unexpected EOF`.
+//     admits THAT entry's shape — abandon for a pristine entry the
+//     abandonment gate's own prediction accepts — and, when nothing admits
+//     it, says so precisely and names the machine-readable diagnosis instead
+//     of a command that would then refuse. (Reconciliation used to also be a
+//     possible named continuation here; the `review reconcile-authority`
+//     verb and its provider retired in Wave 7 S3a/S3b, so reclaim's own
+//     refusal for a reconcilable-shaped edge now falls through to the same
+//     abandon-or-Blocked logic every other shape uses.)
 //   - `review start` over an invalid authority graph names the sanctioned exit
-//     the read-only inspection proves, exactly as the reconcile refusal
-//     already does, instead of stopping at the bare graph violation.
+//     the read-only inspection proves, instead of stopping at the bare graph
+//     violation.
 //
 // Every named continuation is then DRIVEN, so a future refusal whose named
 // command dead-ends fails here, not in the field.
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -86,59 +85,16 @@ func requireAuthoritativeInventory(t *testing.T, repo string) {
 	}
 }
 
-// TestReconcileRefusesUnreadableSuccessorWithDiagnosis pins the ds05 shape:
-// the operation the reclaim refusal names for an invalid recovery successor
-// answered `load reconcile successor: unexpected EOF` for a record truncated
-// mid-write — the continuation named for the case could not load the case. A
-// decoder error is never an operator-facing answer. Reconciliation cannot
-// admit an unreadable record — its whole design re-derives proof from readable
-// state, and admitting bytes that prove nothing is a maintainer policy
-// decision — so the refusal must say exactly that, carry the inspection's own
-// classification, and name the diagnosis to capture.
-func TestReconcileRefusesUnreadableSuccessorWithDiagnosis(t *testing.T) {
-	ctx := context.Background()
-	repo := initSnapshotRepo(t)
-	predecessor, successor, successorStore := forgedRecoveryPair(t, repo, "halved", "half-written target\n")
-	truncated := truncateCompactStateFile(t, successorStore)
-
-	_, err := ReconcileInvalidRecoveryEdge(ctx, repo, forgedReconcileRequest(predecessor, successor))
-	if err == nil {
-		t.Fatal("reconcile admitted an unreadable successor record")
-	}
-	refusal := err.Error()
-	if strings.HasPrefix(refusal, "load reconcile successor:") {
-		t.Fatalf("a bare decoder error is not an operator-facing answer: %q", refusal)
-	}
-	for _, want := range []string{
-		"malformed_compact_state",
-		"maintainer policy decision",
-		"gentle-ai review inspect-authority",
-	} {
-		if !strings.Contains(refusal, want) {
-			t.Fatalf("reconcile refusal does not carry %q:\n%s", want, refusal)
-		}
-	}
-
-	// The refusal mutated nothing: the truncated bytes stay exactly as found.
-	after, err := os.ReadFile(successorStore.StatePath())
-	if err != nil || !bytes.Equal(after, truncated) {
-		t.Fatalf("refused reconcile mutated the unreadable record: %v", err)
-	}
-
-	// The named diagnosis answers: inspection classifies the entry exactly as
-	// the refusal claimed.
-	report, err := InspectCompactRecoveryEdges(ctx, repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.Complete || report.Totals.EntryDiagnostics != 1 {
-		t.Fatalf("inspection does not report the unreadable entry: %#v", report.Totals)
-	}
-	diagnostic := report.EntryDiagnostics[0]
-	if diagnostic.LineageID != successor.State.LineageID || diagnostic.Problem != "malformed_compact_state" {
-		t.Fatalf("inspection diagnostic = %#v", diagnostic)
-	}
-}
+// TestReconcileRefusesUnreadableSuccessorWithDiagnosis used to pin the ds05
+// shape directly against ReconcileInvalidRecoveryEdge: an unreadable
+// successor record answered a bare decoder error rather than the
+// inspection's own classification. Wave 7 S3b retired that provider (its
+// verb, `review reconcile-authority`, retired one slice earlier in S3a) --
+// the identical shape is already covered, end to end, by
+// TestReclaimRefusalNamesTheOperationThatAdmitsTheShape's own "unreadable
+// record" subtest below, which drives `review reclaim`'s refusal (the
+// retained, live surface) over the same truncated-record fixture and proves
+// the same inspection classification.
 
 // TestReclaimRefusalNamesTheOperationThatAdmitsTheShape pins the reclaim →
 // reconcile circle the benchmark measured. reclaim refused every
@@ -161,26 +117,30 @@ func TestReclaimRefusalNamesTheOperationThatAdmitsTheShape(t *testing.T) {
 		return err.Error()
 	}
 
-	t.Run("reconcilable pre-contract edge names reconcile with the persisted values", func(t *testing.T) {
+	// Wave 7 S3a: `review reconcile-authority` retired with no replacement,
+	// so a reconcilable pre-contract edge's fate now depends only on
+	// whether the successor is pristine -- this fixture's is, so reclaim
+	// names `review abandon`, the same as any other pristine forged
+	// successor (the subtest below). The renamed subtest documents that
+	// the reconcile-specific continuation this test used to pin is gone.
+	t.Run("reconcilable pre-contract edge names abandon, reconciliation retired", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
-		predecessor, _, successor, _ := preContractRecoveryFixture(t, repo, preContractFixtureAuthorization, nil)
+		_, _, successor, _ := preContractRecoveryFixture(t, repo, preContractFixtureAuthorization, nil)
 		refusal := reclaim(t, repo, successor.State.LineageID)
 		for _, want := range []string{
-			"gentle-ai review reconcile-authority",
-			"--predecessor-lineage \"" + predecessor.State.LineageID + "\"",
-			"--expected-predecessor-revision \"" + predecessor.Revision + "\"",
-			"--successor-lineage \"" + successor.State.LineageID + "\"",
-			"--expected-successor-revision \"" + successor.Revision + "\"",
-			compactReconcileAuthorizationSchema,
+			"gentle-ai review abandon",
+			"--lineage \"" + successor.State.LineageID + "\"",
+			"--expected-revision \"" + successor.Revision + "\"",
+			CompactAbandonAuthorizationSchema,
 		} {
 			if !strings.Contains(refusal, want) {
 				t.Fatalf("reclaim refusal does not name %q:\n%s", want, refusal)
 			}
 		}
-		// Drive exactly the operation the refusal named; the block clears.
-		if _, err := ReconcileInvalidRecoveryEdge(ctx, repo, preContractReconcileRequest(predecessor, successor)); err != nil {
-			t.Fatalf("the named reconcile does not run: %v", err)
+		if strings.Contains(refusal, "gentle-ai review reconcile-authority") {
+			t.Fatalf("reclaim named the retired reconcile-authority verb:\n%s", refusal)
 		}
+		abandonPerEligibility(t, repo, successor.State.LineageID, "clear the damaged entry")
 		requireAuthoritativeInventory(t, repo)
 	})
 
@@ -255,19 +215,46 @@ func TestReclaimRefusalNamesTheOperationThatAdmitsTheShape(t *testing.T) {
 	})
 }
 
-// TestStartOverInvalidGraphRefusalNamesSanctionedExit pins the `review start`
-// half: a fresh start over a damaged authority graph refused with the bare
-// graph violation and named nothing. The refusal now carries the sanctioned
-// exit the read-only inspection proves — the same pattern the reconcile
-// refusal already uses — and driving that exit makes the same start succeed.
+// TestStartOverInvalidGraphRefusalNamesSanctionedExit pins both halves of the
+// `review start` scope rule.
+//
+// UNRELATED work starts. A damaged historical edge is not a fact about a
+// candidate that does not inherit from it, and refusing every start in the
+// repository until somebody repaired unrelated history is the dead end
+// reported as 1892, 2014 and 2167 — in a shared Git common directory it
+// refused every worktree at once.
+//
+// The DAMAGED lineage still refuses for itself, and the refusal still names
+// the sanctioned exit the read-only inspection proves, so running exactly what
+// it printed clears exactly that entry. Scoping a refusal is not softening it:
+// the same operator gets the same exit, and everybody else stops being asked
+// to run it.
 func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 	ctx := context.Background()
 
-	freshStart := func(t *testing.T, repo, lineage string) error {
+	startLineage := func(t *testing.T, repo, lineage string) error {
 		t.Helper()
 		writeSnapshotFile(t, repo, "tracked.txt", "fresh start target for "+lineage+"\n")
 		_, err := StartCompactAuthority(ctx, repo, CompactStartRequest{State: newCompactTestState(t, repo, lineage)})
 		return err
+	}
+
+	// freshStart is unrelated work: a lineage the damaged graph does not
+	// contain and no damaged entry is an ancestor of.
+	freshStart := func(t *testing.T, repo, lineage string) error {
+		t.Helper()
+		return startLineage(t, repo, lineage)
+	}
+
+	// blockedStart names the damaged lineage itself, which is the only start
+	// a damaged entry has any standing to refuse.
+	blockedStart := func(t *testing.T, repo, lineage string) string {
+		t.Helper()
+		err := startLineage(t, repo, lineage)
+		if err == nil {
+			t.Fatalf("start on the damaged lineage %q was admitted", lineage)
+		}
+		return err.Error()
 	}
 
 	t.Run("dangling predecessor names the abandonment that clears it", func(t *testing.T) {
@@ -276,11 +263,10 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 		if err := os.RemoveAll(filepath.Join(filepath.Dir(successorStore.Dir), predecessor.State.LineageID)); err != nil {
 			t.Fatal(err)
 		}
-		err := freshStart(t, repo, "start-over-dangling")
-		if err == nil {
-			t.Fatal("start succeeded over a dangling predecessor")
+		if err := freshStart(t, repo, "start-over-dangling"); err != nil {
+			t.Fatalf("unrelated work was refused by a dangling predecessor it never inherited from: %v", err)
 		}
-		refusal := err.Error()
+		refusal := blockedStart(t, repo, successor.State.LineageID)
 		for _, want := range []string{
 			"dangling predecessor",
 			"gentle-ai review abandon",
@@ -299,28 +285,32 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 		}
 	})
 
-	t.Run("pre-contract edge names the reconcile that clears it", func(t *testing.T) {
+	// Wave 7 S3a: `review reconcile-authority` retired with no replacement
+	// (see the sibling reclaim test above); this fixture's successor is
+	// pristine, so `review start`'s sanctioned-exit refusal now names
+	// `review abandon` instead, the same as the forged-pristine subtest
+	// below.
+	t.Run("pre-contract edge names abandon, reconciliation retired", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
-		predecessor, _, successor, _ := preContractRecoveryFixture(t, repo, preContractFixtureAuthorization, nil)
-		err := freshStart(t, repo, "start-over-pre-contract")
-		if err == nil {
-			t.Fatal("start succeeded over an invalid recovery edge")
+		_, _, successor, _ := preContractRecoveryFixture(t, repo, preContractFixtureAuthorization, nil)
+		if err := freshStart(t, repo, "start-over-pre-contract"); err != nil {
+			t.Fatalf("unrelated work was refused by an invalid recovery edge it never inherited from: %v", err)
 		}
-		refusal := err.Error()
+		refusal := blockedStart(t, repo, successor.State.LineageID)
 		for _, want := range []string{
 			"exact maintainer authorization binding",
-			"gentle-ai review reconcile-authority",
-			"--expected-predecessor-revision \"" + predecessor.Revision + "\"",
-			"--expected-successor-revision \"" + successor.Revision + "\"",
-			compactReconcileAuthorizationSchema,
+			"gentle-ai review abandon",
+			"--expected-revision \"" + successor.Revision + "\"",
+			CompactAbandonAuthorizationSchema,
 		} {
 			if !strings.Contains(refusal, want) {
 				t.Fatalf("start refusal does not name %q:\n%s", want, refusal)
 			}
 		}
-		if _, err := ReconcileInvalidRecoveryEdge(ctx, repo, preContractReconcileRequest(predecessor, successor)); err != nil {
-			t.Fatalf("the named reconcile does not run: %v", err)
+		if strings.Contains(refusal, "gentle-ai review reconcile-authority") {
+			t.Fatalf("start named the retired reconcile-authority verb:\n%s", refusal)
 		}
+		abandonPerEligibility(t, repo, successor.State.LineageID, "the recovery edge cannot be admitted")
 		if err := freshStart(t, repo, "start-over-pre-contract"); err != nil {
 			t.Fatalf("start still refuses after the named exit ran: %v", err)
 		}
@@ -329,11 +319,10 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 	t.Run("forged pristine successor names the abandonment that clears it", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		_, successor, _ := forgedRecoveryPair(t, repo, "start", "forged start target\n")
-		err := freshStart(t, repo, "start-over-forged")
-		if err == nil {
-			t.Fatal("start succeeded over a forged recovery edge")
+		if err := freshStart(t, repo, "start-over-forged"); err != nil {
+			t.Fatalf("unrelated work was refused by a forged recovery edge it never inherited from: %v", err)
 		}
-		refusal := err.Error()
+		refusal := blockedStart(t, repo, successor.State.LineageID)
 		for _, want := range []string{
 			"gentle-ai review abandon",
 			"--expected-revision \"" + successor.Revision + "\"",
@@ -362,7 +351,7 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 	// named a runnable exit.
 	t.Run("forged successor holding captured results names the repair that clears it", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
-		forgedRecoveryPair(t, repo, "start-captured", "forged captured start target\n", func(state *CompactState) {
+		_, capturedSuccessor, _ := forgedRecoveryPair(t, repo, "start-captured", "forged captured start target\n", func(state *CompactState) {
 			results := make([]LensResult, 0, len(state.SelectedLenses))
 			for _, lens := range state.SelectedLenses {
 				results = append(results, LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed once"}})
@@ -373,11 +362,10 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-		err := freshStart(t, repo, "start-over-captured")
-		if err == nil {
-			t.Fatal("start succeeded over a content-mismatched leaf holding captured review data")
+		if err := freshStart(t, repo, "start-over-captured"); err != nil {
+			t.Fatalf("unrelated work was refused by a content-mismatched leaf it never inherited from: %v", err)
 		}
-		refusal := err.Error()
+		refusal := blockedStart(t, repo, capturedSuccessor.State.LineageID)
 		for _, want := range []string{
 			"gentle-ai review repair",
 			"--plan-digest",
@@ -394,6 +382,7 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 
 		ctx := context.Background()
 		plan, err := DeriveAuthorityDispositionPlanAtRepo(ctx, repo, "maintainer@example.com", "clear the content-mismatched leaf")
+		_ = plan
 		if err != nil {
 			t.Fatal(err)
 		}

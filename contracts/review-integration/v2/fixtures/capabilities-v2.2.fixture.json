@@ -36,7 +36,7 @@
     "gentle-ai.review-integration.projection/v1",
     "gentle-ai.review-integration.repair/v2",
     "gentle-ai.review-integration.start/v3",
-    "gentle-ai.review-integration.status/v4",
+    "gentle-ai.review-integration.status/v5",
     "gentle-ai.review-receipt/v1",
     "gentle-ai.review-receipt/v2",
     "gentle-ai.review-result-artifact/v2",
@@ -82,7 +82,7 @@
     ]
   },
   "bootstrap": {
-    "command": "gentle-ai review status --cwd \u003crepo\u003e --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition",
+    "command": "gentle-ai review status --cwd \u003crepo\u003e --contract gentle-ai.review-integration/v2 --next-transition",
     "target_selector_variants": [
       {"target_type": "staged", "arguments": ["--projection", "staged"]},
       {"target_type": "base_ref", "arguments": ["--base-ref", "\u003cref\u003e"]},

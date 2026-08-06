@@ -266,21 +266,103 @@ func runNextTransitionVerbatim(r *journeyRun) (Observation, error) {
 	if err != nil {
 		return Observation{}, err
 	}
+	return runPrintedTransition(r, envelope)
+}
+
+// runPrintedTransition runs the command the product PRINTED, exactly as
+// printed.
+//
+// It deliberately does not re-derive the verb from the operation name, which
+// is what this corpus used to do. That re-derivation was the reason a journey
+// named "the printed transition executes exactly as printed" kept passing over
+// an execute transition whose `command` was empty: the benchmark quietly
+// assembled the command the product owed the reader, ran its own, and reported
+// the flow as continuing. "Runs verbatim" has to mean the printed bytes, or it
+// measures the benchmark instead of the product.
+//
+// It is also more correct than the split it replaces. An operation name is not
+// a verb -- "review.retry_final_verification" and "review.bind_sdd" spell
+// their verbs with hyphens -- so splitting on "." only ever produced a runnable
+// verb by coincidence.
+func runPrintedTransition(r *journeyRun, envelope statusEnvelope) (Observation, error) {
 	if envelope.NextTransition.Kind != "execute" {
 		return Observation{}, fmt.Errorf("expected an execute transition, got %q", envelope.NextTransition.Kind)
 	}
-	verb := strings.SplitN(envelope.NextTransition.Execute.Operation, ".", 2)
-	if len(verb) != 2 {
-		return Observation{}, fmt.Errorf("execute operation %q is not <verb>.<subcommand>", envelope.NextTransition.Execute.Operation)
-	}
-	args := []string{verb[0], verb[1], "--cwd", r.sandbox.Repo}
-	for _, argument := range envelope.NextTransition.Execute.Arguments {
-		if argument.Token == "" {
-			return Observation{}, fmt.Errorf("argument %q carried no runnable token", argument.Name)
-		}
-		args = append(args, argument.Token)
+	args, err := printedCommandArguments(envelope.NextTransition.Execute.Command)
+	if err != nil {
+		return Observation{}, fmt.Errorf("execute transition for %q %w", envelope.NextTransition.Execute.Operation, err)
 	}
 	return r.run(args, false), nil
+}
+
+// printedCommandArguments turns one printed command line into the argv a POSIX
+// shell would hand the product, and refuses anything that is not a complete,
+// immediately runnable `gentle-ai ...` invocation.
+func printedCommandArguments(command string) ([]string, error) {
+	words, err := splitPrintedCommandWords(command)
+	if err != nil {
+		return nil, err
+	}
+	if len(words) == 0 {
+		return nil, errors.New("carried no command to run")
+	}
+	if words[0] != productName {
+		return nil, fmt.Errorf("printed a command that starts with %q, not %q", words[0], productName)
+	}
+	if len(words) == 1 {
+		return nil, fmt.Errorf("printed a command that names no arguments: %q", command)
+	}
+	if !HasRunnableCommand(command) {
+		return nil, fmt.Errorf("printed a command that is not runnable as printed: %q", command)
+	}
+	return words[1:], nil
+}
+
+// splitPrintedCommandWords splits a printed command line into shell words.
+//
+// It understands exactly the quoting the product emits and nothing more:
+// POSIX single quotes, and a backslash escape for the one character single
+// quotes cannot contain (reviewTransitionShellWord renders an embedded quote
+// as '\”). Anything else -- an unterminated quote, a trailing escape -- is a
+// line that would not run as printed, and saying so is the point.
+func splitPrintedCommandWords(line string) ([]string, error) {
+	words := []string{}
+	var word strings.Builder
+	quoted, escaped, started := false, false, false
+	for _, char := range line {
+		switch {
+		case quoted && char == '\'':
+			quoted = false
+		case quoted:
+			word.WriteRune(char)
+		case escaped:
+			word.WriteRune(char)
+			escaped = false
+		case char == '\\':
+			escaped, started = true, true
+		case char == '\'':
+			quoted, started = true, true
+		case char == ' ' || char == '\t' || char == '\n' || char == '\r':
+			if started {
+				words = append(words, word.String())
+				word.Reset()
+				started = false
+			}
+		default:
+			word.WriteRune(char)
+			started = true
+		}
+	}
+	if quoted {
+		return nil, fmt.Errorf("printed a command with an unterminated quote: %q", line)
+	}
+	if escaped {
+		return nil, fmt.Errorf("printed a command with a trailing escape: %q", line)
+	}
+	if started {
+		words = append(words, word.String())
+	}
+	return words, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -433,6 +515,8 @@ var abandonCapability = &Capability{Verb: []string{"review", "abandon"}, Flags: 
 func Journeys() []Journey {
 	journeys := append(coreJourneys(), edgeJourneys()...)
 	journeys = append(journeys, sddJourneys()...)
+	journeys = append(journeys, sddChainJourneys()...)
+	journeys = append(journeys, captureEvidenceDescriptorJourneys()...)
 	journeys = append(journeys, waveOneJourneys()...)
 	journeys = append(journeys, waveThreeJourneys()...)
 	return append(journeys, waveFiveJourneys()...)

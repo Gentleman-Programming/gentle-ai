@@ -46,14 +46,14 @@ func authorizeReviewTransportCapability(agent string) error {
 	}
 	manifest, err := reviewTransportCapabilityForAgent(model.AgentID(agent))
 	if err != nil {
-		return fmt.Errorf("unrecognised review runtime capability claim for %q: %w", agent, err)
+		return fmt.Errorf("unrecognised review runtime capability claim for %q: %w%s", agent, err, reviewTransportRefusalExitGuidance())
 	}
 	if !manifest.Advertises(capabilitymanifest.ContractReviewTransportV1) {
 		// refusal:by-design world-action: an adapter that never declared review transport cannot receive it by probing
-		return fmt.Errorf("runtime %q does not advertise review transport capability", agent)
+		return fmt.Errorf("runtime %q does not advertise review transport capability%s", agent, reviewTransportRefusalExitGuidance())
 	}
 	if err := manifest.Validate(); err != nil {
-		return fmt.Errorf("review transport capability manifest for %q is invalid: %w", agent, err)
+		return fmt.Errorf("review transport capability manifest for %q is invalid: %w%s", agent, err, reviewTransportRefusalExitGuidance())
 	}
 	return nil
 }

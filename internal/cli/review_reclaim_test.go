@@ -20,22 +20,41 @@ func incompleteCompactResidueDir(t *testing.T, repo, lineage string) string {
 	return residue
 }
 
-func TestUnqualifiedGateDiscoveryDeniesIncompleteStoreEntryWithDistinctCause(t *testing.T) {
+// TestUnqualifiedGateDiscoveryReportsIncompleteStoreEntryWithoutDenyingOthers
+// keeps the distinct-cause classification and drops the veto. An interrupted
+// store write leaves a directory with no state in it; that entry is genuinely
+// incomplete and is reported as such, but the approved lineage beside it is
+// untouched and still governs its own delivery.
+func TestUnqualifiedGateDiscoveryReportsIncompleteStoreEntryWithoutDenyingOthers(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-reclaim-valid", "docs/valid.md", "valid\n")
 	incompleteCompactResidueDir(t, repo, "reclaim-audit")
 
 	var output bytes.Buffer
-	err := RunReview([]string{
+	if err := RunReview([]string{
 		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
 		"--gate", string(reviewtransaction.GatePostApply),
-	}, &output)
-	if err == nil {
-		t.Fatal("incomplete store entry did not deny lineage-less gate validation")
+	}, &output); err != nil {
+		t.Fatalf("an incomplete store entry denied an unrelated approved lineage: %v\n%s", err, output.String())
 	}
-	failure := decodeReviewIntegrationFailure(t, output.Bytes())
-	if failure.Code != "authority_corrupted" || failure.CauseCategory != "incomplete_store_entry" {
-		t.Fatalf("incomplete store entry failure = %#v", failure)
+	var validated ReviewValidateResult
+	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &validated)
+	if !validated.Allowed || validated.Context.LineageID != "review-reclaim-valid" {
+		t.Fatalf("post-apply over an incomplete residue entry = %#v", validated)
+	}
+
+	report, err := reviewtransaction.InventoryAuthority(t.Context(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	classified := false
+	for _, entry := range report.Entries {
+		if entry.LineageID == "reclaim-audit" {
+			classified = entry.Status == reviewtransaction.AuthorityStatusIncomplete
+		}
+	}
+	if !classified {
+		t.Fatalf("the incomplete store entry lost its distinct classification: %#v", report.Entries)
 	}
 }
 
@@ -100,7 +119,13 @@ func TestReviewStartSucceedsDespiteIncompleteStoreResidue(t *testing.T) {
 	}
 }
 
-func TestReviewReclaimUnblocksStartPoisonedByEnumeratedResidue(t *testing.T) {
+// TestReviewReclaimClearsEnumeratedResidueThatNeverBlockedStart used to prove
+// reclaim was the way OUT of a start poisoned by enumerated residue. Nothing
+// is poisoned now -- a stray file in a state-less directory is that
+// directory's problem -- so what is left to prove is that reclaim still does
+// its own job: the residue is quarantined with an audit record, and start
+// works on both sides of that, not only after it.
+func TestReviewReclaimClearsEnumeratedResidueThatNeverBlockedStart(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	residue := incompleteCompactResidueDir(t, repo, "reclaim-audit")
 	if err := os.WriteFile(filepath.Join(residue, "stray.tmp"), []byte("stray\n"), 0o644); err != nil {
@@ -113,12 +138,11 @@ func TestReviewReclaimUnblocksStartPoisonedByEnumeratedResidue(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-reclaim-start"}, &output)
-	if err == nil {
-		t.Fatal("review start ignored an enumerated incomplete store entry")
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-reclaim-start"}, &output); err != nil {
+		t.Fatalf("enumerated residue blocked an unrelated start: %v\n%s", err, output.String())
 	}
-	if !strings.Contains(err.Error(), "load compact start authority") {
-		t.Fatalf("start-time enumeration failure = %v", err)
+	if _, err := os.Stat(filepath.Join(residue, "stray.tmp")); err != nil {
+		t.Fatalf("the start consumed or cleaned the residue it should have ignored: %v", err)
 	}
 
 	if err := RunReview([]string{

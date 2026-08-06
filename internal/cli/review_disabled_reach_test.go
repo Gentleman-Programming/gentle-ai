@@ -250,12 +250,24 @@ func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled(t *tes
 	if result.Delivery != "" {
 		t.Fatalf("an enabled switch reported a delivery disposition: %#v", result)
 	}
-	if result.Allowed || result.Context.Denial == nil || result.Context.Denial.Code != string(ReviewAuthorityCorrupted) {
-		t.Fatalf("enabled corrupted-authority denial = %#v", result)
+	if result.Allowed || result.Context.Denial == nil {
+		t.Fatalf("enabled denial over unreviewed commits = %#v", result)
 	}
-	// Visible, not silent: the damage is named in the reported reason.
-	if !strings.Contains(result.Reason, "unavailable or corrupted") {
-		t.Fatalf("enabled corrupted-authority reason hid the damage: %q", result.Reason)
+	// The denial is about THIS candidate, not about an unrelated damaged
+	// entry sitting in the same shared store. Two unreviewed commits have no
+	// receipt, and that is what the gate must say; borrowing a corruption
+	// verdict from history would describe a repository the operator does not
+	// have and name no action they can take.
+	if result.Context.Denial.Code == string(ReviewAuthorityCorrupted) {
+		t.Fatalf("an unrelated damaged entry was reported as this candidate's corruption: %#v", result)
+	}
+	// Visible, not silent: the damage is still named where it belongs.
+	var inspection bytes.Buffer
+	if err := RunReviewInspectAuthority([]string{"--cwd", repo}, &inspection); err != nil {
+		t.Fatalf("inspect-authority over a damaged store: %v\n%s", err, inspection.String())
+	}
+	if !strings.Contains(inspection.String(), "corrupt-reach") {
+		t.Fatalf("the damaged entry vanished from inspection:\n%s", inspection.String())
 	}
 }
 
@@ -365,7 +377,7 @@ func TestReviewValidateReValidatesFromScratchAfterReEnabling(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	beforeTarget := startFacadeReviewTargetIdentity(t, repo, "review-before-disabling")
+	beforeTarget := liveFacadeSnapshotIdentity(t, repo)
 	finalizeApprovedFacadeReview(t, repo, "review-before-disabling")
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
 
@@ -458,7 +470,7 @@ func recoverFacadeReview(t *testing.T, repo, predecessor, successorLineage strin
 		t.Fatal(err)
 	}
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
-	intended, err := builder.DiscoverIntendedUntracked(context.Background())
+	intended, err := builder.DiscoverUnignoredUntracked(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,21 +508,103 @@ func startFacadeReviewResult(t *testing.T, repo, lineage string) ReviewFacadeSta
 	return started
 }
 
-func startFacadeReviewTargetIdentity(t *testing.T, repo, lineage string) string {
+// liveFacadeSnapshotIdentity computes the current workspace candidate's
+// snapshot identity WITHOUT persisting any authority (legacy or v3) for it.
+// Some fixtures need this identity purely as a later comparison value
+// (proving a successor candidate is NOT the same target), and calling it
+// where a subsequent finalizeApprovedFacadeReview also creates LEGACY
+// authority for the identical lineage id would otherwise leave both a v3
+// record (from an ordinary `review start`) and a v2 one (from
+// finalizeApprovedFacadeReview's direct construction) for the same lineage
+// -- a collision this helper avoids by never persisting anything.
+func liveFacadeSnapshotIdentity(t *testing.T, repo string) string {
 	t.Helper()
-	return startFacadeReviewResult(t, repo, lineage).TargetIdentity
+	ctx := context.Background()
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		t.Fatalf("resolve live snapshot repository root: %v", err)
+	}
+	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
+	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatalf("build live snapshot identity: %v", err)
+	}
+	return snapshot.Identity
 }
 
-// finalizeApprovedFacadeReview finalizes an already-started lineage to a
-// terminal receipt.
+// finalizeApprovedFacadeReview finalizes an already-started LEGACY
+// (compact-v2) lineage to a terminal receipt. Every caller of this helper
+// specifically needs genuine legacy authority (proven by
+// reviewtransaction.CompactAuthoritativeStore/CompactAuthoritativeStore
+// reads immediately after several call sites, and by the two
+// legacy-vs-v3-precedence tests in review_governing_authority_test.go),
+// never merely "some approved review" -- a v3 fixture would not exercise
+// what any of these tests actually assert.
+//
+// Before Wave 7 S7 (WU18), this called the CLI's own `review start` with
+// the (default, unset) activation switch off, which took the legacy
+// compact-v2 branch. WU18 removed that branch entirely -- `review start` is
+// now unconditionally v3, so there is no CLI-reachable way left to create a
+// NEW legacy authority (matches gate_boundary_matrix_test.go's own
+// disclosed-gap comment: a v1 legacy lineage already had no CLI-reachable
+// creation path, and now neither does v2). This constructs the identical
+// legacy compact-v2 authority directly through the same
+// reviewtransaction API runReviewFacadeStart's now-deleted legacy branch
+// used to call, then finalizes it through the unchanged CLI
+// RunReviewFacadeFinalize (finalize's discovery-by-kind logic never
+// depended on the switch and is untouched by WU18).
 func finalizeApprovedFacadeReview(t *testing.T, repo, lineage string) {
 	t.Helper()
-	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, &output); err != nil {
-		t.Fatalf("resume facade review %q: %v\n%s", lineage, err, output.String())
+	ctx := context.Background()
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		t.Fatalf("resolve legacy facade review repository root: %v", err)
 	}
-	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
+	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatalf("build legacy facade review target %q: %v", lineage, err)
+	}
+	assessment, err := rootBuilder.AssessSnapshotRisk(ctx, snapshot)
+	if err != nil {
+		t.Fatalf("classify legacy facade review target %q: %v", lineage, err)
+	}
+	lenses, err := facadeSelectedLenses(assessment, "reliability")
+	if err != nil {
+		t.Fatalf("select legacy facade review lenses %q: %v", lineage, err)
+	}
+	policy, err := facadePolicyBytes("")
+	if err != nil {
+		t.Fatalf("read legacy facade review policy %q: %v", lineage, err)
+	}
+	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+		LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
+		Snapshot: snapshot, PolicyHash: facadePayloadHash(policy), RiskLevel: assessment.Level,
+		SelectedLenses: lenses, OriginalChangedLines: &assessment.ChangedLines,
+	})
+	if err != nil {
+		t.Fatalf("create legacy facade review state %q: %v", lineage, err)
+	}
+	compactStarted, err := reviewtransaction.StartCompactAuthority(ctx, root, reviewtransaction.CompactStartRequest{
+		State: state, ExplicitLineage: true,
+	})
+	if err != nil {
+		t.Fatalf("start legacy compact authority %q: %v", lineage, err)
+	}
+	// reviewFacadeStartResultFor is the same production helper
+	// runReviewFacadeStart's own (now-deleted) legacy branch used to shape
+	// this exact result from a StartCompactAuthority call -- reused here
+	// rather than calling the CLI a second time, which would now hit the
+	// unconditional start path's own read-only guard against an existing
+	// legacy chain (by design: v3 must never be created over live legacy
+	// authority for the same lineage id).
+	started := reviewFacadeStartResultFor(compactStarted.Action, compactStarted.LensesRequired, compactStarted.Record.State)
 	args := []string{"--cwd", repo, "--lineage", started.LineageID}
 	if len(started.SelectedLenses) != 0 {
 		evidencePath := filepath.Join(t.TempDir(), "evidence.txt")

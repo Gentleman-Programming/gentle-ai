@@ -1,0 +1,9 @@
+{
+  "operation": "review/finalize",
+  "lineage_id": "byte-equivalence-commit-a-lineage",
+  "state": "approved",
+  "receipt": {
+    "lineage_id": "byte-equivalence-commit-a-lineage",
+    "authority_revision": "sha256:{{path-dependent-authority-revision}}"
+  }
+}

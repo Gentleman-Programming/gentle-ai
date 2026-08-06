@@ -1025,14 +1025,21 @@ func stringInSlice(values []string, target string) bool {
 // AuthorityDisposition proof, never re-deriving it — and only falls back to
 // a fresh derivation (compared against the caller-supplied planDigest/
 // inventoryRevision) when no such record exists.
-func repairAuthorityDispositionAtRepo(ctx context.Context, repo, planDigest, inventoryRevision, actor, reason, authorization string) (CompactReclaimRecord, error) {
+func repairAuthorityDispositionAtRepo(ctx context.Context, repo, planDigest, inventoryRevision, actor, reason, authorization string, selector *AuthorityDispositionSelector) (CompactReclaimRecord, error) {
 	if reconstructed, found, err := reconstructAuthorityDispositionPlanForResume(ctx, repo, planDigest, actor, reason); err != nil {
 		return CompactReclaimRecord{}, err
 	} else if found {
+		if selector != nil && (reconstructed.Selector == nil || *reconstructed.Selector != *selector) {
+			return CompactReclaimRecord{}, fmt.Errorf("%w: submitted exact selector does not match the in-progress plan", ErrConcurrentUpdate)
+		}
 		reconstructed.Authorization = authorization
 		return executeAuthorityDisposition(ctx, repo, reconstructed)
 	}
-	plan, err := deriveAuthorityDispositionPlanAtRepo(ctx, repo, actor, reason)
+	requested := []AuthorityDispositionSelector{}
+	if selector != nil {
+		requested = append(requested, *selector)
+	}
+	plan, err := deriveAuthorityDispositionPlanAtRepo(ctx, repo, actor, reason, requested...)
 	if err != nil {
 		return CompactReclaimRecord{}, err
 	}
@@ -1111,7 +1118,8 @@ func reconstructAuthorityDispositionPlanForResume(ctx context.Context, repo, pla
 		return AuthorityDispositionPlan{
 			Schema: AuthorityDispositionPlanSchema, RepositoryBinding: binding,
 			AuthorityInventoryRevision: proof.AuthorityInventoryRevision, AnomalyClass: proof.AnomalyClass,
-			SeedSet: append([]string(nil), proof.SeedSet...), Closure: append([]string(nil), proof.Closure...),
+			Selector: proof.Selector,
+			SeedSet:  append([]string(nil), proof.SeedSet...), Closure: append([]string(nil), proof.Closure...),
 			ExpectedRevisions: cloneAuthorityDispositionRevisions(proof.ExpectedRevisions),
 			Actor:             strings.TrimSpace(actor), Reason: strings.TrimSpace(reason),
 			PlanDigest: proof.PlanDigest,
@@ -1128,6 +1136,12 @@ func reconstructAuthorityDispositionPlanForResume(ctx context.Context, repo, pla
 // command). Wave 6: planDigest and inventoryRevision are now required
 // parameters — repairAuthorityDispositionAtRepo needs them to decide
 // fresh-vs-resume; it no longer blindly re-derives from actor/reason alone.
-func RepairAuthorityDisposition(ctx context.Context, repo, planDigest, inventoryRevision, actor, reason, authorization string) (CompactReclaimRecord, error) {
-	return repairAuthorityDispositionAtRepo(ctx, repo, planDigest, inventoryRevision, actor, reason, authorization)
+func RepairAuthorityDisposition(ctx context.Context, repo, planDigest, inventoryRevision, actor, reason, authorization string, selectors ...AuthorityDispositionSelector) (CompactReclaimRecord, error) {
+	if len(selectors) > 1 {
+		return CompactReclaimRecord{}, fmt.Errorf("%w: multiple exact selectors supplied", errAuthorityDispositionPlanNotDerivable)
+	}
+	if len(selectors) == 1 {
+		return repairAuthorityDispositionAtRepo(ctx, repo, planDigest, inventoryRevision, actor, reason, authorization, &selectors[0])
+	}
+	return repairAuthorityDispositionAtRepo(ctx, repo, planDigest, inventoryRevision, actor, reason, authorization, nil)
 }

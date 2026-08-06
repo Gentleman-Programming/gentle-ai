@@ -15,6 +15,12 @@ import (
 type dimensionRow struct {
 	Label string
 	Value func(MetricSet) (int, bool, string) // value, present, derivation
+	// Unmeasured reports that this run never exercised the dimension, so its
+	// value is an absence rather than a measurement. nil means the dimension
+	// is always measured. UnmeasuredNote is the legend sentence that says why
+	// the column reads n/a instead of a number.
+	Unmeasured     func(Results) bool
+	UnmeasuredNote string
 }
 
 func dimensionRows() []dimensionRow {
@@ -31,20 +37,43 @@ func dimensionRows() []dimensionRow {
 		return func(set MetricSet) (int, bool, string) { return get(set.Blocks), true, set.BlocksDerivation }
 	}
 	return []dimensionRow{
-		{"1 human_prompts", pick(func(s MetricSet) Dimension { return s.HumanPrompts })},
-		{"2 manual_tokens", pick(func(s MetricSet) Dimension { return s.ManualTokens })},
-		{"3 commands_to_completion", pick(func(s MetricSet) Dimension { return s.CommandsToCompletion })},
-		{"4 blocks (total)", blocks(func(b BlockCounts) int { return b.Total() })},
-		{"4a   self_recovered", blocks(func(b BlockCounts) int { return b.SelfRecovered })},
-		{"4b   in_band", blocks(func(b BlockCounts) int { return b.InBand })},
-		{"4c   out_of_band", blocks(func(b BlockCounts) int { return b.OutOfBand })},
-		{"4d   by_design", blocks(func(b BlockCounts) int { return b.ByDesign })},
-		{"4e   dead_end", blocks(func(b BlockCounts) int { return b.DeadEnd })},
-		{"5 recovery_round_trips", pick(func(s MetricSet) Dimension { return s.RecoveryRoundTrips })},
-		{"6 model_runs", pick(func(s MetricSet) Dimension { return s.ModelRuns })},
-		{"7 human_surface_bytes", pick(func(s MetricSet) Dimension { return s.HumanSurfaceBytes })},
-		{"- git_subprocesses (info)", pick(func(s MetricSet) Dimension { return s.GitSubprocesses })},
+		{Label: "1 human_prompts", Value: pick(func(s MetricSet) Dimension { return s.HumanPrompts })},
+		{Label: "2 manual_tokens", Value: pick(func(s MetricSet) Dimension { return s.ManualTokens })},
+		{Label: "3 commands_to_completion", Value: pick(func(s MetricSet) Dimension { return s.CommandsToCompletion })},
+		{Label: "4 blocks (total)", Value: blocks(func(b BlockCounts) int { return b.Total() })},
+		{Label: "4a   self_recovered", Value: blocks(func(b BlockCounts) int { return b.SelfRecovered })},
+		{Label: "4b   in_band", Value: blocks(func(b BlockCounts) int { return b.InBand })},
+		{Label: "4c   out_of_band", Value: blocks(func(b BlockCounts) int { return b.OutOfBand })},
+		{Label: "4d   by_design", Value: blocks(func(b BlockCounts) int { return b.ByDesign })},
+		{
+			Label:      "4e   dead_end",
+			Value:      blocks(func(b BlockCounts) int { return b.DeadEnd }),
+			Unmeasured: deadEndUnexercised,
+			UnmeasuredNote: "n/a because no journey in this run declared a dead end; " +
+				"an unexercised 0 would read as a measured absence",
+		},
+		{Label: "5 recovery_round_trips", Value: pick(func(s MetricSet) Dimension { return s.RecoveryRoundTrips })},
+		{Label: "6 model_runs", Value: pick(func(s MetricSet) Dimension { return s.ModelRuns })},
+		{Label: "7 human_surface_bytes", Value: pick(func(s MetricSet) Dimension { return s.HumanSurfaceBytes })},
+		{Label: "- git_subprocesses (info)", Value: pick(func(s MetricSet) Dimension { return s.GitSubprocesses })},
 	}
+}
+
+// deadEndUnexercised reports whether the run carries no dead-end declaration
+// at all: no command holds a DeadEndOutcome, applied or stale. dead_end can
+// only ever count through a declaration (Step.DeadEnd), so a run without one
+// has not measured the dimension, and its 0 is an absence. A stale
+// declaration is still an exercise of the classifier, and the genuine 0 it
+// produces keeps printing as a number.
+func deadEndUnexercised(results Results) bool {
+	for _, journey := range results.Journeys {
+		for _, command := range journey.Commands {
+			if command.DeadEnd != nil {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func writeRunReport(out io.Writer, results Results) {
@@ -59,6 +88,14 @@ func writeRunReport(out io.Writer, results Results) {
 	fmt.Fprintln(out)
 
 	rows := dimensionRows()
+	// unmeasured marks the rows this run never exercised, so their cells read
+	// n/a instead of a 0 that would invite the reading "measured, none found".
+	unmeasured := map[int]bool{}
+	for i, row := range rows {
+		if row.Unmeasured != nil && row.Unmeasured(results) {
+			unmeasured[i] = true
+		}
+	}
 	// The axis column appears only when a run selected one, so a core-only
 	// report is byte-for-byte the report it has always been.
 	withAxis := len(results.Axes) > 0
@@ -72,7 +109,11 @@ func writeRunReport(out io.Writer, results Results) {
 	table := [][]string{headers}
 	for _, journey := range results.Journeys {
 		line := []string{journey.ID, journey.Status}
-		for _, row := range rows {
+		for i, row := range rows {
+			if unmeasured[i] && journey.Status == StatusCompleted {
+				line = append(line, "n/a")
+				continue
+			}
 			line = append(line, cell(journey, row))
 		}
 		if withAxis {
@@ -81,7 +122,11 @@ func writeRunReport(out io.Writer, results Results) {
 		table = append(table, line)
 	}
 	total := []string{"TOTAL (completed only)", ""}
-	for _, row := range rows {
+	for i, row := range rows {
+		if unmeasured[i] {
+			total = append(total, "n/a")
+			continue
+		}
 		value, present, _ := row.Value(results.Totals)
 		total = append(total, format(value, present))
 	}
@@ -92,10 +137,13 @@ func writeRunReport(out io.Writer, results Results) {
 	renderTable(out, table)
 
 	fmt.Fprintf(out, "\nDimension legend\n")
-	for _, row := range rows {
+	for i, row := range rows {
 		value, present, derivation := row.Value(results.Totals)
 		_ = value
 		_ = present
+		if unmeasured[i] {
+			derivation += "; " + row.UnmeasuredNote
+		}
 		fmt.Fprintf(out, "  %-26s %s\n", row.Label, derivation)
 	}
 

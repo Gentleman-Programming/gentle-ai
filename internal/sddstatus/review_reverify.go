@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -301,15 +302,15 @@ func archiveReVerifySatisfied(evidence correctionEvidence, attempts []RuntimeAtt
 // already established for this CLI surface.
 func archiveReVerifyContinuation(workspaceRoot, changeName string, runtimeStatus RuntimeStatus) string {
 	finish := fmt.Sprintf(
-		"gentle-ai sdd-attempt finish --cwd %q --change %q --expected-revision %s --request-id \"<unique-request-id>\" --outcome passed --evidence-revision \"<fresh-evidence-sha256>\" --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<cleanup-evidence>\" --process-evidence \"<process-evidence>\"",
-		workspaceRoot, changeName, runtimeStatus.Revision,
+		"gentle-ai sdd-attempt finish --cwd %s --change %q --expected-revision %s --request-id \"<unique-request-id>\" --outcome passed --evidence-revision \"<fresh-evidence-sha256>\" --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<cleanup-evidence>\" --process-evidence \"<process-evidence>\"",
+		pathquote.Quote(workspaceRoot), changeName, runtimeStatus.Revision,
 	)
 	if runtimeStatus.ActiveAttempt != nil {
 		return finish
 	}
 	begin := fmt.Sprintf(
-		"gentle-ai sdd-attempt begin --cwd %q --change %q --expected-revision %s --request-id \"<unique-request-id>\" --work-unit \"<work-unit>\" --evidence-goal \"<evidence-goal>\" --max-attempts <n> --max-changed-lines <n>",
-		workspaceRoot, changeName, runtimeStatus.Revision,
+		"gentle-ai sdd-attempt begin --cwd %s --change %q --expected-revision %s --request-id \"<unique-request-id>\" --work-unit \"<work-unit>\" --evidence-goal \"<evidence-goal>\" --max-attempts <n> --max-changed-lines <n>",
+		pathquote.Quote(workspaceRoot), changeName, runtimeStatus.Revision,
 	)
 	return begin + ", then (with the new revision it returns) " + finish
 }

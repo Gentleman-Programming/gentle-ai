@@ -86,12 +86,22 @@ func TestStatusRecoverTransitionExecutesExactBaseDiffSelectors(t *testing.T) {
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "candidate.go")
 	runReviewCLIGit(t, repo, "commit", "-qm", "add candidate")
+	// This is SETUP for the RECOVER selector-transition behavior under test,
+	// not the start refusal itself; the committed candidate selects a lens,
+	// so a direct base-diff start now hits issue #2447's up-front refusal.
+	// The negotiated envelope carries extra fields ReviewFacadeStartResult
+	// does not declare, so a plain (non-strict) decode is used here.
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "selector-recover", "--base-ref", base, "--committed-only"}, &output); err != nil {
+	startArgs := boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", "selector-recover", "--base-ref", base,
+	})
+	if err := RunReview(startArgs, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	if err := json.Unmarshal(output.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
 	result := filepath.Join(t.TempDir(), "blocking.json")
 	writeReviewCLIJSON(t, result, facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
 		Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
@@ -217,7 +227,7 @@ func TestStatusRecoverTransitionExecutesApprovedStagedScopeExpansion(t *testing.
 	writeReviewStartCandidate(t, repo, "docs/extra.md", "# Extra\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "docs/extra.md")
 	writeReviewStartCandidate(t, repo, "tracked.txt", "unstaged divergence\n", 0o644)
-	writeReviewStartCandidate(t, repo, "scratch.txt", "untracked noise\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, "scratch.txt", "untracked noise\n", 0o644)
 	wantTree := strings.TrimSpace(runReviewCLIGit(t, repo, "write-tree"))
 	selectors := []string{"--lineage", predecessor.State.LineageID, "--base-ref", base, "--projection", "staged", "--workspace-overlay"}
 	probe := selectorTransitionStatus(t, repo, selectors...)
@@ -333,15 +343,23 @@ func TestStatusRecoverTransitionExecutesCorrectionRequiredStagedScopeExpansion(t
 	runReviewCLIGit(t, repo, "add", "candidate.go")
 	runReviewCLIGit(t, repo, "commit", "-qm", "add reviewed candidate")
 
+	// This is SETUP for the RECOVER selector-transition behavior under test,
+	// not the start refusal itself; the committed candidate selects a lens,
+	// so a direct base-diff start now hits issue #2447's up-front refusal.
+	// The negotiated envelope carries extra fields ReviewFacadeStartResult
+	// does not declare, so a plain (non-strict) decode is used here.
 	const predecessorLineage = "correction-staged-root"
 	var startedOut bytes.Buffer
-	if err := RunReviewFacadeStart([]string{
-		"--cwd", repo, "--lineage", predecessorLineage, "--base-ref", base, "--committed-only",
-	}, &startedOut); err != nil {
+	startArgs := boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", predecessorLineage, "--base-ref", base,
+	})
+	if err := RunReview(startArgs, &startedOut); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, startedOut.Bytes(), &started)
+	if err := json.Unmarshal(startedOut.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
 	if len(started.SelectedLenses) == 0 {
 		t.Fatal("base-diff fixture selected no reviewer lenses")
 	}
@@ -378,7 +396,7 @@ func TestStatusRecoverTransitionExecutesCorrectionRequiredStagedScopeExpansion(t
 	writeReviewStartCandidate(t, repo, "migration.sql", "CREATE TABLE recovered (id INTEGER);\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "candidate.go", "migration.sql")
 	writeReviewStartCandidate(t, repo, "tracked.txt", "unstaged divergence\n", 0o644)
-	writeReviewStartCandidate(t, repo, "scratch.txt", "untracked noise\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, "scratch.txt", "untracked noise\n", 0o644)
 	wantTree := strings.TrimSpace(runReviewCLIGit(t, repo, "write-tree"))
 
 	selectors := []string{
@@ -578,8 +596,14 @@ func TestStatusStopsUnchangedBaseDiffRecoveryWithoutSuccessor(t *testing.T) {
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "candidate.go")
 	runReviewCLIGit(t, repo, "commit", "-qm", "add candidate")
+	// This is SETUP for the STATUS/recover stop behavior under test, not the
+	// start refusal itself; the committed candidate selects a lens, so a
+	// direct base-diff start now hits issue #2447's up-front refusal.
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "selector-unchanged", "--base-ref", base, "--committed-only"}, &output); err != nil {
+	startArgs := boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", "selector-unchanged", "--base-ref", base,
+	})
+	if err := RunReview(startArgs, &output); err != nil {
 		t.Fatal(err)
 	}
 	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "selector-unchanged")

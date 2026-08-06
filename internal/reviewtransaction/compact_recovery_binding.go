@@ -303,14 +303,6 @@ func verifyCompactRecoveryRelationDelivery(ctx context.Context, repo string, bin
 		return err
 	}
 	relation := classifyCompactTargetRelation(frozen, snapshot, binding.GenesisPaths, compactTargetRelationEvidence{CompatibleAdvance: compatibility})
-	// Wave 1 shadow observation (rdd-shadow-evaluation): outcome-neutral,
-	// advisory-only, and a true no-op unless GENTLE_AI_RDD_SHADOW is set —
-	// see shadow_observer.go. No GateKind or live gate result exists at this
-	// recovery-binding layer, so both are honestly reported as empty rather
-	// than fabricated.
-	ObserveShadowRelation(ctx, repo, "",
-		binding.BaseTree, finalTree, frozen.PathsDigest, "",
-		snapshot, "", "", nil, compatibility)
 	deliveryBaseCommit := baseCommit
 	switch relation.Kind {
 	case compactTargetCompatibleAdvance:

@@ -8,19 +8,13 @@ Defines the one executor that consumes a `DispositionPlan` (see `rdd-authority-d
 
 ### Requirement: Cardinality-One Admission
 
-The executor MUST admit a plan only when `closure(S)` has cardinality exactly one. Any other cardinality MUST refuse.
+The executor MUST admit a plan when `closure(S)` has cardinality exactly one, as the N=1 base case of the general closure admission rule defined in `rdd-closure-disposition-execution` (closed anomaly classes, cardinality `>= 1`). This requirement no longer refuses multi-node closures itself; multi-node admission and its ordering, manifest, and resume semantics are owned by `rdd-closure-disposition-execution`.
 
 #### Scenario: Single-node closure is admitted
 
 - GIVEN a plan whose `ordered_closure` has exactly one entry, classified from #1892's historical exact-binding edge shape
 - WHEN the executor evaluates admission
 - THEN the plan is admitted for execution
-
-#### Scenario: Multi-node closure refuses
-
-- GIVEN a plan whose `ordered_closure` has more than one entry (the #2014/#1656 shape)
-- WHEN the executor evaluates admission
-- THEN execution refuses, naming cardinality as the reason and Wave 6 as the escalation path, not a roadmap promise
 
 ### Requirement: No Predecessor Pointer Rewritten
 

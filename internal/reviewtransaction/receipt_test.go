@@ -177,32 +177,3 @@ func TestReleaseGateRequiresCompleteImmutablePublicationBoundary(t *testing.T) {
 		t.Fatalf("validateDerivedGate(changed publication boundary) = %q, want invalidated", got)
 	}
 }
-
-func TestJudgmentDayReceiptCarriesTwoJudgeProof(t *testing.T) {
-	tx := newTestTransaction(t, ModeJudgmentDay)
-	_ = tx.StartReview()
-	if err := tx.RecordJudgeProofs([]JudgeProof{
-		{JudgeID: "judge-a", ExecutionHash: hash("1"), ResultHash: hash("2"), Blind: true, Confirmed: true},
-		{JudgeID: "judge-b", ExecutionHash: hash("3"), ResultHash: hash("4"), Blind: true, Confirmed: true},
-	}, hash("5")); err != nil {
-		t.Fatal(err)
-	}
-	_ = freezeTestFindings(tx, []Finding{})
-	_, _ = tx.ClassifyEvidence([]FindingEvidence{})
-	_ = tx.BeginFinalVerification()
-	_ = tx.CompleteFinalVerification(hash("7"), true)
-	receipt, err := tx.Receipt()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if receipt.JudgeProofHash != tx.JudgeProofHash || receipt.Counters.JudgeExecutions != 2 {
-		t.Fatalf("receipt judge proof = %q counters=%#v", receipt.JudgeProofHash, receipt.Counters)
-	}
-	withoutProof := receipt
-	withoutProof.JudgeProofHash = ""
-	if payload, err := json.Marshal(withoutProof); err != nil {
-		t.Fatal(err)
-	} else if _, err := ParseReceipt(payload); err == nil {
-		t.Fatal("ParseReceipt() accepted Judgment Day approval without judge proof")
-	}
-}
