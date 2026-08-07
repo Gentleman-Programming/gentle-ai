@@ -794,3 +794,27 @@ func freezeTestFindings(tx *Transaction, findings []Finding) error {
 func tree(char string) string {
 	return strings.Repeat(char, 40)
 }
+
+func TestCanonicalLensResultNormalizesLongForm(t *testing.T) {
+	result := LensResult{
+		Lens: "review-reliability",
+		Findings: []Finding{{
+			Location: "internal/a.go:42",
+			Severity: "WARNING",
+			Claim:    "test claim",
+			ProofRefs: []string{"diff: internal/a.go:42"},
+			Lens: "review-reliability",
+		}},
+		Evidence: []string{"test evidence"},
+	}
+	canonical, err := canonicalLensResult(result, false)
+	if err != nil {
+		t.Fatalf("canonicalLensResult() error = %v", err)
+	}
+	if canonical.Lens != "review-reliability" {
+		t.Errorf("result lens mutated")
+	}
+	if canonical.Findings[0].Lens != "reliability" {
+		t.Errorf("finding lens not normalized to short form, got %q", canonical.Findings[0].Lens)
+	}
+}

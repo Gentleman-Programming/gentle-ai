@@ -375,6 +375,7 @@ func canonicalLensResult(result LensResult, allowMissingSevereLocation bool) (Le
 			finding.ID = fmt.Sprintf("%s-%03d", idPrefix, index+1)
 		}
 		finding.Lens = strings.TrimSpace(finding.Lens)
+		finding.Lens = strings.TrimPrefix(finding.Lens, "review-")
 		if finding.Lens == "" {
 			finding.Lens = wantFindingLens
 		}
