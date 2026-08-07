@@ -152,6 +152,15 @@ func TestArtifactAdmissionCandidateCausalCanonicalization(t *testing.T) {
 			t.Fatalf("AdmitArtifact() = %q, %v; want completed", admission.Decision, err)
 		}
 	})
+	t.Run("out of scope path mixed with valid paths is still refused", func(t *testing.T) {
+		request := admittedCandidateCausalArtifactFixture(t)
+		request.CandidateCausalFindingIDs = []string{"R3-001"}
+		request.Inspection.Paths = []string{"internal/a.go", "outside/evil.go", "internal/b.go"}
+		_, admission, err := AdmitArtifact(request)
+		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope {
+			t.Fatalf("AdmitArtifact() = %q, %v; want out_of_scope", admission.Decision, err)
+		}
+	})
 	t.Run("canonicalization error becomes incomplete and names the offending id", func(t *testing.T) {
 		request := admittedCandidateCausalArtifactFixture(t)
 		request.CandidateCausalFindingIDs = []string{"R3-001", "R3-001"}
