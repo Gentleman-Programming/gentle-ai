@@ -30,7 +30,12 @@ var runtimeGOOS = func() string { return runtime.GOOS }
 // can simulate a rename that reports success without taking effect: the shape
 // reported on Windows in #2319, where an antivirus/indexer hold turns the swap
 // into a silent no-op.
-var renameFn = os.Rename
+//
+// The default is MoveFileReplace rather than os.Rename because on Windows a
+// plain rename is not enough to replace a held destination; see move.go. That
+// changes the mechanism, not the contract — the read-back below is still the
+// only thing that decides whether the replacement landed.
+var renameFn = MoveFileReplace
 
 // stagedFile is the staged destination of a durable write. The interface exists
 // so tests can fault Chmod, Sync and Close, which a real *os.File only fails

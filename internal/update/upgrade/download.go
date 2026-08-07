@@ -35,7 +35,11 @@ var lookPathFn = exec.LookPath
 // renameFn publishes the staged binary. Package-level var so tests can simulate
 // a rename that reports success without taking effect, which is what the TUI
 // reported as an applied upgrade over an unchanged binary (#2319).
-var renameFn = os.Rename
+//
+// The default is filemerge.MoveFileReplace, not os.Rename: the swap mechanism
+// lives in one place for the whole program, so the Windows fallback chain that
+// replaces a held destination is the same one every atomic write already uses.
+var renameFn = filemerge.MoveFileReplace
 
 // URL builders are package variables so tests can route release traffic to an
 // isolated server without weakening the production URL contract.
@@ -87,16 +91,15 @@ var (
 // manifest and its exact repository/tag binding, parse one unique archive
 // digest, then download/check/extract and finally replace the binary.
 //
-// This function is not called on Windows — callers (strategy.go) gate it via
-// platform check and return a manual fallback error instead.
+// This function no longer refuses by platform. It used to return a "requires
+// manual update" error on Windows, which was a workaround for a rename that
+// could report success without replacing anything (#2319); the replacement is
+// now read back from disk and the Windows swap has a fallback chain for a held
+// destination, so the platform is no longer the reason to stop. Which platforms
+// are *allowed* to auto-upgrade is policy, and policy has one home:
+// binaryUpgrade in strategy.go, where the gentle-ai Windows distribution hold
+// and the per-tool manual fallbacks are decided.
 func Download(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
-	if profile.OS == "windows" {
-		hint := r.UpdateHint
-		if hint == "" {
-			hint = fmt.Sprintf("Download from https://github.com/%s/%s/releases", r.Tool.Owner, r.Tool.Repo)
-		}
-		return fmt.Errorf("upgrade %q on Windows requires manual update — %s", r.Tool.Name, hint)
-	}
 	if err := validateReleaseIdentity(r.Tool.Owner, r.Tool.Repo, r.LatestVersion); err != nil {
 		return fmt.Errorf("authenticate release: %w", err)
 	}
@@ -157,7 +160,7 @@ func Download(ctx context.Context, r update.UpdateResult, profile system.Platfor
 	}
 	defer f.Close()
 
-	if err := extractBinaryFromTarGz(f, r.Tool.Name, tmpBinaryPath); err != nil {
+	if err := extractBinaryFromTarGz(f, releaseBinaryName(r.Tool.Name, profile.OS), tmpBinaryPath); err != nil {
 		return fmt.Errorf("extract %s: %w", r.Tool.Name, err)
 	}
 
@@ -167,6 +170,21 @@ func Download(ctx context.Context, r update.UpdateResult, profile system.Platfor
 	}
 
 	return nil
+}
+
+// releaseBinaryName is the file name the release archive carries for the tool on
+// goos. The extractor matches archive entries by base name, so the platform
+// suffix has to be part of the query or a Windows archive — where GoReleaser
+// writes gentle-ai.exe — would report the binary as missing.
+//
+// This is deliberately not goInstallBinaryName: that one describes what the Go
+// toolchain writes into GOBIN, and the two would drift apart the moment either
+// convention changes.
+func releaseBinaryName(toolName, goos string) string {
+	if goos == "windows" {
+		return toolName + ".exe"
+	}
+	return toolName
 }
 
 // resolveArchiveName returns the GoReleaser archive filename for the given
@@ -404,8 +422,11 @@ func writeExecutable(r io.Reader, outPath string) error {
 // taken effect. On Windows a hold by antivirus, the indexer, or the running
 // image turns the swap into a silent no-op, and reporting the attempt as the
 // outcome is how an upgrade was announced as applied over an unchanged binary
-// (#2319). This is safe on Unix (same-filesystem rename); the caller must guard
-// against Windows before calling.
+// (#2319). The move itself is filemerge.MoveFileReplace, which on Windows falls
+// back to MoveFileEx and, for a held destination, displaces it before moving the
+// new binary in — but that only widens the set of swaps that can succeed. What
+// makes a success trustworthy is still the comparison below, and a swap that
+// cannot be proven from disk is an error even when every call returned nil.
 func atomicReplace(src, dst string) error {
 	stagedDigest, stagedBytes, err := filemerge.FileDigest(src)
 	if err != nil {

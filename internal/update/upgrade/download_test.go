@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -199,11 +200,12 @@ func TestDownloadAndExtract_NotFoundReturnsError(t *testing.T) {
 
 // TestAtomicReplace verifies that atomicReplace replaces the destination file
 // without leaving temp files around.
+//
+// This runs on Windows too. It used to skip there with "Windows behavior is
+// different", which was true of the old mechanism and is exactly what let the
+// #2319 shape go unobserved on the platform that reported it: the swap is now
+// filemerge.MoveFileReplace plus a read-back, and both have to hold everywhere.
 func TestAtomicReplace(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("atomic replace uses rename — Windows behavior is different")
-	}
-
 	dir := t.TempDir()
 	src := filepath.Join(dir, "new-binary")
 	dst := filepath.Join(dir, "existing-binary")
@@ -235,15 +237,17 @@ func TestAtomicReplace(t *testing.T) {
 	}
 }
 
-// --- TestDownload_WindowsSkipped ---
+// --- TestDownloadOnWindowsIsNotRefusedByPlatform ---
 
-// TestDownload_WindowsSkipped is a build-constraint smoke test:
-// calling Download on Windows should return a manual fallback error.
-func TestDownload_WindowsAlwaysManualFallback(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("only runs on Windows")
-	}
-
+// TestDownloadOnWindowsIsNotRefusedByPlatform pins the guard removal. Download
+// used to return "requires manual update" for any Windows profile, which was the
+// workaround for a rename that could not replace a held binary (#2319). The swap
+// is fixed, so the platform is no longer a reason to refuse: what stops a Windows
+// upgrade now is the trust anchor (as here, in a source build) or the platform
+// policy in binaryUpgrade — never a duplicate check buried in the downloader.
+//
+// The profile is passed explicitly, so this is meaningful on every host OS.
+func TestDownloadOnWindowsIsNotRefusedByPlatform(t *testing.T) {
 	r := update.UpdateResult{
 		Tool: update.ToolInfo{
 			Name:          "gentle-ai",
@@ -257,7 +261,28 @@ func TestDownload_WindowsAlwaysManualFallback(t *testing.T) {
 
 	err := Download(context.Background(), r, profile)
 	if err == nil {
-		t.Errorf("expected error for Windows binary download, got nil")
+		t.Fatal("Download() = nil, want the trust-anchor refusal of a source build")
+	}
+	if strings.Contains(err.Error(), "requires manual update") {
+		t.Errorf("Download() error = %q, want it to stop for a reason other than the platform", err)
+	}
+	if !errors.Is(err, ErrReleaseTrustUnavailable) {
+		t.Errorf("Download() error = %v, want it to wrap ErrReleaseTrustUnavailable", err)
+	}
+}
+
+// TestReleaseBinaryNameCarriesTheWindowsSuffix pins the extraction query. The
+// archive entry GoReleaser writes for Windows is gentle-ai.exe, and the extractor
+// matches by base name, so dropping the suffix would turn a working download into
+// "binary not found in archive".
+func TestReleaseBinaryNameCarriesTheWindowsSuffix(t *testing.T) {
+	if got := releaseBinaryName("gentle-ai", "windows"); got != "gentle-ai.exe" {
+		t.Errorf("releaseBinaryName(windows) = %q, want %q", got, "gentle-ai.exe")
+	}
+	for _, goos := range []string{"linux", "darwin"} {
+		if got := releaseBinaryName("gentle-ai", goos); got != "gentle-ai" {
+			t.Errorf("releaseBinaryName(%s) = %q, want %q", goos, got, "gentle-ai")
+		}
 	}
 }
 
