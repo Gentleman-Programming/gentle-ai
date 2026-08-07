@@ -1339,11 +1339,9 @@ func addIntendedPathspecs(ctx context.Context, repo string, env []string, intend
 func nulJoinedPathspecs(logicalPaths []string) []byte {
 	pathspecs := literalPathspecs(logicalPaths)
 	var buffer bytes.Buffer
-	for index, pathspec := range pathspecs {
-		if index > 0 {
-			buffer.WriteByte(0)
-		}
+	for _, pathspec := range pathspecs {
 		buffer.WriteString(pathspec)
+		buffer.WriteByte(0)
 	}
 	return buffer.Bytes()
 }

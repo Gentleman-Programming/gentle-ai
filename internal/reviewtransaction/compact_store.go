@@ -513,7 +513,7 @@ func compactReleaseScopeRecovery(predecessor CompactState, next Snapshot) bool {
 	if predecessor.InitialSnapshot.Kind != TargetCurrentChanges ||
 		(previous.Kind != TargetCurrentChanges && previous.Kind != TargetFixDiff) || next.Kind != TargetBaseDiff ||
 		previous.Projection != next.Projection || previous.CandidateTree != next.CandidateTree ||
-		len(next.Paths) <= len(predecessor.GenesisPaths) {
+		len(next.Paths) < len(predecessor.GenesisPaths) {
 		return false
 	}
 	return pathsAreSubset(predecessor.GenesisPaths, next.Paths) == nil

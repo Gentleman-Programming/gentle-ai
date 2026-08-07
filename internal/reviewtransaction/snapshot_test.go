@@ -859,7 +859,7 @@ func TestAddIntendedPathspecsEmptySetIsNoop(t *testing.T) {
 // here instead.
 func TestNulJoinedPathspecsEmitsNulDelimitedLiteralPathspecs(t *testing.T) {
 	got := nulJoinedPathspecs([]string{"a.txt", "dir/b.txt"})
-	want := []byte(":(literal)a.txt\x00:(literal)dir/b.txt")
+	want := []byte(":(literal)a.txt\x00:(literal)dir/b.txt\x00")
 	if !bytes.Equal(got, want) {
 		t.Fatalf("nulJoinedPathspecs() = %q, want %q", got, want)
 	}

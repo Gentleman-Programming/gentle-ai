@@ -100,6 +100,10 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 			}
 		}
 	}
+	if state.CurrentSnapshot.BaseTree == state.CurrentSnapshot.CandidateTree && snapshot.BaseTree != snapshot.CandidateTree {
+		assessment.Applicability = CompactGateTargetScopeChanged
+		return assessment, nil
+	}
 	if snapshot.CandidateTree == state.CurrentSnapshot.CandidateTree && pathsMatch && baseMatches {
 		assessment.Applicability = CompactGateTargetExact
 		return assessment, nil

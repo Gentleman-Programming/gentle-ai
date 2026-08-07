@@ -102,6 +102,36 @@ func TestLegacyCurrentChangesGateRejectsCallerProjectionMismatch(t *testing.T) {
 	}
 }
 
+func TestAssessCompactGateTargetRejectsZeroDeltaReceiptForCandidateWithChanges(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	tree, err := (SnapshotBuilder{Repo: repo}).resolveTree(context.Background(), "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroSnapshot := Snapshot{
+		Kind: TargetCurrentChanges, Projection: "",
+		BaseTree: tree, CandidateTree: tree, PathsDigest: digestPaths([]string{}),
+		Paths: []string{}, IntendedUntracked: []string{}, Identity: "zero-delta-identity",
+	}
+	state := CompactState{
+		Schema: CompactStateSchema, Generation: 1,
+		State: StateApproved, LineageID: "zero-delta-lineage",
+		InitialSnapshot: zeroSnapshot, CurrentSnapshot: zeroSnapshot,
+		GenesisPaths: []string{},
+	}
+	writeSnapshotFile(t, repo, "file.txt", "content\n")
+	input := NativeGateRequestInput{
+		Gate: GatePreCommit, LineageID: state.LineageID,
+	}
+	assessment, err := AssessCompactGateTarget(context.Background(), repo, state, input)
+	if err != nil {
+		t.Fatalf("AssessCompactGateTarget() error = %v", err)
+	}
+	if assessment.Applicability == CompactGateTargetExact {
+		t.Fatalf("AssessCompactGateTarget() = Exact, want non-Exact for zero-delta receipt against live candidate changes")
+	}
+}
+
 func TestCompactStagedPreCommitBindsIndexDespiteWorkspaceDivergence(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "staged candidate\n")

@@ -1476,6 +1476,10 @@ func TestReviewStatusReportsActiveAuthorityWithoutChangingAuthorityFiles(t *test
 }
 
 func TestReviewFacadeHelpAndFlatCompatibilityPathsRemainAvailable(t *testing.T) {
+	var mainHelp bytes.Buffer
+	if err := RunReview([]string{"--help"}, &mainHelp); err != nil || !strings.Contains(mainHelp.String(), "lens-context") {
+		t.Fatalf("facade main help missing lens-context: %v\n%s", err, mainHelp.String())
+	}
 	for _, subcommand := range []string{"start", "finalize", "validate", "status", "recover"} {
 		var output bytes.Buffer
 		if err := RunReview([]string{subcommand, "--help"}, &output); err != nil || !strings.Contains(output.String(), "Usage: gentle-ai review "+subcommand) {

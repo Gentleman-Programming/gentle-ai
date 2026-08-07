@@ -328,6 +328,22 @@ func TestCompactReleaseScopeRecoveryRequiresStrictSameCandidateExpansion(t *test
 	}
 }
 
+func TestCompactReleaseScopeRecoveryAcceptsExactPathSetCommit(t *testing.T) {
+	candidate := strings.Repeat("c", 40)
+	previous := Snapshot{
+		Kind: TargetCurrentChanges, Projection: ProjectionWorkspace, CandidateTree: candidate,
+		Paths: []string{"tracked.go", "untracked1.go", "untracked2.go"},
+	}
+	exactCommitSnapshot := Snapshot{
+		Kind: TargetBaseDiff, Projection: ProjectionWorkspace, CandidateTree: candidate,
+		Paths: []string{"tracked.go", "untracked1.go", "untracked2.go"},
+	}
+	predecessor := CompactState{InitialSnapshot: previous, CurrentSnapshot: previous, GenesisPaths: previous.Paths}
+	if !compactReleaseScopeRecovery(predecessor, exactCommitSnapshot) {
+		t.Fatal("exact-path commit release scope recovery was rejected")
+	}
+}
+
 func TestCompactGateFinalRecheckRejectsConcurrentRecoverySuccessor(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")

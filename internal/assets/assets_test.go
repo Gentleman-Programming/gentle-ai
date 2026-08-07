@@ -810,6 +810,56 @@ func TestFourRReviewAgentAssets(t *testing.T) {
 	}
 }
 
+func TestClaudeReviewAgentsHaveBashTool(t *testing.T) {
+	agents := []string{"review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter"}
+	for _, agent := range agents {
+		content := MustRead("claude/agents/" + agent + ".md")
+		if !strings.Contains(content, "Bash") {
+			t.Fatalf("claude/agents/%s.md missing Bash tool in frontmatter", agent)
+		}
+	}
+}
+
+func TestAntigravitySDDOrchestratorRequiresInteractivePauseGate(t *testing.T) {
+	content := MustRead("antigravity/sdd-orchestrator.md")
+
+	for _, required := range []string{
+		"### SDD Session Preflight and Execution Mode (HARD GATE)",
+		"Before executing ANY `/sdd-*` command or natural-language SDD request",
+		"If the session preflight or execution mode is missing, ASK first, then STOP and wait for the user's answer before invoking any dynamic subagent.",
+		"Interactive mode is a hard pause gate, not summary-only wording.",
+		"In **Interactive** mode, after each phase subagent returns",
+		"STOP and wait for user input before invoking the next dynamic subagent",
+		"Interactive approval is phase-scoped",
+		"`continue`, `dale`, or `go on` approve only the immediate next phase",
+		"Do NOT run `/sdd-ff` or dynamic subagent chains back-to-back unless the cached execution mode is `auto` / `automatic`.",
+		"Before the `sdd-propose` phase in interactive mode, run a product/proposal question round",
+		"Technical artifacts and prompts remain English",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("antigravity/sdd-orchestrator.md missing hard interactive pause gate wording %q", required)
+		}
+	}
+}
+
+func TestAntigravitySDDOrchestratorAnchorsPostApplyReview(t *testing.T) {
+	content := MustRead("antigravity/sdd-orchestrator.md")
+
+	for _, required := range []string{
+		"**Post-apply review rule**",
+		"after `sdd-apply` completes",
+		"if no valid content-bound receipt exists",
+		"explicitly start ordinary bounded review using the fresh review operation above",
+		"If a valid receipt exists, reuse it.",
+		"This is a phase-boundary trigger, not a lifecycle gate",
+		"commit, push, PR, and release still validate the receipt only and never launch review actors",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("antigravity/sdd-orchestrator.md missing post-apply review anchor %q", required)
+		}
+	}
+}
+
 func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 	content := MustRead("opencode/sdd-orchestrator.md")
 
