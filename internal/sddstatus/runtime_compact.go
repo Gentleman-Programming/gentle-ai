@@ -486,9 +486,26 @@ func compactBlockedExitText(reason CompactBlockReason, token string) string {
 			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to see the live attempt and its " +
 			"current revision, then reissue this call against that state"
 	case CompactBlockMaintainerDecision:
+		// #2530: this arm used to name "rescope or reset the objective". It is
+		// reached from exactly one call site -- compactTerminalState's
+		// DecisionRequired arm -- and runtimeObjectiveRescopeStructurallyPermitted
+		// refuses every decision-required objective, so half of that pair was an
+		// operation the runtime is guaranteed to reject in the only state that
+		// can print it. Naming a refused operation is the dead end this file's
+		// exit-naming audit exists to prevent.
+		//
+		// compactBlockedExitText is a pure function of (reason, token) and never
+		// receives the RuntimeStatus, so it cannot tell which continuation is
+		// admissible here. Rather than widen the signature for one arm, it defers
+		// to the field that already carries the answer: Status publishes
+		// next_action, and the same status command was already being named for
+		// the accounting. This is the convention runtimeLedgerStatusPointer
+		// applies everywhere else -- name the status, let next_action name the
+		// operation.
 		return "this work unit's attempt or changed-line budget needs a maintainer decision; run " +
-			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` for the accounting, then ask a " +
-			"maintainer to rescope or reset the objective, or run " + compactBlockedReviewModeDisableExit
+			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` for the accounting and for " +
+			"next_action, which names the one audited continuation this objective admits, then ask a " +
+			"maintainer to authorize that continuation, or run " + compactBlockedReviewModeDisableExit
 	case CompactBlockActiveAttempt:
 		// Adversarial finding F2: the bare `sdd-attempt acquire --token <t>`
 		// / `settle --token <t>` forms are not complete commands -- each
