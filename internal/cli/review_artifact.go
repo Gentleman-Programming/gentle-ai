@@ -244,9 +244,6 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		strings.TrimSpace(*lens) == "" || *order < 0 || (!*preflight && strings.TrimSpace(*input) == "") {
 		return reviewPreflightError(errors.New("review capture-result requires an exact repository context, --lineage, --target, --lens, --order, and --input (or --preflight); `gentle-ai review status --contract gentle-ai.review-integration/v1 --next-transition` prints the exact bindings and `gentle-ai review schema reviewer` emits the result schema with a working example"))
 	}
-	if *preflight && strings.TrimSpace(*input) != "" {
-		return reviewPreflightError(errors.New("review capture-result --preflight verifies the binding only and does not accept --input"))
-	}
 	contextHandle := strings.TrimSpace(*repositoryContext)
 	if contextHandle != "" && reviewFlagWasProvided(flags, "cwd") {
 		return reviewPreflightError(errors.New("review capture-result accepts either --repository-context or --cwd, not both"))
@@ -305,7 +302,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if err != nil {
 		return reviewPreflightError(fmt.Errorf("derive reviewer artifact subject: %w", err))
 	}
-	if *preflight {
+	if *preflight && strings.TrimSpace(*input) == "" {
 		publicRoot := root
 		if contextHandle != "" {
 			publicRoot = ""
@@ -376,6 +373,25 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		return err
 	}
 	envelope = append(envelope, '\n')
+	if *preflight {
+		artifact := reviewResultArtifact{
+			Schema:            reviewResultArtifactSchema,
+			Capability:        reviewResultArtifactCapability,
+			Path:              filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", *order, *lens)),
+			SHA256:            facadePayloadHash(envelope),
+			LineageID:         state.LineageID,
+			TargetIdentity:    state.InitialSnapshot.Identity,
+			Lens:              *lens,
+			SelectedOrder:     *order,
+			SubjectHash:       subject.SubjectHash,
+			AdmissionDecision: admission.Decision,
+		}
+		if contextHandle != "" {
+			artifact.Reference = reviewResultReference(artifact)
+			artifact.Path = ""
+		}
+		return encodeReviewJSON(stdout, artifact)
+	}
 	var artifact reviewResultArtifact
 	err = store.CaptureReviewerResult(record.Revision, *target, *lens, *order, func(current reviewtransaction.CompactState) error {
 		var captureErr error
