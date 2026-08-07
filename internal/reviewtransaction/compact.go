@@ -955,12 +955,35 @@ func findingLocationInGenesis(location string, genesisPaths []string) bool {
 		return false
 	}
 	line := location[separator+1:]
-	nonzero := false
-	for index := range line {
-		if line[index] < '0' || line[index] > '9' {
+	
+	checkNum := func(s string) bool {
+		if s == "" {
 			return false
 		}
-		nonzero = nonzero || line[index] != '0'
+		nz := false
+		for i := 0; i < len(s); i++ {
+			if s[i] < '0' || s[i] > '9' {
+				return false
+			}
+			nz = nz || s[i] != '0'
+		}
+		return nz
+	}
+
+	nonzero := false
+	if dash := strings.IndexByte(line, '-'); dash >= 0 {
+		if strings.IndexByte(line[dash+1:], '-') >= 0 {
+			return false
+		}
+		if !checkNum(line[:dash]) || !checkNum(line[dash+1:]) {
+			return false
+		}
+		nonzero = true
+	} else {
+		if !checkNum(line) {
+			return false
+		}
+		nonzero = true
 	}
 	logicalPath := location[:separator]
 	if len(logicalPath) >= 3 && logicalPath[1] == ':' && logicalPath[2] == '/' &&

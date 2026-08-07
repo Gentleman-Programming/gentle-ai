@@ -66,6 +66,16 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 		t.Fatalf("admission.Validate() error = %v", err)
 	}
 
+	// Test line range location
+	request.Result.Findings[0].Location = "internal/a.go:44-62"
+	_, admissionRange, errRange := AdmitArtifact(request)
+	if errRange != nil {
+		t.Fatalf("AdmitArtifact() line range error = %v", errRange)
+	}
+	if admissionRange.Decision != ArtifactAdmissionCompleted {
+		t.Fatalf("admission line range decision = %v; want completed", admissionRange.Decision)
+	}
+
 	tests := []struct {
 		name     string
 		mutate   func(*ArtifactAdmissionRequest)
@@ -97,6 +107,10 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 		{name: "root path proof outside scope", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings[0].ProofRefs = []string{"diff: secret.go:42"}
 		}, decision: ArtifactAdmissionOutOfScope},
+		{name: "location range incomplete end", mutate: func(r *ArtifactAdmissionRequest) { r.Result.Findings[0].Location = "internal/a.go:7-" }, decision: ArtifactAdmissionOutOfScope},
+		{name: "location range incomplete start", mutate: func(r *ArtifactAdmissionRequest) { r.Result.Findings[0].Location = "internal/a.go:-7" }, decision: ArtifactAdmissionOutOfScope},
+		{name: "location zero", mutate: func(r *ArtifactAdmissionRequest) { r.Result.Findings[0].Location = "internal/a.go:0-0" }, decision: ArtifactAdmissionOutOfScope},
+		{name: "location zero end", mutate: func(r *ArtifactAdmissionRequest) { r.Result.Findings[0].Location = "internal/a.go:7-0" }, decision: ArtifactAdmissionOutOfScope},
 		{name: "non ASCII finding id", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings[0].ID = "R3-é"
 		}, decision: ArtifactAdmissionBindingMismatch},
