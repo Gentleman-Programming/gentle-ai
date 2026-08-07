@@ -461,11 +461,12 @@ type facadeFinding struct {
 }
 
 type facadeReviewerResult struct {
-	SubjectHash string                               `json:"subject_hash"`
-	Inspection  reviewtransaction.ArtifactInspection `json:"inspection"`
-	Lens        string                               `json:"lens,omitempty"`
-	Findings    []facadeFinding                      `json:"findings"`
-	Evidence    []string                             `json:"evidence"`
+	SubjectHash           string                                   `json:"subject_hash"`
+	Inspection            reviewtransaction.ArtifactInspection     `json:"inspection"`
+	Lens                  string                                   `json:"lens,omitempty"`
+	Findings              []facadeFinding                          `json:"findings"`
+	Evidence              []string                                 `json:"evidence"`
+	ProviderCausalCarrier *reviewtransaction.ProviderCausalCarrier `json:"-"`
 }
 
 type facadeValidationCheck struct {
@@ -3691,6 +3692,10 @@ func prepareCompactReviewerResults(state reviewtransaction.CompactState, results
 	}
 	lensResults := make([]reviewtransaction.LensResult, len(results))
 	classifications := make([]reviewtransaction.FindingEvidence, 0)
+	var providerCarriers map[string]reviewtransaction.ProviderCausalCarrier
+	if len(repository) == 1 {
+		providerCarriers = make(map[string]reviewtransaction.ProviderCausalCarrier)
+	}
 	for index, reviewer := range results {
 		lensResult := reviewer.nativeLensResult()
 		expectedLens := state.SelectedLenses[index]
@@ -3711,32 +3716,47 @@ func prepareCompactReviewerResults(state reviewtransaction.CompactState, results
 		if err != nil {
 			return reviewtransaction.CompactReviewInput{}, fmt.Errorf("canonicalize reviewer result %d: %w", index+1, err)
 		}
-		causalityChanged := false
+		var provider reviewtransaction.ProviderCausalCarrier
+		providerBound := len(repository) == 1 && reviewer.SubjectHash != ""
+		if providerBound {
+			if reviewer.ProviderCausalCarrier == nil {
+				return reviewtransaction.CompactReviewInput{}, fmt.Errorf("reviewer result %d is missing admitted provider causal carrier", index+1) // refusal:by-design world-action: the provider-bound result is incomplete; only a fresh capture can produce the missing admitted carrier
+			}
+			provider = *reviewer.ProviderCausalCarrier
+			if err := provider.Validate(); err != nil || provider.SubjectHash != reviewer.SubjectHash || provider.CandidateIdentity.BaseTree != state.InitialSnapshot.BaseTree || provider.CandidateIdentity.CandidateTree != state.InitialSnapshot.CandidateTree {
+				return reviewtransaction.CompactReviewInput{}, fmt.Errorf("reviewer result %d has invalid admitted provider causal carrier", index+1) // refusal:by-design world-action: the provider-owned carrier is corrupted or misbound; only fresh capture or maintainer code repair can restore a safe binding
+			}
+			providerCarriers[expectedLens] = provider
+		}
 		for findingIndex, finding := range canonical.Findings {
 			if !facadeSevere(finding.Severity) {
 				continue
 			}
-			switch finding.CausalDisposition {
-			case reviewtransaction.CausalIntroduced, reviewtransaction.CausalBehaviorActivated, reviewtransaction.CausalWorsened:
-				if len(repository) == 1 {
-					changed, err := (reviewtransaction.SnapshotBuilder{Repo: repository[0].repo}).CandidateLocationSupportsCausality(repository[0].ctx, state.InitialSnapshot, finding.Location, finding.CausalDisposition)
-					if err != nil {
-						return reviewtransaction.CompactReviewInput{}, fmt.Errorf("verify candidate causality for finding %q: %w", finding.ID, err)
-					}
-					if !changed {
-						finding.CausalDisposition = reviewtransaction.CausalUnknown
-						canonical.Findings[findingIndex] = finding
-						causalityChanged = true
-					}
+			if providerBound {
+				providerFinding := providerFindingByID(provider, finding.ID)
+				switch providerFinding.Classification {
+				case reviewtransaction.ProviderCandidateCausal:
+					finding.CausalDisposition = reviewtransaction.CausalIntroduced
+				case reviewtransaction.ProviderProvenNonCandidate:
+					finding.CausalDisposition = reviewtransaction.CausalPreExisting
+				default:
+					finding.CausalDisposition = reviewtransaction.CausalUnknown
+				}
+			} else if len(repository) == 1 {
+				changed, checkErr := (reviewtransaction.SnapshotBuilder{Repo: repository[0].repo}).CandidateLocationSupportsCausality(repository[0].ctx, state.InitialSnapshot, finding.Location, finding.CausalDisposition)
+				if checkErr != nil {
+					return reviewtransaction.CompactReviewInput{}, fmt.Errorf("verify candidate causality for finding %q: %w", finding.ID, checkErr)
+				}
+				if !changed {
+					finding.CausalDisposition = reviewtransaction.CausalUnknown
 				}
 			}
+			canonical.Findings[findingIndex] = finding
 		}
-		if causalityChanged {
-			canonical.ResultHash = ""
-			canonical, err = reviewtransaction.CanonicalCompactLensResult(canonical)
-			if err != nil {
-				return reviewtransaction.CompactReviewInput{}, fmt.Errorf("canonicalize reviewer result %d after causal admission: %w", index+1, err)
-			}
+		canonical.ResultHash = ""
+		canonical, err = reviewtransaction.CanonicalCompactLensResult(canonical)
+		if err != nil {
+			return reviewtransaction.CompactReviewInput{}, fmt.Errorf("canonicalize reviewer result %d after causal admission: %w", index+1, err)
 		}
 		lensResults[index] = canonical
 		for _, finding := range canonical.Findings {
@@ -3750,8 +3770,17 @@ func prepareCompactReviewerResults(state reviewtransaction.CompactState, results
 		}
 	}
 	return reviewtransaction.CompactReviewInput{
-		LensResults: lensResults, Classifications: classifications, RefuterOutcomes: refuter.native(),
+		LensResults: lensResults, Classifications: classifications, RefuterOutcomes: refuter.native(), ProviderCausalCarriers: providerCarriers,
 	}, nil
+}
+
+func providerFindingByID(carrier reviewtransaction.ProviderCausalCarrier, id string) reviewtransaction.ProviderCausalFinding {
+	for _, finding := range carrier.Findings {
+		if finding.FindingID == id {
+			return finding
+		}
+	}
+	return reviewtransaction.ProviderCausalFinding{Classification: reviewtransaction.ProviderUnknown}
 }
 
 func nativeFacadeReviewerLens(lens string) (string, error) {

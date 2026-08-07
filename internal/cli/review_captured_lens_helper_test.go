@@ -46,6 +46,32 @@ func finalizeReviewCLIArgs(t *testing.T, repo string, args []string, stdout io.W
 	return RunReviewFacadeFinalize(append(rest, "--captured-results=true"), stdout)
 }
 
+// finalizeNegotiatedSubmissionForTest executes the exact v2 finalize descriptor
+// currently published by STATUS, substituting only its declared value slot.
+func finalizeNegotiatedSubmissionForTest(t *testing.T, repo, lineage, value string, stdout io.Writer, selector ...string) error {
+	t.Helper()
+	statusArgs := []string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		"--next-transition", "--lineage", lineage,
+	}
+	statusArgs = append(statusArgs, selector...)
+	status := readCorrectionEvidenceStatus(t, statusArgs)
+	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("negotiated finalize descriptor unavailable: %#v", status.NextTransition)
+	}
+	submission := status.NextTransition.Collect.Inputs[0].Submission
+	if submission == nil || submission.Value == nil {
+		t.Fatalf("negotiated finalize submission unavailable: %#v", status.NextTransition.Collect.Inputs[0])
+	}
+	args := append([]string(nil), submission.ArgumentTokens...)
+	location := submission.Value.SubstitutionLocation
+	if location < 0 || location >= len(args) {
+		t.Fatalf("negotiated finalize substitution location %d for %#v", location, args)
+	}
+	args[location] = strings.Replace(args[location], reviewSubmissionValuePlaceholder, value, 1)
+	return RunReviewFacadeFinalize(args, stdout)
+}
+
 // splitReviewCLIResultArgs separates the retired --result arguments from the
 // rest of the invocation and reports the explicit --lineage when one was given.
 func splitReviewCLIResultArgs(args []string) (rest, resultPaths []string, lineage string) {

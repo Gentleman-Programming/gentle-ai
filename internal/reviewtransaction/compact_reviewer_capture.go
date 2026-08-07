@@ -19,6 +19,7 @@ type CompactAdmittedReviewerResultRequest struct {
 	ExpectedRevision          string
 	TargetIdentity            string
 	FrozenContext             FrozenCandidateContext
+	CandidateIdentity         CandidateIdentity
 	ArtifactSubject           ArtifactSubject
 	Inspection                ArtifactInspection
 	Result                    LensResult
@@ -69,6 +70,10 @@ func (store CompactStore) resolveAdmittedReviewerResult(ctx context.Context, exp
 	if !reflect.DeepEqual(nativeFrozen, frozen) || expected != subject {
 		return LensResult{}, false, errors.New("resolved reviewer result does not match repository authority")
 	}
+	candidate, err := FreezeCandidateIdentity(ctx, store.repo, state.InitialSnapshot, state.PolicyHash)
+	if err != nil {
+		return LensResult{}, false, err
+	}
 	path := filepath.Join(store.Dir, CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", subject.SelectedOrder, subject.Lens))
 	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
 		return LensResult{}, false, nil
@@ -90,7 +95,7 @@ func (store CompactStore) resolveAdmittedReviewerResult(ctx context.Context, exp
 		// refusal:by-design world-action: only an exact provider-admitted artifact can satisfy this immutable slot; conflicting bytes must remain refused
 		return LensResult{}, false, errors.New("admitted reviewer result does not match repository authority")
 	}
-	result, found = reAdmitCompactReviewerResult(ctx, envelope, expected, nativeFrozen)
+	result, found = reAdmitCompactReviewerResult(ctx, envelope, expected, nativeFrozen, candidate)
 	if !found {
 		return LensResult{}, false, errors.New("admitted reviewer result failed native re-admission")
 	}
@@ -179,6 +184,13 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 					"reviewer frozen context does not match repository authority",
 				)
 			}
+			candidate, err := FreezeCandidateIdentity(ctx, store.repo, state.InitialSnapshot, state.PolicyHash)
+			if err != nil {
+				return err
+			}
+			if candidate != request.CandidateIdentity {
+				return errors.New("reviewer candidate identity does not match repository authority") // refusal:by-design operator-knowledge: replay must use the exact canonical identity frozen by the current authority
+			}
 			if expected != request.ArtifactSubject {
 				return errors.New(
 					"reviewer artifact subject does not match the locked authority",
@@ -189,6 +201,7 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 				ArtifactAdmissionRequest{
 					ExpectedSubject:           expected,
 					FrozenContext:             nativeContext,
+					CandidateIdentity:         candidate,
 					EchoedSubjectHash:         providerResult.SubjectHash,
 					Inspection:                providerResult.Inspection,
 					Result:                    canonicalResult,
@@ -234,7 +247,7 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 	if err != nil {
 		if errors.Is(err, ErrAuthorityLockTimeout) {
 			_, expectedAdmission, admissionErr := AdmitArtifact(ctx, ArtifactAdmissionRequest{
-				ExpectedSubject: request.ArtifactSubject, FrozenContext: request.FrozenContext,
+				ExpectedSubject: request.ArtifactSubject, FrozenContext: request.FrozenContext, CandidateIdentity: request.CandidateIdentity,
 				EchoedSubjectHash: request.ArtifactSubject.SubjectHash, Inspection: request.Inspection,
 				Result: request.Result, CandidateCausalFindingIDs: request.CandidateCausalFindingIDs,
 				RawPayload: request.RawPayload, CanonicalPayload: canonicalPayload,

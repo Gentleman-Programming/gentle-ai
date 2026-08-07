@@ -134,8 +134,8 @@ func submissionDescriptorCorrectionFixture(t *testing.T) (string, ReviewIntegrat
 	writeReviewCLIJSON(t, result, facadeReviewerResult{
 		Lens: started.SelectedLenses[0],
 		Findings: []facadeFinding{{
-			Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate value is wrong",
-			ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+			ID: "R3-001", Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate value is wrong",
+			ProofRefs: []string{"candidate.go:3"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 			CausalDisposition: reviewtransaction.CausalIntroduced,
 		}},
 		Evidence: []string{"inspected exact candidate"},

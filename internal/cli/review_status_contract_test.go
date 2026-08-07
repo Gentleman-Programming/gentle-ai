@@ -1181,8 +1181,8 @@ func TestCorrectionPlanStatusAcceptsFrozenBindingAfterAppliedFix(t *testing.T) {
 			resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
 			writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 				Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
-					Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate value is wrong",
-					ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+					ID: "R3-001", Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate value is wrong",
+					ProofRefs: []string{"candidate.go:3"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 					CausalDisposition: reviewtransaction.CausalIntroduced,
 				}}, Evidence: []string{"inspected exact candidate"},
 			})
@@ -1190,7 +1190,7 @@ func TestCorrectionPlanStatusAcceptsFrozenBindingAfterAppliedFix(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tt.forecast {
-				if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "1"}, &bytes.Buffer{}); err != nil {
+				if err := finalizeNegotiatedSubmissionForTest(t, repo, started.LineageID, "1", &bytes.Buffer{}); err != nil {
 					t.Fatal(err)
 				}
 			}

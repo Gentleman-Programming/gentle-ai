@@ -541,10 +541,10 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 	harness.captureReviewerResultOrFail(lineage, started, 0, organicReviewerResult{
 		Lens: started.SelectedLenses[0],
 		Findings: []organicFinding{{
-			Location:          path + ":5",
+			Location:          path + ":16",
 			Severity:          "CRITICAL",
 			Claim:             "the candidate returns the wrong terminal value",
-			ProofRefs:         []string{"a differential test passes on base and fails on the candidate"},
+			ProofRefs:         []string{path + ":16"},
 			EvidenceClass:     "deterministic",
 			CausalDisposition: "introduced",
 		}},

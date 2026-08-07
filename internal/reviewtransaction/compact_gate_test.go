@@ -80,6 +80,99 @@ func TestCompactEscalatedGateReasonFallsBackWithoutDerivableCause(t *testing.T) 
 	}
 }
 
+func TestEvaluateCompactGateRejectsProviderAggregateDigestDrift(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		mutate func(*CompactReceipt)
+	}{
+		{name: "missing", mutate: func(receipt *CompactReceipt) { receipt.ProviderCausalAggregateDigest = "" }},
+		{name: "stale", mutate: func(receipt *CompactReceipt) {
+			receipt.ProviderCausalAggregateDigest = "sha256:" + strings.Repeat("0", 64)
+		}},
+		{name: "mismatch", mutate: func(receipt *CompactReceipt) {
+			receipt.ProviderCausalAggregateDigest = "sha256:" + strings.Repeat("e", 64)
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			state := accountingOnlyEscalatedState(t, repo, "provider-aggregate-"+tt.name)
+			carrier := ProviderCausalCarrier{
+				SubjectHash: "sha256:" + strings.Repeat("f", 64),
+				CandidateIdentity: CandidateIdentity{
+					BaseTree: state.InitialSnapshot.BaseTree, CandidateTree: state.InitialSnapshot.CandidateTree,
+					PolicyHash: state.PolicyHash,
+				},
+				Findings: []ProviderCausalFinding{},
+			}
+			carrier.AggregateDigest = providerAggregateDigest(carrier)
+			state.ProviderCausalCarriers = map[string]ProviderCausalCarrier{state.SelectedLenses[0]: carrier}
+			state.ProviderCausalAggregateDigest = compactProviderCausalAggregateDigest(state.ProviderCausalCarriers)
+			store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, payload, err := makeCompactRecord(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(store.Dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := state.Receipt()
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.mutate(&receipt)
+			if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+				t.Fatal(err)
+			}
+			if got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID}); got.Result != GateInvalidated {
+				t.Fatalf("provider aggregate drift = %#v, want GateInvalidated", got)
+			}
+		})
+	}
+}
+
+func TestCompactProviderCausalAuthorityRejectsCandidateIdentityDrift(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		mutate     func(*ProviderCausalCarrier, CompactState)
+		reasonPart string
+	}{
+		{name: "policy", mutate: func(carrier *ProviderCausalCarrier, state CompactState) {
+			carrier.CandidateIdentity.PolicyHash = "sha256:" + strings.Repeat("b", 64)
+		}, reasonPart: "frozen policy"},
+		{name: "trees", mutate: func(carrier *ProviderCausalCarrier, state CompactState) {
+			carrier.CandidateIdentity.CandidateTree = "sha256:" + strings.Repeat("c", 64)
+		}, reasonPart: "frozen trees"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			state := accountingOnlyEscalatedState(t, repo, "provider-binding-"+tt.name)
+			carrier := ProviderCausalCarrier{
+				SubjectHash: "sha256:" + strings.Repeat("f", 64),
+				CandidateIdentity: CandidateIdentity{
+					BaseTree: state.InitialSnapshot.BaseTree, CandidateTree: state.InitialSnapshot.CandidateTree,
+					PolicyHash: state.PolicyHash,
+				},
+				Findings: []ProviderCausalFinding{},
+			}
+			tt.mutate(&carrier, state)
+			carrier.AggregateDigest = providerAggregateDigest(carrier)
+			state.ProviderCausalCarriers = map[string]ProviderCausalCarrier{state.SelectedLenses[0]: carrier}
+			state.ProviderCausalAggregateDigest = compactProviderCausalAggregateDigest(state.ProviderCausalCarriers)
+
+			err := state.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.reasonPart) {
+				t.Fatalf("binding drift validation error = %v, want refusal mentioning %q", err, tt.reasonPart)
+			}
+		})
+	}
+}
+
 func TestLegacyCurrentChangesGateRejectsCallerProjectionMismatch(t *testing.T) {
 	for _, gate := range []GateKind{GatePostApply, GatePreCommit} {
 		t.Run(string(gate), func(t *testing.T) {

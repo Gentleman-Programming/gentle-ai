@@ -395,12 +395,16 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if err != nil {
 		return reviewPreflightError(fmt.Errorf("canonicalize reviewer result: %w", err))
 	}
-	candidateCausalIDs, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, canonicalForCausality)
+	candidateIdentity, err := reviewtransaction.FreezeCandidateIdentity(ctx, root, state.InitialSnapshot, state.PolicyHash)
+	if err != nil {
+		return reviewPreflightError(fmt.Errorf("freeze candidate identity: %w", err))
+	}
+	candidateCausalIDs, err := verifiedCandidateCausalFindingIDs(ctx, root, subject.SubjectHash, candidateIdentity, canonicalForCausality)
 	if err != nil {
 		return reviewPreflightError(err)
 	}
 	_, admission, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
-		ExpectedSubject: subject, FrozenContext: frozen, EchoedSubjectHash: result.SubjectHash,
+		ExpectedSubject: subject, FrozenContext: frozen, CandidateIdentity: candidateIdentity, EchoedSubjectHash: result.SubjectHash,
 		Inspection: result.Inspection, Result: nativeResult, CandidateCausalFindingIDs: candidateCausalIDs,
 		RawPayload: rawPayload, CanonicalPayload: canonicalResult,
 	})
@@ -409,7 +413,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	}
 	path := filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", *order, *lens))
 	_, err = store.CaptureAdmittedReviewerResult(ctx, reviewtransaction.CompactAdmittedReviewerResultRequest{
-		ExpectedRevision: record.Revision, TargetIdentity: *target, FrozenContext: frozen,
+		ExpectedRevision: record.Revision, TargetIdentity: *target, FrozenContext: frozen, CandidateIdentity: candidateIdentity,
 		ArtifactSubject: subject, Inspection: result.Inspection, Result: nativeResult,
 		CandidateCausalFindingIDs: candidateCausalIDs, RawPayload: rawPayload,
 		PreparePublication: func(current reviewtransaction.CompactState) error {
@@ -616,6 +620,10 @@ func readFacadeReviewerArtifacts(ctx context.Context, repo string, raw []string,
 	if err != nil {
 		return nil, err
 	}
+	candidate, err := reviewtransaction.FreezeCandidateIdentity(ctx, repo, state.InitialSnapshot, state.PolicyHash)
+	if err != nil {
+		return nil, err
+	}
 	results := make([]facadeReviewerResult, len(raw))
 	for index := range raw {
 		var artifact reviewResultArtifact
@@ -629,7 +637,7 @@ func readFacadeReviewerArtifacts(ctx context.Context, repo string, raw []string,
 		if err != nil {
 			return nil, fmt.Errorf("verify reviewer artifact %d: %w", index+1, err)
 		}
-		result, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, payload, artifact.SHA256, state, revision, index, frozen)
+		result, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, payload, artifact.SHA256, state, revision, index, frozen, candidate)
 		if err != nil {
 			return nil, fmt.Errorf("parse reviewer artifact %d: %w", index+1, err)
 		}
@@ -646,6 +654,10 @@ func readFacadeReviewerArtifacts(ctx context.Context, repo string, raw []string,
 // asking a consumer to reconstruct result manifests.
 func discoverCapturedReviewerArtifacts(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) ([]ReviewTransitionArtifact, error) {
 	frozen, err := reviewerArtifactFrozenContext(ctx, repo, state)
+	if err != nil {
+		return nil, err
+	}
+	candidate, err := reviewtransaction.FreezeCandidateIdentity(ctx, repo, state.InitialSnapshot, state.PolicyHash)
 	if err != nil {
 		return nil, err
 	}
@@ -671,7 +683,7 @@ func discoverCapturedReviewerArtifacts(ctx context.Context, repo, storeDir strin
 		if err != nil {
 			return nil, fmt.Errorf("verify captured reviewer result %d: %w", order, err)
 		}
-		_, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, payload, artifact.SHA256, state, revision, order, frozen)
+		_, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, payload, artifact.SHA256, state, revision, order, frozen, candidate)
 		if err != nil {
 			return nil, fmt.Errorf("verify captured reviewer admission %d: %w", order, err)
 		}
@@ -718,6 +730,10 @@ func readCapturedReviewerResults(ctx context.Context, repo, storeDir string, sta
 	if len(artifacts) != len(state.SelectedLenses) {
 		return nil, fmt.Errorf("review finalize requires all %d captured reviewer result(s); capture each missing one with `%s` (see `%s` for the exact lineage/target/lens/order bindings)", len(state.SelectedLenses), reviewCaptureResultCommandName(), reviewNextTransitionRefreshCommand)
 	}
+	candidate, err := reviewtransaction.FreezeCandidateIdentity(ctx, repo, state.InitialSnapshot, state.PolicyHash)
+	if err != nil {
+		return nil, err
+	}
 	results := make([]facadeReviewerResult, len(artifacts))
 	frozen, err := reviewerArtifactFrozenContext(ctx, repo, state)
 	if err != nil {
@@ -735,7 +751,7 @@ func readCapturedReviewerResults(ctx context.Context, repo, storeDir string, sta
 		if err != nil {
 			return nil, err
 		}
-		result, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, payload, artifact.SHA256, state, revision, index, frozen)
+		result, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, payload, artifact.SHA256, state, revision, index, frozen, candidate)
 		if err != nil {
 			return nil, err
 		}
@@ -755,7 +771,7 @@ func reviewerArtifactFrozenContext(ctx context.Context, repo string, state revie
 	return frozen, nil
 }
 
-func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload []byte, artifactDigest string, state reviewtransaction.CompactState, currentRevision string, order int, frozen reviewtransaction.FrozenCandidateContext) (facadeReviewerResult, reviewtransaction.ArtifactSubject, error) {
+func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload []byte, artifactDigest string, state reviewtransaction.CompactState, currentRevision string, order int, frozen reviewtransaction.FrozenCandidateContext, candidate reviewtransaction.CandidateIdentity) (facadeReviewerResult, reviewtransaction.ArtifactSubject, error) {
 	var envelope admittedReviewerResult
 	if err := decodeFacadeJSONBytes(payload, &envelope); err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
@@ -787,7 +803,7 @@ func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload
 	if err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
 	}
-	result, err := decodeAdmittedReviewerResult(ctx, payload, expected, subjectFrozen)
+	result, err := decodeAdmittedReviewerResult(ctx, payload, expected, subjectFrozen, candidate)
 	if err != nil {
 		return facadeReviewerResult{}, reviewtransaction.ArtifactSubject{}, err
 	}
@@ -802,7 +818,7 @@ func decodeBoundAdmittedReviewerResult(ctx context.Context, repo string, payload
 	return result, expected, nil
 }
 
-func decodeAdmittedReviewerResult(ctx context.Context, payload []byte, expected reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext) (facadeReviewerResult, error) {
+func decodeAdmittedReviewerResult(ctx context.Context, payload []byte, expected reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext, candidate reviewtransaction.CandidateIdentity) (facadeReviewerResult, error) {
 	var envelope admittedReviewerResult
 	if err := decodeFacadeJSONBytes(payload, &envelope); err != nil {
 		return facadeReviewerResult{}, err
@@ -825,37 +841,39 @@ func decodeAdmittedReviewerResult(ctx context.Context, payload []byte, expected 
 	native := envelope.Result.nativeLensResult()
 	native.Lens = expected.Lens
 	result, revalidated, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
-		ExpectedSubject: expected, FrozenContext: frozen, EchoedSubjectHash: envelope.Result.SubjectHash,
+		ExpectedSubject: expected, FrozenContext: frozen, CandidateIdentity: candidate, EchoedSubjectHash: envelope.Result.SubjectHash,
 		Inspection: envelope.Result.Inspection, Result: native,
-		CandidateCausalFindingIDs: envelope.Admission.CandidateCausalFindingIDs,
-		RawPayload:                canonical, CanonicalPayload: canonical,
+		CandidateCausalFindingIDs:     envelope.Admission.CandidateCausalFindingIDs,
+		AdmittedProviderCausalCarrier: envelope.Admission.ProviderCausalCarrier,
+		RawPayload:                    canonical, CanonicalPayload: canonical,
 	})
 	if err != nil || revalidated.Decision != reviewtransaction.ArtifactAdmissionCompleted ||
 		revalidated.CanonicalSHA256 != envelope.Admission.CanonicalSHA256 || result.ResultHash != envelope.Admission.ResultHash {
 		return facadeReviewerResult{}, errors.New("captured reviewer result no longer satisfies its admission record")
 	}
+	envelope.Result.ProviderCausalCarrier = envelope.Admission.ProviderCausalCarrier
 	return envelope.Result, nil
 }
 
-func verifiedCandidateCausalFindingIDs(ctx context.Context, repo string, snapshot reviewtransaction.Snapshot, result reviewtransaction.LensResult) ([]string, error) {
-	ids := make([]string, 0)
-	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+func verifiedCandidateCausalFindingIDs(ctx context.Context, repo, subjectHash string, candidate reviewtransaction.CandidateIdentity, result reviewtransaction.LensResult) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	claims := make([]reviewtransaction.ProviderCausalEvidence, 0, len(result.Findings))
 	for _, finding := range result.Findings {
 		if !facadeSevere(finding.Severity) {
 			continue
 		}
-		switch finding.CausalDisposition {
-		case reviewtransaction.CausalIntroduced, reviewtransaction.CausalBehaviorActivated, reviewtransaction.CausalWorsened:
-			changed, err := builder.CandidateLocationSupportsCausality(ctx, snapshot, finding.Location, finding.CausalDisposition)
-			if err != nil {
-				if errors.Is(err, reviewtransaction.ErrInvalidFindingLocation) {
-					return nil, reviewtransaction.NewArtifactLocationAdmissionError(finding.ID, finding.Location, err)
-				}
-				return nil, fmt.Errorf("verify candidate causality for finding %q: %w", finding.ID, err)
-			}
-			if changed {
-				ids = append(ids, finding.ID)
-			}
+		claims = append(claims, reviewtransaction.ProviderCausalEvidence{FindingID: finding.ID, Location: finding.Location, ProofRefs: finding.ProofRefs})
+	}
+	carrier, err := reviewtransaction.DeriveProviderCausalCarrier(ctx, repo, subjectHash, candidate, claims)
+	if err != nil {
+		return nil, fmt.Errorf("derive provider candidate causality: %w", err)
+	}
+	ids := make([]string, 0)
+	for _, finding := range carrier.Findings {
+		if finding.Classification == reviewtransaction.ProviderCandidateCausal {
+			ids = append(ids, finding.FindingID)
 		}
 	}
 	sort.Strings(ids)

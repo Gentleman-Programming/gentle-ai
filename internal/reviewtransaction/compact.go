@@ -68,43 +68,45 @@ func compactLineageQuarantinable(err error) (*CompactSemanticStateError, bool) {
 }
 
 type CompactState struct {
-	Schema                       string                       `json:"schema"`
-	LineageID                    string                       `json:"lineage_id"`
-	Generation                   int                          `json:"generation"`
-	State                        State                        `json:"state"`
-	InitialSnapshot              Snapshot                     `json:"initial_snapshot"`
-	CurrentSnapshot              Snapshot                     `json:"current_snapshot"`
-	GenesisPaths                 []string                     `json:"genesis_paths"`
-	PolicyHash                   string                       `json:"policy_hash"`
-	RiskLevel                    RiskLevel                    `json:"risk_level"`
-	SelectedLenses               []string                     `json:"selected_lenses"`
-	OriginalChangedLines         int                          `json:"original_changed_lines"`
-	CorrectionBudget             int                          `json:"correction_budget"`
-	LensResults                  []LensResult                 `json:"lens_results"`
-	Findings                     []Finding                    `json:"findings"`
-	Classifications              map[string]FindingEvidence   `json:"classifications"`
-	Outcomes                     map[string]EvidenceOutcome   `json:"outcomes"`
-	FixFindingIDs                []string                     `json:"fix_finding_ids"`
-	FollowUps                    []FollowUp                   `json:"follow_ups"`
-	ProposedCorrectionLines      *int                         `json:"proposed_correction_lines,omitempty"`
-	ActualCorrectionLines        *int                         `json:"actual_correction_lines,omitempty"`
-	FixDeltaHash                 string                       `json:"fix_delta_hash"`
-	OriginalCriteria             *ValidationCheck             `json:"original_criteria,omitempty"`
-	CorrectionRegression         *ValidationCheck             `json:"correction_regression,omitempty"`
-	EvidenceHash                 string                       `json:"evidence_hash,omitempty"`
-	EvidenceRecordDigest         string                       `json:"evidence_record_digest,omitempty"`
-	EvidenceOutcome              VerificationOutcome          `json:"evidence_outcome,omitempty"`
-	EvidenceTargetIdentity       string                       `json:"evidence_target_identity,omitempty"`
-	EvidenceAuthorityRevision    string                       `json:"evidence_authority_revision,omitempty"`
-	CorrectionVerificationTarget *Snapshot                    `json:"correction_verification_target,omitempty"`
-	InvalidationReason           string                       `json:"invalidation_reason,omitempty"`
-	InvalidationEvidence         *CompactInvalidationEvidence `json:"invalidation_evidence,omitempty"`
-	Recovery                     *CompactRecoveryProvenance   `json:"recovery,omitempty"`
-	CorrectionAttempts           []CompactCorrectionAttempt   `json:"correction_attempts,omitempty"`
-	CumulativeCorrectionLines    int                          `json:"cumulative_correction_lines,omitempty"`
-	ResultDispositions           []CompactResultDisposition   `json:"result_dispositions,omitempty"`
-	ResultReopens                []CompactResultReopen        `json:"result_reopens,omitempty"`
-	ReviewerContextLevel         ReviewerContextLevel         `json:"reviewer_context_level,omitempty"`
+	Schema                        string                           `json:"schema"`
+	LineageID                     string                           `json:"lineage_id"`
+	Generation                    int                              `json:"generation"`
+	State                         State                            `json:"state"`
+	InitialSnapshot               Snapshot                         `json:"initial_snapshot"`
+	CurrentSnapshot               Snapshot                         `json:"current_snapshot"`
+	GenesisPaths                  []string                         `json:"genesis_paths"`
+	PolicyHash                    string                           `json:"policy_hash"`
+	RiskLevel                     RiskLevel                        `json:"risk_level"`
+	SelectedLenses                []string                         `json:"selected_lenses"`
+	OriginalChangedLines          int                              `json:"original_changed_lines"`
+	CorrectionBudget              int                              `json:"correction_budget"`
+	LensResults                   []LensResult                     `json:"lens_results"`
+	Findings                      []Finding                        `json:"findings"`
+	Classifications               map[string]FindingEvidence       `json:"classifications"`
+	Outcomes                      map[string]EvidenceOutcome       `json:"outcomes"`
+	FixFindingIDs                 []string                         `json:"fix_finding_ids"`
+	FollowUps                     []FollowUp                       `json:"follow_ups"`
+	ProposedCorrectionLines       *int                             `json:"proposed_correction_lines,omitempty"`
+	ActualCorrectionLines         *int                             `json:"actual_correction_lines,omitempty"`
+	FixDeltaHash                  string                           `json:"fix_delta_hash"`
+	OriginalCriteria              *ValidationCheck                 `json:"original_criteria,omitempty"`
+	CorrectionRegression          *ValidationCheck                 `json:"correction_regression,omitempty"`
+	EvidenceHash                  string                           `json:"evidence_hash,omitempty"`
+	EvidenceRecordDigest          string                           `json:"evidence_record_digest,omitempty"`
+	EvidenceOutcome               VerificationOutcome              `json:"evidence_outcome,omitempty"`
+	EvidenceTargetIdentity        string                           `json:"evidence_target_identity,omitempty"`
+	EvidenceAuthorityRevision     string                           `json:"evidence_authority_revision,omitempty"`
+	CorrectionVerificationTarget  *Snapshot                        `json:"correction_verification_target,omitempty"`
+	InvalidationReason            string                           `json:"invalidation_reason,omitempty"`
+	InvalidationEvidence          *CompactInvalidationEvidence     `json:"invalidation_evidence,omitempty"`
+	Recovery                      *CompactRecoveryProvenance       `json:"recovery,omitempty"`
+	CorrectionAttempts            []CompactCorrectionAttempt       `json:"correction_attempts,omitempty"`
+	CumulativeCorrectionLines     int                              `json:"cumulative_correction_lines,omitempty"`
+	ResultDispositions            []CompactResultDisposition       `json:"result_dispositions,omitempty"`
+	ResultReopens                 []CompactResultReopen            `json:"result_reopens,omitempty"`
+	ReviewerContextLevel          ReviewerContextLevel             `json:"reviewer_context_level,omitempty"`
+	ProviderCausalCarriers        map[string]ProviderCausalCarrier `json:"provider_causal_carriers,omitempty"`
+	ProviderCausalAggregateDigest string                           `json:"provider_causal_aggregate_digest,omitempty"`
 }
 
 // CorrectionBudgetExceededError identifies a repository-derived correction
@@ -307,13 +309,15 @@ type CompactReceipt struct {
 	// particular mechanism. That keeps every receipt issued before this field
 	// existed re-derivable byte-identically, which its immutable publication
 	// requires.
-	ReviewerContextLevel ReviewerContextLevel `json:"reviewer_context_level,omitempty"`
+	ReviewerContextLevel          ReviewerContextLevel `json:"reviewer_context_level,omitempty"`
+	ProviderCausalAggregateDigest string               `json:"provider_causal_aggregate_digest,omitempty"`
 }
 
 type CompactReviewInput struct {
-	LensResults     []LensResult
-	Classifications []FindingEvidence
-	RefuterOutcomes []EvidenceResult
+	LensResults            []LensResult
+	Classifications        []FindingEvidence
+	RefuterOutcomes        []EvidenceResult
+	ProviderCausalCarriers map[string]ProviderCausalCarrier
 }
 
 func NewCompactState(start Start) (CompactState, error) {
@@ -494,6 +498,9 @@ func (state CompactState) Validate() error {
 	if err := validateCompactVerificationEvidence(state); err != nil {
 		return err
 	}
+	if err := validateCompactProviderCausalAuthority(state); err != nil {
+		return err
+	}
 	switch state.State {
 	case StateReviewing:
 		if len(state.Findings) != 0 || len(state.Classifications) != 0 || len(state.Outcomes) != 0 || len(state.FixFindingIDs) != 0 || state.ProposedCorrectionLines != nil || state.ActualCorrectionLines != nil || state.EvidenceHash != "" {
@@ -553,6 +560,68 @@ func validateCompactVerificationEvidence(state CompactState) error {
 		if state.State != StateEscalated {
 			return errors.New("failed compact verification evidence requires escalated authority") // refusal:by-design world-action: persisted outcome and lifecycle state contradict each other and require code or storage repair
 		}
+	}
+	return nil
+}
+
+func cloneProviderCausalCarriers(carriers map[string]ProviderCausalCarrier) map[string]ProviderCausalCarrier {
+	clone := make(map[string]ProviderCausalCarrier, len(carriers))
+	for lens, carrier := range carriers {
+		carrier.Findings = append([]ProviderCausalFinding(nil), carrier.Findings...)
+		for index := range carrier.Findings {
+			carrier.Findings[index].ProofRefs = append([]string(nil), carrier.Findings[index].ProofRefs...)
+		}
+		clone[lens] = carrier
+	}
+	return clone
+}
+
+func compactProviderCausalAggregateDigest(carriers map[string]ProviderCausalCarrier) string {
+	type entry struct {
+		Lens    string                `json:"lens"`
+		Carrier ProviderCausalCarrier `json:"carrier"`
+	}
+	lenses := make([]string, 0, len(carriers))
+	for lens := range carriers {
+		lenses = append(lenses, lens)
+	}
+	sort.Strings(lenses)
+	entries := make([]entry, 0, len(lenses))
+	for _, lens := range lenses {
+		entries = append(entries, entry{Lens: lens, Carrier: carriers[lens]})
+	}
+	payload, _ := json.Marshal(entries)
+	sum := sha256.Sum256(append([]byte("gentle-ai.compact-provider-causal-aggregate/v1\x00"), payload...))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func validateCompactProviderCausalAuthority(state CompactState) error {
+	if len(state.ProviderCausalCarriers) == 0 {
+		if state.ProviderCausalAggregateDigest != "" {
+			return errors.New("compact provider causal aggregate is present without carriers") // refusal:by-design world-action: persisted compact authority lost the carriers behind its aggregate; maintainer inspection and storage or code repair are the only safe exits
+		}
+		return nil
+	}
+	for _, lens := range state.SelectedLenses {
+		carrier, ok := state.ProviderCausalCarriers[lens]
+		if !ok {
+			return fmt.Errorf("compact provider causal carrier is missing for lens %q", lens) // refusal:by-design world-action: persisted compact authority is incomplete for a selected lens; maintainer inspection must repair code or storage before replay
+		}
+		if err := carrier.Validate(); err != nil {
+			return fmt.Errorf("compact provider causal carrier for lens %q is invalid: %w", lens, err)
+		}
+		if !validSHA256(carrier.SubjectHash) {
+			return fmt.Errorf("compact provider causal carrier for lens %q has an invalid provider artifact subject", lens) // refusal:by-design world-action: malformed provider-owned artifact identity requires fresh capture or maintainer repair
+		}
+		if carrier.CandidateIdentity.PolicyHash != state.PolicyHash {
+			return fmt.Errorf("compact provider causal carrier for lens %q is not bound to the frozen policy", lens) // refusal:by-design world-action: persisted provider authority is detached from the frozen policy; maintainer inspection and code or storage repair are the only safe exits
+		}
+		if carrier.CandidateIdentity.BaseTree != state.InitialSnapshot.BaseTree || carrier.CandidateIdentity.CandidateTree != state.InitialSnapshot.CandidateTree {
+			return fmt.Errorf("compact provider causal carrier for lens %q is not bound to the frozen trees", lens) // refusal:by-design world-action: persisted provider authority is detached from the frozen trees; only maintainer inspection and code or storage repair can restore integrity
+		}
+	}
+	if len(state.ProviderCausalCarriers) != len(state.SelectedLenses) || state.ProviderCausalAggregateDigest != compactProviderCausalAggregateDigest(state.ProviderCausalCarriers) {
+		return errors.New("compact provider causal aggregate digest does not match persisted carriers") // refusal:by-design world-action: persisted aggregate authority was altered or truncated; maintainer inspection and storage or code repair are the only safe exits
 	}
 	return nil
 }
@@ -966,6 +1035,10 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 	}
 	state.LensResults = []LensResult{}
 	state.Findings = []Finding{}
+	if len(input.ProviderCausalCarriers) > 0 {
+		state.ProviderCausalCarriers = cloneProviderCausalCarriers(input.ProviderCausalCarriers)
+		state.ProviderCausalAggregateDigest = compactProviderCausalAggregateDigest(state.ProviderCausalCarriers)
+	}
 	for index, result := range input.LensResults {
 		result.Lens = state.SelectedLenses[index]
 		canonical, err := CanonicalCompactLensResult(result)
@@ -1558,7 +1631,8 @@ func (state CompactState) Receipt() (CompactReceipt, error) {
 		EvidenceTargetIdentity: state.EvidenceTargetIdentity, EvidenceAuthorityRevision: state.EvidenceAuthorityRevision,
 		RiskLevel: state.RiskLevel, SelectedLenses: append([]string{}, state.SelectedLenses...),
 		ResolvedFindingIDs: append([]string(nil), state.FixFindingIDs...), TerminalState: terminal,
-		ReviewerContextLevel: state.ReviewerContextLevel,
+		ReviewerContextLevel:          state.ReviewerContextLevel,
+		ProviderCausalAggregateDigest: state.ProviderCausalAggregateDigest,
 	}
 	if err := receipt.Validate(); err != nil {
 		return CompactReceipt{}, err
@@ -1644,6 +1718,9 @@ func (receipt CompactReceipt) Validate() error {
 	// later release must stay readable here. See ReviewerContextLevel.
 	if receipt.ReviewerContextLevel != "" && !ReviewerContextLevelWellFormed(receipt.ReviewerContextLevel) {
 		return errors.New("compact receipt reviewer context level is malformed") // refusal:by-design world-action: a persisted receipt carrying unreadable bytes in an audit field requires storage repair, not an operator command
+	}
+	if receipt.ProviderCausalAggregateDigest != "" && !validSHA256(receipt.ProviderCausalAggregateDigest) {
+		return errors.New("compact provider causal aggregate digest is malformed") // refusal:by-design world-action: persisted receipt authority contains unreadable provider integrity bytes; maintainer inspection and storage or code repair are required
 	}
 	hasRecordBinding := receipt.EvidenceRecordDigest != "" || receipt.EvidenceOutcome != "" ||
 		receipt.EvidenceTargetIdentity != "" || receipt.EvidenceAuthorityRevision != ""

@@ -212,7 +212,7 @@ func TestOrganicReviewLifecycleErrorTyping(t *testing.T) {
 			Findings: []organicFinding{{
 				ID: "  " + prefix + "001  ", Location: "tracked.txt:1", Severity: "BLOCKER",
 				Claim:             "the candidate introduces an unreviewed causal defect",
-				ProofRefs:         []string{"diff: tracked.txt:1"},
+				ProofRefs:         []string{"tracked.txt:1"},
 				EvidenceClass:     "deterministic",
 				CausalDisposition: "introduced",
 			}},
@@ -302,7 +302,7 @@ func TestOrganicReviewLifecycleErrorTyping(t *testing.T) {
 				// ID intentionally omitted entirely (json:"id,omitempty").
 				Location: "tracked.txt:1", Severity: "BLOCKER",
 				Claim:             "the candidate introduces an unreviewed causal defect",
-				ProofRefs:         []string{"diff: tracked.txt:1"},
+				ProofRefs:         []string{"tracked.txt:1"},
 				EvidenceClass:     "deterministic",
 				CausalDisposition: "introduced",
 			}},

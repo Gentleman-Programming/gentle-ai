@@ -53,7 +53,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 				if index == 0 {
 					findings = []facadeFinding{{
 						Location: tt.path + ":1", Severity: "CRITICAL", Claim: "candidate exposes the wrong behavior",
-						ProofRefs:     []string{"exact changed hunk", "reproduced candidate failure"},
+						ProofRefs:     []string{tt.path + ":1"},
 						EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 					}}
 				}
@@ -66,9 +66,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 				t.Fatal(err)
 			}
 			if tt.forecast > 0 {
-				if err := RunReviewFacadeFinalize([]string{
-					"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", fmt.Sprint(tt.forecast),
-				}, &bytes.Buffer{}); err != nil {
+				if err := finalizeNegotiatedSubmissionForTest(t, repo, started.LineageID, fmt.Sprint(tt.forecast), &bytes.Buffer{}); err != nil {
 					t.Fatal(err)
 				}
 			}

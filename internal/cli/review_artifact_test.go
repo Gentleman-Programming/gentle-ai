@@ -318,7 +318,7 @@ func TestReviewCaptureResultFinalizePreservesCausalClassification(t *testing.T) 
 			result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
 			result.Findings = []facadeFinding{{
 				ID: "R3-001", Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate failure",
-				ProofRefs: []string{"tracked.txt:1 candidate-specific proof"}, EvidenceClass: tt.class, CausalDisposition: tt.causality,
+				ProofRefs: []string{"tracked.txt:1"}, EvidenceClass: tt.class, CausalDisposition: tt.causality,
 			}}
 			input := filepath.Join(t.TempDir(), "result.json")
 			writeReviewCLIJSON(t, input, result)
@@ -346,8 +346,12 @@ func TestReviewCaptureResultFinalizePreservesCausalClassification(t *testing.T) 
 			}
 			finding := finalized.State.LensResults[0].Findings[0]
 			classification := finalized.State.Classifications[finding.ID]
-			if finding.EvidenceClass != tt.class || finding.CausalDisposition != tt.causality ||
-				classification.Class != tt.class || classification.Causality != tt.causality ||
+			wantCausality := tt.causality
+			if wantCausality == reviewtransaction.CausalBehaviorActivated {
+				wantCausality = reviewtransaction.CausalIntroduced
+			}
+			if finding.EvidenceClass != tt.class || finding.CausalDisposition != wantCausality ||
+				classification.Class != tt.class || classification.Causality != wantCausality ||
 				finalized.State.Outcomes[finding.ID] != reviewtransaction.OutcomeCorroborated ||
 				finalized.State.State != reviewtransaction.StateCorrectionRequired || !reflect.DeepEqual(finalized.State.FixFindingIDs, []string{finding.ID}) {
 				t.Fatalf("causal result was not preserved: finding=%#v classification=%#v state=%q outcomes=%#v fixes=%v",

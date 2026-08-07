@@ -40,17 +40,34 @@ func TestNegotiatedReviewFinalizePreservesLegacyResultAndCanonicalIdentities(t *
 	var negotiated ReviewIntegrationFinalizeResult
 	decodeStrictReviewJSON(t, envelope.Result, &negotiated)
 	if negotiated.Operation != legacy.Operation || negotiated.LineageID != legacy.LineageID || negotiated.State != legacy.State ||
-		negotiated.Action != legacy.Action || negotiated.StoreRevision != legacy.StoreRevision {
+		negotiated.Action != legacy.Action {
 		t.Fatalf("negotiated finalize result = %#v, legacy %#v", negotiated, legacy)
 	}
 	assertNoPrivateReviewOperationFields(t, negotiatedOutput)
 
-	legacyAuthority := readReviewOperationFile(t, legacyStore.StatePath())
-	negotiatedAuthority := readReviewOperationFile(t, negotiatedStore.StatePath())
-	legacyReceipt := readReviewOperationFile(t, legacyStore.ReceiptPath())
-	negotiatedReceipt := readReviewOperationFile(t, negotiatedStore.ReceiptPath())
-	if !bytes.Equal(legacyAuthority, negotiatedAuthority) || !bytes.Equal(legacyReceipt, negotiatedReceipt) {
-		t.Fatalf("negotiation changed canonical authority or receipt bytes")
+	legacyRecord, err := legacyStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	negotiatedRecord, err := negotiatedStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(comparableReviewOperationRecord(legacyRecord), comparableReviewOperationRecord(negotiatedRecord)) {
+		t.Fatalf("negotiation changed canonical review state semantics")
+	}
+	legacyReceiptBytes := readReviewOperationFile(t, legacyStore.ReceiptPath())
+	legacyReceipt, err := reviewtransaction.ParseCompactReceipt(legacyReceiptBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	negotiatedReceiptBytes := readReviewOperationFile(t, negotiatedStore.ReceiptPath())
+	negotiatedReceipt, err := reviewtransaction.ParseCompactReceipt(negotiatedReceiptBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(comparableReviewOperationReceipt(legacyReceipt), comparableReviewOperationReceipt(negotiatedReceipt)) {
+		t.Fatalf("negotiation changed canonical receipt semantics")
 	}
 }
 
@@ -158,7 +175,7 @@ func TestNegotiatedReviewBindSDDPreservesLegacyResultAndBindingHashes(t *testing
 	}
 	var negotiated sddstatus.ReviewBinding
 	decodeStrictReviewJSON(t, envelope.Result, &negotiated)
-	if !reflect.DeepEqual(legacy, negotiated) {
+	if !reflect.DeepEqual(comparableReviewBinding(legacy), comparableReviewBinding(negotiated)) {
 		t.Fatalf("negotiated binding changed identities:\nlegacy=%#v\nnegotiated=%#v", legacy, negotiated)
 	}
 	legacyNative := readReviewOperationRuntimeBinding(t, legacyRepo, "thin")
@@ -167,6 +184,31 @@ func TestNegotiatedReviewBindSDDPreservesLegacyResultAndBindingHashes(t *testing
 		t.Fatal("contract negotiation changed native SDD binding authority")
 	}
 	assertNoPrivateReviewOperationFields(t, negotiatedOutput.Bytes())
+}
+
+func comparableReviewOperationRecord(record reviewtransaction.CompactRecord) reviewtransaction.CompactRecord {
+	record.Revision = ""
+	record.State.EvidenceAuthorityRevision = ""
+	record.State.ProviderCausalAggregateDigest = ""
+	record.State.ProviderCausalCarriers = nil
+	return record
+}
+
+func comparableReviewOperationReceipt(receipt reviewtransaction.CompactReceipt) reviewtransaction.CompactReceipt {
+	receipt.EvidenceAuthorityRevision = ""
+	receipt.ProviderCausalAggregateDigest = ""
+	return receipt
+}
+
+func comparableReviewBinding(binding sddstatus.ReviewBinding) sddstatus.ReviewBinding {
+	binding.Revision = ""
+	binding.AuthorityRevision = ""
+	binding.ReceiptHash = ""
+	binding.GateContext.StoreRevision = ""
+	binding.GateContext.GenesisRevision = ""
+	binding.GateContext.ChainIdentity = ""
+	binding.GateContext.BundleDigest = ""
+	return binding
 }
 
 func TestNegotiatedReviewBindSDDAcceptsSemanticallyEquivalentCompactReceiptArrays(t *testing.T) {

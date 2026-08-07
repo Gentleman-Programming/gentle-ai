@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -47,12 +48,14 @@ type ArtifactAdmission struct {
 	CanonicalSHA256           string                    `json:"canonical_sha256"`
 	ResultHash                string                    `json:"result_hash,omitempty"`
 	CandidateCausalFindingIDs []string                  `json:"candidate_causal_finding_ids"`
+	ProviderCausalCarrier     *ProviderCausalCarrier    `json:"provider_causal_carrier,omitempty"`
 	Diagnostic                string                    `json:"diagnostic,omitempty"`
 }
 
 type ArtifactAdmissionRequest struct {
 	ExpectedSubject   ArtifactSubject
 	FrozenContext     FrozenCandidateContext
+	CandidateIdentity CandidateIdentity
 	EchoedSubjectHash string
 	Inspection        ArtifactInspection
 	Result            LensResult
@@ -62,6 +65,10 @@ type ArtifactAdmissionRequest struct {
 	CandidateCausalFindingIDs []string
 	RawPayload                []byte
 	CanonicalPayload          []byte
+	// AdmittedProviderCausalCarrier is supplied only when replaying a
+	// provider-bound admission. Its frozen-tree binding is validated and its
+	// classifications are reused; reviewer claims never replace it.
+	AdmittedProviderCausalCarrier *ProviderCausalCarrier
 }
 
 // ArtifactAdmissionError exposes the stable native decision without requiring
@@ -160,6 +167,33 @@ func (admission ArtifactAdmission) Validate(subject ArtifactSubject) error {
 		if !artifactFindingID.MatchString(id) {
 			return errors.New("artifact admission candidate-causal finding ID is invalid")
 		}
+	}
+	if subject.Schema == ArtifactSubjectSchema {
+		carrier := admission.ProviderCausalCarrier
+		if carrier == nil {
+			return errors.New("v2 artifact admission is missing provider causal carrier") // refusal:by-design world-action: persisted v2 admission is incomplete authority; maintainer inspection must determine whether code or storage repair is safe
+		}
+		if err := carrier.Validate(); err != nil {
+			return fmt.Errorf("artifact admission provider causal carrier is invalid: %w", err)
+		}
+		if carrier.SubjectHash != subject.SubjectHash ||
+			carrier.CandidateIdentity.BaseTree != subject.BaseTree ||
+			carrier.CandidateIdentity.CandidateTree != subject.CandidateTree ||
+			!validSHA256(carrier.CandidateIdentity.PolicyHash) {
+			return errors.New("artifact admission provider causal carrier does not match the frozen subject") // refusal:by-design world-action: the persisted provider authority is misbound to the frozen subject; only maintainer inspection and code or storage repair can restore integrity
+		}
+		carrierIDs := make([]string, 0, len(carrier.Findings))
+		for _, finding := range carrier.Findings {
+			if finding.Classification == ProviderCandidateCausal {
+				carrierIDs = append(carrierIDs, finding.FindingID)
+			}
+		}
+		sort.Strings(carrierIDs)
+		if !equalStrings(carrierIDs, admission.CandidateCausalFindingIDs) {
+			return errors.New("artifact admission candidate-causal IDs do not match provider causal carrier") // refusal:by-design world-action: persisted admission and provider authority disagree; maintainer inspection must choose code or storage repair, not an operator override
+		}
+	} else if admission.ProviderCausalCarrier != nil {
+		return errors.New("legacy artifact admission must not contain provider causal carrier") // refusal:by-design world-action: legacy persisted authority has an impossible provider field; only maintainer inspection and storage or code repair can make it trustworthy
 	}
 	return ValidateArtifactSubject(subject)
 }
@@ -339,6 +373,49 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 	if wantErr != nil {
 		return fail(ArtifactAdmissionIncomplete, wantErr.Error())
 	}
+	if request.ExpectedSubject.Schema == ArtifactSubjectSchema {
+		claims := make([]ProviderCausalEvidence, 0, len(canonical.Findings))
+		for _, finding := range canonical.Findings {
+			if !isSevereSeverity(finding.Severity) {
+				continue
+			}
+			claims = append(claims, ProviderCausalEvidence{FindingID: finding.ID, Location: finding.Location, ProofRefs: finding.ProofRefs})
+		}
+		candidate := request.CandidateIdentity
+		if candidate == (CandidateIdentity{}) || candidate.BaseTree != request.FrozenContext.BaseTree || candidate.CandidateTree != request.FrozenContext.CandidateTree {
+			return fail(ArtifactAdmissionBindingMismatch, "provider causal admission requires the exact frozen candidate identity")
+		}
+		carrier := ProviderCausalCarrier{}
+		if request.AdmittedProviderCausalCarrier != nil {
+			carrier = *request.AdmittedProviderCausalCarrier
+			if err := carrier.Validate(); err != nil || carrier.SubjectHash != request.ExpectedSubject.SubjectHash || carrier.CandidateIdentity != candidate {
+				return fail(ArtifactAdmissionBindingMismatch, "admitted provider causal carrier does not match the frozen subject")
+			}
+			if len(carrier.Findings) != len(claims) {
+				return fail(ArtifactAdmissionBindingMismatch, "admitted provider causal carrier does not match reviewer evidence")
+			}
+			for index, claim := range claims {
+				finding := carrier.Findings[index]
+				if finding.FindingID != claim.FindingID || finding.Location != claim.Location || !equalStrings(finding.ProofRefs, claim.ProofRefs) {
+					return fail(ArtifactAdmissionBindingMismatch, "admitted provider causal carrier does not match reviewer evidence")
+				}
+			}
+		} else {
+			var deriveErr error
+			carrier, deriveErr = DeriveProviderCausalCarrier(ctx, request.FrozenContext.repositoryRoot, request.ExpectedSubject.SubjectHash, candidate, claims)
+			if deriveErr != nil {
+				return fail(ArtifactAdmissionBindingMismatch, "provider causal authority could not be derived")
+			}
+		}
+		admission.ProviderCausalCarrier = &carrier
+		wantCandidateCausalIDs = wantCandidateCausalIDs[:0]
+		for _, finding := range carrier.Findings {
+			if finding.Classification == ProviderCandidateCausal {
+				wantCandidateCausalIDs = append(wantCandidateCausalIDs, finding.FindingID)
+			}
+		}
+		sort.Strings(wantCandidateCausalIDs)
+	}
 	verifiedIDs, err := canonicalStrings(request.CandidateCausalFindingIDs, "candidate-causal finding id")
 	if err != nil {
 		return fail(ArtifactAdmissionIncomplete, err.Error())
@@ -445,7 +522,8 @@ type frozenRepositoryPathLookup struct {
 
 func newFrozenRepositoryPathLookup(ctx context.Context, frozen FrozenCandidateContext) (*frozenRepositoryPathLookup, func(), error) {
 	if ctx == nil || frozen.repositoryRoot == "" || !validGitTree(frozen.BaseTree) || !validGitTree(frozen.CandidateTree) {
-		return nil, func() {}, errors.New("frozen repository identity is incomplete") // refusal:by-design world-action: provider-owned immutable context is incomplete and must be reconstructed from authority
+		// refusal:by-design world-action: provider-owned immutable context is incomplete and must be reconstructed from authority
+		return nil, func() {}, errors.New("frozen repository identity is incomplete")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, func() {}, err

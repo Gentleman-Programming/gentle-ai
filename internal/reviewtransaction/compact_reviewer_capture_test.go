@@ -74,6 +74,10 @@ func newCompactReviewerCaptureFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
+	candidate, err := FreezeCandidateIdentity(context.Background(), repo, state.InitialSnapshot, state.PolicyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
 	subject, err := NewArtifactSubject(
 		state,
 		revision,
@@ -114,6 +118,7 @@ func newCompactReviewerCaptureFixture(
 			ExpectedRevision:          revision,
 			TargetIdentity:            state.InitialSnapshot.Identity,
 			FrozenContext:             frozen,
+			CandidateIdentity:         candidate,
 			ArtifactSubject:           subject,
 			Inspection:                inspection,
 			Result:                    result,
@@ -161,6 +166,9 @@ func TestCompactStoreCaptureAdmittedReviewerResultPublishesDurableExactReplay(
 		envelope.Admission.Validate(fixture.request.ArtifactSubject) != nil {
 		t.Fatalf("admitted envelope = %#v", envelope)
 	}
+	if envelope.Admission.ProviderCausalCarrier == nil {
+		t.Fatal("admitted envelope omitted provider causal carrier")
+	}
 	var provider compactProviderReviewerResult
 	decodeStrictReviewerCaptureJSON(t, envelope.Result, &provider)
 	if provider.SubjectHash != fixture.request.ArtifactSubject.SubjectHash ||
@@ -173,9 +181,35 @@ func TestCompactStoreCaptureAdmittedReviewerResultPublishesDurableExactReplay(
 		envelope,
 		fixture.request.ArtifactSubject,
 		fixture.request.FrozenContext,
+		fixture.request.CandidateIdentity,
 	)
 	if !ok || reAdmitted.ResultHash != got.ResultHash {
 		t.Fatalf("re-admitted result = %#v, %t", reAdmitted, ok)
+	}
+	for _, mutate := range []struct {
+		name   string
+		mutate func(*ArtifactAdmission)
+	}{
+		{name: "missing carrier", mutate: func(admission *ArtifactAdmission) { admission.ProviderCausalCarrier = nil }},
+		{name: "stale carrier", mutate: func(admission *ArtifactAdmission) {
+			admission.ProviderCausalCarrier.SubjectHash = "sha256:" + strings.Repeat("9", 64)
+		}},
+		{name: "mismatched carrier", mutate: func(admission *ArtifactAdmission) {
+			admission.ProviderCausalCarrier.AggregateDigest = "sha256:" + strings.Repeat("8", 64)
+		}},
+	} {
+		t.Run(mutate.name, func(t *testing.T) {
+			candidate := envelope
+			if envelope.Admission.ProviderCausalCarrier != nil {
+				carrier := *envelope.Admission.ProviderCausalCarrier
+				carrier.Findings = append([]ProviderCausalFinding(nil), carrier.Findings...)
+				candidate.Admission.ProviderCausalCarrier = &carrier
+			}
+			mutate.mutate(&candidate.Admission)
+			if _, admitted := reAdmitCompactReviewerResult(t.Context(), candidate, fixture.request.ArtifactSubject, fixture.request.FrozenContext, fixture.request.CandidateIdentity); admitted {
+				t.Fatal("re-admission accepted invalid persisted provider carrier")
+			}
+		})
 	}
 	beforeArtifact := append([]byte(nil), payload...)
 	beforeDigest, err := os.ReadFile(fixture.path + ".sha256")

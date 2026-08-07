@@ -27,6 +27,10 @@ func admittedArtifactFixture(t *testing.T) (ArtifactSubject, FrozenCandidateCont
 	if err != nil {
 		t.Fatal(err)
 	}
+	candidate, err := FreezeCandidateIdentity(t.Context(), repo, snapshot, "sha256:"+strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
 	state := CompactState{LineageID: "review-artifact-subject", SelectedLenses: []string{LensReliability, LensReadability}, InitialSnapshot: snapshot}
 	subject, err := NewArtifactSubject(state, "sha256:"+strings.Repeat("2", 64), context, LensReliability, 0, "")
 	if err != nil {
@@ -35,14 +39,15 @@ func admittedArtifactFixture(t *testing.T) (ArtifactSubject, FrozenCandidateCont
 	result := LensResult{
 		Lens: LensReliability,
 		Findings: []Finding{{
-			ID: "R3-001", Lens: "reliability", Location: "internal/a.go:7", Severity: "WARNING",
-			Claim: "the candidate loses the retry error", ProofRefs: []string{"diff: internal/a.go:7"},
+			ID: "R3-001", Lens: "reliability", Location: "internal/a.go:3", Severity: "WARNING",
+			Claim: "the candidate loses the retry error", ProofRefs: []string{"internal/a.go:3"},
 		}},
-		Evidence: []string{"inspection: internal/a.go:7 and internal/b.go:1", "test: go test ./internal/reviewtransaction"},
+		Evidence: []string{"inspection: internal/a.go:3 and internal/b.go:1", "test: go test ./internal/reviewtransaction"},
 	}
 	request := ArtifactAdmissionRequest{
 		ExpectedSubject:   subject,
 		FrozenContext:     context,
+		CandidateIdentity: candidate,
 		EchoedSubjectHash: subject.SubjectHash,
 		Inspection:        ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: []string{"internal/a.go", "internal/b.go"}},
 		Result:            result,
@@ -127,6 +132,60 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 				t.Fatalf("AdmitArtifact() decision = %q, error = %v; want %q", admission.Decision, err, tc.decision)
 			}
 		})
+	}
+}
+
+func TestAdmitArtifactPersistsCompleteProviderCarrier(t *testing.T) {
+	_, _, request := admittedArtifactFixture(t)
+	_, admission, err := AdmitArtifact(t.Context(), request)
+	if err != nil {
+		t.Fatalf("AdmitArtifact() error = %v", err)
+	}
+	if admission.ProviderCausalCarrier == nil {
+		t.Fatal("completed v2 admission omitted provider causal carrier")
+	}
+	if err := admission.ProviderCausalCarrier.Validate(); err != nil {
+		t.Fatalf("persisted provider causal carrier is invalid: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*ArtifactAdmission)
+	}{
+		{name: "missing carrier", mutate: func(a *ArtifactAdmission) { a.ProviderCausalCarrier = nil }},
+		{name: "stale subject", mutate: func(a *ArtifactAdmission) { a.ProviderCausalCarrier.SubjectHash = "sha256:" + strings.Repeat("9", 64) }},
+		{name: "mismatched aggregate", mutate: func(a *ArtifactAdmission) {
+			a.ProviderCausalCarrier.AggregateDigest = "sha256:" + strings.Repeat("8", 64)
+		}},
+		{name: "mismatched candidate IDs", mutate: func(a *ArtifactAdmission) { a.CandidateCausalFindingIDs = []string{"R3-999"} }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := admission
+			if admission.ProviderCausalCarrier != nil {
+				carrier := *admission.ProviderCausalCarrier
+				carrier.Findings = append([]ProviderCausalFinding(nil), carrier.Findings...)
+				candidate.ProviderCausalCarrier = &carrier
+			}
+			tc.mutate(&candidate)
+			if err := candidate.Validate(request.ExpectedSubject); err == nil {
+				t.Fatal("ArtifactAdmission.Validate() accepted invalid provider carrier")
+			}
+		})
+	}
+}
+
+func TestAdmitArtifactLegacyAdmissionDoesNotRequireProviderCarrier(t *testing.T) {
+	request := legacyAdmittedArtifactFixture(t)
+	_, admission, err := AdmitArtifact(t.Context(), request)
+	if err != nil {
+		t.Fatalf("legacy AdmitArtifact() error = %v", err)
+	}
+	if admission.ProviderCausalCarrier != nil {
+		t.Fatal("legacy admission unexpectedly persisted provider carrier")
+	}
+	if err := admission.Validate(request.ExpectedSubject); err != nil {
+		t.Fatalf("legacy admission.Validate() error = %v", err)
 	}
 }
 
@@ -283,7 +342,7 @@ func TestArtifactAdmissionCandidateCausalCanonicalization(t *testing.T) {
 			t.Fatalf("candidate-causal error = %v; want structured diagnostic", err)
 		}
 		if admissionErr.Diagnostic.FindingID != "R3-001" ||
-			admissionErr.Diagnostic.Location != "internal/a.go:7" ||
+			admissionErr.Diagnostic.Location != "internal/a.go:3" ||
 			admissionErr.Diagnostic.Reason != "line_not_changed_by_candidate" {
 			t.Fatalf("candidate-causal diagnostic = %#v", admissionErr.Diagnostic)
 		}

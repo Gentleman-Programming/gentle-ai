@@ -988,12 +988,12 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	started := startFacadeReview(t, repo)
+	started := startFacadeReview(t, repo, "tracked.txt")
 	resultPath := filepath.Join(t.TempDir(), "review.json")
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 		Findings: []facadeFinding{{
 			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate returns the wrong terminal value",
-			ProofRefs:     []string{"differential test passes on base and fails on candidate"},
+			ProofRefs:     []string{"tracked.txt:5"},
 			EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 		}},
 		Evidence: []string{"focused differential test failed on candidate"},
@@ -1048,7 +1048,7 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	resumed := startFacadeReview(t, repo)
+	resumed := startFacadeReview(t, repo, "tracked.txt")
 	if resumed.Action != "resumed" || resumed.LensesRequired || resumed.LineageID != started.LineageID || resumed.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("corrected in-scope start did not resume correction authority: %#v", resumed)
 	}
@@ -1124,18 +1124,12 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 	}
 }
 
-// TestReviewFacadeRefusesFalseIntroducedFindingOutsideGenesis covers a claim
-// the product used to accept and then downgrade at finalize: a CRITICAL finding
-// asserted as candidate-introduced while sitting on an unchanged production
-// path.
-//
-// It is now refused at admission instead, by the same repository-derived
-// changed-line evidence finalize used to consult, and the refusal never
-// consumes the lens slot or moves authority. Refusing an unprovable causal
-// claim before it enters authority is strictly stronger than recording it and
-// escalating afterwards, so this test asserts the refusal and the untouched
-// authority rather than the escalated state that route no longer reaches.
-func TestReviewFacadeRefusesFalseIntroducedFindingOutsideGenesis(t *testing.T) {
+// TestReviewFacadeEscalatesUnprovenIntroducedFindingOutsideGenesis covers a claim
+// the provider cannot prove: a CRITICAL finding asserted as candidate-introduced
+// while citing an unchanged line in a changed file. The provider-derived
+// classification is unknown, so finalize escalates inconclusively rather than
+// admitting a false candidate-causal approval.
+func TestReviewFacadeEscalatesUnprovenIntroducedFindingOutsideGenesis(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	legacyDir := filepath.Join(repo, "internal", "legacy")
 	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
@@ -1165,18 +1159,22 @@ func TestReviewFacadeRefusesFalseIntroducedFindingOutsideGenesis(t *testing.T) {
 		ProofRefs: []string{"the frozen candidate deterministically reproduces the panic"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, Evidence: []string{"reproduced the defect without candidate-causality evidence"}})
 	var output bytes.Buffer
-	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--result", reviewer}, &output); err == nil {
-		t.Fatal("unprovable candidate-causal claim was admitted")
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--result", reviewer}, &output); err != nil {
+		t.Fatalf("unprovable candidate-causal claim finalize = %v", err)
 	}
 	after, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Revision != before.Revision || after.State.State != reviewtransaction.StateReviewing {
-		t.Fatalf("refused causal claim moved authority: before=%s after=%#v", before.Revision, after.State)
+	if after.Revision == before.Revision || after.State.State != reviewtransaction.StateEscalated {
+		t.Fatalf("unknown causal claim did not escalate: before=%s after=%#v", before.Revision, after.State)
 	}
-	if len(after.State.Classifications) != 0 || len(after.State.Outcomes) != 0 {
-		t.Fatalf("refused causal claim entered authority: %#v", after.State)
+	classification := after.State.Classifications["R3-001"]
+	if classification.Causality != reviewtransaction.CausalUnknown || after.State.Outcomes["R3-001"] != reviewtransaction.OutcomeInconclusive {
+		t.Fatalf("provider causal classification = %#v, outcome = %q", classification, after.State.Outcomes["R3-001"])
+	}
+	if len(after.State.FixFindingIDs) != 0 {
+		t.Fatalf("unknown causal claim entered candidate-causal approval: %v", after.State.FixFindingIDs)
 	}
 	// Both candidate paths are genesis; the finding cited an unchanged LINE
 	// inside one of them, which is what made the introduced claim unprovable.
@@ -1207,7 +1205,7 @@ func TestReviewFacadeStartCannotResetActiveCorrectionBudget(t *testing.T) {
 			started := startFacadeReview(t, repo)
 			reviewer := filepath.Join(t.TempDir(), "reviewer.json")
 			writeReviewCLIJSON(t, reviewer, facadeReviewerResult{Findings: []facadeFinding{{
-				Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "wrong value", ProofRefs: []string{"candidate-only failure"},
+				ID: "R3-001", Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "wrong value", ProofRefs: []string{"tracked.txt:5"},
 				EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 			}}, Evidence: []string{"focused differential failure"}})
 			if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--result", reviewer}, io.Discard); err != nil {
@@ -1276,12 +1274,12 @@ func TestReviewFacadeFinalizeIgnoresCorrectionCreatedUntrackedPath(t *testing.T)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	started := startFacadeReview(t, repo)
+	started := startFacadeReview(t, repo, "tracked.txt")
 	resultPath := filepath.Join(t.TempDir(), "review.json")
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 		Findings: []facadeFinding{{
 			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate returns the wrong terminal value",
-			ProofRefs:     []string{"differential test passes on base and fails on candidate"},
+			ProofRefs:     []string{"tracked.txt:5"},
 			EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 		}},
 		Evidence: []string{"focused differential test failed on candidate"},
@@ -1338,8 +1336,8 @@ func TestReviewFacadePersistsOverBudgetForecastAndActual(t *testing.T) {
 		resultPath := filepath.Join(t.TempDir(), "review.json")
 		writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 			Findings: []facadeFinding{{
-				Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate regression",
-				ProofRefs:     []string{"differential test fails only on candidate"},
+				ID: "R3-001", Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate regression",
+				ProofRefs:     []string{"tracked.txt:5"},
 				EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 			}}, Evidence: []string{"focused differential test failed"},
 		})
@@ -1653,7 +1651,7 @@ func TestReviewFacadeRejectsMalformedInputsWithoutConsumingTerminalValidator(t *
 	assertUnchanged(record.Revision, finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--result", malformed}, io.Discard))
 
 	reviewer := filepath.Join(t.TempDir(), "reviewer.json")
-	writeReviewCLIJSON(t, reviewer, facadeReviewerResult{Findings: []facadeFinding{{Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "wrong value", ProofRefs: []string{"candidate-only failure"}, EvidenceClass: reviewtransaction.EvidenceInferential, CausalDisposition: reviewtransaction.CausalIntroduced}}, Evidence: []string{"reviewed once"}})
+	writeReviewCLIJSON(t, reviewer, facadeReviewerResult{Findings: []facadeFinding{{ID: "R3-001", Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "wrong value", ProofRefs: []string{"tracked.txt:5"}, EvidenceClass: reviewtransaction.EvidenceInferential, CausalDisposition: reviewtransaction.CausalIntroduced}}, Evidence: []string{"reviewed once"}})
 	if err := os.WriteFile(malformed, []byte(`{"results":[],"unknown":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1711,7 +1709,7 @@ func TestReviewRecoverCreatesSuccessorAndDiscoveryRejectsHistoricalAuthority(t *
 	resultPath := filepath.Join(t.TempDir(), "review.json")
 	cleanResultPath := filepath.Join(t.TempDir(), "clean-review.json")
 	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
-	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{Findings: []facadeFinding{{Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate regression", ProofRefs: []string{"candidate-only failure"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced}}, Evidence: []string{"reviewed"}})
+	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{Findings: []facadeFinding{{ID: "R3-001", Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate regression", ProofRefs: []string{"tracked.txt:1"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced}}, Evidence: []string{"reviewed"}})
 	writeReviewCLIJSON(t, cleanResultPath, facadeReviewerResult{Findings: []facadeFinding{}, Evidence: []string{"reviewed"}})
 	if err := os.WriteFile(evidencePath, []byte("tests pass\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1975,8 +1973,8 @@ func TestCompactTransportAllowsCorrectedPrePushWithoutTransientBaseObject(t *tes
 	resultPath := filepath.Join(t.TempDir(), "review.json")
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 		Findings: []facadeFinding{{
-			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate returns the wrong terminal value",
-			ProofRefs:     []string{"differential test passes on base and fails on candidate"},
+			ID: "R3-001", Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate returns the wrong terminal value",
+			ProofRefs:     []string{"tracked.txt:5"},
 			EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 		}}, Evidence: []string{"focused differential test failed on candidate"},
 	})
@@ -2057,13 +2055,38 @@ func TestReviewFacadeRoutesStructuredCandidateCausality(t *testing.T) {
 	started := startFacadeReview(t, repo)
 	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	record, _ := store.Load()
+	candidate, err := reviewtransaction.FreezeCandidateIdentity(context.Background(), repo, record.State.InitialSnapshot, record.State.PolicyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tt := range []struct {
 		causality reviewtransaction.CausalDisposition
 		want      reviewtransaction.CausalDisposition
 		state     reviewtransaction.State
-	}{{reviewtransaction.CausalIntroduced, reviewtransaction.CausalUnknown, reviewtransaction.StateEscalated}, {reviewtransaction.CausalWorsened, reviewtransaction.CausalUnknown, reviewtransaction.StateEscalated}, {reviewtransaction.CausalBehaviorActivated, reviewtransaction.CausalBehaviorActivated, reviewtransaction.StateCorrectionRequired}} {
-		result := facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{{Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "unchanged", ProofRefs: []string{string(tt.causality) + " structured proof"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: tt.causality}}, Evidence: []string{"reviewed"}}
+	}{{reviewtransaction.CausalIntroduced, reviewtransaction.CausalUnknown, reviewtransaction.StateEscalated}, {reviewtransaction.CausalWorsened, reviewtransaction.CausalUnknown, reviewtransaction.StateEscalated}, {reviewtransaction.CausalBehaviorActivated, reviewtransaction.CausalIntroduced, reviewtransaction.StateCorrectionRequired}} {
+		location := "tracked.txt:1"
+		if tt.causality == reviewtransaction.CausalBehaviorActivated {
+			location = "tracked.txt:2"
+		}
+		carrier, err := reviewtransaction.DeriveProviderCausalCarrier(context.Background(), repo, "sha256:"+strings.Repeat("f", 64), candidate, []reviewtransaction.ProviderCausalEvidence{{FindingID: "R3-001", Location: location, ProofRefs: []string{location}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := facadeReviewerResult{SubjectHash: carrier.SubjectHash, Lens: started.SelectedLenses[0], Findings: []facadeFinding{{ID: "R3-001", Location: location, Severity: "CRITICAL", Claim: "unchanged", ProofRefs: []string{location}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: tt.causality}}, Evidence: []string{"reviewed"}, ProviderCausalCarrier: &carrier}
 		input, err := prepareCompactReviewerResults(record.State, []facadeReviewerResult{result}, facadeRefuterResult{}, facadeRepositoryEvidence{ctx: context.Background(), repo: repo})
+		if err == nil {
+			carrier, ok := input.ProviderCausalCarriers[started.SelectedLenses[0]]
+			if !ok || len(carrier.Findings) != 1 {
+				t.Fatalf("provider carrier = %#v, want one persisted lens carrier", input.ProviderCausalCarriers)
+			}
+			wantProvider := reviewtransaction.ProviderUnknown
+			if tt.causality == reviewtransaction.CausalBehaviorActivated {
+				wantProvider = reviewtransaction.ProviderCandidateCausal
+			}
+			if carrier.Findings[0].Classification != wantProvider {
+				t.Fatalf("provider classification = %q, want %q", carrier.Findings[0].Classification, wantProvider)
+			}
+		}
 		state := record.State
 		if err == nil {
 			err = state.CompleteReview(input)
@@ -2113,17 +2136,37 @@ func TestReviewFacadePropagatesCausalGitFailureBeforeMutation(t *testing.T) {
 // reviewtransaction API runReviewFacadeStart's now-deleted legacy branch
 // used to call -- identical to finalizeApprovedFacadeReview's and
 // approveDiscoveryMarkdownProjection's own fixes.
-func startFacadeReview(t *testing.T, repo string) ReviewFacadeStartResult {
+func startFacadeReview(t *testing.T, repo string, intendedUntracked ...string) ReviewFacadeStartResult {
 	t.Helper()
 	ctx := context.Background()
+	if intendedUntracked == nil {
+		intendedUntracked = []string{}
+	}
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
 	root, err := builder.ResolveRepositoryRoot(ctx)
 	if err != nil {
 		t.Fatalf("resolve facade review repository root: %v", err)
 	}
+	if len(intendedUntracked) > 0 {
+		untracked, err := (reviewtransaction.SnapshotBuilder{Repo: root}).DiscoverUnignoredUntracked(ctx)
+		if err != nil {
+			t.Fatalf("discover intended-untracked fixture paths: %v", err)
+		}
+		available := make(map[string]struct{}, len(untracked))
+		for _, path := range untracked {
+			available[path] = struct{}{}
+		}
+		filtered := intendedUntracked[:0]
+		for _, path := range intendedUntracked {
+			if _, ok := available[path]; ok {
+				filtered = append(filtered, path)
+			}
+		}
+		intendedUntracked = filtered
+	}
 	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
 	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intendedUntracked,
 	})
 	if err != nil {
 		t.Fatalf("build facade review target: %v", err)
@@ -2195,12 +2238,12 @@ func TestReviewFacadeFinalizeSurfacesEscalationAccounting(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	started := startFacadeReview(t, repo)
+	started := startFacadeReview(t, repo, "tracked.txt")
 	resultPath := filepath.Join(t.TempDir(), "review.json")
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 		Findings: []facadeFinding{{
 			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate regression",
-			ProofRefs:     []string{"differential test fails only on candidate"},
+			ProofRefs:     []string{"tracked.txt:5"},
 			EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 		}}, Evidence: []string{"focused differential test failed"},
 	})

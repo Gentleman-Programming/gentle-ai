@@ -374,7 +374,11 @@ func inspectCompactResultReopenSlot(ctx context.Context, repository, storeDir st
 	if err != nil || envelope.Subject != expected || envelope.Admission.Validate(expected) != nil {
 		return slot, false, nil
 	}
-	result, admitted := reAdmitCompactReviewerResult(ctx, envelope, expected, frozen)
+	candidate, candidateErr := FreezeCandidateIdentity(ctx, repository, state.InitialSnapshot, state.PolicyHash)
+	if candidateErr != nil {
+		return slot, false, nil
+	}
+	result, admitted := reAdmitCompactReviewerResult(ctx, envelope, expected, frozen, candidate)
 	if !admitted || result.ResultHash != state.LensResults[order].ResultHash {
 		return slot, false, nil
 	}
@@ -382,7 +386,10 @@ func inspectCompactResultReopenSlot(ctx context.Context, repository, storeDir st
 	return slot, true, nil
 }
 
-func reAdmitCompactReviewerResult(ctx context.Context, envelope compactAdmittedReviewerResult, expected ArtifactSubject, frozen FrozenCandidateContext) (LensResult, bool) {
+func reAdmitCompactReviewerResult(ctx context.Context, envelope compactAdmittedReviewerResult, expected ArtifactSubject, frozen FrozenCandidateContext, candidate CandidateIdentity) (LensResult, bool) {
+	if err := envelope.Admission.Validate(expected); err != nil {
+		return LensResult{}, false
+	}
 	decoder := json.NewDecoder(bytes.NewReader(envelope.Result))
 	decoder.DisallowUnknownFields()
 	var provider compactProviderReviewerResult
@@ -402,11 +409,12 @@ func reAdmitCompactReviewerResult(ctx context.Context, envelope compactAdmittedR
 	}
 	canonicalPayload = append(canonicalPayload, '\n')
 	result, admission, err := AdmitArtifact(ctx, ArtifactAdmissionRequest{
-		ExpectedSubject: expected, FrozenContext: frozen, EchoedSubjectHash: provider.SubjectHash,
-		Inspection:                provider.Inspection,
-		Result:                    LensResult{Lens: expected.Lens, Findings: provider.Findings, Evidence: provider.Evidence},
-		CandidateCausalFindingIDs: envelope.Admission.CandidateCausalFindingIDs,
-		RawPayload:                canonicalPayload, CanonicalPayload: canonicalPayload,
+		ExpectedSubject: expected, FrozenContext: frozen, CandidateIdentity: candidate, EchoedSubjectHash: provider.SubjectHash,
+		Inspection:                    provider.Inspection,
+		Result:                        LensResult{Lens: expected.Lens, Findings: provider.Findings, Evidence: provider.Evidence},
+		CandidateCausalFindingIDs:     envelope.Admission.CandidateCausalFindingIDs,
+		AdmittedProviderCausalCarrier: envelope.Admission.ProviderCausalCarrier,
+		RawPayload:                    canonicalPayload, CanonicalPayload: canonicalPayload,
 	})
 	if err != nil || admission.Decision != ArtifactAdmissionCompleted ||
 		admission.CanonicalSHA256 != envelope.Admission.CanonicalSHA256 || admission.ResultHash != envelope.Admission.ResultHash {

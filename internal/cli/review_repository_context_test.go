@@ -269,7 +269,7 @@ func TestNegotiatedFinalizeReturnsProviderOwnedTargetedValidationRequest(t *test
 		Lens: started.SelectedLenses[0],
 		Findings: []facadeFinding{{
 			Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate behavior is incorrect",
-			ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+			ProofRefs: []string{"candidate.go:3"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 			CausalDisposition: reviewtransaction.CausalIntroduced,
 		}},
 		Evidence: []string{"inspected frozen candidate"},
@@ -277,7 +277,7 @@ func TestNegotiatedFinalizeReturnsProviderOwnedTargetedValidationRequest(t *test
 	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2"}, io.Discard); err != nil {
+	if err := finalizeNegotiatedSubmissionForTest(t, repo, started.LineageID, "2", io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc corrected() int { return 2 }\n", 0o644)
@@ -410,7 +410,7 @@ func TestNegotiatedStatusAcceptsCorrectionSubsetDigest(t *testing.T) {
 		Lens: started.SelectedLenses[0],
 		Findings: []facadeFinding{{
 			Location: "corrected.go:3", Severity: "CRITICAL", Claim: "corrected subset remains wrong",
-			ProofRefs: []string{"corrected.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+			ProofRefs: []string{"corrected.go:3"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 			CausalDisposition: reviewtransaction.CausalIntroduced,
 		}},
 		Evidence: []string{"inspected exact two-path candidate"},
@@ -418,7 +418,7 @@ func TestNegotiatedStatusAcceptsCorrectionSubsetDigest(t *testing.T) {
 	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "1"}, io.Discard); err != nil {
+	if err := finalizeNegotiatedSubmissionForTest(t, repo, started.LineageID, "1", io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	writeReviewStartCandidate(t, repo, "corrected.go", "package candidate\n\nfunc correctedSubset() int { return 2 }\n", 0o644)

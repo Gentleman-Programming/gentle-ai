@@ -128,15 +128,15 @@ func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing
 	resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 		Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
-			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "terminal value is incorrect",
-			ProofRefs: []string{"tracked.txt:5 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+			ID: "R3-001", Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "terminal value is incorrect",
+			ProofRefs: []string{"tracked.txt:5"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 			CausalDisposition: reviewtransaction.CausalIntroduced,
 		}}, Evidence: []string{"inspected correction target"},
 	})
 	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2"}, &bytes.Buffer{}); err != nil {
+	if err := finalizeNegotiatedSubmissionForTest(t, repo, started.LineageID, "2", &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nstill wrong\n"), 0o644); err != nil {
@@ -241,15 +241,15 @@ func TestProceduralCorrectionEvidenceEscalatesBeforeRetryEligibility(t *testing.
 	resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 		Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
-			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "terminal value is incorrect",
-			ProofRefs: []string{"tracked.txt:5 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+			ID: "R3-001", Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "terminal value is incorrect",
+			ProofRefs: []string{"tracked.txt:5"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 			CausalDisposition: reviewtransaction.CausalIntroduced,
 		}}, Evidence: []string{"inspected correction target"},
 	})
 	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2"}, &bytes.Buffer{}); err != nil {
+	if err := finalizeNegotiatedSubmissionForTest(t, repo, started.LineageID, "2", &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {

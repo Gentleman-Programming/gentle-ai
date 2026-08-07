@@ -33,7 +33,7 @@ func contaminatedReviewerPayloadForTest(t *testing.T, repo string, record review
 		Severity:          "CRITICAL",
 		Claim:             "the file is not valid source: pseudocode phrases appear where statements are required",
 		Location:          location,
-		ProofRefs:         []string{location + " in the supplied candidate content"},
+		ProofRefs:         []string{location},
 		EvidenceClass:     reviewtransaction.EvidenceDeterministic,
 		CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}

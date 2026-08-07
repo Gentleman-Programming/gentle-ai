@@ -557,7 +557,7 @@ func failedCorrectedFinalVerificationCLIFixture(t *testing.T) failedFinalVerific
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 		Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
 			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "terminal value is incorrect",
-			ProofRefs: []string{"tracked.txt:5 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+			ProofRefs: []string{"tracked.txt:5"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 			CausalDisposition: reviewtransaction.CausalIntroduced,
 		}}, Evidence: []string{"inspected corrected candidate"},
 	})

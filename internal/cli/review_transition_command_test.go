@@ -484,8 +484,8 @@ func TestReviewRecoverTransitionEmitsACommandThatRuns(t *testing.T) {
 	decodeStrictReviewJSON(t, output.Bytes(), &started)
 	result := filepath.Join(t.TempDir(), "blocking.json")
 	writeReviewCLIJSON(t, result, facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
-		Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
-		ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+		ID: "R3-001", Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
+		ProofRefs: []string{"candidate.go:3"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 		CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, Evidence: []string{"reviewed exact current changes"}})
 	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {

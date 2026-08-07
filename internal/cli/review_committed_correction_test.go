@@ -88,13 +88,13 @@ func TestStagedCorrectionContinuesToReceipt(t *testing.T) {
 	result := filepath.Join(t.TempDir(), "reviewer.json")
 	writeReviewCLIJSON(t, result, facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
 		Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate is wrong",
-		ProofRefs: []string{"tracked.txt:5 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+		ProofRefs: []string{"tracked.txt:5"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 		CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, Evidence: []string{"reviewed frozen staged candidate"}})
 	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2"}, &bytes.Buffer{}); err != nil {
+	if err := finalizeNegotiatedSubmissionForTest(t, repo, started.LineageID, "2", &bytes.Buffer{}, "--projection", "staged"); err != nil {
 		t.Fatal(err)
 	}
 	writeReviewStartCandidate(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\n", 0o644)
@@ -110,7 +110,7 @@ func TestStagedCorrectionContinuesToReceipt(t *testing.T) {
 		OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"original criteria passed"}},
 		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"correction regression passed"}}, FollowUps: []reviewtransaction.FollowUp{},
 	})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--validation", validation, "--captured-evidence"}, &bytes.Buffer{}); err != nil {
+	if err := finalizeNegotiatedSubmissionForTest(t, repo, started.LineageID, validation, &bytes.Buffer{}, "--projection", "staged"); err != nil {
 		t.Fatal(err)
 	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
@@ -222,6 +222,8 @@ func committedCorrectionWithOperationalReconstructionAuthority(t *testing.T) str
 	state.LineageID = "operational-reconstruction"
 	state.InitialSnapshot, state.CurrentSnapshot = snapshot, snapshot
 	state.GenesisPaths = append([]string(nil), snapshot.Paths...)
+	state.ProviderCausalCarriers = nil
+	state.ProviderCausalAggregateDigest = ""
 	if err := state.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -294,6 +296,8 @@ func committedCorrectionWithOverBudgetReconstructionAuthority(t *testing.T) stri
 	healthy.LineageID = "healthy-reconstruction"
 	healthy.InitialSnapshot, healthy.CurrentSnapshot = healthySnapshot, healthySnapshot
 	healthy.GenesisPaths = append([]string(nil), healthySnapshot.Paths...)
+	healthy.ProviderCausalCarriers = nil
+	healthy.ProviderCausalAggregateDigest = ""
 	healthy.OriginalChangedLines, healthy.CorrectionBudget = 10, 5
 	forecast := 5
 	healthy.ProposedCorrectionLines = &forecast
@@ -343,14 +347,14 @@ func forecastCommittedCorrection(t *testing.T) (string, string, string) {
 	writeReviewCLIJSON(t, result, facadeReviewerResult{
 		Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
 			Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate is wrong",
-			ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+			ProofRefs: []string{"candidate.go:3"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 			CausalDisposition: reviewtransaction.CausalIntroduced,
 		}}, Evidence: []string{"reviewed frozen committed candidate"},
 	})
 	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", lineage, "--result", result}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--correction-lines", "2"}, &bytes.Buffer{}); err != nil {
+	if err := finalizeNegotiatedSubmissionForTest(t, repo, lineage, "2", &bytes.Buffer{}, "--base-ref", base); err != nil {
 		t.Fatal(err)
 	}
 	return repo, base, lineage

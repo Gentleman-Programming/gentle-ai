@@ -104,8 +104,8 @@ func TestStatusRecoverTransitionExecutesExactBaseDiffSelectors(t *testing.T) {
 	}
 	result := filepath.Join(t.TempDir(), "blocking.json")
 	writeReviewCLIJSON(t, result, facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
-		Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
-		ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+		ID: "R3-001", Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
+		ProofRefs: []string{"candidate.go:3"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, Evidence: []string{"reviewed exact base diff"}})
 	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -119,6 +119,9 @@ func TestStatusRecoverTransitionExecutesExactBaseDiffSelectors(t *testing.T) {
 	runReviewCLIGit(t, repo, "add", "helper.go")
 	runReviewCLIGit(t, repo, "commit", "-qm", "expand candidate scope")
 	probe := selectorTransitionStatus(t, repo, "--lineage", started.LineageID, "--base-ref", base)
+	if probe.Applicability != reviewtransaction.TargetApplicabilityCurrent || probe.Authority == nil || probe.Action != reviewtransaction.TargetStatusActionRecover {
+		t.Fatalf("recovery probe is not applicable: applicability=%q action=%q authority=%#v", probe.Applicability, probe.Action, probe.Authority)
+	}
 	reason, actor := "approved scope expansion", "maintainer"
 	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + started.LineageID + "\npredecessor_revision=" + probe.Authority.Revision + "\ntarget_identity=" + probe.TargetIdentity + "\nsuccessor_lineage=selector-recovered\nactor=" + actor + "\nreason=" + reason
 	status := selectorTransitionStatus(t, repo, "--lineage", started.LineageID, "--base-ref", "  "+base+"  ",
@@ -368,8 +371,8 @@ func TestStatusRecoverTransitionExecutesCorrectionRequiredStagedScopeExpansion(t
 		result := facadeReviewerResult{Lens: lens, Findings: []facadeFinding{}, Evidence: []string{"reviewed exact base diff"}}
 		if index == 0 {
 			result.Findings = []facadeFinding{{
-				Location: "candidate.go:4", Severity: "CRITICAL", Claim: "candidate returns the wrong value",
-				ProofRefs: []string{"candidate.go:4 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+				ID: "R3-001", Location: "candidate.go:4", Severity: "CRITICAL", Claim: "candidate returns the wrong value",
+				ProofRefs: []string{"candidate.go:4"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 				CausalDisposition: reviewtransaction.CausalIntroduced,
 			}}
 		}
@@ -380,9 +383,7 @@ func TestStatusRecoverTransitionExecutesCorrectionRequiredStagedScopeExpansion(t
 	if err := finalizeReviewCLIArgs(t, repo, finalizeArgs, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--lineage", predecessorLineage, "--correction-lines", "3",
-	}, &bytes.Buffer{}); err != nil {
+	if err := finalizeNegotiatedSubmissionForTest(t, repo, predecessorLineage, "3", &bytes.Buffer{}, "--base-ref", base); err != nil {
 		t.Fatal(err)
 	}
 
@@ -456,8 +457,8 @@ func TestCurrentChangesRecoverSelectorPresenceSurvivesJSONRoundTrip(t *testing.T
 	decodeStrictReviewJSON(t, output.Bytes(), &started)
 	result := filepath.Join(t.TempDir(), "blocking.json")
 	writeReviewCLIJSON(t, result, facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
-		Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
-		ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+		ID: "R3-001", Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
+		ProofRefs: []string{"candidate.go:3"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, Evidence: []string{"reviewed exact current changes"}})
 	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -538,8 +539,8 @@ func TestStatusStopsUnrepresentableRecoveryWithoutMutation(t *testing.T) {
 	decodeStrictReviewJSON(t, output.Bytes(), &started)
 	result := filepath.Join(t.TempDir(), "blocking.json")
 	writeReviewCLIJSON(t, result, facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
-		Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
-		ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+		ID: "R3-001", Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate requires a helper",
+		ProofRefs: []string{"candidate.go:3"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, Evidence: []string{"reviewed exact current changes"}})
 	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)

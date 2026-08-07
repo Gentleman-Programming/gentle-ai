@@ -175,7 +175,7 @@ func TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection(t
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 		Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
 			Location: candidatePath + ":3", Severity: "CRITICAL", Claim: "candidate value is wrong",
-			ProofRefs: []string{candidatePath + ":3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+			ProofRefs: []string{candidatePath + ":3"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 			CausalDisposition: reviewtransaction.CausalIntroduced,
 		}}, Evidence: []string{"inspected exact candidate"},
 	})
@@ -184,9 +184,7 @@ func TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection(t
 	}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "1",
-	}, &bytes.Buffer{}); err != nil {
+	if err := finalizeNegotiatedSubmissionForTest(t, repo, started.LineageID, "1", &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	writeReviewStartCandidate(t, repo, candidatePath, "package candidate\n\nfunc value() int { return 2 }\n", 0o644)

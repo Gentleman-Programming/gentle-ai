@@ -683,10 +683,11 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 
 	resultPath := filepath.Join(t.TempDir(), "reviewer.json")
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
-		Lens: started.SelectedLenses[0],
+		SubjectHash: initial.State.InitialSnapshot.Identity,
+		Lens:        started.SelectedLenses[0],
 		Findings: []facadeFinding{{
-			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate returns the wrong terminal value",
-			ProofRefs:     []string{"differential test passes on base and fails on candidate"},
+			ID: "R3-001", Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate returns the wrong terminal value",
+			ProofRefs:     []string{"tracked.txt:5"},
 			EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 		}},
 		Evidence: []string{"focused differential test failed on candidate"},
