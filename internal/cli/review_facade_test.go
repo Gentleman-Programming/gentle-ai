@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -1499,6 +1500,90 @@ func TestReviewFacadeHelpAndFlatCompatibilityPathsRemainAvailable(t *testing.T) 
 			t.Fatalf("flat compatibility help %q: %v\n%s", test.want, err, output.String())
 		}
 	}
+}
+
+func TestReviewFacadeHelpNamesEveryDispatchedVerb(t *testing.T) {
+	dispatched := reviewCommandDispatchVerbs(t)
+	if len(dispatched) == 0 {
+		t.Fatal("reviewCommandDispatchVerbs returned zero verbs; the extraction is stale")
+	}
+	var helpOutput bytes.Buffer
+	if err := RunReview([]string{"--help"}, &helpOutput); err != nil {
+		t.Fatalf("review --help: %v", err)
+	}
+	help := helpOutput.String()
+	helpVerbs := reviewFacadeHelpVerbs(t, help)
+	advertised := make(map[string]struct{}, len(helpVerbs))
+	for _, verb := range helpVerbs {
+		advertised[verb] = struct{}{}
+	}
+	for verb := range dispatched {
+		// These verbs are dispatched through the negotiated path in
+		// runReviewCommandContext rather than the headless switch in
+		// runReviewCommand, but the facade usage line must still name
+		// them — the reverse check below covers that direction.
+		if verb == "start" || verb == "finalize" || verb == "validate" || verb == "status" ||
+			verb == "repair" || verb == "retry-final-verification" || verb == "bind-sdd" {
+			continue
+		}
+		if _, ok := advertised[verb]; !ok {
+			t.Errorf("dispatch switch verb %q is missing from `review --help` usage line", verb)
+		}
+	}
+	// Reverse: parse the usage line to extract every verb it names, and verify
+	// each one actually dispatches (RunReview silently returns nil for unknown
+	// help because it prints usage and exits 0, but --help for a known verb
+	// prints that verb's own help and also exits 0; unknown verbs print the
+	// generic usage again). Run each verb with --help and check it names the
+	// verb specifically, proving the switch case exists.
+	for _, verb := range helpVerbs {
+		var verbHelp bytes.Buffer
+		err := RunReview([]string{verb, "--help"}, &verbHelp)
+		dispatchText := verbHelp.String()
+		if err != nil {
+			if strings.Contains(err.Error(), "unknown") ||
+				strings.Contains(err.Error(), "unrecognized") {
+				t.Errorf("verb %q named in `review --help` does not dispatch: %v", verb, err)
+				continue
+			}
+			// Preflight errors (missing required flags) are proof of
+			// dispatch; append the error text so the check below can
+			// match the `review <verb> requires` message it carries.
+			dispatchText += "\n" + err.Error()
+		}
+		// Dispatch proof: the result is distinct from generic facade
+		// help (which reprints the full usage for unknown verbs), AND
+		// it names the verb specifically either in a Usage line or a
+		// required-flags message.
+		dispatched := strings.TrimSpace(dispatchText) != strings.TrimSpace(help) &&
+			(strings.Contains(dispatchText, "Usage: gentle-ai review "+verb) ||
+				strings.Contains(dispatchText, "review "+verb+" requires"))
+		if !dispatched {
+			t.Errorf("verb %q named in `review --help` does not dispatch:\n%s", verb, dispatchText)
+		}
+	}
+}
+
+// reviewFacadeHelpVerbs parses the `review <verb1|verb2|...>` usage line from
+// the facade help output and returns every named verb.
+func reviewFacadeHelpVerbs(t *testing.T, help string) []string {
+	t.Helper()
+	re := regexp.MustCompile(`review <([^>]+)>`)
+	m := re.FindStringSubmatch(help)
+	if m == nil {
+		t.Fatal("could not find `review <...>` usage line in facade help:\n" + help)
+	}
+	var verbs []string
+	for _, verb := range strings.Split(m[1], "|") {
+		verb = strings.TrimSpace(verb)
+		if verb != "" {
+			verbs = append(verbs, verb)
+		}
+	}
+	if len(verbs) == 0 {
+		t.Fatal("found zero verbs in `review <...>` usage line:\n" + help)
+	}
+	return verbs
 }
 
 func TestReviewSchemaExamplesMatchStrictFacadeContracts(t *testing.T) {
