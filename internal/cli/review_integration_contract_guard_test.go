@@ -428,7 +428,7 @@ func TestReviewIntegrationNonVacuousModeClassificationsAreEvidenced(t *testing.T
 		// workspace-mode candidates whose selected lenses still need the
 		// negotiated form's repository_context -- so the evidence now points
 		// at that call site instead of the removed constant.
-		{fn: "runReviewFacadeStart", file: "review_facade.go", evidence: "reviewNegotiatedStartCommand(authority.InitialSnapshot, *runtimeAgent)"},
+		{fn: "runReviewFacadeStart", file: "review_facade.go", evidence: "reviewNegotiatedStartCommand(authority.InitialSnapshot, *runtimeAgent, intendedScope)"},
 		{fn: "runReviewFacadeFinalize", file: "review_facade.go", evidence: "reviewContractRequiredForActionEligibilityReason"},
 	}
 	for _, testCase := range cases {

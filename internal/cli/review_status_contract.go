@@ -89,6 +89,7 @@ type ReviewTargetStatusResult struct {
 	NextTransition         *ReviewNextTransition                                `json:"next_transition,omitempty"`
 	ValidationRequest      *reviewtransaction.TargetedValidationRequest         `json:"validation_request,omitempty"`
 	FinalVerificationRetry *reviewtransaction.FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
+	intendedUntracked      reviewIntendedUntrackedScope
 }
 
 // ReviewActionEligibility remains an additive compatibility detail for older
@@ -686,6 +687,9 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if result.NextTransition == nil {
 		return nil
 	}
+	if result.NextTransition.ReasonCode == "intended_untracked_selection_required" {
+		return result.validateIntendedUntrackedSelectionTransition()
+	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
 		if result.Action == reviewtransaction.TargetStatusActionStop {
 			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "staged_workspace_overlay_recovery_unavailable" {
@@ -843,7 +847,7 @@ func (result ReviewTargetStatusResult) validateStartNextTransition() error {
 		transition.Execute.Operation != "review.start" || len(transition.Execute.Artifacts) != 0 {
 		return errors.New("fresh target lacks an executable START transition")
 	}
-	arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments)
+	arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments, "review.start")
 	if err != nil {
 		return err
 	}
@@ -858,7 +862,7 @@ func (result ReviewTargetStatusResult) validateStartNextTransition() error {
 			return errors.New("fresh target START runtime lacks immutable review transport")
 		}
 	}
-	wantArguments := reviewStartArguments(result, lineage, runtime)
+	wantArguments := reviewStartArguments(result, lineage, runtime, result.intendedUntracked)
 	for index, argument := range wantArguments {
 		argument.Token = reviewTransitionArgumentToken(argument)
 		wantArguments[index] = argument
@@ -936,7 +940,7 @@ func (result ReviewTargetStatusResult) validateRepairNextTransition() error {
 			transition.Execute.Binding.LineageID != candidate.LineageID || transition.Execute.Binding.Revision != candidate.Revision {
 			return errors.New("classified repair execution transition is incomplete")
 		}
-		arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments)
+		arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments, transition.Execute.Operation)
 		if err != nil || len(arguments) != len(provider)+3 {
 			return errors.New("classified repair execution arguments are incomplete")
 		}
@@ -1109,7 +1113,7 @@ func (transition ReviewNextTransition) Validate() error {
 				return errors.New("execution transition has an incomplete precondition")
 			}
 		}
-		arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments)
+		arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments, transition.Execute.Operation)
 		if err != nil {
 			return err
 		}
@@ -1214,15 +1218,29 @@ func (submission ReviewTransitionSubmission) validateFinalize() error {
 	return nil
 }
 
-func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument) (map[string]string, error) {
+func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument, operation ...string) (map[string]string, error) {
 	values := make(map[string]string, len(arguments))
 	for _, argument := range arguments {
-		if _, duplicate := values[argument.Name]; duplicate {
+		previous, duplicate := values[argument.Name]
+		if duplicate && (len(operation) != 1 || operation[0] != "review.start" || argument.Name != "intended-untracked" || previous == argument.Value) {
 			return nil, errors.New("review transition repeats an argument")
 		}
 		values[argument.Name] = argument.Value
 	}
 	return values, nil
+}
+
+func (result ReviewTargetStatusResult) validateIntendedUntrackedSelectionTransition() error {
+	transition := result.NextTransition
+	if transition.Kind != reviewNextTransitionCollect || transition.Collect == nil || len(transition.Collect.Inputs) != 1 {
+		return errors.New("fresh target lacks an intended-untracked selection transition") // refusal:by-design world-action: only provider code can restore a malformed transition
+	}
+	input := transition.Collect.Inputs[0]
+	wantPrefix := reviewTargetArguments(result)
+	if input.Name != "intended_untracked_selection" || input.Schema != reviewIntendedUntrackedSelectionSchema || input.CaptureOperation != "external.select_intended_untracked" || input.Submission != nil || len(input.Arguments) != len(wantPrefix)+2 || !reflect.DeepEqual(input.Arguments[:len(wantPrefix)], wantPrefix) || input.Arguments[len(wantPrefix)].Name != "eligible_paths_json" || input.Arguments[len(wantPrefix)+1].Name != "expected_untracked_inventory" {
+		return errors.New("fresh target lacks an intended-untracked selection transition") // refusal:by-design world-action: only provider code can restore a malformed transition
+	}
+	return nil
 }
 
 func validateReviewTransitionExecution(execution ReviewTransitionExecution, arguments map[string]string) error {

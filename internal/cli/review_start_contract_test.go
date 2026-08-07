@@ -894,9 +894,14 @@ func TestNegotiatedReviewStartSchemaAndFixtureAreStrict(t *testing.T) {
 
 func runNegotiatedReviewStart(t *testing.T, repo, lineage string) ReviewIntegrationStartResult {
 	t.Helper()
+	_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	var output bytes.Buffer
 	if err := RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage,
+		"--untracked-scope=exclude", "--expected-untracked-inventory=" + digest,
 	}), &output); err != nil {
 		t.Fatal(err)
 	}

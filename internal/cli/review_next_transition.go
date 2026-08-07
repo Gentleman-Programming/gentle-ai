@@ -144,7 +144,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 					Arguments: reviewTargetArguments(status),
 				})
 			}
-			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage, input.RuntimeAgent), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
+			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage, input.RuntimeAgent, input.IntendedUntracked), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
 		case reviewtransaction.TargetApplicabilityAmbiguous:
 			return reviewCollectTransition("lineage_selection_required", ReviewTransitionInput{
 				Name: "lineage_selection", Schema: "gentle-ai.review-lineage-selection/v1", CaptureOperation: "external.select_lineage",
@@ -476,6 +476,7 @@ type reviewNextTransitionInput struct {
 	CorrectionForecasted                           bool
 	CaptureContext                                 *reviewCaptureContext
 	Selector                                       *reviewTransitionSelector
+	IntendedUntracked                              reviewIntendedUntrackedScope
 }
 
 const reviewSubmissionValuePlaceholder = "{{value}}"
@@ -576,7 +577,7 @@ type reviewTransitionSelector struct {
 	PrePRRepresentable    bool
 }
 
-func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runtime model.AgentID) []ReviewTransitionArgument {
+func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runtime model.AgentID, intended reviewIntendedUntrackedScope) []ReviewTransitionArgument {
 	contract := status.Contract
 	if contract == "" {
 		contract = ReviewIntegrationContractV1
@@ -601,6 +602,7 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runti
 	if contract == ReviewIntegrationContractV2 {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "consent", Value: string(reviewConsentModeRelay)})
 	}
+	arguments = append(arguments, reviewStartIntendedUntrackedArguments(intended)...)
 	return arguments
 }
 

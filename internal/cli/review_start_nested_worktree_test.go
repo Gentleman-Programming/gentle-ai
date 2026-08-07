@@ -7,13 +7,6 @@ package cli
 // present and provably excludes the worktree's contents from the frozen
 // changed-path manifest.
 //
-// Issue #2394 removed the second half of the original story. START no longer
-// enumerates untracked workspace content at all, so neither a nested worktree
-// nor an embedded foreign repository can reach the candidate, and the
-// untracked-scope refusal that used to fire here has nothing left to refuse.
-// The refusal still exists where the question is still asked: the delivery
-// gates, which do inspect the live worktree.
-
 import (
 	"bytes"
 	"encoding/json"
@@ -55,13 +48,7 @@ func TestReviewStartExcludesNestedWorktreeFromFrozenManifest(t *testing.T) {
 	}
 }
 
-// TestNegotiatedReviewStartIgnoresEmbeddedForeignRepository replaces the test
-// that pinned the opposite outcome. An embedded foreign clone used to block
-// START, because the sweep tried to make its directory part of the candidate
-// and Git refuses to enumerate inside it. #2394 stopped the sweep, so an
-// embedded clone is now ordinary undeclared workspace content: START succeeds
-// and the clone never appears in the frozen manifest.
-func TestNegotiatedReviewStartIgnoresEmbeddedForeignRepository(t *testing.T) {
+func TestNegotiatedReviewStartRefusesEmbeddedForeignRepository(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	runReviewCLIGit(t, repo, "init", "-q", filepath.Join(repo, "vendor", "embedded"))
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
@@ -69,20 +56,8 @@ func TestNegotiatedReviewStartIgnoresEmbeddedForeignRepository(t *testing.T) {
 	var output bytes.Buffer
 	if err := RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", "embedded-repository-2394",
-	}), &output); err != nil {
-		t.Fatalf("negotiated review start beside an embedded foreign repository: %v\n%s", err, output.String())
-	}
-	result := decodeNegotiatedReviewStart(t, output.Bytes())
-	if result.ChangedPathManifest == nil {
-		t.Fatalf("negotiated START carries no changed-path manifest:\n%s", output.String())
-	}
-	for _, entry := range *result.ChangedPathManifest {
-		if strings.HasPrefix(entry.Path, "vendor/") {
-			t.Fatalf("frozen manifest admitted embedded repository content %q", entry.Path)
-		}
-	}
-	if len(*result.ChangedPathManifest) != 1 || (*result.ChangedPathManifest)[0].Path != "tracked.txt" {
-		t.Fatalf("frozen manifest = %#v, want only the declared change", *result.ChangedPathManifest)
+	}), &output); err == nil {
+		t.Fatal("negotiated review start admitted an embedded foreign repository")
 	}
 }
 func TestReviewStartKeepsSiblingLinkedWorktreeWorking(t *testing.T) {

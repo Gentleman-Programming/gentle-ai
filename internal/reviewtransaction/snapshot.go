@@ -654,6 +654,43 @@ func (builder SnapshotBuilder) DiscoverUnignoredUntracked(ctx context.Context) (
 	return canonical, nil
 }
 
+func (builder SnapshotBuilder) IntendedUntrackedInventory(ctx context.Context) ([]string, string, error) {
+	paths, err := builder.DiscoverUnignoredUntracked(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	hash := sha256.New()
+	hash.Write([]byte("gentle-ai.intended-untracked-inventory/v1\x00"))
+	for _, path := range paths {
+		writeLengthPrefixed(hash, []byte(path))
+	}
+	return paths, "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Context, expectedDigest string, selected []string) ([]string, error) {
+	paths, digest, err := builder.IntendedUntrackedInventory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if digest != expectedDigest {
+		return nil, errors.New("untracked inventory changed; rerun `gentle-ai review status --next-transition`")
+	}
+	selected, err = canonicalPaths(selected)
+	if err != nil {
+		return nil, err
+	}
+	eligible := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		eligible[path] = true
+	}
+	for _, path := range selected {
+		if !eligible[path] {
+			return nil, fmt.Errorf("intended-untracked path %q is not in the eligible inventory; rerun `gentle-ai review status --next-transition`", path)
+		}
+	}
+	return selected, nil
+}
+
 // UntrackedScopeRefusalError marks a working-tree shape that untracked-scope
 // discovery refuses as a NAMED, anticipated condition: an embedded foreign
 // repository, or an untracked path Git reported that cannot be addressed as
