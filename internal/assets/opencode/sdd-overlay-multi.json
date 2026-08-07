@@ -52,7 +52,14 @@
         "read": true,
         "write": true,
         "edit": true,
-        "bash": true
+        "bash": true,
+        "engram_mem_save": true,
+        "engram_mem_search": true,
+        "engram_mem_get_observation": true,
+        "engram_mem_context": true,
+        "engram_mem_current_project": true,
+        "engram_mem_session_summary": true,
+        "engram_mem_suggest_topic_key": true
       }
     },
     "sdd-explore": {
@@ -64,7 +71,14 @@
         "read": true,
         "write": true,
         "edit": true,
-        "bash": true
+        "bash": true,
+        "engram_mem_save": true,
+        "engram_mem_search": true,
+        "engram_mem_get_observation": true,
+        "engram_mem_context": true,
+        "engram_mem_current_project": true,
+        "engram_mem_session_summary": true,
+        "engram_mem_suggest_topic_key": true
       }
     },
     "sdd-propose": {
@@ -76,7 +90,14 @@
         "read": true,
         "write": true,
         "edit": true,
-        "bash": true
+        "bash": true,
+        "engram_mem_save": true,
+        "engram_mem_search": true,
+        "engram_mem_get_observation": true,
+        "engram_mem_context": true,
+        "engram_mem_current_project": true,
+        "engram_mem_session_summary": true,
+        "engram_mem_suggest_topic_key": true
       }
     },
     "sdd-spec": {
@@ -88,7 +109,14 @@
         "read": true,
         "write": true,
         "edit": true,
-        "bash": true
+        "bash": true,
+        "engram_mem_save": true,
+        "engram_mem_search": true,
+        "engram_mem_get_observation": true,
+        "engram_mem_context": true,
+        "engram_mem_current_project": true,
+        "engram_mem_session_summary": true,
+        "engram_mem_suggest_topic_key": true
       }
     },
     "sdd-design": {
@@ -100,7 +128,14 @@
         "read": true,
         "write": true,
         "edit": true,
-        "bash": true
+        "bash": true,
+        "engram_mem_save": true,
+        "engram_mem_search": true,
+        "engram_mem_get_observation": true,
+        "engram_mem_context": true,
+        "engram_mem_current_project": true,
+        "engram_mem_session_summary": true,
+        "engram_mem_suggest_topic_key": true
       }
     },
     "sdd-tasks": {
@@ -112,7 +147,14 @@
         "read": true,
         "write": true,
         "edit": true,
-        "bash": true
+        "bash": true,
+        "engram_mem_save": true,
+        "engram_mem_search": true,
+        "engram_mem_get_observation": true,
+        "engram_mem_context": true,
+        "engram_mem_current_project": true,
+        "engram_mem_session_summary": true,
+        "engram_mem_suggest_topic_key": true
       }
     },
     "sdd-apply": {
@@ -124,7 +166,14 @@
         "read": true,
         "write": true,
         "edit": true,
-        "bash": true
+        "bash": true,
+        "engram_mem_save": true,
+        "engram_mem_search": true,
+        "engram_mem_get_observation": true,
+        "engram_mem_context": true,
+        "engram_mem_current_project": true,
+        "engram_mem_session_summary": true,
+        "engram_mem_suggest_topic_key": true
       }
     },
     "sdd-verify": {
@@ -136,7 +185,14 @@
         "read": true,
         "write": true,
         "edit": true,
-        "bash": true
+        "bash": true,
+        "engram_mem_save": true,
+        "engram_mem_search": true,
+        "engram_mem_get_observation": true,
+        "engram_mem_context": true,
+        "engram_mem_current_project": true,
+        "engram_mem_session_summary": true,
+        "engram_mem_suggest_topic_key": true
       }
     },
     "sdd-archive": {
@@ -148,7 +204,14 @@
         "read": true,
         "write": true,
         "edit": true,
-        "bash": true
+        "bash": true,
+        "engram_mem_save": true,
+        "engram_mem_search": true,
+        "engram_mem_get_observation": true,
+        "engram_mem_context": true,
+        "engram_mem_current_project": true,
+        "engram_mem_session_summary": true,
+        "engram_mem_suggest_topic_key": true
       }
     },
     "sdd-onboard": {
@@ -160,7 +223,14 @@
         "read": true,
         "write": true,
         "edit": true,
-        "bash": true
+        "bash": true,
+        "engram_mem_save": true,
+        "engram_mem_search": true,
+        "engram_mem_get_observation": true,
+        "engram_mem_context": true,
+        "engram_mem_current_project": true,
+        "engram_mem_session_summary": true,
+        "engram_mem_suggest_topic_key": true
       }
     },
     "jd-judge-a": {
@@ -192,7 +262,14 @@
         "read": true,
         "write": true,
         "edit": true,
-        "bash": true
+        "bash": true,
+        "engram_mem_save": true,
+        "engram_mem_search": true,
+        "engram_mem_get_observation": true,
+        "engram_mem_context": true,
+        "engram_mem_current_project": true,
+        "engram_mem_session_summary": true,
+        "engram_mem_suggest_topic_key": true
       }
     },
     "review-risk": {

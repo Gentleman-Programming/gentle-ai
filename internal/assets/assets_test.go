@@ -1842,6 +1842,56 @@ func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 	}
 }
 
+// TestOpenCodeSDDOverlaySubagentsHaveEngramTools guards against SDD subagents
+// missing Engram MCP tools. Without them, subagents cannot persist or read
+// SDD artifacts when the artifact store is Engram, causing silent failures
+// (issue #2710). Related: #602 (Pi), #1976 (Claude Code).
+func TestOpenCodeSDDOverlaySubagentsHaveEngramTools(t *testing.T) {
+	engramTools := []string{
+		"engram_mem_save",
+		"engram_mem_search",
+		"engram_mem_get_observation",
+		"engram_mem_context",
+		"engram_mem_current_project",
+		"engram_mem_session_summary",
+		"engram_mem_suggest_topic_key",
+	}
+	sddPhases := []string{
+		"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design",
+		"sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard",
+		// jd-fix-agent shares the same tools block as SDD phases in both
+		// overlays and receives Engram tools through the same replaceAll edit.
+		"jd-fix-agent",
+	}
+	for _, assetPath := range []string{"opencode/sdd-overlay-single.json", "opencode/sdd-overlay-multi.json"} {
+		t.Run(assetPath, func(t *testing.T) {
+			var root map[string]any
+			if err := json.Unmarshal([]byte(MustRead(assetPath)), &root); err != nil {
+				t.Fatalf("Unmarshal(%q) error = %v", assetPath, err)
+			}
+			agents, ok := root["agent"].(map[string]any)
+			if !ok {
+				t.Fatalf("%q missing agent map", assetPath)
+			}
+			for _, phase := range sddPhases {
+				agentDef, ok := agents[phase].(map[string]any)
+				if !ok {
+					t.Fatalf("%q missing %s agent", assetPath, phase)
+				}
+				tools, ok := agentDef["tools"].(map[string]any)
+				if !ok {
+					t.Fatalf("%q %s missing tools block", assetPath, phase)
+				}
+				for _, tool := range engramTools {
+					if tools[tool] != true {
+						t.Errorf("%q %s missing required Engram tool %q — subagent cannot persist artifacts to Engram", assetPath, phase, tool)
+					}
+				}
+			}
+		})
+	}
+}
+
 // TestCommandsDoNotUseEchoNPwd guards against the nested-subshell pattern
 // `echo -n "$(pwd)"` (and the basename variant) that causes Claude Code v2.1.113+
 // to reject slash commands with "Unhandled node type: string". Use the plain pwd
