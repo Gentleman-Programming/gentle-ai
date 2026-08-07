@@ -36,15 +36,10 @@ func intendedUntrackedSelection(t *testing.T, status ReviewTargetStatusResult) (
 	if err := json.Unmarshal([]byte(arguments["eligible_paths_json"]), &paths); err != nil {
 		t.Fatal(err)
 	}
-	digest := arguments["expected_untracked_inventory"]
-	if digest == "" {
-		t.Fatal("selection input omits the expected inventory digest")
-	}
-	return digest, paths
+	return arguments["expected_untracked_inventory"], paths
 }
 func assertNoUntrackedSelectionAuthority(t *testing.T, repo string) {
-	stores, err := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
-	if err != nil || len(stores) != 0 {
+	if stores, err := reviewtransaction.DiscoverCompactStores(context.Background(), repo); err != nil || len(stores) != 0 {
 		t.Fatalf("incomplete untracked intent created authority: err=%v stores=%#v", err, stores)
 	}
 }
@@ -52,8 +47,7 @@ func TestIntendedUntrackedSelectionRequiresExplicitIntentBeforeAuthority(t *test
 	repo := initReviewCLIRepo(t)
 	writeUndeclaredWorkspaceFile(t, repo, "candidate, with space.txt", "candidate\n", 0o644)
 	writeUndeclaredWorkspaceFile(t, repo, unrelatedCredentialPath, unrelatedCredentialContents, 0o600)
-	status := intendedUntrackedStatus(t, repo)
-	digest, inventory := intendedUntrackedSelection(t, status)
+	digest, inventory := intendedUntrackedSelection(t, intendedUntrackedStatus(t, repo))
 	if !containsString(inventory, "candidate, with space.txt") || !containsString(inventory, unrelatedCredentialPath) || strings.Contains(strings.Join(inventory, "\n"), unrelatedCredentialMarker) {
 		t.Fatalf("selection inventory = %q, want canonical paths but no candidate bytes", inventory)
 	}

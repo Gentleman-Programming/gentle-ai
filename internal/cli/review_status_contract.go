@@ -715,16 +715,16 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 
 func (result ReviewTargetStatusResult) validateIntendedUntrackedSelectionTransition() error {
 	if result.NextTransition.Collect == nil || len(result.NextTransition.Collect.Inputs) != 1 {
-		return errors.New("fresh target lacks an intended-untracked selection transition")
+		return errors.New("fresh target lacks an intended-untracked selection transition") // refusal:by-design world-action: only provider code can restore the malformed transition binding
 	}
 	input := result.NextTransition.Collect.Inputs[0]
 	if input.Name != "intended_untracked_selection" || input.Schema != reviewIntendedUntrackedSelectionSchema ||
 		input.CaptureOperation != "external.select_intended_untracked" || input.Submission != nil || len(input.Arguments) != 6 {
-		return errors.New("fresh target lacks an intended-untracked selection transition")
+		return errors.New("fresh target lacks an intended-untracked selection transition") // refusal:by-design world-action: only provider code can restore the malformed transition binding
 	}
 	if !reflect.DeepEqual(input.Arguments[:4], reviewTargetArguments(result)) || input.Arguments[4].Name != "eligible_paths_json" ||
 		input.Arguments[5].Name != "expected_untracked_inventory" || input.Arguments[5].Value == "" {
-		return errors.New("fresh target lacks an intended-untracked selection transition")
+		return errors.New("fresh target lacks an intended-untracked selection transition") // refusal:by-design world-action: only provider code can restore the malformed transition binding
 	}
 	return nil
 }

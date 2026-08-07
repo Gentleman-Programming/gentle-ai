@@ -28,17 +28,16 @@ type reviewSingleValueFlag struct {
 func (flag *reviewSingleValueFlag) String() string { return flag.value }
 func (flag *reviewSingleValueFlag) Set(value string) error {
 	if flag.set {
-		return errors.New("untracked scope flags may only be specified once")
+		return errors.New("untracked scope flags may only be specified once") // refusal:by-design operator-knowledge: remove the ambiguous duplicate declaration before retrying
 	}
 	flag.value, flag.set = value, true
 	return nil
 }
 
 type reviewIntendedUntrackedScope struct {
-	Inventory, Intended []string
-	Digest              string
-	NeedsSelection      bool
-	Declared            bool
+	Inventory, Intended      []string
+	Digest                   string
+	NeedsSelection, Declared bool
 }
 
 func reviewIntendedUntrackedScopeForTarget(ctx context.Context, builder reviewtransaction.SnapshotBuilder, mode string, modeProvided bool, selected []string, expectedDigest string, digestProvided bool) (reviewIntendedUntrackedScope, error) {
@@ -55,19 +54,19 @@ func reviewIntendedUntrackedScopeForTarget(ctx context.Context, builder reviewtr
 		return scope, nil
 	}
 	if !modeProvided || !digestProvided {
-		return reviewIntendedUntrackedScope{}, errors.New("untracked selection requires --untracked-scope and --expected-untracked-inventory")
+		return reviewIntendedUntrackedScope{}, errors.New("untracked selection requires --untracked-scope and --expected-untracked-inventory; rerun `gentle-ai review status --next-transition`")
 	}
 	switch mode {
 	case "exclude":
 		if len(selected) != 0 {
-			return reviewIntendedUntrackedScope{}, errors.New("--untracked-scope=exclude does not accept --intended-untracked")
+			return reviewIntendedUntrackedScope{}, errors.New("--untracked-scope=exclude does not accept --intended-untracked; rerun `gentle-ai review start --untracked-scope=select`")
 		}
 	case "select":
 		if len(selected) == 0 {
-			return reviewIntendedUntrackedScope{}, errors.New("--untracked-scope=select requires at least one --intended-untracked")
+			return reviewIntendedUntrackedScope{}, errors.New("--untracked-scope=select requires at least one --intended-untracked; rerun `gentle-ai review start --untracked-scope=exclude`")
 		}
 	default:
-		return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope must be exclude or select, got %q", mode)
+		return reviewIntendedUntrackedScope{}, fmt.Errorf("--untracked-scope must be exclude or select, got %q; rerun `gentle-ai review status --next-transition`", mode)
 	}
 	intended, err := builder.ValidateIntendedUntrackedSelection(ctx, expectedDigest, selected)
 	if err != nil {
@@ -76,11 +75,9 @@ func reviewIntendedUntrackedScopeForTarget(ctx context.Context, builder reviewtr
 	scope.Intended = intended
 	return scope, nil
 }
-
 func reviewIntendedUntrackedSelectionRequired(scope reviewIntendedUntrackedScope) error {
-	return fmt.Errorf("untracked files require an explicit declaration; rerun with --untracked-scope=exclude --expected-untracked-inventory=%s or --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s", scope.Digest, scope.Digest)
+	return fmt.Errorf("untracked files require an explicit declaration; run `gentle-ai review status --next-transition`, then rerun with --untracked-scope=exclude --expected-untracked-inventory=%s or --untracked-scope=select --intended-untracked=<repo-relative-path> --expected-untracked-inventory=%s", scope.Digest, scope.Digest)
 }
-
 func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope reviewIntendedUntrackedScope) ReviewNextTransition {
 	paths, _ := json.Marshal(scope.Inventory)
 	return reviewCollectTransition("intended_untracked_selection_required", ReviewTransitionInput{
@@ -91,7 +88,6 @@ func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope re
 			ReviewTransitionArgument{Name: "expected_untracked_inventory", Value: scope.Digest}),
 	})
 }
-
 func reviewStartIntendedUntrackedArguments(scope reviewIntendedUntrackedScope) []ReviewTransitionArgument {
 	if !scope.Declared {
 		return nil

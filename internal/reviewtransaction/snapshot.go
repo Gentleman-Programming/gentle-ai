@@ -614,6 +614,10 @@ func (builder SnapshotBuilder) ResolveRepositoryRoot(ctx context.Context) (strin
 // callers that mean "what did the user submit" must not call this. The
 // remaining callers ask a different question: what is untracked right now.
 func (builder SnapshotBuilder) DiscoverUnignoredUntracked(ctx context.Context) ([]string, error) {
+	return builder.discoverUnignoredUntracked(ctx, true)
+}
+
+func (builder SnapshotBuilder) discoverUnignoredUntracked(ctx context.Context, rejectForeignNestedRepositories bool) ([]string, error) {
 	root, err := builder.ResolveRepositoryRoot(ctx)
 	if err != nil {
 		return nil, err
@@ -642,7 +646,7 @@ func (builder SnapshotBuilder) DiscoverUnignoredUntracked(ctx context.Context) (
 		}
 		paths = append(paths, value)
 	}
-	if len(nestedRepositories) != 0 {
+	if rejectForeignNestedRepositories && len(nestedRepositories) != 0 {
 		if err := excludeRegisteredNestedWorktrees(ctx, root, nestedRepositories); err != nil {
 			return nil, err
 		}
@@ -654,10 +658,9 @@ func (builder SnapshotBuilder) DiscoverUnignoredUntracked(ctx context.Context) (
 	return canonical, nil
 }
 
-// IntendedUntrackedInventory returns the canonical eligible paths and the
-// digest a caller must bind an explicit selection to.
+// IntendedUntrackedInventory returns canonical eligible paths and their digest.
 func (builder SnapshotBuilder) IntendedUntrackedInventory(ctx context.Context) ([]string, string, error) {
-	paths, err := builder.DiscoverUnignoredUntracked(ctx)
+	paths, err := builder.discoverUnignoredUntracked(ctx, false)
 	if err != nil {
 		return nil, "", err
 	}
@@ -672,7 +675,7 @@ func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Co
 		return nil, err
 	}
 	if expectedDigest != digest {
-		return nil, errors.New("untracked inventory changed; refresh review status before selecting paths")
+		return nil, errors.New("untracked inventory changed; rerun `gentle-ai review status --next-transition` before selecting paths")
 	}
 	selected, err = canonicalPaths(selected)
 	if err != nil {
@@ -684,7 +687,7 @@ func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Co
 	}
 	for _, path := range selected {
 		if _, ok := eligible[path]; !ok {
-			return nil, fmt.Errorf("intended-untracked path %q is not in the current eligible inventory", path)
+			return nil, fmt.Errorf("intended-untracked path %q is not in the current eligible inventory; rerun `gentle-ai review status --next-transition`", path)
 		}
 	}
 	return selected, nil
