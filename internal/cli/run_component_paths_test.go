@@ -380,6 +380,10 @@ func TestComponentPathsContext7ClaudeUsesUserRegistry(t *testing.T) {
 	}
 }
 
+// TestComponentPathsContext7ClaudeRespectsWorkspaceScope pins workspace-scoped
+// Claude Context7 to <workspace>/.mcp.json, the project-scoped file Claude Code
+// loads MCP servers from (issue #2213). The inert settings.json merge is never
+// written, so verifying it would fail on a healthy install.
 func TestComponentPathsContext7ClaudeRespectsWorkspaceScope(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -387,9 +391,17 @@ func TestComponentPathsContext7ClaudeRespectsWorkspaceScope(t *testing.T) {
 
 	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{}, adapters, model.ComponentContext7)
 
-	want := filepath.Join(workspace, ".claude", "settings.json")
+	want := filepath.Join(workspace, ".mcp.json")
 	if !containsPath(paths, want) {
 		t.Fatalf("componentPathsWithWorkspaceScoped(context7,claude) with ScopeWorkspace missing %q\npaths=%v", want, paths)
+	}
+	for _, absent := range []string{
+		filepath.Join(workspace, ".claude", "settings.json"),
+		filepath.Join(home, ".claude.json"),
+	} {
+		if containsPath(paths, absent) {
+			t.Fatalf("componentPathsWithWorkspaceScoped(context7,claude) with ScopeWorkspace must not require %q\npaths=%v", absent, paths)
+		}
 	}
 }
 

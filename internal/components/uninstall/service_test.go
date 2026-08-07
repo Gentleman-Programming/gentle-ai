@@ -343,6 +343,66 @@ func TestExecutePlanReportsManualCleanupForNonEmptyDirectory(t *testing.T) {
 	}
 }
 
+// TestComponentOperationsContext7ClaudeWorkspaceScopeRemovesMCPJsonEntry
+// verifies that workspace-scoped uninstall removes the managed context7 entry
+// from <workspace>/.mcp.json and the legacy inert settings.json block while
+// preserving unrelated servers (issue #2213).
+func TestComponentOperationsContext7ClaudeWorkspaceScopeRemovesMCPJsonEntry(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("Claude adapter not found in registry")
+	}
+
+	workspaceMCPPath := filepath.Join(workspaceDir, ".mcp.json")
+	workspaceSettingsPath := adapter.SettingsPath(workspaceDir)
+	if err := os.MkdirAll(filepath.Dir(workspaceSettingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	if err := os.WriteFile(workspaceMCPPath, []byte(`{"mcpServers":{"context7":{"command":"npx"},"codegraph":{"command":"codegraph"}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(workspace mcp.json) error = %v", err)
+	}
+	if err := os.WriteFile(workspaceSettingsPath, []byte(`{"theme":"dark","mcpServers":{"context7":{"command":"npx"}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(workspace settings) error = %v", err)
+	}
+
+	ops, targets, err := svc.componentOperations(adapter, model.ComponentContext7)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+	if !slices.Contains(targets, workspaceMCPPath) || !slices.Contains(targets, workspaceSettingsPath) {
+		t.Fatalf("targets = %#v, want workspace mcp.json and settings paths", targets)
+	}
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("operation %v on %q error = %v", op.typeID, op.path, err)
+		}
+	}
+
+	mcp := readJSONFileForTest(t, workspaceMCPPath)
+	mcpServers := mcp["mcpServers"].(map[string]any)
+	if _, ok := mcpServers["context7"]; ok {
+		t.Fatalf("workspace mcp.json still contains mcpServers.context7: %#v", mcp)
+	}
+	if _, ok := mcpServers["codegraph"]; !ok {
+		t.Fatalf("workspace mcp.json lost unrelated mcpServers.codegraph: %#v", mcp)
+	}
+
+	settings := readJSONFileForTest(t, workspaceSettingsPath)
+	if _, ok := settings["mcpServers"]; ok {
+		t.Fatalf("workspace settings still contains inert mcpServers block: %#v", settings)
+	}
+	if settings["theme"] != "dark" {
+		t.Fatalf("workspace settings lost theme: %#v", settings)
+	}
+}
+
 func TestComponentOperationsContext7ClaudeRemovesSettingsAndManagedLegacyFile(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()

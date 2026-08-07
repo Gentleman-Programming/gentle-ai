@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -22,7 +23,8 @@ type InjectionResult struct {
 // scoped injection root (the home directory for user scope, the workspace for
 // workspace scope). Claude Code user-scope registration goes to ~/.claude.json,
 // the only user-scope file Claude Code reads MCP servers from (issue #1868);
-// workspace scope keeps the scoped settings merge.
+// workspace scope writes <workspace>/.mcp.json, the project-scoped file Claude
+// Code loads MCP servers from (issue #2213).
 func Inject(homeDir, targetDir string, adapter agents.Adapter) (InjectionResult, error) {
 	if !adapter.SupportsMCP() {
 		return InjectionResult{}, nil
@@ -34,7 +36,7 @@ func Inject(homeDir, targetDir string, adapter agents.Adapter) (InjectionResult,
 			if targetDir == homeDir {
 				return injectClaudeUserConfig(homeDir, adapter)
 			}
-			return injectMergeIntoSettings(targetDir, adapter)
+			return injectClaudeWorkspaceConfig(targetDir, adapter)
 		}
 		return injectSeparateFile(targetDir, adapter)
 	case model.StrategyMergeIntoSettings:
@@ -279,10 +281,35 @@ func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionRe
 	return InjectionResult{Changed: changed, Files: files}, nil
 }
 
+// injectClaudeWorkspaceConfig registers Context7 in <workspace>/.mcp.json, the
+// project-scoped file Claude Code loads MCP servers from — settings.json
+// silently ignores the top-level mcpServers key earlier versions wrote
+// (issue #2213). Unrelated servers in the file are preserved by the merge.
+func injectClaudeWorkspaceConfig(workspaceDir string, adapter agents.Adapter) (InjectionResult, error) {
+	mcpPath := filepath.Join(workspaceDir, ".mcp.json")
+
+	writeResult, err := mergeJSONFile(mcpPath, DefaultContext7OverlayJSON())
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	changed := writeResult.Changed
+	files := []string{mcpPath}
+	// Best-effort: the block is inert, so a settings.json that cannot be
+	// rewritten must not fail the injection that already succeeded above.
+	settingsPath := adapter.SettingsPath(workspaceDir)
+	if settingsChanged, cleanupErr := removeInertSettingsMCPServers(settingsPath); cleanupErr == nil && settingsChanged {
+		changed = true
+		files = append(files, settingsPath)
+	}
+
+	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
 // removeInertSettingsMCPServers deletes the inert top-level mcpServers key
-// from settings.json once the real registration lives in ~/.claude.json —
-// but only when the block holds nothing beyond the managed context7 entry.
-// An unparsable settings file is left untouched.
+// from settings.json once the real registration lives in ~/.claude.json or
+// <workspace>/.mcp.json — but only when the block holds nothing beyond the
+// managed context7 entry. An unparsable settings file is left untouched.
 // isManagedSettingsContext7Entry reports whether the inert settings.json entry
 // matches the managed shape, so cleanup never deletes a user-authored server.
 func isManagedSettingsContext7Entry(entry any) bool {
