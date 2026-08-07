@@ -175,7 +175,7 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 		return fail(ArtifactAdmissionIncomplete, "reviewer did not report completed candidate inspection")
 	}
 	inspectionPaths, err := canonicalPaths(request.Inspection.Paths)
-	if err != nil || !equalStrings(inspectionPaths, request.Inspection.Paths) {
+	if err != nil {
 		return fail(ArtifactAdmissionOutOfScope, "reviewer inspection paths are not canonical candidate paths")
 	}
 	for _, path := range inspectionPaths {

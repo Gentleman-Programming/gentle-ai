@@ -143,6 +143,15 @@ func TestArtifactAdmissionCandidateCausalCanonicalization(t *testing.T) {
 			t.Fatalf("admission.CandidateCausalFindingIDs = %v, want canonical [R3-001]", admission.CandidateCausalFindingIDs)
 		}
 	})
+	t.Run("unsorted inspection paths covering manifest admit cleanly", func(t *testing.T) {
+		request := admittedCandidateCausalArtifactFixture(t)
+		request.CandidateCausalFindingIDs = []string{"R3-001"}
+		request.Inspection.Paths = []string{"internal/b.go", "internal/a.go"}
+		_, admission, err := AdmitArtifact(request)
+		if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+			t.Fatalf("AdmitArtifact() = %q, %v; want completed", admission.Decision, err)
+		}
+	})
 	t.Run("canonicalization error becomes incomplete and names the offending id", func(t *testing.T) {
 		request := admittedCandidateCausalArtifactFixture(t)
 		request.CandidateCausalFindingIDs = []string{"R3-001", "R3-001"}
