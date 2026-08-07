@@ -339,12 +339,22 @@ func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func(
 	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte(config), 0o600); err != nil {
 		return fail(err)
 	}
+	// Create empty config files instead of using os.DevNull. On Windows,
+	// os.DevNull resolves to "NUL" which Git for Windows rejects as a
+	// config-file path (exit code 128: "unable to access 'NUL': Invalid
+	// argument"). Empty regular files preserve the isolation boundary while
+	// working on every platform. These files live inside gitDir which is
+	// already removed by the cleanup function.
+	emptyConfig := filepath.Join(gitDir, "empty-git-config")
+	if err := os.WriteFile(emptyConfig, nil, 0o600); err != nil {
+		return fail(err)
+	}
 	return []string{
 		"GIT_DIR=" + gitDir,
 		"GIT_OBJECT_DIRECTORY=" + filepath.Join(identity.GitCommonDir, "objects"),
 		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_SYSTEM=" + os.DevNull,
-		"GIT_CONFIG_GLOBAL=" + os.DevNull,
+		"GIT_CONFIG_SYSTEM=" + emptyConfig,
+		"GIT_CONFIG_GLOBAL=" + emptyConfig,
 		"GIT_CONFIG_COUNT=0",
 		"GIT_ATTR_NOSYSTEM=1",
 		"LANG=C",

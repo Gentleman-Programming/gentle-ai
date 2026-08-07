@@ -404,6 +404,36 @@ func TestGitAuthorityPathHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
+func TestIsolatedImmutableTreeGitUsesEmptyFilesInsteadOfDevNull(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	isolation, cleanup, err := isolatedImmutableTreeGit(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+
+	for _, env := range isolation {
+		for _, prefix := range []string{"GIT_CONFIG_SYSTEM=", "GIT_CONFIG_GLOBAL="} {
+			if !strings.HasPrefix(env, prefix) {
+				continue
+			}
+			path := strings.TrimPrefix(env, prefix)
+			if path == os.DevNull {
+				t.Errorf("isolation env %s still uses os.DevNull (%q); want an empty regular file", prefix, os.DevNull)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Errorf("isolation env %s points to inaccessible path %q: %v", prefix, path, err)
+				continue
+			}
+			if info.IsDir() {
+				t.Errorf("isolation env %s points to directory %q; want a regular file", prefix, path)
+			}
+		}
+	}
+}
+
 func slicesContain(values []string, target string) bool {
 	for _, value := range values {
 		if strings.EqualFold(value, target) {
