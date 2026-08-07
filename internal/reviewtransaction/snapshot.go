@@ -654,6 +654,51 @@ func (builder SnapshotBuilder) DiscoverUnignoredUntracked(ctx context.Context) (
 	return canonical, nil
 }
 
+// IntendedUntrackedInventory returns the canonical eligible paths and the
+// digest a caller must bind an explicit selection to.
+func (builder SnapshotBuilder) IntendedUntrackedInventory(ctx context.Context) ([]string, string, error) {
+	paths, err := builder.DiscoverUnignoredUntracked(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	return paths, intendedUntrackedInventoryDigest(paths), nil
+}
+
+// ValidateIntendedUntrackedSelection proves a supplied selection still names
+// only paths in the current eligible inventory.
+func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Context, expectedDigest string, selected []string) ([]string, error) {
+	paths, digest, err := builder.IntendedUntrackedInventory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if expectedDigest != digest {
+		return nil, errors.New("untracked inventory changed; refresh review status before selecting paths")
+	}
+	selected, err = canonicalPaths(selected)
+	if err != nil {
+		return nil, err
+	}
+	eligible := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		eligible[path] = struct{}{}
+	}
+	for _, path := range selected {
+		if _, ok := eligible[path]; !ok {
+			return nil, fmt.Errorf("intended-untracked path %q is not in the current eligible inventory", path)
+		}
+	}
+	return selected, nil
+}
+
+func intendedUntrackedInventoryDigest(paths []string) string {
+	hash := sha256.New()
+	writeLengthPrefixed(hash, []byte("gentle-ai.intended-untracked-inventory/v1"))
+	for _, path := range paths {
+		writeLengthPrefixed(hash, []byte(path))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
 // UntrackedScopeRefusalError marks a working-tree shape that untracked-scope
 // discovery refuses as a NAMED, anticipated condition: an embedded foreign
 // repository, or an untracked path Git reported that cannot be addressed as

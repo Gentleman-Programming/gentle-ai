@@ -782,6 +782,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	repairActor := flags.String("repair-actor", "", "authorized classified repair actor")
 	repairReason := flags.String("repair-reason", "", "authorized classified repair reason")
 	repairAuthorization := flags.String("repair-authorization", "", "exact classified repair authorization binding")
+	untrackedScope := reviewSingleValueFlag{}
+	intendedUntracked := reviewRepeatedPathFlag{}
+	expectedUntrackedInventory := reviewSingleValueFlag{}
+	flags.Var(&untrackedScope, "untracked-scope", "explicit untracked scope: exclude or select")
+	flags.Var(&intendedUntracked, "intended-untracked", "repo-relative untracked path to include; repeat for each path")
+	flags.Var(&expectedUntrackedInventory, "expected-untracked-inventory", "sha256 inventory digest from review status")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -854,6 +860,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				target.BaseRef = selectedBaseTree
 			}
 		}
+		intendedScope := reviewIntendedUntrackedScope{}
+		if selectedProjection != reviewtransaction.ProjectionStaged {
+			intendedScope, err = reviewIntendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: root}, untrackedScope.value,
+				untrackedScope.set, intendedUntracked, expectedUntrackedInventory.value, expectedUntrackedInventory.set)
+			if err != nil {
+				return reviewPreflightError(err)
+			}
+			target.IntendedUntracked = intendedScope.Intended
+		}
 		selector := &reviewTransitionSelector{
 			Kind: target.Kind, Projection: selectedProjection, BaseRef: selectedBaseRef,
 			BaseTree: selectedBaseTree, WorkspaceOverlay: *workspaceOverlay, PrePRRepresentable: true,
@@ -871,6 +886,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			return errors.New("--base-tree does not identify an exact Git tree object")
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
+		result.intendedUntracked = intendedScope
 		if native.Applicability == reviewtransaction.TargetApplicabilityCorrupted &&
 			native.Action == reviewtransaction.TargetStatusActionRepairAuthority {
 			repair, repairErr := reviewtransaction.AssessAuthorityRepairAtRepositoryRoot(ctx, root)
@@ -1007,7 +1023,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if startLineage == "" && native.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
 				startLineage = reviewAvailableStartLineage(ctx, root, native.TargetIdentity)
 			}
-			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector})
+			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope})
 			result.NextTransition = &transition
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&
 				transition.ReasonCode != "correction_repository_tooling_failed" {
@@ -1020,6 +1036,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if transition.Kind == reviewNextTransitionStop {
 				reviewNarrateStopReason(transition.ReasonCode, runtime)
 			}
+		}
+		if intendedScope.NeedsSelection {
+			transition := reviewIntendedUntrackedCollection(result, intendedScope)
+			result.NextTransition = &transition
 		}
 		if err := result.Validate(); err != nil {
 			return fmt.Errorf("validate negotiated review status: %w", err)
@@ -1463,6 +1483,12 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	tracePath := flags.String("trace", "", "optional diagnostic operation metadata trace path")
 	consent := flags.String("consent", "", "negotiated consent declaration: relay to receive the typed blocking consent question, granted or declined to answer it for the exact frozen candidate")
 	locale := flags.String("locale", "", "optional consent-envelope locale: en or es")
+	untrackedScope := reviewSingleValueFlag{}
+	intendedUntracked := reviewRepeatedPathFlag{}
+	expectedUntrackedInventory := reviewSingleValueFlag{}
+	flags.Var(&untrackedScope, "untracked-scope", "explicit untracked scope: exclude or select")
+	flags.Var(&intendedUntracked, "intended-untracked", "repo-relative untracked path to include; repeat for each path")
+	flags.Var(&expectedUntrackedInventory, "expected-untracked-inventory", "sha256 inventory digest from review status")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -1540,23 +1566,24 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			return errors.New("review start with --base-ref omits dirty tracked changes; rerun with --committed-only to acknowledge committed-only review scope")
 		}
 	}
-	// Issue #2394: START used to sweep every unignored untracked path in the
-	// worktree into the frozen candidate. Existing on disk is not a
-	// declaration, and the sweep handed a reviewer the exact bytes of files
-	// the user never submitted -- two unrelated credential files, in the
-	// reported occurrence. Review scope is now only what the user declared
-	// through Git's own mechanism: tracked modifications, plus new files put
-	// in the index with `git add`, which the candidate is already built from.
-	// Nothing here has to be configured for that to be safe, because there is
-	// no longer anything to configure: the sweep is gone rather than filtered.
-	intended := []string{}
-	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: intended}
+	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: []string{}}
 	if strings.TrimSpace(*baseRef) != "" {
 		target.Kind = reviewtransaction.TargetBaseDiff
 		target.BaseRef = strings.TrimSpace(*baseRef)
 	}
 	if *workspaceOverlay {
 		target.Kind = reviewtransaction.TargetBaseWorkspaceOverlay
+	}
+	if selectedProjection != reviewtransaction.ProjectionStaged {
+		scope, scopeErr := reviewIntendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: root}, untrackedScope.value,
+			untrackedScope.set, intendedUntracked, expectedUntrackedInventory.value, expectedUntrackedInventory.set)
+		if scopeErr != nil {
+			return reviewPreflightError(scopeErr)
+		}
+		if scope.NeedsSelection {
+			return reviewPreflightError(reviewIntendedUntrackedSelectionRequired(scope))
+		}
+		target.IntendedUntracked = scope.Intended
 	}
 	snapshot, err := reviewFacadeBuildStartSnapshot(ctx, reviewtransaction.SnapshotBuilder{Repo: root}, target)
 	if err != nil {
