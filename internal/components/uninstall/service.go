@@ -649,6 +649,18 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 	case model.ComponentContext7:
 		targets = append(targets, context7Targets(adapter, homeDir)...)
 		ops = append(ops, context7Operations(adapter, homeDir)...)
+		if adapter.Agent() == model.AgentClaudeCode && strings.TrimSpace(s.workspaceDir) != "" && s.workspaceDir != s.homeDir {
+			// Workspace-scoped installs write <workspace>/.mcp.json (issue
+			// #2213). Clean the managed entry there and the legacy inert
+			// settings.json block, preserving unrelated servers.
+			workspaceMCPPath := filepath.Join(s.workspaceDir, ".mcp.json")
+			targets = append(targets, workspaceMCPPath)
+			ops = append(ops, rewriteJSONFile(workspaceMCPPath, jsonPath{"mcpServers", "context7"}))
+			if p := adapter.SettingsPath(s.workspaceDir); p != "" {
+				targets = append(targets, p)
+				ops = append(ops, rewriteJSONFile(p, jsonPath{"mcpServers", "context7"}))
+			}
+		}
 	case model.ComponentEngram:
 		if s.engramUninstallScope == model.EngramUninstallScopeProject {
 			projectDataPath := filepath.Join(s.workspaceDir, ".engram")
