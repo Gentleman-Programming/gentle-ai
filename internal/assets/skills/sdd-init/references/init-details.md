@@ -1,5 +1,26 @@
 # SDD Init Details
 
+## Project Root Discovery
+
+A workspace root without stack markers does not mean the workspace is unclassified — in a monorepo the markers live one or two levels down. Discover roots before classifying anything.
+
+- **Marker files** that define a project root: `package.json`, `go.mod`, `pyproject.toml`, `setup.py`, `requirements.txt`, `Cargo.toml`, `pom.xml`, `build.gradle`, `build.gradle.kts`, `Gemfile`, `composer.json`, `*.csproj`, `*.sln`, `mix.exs`, `pubspec.yaml`.
+- **Depth**: scan the workspace root and up to **two** directory levels below it. Deeper nesting is reported as a limitation rather than scanned, so the cost stays bounded on large trees. A depth-bounded scan can never establish that no marker exists at any depth: report "no marker within the scanned depth" together with the directories actually scanned.
+- **Skip** directories that never hold a first-party project root: `node_modules`, `vendor`, `target`, `dist`, `build`, `.venv`, `venv`, `__pycache__`, `.git`, `.gradle`, `bin`, `obj`, and any path ignored by `.gitignore`.
+- **Workspace-manager roots count once**: when a root declares members (`workspaces` in `package.json`, `[workspace] members` in `Cargo.toml`, `pnpm-workspace.yaml`, `go.work`), use the declared members as the sub-project list instead of re-deriving it from the directory walk.
+- **Declared members outrank both bounds**: a declared member deeper than two levels is still discovered, because reading a declaration costs no walk, and a declared member under a skipped or gitignored path is still discovered, because an explicit declaration beats the heuristic skip list. The skip list still applies **inside** glob expansion, so `packages/*` never yields `packages/node_modules`. A declared member with no directory on disk is reported as a limitation, never dropped silently.
+- **Naming**: the sub-project name is its path relative to the workspace root (`services/api`), not just the leaf, so two `api` directories never collide.
+
+| Discovered | Layout | Persistence shape |
+|---|---|---|
+| marker at workspace root only | single project | one context, one capability set |
+| exactly one marker, in a sub-directory | nested single project | one entry keyed by its relative path, workspace recorded as the container |
+| markers in two or more sub-directories | monorepo | one entry per sub-project, workspace recorded as the container |
+| marker at root **and** in sub-directories | monorepo with a root project | root project plus one entry per sub-project |
+| no marker within the scanned depth | unclassified | report the scanned directories, the depth bound reached, and the skip list applied |
+
+Report per sub-project: relative path, language/stack, test runner, and resolved `strict_tdd`. Never average unlike sub-projects into a single verdict — a Python service with `pytest` and a Rust crate with `cargo test` are two answers, not one.
+
 ## Testing Capability Checklist
 
 - Test runner: `package.json` scripts/deps, `pyproject.toml`, `pytest.ini`, `go.mod`, `Cargo.toml`, `Makefile`.
@@ -39,6 +60,16 @@ mem_save title/topic_key: sdd/{project}/testing-capabilities
 type: config
 content: testing capabilities markdown
 capture_prompt: false when available
+```
+
+In a monorepo, save one capability observation per sub-project and keep the
+workspace-level key as the index that lists them:
+
+```text
+mem_save title/topic_key: sdd/{project}/{sub-project-path}/testing-capabilities
+type: config
+content: testing capabilities markdown for that sub-project
+capture_prompt: false when available
 
 mem_save title/topic_key: skill-registry
 type: config
@@ -57,6 +88,25 @@ openspec/
 ```
 
 `config.yaml` should include concise context, `strict_tdd`, testing capabilities, and phase rules for proposal/spec/design/tasks/apply/verify/archive. Keep `context:` under 10 lines.
+
+For a monorepo, keep the workspace-level `context:` under 10 lines and move the per-sub-project detail into a `projects:` list so unlike stacks stay separable:
+
+```yaml
+context: |
+  workspace is a monorepo with 2 sub-projects.
+strict_tdd: false          # workspace default; each project may override
+projects:
+  - path: a
+    stack: Python
+    testing: { unit: pytest, coverage: pytest-cov }
+    strict_tdd: true
+  - path: b
+    stack: Rust
+    testing: { unit: cargo test }
+    strict_tdd: true
+```
+
+Resolution order for a sub-project's `strict_tdd`: its own entry value or agent marker → the workspace-level default → its detected test runner → `false`. Every entry under `projects:` carries its own `testing:` and `strict_tdd:`, so a workspace default never silently overwrites a sub-project that decided differently.
 
 ## Testing Capabilities Format
 

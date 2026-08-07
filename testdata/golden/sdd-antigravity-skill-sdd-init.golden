@@ -32,6 +32,8 @@ Run this phase when the orchestrator/user asks to initialize SDD in a project. Y
 ## Hard Rules
 
 - Detect the real stack, conventions, architecture, testing tools, and persistence mode; never guess.
+- Discover every project root before classifying: the workspace root plus any bounded-depth directory carrying its own stack marker. A workspace whose markers live only in sub-directories is never "unclassified"; classify it by the number and location of the roots found, not by the bare workspace root.
+- In a monorepo, detect stack, testing capabilities, and Strict TDD **per sub-project**; never collapse unlike sub-projects into one verdict.
 - In `engram` mode, do **not** create `openspec/`.
 - In `openspec` mode, follow `../_shared/openspec-convention.md` and write file artifacts.
 - In `hybrid` mode, write both openspec files and Engram observations.
@@ -48,15 +50,20 @@ Run this phase when the orchestrator/user asks to initialize SDD in a project. Y
 | `mode=openspec` | Create/update openspec bootstrap files only. |
 | `mode=hybrid` | Do both Engram and openspec persistence. |
 | `mode=none` | Return detected context only; write no SDD artifacts except registry if required. |
-| strict TDD marker/config found | Use that value. |
-| no marker/config but test runner exists | Default `strict_tdd: true`. |
+| exactly one project root, at the workspace root | Single-project layout: one context, one capability set. |
+| exactly one project root, in a sub-directory | Nested single project: persist it under its relative path and record the workspace as the container, not as the project. |
+| two or more project roots | Monorepo: detect and persist per sub-project, and record the root as the workspace. |
+| no marker within the scanned depth | Report unclassified **and** list the scanned directories plus the depth bound reached; never claim a deeper marker is absent. |
+| strict TDD marker/config found | Use that value, resolved per sub-project in a monorepo. |
+| no per-project marker/config but workspace default set | Use the workspace `strict_tdd` default for that sub-project. |
+| no marker/config and no workspace default, but test runner exists | Default `strict_tdd: true`. |
 | no test runner | Set `strict_tdd: false` and explain unavailable. |
 
 ## Execution Steps
 
-1. Inspect project files (`package.json`, `go.mod`, `pyproject.toml`, CI, lint/test config) and summarize stack/conventions.
-2. Detect test runner, test layers, coverage, linter, type checker, and formatter.
-3. Resolve Strict TDD from agent marker, `openspec/config.yaml`, detected runner fallback, or no-runner fallback.
+1. Discover project roots with the marker and depth rules in `references/init-details.md`, then inspect each root's files (`package.json`, `go.mod`, `pyproject.toml`, `Cargo.toml`, CI, lint/test config) and summarize stack/conventions per root.
+2. Detect test runner, test layers, coverage, linter, type checker, and formatter for each discovered root.
+3. Resolve Strict TDD per root in this precedence: the root's own agent marker or `openspec/config.yaml` override → the workspace-level `strict_tdd` default → the root's detected test runner → `false`. Run the chain once per root; a root that declares its own value keeps it.
 4. Initialize persistence for the resolved mode.
 5. Build `.atl/skill-registry.md` using the skill-registry scan rules.
 6. Persist testing capabilities and project context.

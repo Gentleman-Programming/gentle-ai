@@ -370,6 +370,54 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 	}
 }
 
+// TestSDDInitDiscoversMonorepoSubProjects pins the multi-root detection
+// contract. A workspace whose stack markers live only in sub-directories used
+// to be classified as "unclassified" with no runner, because detection was
+// anchored at the workspace root (issue #810). The skill must discover every
+// project root and keep unlike sub-projects separable.
+func TestSDDInitDiscoversMonorepoSubProjects(t *testing.T) {
+	skill := MustRead("skills/sdd-init/SKILL.md")
+	for _, want := range []string{
+		"Discover every project root before classifying",
+		"never \"unclassified\"",
+		"per sub-project",
+		"two or more project roots",
+		"exactly one project root, at the workspace root",
+		"exactly one project root, in a sub-directory",
+		"no marker within the scanned depth",
+		"override → the workspace-level `strict_tdd` default → the root's detected test runner → `false`",
+		"no per-project marker/config but workspace default set",
+	} {
+		if !strings.Contains(skill, want) {
+			t.Fatalf("skills/sdd-init/SKILL.md missing monorepo contract %q", want)
+		}
+	}
+
+	details := MustRead("skills/sdd-init/references/init-details.md")
+	for _, want := range []string{
+		"Project Root Discovery",
+		"Cargo.toml",
+		"pyproject.toml",
+		"node_modules",
+		"go.work",
+		"projects:",
+		"sub-project name is its path relative to the workspace root",
+		"testing:",
+		"strict_tdd:",
+		"Declared members outrank both bounds",
+	} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("skills/sdd-init/references/init-details.md missing discovery rule %q", want)
+		}
+	}
+
+	for _, want := range []string{"two** directory levels", "ignored by `.gitignore`"} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("skills/sdd-init/references/init-details.md lost its scan bound %q", want)
+		}
+	}
+}
+
 func TestSDDVerifyAuthorityPreflightDenialEnvelopeContract(t *testing.T) {
 	const denialFields = `authority_only_failure: true
 missing_review_authority: true

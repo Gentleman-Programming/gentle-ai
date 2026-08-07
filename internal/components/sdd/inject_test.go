@@ -4152,7 +4152,7 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 		t.Fatalf("WriteFile(background-agents.ts) error = %v", err)
 	}
 	reviewPluginPath := filepath.Join(pluginsDir, "review-result-artifacts.ts")
-	if err := os.WriteFile(reviewPluginPath, []byte("stale OpenCode-only review plugin"), 0o644); err != nil {
+	if err := os.WriteFile(reviewPluginPath, []byte(assets.MustRead("opencode/plugins/review-result-artifacts.ts")), 0o644); err != nil {
 		t.Fatalf("WriteFile(review-result-artifacts.ts) error = %v", err)
 	}
 
@@ -4182,6 +4182,56 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 	}
 	if _, err := os.Stat(reviewPluginPath); !os.IsNotExist(err) {
 		t.Fatalf("OpenCode-only review plugin remains installed for Kilo: %v", err)
+	}
+}
+
+func TestKilocodeReviewPluginCleanupPreservesUnverifiedFiles(t *testing.T) {
+	tests := []struct {
+		name    string
+		cleanup func(string, agents.Adapter) (InjectionResult, error)
+	}{
+		{
+			name: "install",
+			cleanup: func(home string, adapter agents.Adapter) (InjectionResult, error) {
+				return installOpenCodePlugins(home, adapter)
+			},
+		},
+		{
+			name:    "refresh",
+			cleanup: RefreshInstalledOpenCodePlugins,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			pluginsDir := filepath.Join(home, ".config", "kilo", "plugins")
+			if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll(plugins) error = %v", err)
+			}
+			reviewPluginPath := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+			userContent := []byte("// user-owned Kilo review plugin")
+			if err := os.WriteFile(reviewPluginPath, userContent, 0o644); err != nil {
+				t.Fatalf("WriteFile(review-result-artifacts.ts) error = %v", err)
+			}
+
+			result, err := tt.cleanup(home, kilocodeAdapter())
+			if err != nil {
+				t.Fatalf("Kilo %s error = %v", tt.name, err)
+			}
+			got, err := os.ReadFile(reviewPluginPath)
+			if err != nil {
+				t.Fatalf("ReadFile(user-owned review plugin) error = %v", err)
+			}
+			if !bytes.Equal(got, userContent) {
+				t.Fatalf("user-owned review plugin changed: got %q, want %q", got, userContent)
+			}
+			for _, file := range result.Files {
+				if file == reviewPluginPath {
+					t.Fatalf("user-owned review plugin %q reported as cleanup: %v", reviewPluginPath, result.Files)
+				}
+			}
+		})
 	}
 }
 
@@ -5523,8 +5573,8 @@ func TestFindProjectRootPackageJsonFallback(t *testing.T) {
 	}
 }
 
-// TestFindProjectRootEmptyDirReturnsNotFound verifies that an empty directory
-// (no markers at all) returns false.
+// TestFindProjectRootEmptyDirReturnsNotFound verifies that an isolated directory
+// with no repository markers returns an empty root and false.
 func TestFindProjectRootEmptyDirReturnsNotFound(t *testing.T) {
 	emptyDir := t.TempDir() // No markers, isolated temp dir
 
@@ -5534,11 +5584,9 @@ func TestFindProjectRootEmptyDirReturnsNotFound(t *testing.T) {
 		t.Fatalf("MkdirAll(subDir): %v", err)
 	}
 
-	_, ok := findProjectRoot(subDir)
-	if ok {
-		// Note: this may find markers in ancestor dirs outside emptyDir
-		// on some systems. The test is best-effort for isolated environments.
-		t.Log("findProjectRoot found a marker outside the temp dir — acceptable on some systems")
+	got, ok := findProjectRootWithin(subDir, emptyDir)
+	if ok || got != "" {
+		t.Fatalf("findProjectRootWithin(%q, %q) = (%q, %v), want (\"\", false)", subDir, emptyDir, got, ok)
 	}
 }
 
@@ -5552,12 +5600,13 @@ func TestFindProjectRootEmptyStringReturnsNotFound(t *testing.T) {
 }
 
 // TestFindProjectRootDeepNested verifies that findProjectRoot handles deeply
-// nested directories without panicking or infinite looping, and that it
-// correctly returns ("", false) when the marker is beyond maxAncestorDepth.
-func TestFindProjectRootDeepNested(t *testing.T) {
+// TestFindProjectRootDeepNestedMonorepo verifies that root discovery reaches a
+// monorepo marker beyond the former fixed 20-parent traversal limit.
+func TestFindProjectRootDeepNestedMonorepo(t *testing.T) {
 	root := t.TempDir()
 
-	// Build a directory 25 levels deep (beyond maxAncestorDepth=20).
+	// Build a directory 25 levels deep so this fixture would fail with the
+	// former fixed 20-parent traversal limit.
 	deepDir := root
 	for i := 0; i < 25; i++ {
 		deepDir = filepath.Join(deepDir, fmt.Sprintf("level%02d", i))
@@ -5566,36 +5615,27 @@ func TestFindProjectRootDeepNested(t *testing.T) {
 		t.Fatalf("MkdirAll(deepDir): %v", err)
 	}
 
-	// Place a go.mod only at the root (25 levels above deepDir).
-	// With maxAncestorDepth=20, findProjectRoot cannot reach it from level 25.
-	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module test\n"), 0o644); err != nil {
-		t.Fatalf("write go.mod: %v", err)
+	if err := os.WriteFile(filepath.Join(root, "pnpm-workspace.yaml"), []byte("packages:\n  - packages/*\n"), 0o644); err != nil {
+		t.Fatalf("write pnpm-workspace.yaml: %v", err)
 	}
 
-	// This must not panic or loop infinitely.
-	// The important assertion is that it completes quickly.
-	done := make(chan struct{})
-	var gotPath string
-	var gotOk bool
+	type result struct {
+		root string
+		ok   bool
+	}
+	results := make(chan result, 1)
 	go func() {
-		defer close(done)
-		gotPath, gotOk = findProjectRoot(deepDir)
+		got, ok := findProjectRoot(deepDir)
+		results <- result{root: got, ok: ok}
 	}()
 
 	select {
-	case <-done:
-		// Completed without hanging — test passes.
-	case <-time.After(5 * time.Second):
-		t.Fatal("findProjectRoot appeared to hang on deeply nested dir")
-	}
-
-	// Correctness: starting 25 levels deep with go.mod only at level 0 and
-	// maxAncestorDepth=20, the function cannot reach level 0 — must return ("", false).
-	if gotOk {
-		t.Fatalf("findProjectRoot should return false when marker is beyond maxAncestorDepth, got path=%q ok=%v", gotPath, gotOk)
-	}
-	if gotPath != "" {
-		t.Fatalf("findProjectRoot should return empty path when not found, got %q", gotPath)
+	case r := <-results:
+		if !r.ok || r.root != root {
+			t.Fatalf("findProjectRoot(%q) = (%q, %v), want (%q, true)", deepDir, r.root, r.ok, root)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("findProjectRoot did not reach the monorepo root within one second")
 	}
 }
 

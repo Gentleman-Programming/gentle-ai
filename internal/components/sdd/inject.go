@@ -138,11 +138,6 @@ var strongProjectMarkers = []string{
 	"build.gradle",
 }
 
-// maxAncestorDepth is the maximum number of parent directories findProjectRoot
-// will traverse before giving up. This prevents infinite loops on deeply-nested
-// trees and ensures we stop well before reaching the filesystem root.
-const maxAncestorDepth = 20
-
 // bootstrapper is an optional adapter capability: if an adapter implements
 // this interface, any injector that writes Jinja modules will first ensure
 // the base template (entry point) exists.
@@ -166,13 +161,20 @@ type bootstrapper interface {
 // the first one — we keep walking to find the highest ancestor with package.json
 // (or a monorepo root marker above it).
 func findProjectRoot(dir string) (string, bool) {
+	return findProjectRootWithin(dir, "")
+}
+
+// findProjectRootWithin walks upward from dir until it finds a project root or
+// reaches boundary. An empty boundary preserves findProjectRoot's production
+// behavior of walking to the filesystem root.
+func findProjectRootWithin(dir, boundary string) (string, bool) {
 	if dir == "" {
 		return "", false
 	}
 	current := filepath.Clean(dir)
 	var bestCandidate string // best weak (package.json-only) match found so far
 
-	for i := 0; i < maxAncestorDepth; i++ {
+	for i := 0; ; i++ {
 		// Check monorepo root markers first — highest priority; return immediately.
 		for _, marker := range monorepoRootMarkers {
 			if _, err := os.Stat(filepath.Join(current, marker)); err == nil {
@@ -194,6 +196,9 @@ func findProjectRoot(dir string) (string, bool) {
 		parent := filepath.Dir(current)
 		if parent == current {
 			// Reached filesystem root ("/" on Unix, "C:\" on Windows).
+			break
+		}
+		if boundary != "" && current == filepath.Clean(boundary) {
 			break
 		}
 		current = parent
