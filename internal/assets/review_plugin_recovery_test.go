@@ -71,15 +71,25 @@ const runAfter = async (outputText: string) => {
 
 try {
   if (scenario.startsWith("sdd-")) {
-    const phase = scenario.startsWith("sdd-profile-") ? "sdd-propose-cheap" : scenario === "sdd-unrelated" ? "sdd-custom" : "sdd-propose"
-    const result = scenario.includes("malformed") ? "<task_result>broken" : scenario.includes("empty") ? "<task id=\"phase\" state=\"completed\">\n<task_result>\n\n</task_result>\n</task>" : ""
+    const phase = scenario.startsWith("sdd-spec-") ? "sdd-spec" : scenario.startsWith("sdd-profile-") ? "sdd-propose-cheap" : scenario === "sdd-unrelated" ? "sdd-custom" : "sdd-propose"
+    const result = scenario.includes("malformed") ? "<task_result>broken" : (scenario.includes("empty") || scenario.startsWith("sdd-spec-")) ? "<task id=\"phase\" state=\"completed\">\n<task_result>\n\n</task_result>\n</task>" : ""
     const artifact = cwd + "/proposal.md"
-    await writeFile(artifact, "existing artifact")
+    if (scenario === "sdd-spec-recovery") {
+      const { mkdir } = await import("node:fs/promises")
+      const specDir = cwd + "/openspec/changes/test-change/specs/auth"
+      await mkdir(specDir, { recursive: true })
+      await writeFile(specDir + "/spec.md", "### Spec Content")
+    } else if (scenario !== "sdd-spec-no-artifacts") {
+      await writeFile(artifact, "existing artifact")
+    }
+
     const input = { tool: "task", sessionID: "sdd-session", callID: "call-sdd", args: { subagent_type: phase, prompt: "phase work" } }
     const output = { title: "", output: result, metadata: {} }
     let failure = "NO_ERROR"
     try { await hooks["tool.execute.after"](input, output) } catch (cause: unknown) { failure = cause instanceof Error ? cause.message : String(cause) }
-    if (scenario === "sdd-lifecycle") {
+    if (scenario.startsWith("sdd-spec-")) {
+      console.log([failure, output.output].join("\n---\n"))
+    } else if (scenario === "sdd-lifecycle") {
       let beforeDispose = "NO_ERROR"
       try { await hooks["tool.execute.before"]({ ...input, callID: "call-before-dispose" }, { args: { subagent_type: phase, prompt: "retry" } }) } catch (cause: unknown) { beforeDispose = cause instanceof Error ? cause.message : String(cause) }
       await hooks.dispose?.()
@@ -93,6 +103,7 @@ try {
       }
       console.log([failure, downstream, await readFile(artifact, "utf8")].join("\n---\n"))
     }
+
   } else if (scenario === "before-background") {
     console.log(await runBefore("review-risk", true))
   } else if (scenario === "before-no-prompt") {
@@ -294,6 +305,32 @@ func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSDDSpecTaskResultEmptyWithValidArtifactsRecovers(t *testing.T) {
+	out := runReviewPluginScenario(t, "sdd-spec-recovery", "unused")
+	parts := strings.Split(out, "\n---\n")
+	if len(parts) != 2 {
+		t.Fatalf("scenario output = %q", out)
+	}
+	if parts[0] != "NO_ERROR" {
+		t.Fatalf("recovery failed with error: %s", parts[0])
+	}
+	if !strings.Contains(parts[1], "auth") && !strings.Contains(parts[1], "Specs Written") {
+		t.Fatalf("recovered output = %q, want recovered Section D envelope with spec domain", parts[1])
+	}
+}
+
+func TestSDDSpecTaskResultEmptyWithoutArtifactsFailsClosed(t *testing.T) {
+	out := runReviewPluginScenario(t, "sdd-spec-no-artifacts", "unused")
+	parts := strings.Split(out, "\n---\n")
+	if len(parts) != 2 {
+		t.Fatalf("scenario output = %q", out)
+	}
+	if !strings.Contains(parts[0], "sdd_task_result_empty") {
+		t.Fatalf("failure = %q, want sdd_task_result_empty", parts[0])
+	}
+	assertSDDTaskResultHandoff(t, parts[0], "sdd_task_result_empty", "sdd-spec")
 }
 
 func assertSDDTaskResultHandoff(t *testing.T, message, code, phase string) {

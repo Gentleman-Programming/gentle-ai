@@ -7007,3 +7007,87 @@ func TestInjectRefreshesStaleArchiveSkillWithFinalStateAuthority(t *testing.T) {
 		t.Fatal("installed lazy SDD workflow missing archive final-state handoff section")
 	}
 }
+
+func TestOpenCodeOverlayIncludesEngramToolsForSDDInit(t *testing.T) {
+	requiredTools := []string{"mem_save", "mem_search", "mem_context", "mem_get_observation", "mem_capture_passive"}
+
+	for _, overlayAsset := range []string{"opencode/sdd-overlay-single.json", "opencode/sdd-overlay-multi.json"} {
+		t.Run(overlayAsset, func(t *testing.T) {
+			content, err := assets.Read(overlayAsset)
+			if err != nil {
+				t.Fatalf("assets.Read(%s) error = %v", overlayAsset, err)
+			}
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+				t.Fatalf("json.Unmarshal(%s) error = %v", overlayAsset, err)
+			}
+			agentMap, ok := parsed["agent"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s missing top-level agent map", overlayAsset)
+			}
+			sddInitMap, ok := agentMap["sdd-init"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s missing sdd-init agent map", overlayAsset)
+			}
+			toolsMap, ok := sddInitMap["tools"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s missing sdd-init tools map", overlayAsset)
+			}
+			for _, tool := range requiredTools {
+				val, exists := toolsMap[tool]
+				if !exists {
+					t.Errorf("%s sdd-init tools missing %s", overlayAsset, tool)
+				} else if boolVal, isBool := val.(bool); !isBool || !boolVal {
+					t.Errorf("%s sdd-init tool %s = %v, want true", overlayAsset, tool, val)
+				}
+			}
+		})
+	}
+}
+
+func TestSDDInjectPreservesEngramToolsInOpenCodeConfig(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+	adapter := opencodeAdapter()
+
+	result, err := Inject(home, adapter, model.SDDModeSingle)
+	if err != nil {
+		t.Fatalf("Inject(opencode) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(opencode) changed = false, want true")
+	}
+
+	configPath := adapter.SettingsPath(home)
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", configPath, err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("json.Unmarshal(%s) error = %v", configPath, err)
+	}
+	agentMap, ok := parsed["agent"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s missing agent map", configPath)
+	}
+	sddInitMap, ok := agentMap["sdd-init"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s missing sdd-init agent map", configPath)
+	}
+	toolsMap, ok := sddInitMap["tools"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s missing sdd-init tools map", configPath)
+	}
+
+	requiredTools := []string{"mem_save", "mem_search", "mem_context", "mem_get_observation", "mem_capture_passive"}
+	for _, tool := range requiredTools {
+		val, exists := toolsMap[tool]
+		if !exists {
+			t.Errorf("opencode.json sdd-init tools missing %s", tool)
+		} else if boolVal, isBool := val.(bool); !isBool || !boolVal {
+			t.Errorf("opencode.json sdd-init tool %s = %v, want true", tool, val)
+		}
+	}
+}

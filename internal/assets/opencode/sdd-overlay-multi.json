@@ -52,8 +52,14 @@
         "read": true,
         "write": true,
         "edit": true,
-        "bash": true
+        "bash": true,
+        "mem_save": true,
+        "mem_search": true,
+        "mem_context": true,
+        "mem_get_observation": true,
+        "mem_capture_passive": true
       }
+
     },
     "sdd-explore": {
       "mode": "subagent",

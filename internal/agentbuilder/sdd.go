@@ -125,3 +125,64 @@ func extractName(marker string) string {
 	}
 	return ""
 }
+
+// SDDAgentValidationError represents a typed validation error for SDD agent configurations.
+type SDDAgentValidationError struct {
+	Code    string
+	Message string
+}
+
+func (e *SDDAgentValidationError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// ValidateSDDAgentConfig validates an OpenCode agent configuration map when Engram mode is active.
+func ValidateSDDAgentConfig(config map[string]interface{}, engramMode bool) error {
+	if !engramMode || config == nil {
+		return nil
+	}
+
+	requiredTools := []string{"mem_save", "mem_search", "mem_context", "mem_get_observation", "mem_capture_passive"}
+
+	agentMap, ok := config["agent"].(map[string]interface{})
+	if !ok {
+		return &SDDAgentValidationError{
+			Code:    "engram_tools_missing",
+			Message: "OpenCode config missing 'agent' map. Run 'gentle-ai sync' to update agent configurations.",
+		}
+	}
+
+	sddInitMap, ok := agentMap["sdd-init"].(map[string]interface{})
+	if !ok {
+		return &SDDAgentValidationError{
+			Code:    "engram_tools_missing",
+			Message: "sdd-init agent definition missing in config. Run 'gentle-ai sync' to update agent configurations.",
+		}
+	}
+
+	toolsMap, ok := sddInitMap["tools"].(map[string]interface{})
+	if !ok {
+		return &SDDAgentValidationError{
+			Code:    "engram_tools_missing",
+			Message: "sdd-init tools definition missing in config. Run 'gentle-ai sync' to update agent configurations.",
+		}
+	}
+
+	for _, tool := range requiredTools {
+		val, exists := toolsMap[tool]
+		if !exists {
+			return &SDDAgentValidationError{
+				Code:    "engram_tools_missing",
+				Message: fmt.Sprintf("sdd-init tools missing required Engram tool %q. Run 'gentle-ai sync' to update agent configurations.", tool),
+			}
+		}
+		if boolVal, isBool := val.(bool); !isBool || !boolVal {
+			return &SDDAgentValidationError{
+				Code:    "engram_tools_missing",
+				Message: fmt.Sprintf("sdd-init tool %q is disabled. Run 'gentle-ai sync' to update agent configurations.", tool),
+			}
+		}
+	}
+
+	return nil
+}

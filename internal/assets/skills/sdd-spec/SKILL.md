@@ -238,8 +238,9 @@ Ready for design (sdd-design). If design already exists, ready for tasks (sdd-ta
 - REMOVED requirements MUST include Reason and SHOULD include Migration when consumers, persisted behavior, docs, or tests are affected
 - RENAMED requirements MUST state both old and new names explicitly and SHOULD include Migration guidance for references/tests/docs
 - Apply any `rules.specs` from `openspec/config.yaml`
-- **Size budget**: Spec artifact MUST be under 650 words. Prefer requirement tables over narrative descriptions. Each scenario: 3-5 lines max.
+- **Mandatory Return Envelope**: You MUST produce the Section D return envelope in stdout upon completion so the OpenCode orchestrator task wrapper receives a non-empty summary envelope.
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
+
 
 ## RFC 2119 Keywords Quick Reference
 

@@ -201,3 +201,37 @@ func TestInjectSDDReference_NilAgent_IsNoop(t *testing.T) {
 		t.Fatalf("expected no error for nil agent, got: %v", err)
 	}
 }
+
+func TestSDDInitEngramToolsMissingTypedRefusal(t *testing.T) {
+	// OpenCode configuration missing Engram tools for sdd-init
+	config := map[string]interface{}{
+		"agent": map[string]interface{}{
+			"sdd-init": map[string]interface{}{
+				"tools": map[string]interface{}{
+					"read":  true,
+					"write": true,
+					"edit":  true,
+					"bash":  true,
+				},
+			},
+		},
+	}
+
+	err := ValidateSDDAgentConfig(config, true)
+	if err == nil {
+		t.Fatal("ValidateSDDAgentConfig with missing Engram tools returned nil error, want error")
+	}
+
+	valErr, ok := err.(*SDDAgentValidationError)
+	if !ok {
+		t.Fatalf("ValidateSDDAgentConfig returned error of type %T, want *SDDAgentValidationError", err)
+	}
+
+	if valErr.Code != "engram_tools_missing" {
+		t.Errorf("error code = %q, want %q", valErr.Code, "engram_tools_missing")
+	}
+
+	if !strings.Contains(valErr.Message, "gentle-ai sync") {
+		t.Errorf("error message = %q, want recommendation to run gentle-ai sync", valErr.Message)
+	}
+}

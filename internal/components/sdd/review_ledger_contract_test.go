@@ -325,11 +325,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// session boundary explicitly. Kilocode embeds the same paragraph, so the
 	// hash moved again. Deliberate, not drift.
 	//
-	// Provider defect handoff recovery fix: an installed published fix remains
-	// valid, but an explicit maintainer-authorized native recovery or reset that
-	// the runtime supports is no longer overridden. Kilocode renders that shared
-	// orchestrator contract, so the hash moved again. Deliberate, not drift.
-	const want = "7b4baa31cd41d42ef2543f5b86152f084e751e95891124edefff7edb98447663"
+	// Engram MCP tools added to sdd-init in sdd-overlay-single.json and sdd-overlay-multi.json (#2710).
+	// Kilocode renders that shared overlay contract, so the hash moved. Deliberate, not drift.
+	const want = "e775842bc1c5f1b4cc05fb6ceffb9db0650ec7439480cf2d20b3eeba0ea94115"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

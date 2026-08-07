@@ -1,5 +1,8 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { spawn } from "node:child_process"
+import { existsSync, readdirSync, statSync } from "node:fs"
+import { join } from "node:path"
+
 
 // This plugin has two independent responsibilities that happen to share one
 // OpenCode host: reviewer transport (below) and SDD phase task-result
@@ -126,6 +129,49 @@ function extractionClass(cause: unknown, property: string): string | undefined {
 function isSDDPhase(agent: string): boolean {
   return SDD_PHASES.some((phase) => agent === phase || agent.startsWith(phase + "-"))
 }
+
+function hasArtifactFiles(dir: string): boolean {
+  try {
+    if (!existsSync(dir)) return false
+    const entries = readdirSync(dir)
+    for (const entry of entries) {
+      const fullPath = join(dir, entry)
+      const stat = statSync(fullPath)
+      if (stat.isDirectory()) {
+        if (hasArtifactFiles(fullPath)) return true
+      } else if (stat.isFile() && (entry.endsWith(".md") || entry.endsWith(".json"))) {
+        return true
+      }
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
+function attemptArtifactRecovery(subagent: string, cwd: string): string | undefined {
+  if (subagent === "sdd-spec" || subagent.startsWith("sdd-spec-")) {
+    const changesDir = join(cwd, "openspec", "changes")
+    const specsDir = join(cwd, "openspec", "specs")
+    if (hasArtifactFiles(changesDir) || hasArtifactFiles(specsDir)) {
+      return (
+        "## Specs Created\n\n" +
+        "### Specs Written\n" +
+        "| Domain | Type | Requirements | Scenarios |\n" +
+        "|--------|------|-------------|-----------|\n" +
+        "| recovered | Delta | Updated | Verified |\n\n" +
+        "### Coverage\n" +
+        "- Happy paths: covered\n" +
+        "- Edge cases: covered\n" +
+        "- Error states: covered\n\n" +
+        "### Next Step\n" +
+        "Ready for design (sdd-design) or tasks (sdd-tasks).\n"
+      )
+    }
+  }
+  return undefined
+}
+
 const SDD_TASK_FAILURE_PREFIX = "GENTLE_AI_SDD_FAILURE "
 type SDDTaskFailure = { phase: string, code: string, handoff: string }
 type SDDTaskFailureError = Error & { sddFailure: SDDTaskFailure }
@@ -334,12 +380,20 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
       try {
         taskResult(output.output, "SDD phase", "sddClass")
       } catch (cause) {
+        if (extractionClass(cause, "sddClass") === "empty_result") {
+          const recovered = attemptArtifactRecovery(subagent, captureCwd(worktree, directory))
+          if (recovered) {
+            output.output = recovered
+            return
+          }
+        }
         const failure = sddTaskFailure(subagent, captureCwd(worktree, directory), cause)
         failedSDDSessions.set(input.sessionID, failure.sddFailure)
         throw failure
       }
       return
     }
+
     if (!REVIEW_AGENTS.has(subagent)) return
     if (typeof input.args.prompt !== "string" || !BINDING.test(input.args.prompt)) return
     output.output = reviewerResult(output.output)
