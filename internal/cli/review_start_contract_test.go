@@ -1009,3 +1009,54 @@ func isReviewCLITrackedPath(t *testing.T, repo, path string) bool {
 	command := exec.Command("git", "-C", repo, "ls-files", "--error-unmatch", "--", path)
 	return command.Run() == nil
 }
+
+func intendedStatus(t *testing.T, repo string, args ...string) ReviewTargetStatusResult {
+	var output bytes.Buffer
+	if err := RunReviewStatus(append([]string{"--cwd", repo, "--contract", ReviewIntegrationContractV2, "--next-transition"}, args...), &output); err != nil {
+		t.Fatalf("review status %v: %v", args, err)
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	return status
+}
+func intendedSelection(t *testing.T, status ReviewTargetStatusResult) (string, string) {
+	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 || status.NextTransition.Collect.Inputs[0].Name != "intended_untracked_selection" {
+		t.Fatalf("untracked STATUS transition = %#v", status.NextTransition)
+	}
+	arguments, _ := reviewTransitionArgumentMap(status.NextTransition.Collect.Inputs[0].Arguments)
+	return arguments["expected_untracked_inventory"], arguments["eligible_paths_json"]
+}
+func TestReviewStatusCollectsAndStartsUntrackedOnlyCandidate(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeUndeclaredWorkspaceFile(t, repo, "new.go", "package candidate\n", 0o644)
+	digest, _ := intendedSelection(t, intendedStatus(t, repo, "--base-ref=HEAD"))
+	selection := []string{"--untracked-scope=select", "--intended-untracked=new.go", "--expected-untracked-inventory=" + digest}
+	selected := intendedStatus(t, repo, append([]string{"--base-ref=HEAD"}, selection...)...)
+	question := decodeConsentQuestion(t, runConsentRelayStart(t, transitionStartArgs(repo, selected)).Bytes())
+	if invocation := question.Choices[0].Invocation; !strings.Contains(invocation, "--untracked-scope=select") || !strings.Contains(invocation, "--intended-untracked=new.go") || !strings.Contains(invocation, "--expected-untracked-inventory="+digest) {
+		t.Fatalf("consent continuation lost intended-untracked scope: %q", invocation)
+	}
+	if started := decodeNegotiatedReviewStart(t, runConsentRelayStart(t, invocationArgs(t, question.Choices[0].Invocation)).Bytes()); negotiatedStartTarget(started) != selected.TargetIdentity || len(selected.Projection.Paths) != 1 || selected.Projection.Paths[0] != "new.go" || !strings.Contains(selected.NextTransition.Execute.Command, "--intended-untracked=new.go") {
+		t.Fatalf("consent continuation target = %s, want %s", negotiatedStartTarget(started), selected.TargetIdentity)
+	}
+}
+func TestIntendedUntrackedRevalidatesAtV3AuthorityBoundary(t *testing.T) {
+	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "1")
+	repo := initReviewCLIRepo(t)
+	writeUndeclaredWorkspaceFile(t, repo, "candidate.md", "candidate\n", 0o644)
+	digest, _ := intendedSelection(t, intendedStatus(t, repo))
+	original := reviewFacadeBuildStartSnapshot
+	reviewFacadeBuildStartSnapshot = func(ctx context.Context, builder reviewtransaction.SnapshotBuilder, target reviewtransaction.Target) (reviewtransaction.Snapshot, error) {
+		snapshot, err := original(ctx, builder, target)
+		if err == nil {
+			writeUndeclaredWorkspaceFile(t, repo, "late.md", "late\n", 0o644)
+		}
+		return snapshot, err
+	}
+	t.Cleanup(func() { reviewFacadeBuildStartSnapshot = original })
+	err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "boundary-inventory", "--untracked-scope=select", "--intended-untracked=candidate.md", "--expected-untracked-inventory=" + digest}, &bytes.Buffer{})
+	store, storeErr := reviewtransaction.NewLineageAuthorityStore(context.Background(), repo, "boundary-inventory")
+	if _, statErr := os.Stat(store.StatePath()); err == nil || storeErr != nil || !os.IsNotExist(statErr) {
+		t.Fatalf("v3 boundary mutation error/store/stat = %v, %v, %v", err, storeErr, statErr)
+	}
+}

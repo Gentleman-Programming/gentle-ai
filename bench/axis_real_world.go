@@ -152,6 +152,61 @@ func afterEach(hooks ...func(*Sandbox, Observation) error) func(*Sandbox, Observ
 	}
 }
 
+func explicitUntrackedStart(mode string, selected, wantPaths []string, wantInventory int, after func(*Sandbox, Observation) error) func(*journeyRun) error {
+	return func(r *journeyRun) error {
+		refused := r.run([]string{"review", "start", "--cwd", r.sandbox.Repo}, false)
+		if err := after(r.sandbox, refused); err != nil {
+			return err
+		}
+		if refused.ExitCode == 0 || !strings.Contains(refused.Stdout+refused.Stderr, "explicit declaration") {
+			return fmt.Errorf("incomplete START = exit %d, stderr %q; want explicit-declaration refusal", refused.ExitCode, firstLine(refused.Stderr))
+		}
+		statusArgs := []string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}
+		collected := r.run(statusArgs, false)
+		if err := after(r.sandbox, collected); err != nil {
+			return err
+		}
+		var collection statusEnvelope
+		if err := decodeWaveObservation(collected, &collection, "intended-untracked collection STATUS"); err != nil {
+			return err
+		}
+		if collection.Authority.LineageID != "" || collection.NextTransition.Kind != "collect" || len(collection.NextTransition.Collect.Inputs) != 1 || collection.NextTransition.Collect.Inputs[0].Name != "intended_untracked_selection" {
+			return fmt.Errorf("incomplete START left authority or no selection boundary: %+v", collection.NextTransition)
+		}
+		var inventory []string
+		digest := collection.argument("expected_untracked_inventory")
+		if err := json.Unmarshal([]byte(collection.argument("eligible_paths_json")), &inventory); err != nil || len(inventory) != wantInventory || digest == "" {
+			return fmt.Errorf("eligible inventory = %d paths, digest %q, parse error %v; want %d", len(inventory), digest, err, wantInventory)
+		}
+		selectionArgs := append(statusArgs, "--untracked-scope="+mode, "--expected-untracked-inventory="+digest)
+		for _, path := range selected {
+			selectionArgs = append(selectionArgs, "--intended-untracked="+path)
+		}
+		explicit := r.run(selectionArgs, false)
+		if err := after(r.sandbox, explicit); err != nil {
+			return err
+		}
+		var executable statusEnvelope
+		if err := decodeWaveObservation(explicit, &executable, "explicit intended-untracked STATUS"); err != nil {
+			return err
+		}
+		if executable.TargetIdentity == "" || executable.NextTransition.Kind != "execute" || strings.Join(executable.Projection.Paths, "\x00") != strings.Join(wantPaths, "\x00") {
+			return fmt.Errorf("explicit selection produced transition %q over paths %v, want %v", executable.NextTransition.Kind, executable.Projection.Paths, wantPaths)
+		}
+		started, err := runPrintedTransition(r, executable)
+		if err != nil {
+			return err
+		}
+		if err := after(r.sandbox, started); err != nil {
+			return err
+		}
+		if err := rememberLineage(r.sandbox, started); err != nil || r.sandbox.Lineage == "" {
+			return fmt.Errorf("explicit START created no matching lineage/target: %v (exit %d, stderr %q)", err, started.ExitCode, firstLine(started.Stderr))
+		}
+		return nil
+	}
+}
+
 // mustNotEcho builds an After assertion that fails the journey the moment a
 // counted command's emitted bytes contain the given sentinel. The failure
 // reason names the invocation, because the finding IS the journey's result.
@@ -267,10 +322,9 @@ func largeUntrackedTree(sandbox *Sandbox) error {
 }
 
 // secretEnvUntracked plants an untracked .env whose values look exactly like
-// what they are. The candidate is an ordinary docs change; the .env is the
-// clutter beside it. What matters is not whether the flow completes but what
-// the product's emitted bytes QUOTE along the way — the After assertion on
-// every counted step in the journey checks.
+// what they are. The candidate explicitly selects the .env beside its docs change.
+// What matters is not whether the flow completes but what the product's emitted
+// bytes QUOTE along the way — the After assertion on every counted step checks.
 func secretEnvUntracked(sandbox *Sandbox) error {
 	if err := baseRepo(sandbox); err != nil {
 		return err
@@ -1026,29 +1080,21 @@ func realWorldJourneys() []Journey {
 		},
 		{
 			ID:     "rw02-node-modules-scale-untracked-tree",
-			Title:  "3,000 untracked files beside the candidate: discovery must survive, and the cost is measured",
+			Title:  "3,000 eligible untracked files: inventory scales and explicit exclusion stays docs-only",
 			Source: "family A (ecosystem clutter): dependency trees tools leave behind",
-			// Distinct path: untracked-scope freeze over thousands of paths.
-			// The corpus's largest candidate (j04) is 1,200 lines in four
-			// files; nothing has ever made discovery walk a tree this size.
-			// `git_subprocesses` and the byte counts carry the price — and on
-			// the current build the price includes an escalation: the same
-			// staged docs change that reviews at tier 0 in j01 demands a
-			// reviewer lens here, purely because of what sits UNTRACKED
-			// beside it. The lens flow below is what the product dictated.
+			// Distinct path: STATUS inventories thousands of eligible paths,
+			// then explicit exclusion proves none enter the docs-only candidate.
 			Steps: []Step{
 				{Name: "fixture: 3,000 untracked files proven enumerated by git", Fixture: largeUntrackedTree},
-				{Name: "review start beside the tree", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "capture every lens the tree escalated to", Requires: captureResultCapability, Composite: captureAllLenses},
-				{Name: "finalize with captured results", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--captured-results=true")},
-				{Name: "capture final evidence", Requires: captureEvidenceCapability, Composite: captureFinalEvidence},
-				{Name: "finalize with captured evidence", Requires: finalizeEvidenceCapability, Args: productArgs("review", "finalize", "--captured-evidence=true")},
+				{Name: "refuse implicit scope, inventory all paths, explicitly exclude, then START", Requires: statusCapability,
+					Composite: explicitUntrackedStart("exclude", nil, []string{"docs/deps-note.md"}, largeTreeDirs*largeTreeFilesPerDir, func(*Sandbox, Observation) error { return nil })},
+				{Name: "finalize docs-only review", Requires: finalizeCapability, Args: productArgs("review", "finalize")},
 				{Name: "gate pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit")},
 			},
 		},
 		{
 			ID:     "rw03-untracked-env-with-secrets",
-			Title:  "Untracked .env with secret-looking content: nothing counted may quote the value",
+			Title:  "Explicitly selected untracked .env: path may enter, secret value must never echo",
 			Source: "family A (ecosystem clutter): secrets files beside every real candidate",
 			// Distinct path: what risk evidence and scope envelopes QUOTE.
 			// Naming the .env's PATH is honest — it is in the untracked scope.
@@ -1059,10 +1105,8 @@ func realWorldJourneys() []Journey {
 			// After assertions.
 			Steps: []Step{
 				{Name: "fixture: sentinel secret proven planted, untracked and not ignored", Fixture: secretEnvUntracked},
-				{Name: "review start beside the .env", Requires: startCapability,
-					Args: productArgs("review", "start"), After: afterEach(rememberLineage, secretMustNotEcho)},
-				{Name: "review status beside the .env", Requires: statusOnlyCapability,
-					Args: productArgs("review", "status"), After: secretMustNotEcho},
+				{Name: "refuse implicit scope, collect safely, explicitly select .env, then START", Requires: statusCapability,
+					Composite: explicitUntrackedStart("select", []string{".env"}, []string{".env", "docs/config-note.md"}, 1, secretMustNotEcho)},
 				{Name: "capture every lens, checking each envelope for the secret", Requires: captureResultCapability, Composite: lensLoopCheckingEchoes},
 				{Name: "finalize with captured results", Requires: finalizeResultsCapability,
 					Args: productArgs("review", "finalize", "--captured-results=true"), After: secretMustNotEcho},

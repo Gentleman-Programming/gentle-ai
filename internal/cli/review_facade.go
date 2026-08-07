@@ -142,6 +142,60 @@ const ReviewStartConsentDeclinedThisCandidate = "declined_this_candidate"
 // and the fix is to name the base to compare against, not to redo the work.
 const reviewStartEmptyCandidateHint = "the candidate has no pending changes; already-committed work can be reviewed by rerunning review start with --base-ref <commit> naming the base to compare against"
 
+const reviewIntendedUntrackedSelectionSchema = "gentle-ai.review-intended-untracked-selection/v1"
+
+type reviewIntendedUntrackedScope struct {
+	Inventory, Intended []string
+	Digest              string
+	Declared            bool
+}
+
+func reviewIntendedUntrackedScopeForTarget(ctx context.Context, builder reviewtransaction.SnapshotBuilder, mode, selected, expected repeatedString) (reviewIntendedUntrackedScope, error) {
+	inventory, digest, err := builder.IntendedUntrackedInventory(ctx)
+	if err != nil {
+		return reviewIntendedUntrackedScope{}, err
+	}
+	scope := reviewIntendedUntrackedScope{Inventory: inventory, Intended: []string{}, Digest: digest, Declared: len(mode) > 0 || len(selected) > 0 || len(expected) > 0}
+	if !scope.Declared {
+		return scope, nil
+	}
+	switch {
+	case len(mode) != 1 || len(expected) != 1:
+		return scope, errors.New("untracked selection requires --untracked-scope and --expected-untracked-inventory; rerun `gentle-ai review status --next-transition`")
+	case mode[0] == "exclude" && len(selected) > 0:
+		return scope, errors.New("--untracked-scope=exclude does not accept --intended-untracked; rerun `gentle-ai review start --untracked-scope=exclude` without selected paths")
+	case mode[0] == "select" && len(selected) == 0:
+		return scope, errors.New("--untracked-scope=select requires --intended-untracked; rerun `gentle-ai review status --next-transition` to select a path")
+	case mode[0] != "exclude" && mode[0] != "select":
+		return scope, fmt.Errorf("--untracked-scope must be exclude or select, got %q; rerun `gentle-ai review status --next-transition`", mode[0])
+	}
+	scope.Intended, err = builder.ValidateIntendedUntrackedSelection(ctx, expected[0], selected)
+	return scope, err
+}
+func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope reviewIntendedUntrackedScope) ReviewNextTransition {
+	paths, _ := json.Marshal(scope.Inventory)
+	return reviewCollectTransition("intended_untracked_selection_required", ReviewTransitionInput{
+		Name: "intended_untracked_selection", Schema: reviewIntendedUntrackedSelectionSchema,
+		CaptureOperation: "external.select_intended_untracked",
+		Arguments: append(reviewTargetArguments(status),
+			ReviewTransitionArgument{Name: "eligible_paths_json", Value: string(paths)},
+			ReviewTransitionArgument{Name: "expected_untracked_inventory", Value: scope.Digest}),
+	})
+}
+func reviewStartIntendedUntrackedArguments(scope reviewIntendedUntrackedScope) []ReviewTransitionArgument {
+	if !scope.Declared {
+		return nil
+	}
+	arguments := []ReviewTransitionArgument{{Name: "untracked-scope", Value: "exclude"}}
+	if len(scope.Intended) > 0 {
+		arguments[0].Value = "select"
+	}
+	for _, path := range scope.Intended {
+		arguments = append(arguments, ReviewTransitionArgument{Name: "intended-untracked", Value: path})
+	}
+	return append(arguments, ReviewTransitionArgument{Name: "expected-untracked-inventory", Value: scope.Digest})
+}
+
 // reviewUndeclaredRuntimeIdentitySlot is what the printed continuation carries
 // when no runtime declared itself. The direct route refuses `--agent` outright
 // ("review start --agent requires a negotiated --contract"), so on that path
@@ -787,7 +841,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	repairActor := flags.String("repair-actor", "", "authorized classified repair actor")
 	repairReason := flags.String("repair-reason", "", "authorized classified repair reason")
 	repairAuthorization := flags.String("repair-authorization", "", "exact classified repair authorization binding")
-	untrackedScope, intendedUntracked, expectedUntrackedInventory := reviewSingleValueFlag{}, reviewRepeatedPathFlag{}, reviewSingleValueFlag{}
+	untrackedScope, intendedUntracked, expectedUntrackedInventory := repeatedString{}, repeatedString{}, repeatedString{}
 	flags.Var(&untrackedScope, "untracked-scope", "explicit untracked scope: exclude or select")
 	flags.Var(&intendedUntracked, "intended-untracked", "repo-relative untracked path to include; repeat for each path")
 	flags.Var(&expectedUntrackedInventory, "expected-untracked-inventory", "expected complete eligible untracked inventory digest")
@@ -864,7 +918,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 		}
 		intendedScope := reviewIntendedUntrackedScope{}
-		untrackedFlags := untrackedScope.set || len(intendedUntracked) > 0 || expectedUntrackedInventory.set
+		untrackedFlags := len(untrackedScope) > 0 || len(intendedUntracked) > 0 || len(expectedUntrackedInventory) > 0
 		if selectedProjection == reviewtransaction.ProjectionStaged {
 			if untrackedFlags {
 				return errors.New("staged projection does not accept untracked-selection flags; rerun `gentle-ai review status --next-transition --projection=staged` without them")
@@ -1050,7 +1104,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				reviewNarrateStopReason(transition.ReasonCode, runtime)
 			}
 		}
-		if intendedScope.NeedsSelection {
+		if !intendedScope.Declared && len(intendedScope.Inventory) > 0 {
 			transition := reviewIntendedUntrackedCollection(result, intendedScope)
 			result.NextTransition = &transition
 			if result.Forecast != nil {
@@ -1066,7 +1120,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if *actionEligibility || *nextTransition {
 		return errors.New(reviewContractRequiredForActionEligibilityReason)
 	}
-	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" || untrackedScope.set || len(intendedUntracked) > 0 || expectedUntrackedInventory.set {
+	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" || len(untrackedScope) > 0 || len(intendedUntracked) > 0 || len(expectedUntrackedInventory) > 0 {
 		return errors.New(reviewStatusTargetSelectorsRequireContractReason)
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
@@ -1500,7 +1554,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	tracePath := flags.String("trace", "", "optional diagnostic operation metadata trace path")
 	consent := flags.String("consent", "", "negotiated consent declaration: relay to receive the typed blocking consent question, granted or declined to answer it for the exact frozen candidate")
 	locale := flags.String("locale", "", "optional consent-envelope locale: en or es")
-	untrackedScope, intendedUntracked, expectedUntrackedInventory := reviewSingleValueFlag{}, reviewRepeatedPathFlag{}, reviewSingleValueFlag{}
+	untrackedScope, intendedUntracked, expectedUntrackedInventory := repeatedString{}, repeatedString{}, repeatedString{}
 	flags.Var(&untrackedScope, "untracked-scope", "explicit untracked scope: exclude or select")
 	flags.Var(&intendedUntracked, "intended-untracked", "repo-relative untracked path to include; repeat for each path")
 	flags.Var(&expectedUntrackedInventory, "expected-untracked-inventory", "expected complete eligible untracked inventory digest")
@@ -1600,7 +1654,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		target.Kind = reviewtransaction.TargetBaseWorkspaceOverlay
 	}
 	intendedScope := reviewIntendedUntrackedScope{}
-	untrackedFlags := untrackedScope.set || len(intendedUntracked) > 0 || expectedUntrackedInventory.set
+	untrackedFlags := len(untrackedScope) > 0 || len(intendedUntracked) > 0 || len(expectedUntrackedInventory) > 0
 	if selectedProjection == reviewtransaction.ProjectionStaged {
 		if untrackedFlags {
 			return errors.New("staged projection does not accept untracked-selection flags; rerun `gentle-ai review start --projection=staged` without them")
@@ -1610,7 +1664,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		if err != nil {
 			return reviewPreflightError(err)
 		}
-		if intendedScope.NeedsSelection {
+		if !intendedScope.Declared && len(intendedScope.Inventory) > 0 {
 			return reviewPreflightError(fmt.Errorf("untracked files require an explicit declaration; rerun `gentle-ai review start --untracked-scope=exclude --expected-untracked-inventory=%s` or select a path through `gentle-ai review status --next-transition`", intendedScope.Digest))
 		}
 		target.IntendedUntracked = intendedScope.Intended
@@ -1712,6 +1766,17 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		}
 		return err
 	}
+	validateBeforeCreate := func() error {
+		if selectedProjection != reviewtransaction.ProjectionStaged {
+			if _, err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateIntendedUntrackedSelection(ctx, intendedScope.Digest, intendedScope.Intended); err != nil {
+				return reviewPreflightRefusal(reviewPreflightStaleTargetReason, err)
+			}
+		}
+		if err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateLiveSnapshot(ctx, snapshot); err != nil {
+			return reviewPreflightRefusal(reviewPreflightStaleTargetReason, err)
+		}
+		return nil
+	}
 	// Wave 3 Slice 3 activation branch (design decision 5): every input this
 	// call needs -- snapshot, risk assessment, tier, lenses, and the fact
 	// that authorizeReviewStart already returned nil (consent granted, or
@@ -1783,7 +1848,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 					trimmedLineage, reviewRecoverCommand(*cwd, trimmedLineage, record.Revision, "<new-lineage>", "<scope_changed|invalidated|escalated>"))
 			}
 		}
-		record, err := runReviewFacadeStartNewLineage(ctx, root, trimmedLineage, strings.TrimSpace(*policySource), snapshot, assessment, changedLines, lenses)
+		record, err := runReviewFacadeStartNewLineage(ctx, root, trimmedLineage, strings.TrimSpace(*policySource), snapshot, assessment, changedLines, lenses, validateBeforeCreate)
 		if err != nil {
 			return err
 		}
@@ -1928,21 +1993,11 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// BeforeCreate runs under the START lock at the new-authority boundary
 	// only, so refusing from it is the one place a START can fail with nothing
 	// persisted. It is wired for both forms because both create authority; the
-	// and revalidates both explicit inventory and exact candidate bytes for both
-	// direct and negotiated starts.
 	beforeCreate := func() error {
 		if requestedContextErr != nil {
 			return requestedContextErr
 		}
-		if selectedProjection != reviewtransaction.ProjectionStaged {
-			if _, err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateIntendedUntrackedSelection(ctx, intendedScope.Digest, intendedScope.Intended); err != nil {
-				return reviewPreflightRefusal(reviewPreflightStaleTargetReason, err)
-			}
-		}
-		if err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateLiveSnapshot(ctx, snapshot); err != nil {
-			return reviewPreflightRefusal(reviewPreflightStaleTargetReason, err)
-		}
-		return nil
+		return validateBeforeCreate()
 	}
 	started, err := reviewtransaction.StartCompactAuthority(ctx, root, reviewtransaction.CompactStartRequest{
 		State: state, TracePath: strings.TrimSpace(*tracePath), ExplicitLineage: explicitLineage, BeforeCreate: beforeCreate,

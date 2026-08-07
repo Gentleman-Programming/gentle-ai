@@ -48,16 +48,35 @@ func TestReviewStartExcludesNestedWorktreeFromFrozenManifest(t *testing.T) {
 	}
 }
 
-func TestNegotiatedReviewStartRefusesEmbeddedForeignRepository(t *testing.T) {
+func TestNegotiatedReviewStartIgnoresEmbeddedForeignRepository(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	runReviewCLIGit(t, repo, "init", "-q", filepath.Join(repo, "vendor", "embedded"))
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
 
 	var output bytes.Buffer
 	if err := RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", "embedded-repository-2394",
 	}), &output); err == nil {
 		t.Fatal("negotiated review start admitted an embedded foreign repository")
+	}
+	output.Reset()
+	if err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", "embedded-repository-2394", "--projection", "staged",
+	}), &output); err != nil {
+		t.Fatalf("negotiated review start beside an embedded foreign repository: %v\n%s", err, output.String())
+	}
+	result := decodeNegotiatedReviewStart(t, output.Bytes())
+	if result.ChangedPathManifest == nil {
+		t.Fatalf("negotiated START carries no changed-path manifest:\n%s", output.String())
+	}
+	for _, entry := range *result.ChangedPathManifest {
+		if strings.HasPrefix(entry.Path, "vendor/") {
+			t.Fatalf("frozen manifest admitted embedded repository content %q", entry.Path)
+		}
+	}
+	if len(*result.ChangedPathManifest) != 1 || (*result.ChangedPathManifest)[0].Path != "tracked.txt" {
+		t.Fatalf("frozen manifest = %#v, want only the declared change", *result.ChangedPathManifest)
 	}
 }
 func TestReviewStartKeepsSiblingLinkedWorktreeWorking(t *testing.T) {

@@ -49,7 +49,7 @@ type ReviewFacadeStartNewLineageResult struct {
 func runReviewFacadeStartNewLineage(
 	ctx context.Context, root, explicitLineage, policySource string,
 	snapshot reviewtransaction.Snapshot, assessment reviewtransaction.RiskAssessment,
-	changedLines int, lenses []string,
+	changedLines int, lenses []string, beforeCreate func() error,
 ) (reviewtransaction.NewLineageRecord, error) {
 	lineage := explicitLineage
 	if lineage == "" {
@@ -82,6 +82,9 @@ func runReviewFacadeStartNewLineage(
 		return reviewtransaction.NewLineageRecord{}, err
 	}
 	if _, err := store.Mutate(ctx, "", func(next *reviewtransaction.NewLineageAuthority) error {
+		if err := beforeCreate(); err != nil {
+			return err
+		}
 		*next = *transition.Authority
 		next.LineageID = lineage
 		return next.RecordTransition(snapshot.Identity, nil)

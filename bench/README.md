@@ -797,8 +797,8 @@ across days of sessions, and a large gitignored binary inside the tree.
 | ID | Shape | Family |
 |---|---|---|
 | `rw01-nested-worktree-not-ignored` | linked worktree at `.wt/test` INSIDE the tree, untracked, not ignored — #1881 verbatim | A |
-| `rw02-node-modules-scale-untracked-tree` | 3,000 untracked files beside a docs candidate; discovery's cost is the measurement | A |
-| `rw03-untracked-env-with-secrets` | untracked `.env` holding a sentinel secret; no counted command may quote the value | A |
+| `rw02-node-modules-scale-untracked-tree` | STATUS inventories 3,000 eligible paths; explicit exclusion keeps the candidate docs-only | A |
+| `rw03-untracked-env-with-secrets` | explicitly selected `.env`; its path may enter scope but no counted command may quote the sentinel value | A |
 | `rw04-mutating-pre-commit-hook` | husky-style hook rewrites a tracked file during commit; bytes proven moved between review and commit | A |
 | `rw05-dirty-submodule-gitlink-bump` | staged gitlink bump while the submodule's working tree holds uncommitted edits | A |
 | `rw06-shallow-clone-depth-1` | `--depth 1` clone proven to hold 1 of 3 commits; pre-push derivation against missing history | A |

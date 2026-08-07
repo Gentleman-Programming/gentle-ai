@@ -679,12 +679,8 @@ func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Co
 	if err != nil {
 		return nil, err
 	}
-	eligible := make(map[string]bool, len(paths))
-	for _, path := range paths {
-		eligible[path] = true
-	}
 	for _, path := range selected {
-		if !eligible[path] {
+		if index := sort.SearchStrings(paths, path); index == len(paths) || paths[index] != path {
 			return nil, fmt.Errorf("intended-untracked path %q is not in the eligible inventory; rerun `gentle-ai review status --next-transition`", path)
 		}
 	}
