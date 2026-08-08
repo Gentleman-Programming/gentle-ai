@@ -144,6 +144,8 @@ func TestReviewReopenResultsAdmittedSlotQuarantineRequiresNamedAuthorization(t *
 // route, recapture, and finalize to an approved terminal state over the exact
 // same candidate identity, with the overridden bytes preserved.
 func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequired(t *testing.T) {
+	t.Parallel()
+
 	repo, started, store, initial := newArtifactReview(t, true)
 	if len(initial.State.SelectedLenses) != 4 {
 		t.Fatalf("selected lenses = %v, want 4R", initial.State.SelectedLenses)

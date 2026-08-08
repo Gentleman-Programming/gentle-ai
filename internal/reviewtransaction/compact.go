@@ -39,6 +39,14 @@ type CompactSemanticStateError struct {
 	LineageID string
 	State     State
 	Problem   string
+	// OutdatedIdentity marks the one semantic failure a retired
+	// snapshot-identity formula leaves behind (#2743): the record's bytes
+	// parse and its structure is intact, but the identity it froze was
+	// computed by an earlier release's formula, so recomputation under the
+	// current formula no longer matches. Outdated means gate-invalid, not
+	// damaged: diagnostics classify it historical instead of malformed, and
+	// no scoped walk lets it block another lineage's operation.
+	OutdatedIdentity bool
 }
 
 func (err *CompactSemanticStateError) Error() string {
@@ -596,10 +604,21 @@ func validateCompactSnapshotMetadata(snapshot Snapshot) error {
 	}
 	wantIdentity := snapshotIdentityForProjection(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
 	if snapshot.Identity != wantIdentity {
-		return errors.New("compact snapshot identity does not match its metadata")
+		return errCompactSnapshotIdentityMismatch
 	}
 	return nil
 }
+
+// errCompactSnapshotIdentityMismatch is the exact semantic failure a record
+// frozen under a retired snapshot-identity formula produces when the current
+// formula recomputes its identity (#2743: every pre-rc.2 compact-v2 record
+// fails here after the #2659/PR-#2667 identity purification). It is a
+// sentinel so parseCompactRecord can mark the resulting typed
+// *CompactSemanticStateError as OutdatedIdentity — the clean-break policy
+// keeps such records gate-invalid without rewriting their bytes, and
+// diagnostics owe them an honest historical classification instead of
+// narrating them as damage.
+var errCompactSnapshotIdentityMismatch = errors.New("compact snapshot identity does not match its metadata")
 
 func validateCompactFindings(state CompactState) error {
 	if state.State == StateReviewing || state.State == StateInvalidated {
@@ -1107,6 +1126,16 @@ type findingLocation struct {
 	EndLine   int
 }
 
+// findingLocationHasPositiveLines reports whether a parsed finding location
+// carries strictly positive 1-based line numbers. It is a defense-in-depth
+// lower bound for causality: source lines are numbered from 1, so a location
+// whose start or end line is below 1 can never designate a line that exists in
+// the candidate and must never be treated as candidate-causal. This holds the
+// invariant even if a parser path ever yielded a non-positive line.
+func findingLocationHasPositiveLines(finding findingLocation) bool {
+	return finding.StartLine >= 1 && finding.EndLine >= 1
+}
+
 func parseFindingLocation(location string) (findingLocation, error) {
 	fail := func(reason FindingLocationErrorReason) (findingLocation, error) {
 		return findingLocation{}, &FindingLocationError{Location: location, Reason: reason}
@@ -1161,7 +1190,13 @@ func parseFindingLocationLine(value string) (int, FindingLocationErrorReason) {
 			return 0, FindingLocationLineNotInteger
 		}
 	}
-	line, err := strconv.ParseUint(value, 10, strconv.IntSize)
+	// The all-digits check above guarantees no sign character reaches here, so
+	// the value is a non-negative literal. Parse it as an unsigned integer that
+	// must fit a positive Go int: bit size strconv.IntSize-1 caps the result at
+	// the platform's MaxInt, so any value above it (including the [2^63, 2^64-1]
+	// band that a full 64-bit parse accepted before wrapping negative via int())
+	// refuses as an overflow instead of silently becoming a negative line.
+	line, err := strconv.ParseUint(value, 10, strconv.IntSize-1)
 	if err != nil {
 		return 0, FindingLocationLineOverflowsInteger
 	}

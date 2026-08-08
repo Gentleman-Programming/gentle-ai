@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -71,7 +72,7 @@ func TestGoverningAuthorityLiveEvidenceUsesStagedProjectionAtPreCommit(t *testin
 // not been staged yet. The same unstaged-drift fixture that pre-commit
 // (correctly) allows must still be reported as changed at post-apply.
 func TestGoverningAuthorityLiveEvidenceUsesWorkspaceProjectionAtPostApply(t *testing.T) {
-	reviewModeHome(t)
+	home := reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "1")
 
@@ -88,6 +89,10 @@ func TestGoverningAuthorityLiveEvidenceUsesWorkspaceProjectionAtPostApply(t *tes
 	var finalize bytes.Buffer
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", "gate-selector-post-apply-lineage"}, &finalize); err != nil {
 		t.Fatalf("new-lineage finalize: %v\n%s", err, finalize.String())
+	}
+	staleManagedReviewerAssets(t, home)
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", "gate-selector-post-apply-lineage", "--gate", string(reviewtransaction.GatePostApply)}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), managedAssetProvenanceRefusal) {
+		t.Fatalf("exact approved receipt with stale assets error = %v, want %q", err, managedAssetProvenanceRefusal)
 	}
 
 	// Approved and receipted (default-deny no longer masks the denial this
@@ -113,5 +118,8 @@ func TestGoverningAuthorityLiveEvidenceUsesWorkspaceProjectionAtPostApply(t *tes
 	// also produce for the wrong reason.
 	if denied.Result != reviewtransaction.GateScopeChanged {
 		t.Fatalf("post-apply drift must deny as scope-changed, got %#v", denied)
+	}
+	if strings.Contains(err.Error(), managedAssetProvenanceRefusal) {
+		t.Fatalf("post-apply drift was masked by stale asset provenance: %v", err)
 	}
 }

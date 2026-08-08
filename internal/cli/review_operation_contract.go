@@ -748,6 +748,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 		failure.NextAction = "stop"
+		failure.Cause = reviewIntegrationFailureCause(gitTimeout)
 		return failure
 	}
 	var gitFailure *reviewtransaction.GitCommandError
@@ -760,6 +761,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 		failure.NextAction = "stop"
+		failure.Cause = reviewIntegrationFailureCause(gitFailure)
 		return failure
 	}
 	var gitControl *reviewtransaction.GitProcessControlError
@@ -772,6 +774,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 		failure.NextAction = "stop"
+		failure.Cause = reviewIntegrationFailureCause(gitControl)
 		return failure
 	}
 	if errors.Is(runErr, context.DeadlineExceeded) {

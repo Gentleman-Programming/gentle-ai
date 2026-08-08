@@ -35,6 +35,8 @@ func TestReviewCaptureEvidenceRepositoryResolverDiagnostics(t *testing.T) {
 }
 
 func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
+	t.Parallel()
+
 	repo, started, _, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "result.json")
 	args := func(lineage, target, lens, order string) []string {
@@ -119,6 +121,8 @@ func TestReviewCaptureResultAdmitsOneJSONEnvelopeInsideProse(t *testing.T) {
 }
 
 func TestReviewCaptureResultRejectsSemanticAdmissionBeforePublication(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name   string
 		mutate func(*facadeReviewerResult)
@@ -355,6 +359,8 @@ func TestReviewCaptureResultRejectsInvalidLocationWithActionableDiagnostic(t *te
 }
 
 func TestReviewCaptureResultFinalizePreservesCausalClassification(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name        string
 		class       reviewtransaction.EvidenceClass
@@ -466,6 +472,8 @@ func TestReviewFinalizeArtifactFiles(t *testing.T) {
 }
 
 func TestReviewFinalizeArtifactFileSizeLimit(t *testing.T) {
+	t.Parallel()
+
 	t.Run("exact limit", func(t *testing.T) {
 		repo, started, _, _, artifacts := capturedArtifacts(t, false)
 		path := writeSizedArtifactManifest(t, artifacts[0], reviewResultArtifactLimit)
@@ -563,6 +571,8 @@ func TestReviewFinalizeArtifactFileCancellationAndErrorPrivacy(t *testing.T) {
 }
 
 func TestReviewFinalizeRejectsArtifactFileSourceMixing(t *testing.T) {
+	t.Parallel()
+
 	result := filepath.Join(t.TempDir(), "result.json")
 	if err := os.WriteFile(result, []byte(`{"findings":[],"evidence":["checked"]}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -603,6 +613,8 @@ func TestReviewFinalizeArtifactFileStdinAccounting(t *testing.T) {
 }
 
 func TestReviewFinalizeArtifactFilePreservesStrictManifestValidation(t *testing.T) {
+	t.Parallel()
+
 	t.Run("malformed", func(t *testing.T) {
 		repo, started, store, record := newArtifactReview(t, false)
 		path := filepath.Join(t.TempDir(), "manifest.json")
@@ -648,6 +660,8 @@ func TestReviewFinalizeArtifactFilePreservesStrictManifestValidation(t *testing.
 }
 
 func TestReviewCaptureResultWaitsForMaintenanceBeforePublication(t *testing.T) {
+	t.Parallel()
+
 	repo, started, store, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "result.json")
 	if err := os.WriteFile(input, admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0), 0o600); err != nil {

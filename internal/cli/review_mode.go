@@ -568,6 +568,9 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 	if err != nil {
 		return reviewModeUnreadable(ctx, repo, global, err)
 	}
+	if err := authorizeManagedReviewerAssets(); err != nil {
+		return err
+	}
 	if assessment.Level == reviewtransaction.RiskLow {
 		// Tier 0 is silent structural readback. Asking here would reintroduce
 		// exactly the ceremony the silent readback exists to remove, and a

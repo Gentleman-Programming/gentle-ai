@@ -349,11 +349,14 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 			importCompactRecoveredEvidence(&request.Successor, predecessor.State, evidence)
 		}
 	}
-	stores, err := DiscoverCompactStores(ctx, repo)
+	// The recovery graph is scoped the same way every other authority walk is
+	// (#2495, finished here for #2741/#2743): a foreign record nobody can read
+	// is ABSENT from the graph, never a repository-wide refusal issued to a
+	// healthy, unrelated recovery. scanCompactAuthority still propagates
+	// operational failures, and the predecessor's own readability was already
+	// proven by its explicit load above.
+	scan, err := scanCompactAuthority(ctx, repo)
 	if err != nil {
-		return CompactRecord{}, err
-	}
-	if _, err := CompactAuthorityLeaves(ctx, repo); err != nil {
 		return CompactRecord{}, err
 	}
 	if existingErr == nil {
@@ -362,11 +365,7 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 		}
 		return CompactRecord{}, errors.New("recovery successor lineage already exists with different authority")
 	}
-	for _, store := range stores {
-		record, loadErr := store.Load()
-		if loadErr != nil {
-			return CompactRecord{}, fmt.Errorf("validate recovery graph: %w", loadErr)
-		}
+	for _, record := range scan.records {
 		if record.State.Recovery != nil && record.State.Recovery.PredecessorLineageID == request.PredecessorLineageID {
 			return CompactRecord{}, errors.New("recovery predecessor already has successor")
 		}
@@ -2245,7 +2244,8 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 		return CompactRecord{}, errors.New("invalid compact review state record")
 	}
 	if err := record.State.Validate(); err != nil {
-		return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error()}
+		return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error(),
+			OutdatedIdentity: errors.Is(err, errCompactSnapshotIdentityMismatch)}
 	}
 	if lineageID != "" && record.State.LineageID != lineageID {
 		return CompactRecord{}, errors.New("compact state lineage does not match its directory")

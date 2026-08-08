@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -201,6 +202,8 @@ func TestReviewFacadeStartStagedProjectionBaseRefContinuationRefused(t *testing.
 }
 
 func TestReviewFacadeStagedReceiptAllowsDeliveredTreePrePushAndPrePR(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	configureCLIReviewPublicationRemote(t, repo, branch)
@@ -239,6 +242,8 @@ func TestReviewFacadeStagedReceiptAllowsDeliveredTreePrePushAndPrePR(t *testing.
 }
 
 func TestReviewFacadeCleanFlowReplacesOneCompactStateAndUsesOnlyReceipt(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate behavior\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -360,6 +365,8 @@ func TestReviewFacadeCleanFlowReplacesOneCompactStateAndUsesOnlyReceipt(t *testi
 }
 
 func TestReviewFacadeStartSupportsCommittedBaseDiff(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
@@ -434,6 +441,8 @@ func TestReviewFacadeStartSupportsCommittedBaseDiff(t *testing.T) {
 }
 
 func TestReviewFacadeStartRequiresCommittedOnlyAndReusesEquivalentAuthority(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("committed candidate\n"), 0o644); err != nil {
@@ -583,6 +592,8 @@ func TestReviewFacadeStartServiceTokenSelectsCanonicalHighRiskLenses(t *testing.
 }
 
 func TestReviewFacadeStartProvableShellAndModeRiskSelectsCanonical4R(t *testing.T) {
+	t.Parallel()
+
 	want := []string{reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability}
 	tests := []struct {
 		name  string
@@ -977,6 +988,8 @@ func TestReadFacadeReviewerResultsRejectsNonNativeFields(t *testing.T) {
 }
 
 func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
@@ -1136,6 +1149,8 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 // escalating afterwards, so this test asserts the refusal and the untouched
 // authority rather than the escalated state that route no longer reaches.
 func TestReviewFacadeRefusesFalseIntroducedFindingOutsideGenesis(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	legacyDir := filepath.Join(repo, "internal", "legacy")
 	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
@@ -1272,6 +1287,8 @@ func TestReviewFacadeStartCannotResetActiveCorrectionBudget(t *testing.T) {
 // corrected candidate -- and therefore must not block the correction either,
 // which is the false blocker that guard would have become.
 func TestReviewFacadeFinalizeIgnoresCorrectionCreatedUntrackedPath(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1328,6 +1345,8 @@ func TestReviewFacadeFinalizeIgnoresCorrectionCreatedUntrackedPath(t *testing.T)
 	}
 }
 func TestReviewFacadePersistsOverBudgetForecastAndActual(t *testing.T) {
+	t.Parallel()
+
 	newCandidate := func(t *testing.T) (string, ReviewFacadeStartResult, string) {
 		t.Helper()
 		repo := initReviewCLIRepo(t)
@@ -1501,6 +1520,152 @@ func TestReviewFacadeHelpAndFlatCompatibilityPathsRemainAvailable(t *testing.T) 
 	}
 }
 
+// reviewFacadeUsageVerbs reads only the compact facade's usage declaration;
+// later help prose may explain a verb but cannot advertise it as a facade verb.
+func reviewFacadeUsageVerbs(t *testing.T, help string) map[string]bool {
+	t.Helper()
+	line, _, _ := strings.Cut(help, "\n")
+	const prefix = "Usage: gentle-ai review <"
+	const suffix = "> [flags]"
+	if !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, suffix) {
+		t.Fatalf("review facade usage declaration = %q", line)
+	}
+
+	verbs := map[string]bool{}
+	for _, verb := range strings.Split(strings.TrimSuffix(strings.TrimPrefix(line, prefix), suffix), "|") {
+		if verbs[verb] {
+			t.Fatalf("review facade usage declaration names %q more than once", verb)
+		}
+		verbs[verb] = true
+	}
+	return verbs
+}
+
+func reviewFacadeUsageConformanceError(advertised, dispatched map[string]bool) error {
+	missing := []string{}
+	for verb := range dispatched {
+		if !advertised[verb] {
+			missing = append(missing, verb)
+		}
+	}
+	unexpected := []string{}
+	for verb := range advertised {
+		if !dispatched[verb] {
+			unexpected = append(unexpected, verb)
+		}
+	}
+	if len(missing) == 0 && len(unexpected) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+	sort.Strings(unexpected)
+	return fmt.Errorf("facade usage drift: missing dispatched verbs %v; advertised without facade dispatch %v", missing, unexpected)
+}
+
+func reviewFacadeUsageHelp(t *testing.T) string {
+	t.Helper()
+	var help bytes.Buffer
+	if err := RunReview([]string{"--help"}, &help); err != nil {
+		t.Fatal(err)
+	}
+	return help.String()
+}
+
+func copyReviewFacadeVerbSet(verbs map[string]bool) map[string]bool {
+	clone := make(map[string]bool, len(verbs))
+	for verb := range verbs {
+		clone[verb] = true
+	}
+	return clone
+}
+
+func TestReviewFacadeUsageMatchesEveryFacadeDispatch(t *testing.T) {
+	advertised := reviewFacadeUsageVerbs(t, reviewFacadeUsageHelp(t))
+	dispatched := reviewCommandDispatchVerbs(t)
+	if err := reviewFacadeUsageConformanceError(advertised, dispatched); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewFacadeHelpHasNoPartialCommandList(t *testing.T) {
+	if strings.Contains(reviewFacadeUsageHelp(t), "Additive headless capabilities") {
+		t.Fatal("review facade help contains a second partial command list")
+	}
+}
+
+func TestEveryAdvertisedReviewFacadeVerbDispatches(t *testing.T) {
+	advertised := reviewFacadeUsageVerbs(t, reviewFacadeUsageHelp(t))
+	verbs := make([]string, 0, len(advertised))
+	for verb := range advertised {
+		verbs = append(verbs, verb)
+	}
+	sort.Strings(verbs)
+
+	for _, verb := range verbs {
+		t.Run(verb, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunReview([]string{verb, "--help"}, &output)
+			evidence := output.String()
+			if err != nil {
+				evidence += "\n" + err.Error()
+			}
+			lowered := strings.ToLower(evidence)
+			if strings.Contains(lowered, "unknown") || strings.Contains(lowered, "unrecognized") {
+				t.Fatalf("review %s dispatch evidence is unrecognized:\n%s", verb, evidence)
+			}
+			usage := "Usage: gentle-ai review " + verb
+			requires := "review " + verb + " requires"
+			if !strings.Contains(evidence, usage) && !strings.Contains(evidence, requires) {
+				t.Fatalf("review %s did not produce verb-specific dispatch evidence; want %q or %q:\n%s", verb, usage, requires, evidence)
+			}
+		})
+	}
+}
+
+func TestReviewFacadeUsageBoundaryExcludesAppMode(t *testing.T) {
+	facade := reviewCommandDispatchVerbs(t)
+	if facade[reviewModeDispatchVerb] {
+		t.Fatalf("review %s belongs to the app pre-dispatch, not the compact facade switch", reviewModeDispatchVerb)
+	}
+	if !reviewDispatchableReviewVerbs(t)[reviewModeDispatchVerb] {
+		t.Fatalf("review %s is missing from the app dispatch boundary", reviewModeDispatchVerb)
+	}
+	if reviewFacadeUsageVerbs(t, reviewFacadeUsageHelp(t))[reviewModeDispatchVerb] {
+		t.Fatalf("review %s must not be advertised by the compact facade usage declaration", reviewModeDispatchVerb)
+	}
+}
+
+func TestReviewFacadeUsageRatchetRejectsDrift(t *testing.T) {
+	advertised := reviewFacadeUsageVerbs(t, reviewFacadeUsageHelp(t))
+	dispatched := reviewCommandDispatchVerbs(t)
+	deletedAdvertised := copyReviewFacadeVerbSet(advertised)
+	delete(deletedAdvertised, "capture-result")
+	inventedDispatched := copyReviewFacadeVerbSet(dispatched)
+	inventedDispatched["invented"] = true
+	for _, test := range []struct {
+		name       string
+		advertised map[string]bool
+		dispatched map[string]bool
+	}{
+		{
+			name:       "deleted advertised verb",
+			advertised: deletedAdvertised,
+			dispatched: dispatched,
+		},
+		{
+			name:       "invented dispatch verb",
+			advertised: advertised,
+			dispatched: inventedDispatched,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := reviewFacadeUsageConformanceError(test.advertised, test.dispatched); err == nil {
+				t.Fatal("facade usage drift unexpectedly passed")
+			}
+		})
+	}
+}
+
 func TestReviewSchemaExamplesMatchStrictFacadeContracts(t *testing.T) {
 	for _, kind := range []string{"reviewer", "refuter", "validator"} {
 		t.Run(kind, func(t *testing.T) {
@@ -1633,6 +1798,8 @@ func TestReviewSchemasRequireConcreteEvidenceStrings(t *testing.T) {
 }
 
 func TestReviewFacadeRejectsMalformedInputsWithoutConsumingTerminalValidator(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1926,6 +2093,8 @@ func TestLegacyV1LineageRemainsReadableButRejectsAppend(t *testing.T) {
 }
 
 func TestCompactTransportCommandsRoundTripWithoutEventReconstruction(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1966,6 +2135,8 @@ func TestCompactTransportCommandsRoundTripWithoutEventReconstruction(t *testing.
 }
 
 func TestCompactTransportAllowsCorrectedPrePushWithoutTransientBaseObject(t *testing.T) {
+	t.Parallel()
+
 	source := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(source, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -2195,6 +2366,8 @@ func facadeReviewerResultArgs(t *testing.T, repo string, started ReviewFacadeSta
 // reviewtransaction.EscalationAccountingReasonTemplate, the same template the
 // organic gate and the SDD-bound remediation surface use.
 func TestReviewFacadeFinalizeSurfacesEscalationAccounting(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -2375,6 +2548,8 @@ func TestReviewFacadeOperationDeadlineSelector(t *testing.T) {
 // review state" without ever consuming canonical captured evidence or telling
 // the caller why nothing happened.
 func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
+	t.Parallel()
+
 	setup := func(t *testing.T) (string, ReviewFacadeStartResult) {
 		t.Helper()
 		repo := initReviewCLIRepo(t)

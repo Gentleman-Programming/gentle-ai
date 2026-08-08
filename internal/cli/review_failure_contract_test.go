@@ -573,8 +573,8 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 		code      string
 		causeText string
 	}{
-		{name: "timeout", err: &reviewtransaction.GitCommandTimeoutError{Timeout: 15 * time.Second}, code: "git_command_timeout"},
-		{name: "exit", err: &reviewtransaction.GitCommandError{ExitCode: 128}, code: "git_command_failed"},
+		{name: "timeout", err: &reviewtransaction.GitCommandTimeoutError{Timeout: 15 * time.Second}, code: "git_command_timeout", causeText: "15s"},
+		{name: "exit", err: &reviewtransaction.GitCommandError{Args: []string{"write-tree"}, ExitCode: 128, Output: "fatal: not a git repository"}, code: "git_command_failed", causeText: "git write-tree failed with exit code 128: fatal: not a git repository"},
 		{
 			name: "process control",
 			err: &reviewtransaction.GitProcessControlError{
@@ -590,7 +590,11 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 				failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "stop" {
 				t.Fatalf("git failure = %#v", failure)
 			}
-			if tt.causeText != "" && !strings.Contains(failure.Message, tt.causeText) {
+			if tt.causeText != "" && !strings.Contains(failure.Cause, tt.causeText) {
+				t.Fatalf("git failure cause field missing diagnostics %q: %q", tt.causeText, failure.Cause)
+			}
+			if tt.code == "git_command_failed" && tt.name == "process control" && !strings.Contains(failure.Message, tt.causeText) {
+				// Process control includes causeText in Message for immediate diagnosis
 				t.Fatalf("git failure message masks cause: %q", failure.Message)
 			}
 		})
@@ -740,7 +744,12 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 			return err
 		}
 		defer func() { _ = os.Setenv("PATH", oldPath) }()
-		_, err := (reviewtransaction.SnapshotBuilder{Repo: hookRepo}).HasDirtyTrackedChanges(ctx)
+		// Bound only the injected post-commit probe. The committed transition is
+		// already durable, so its Git timeout keeps the required status-only shape
+		// without waiting for the production 15s per-command timeout.
+		hookCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		_, err := (reviewtransaction.SnapshotBuilder{Repo: hookRepo}).HasDirtyTrackedChanges(hookCtx)
 		return err
 	}
 	t.Cleanup(func() { reviewFacadeCommittedTransitionHook = oldTransitionHook })

@@ -356,7 +356,19 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 	if err != nil {
 		return false, err
 	}
+	return builder.candidateFindingSupportsCausality(ctx, snapshot, finding, causality)
+}
+
+// candidateFindingSupportsCausality answers causality for an already parsed
+// finding location. The non-positive line refusal lives here, at the level the
+// causality comparisons actually consume, so a start or end line below 1 can
+// never be judged causal even when it reaches this point without having been
+// filtered by the location parser.
+func (builder SnapshotBuilder) candidateFindingSupportsCausality(ctx context.Context, snapshot Snapshot, finding findingLocation, causality CausalDisposition) (bool, error) {
 	if stringIndex(snapshot.Paths, finding.Path) < 0 {
+		return false, nil
+	}
+	if !findingLocationHasPositiveLines(finding) {
 		return false, nil
 	}
 	if causality == CausalBehaviorActivated {

@@ -190,6 +190,8 @@ func reviewStopToolFault(value bool) *bool { return &value }
 // entirely) or by adding a classified, docs-agreeing entry here — never by
 // exempting it from this test.
 func TestReviewStopInvariantReasonCodesAreClassified(t *testing.T) {
+	t.Parallel()
+
 	source, err := os.ReadFile("review_next_transition.go")
 	if err != nil {
 		t.Fatal(err)
@@ -233,6 +235,8 @@ func TestReviewStopInvariantReasonCodesAreClassified(t *testing.T) {
 // a code marked Terminal here whose docs row is not "Terminal"-prefixed, or a
 // code marked caller-continuable here whose docs row IS "Terminal"-prefixed.
 func TestReviewStopInvariantTerminalClassificationAgreesWithDocs(t *testing.T) {
+	t.Parallel()
+
 	docs, err := os.ReadFile("../../docs/review-integration.md")
 	if err != nil {
 		t.Fatal(err)
@@ -267,6 +271,8 @@ func TestReviewStopInvariantTerminalClassificationAgreesWithDocs(t *testing.T) {
 // way or the other, and the question must not apply to any caller-continuable
 // entry (Terminal: false), where ToolFault must stay nil.
 func TestReviewStopInvariantToolFaultColumnIsWellFormed(t *testing.T) {
+	t.Parallel()
+
 	for code, disposition := range reviewStopInvariantClassification {
 		if disposition.Terminal && disposition.ToolFault == nil {
 			t.Errorf("reason code %q is terminal but has no ToolFault classification (task 5.1 requires every terminal-proof row to get one of the two values)", code)

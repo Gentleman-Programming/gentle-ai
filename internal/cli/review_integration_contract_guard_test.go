@@ -1,9 +1,14 @@
 package cli
 
 import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -219,43 +224,172 @@ func reviewIntegrationProductionSources(t *testing.T) []string {
 	return sources
 }
 
-// reviewCommandDispatchCaseRegexp extracts a quoted case label, e.g.
-// `case "start":` or `case "start", "status":` (only the first label of a
-// multi-label case is meaningful here; none of the two switches this test
-// reads use multi-label cases for review verbs).
-var reviewCommandDispatchCaseRegexp = regexp.MustCompile(`^\s*case "([a-z][a-z-]*)":`)
-
 // reviewCommandDispatchVerbs mechanically extracts every case label inside
 // runReviewCommandContext and runReviewCommand in review_facade.go -- the two
 // switches RunReview ultimately dispatches every `gentle-ai review <verb>`
-// invocation through. It deliberately does NOT scan the whole file: other
-// switches in the same file (severity, lens name) also have quoted string
-// case labels that would otherwise false-positive.
+// invocation through. It parses the source and reads only the top-level
+// `switch args[0]` in each function, so multiline labels and nested switches
+// cannot alter the set.
 func reviewCommandDispatchVerbs(t *testing.T) map[string]bool {
 	t.Helper()
 	source, err := os.ReadFile("review_facade.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	verbs := map[string]bool{}
-	inScope := false
-	for _, line := range strings.Split(string(source), "\n") {
-		switch {
-		case strings.HasPrefix(line, "func runReviewCommandContext(") || strings.HasPrefix(line, "func runReviewCommand("):
-			inScope = true
-			continue
-		case strings.HasPrefix(line, "func "):
-			inScope = false
-			continue
-		}
-		if !inScope {
-			continue
-		}
-		if match := reviewCommandDispatchCaseRegexp.FindStringSubmatch(line); match != nil {
-			verbs[match[1]] = true
-		}
+	return reviewCommandDispatchVerbsFromSource(t, source)
+}
+
+func reviewCommandDispatchVerbsFromSource(t *testing.T, source []byte) map[string]bool {
+	t.Helper()
+	owners, err := reviewCommandDispatchOwners(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verbs := make(map[string]bool, len(owners))
+	for verb := range owners {
+		verbs[verb] = true
 	}
 	return verbs
+}
+
+func reviewCommandDispatchOwners(source []byte) (map[string]string, error) {
+	file, err := parser.ParseFile(token.NewFileSet(), "review_facade.go", source, 0)
+	if err != nil {
+		return nil, err
+	}
+	owners := map[string]string{}
+	found := map[string]bool{}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Body == nil || (function.Name.Name != "runReviewCommandContext" && function.Name.Name != "runReviewCommand") {
+			continue
+		}
+		if found[function.Name.Name] {
+			return nil, fmt.Errorf("review facade declares %s more than once", function.Name.Name)
+		}
+		found[function.Name.Name] = true
+		dispatch, err := reviewCommandDispatchSwitch(function)
+		if err != nil {
+			return nil, err
+		}
+		for _, clause := range dispatch.Body.List {
+			caseClause, ok := clause.(*ast.CaseClause)
+			if !ok {
+				return nil, fmt.Errorf("%s dispatch switch contains %T instead of a case clause", function.Name.Name, clause)
+			}
+			for _, expression := range caseClause.List {
+				literal, ok := expression.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					return nil, fmt.Errorf("%s dispatch case expression = %T, want string literal", function.Name.Name, expression)
+				}
+				verb, err := strconv.Unquote(literal.Value)
+				if err != nil {
+					return nil, fmt.Errorf("unquote %s dispatch case: %w", function.Name.Name, err)
+				}
+				if owner, exists := owners[verb]; exists {
+					return nil, fmt.Errorf("review command %q dispatched by both %s and %s", verb, owner, function.Name.Name)
+				}
+				owners[verb] = function.Name.Name
+			}
+		}
+	}
+	for _, name := range []string{"runReviewCommandContext", "runReviewCommand"} {
+		if !found[name] {
+			return nil, fmt.Errorf("review_facade.go has no %s function", name)
+		}
+	}
+	return owners, nil
+}
+
+func reviewCommandDispatchSwitch(function *ast.FuncDecl) (*ast.SwitchStmt, error) {
+	var dispatch *ast.SwitchStmt
+	for _, statement := range function.Body.List {
+		switchStatement, ok := statement.(*ast.SwitchStmt)
+		if !ok || !reviewCommandDispatchTag(switchStatement.Tag) {
+			continue
+		}
+		if dispatch != nil {
+			return nil, fmt.Errorf("%s has more than one top-level review command dispatch switch", function.Name.Name)
+		}
+		dispatch = switchStatement
+	}
+	if dispatch == nil {
+		return nil, fmt.Errorf("%s has no top-level `switch args[0]` dispatch", function.Name.Name)
+	}
+	return dispatch, nil
+}
+
+func reviewCommandDispatchTag(expression ast.Expr) bool {
+	index, ok := expression.(*ast.IndexExpr)
+	if !ok {
+		return false
+	}
+	args, ok := index.X.(*ast.Ident)
+	if !ok || args.Name != "args" {
+		return false
+	}
+	literal, ok := index.Index.(*ast.BasicLit)
+	return ok && literal.Kind == token.INT && literal.Value == "0"
+}
+
+func TestReviewCommandDispatchVerbsReadsMultilineGroupedCases(t *testing.T) {
+	const source = `package cli
+
+func runReviewCommandContext(args []string) {
+	switch args[0] {
+	case "context-first",
+		"context-second":
+		switch ignored {
+		case "nested":
+		}
+	}
+}
+
+func runReviewCommand(args []string) {
+	switch args[0] {
+	case "command-first",
+		"command-second":
+	}
+}
+
+func unrelated(args []string) {
+	switch args[0] {
+	case "unrelated":
+	}
+}
+`
+
+	verbs := reviewCommandDispatchVerbsFromSource(t, []byte(source))
+	for _, verb := range []string{"context-first", "context-second", "command-first", "command-second"} {
+		if !verbs[verb] {
+			t.Errorf("multiline grouped dispatch omitted %q: %v", verb, verbs)
+		}
+	}
+	if len(verbs) != 4 || verbs["nested"] || verbs["unrelated"] {
+		t.Fatalf("multiline dispatch extraction escaped its two facade switches: %v", verbs)
+	}
+}
+
+func TestReviewCommandDispatchVerbsRejectsDuplicateFacadeVerb(t *testing.T) {
+	const source = `package cli
+
+func runReviewCommandContext(args []string) {
+	switch args[0] {
+	case "duplicate":
+	}
+}
+
+func runReviewCommand(args []string) {
+	switch args[0] {
+	case "duplicate":
+	}
+}
+`
+
+	_, err := reviewCommandDispatchOwners([]byte(source))
+	if err == nil || !strings.Contains(err.Error(), `review command "duplicate" dispatched by both runReviewCommandContext and runReviewCommand`) {
+		t.Fatalf("duplicate dispatch error = %v", err)
+	}
 }
 
 // reviewIntegrationNegotiationCallRegexp finds every call site of

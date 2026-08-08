@@ -147,6 +147,8 @@ func TestReviewReopenResultsQuarantinesLegacyUnadmittedArtifactAndReplacesSlot(t
 }
 
 func TestReviewReopenResultsRetainsAdmittedSlotsAndRejectsCleanAuthority(t *testing.T) {
+	t.Parallel()
+
 	repo, started, store, initial := newArtifactReview(t, true)
 	if len(initial.State.SelectedLenses) != 4 {
 		t.Fatalf("selected lenses = %v, want 4R", initial.State.SelectedLenses)

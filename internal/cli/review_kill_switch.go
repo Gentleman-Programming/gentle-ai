@@ -59,7 +59,18 @@ func resolveReviewOperationRoot(ctx context.Context, cwd string, operation revie
 	if err != nil {
 		return "", err
 	}
-	if err := authorizeReviewRDDOperation(ctx, root, operation); err != nil {
+	switch operation {
+	case reviewtransaction.RDDOperationMutate:
+		// authorizeReviewAuthorityMutation already applies the asset gate.
+		err = authorizeReviewAuthorityMutation(ctx, root)
+	case reviewtransaction.RDDOperationAbandon:
+		if err = authorizeReviewRDDOperation(ctx, root, operation); err == nil {
+			err = authorizeManagedReviewerAssets()
+		}
+	default:
+		err = authorizeReviewRDDOperation(ctx, root, operation)
+	}
+	if err != nil {
 		return "", err
 	}
 	return root, nil
@@ -70,7 +81,10 @@ func resolveReviewOperationRoot(ctx context.Context, cwd string, operation revie
 // separate from resolveReviewMutationRoot for the verbs that resolve their root
 // before they know whether this run mutates anything.
 func authorizeReviewAuthorityMutation(ctx context.Context, repo string) error {
-	return authorizeReviewRDDOperation(ctx, repo, reviewtransaction.RDDOperationMutate)
+	if err := authorizeReviewRDDOperation(ctx, repo, reviewtransaction.RDDOperationMutate); err != nil {
+		return err
+	}
+	return authorizeManagedReviewerAssets()
 }
 
 func authorizeReviewRDDOperation(ctx context.Context, repo string, operation reviewtransaction.RDDOperation) error {
