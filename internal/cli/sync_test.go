@@ -4388,11 +4388,11 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 		LastUpdateCheck: &lastUpdate,
 		PendingSync:     true,
 	}
-	writer, err := managedAssetWriterIdentity()
+	writer, err := managedAssetDigest()
 	if err != nil {
 		t.Fatal(err)
 	}
-	before.ManagedAssetWriter = writer
+	before.ManagedAssetDigest = writer
 	if err := state.Write(home, before); err != nil {
 		t.Fatalf("state.Write: %v", err)
 	}

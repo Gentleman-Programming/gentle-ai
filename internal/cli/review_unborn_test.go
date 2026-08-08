@@ -17,7 +17,6 @@ import (
 
 func initUnbornReviewCLIRepo(t *testing.T) string {
 	t.Helper()
-	stampReviewTestAssets(t)
 	repo := t.TempDir()
 	runReviewCLIGit(t, repo, "init", "-q")
 	runReviewCLIGit(t, repo, "config", "user.email", "test@example.com")

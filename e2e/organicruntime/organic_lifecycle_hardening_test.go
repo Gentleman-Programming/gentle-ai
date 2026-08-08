@@ -808,7 +808,6 @@ func TestOrganicReviewTargetShapeRefusals(t *testing.T) {
 	t.Run("issue-1771", func(t *testing.T) {
 		repo := initOrganicUnbornRepository(t)
 		harness := &organicHarness{t: t, repo: organicRepository{worktree: repo}, home: t.TempDir()}
-		stampOrganicManagedAssetWriter(t, harness)
 		harness.writeFiles(map[string]string{"candidate.txt": organicLines("unborn selector-free candidate", 4)})
 		harness.git("add", "--", "candidate.txt")
 
@@ -849,7 +848,6 @@ func TestOrganicReviewTargetShapeRefusals(t *testing.T) {
 	t.Run("issue-1641", func(t *testing.T) {
 		repo := initOrganicUnbornRepository(t)
 		harness := &organicHarness{t: t, repo: organicRepository{worktree: repo}, home: t.TempDir()}
-		stampOrganicManagedAssetWriter(t, harness)
 		harness.writeFiles(map[string]string{"candidate.txt": organicLines("empty-base candidate", 4)})
 		harness.git("add", "--", "candidate.txt")
 

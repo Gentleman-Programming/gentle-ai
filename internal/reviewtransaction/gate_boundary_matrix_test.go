@@ -193,15 +193,6 @@ func gateBoundaryMatrixEnvironment(home string) []string {
 	return append(environment, "HOME="+home, "USERPROFILE="+home)
 }
 
-func stampGateBoundaryMatrixManagedAssetWriter(t *testing.T, binary, home string) {
-	t.Helper()
-	command := exec.CommandContext(context.Background(), binary, "sync", "--agents", "opencode")
-	command.Env = gateBoundaryMatrixEnvironment(home)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("sync gate boundary matrix managed assets: %v\n%s", err, output)
-	}
-}
-
 type gateBoundaryMatrixCLIResult struct {
 	Result   string `json:"result"`
 	Relation string `json:"relation,omitempty"`
@@ -239,7 +230,6 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 	binary := gateBoundaryMatrixBinary(t)
 	gateBoundaryMatrixHome = t.TempDir()
 	t.Cleanup(func() { gateBoundaryMatrixHome = "" })
-	stampGateBoundaryMatrixManagedAssetWriter(t, binary, gateBoundaryMatrixHome)
 	wired := map[[2]string]gateBoundaryMatrixRow{}
 
 	// post-apply / exact: workspace candidate matches the approved receipt

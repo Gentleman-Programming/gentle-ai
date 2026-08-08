@@ -14,10 +14,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
-
-const reviewTestHomeEnv = "GENTLE_AI_TEST_REVIEW_HOME"
 
 func TestFlatReviewStartRejectsBeforeCreatingLegacyAuthority(t *testing.T) {
 	repo := initReviewCLIRepo(t)
@@ -483,7 +480,6 @@ func assertReviewGateResult(t *testing.T, payload []byte, want reviewtransaction
 
 func initReviewCLIRepo(t *testing.T) string {
 	t.Helper()
-	stampReviewTestAssets(t)
 	repo, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -498,37 +494,6 @@ func initReviewCLIRepo(t *testing.T) string {
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
 	runReviewCLIGit(t, repo, "commit", "-qm", "base")
 	return repo
-}
-
-func stampReviewTestAssets(t *testing.T) {
-	t.Helper()
-	home := os.Getenv(reviewTestHomeEnv)
-	if home == "" {
-		candidate, err := os.UserHomeDir()
-		if err == nil {
-			if relative, relativeErr := filepath.Rel(os.TempDir(), candidate); relativeErr == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-				home = candidate
-			}
-		}
-		if home == "" {
-			home = t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("USERPROFILE", home)
-		}
-		t.Setenv(reviewTestHomeEnv, home)
-	}
-	persisted, err := state.Read(home)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("read review test state: %v", err)
-	}
-	writer, err := managedAssetWriterIdentity()
-	if err != nil {
-		t.Fatalf("derive review test writer identity: %v", err)
-	}
-	persisted.ManagedAssetWriter = writer
-	if err := state.Write(home, persisted); err != nil {
-		t.Fatalf("stamp review test assets: %v", err)
-	}
 }
 
 func runReviewCLIGit(t *testing.T, repo string, args ...string) string {

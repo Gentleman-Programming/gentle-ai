@@ -1384,7 +1384,7 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 // This is the function the TUI calls directly to avoid CLI flag parsing.
 func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult, error) {
 	agentIDs := selection.Agents
-	persistedState, persistedStateErr := state.Read(homeDir)
+	persistedState, _ := state.Read(homeDir)
 	restorePersistedCommunityTools(homeDir, &selection, persistedState)
 
 	// Resolve persona from persisted state when the caller has not provided one.
@@ -1453,37 +1453,46 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	if !result.Verify.Ready {
 		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
-	writer, err := managedAssetWriterIdentity()
+	writer, err := managedAssetDigest()
 	if err != nil {
 		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
 	}
-	if errors.Is(persistedStateErr, os.ErrNotExist) {
-		persistedState = state.InstallState{}
-	} else if persistedStateErr != nil {
-		// Review refuses managed assets until sync records this writer, so a
-		// sync that cannot read the state file must name the command that
-		// rewrites it whole. Otherwise the refusal points back at this failure.
-		return result, fmt.Errorf(
-			"read install state for managed asset provenance: %w; run `gentle-ai install` to rewrite %s",
-			persistedStateErr, state.Path(homeDir))
-	}
-	shouldWriteState := false
-	if persistedState.ManagedAssetWriter != writer {
-		persistedState.ManagedAssetWriter = writer
-		shouldWriteState = true
-	}
-	if !persistedState.CommunityToolsConfigured && selection.CommunityTools != nil {
-		persistedState.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
-		persistedState.CommunityToolsConfigured = true
-		shouldWriteState = true
-	}
-	if shouldWriteState {
-		if err := state.Write(homeDir, persistedState); err != nil {
-			return result, fmt.Errorf("persist managed asset provenance: %w", err)
-		}
+	if err := persistSyncManagedAssetState(homeDir, selection, writer); err != nil {
+		return result, err
 	}
 
 	return result, nil
+}
+
+func persistSyncManagedAssetState(homeDir string, selection model.Selection, writer string) error {
+	return withInstallStateLock(homeDir, func() error {
+		latest, err := state.Read(homeDir)
+		if errors.Is(err, os.ErrNotExist) {
+			latest = state.InstallState{}
+		} else if err != nil {
+			return fmt.Errorf(
+				"read install state for managed asset provenance: %w; run `gentle-ai install` to rewrite %s",
+				err, state.Path(homeDir))
+		}
+
+		shouldWrite := false
+		if latest.ManagedAssetDigest != writer {
+			latest.ManagedAssetDigest = writer
+			shouldWrite = true
+		}
+		if !latest.CommunityToolsConfigured && selection.CommunityTools != nil {
+			latest.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
+			latest.CommunityToolsConfigured = true
+			shouldWrite = true
+		}
+		if !shouldWrite {
+			return nil
+		}
+		if err := state.Write(homeDir, latest); err != nil {
+			return fmt.Errorf("persist managed asset provenance: %w", err)
+		}
+		return nil
+	})
 }
 
 // RunSync is the top-level sync entry point, parallel to RunInstall.

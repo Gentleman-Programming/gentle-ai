@@ -3195,7 +3195,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 			},
 		}, negotiated, *contract)
 	} else if governs {
-		if receiptBacked {
+		if receiptBacked && evaluation.Result == reviewtransaction.GateAllow {
 			if err := authorizeManagedReviewerAssets(); err != nil {
 				return err
 			}

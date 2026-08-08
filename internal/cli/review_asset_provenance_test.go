@@ -54,7 +54,7 @@ func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
 		})
 	}
 	home := t.TempDir()
-	requireManagedAssetProvenanceNoError(t, state.Write(home, state.InstallState{ManagedAssetWriter: "sha256:previous-writer"}))
+	requireManagedAssetProvenanceNoError(t, state.Write(home, state.InstallState{ManagedAssetDigest: "sha256:previous-writer"}))
 	decoy := filepath.Join(home, ".config", "opencode", "plugins", "review-result-artifacts.ts")
 	requireManagedAssetProvenanceNoError(t, os.MkdirAll(filepath.Dir(decoy), 0o755))
 	requireManagedAssetProvenanceNoError(t, os.WriteFile(decoy, []byte(assets.MustRead("opencode/plugins/review-result-artifacts.ts")), 0o644))
@@ -64,7 +64,7 @@ func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
 		t.Fatalf("partial sync result = %#v, %v", result, err)
 	}
 	persisted, readErr := state.Read(home)
-	if _, err := os.Stat(decoy); err != nil || readErr != nil || persisted.ManagedAssetWriter != "sha256:previous-writer" {
+	if _, err := os.Stat(decoy); err != nil || readErr != nil || persisted.ManagedAssetDigest != "sha256:previous-writer" {
 		t.Fatalf("decoy plugin bypassed provenance: stat=%v state=%#v read=%v", err, persisted, readErr)
 	}
 }
@@ -102,8 +102,66 @@ func TestManagedReviewerAssetProvenanceReceiptOrdering(t *testing.T) {
 		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", "provenance-inflight", "--gate", "pre-commit"}, &bytes.Buffer{}), reviewFacadeReceiptNotAvailableReason("provenance-inflight"))
 	})
 }
+// TestManagedReviewerAssetProvenanceRefusesOnlyRecordedSkew pins the two
+// shapes the refusal must NOT take. Only a recorded digest that disagrees is
+// stale; a home that never installed anything has no managed assets to be
+// stale, and refusing it would block every `go install` user from reviewing
+// while telling them to run a sync that would fix nothing.
+func TestManagedReviewerAssetProvenanceRefusesOnlyRecordedSkew(t *testing.T) {
+	digest, err := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, err)
+
+	for name, persist := range map[string]func(string){
+		"no state file at all": func(string) {},
+		"state without a recorded digest": func(home string) {
+			requireManagedAssetProvenanceNoError(t, state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}}))
+		},
+		"digest matching this binary's assets": func(home string) {
+			requireManagedAssetProvenanceNoError(t, state.Write(home, state.InstallState{ManagedAssetDigest: digest}))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			persist(home)
+			if err := authorizeManagedReviewerAssets(); err != nil {
+				t.Fatalf("authorize = %v, want no refusal", err)
+			}
+		})
+	}
+
+	t.Run("recorded digest that disagrees", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+		staleManagedReviewerAssets(t, home)
+		requireManagedAssetProvenanceError(t, authorizeManagedReviewerAssets(), managedAssetProvenanceRefusal)
+	})
+}
+
+// TestManagedAssetDigestIsStableAndAssetBound proves the digest is a property
+// of the embedded assets rather than of the build, which is the whole reason
+// it replaced the capabilities build identity: a rebuild that changes no asset
+// must not invalidate an installation, and a test binary must be able to agree
+// with a released one.
+func TestManagedAssetDigestIsStableAndAssetBound(t *testing.T) {
+	first, err := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, err)
+	second, err := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, err)
+	if first != second || first == "" {
+		t.Fatalf("digest is not stable: %q then %q", first, second)
+	}
+	build, err := reviewCapabilitiesBuildIdentity(AppVersion)
+	requireManagedAssetProvenanceNoError(t, err)
+	if first == build.ID {
+		t.Fatal("digest equals the build identity, so it still carries build metadata")
+	}
+}
+
 func staleManagedReviewerAssets(t *testing.T, home string) {
-	requireManagedAssetProvenanceNoError(t, state.Write(home, state.InstallState{ManagedAssetWriter: "sha256:stale"}))
+	requireManagedAssetProvenanceNoError(t, state.Write(home, state.InstallState{ManagedAssetDigest: "sha256:stale"}))
 }
 func requireManagedAssetProvenanceNoError(t *testing.T, err error) {
 	t.Helper()

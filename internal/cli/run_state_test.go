@@ -104,12 +104,12 @@ func TestRunInstallPersistsConfiguredSelection(t *testing.T) {
 	if err != nil || !got.SelectionConfigured || got.Preset != model.PresetCustom || got.SDDMode != model.SDDModeMulti || len(got.Components) != 0 {
 		t.Fatalf("persisted selection = %#v, err = %v", got, err)
 	}
-	wantWriter, err := managedAssetWriterIdentity()
+	wantDigest, err := managedAssetDigest()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ManagedAssetWriter != wantWriter {
-		t.Fatalf("managed asset writer = %q, want %q", got.ManagedAssetWriter, wantWriter)
+	if got.ManagedAssetDigest != wantDigest {
+		t.Fatalf("managed asset digest = %q, want %q", got.ManagedAssetDigest, wantDigest)
 	}
 }
 

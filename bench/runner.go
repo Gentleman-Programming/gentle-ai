@@ -73,27 +73,6 @@ func newSandbox(binary, root string) (*Sandbox, error) {
 	return sandbox, nil
 }
 
-func (s *Sandbox) stampManagedAssetWriter() error {
-	command := exec.Command(s.Binary, "review", "capabilities")
-	command.Env = s.env()
-	payload, err := command.CombinedOutput()
-	if err != nil {
-		if strings.Contains(string(payload), "unknown review command") {
-			return nil
-		}
-		return fmt.Errorf("read bench binary build identity: %w: %s", err, payload)
-	}
-	var capabilities struct {
-		Build struct {
-			ID string `json:"id"`
-		} `json:"build"`
-	}
-	if err := json.Unmarshal(payload, &capabilities); err != nil || capabilities.Build.ID == "" {
-		return fmt.Errorf("decode bench binary build identity: %s", payload)
-	}
-	return s.write(filepath.Join(s.Home, ".gentle-ai", "state.json"), fmt.Sprintf(`{"managed_asset_writer":%q}`, capabilities.Build.ID))
-}
-
 // env is a closed environment: only what the product legitimately needs.
 // PATH is inherited because the product shells out to git.
 func (s *Sandbox) env() []string {
@@ -520,11 +499,6 @@ func runJourney(binary string, journey Journey) JourneyResult {
 		return result
 	}
 	sandbox.NewLineageActivation = journey.NewLineageActivation
-	if err := sandbox.stampManagedAssetWriter(); err != nil {
-		result.Status = StatusFailed
-		result.FailureReason = err.Error()
-		return result
-	}
 	accumulator := newAccumulator()
 	probe := newCapabilityProbe(sandbox)
 	run := &journeyRun{sandbox: sandbox, probe: probe, accumulator: accumulator}

@@ -18,6 +18,12 @@ import (
 func TestReviewModeStatusReportsBothSourcesWithoutMutating(t *testing.T) {
 	home := reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
+	// This test pins that status leaves global user state alone, so it needs
+	// state on disk to compare against. It writes its own rather than relying
+	// on a shared fixture: nothing else in this flow creates one.
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}}); err != nil {
+		t.Fatal(err)
+	}
 	before, err := os.ReadFile(state.Path(home))
 	if err != nil {
 		t.Fatal(err)
@@ -531,8 +537,6 @@ func reviewModeHome(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	t.Setenv(reviewTestHomeEnv, home)
-	stampReviewTestAssets(t)
 	return home
 }
 

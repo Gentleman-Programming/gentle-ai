@@ -40,7 +40,7 @@ type ClaudePhaseAssignmentState struct {
 // InstallState holds the persisted user selections from the last install run.
 type InstallState struct {
 	InstalledAgents     []string            `json:"installed_agents"`
-	ManagedAssetWriter  string              `json:"managed_asset_writer,omitempty"`
+	ManagedAssetDigest  string              `json:"managed_asset_digest,omitempty"`
 	SelectionConfigured bool                `json:"selection_configured,omitempty"`
 	Components          []model.ComponentID `json:"components,omitempty"`
 	Skills              []model.SkillID     `json:"skills,omitempty"`
@@ -195,7 +195,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 
 	return InstallState{
 		InstalledAgents:             merged,
-		ManagedAssetWriter:          existing.ManagedAssetWriter,
+		ManagedAssetDigest:          existing.ManagedAssetDigest,
 		SelectionConfigured:         existing.SelectionConfigured,
 		Components:                  existing.Components,
 		Skills:                      existing.Skills,
