@@ -618,3 +618,150 @@ func TestRuntimeLedgerExhaustedAttemptsAdmitTheResetForAWiderScope(t *testing.T)
 		t.Fatalf("reset laundered lifetime attempts: %#v", wider)
 	}
 }
+
+// TestRuntimeLedgerWidenedRescopeRefusalNamesTheExhaustRoute is #2769 A, the
+// complement of #1974: that caller reached for reset and heard nothing about
+// rescope, this one reaches for rescope and hears only that a wider budget is
+// refused. Status answers begin, which repeats the ceiling they just called
+// too small. The exhaust-then-reset route is executed here, not asserted as
+// prose, because a refusal naming a route nothing can walk is worse than one
+// naming nothing.
+func TestRuntimeLedgerWidenedRescopeRefusalNamesTheExhaustRoute(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "widened-2769")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "widen-begin-1", WorkUnit: "independent-verification",
+		EvidenceGoal: "independently verify the applied change", MaxAttempts: 2, MaxChangedLines: 40,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "widen-finish-1", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('3'), Diagnosis: "verification failed with the workspace unchanged",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "verification harness exited cleanly",
+		ProcessEvidence: "post-verification process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.NextAction != RuntimeActionBegin {
+		t.Fatalf("status must still answer begin for this state: %#v", failed)
+	}
+
+	_, widenErr := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "widen-rescope-1",
+		WorkUnit: "implementation-remediation", EvidenceGoal: "remediate what verification named",
+		MaxAttempts: 2, MaxChangedLines: 400,
+		Reason: "remediation needs more than the verification ceiling", Actor: "maintainer",
+	})
+	if !errors.Is(widenErr, ErrRuntimeRescopeWidened) {
+		t.Fatalf("widened rescope error = %v, want ErrRuntimeRescopeWidened", widenErr)
+	}
+	for _, want := range []string{"1 remaining attempt", "decision-required", "gentle-ai sdd-attempt reset"} {
+		if !strings.Contains(widenErr.Error(), want) {
+			t.Fatalf("widened rescope refusal does not name %q: %v", want, widenErr)
+		}
+	}
+
+	// Walk the route the refusal names: spend the last attempt, land on
+	// decision-required, reset, and open the wider budget rescope refused.
+	last, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: failed.Revision, RequestID: "widen-begin-2", WorkUnit: "independent-verification",
+		EvidenceGoal: "independently verify the applied change", MaxAttempts: 2, MaxChangedLines: 40,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exhausted, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: last.Revision, RequestID: "widen-finish-2", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('4'), Diagnosis: "verification failed again with the workspace unchanged",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "verification harness exited cleanly",
+		ProcessEvidence: "post-verification process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exhausted.DecisionRequired {
+		t.Fatalf("the route the refusal names did not reach decision-required: %#v", exhausted)
+	}
+	after, err := store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: exhausted.Revision, RequestID: "widen-reset-1",
+		Reason: "remediation needs a wider scope than verification allowed", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatalf("the reset this refusal names was refused: %v", err)
+	}
+	wider, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: after.Revision, RequestID: "widen-begin-3", WorkUnit: "implementation-remediation",
+		EvidenceGoal: "remediate what verification named", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatalf("the wider budget the refusal promises was refused: %v", err)
+	}
+	if wider.Objective == nil || wider.Objective.MaxChangedLines != 400 {
+		t.Fatalf("post-reset objective = %#v", wider.Objective)
+	}
+}
+
+// TestRuntimeLedgerCompleteObjectiveRefusalNamesTheSuccessor is #2769 B. A
+// completed objective refused a repeated begin with "objective is complete"
+// and pointed at status, whose next_action is `complete`: true, and useless to
+// a caller with more work on this change. Advance was one flag away the whole
+// time, and the code comment above the refusal already said so.
+func TestRuntimeLedgerCompleteObjectiveRefusalNamesTheSuccessor(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "complete-2769")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "done-begin-1", WorkUnit: "apply-the-change",
+		EvidenceGoal: "apply the approved change", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	passed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "done-finish-1", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('5'), Diagnosis: "the change applied and its evidence passed",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "harness exited cleanly",
+		ProcessEvidence: "post-run process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !passed.Complete || passed.NextAction != RuntimeActionComplete {
+		t.Fatalf("post-pass status = %#v", passed)
+	}
+
+	_, doneErr := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: passed.Revision, RequestID: "done-begin-2", WorkUnit: "apply-the-change",
+		EvidenceGoal: "apply the approved change", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if !errors.Is(doneErr, ErrRuntimeObjectiveDone) {
+		t.Fatalf("repeated begin error = %v, want ErrRuntimeObjectiveDone", doneErr)
+	}
+	for _, want := range []string{"--work-unit", "advance", "gentle-ai sdd-attempt reset"} {
+		if !strings.Contains(doneErr.Error(), want) {
+			t.Fatalf("complete-objective refusal does not name %q: %v", want, doneErr)
+		}
+	}
+
+	// Exit 1 runs: the same begin with only --work-unit changed is admitted.
+	advanced, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: passed.Revision, RequestID: "done-begin-3", WorkUnit: "verify-the-change",
+		EvidenceGoal: "apply the approved change", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatalf("the advance this refusal names was refused: %v", err)
+	}
+	if advanced.ActiveAttempt == nil || advanced.Objective == nil || advanced.Objective.WorkUnit != "verify-the-change" {
+		t.Fatalf("advanced objective = %#v", advanced)
+	}
+}
