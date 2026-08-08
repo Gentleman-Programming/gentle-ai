@@ -281,7 +281,18 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		}
 		if status.Receipt.Status == ReviewReceiptPresent {
 			if input.Selector != nil && input.gate() == reviewtransaction.GatePrePR && !input.Selector.PrePRRepresentable {
-				return reviewStopTransition("pre_pr_selector_unrepresentable")
+				// Root 7 (#2471): the caller supplied a raw commit SHA where
+				// pre-PR needs a symbolic ref. That is a missing input, not a
+				// terminal state, and the reason code stays byte-identical so
+				// consumers routing on it keep working while the kind stops
+				// lying about there being nothing to do. Same shape as
+				// empty_candidate_base_ref_required above: name the input
+				// without deriving it, because only the caller knows which
+				// ref is the intended base.
+				return reviewCollectTransition("pre_pr_selector_unrepresentable", ReviewTransitionInput{
+					Name: "base_ref", Schema: "gentle-ai.review-base-ref-selection/v1", CaptureOperation: "external.select_base_ref",
+					Arguments: reviewTargetArguments(status),
+				})
 			}
 			arguments := []ReviewTransitionArgument{{Name: "lineage", Value: binding.LineageID}, {Name: "gate", Value: string(input.gate())}}
 			selectors := []ReviewTransitionArgument{}
@@ -723,7 +734,13 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 		var representable bool
 		selectorArguments, representable = input.Selector.recoveryArguments()
 		if !representable {
-			return reviewStopTransition("recovery_target_unrepresentable")
+			// Root 7 (#2471): the selector the caller supplied cannot be
+			// represented as a recovery target, so the missing thing is a
+			// different selector they choose, not a dead end.
+			return reviewCollectTransition("recovery_target_unrepresentable", ReviewTransitionInput{
+				Name: "recovery_target_selector", Schema: "gentle-ai.review-recovery-target-selection/v1",
+				CaptureOperation: "external.select_recovery_target", Arguments: reviewTargetArguments(status),
+			})
 		}
 	}
 	if input.recoveryAuthorized(binding) {

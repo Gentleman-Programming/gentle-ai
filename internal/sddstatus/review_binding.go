@@ -348,6 +348,7 @@ type RuntimeStrandedSuccessor struct {
 	Lineage          string
 	Revision         string
 	SnapshotIdentity string
+	DiscardedWork    reviewtransaction.CompactDiscardedWorkSummary
 }
 
 // runtimeStrandedSuccessor answers exactly one question: is the ONLY thing
@@ -414,7 +415,7 @@ func runtimeStrandedSuccessor(ctx context.Context, repo string, binding ReviewBi
 	if err != nil || !eligibility.Eligible {
 		return RuntimeStrandedSuccessor{}, false
 	}
-	found.Revision, found.SnapshotIdentity = eligibility.Revision, eligibility.SnapshotIdentity
+	found.Revision, found.SnapshotIdentity, found.DiscardedWork = eligibility.Revision, eligibility.SnapshotIdentity, eligibility.DiscardedWork
 	return found, true
 }
 

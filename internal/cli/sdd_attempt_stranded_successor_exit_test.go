@@ -60,11 +60,9 @@ func TestSDDAttemptBoundFinishNamesTheExitOutOfAStrandedSuccessor(t *testing.T) 
 	arguments = arguments[2:]
 
 	const actor = "cli-stranded-exit-test"
-	const reason = "the stranded successor can never be finalized"
 	want := map[string]string{
 		"<actor>":                    actor,
-		"<why-it-is-abandoned>":      reason,
-		"<maintainer-authorization>": namedAbandonAuthorization(t, message, actor, reason),
+		"<maintainer-authorization>": namedAbandonAuthorization(t, message, actor),
 	}
 	for _, placeholder := range namedCommandPlaceholders(arguments) {
 		value, known := want[placeholder]
@@ -139,10 +137,11 @@ func TestSDDAttemptBoundFinishStillRoutesUnstrandedSuccessorsToTheRouter(t *test
 }
 
 // namedAbandonAuthorization assembles the maintainer authorization out of the
-// template the refusal itself printed, substituting only the actor and reason
-// the operator chose. Building it any other way would test this file's idea of
-// the binding rather than the product's.
-func namedAbandonAuthorization(t *testing.T, message, actor, reason string) string {
+// template the refusal itself printed, substituting only the actor the
+// operator chooses. The reason and discarded-work summary are fixed by the V2
+// contract, so building them independently would test this file's idea of the
+// binding rather than the product's.
+func namedAbandonAuthorization(t *testing.T, message, actor string) string {
 	t.Helper()
 	const marker = reviewtransaction.CompactAbandonAuthorizationSchema
 	start := strings.Index(message, marker)
@@ -150,12 +149,11 @@ func namedAbandonAuthorization(t *testing.T, message, actor, reason string) stri
 		t.Fatalf("refusal names an abandonment without the authorization template:\n%s", message)
 	}
 	lines := strings.Split(message[start:], "\n")
-	if len(lines) < 6 {
-		t.Fatalf("authorization template is not six lines:\n%s", message)
+	if len(lines) < 9 {
+		t.Fatalf("authorization template is not nine lines:\n%s", message)
 	}
-	template := strings.Join(lines[:6], "\n")
-	template = strings.ReplaceAll(template, "<--actor>", actor)
-	template = strings.ReplaceAll(template, "<--reason>", reason)
+	template := strings.Join(lines[:9], "\n")
+	template = strings.ReplaceAll(template, "<actor>", actor)
 	if strings.Contains(template, "<") {
 		t.Fatalf("authorization template still carries a value the product knows:\n%s", template)
 	}

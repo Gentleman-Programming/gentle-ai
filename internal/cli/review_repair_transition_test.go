@@ -248,16 +248,13 @@ func writeNonPristineDispositionRepairFixture(t *testing.T, repo, prefix string)
 	}
 }
 
-// TestCompactStartInvalidGraphRefusalStillNamesRepairExit satisfies
+// TestCompactStartInvalidGraphRefusalNamesAbandonExit satisfies
 // tasks.md 4.3/4.4: SanctionedCompactRecoveryExits (the exact seam
 // compactStartInvalidGraphRefusal's continuation prose renders through)
-// still names CompactRecoveryEdgeExitRepair ("review repair") for a closed,
-// NON-PRISTINE content-mismatched-recovery-authorization successor (the
-// #2014 gap: neither reconcile nor abandon accepts it) — this predates Wave 6
-// S4 (Wave 2 Slice S3 wired it) and nothing in S1-S3 touched this switch
-// case; this is the regression guard the coordinator's design risk note
-// asked for so the route ships with covering tests, not blind.
-func TestCompactStartInvalidGraphRefusalStillNamesRepairExit(t *testing.T) {
+// names abandonment for a non-terminal content-mismatched recovery successor.
+// The V2 binding records its exact discarded-work summary rather than routing
+// the operator through an unrelated repair transaction.
+func TestCompactStartInvalidGraphRefusalNamesAbandonExit(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeNonPristineDispositionRepairFixture(t, repo, "s4-repair-exit")
 
@@ -273,13 +270,13 @@ func TestCompactStartInvalidGraphRefusalStillNamesRepairExit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sawRepairExit := false
+	sawAbandonExit := false
 	for _, exit := range exits {
-		if exit.Operation == reviewtransaction.CompactRecoveryEdgeExitRepair {
-			sawRepairExit = true
+		if exit.Operation == reviewtransaction.CompactRecoveryEdgeExitAbandon {
+			sawAbandonExit = true
 		}
 	}
-	if !sawRepairExit {
-		t.Fatalf("no sanctioned exit named %q for a closed, non-pristine content-mismatched-recovery-authorization successor: %#v", reviewtransaction.CompactRecoveryEdgeExitRepair, exits)
+	if !sawAbandonExit {
+		t.Fatalf("no sanctioned exit named %q for a non-terminal content-mismatched-recovery-authorization successor: %#v", reviewtransaction.CompactRecoveryEdgeExitAbandon, exits)
 	}
 }

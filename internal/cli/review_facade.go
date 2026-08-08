@@ -26,9 +26,10 @@ import (
 // source for the refusal when --action-eligibility or --next-transition is
 // requested without --contract. Both runReviewStatus and
 // runReviewFacadeFinalize emit it so the two call sites cannot drift, and it
-// names the exact contract value the caller must pass rather than only
-// describing the requirement.
-const reviewContractRequiredForActionEligibilityReason = "--action-eligibility and --next-transition require --contract " + ReviewIntegrationContractV1
+// names every accepted contract value rather than only describing the
+// requirement.
+const reviewContractRequiredForActionEligibilityReason = "--action-eligibility and --next-transition require --contract " +
+	ReviewIntegrationContractV1 + " or " + ReviewIntegrationContractV2
 
 // reviewStatusTargetSelectorsRequireContractReason is the sibling of
 // reviewContractRequiredForActionEligibilityReason above: it names the same

@@ -58,21 +58,10 @@ func forgedRecoveryPair(t *testing.T, repo, suffix, target string, mutate ...fun
 	return predecessor, successor, successorStore
 }
 
-// TestForgedRecoveryAuthorizationOnNonPristineSuccessorHasSanctionedRepairExit
-// pins the shape #2014 named as a dead end: the abandonment gate refuses to
-// discard captured review results -- but Wave 2's leaf authority disposition
-// plan closes exactly this content_mismatched_recovery_authorization class,
-// and quarantine byte-preserves the entry (nothing is discarded the way
-// `review abandon` would discard captured review results), so the
-// successor's pristine state does not gate admission
-// (rdd-leaf-disposition-execution: cardinality is the only admission
-// predicate). SanctionedCompactRecoveryExits (Wave 2 Slice S3) names `review
-// repair` for this edge. (ReconcileInvalidRecoveryEdge itself used to also
-// independently refuse this edge as corruption -- Wave 7 S3b retired that
-// provider along with the verb it served; the inspection/exit surface this
-// test drives is the only route left, and it already covered this shape on
-// its own.)
-func TestForgedRecoveryAuthorizationOnNonPristineSuccessorHasSanctionedRepairExit(t *testing.T) {
+// TestForgedRecoveryAuthorizationOnNonTerminalSuccessorHasSanctionedAbandonExit
+// keeps the #2014 recovery edge on the generalized V2 abandonment path. Its
+// authorization must bind whatever discarded work the stored successor holds.
+func TestForgedRecoveryAuthorizationOnNonTerminalSuccessorHasSanctionedAbandonExit(t *testing.T) {
 	ctx := context.Background()
 	repo := initSnapshotRepo(t)
 	_, successor, successorStore := forgedRecoveryPair(t, repo, "captured", "forged captured target\n", func(state *CompactState) {
@@ -102,11 +91,11 @@ func TestForgedRecoveryAuthorizationOnNonPristineSuccessorHasSanctionedRepairExi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(exits) != 1 || exits[0].Operation != CompactRecoveryEdgeExitRepair || exits[0].Blocked != "" {
-		t.Fatalf("disposition-eligible sanctioned exit = %#v", exits)
+	if len(exits) != 1 || exits[0].Operation != CompactRecoveryEdgeExitAbandon || exits[0].Blocked != "" {
+		t.Fatalf("abandon-eligible sanctioned exit = %#v", exits)
 	}
-	if _, abandonErr := InspectCompactPristineAbandonment(ctx, repo, successor.State.LineageID); abandonErr != nil {
-		t.Fatal(abandonErr)
+	if eligibility, abandonErr := InspectCompactPristineAbandonment(ctx, repo, successor.State.LineageID); abandonErr != nil || !eligibility.Eligible {
+		t.Fatalf("abandon eligibility = %#v, %v", eligibility, abandonErr)
 	}
 	current, err := os.ReadFile(successorStore.StatePath())
 	if err != nil || !bytes.Equal(current, persisted) {
@@ -214,10 +203,10 @@ func TestForgedRecoveryAuthorizationDeadEndHasRunnableExit(t *testing.T) {
 		}
 		request := CompactAbandonRequest{
 			LineageID: successor.State.LineageID, ExpectedRevision: eligibility.Revision,
-			Reason: "quarantine forged recovery authorization", Actor: "maintainer@example.com",
+			Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
 		}
 		request.MaintainerAuthorization = RenderCompactAbandonAuthorization(
-			request.LineageID, eligibility.Revision, eligibility.SnapshotIdentity, request.Actor, request.Reason)
+			request.LineageID, eligibility.Revision, eligibility.SnapshotIdentity, request.Actor, request.Reason, eligibility.DiscardedWork)
 		record, err := AbandonPristineCompactStore(ctx, repo, request)
 		if err != nil {
 			t.Fatalf("abandon %q: %v", successor.State.LineageID, err)

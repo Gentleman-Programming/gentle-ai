@@ -86,6 +86,8 @@ type CompactReclaimRecord struct {
 	// lens partition; it is set only for review-abandon quarantines of a
 	// reviewing lineage whose selected plan never finished reporting.
 	IncompleteAbandonment *CompactIncompleteAbandonmentProof `json:"incomplete_abandonment,omitempty"`
+	// Abandonment carries the single v2 authorization proof.
+	Abandonment *CompactAbandonmentProof `json:"abandonment,omitempty"`
 	// MalformedLegacyFreeze carries the natively re-derived semantic replay
 	// failure for a shipped legacy-v1 findings-freeze event.
 	MalformedLegacyFreeze *LegacyMalformedFreezeProof `json:"malformed_legacy_freeze,omitempty"`
@@ -209,7 +211,7 @@ func compactReclaimAuthorityRefusal(ctx context.Context, repo, dir, lineageID, a
 	}
 	eligibility, eligibilityErr := InspectCompactPristineAbandonment(ctx, repo, lineageID)
 	if eligibilityErr == nil && eligibility.Eligible {
-		return fmt.Errorf("%s The entry is pristine, so `gentle-ai review abandon` quarantines it whole: %s",
+		return fmt.Errorf("%s The entry is eligible for abandonment, so `gentle-ai review abandon` quarantines it whole: %s",
 			refused, compactAbandonCommandText(repo, lineageID, eligibility))
 	}
 	return fmt.Errorf("%s No advertised operation admits it: %s."+

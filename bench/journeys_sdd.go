@@ -248,7 +248,7 @@ func proveNonLeafTopology(sandbox *Sandbox, bound, successor string) error {
 	if err != nil {
 		return err
 	}
-	if _, _, ok := head.entry(bound); !ok {
+	if _, ok := head.entry(bound); !ok {
 		return fmt.Errorf("fixture claims the bound lineage %q survives recovery but review status does not list it", bound)
 	}
 	found := false
@@ -400,10 +400,11 @@ func sddStrandSuccessor(sandbox *Sandbox) error {
 	if err != nil {
 		return err
 	}
-	_, frozen, ok := head.entry(sddSuccessorLineage)
+	entry, ok := head.entry(sddSuccessorLineage)
 	if !ok {
 		return fmt.Errorf("fixture claims a stranded successor but review status does not list %q", sddSuccessorLineage)
 	}
+	frozen := entry.SnapshotIdentity
 	var live statusEnvelope
 	if err := proveJSON(sandbox, &live, "review", "status", "--cwd", sandbox.Repo,
 		"--contract", reviewContract, "--next-transition"); err != nil {
@@ -1338,33 +1339,26 @@ func sddRecoverSuccessor(r *journeyRun) error {
 	return proveNonLeafTopology(r.sandbox, r.sandbox.Scratch["bound"], sddSuccessorLineage)
 }
 
-// sddAbandonStrandedSuccessor is the exit that actually clears a stranded
-// successor, and the product never names it. It costs a hand-assembled
-// authorization, which is why this journey is also a manual_tokens exhibit.
+// sddAbandonStrandedSuccessor is the exit that clears a stranded successor.
+// Its V2 authorization is assembled from the exact status summary that the
+// abandon validator binds, so the journey drives the refusal's real contract.
 func sddAbandonStrandedSuccessor(r *journeyRun) error {
 	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo}, false)
 	var head authorityHead
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &head); err != nil {
 		return fmt.Errorf("parse review status: %w (stderr: %s)", err, firstLine(observation.Stderr))
 	}
-	revision, snapshot, ok := head.entry(sddSuccessorLineage)
+	entry, ok := head.entry(sddSuccessorLineage)
 	if !ok {
 		return fmt.Errorf("review status no longer lists the stranded successor %q", sddSuccessorLineage)
 	}
 	const actor = "bench"
-	const reason = "the stranded successor can never be finalized"
-	authorization := strings.Join([]string{
-		"gentle-ai.review-abandon-authorization/v1",
-		"lineage=" + sddSuccessorLineage,
-		"revision=" + revision,
-		"snapshot_identity=" + snapshot,
-		"actor=" + actor,
-		"reason=" + reason,
-	}, "\n")
+	const reason = "operator_disposition"
+	authorization := renderAbandonAuthorization(entry, actor, reason)
 	r.run([]string{
 		"review", "abandon", "--cwd", r.sandbox.Repo,
 		"--lineage", sddSuccessorLineage,
-		"--expected-revision", revision,
+		"--expected-revision", entry.Revision,
 		"--reason", reason,
 		"--actor", actor,
 		"--maintainer-authorization", authorization,

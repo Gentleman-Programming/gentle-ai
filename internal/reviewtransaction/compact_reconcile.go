@@ -136,24 +136,24 @@ func classifyCompactRecoveryEdgeAnomalies(predecessor, successor CompactRecord) 
 }
 
 // compactAbandonCommandText renders the exact runnable abandonment invocation
-// for one pristine lineage, with the persisted values the abandonment gate
+// for one eligible lineage, with the persisted values the abandonment gate
 // verifies and the authorization template it accepts. Only a caller whose own
 // read-only prediction (InspectCompactPristineAbandonment) accepted the
 // lineage may render this, so the command printed is the command that runs.
 func compactAbandonCommandText(repo, lineage string, eligibility CompactAbandonEligibility) string {
-	return fmt.Sprintf("`gentle-ai review abandon --cwd %s --lineage %q --expected-revision %q --reason \"<why-it-is-abandoned>\" --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`;"+
+	return fmt.Sprintf("`gentle-ai review abandon --cwd %s --lineage %q --expected-revision %q --reason %q --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`;"+
 		" the abandonment moves the entry into the audited quarantine and rewrites nothing, so the recorded authorization bytes survive exactly as persisted."+
-		" --maintainer-authorization is exactly these six lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
-		pathquote.Quote(repo), lineage, eligibility.Revision,
-		RenderCompactAbandonAuthorization(lineage, eligibility.Revision, eligibility.SnapshotIdentity, "<actor>", "<why-it-is-abandoned>"))
+		" --maintainer-authorization is exactly these nine lines, joined by LF, with no trailing newline, using the same --actor:\n%s",
+		pathquote.Quote(repo), lineage, eligibility.Revision, CompactAbandonReasonOperatorDisposition,
+		RenderCompactAbandonAuthorization(lineage, eligibility.Revision, eligibility.SnapshotIdentity, "<actor>", CompactAbandonReasonOperatorDisposition, eligibility.DiscardedWork))
 }
 
 // compactAbandonBlockerText names which abandonment rule blocks one lineage,
 // so a refusal that cannot name `review abandon` says exactly why instead of
 // inventing a continuation.
 func compactAbandonBlockerText(state CompactState) string {
-	if !compactAbandonablePristineState(state) {
-		return fmt.Sprintf("it holds %q authority carrying captured review or correction data, and review results are never discarded to clear an edge", state.State)
+	if compactAbandonTerminalState(state.State) {
+		return fmt.Sprintf("it holds terminal %q authority", state.State)
 	}
-	return "the abandonment gate does not accept it: a same-lineage legacy-v1 entry, an authoritative artifact beside its state, a successor of its own, or a removal that would break the remaining graph"
+	return "the abandonment gate does not accept it: its discarded-work summary cannot be read, it has a same-lineage legacy-v1 entry, a successor of its own, or removal would break the remaining graph"
 }

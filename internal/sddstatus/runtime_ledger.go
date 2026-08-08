@@ -847,7 +847,8 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		// honest interrupted settlement between the failure and its correction
 		// is an audit record, not a semantic successor, so neither severs the
 		// binding; the first passed settlement after the failure does.
-		chainFailedEvidence, chainHasFailedEvidence := runtimeChainFailedEvidence(status.Attempts)
+		chainFailedAttempt, chainHasFailedEvidence := runtimeChainFailedAttempt(status.Attempts)
+		chainFailedEvidence := chainFailedAttempt.EvidenceRevision
 		if unmanagedRemediation {
 			if !store.ReviewDisabled || currentBinding != nil {
 				// refusal:by-design human-authority: unmanaged remediation is valid only while receipt authority is absent and explicitly disabled.
@@ -894,8 +895,9 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			return runtimeRecord{}, fmt.Errorf("disabled failed verification requires --remediates-evidence-revision %q on the correction settle; rerun `gentle-ai sdd-attempt settle` with that flag", chainFailedEvidence)
 		}
 		if unmanagedRemediation {
-			if snapshot.Identity == active.BeginCandidateIdentity || snapshot.CandidateTree == active.BeginCandidateTree {
-				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed by the active correction attempt.
+			evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(status.LastReset, chainFailedAttempt, snapshot.CandidateTree)
+			if !evidenceOnly && (snapshot.Identity == active.BeginCandidateIdentity || snapshot.CandidateTree == active.BeginCandidateTree) {
+				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed by the active correction attempt, or an audited reset authorizing this exact unchanged candidate.
 				return runtimeRecord{}, errors.New("unmanaged remediation requires a changed correction candidate")
 			}
 			if request.EvidenceRevision == request.RemediatesEvidenceRevision {
@@ -1059,18 +1061,18 @@ func (store RuntimeStore) runtimeRemediationExitRefusal(
 // trusts it.
 //
 // The authorization template is rendered by the same function the abandon gate
-// verifies against (reviewtransaction.RenderCompactAbandonAuthorization), with
-// only the two values the operator chooses left as placeholders, so the bytes a
-// reader assembles from this message are the bytes that gate accepts.
+// verifies against (reviewtransaction.RenderCompactAbandonAuthorization), over
+// the exact summary the eligibility probe accepted. Only the actor remains an
+// operator value, so the bytes a reader assembles are the bytes the gate accepts.
 func (store RuntimeStore) runtimeStrandedSuccessorRefusal(binding ReviewBinding, stranded RuntimeStrandedSuccessor, ordinal int) error {
 	// The sentinel stays in the %w position in every branch: callers that
 	// route on errors.Is must keep working no matter which exit is named.
 	return fmt.Errorf(
-		"%w: the candidate changed after attempt %d began, and lineage %q cannot hold the approved review of this candidate because recovery successor %q supersedes it and froze a target this candidate no longer has, so that successor can never be finalized — quarantine it, then re-run this finish: `gentle-ai review abandon --cwd %s --lineage %q --expected-revision %q --reason \"<why-it-is-abandoned>\" --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`; the abandonment quarantines the pristine successor and destroys nothing, because %q keeps the approved review of the corrected candidate. --maintainer-authorization is exactly these six lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
+		"%w: the candidate changed after attempt %d began, and lineage %q cannot hold the approved review of this candidate because recovery successor %q supersedes it and froze a target this candidate no longer has, so that successor can never be finalized — quarantine it, then re-run this finish: `gentle-ai review abandon --cwd %s --lineage %q --expected-revision %q --reason %q --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`; the abandonment quarantines the stranded successor and records its discarded work, because %q keeps the approved review of the corrected candidate. --maintainer-authorization is exactly these nine lines, joined by LF, with no trailing newline, using the same --actor:\n%s",
 		ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage, stranded.Lineage,
-		pathquote.Quote(store.Workspace), stranded.Lineage, stranded.Revision, binding.Lineage,
+		pathquote.Quote(store.Workspace), stranded.Lineage, stranded.Revision, reviewtransaction.CompactAbandonReasonOperatorDisposition, binding.Lineage,
 		reviewtransaction.RenderCompactAbandonAuthorization(
-			stranded.Lineage, stranded.Revision, stranded.SnapshotIdentity, "<--actor>", "<--reason>"))
+			stranded.Lineage, stranded.Revision, stranded.SnapshotIdentity, "<actor>", reviewtransaction.CompactAbandonReasonOperatorDisposition, stranded.DiscardedWork))
 }
 
 // runtimeRemediatesArgument quotes a concrete revision and leaves an operator
@@ -2071,10 +2073,16 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		// from the immutable chain, so replayed corrections recorded across an
 		// audited reset stay valid. The chain walk requires a settled failed
 		// predecessor, which subsumes the former len(Attempts) < 2 conjunct.
-		chainFailedEvidence, chainHasFailedEvidence := runtimeChainFailedEvidence(replay.Status.Attempts)
+		chainFailedAttempt, chainHasFailedEvidence := runtimeChainFailedAttempt(replay.Status.Attempts)
+		// #2621 lockstep twin: an audited reset that terminated the failing
+		// objective against these exact bytes authorizes one evidence-only
+		// retry, so a replayed correction may leave the candidate unchanged.
+		evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(replay.Status.LastReset, chainFailedAttempt, event.FinishCandidateTree)
+		unchangedCandidate := event.FinishCandidateIdentity == active.BeginCandidateIdentity ||
+			event.FinishCandidateTree == active.BeginCandidateTree
 		if replay.Status.Binding != nil || event.Outcome != AttemptPassed ||
-			!chainHasFailedEvidence || chainFailedEvidence != event.RemediatesEvidenceRevision ||
-			event.FinishCandidateIdentity == active.BeginCandidateIdentity || event.FinishCandidateTree == active.BeginCandidateTree ||
+			!chainHasFailedEvidence || chainFailedAttempt.EvidenceRevision != event.RemediatesEvidenceRevision ||
+			(unchangedCandidate && !evidenceOnly) ||
 			event.EvidenceRevision == event.RemediatesEvidenceRevision {
 			// refusal:by-design world-action: a replayed event that breaks immutable evidence/candidate binding can only be repaired by restoring the authority.
 			return errors.New("unmanaged remediation finish does not bind the final failed-evidence correction")
@@ -2880,15 +2888,59 @@ func runtimeResetStructurallyPermitted(status RuntimeStatus) bool {
 // wiped. Evaluated by RuntimeStore.Finish and applyRuntimeFinishEvent in
 // lockstep, so a committed correction always replays deterministically.
 func runtimeChainFailedEvidence(attempts []RuntimeAttempt) (string, bool) {
+	failed, ok := runtimeChainFailedAttempt(attempts)
+	if !ok {
+		return "", false
+	}
+	return failed.EvidenceRevision, true
+}
+
+// runtimeChainFailedAttempt is runtimeChainFailedEvidence's whole record. The
+// evidence revision alone answers "which failure does this correction repair";
+// #2621 also has to answer "which objective was that failure recorded under",
+// so the authority a reset carries can be matched against the exact failure it
+// terminated rather than against any failure that happens to precede it.
+func runtimeChainFailedAttempt(attempts []RuntimeAttempt) (RuntimeAttempt, bool) {
 	for index := len(attempts) - 1; index >= 0; index-- {
 		switch attempts[index].Outcome {
 		case AttemptPassed:
-			return "", false
+			return RuntimeAttempt{}, false
 		case AttemptFailed:
-			return attempts[index].EvidenceRevision, true
+			return attempts[index], true
 		}
 	}
-	return "", false
+	return RuntimeAttempt{}, false
+}
+
+// runtimeEvidenceOnlyRetryAuthorized reports whether an audited reset already
+// authorized one evidence-only correction of this exact candidate (#2621).
+//
+// A verification failure is not always candidate-caused: when the authoritative
+// suite fails on a transient defect the candidate never introduced, the honest
+// correction reruns the verification instead of editing bytes that were never
+// wrong. The ordinary changed-candidate demand exists to stop unreviewed
+// content from being laundered into a passing record, and it must not be
+// weakened for candidates nobody vouched for. So the waiver rests entirely on
+// authority the ledger ALREADY records rather than on a new operator claim:
+//
+//   - The reset names a maintainer and a reason. It is an audited human act.
+//   - It terminated the exact objective+generation the failure was recorded
+//     under, so a reset taken before that failure can never authorize it.
+//   - Its candidate tree is these bytes, so the maintainer authorized the
+//     retry while looking at precisely the content that is about to pass.
+//
+// Everything else the correction owes stays enforced by the caller: review must
+// be disabled with no binding, the chain must still hold the failed evidence
+// being repaired, and the corrected evidence must be fresh and distinct. No
+// approval is fabricated -- one that a human already gave is honored.
+func runtimeEvidenceOnlyRetryAuthorized(reset *RuntimeReset, failed RuntimeAttempt, candidateTree string) bool {
+	if reset == nil || reset.Actor == "" || reset.Reason == "" || candidateTree == "" {
+		return false
+	}
+	if reset.PreviousObjectiveID != failed.ObjectiveID || reset.PreviousGeneration != failed.ObjectiveGeneration {
+		return false
+	}
+	return reset.ResetCandidateTree == candidateTree
 }
 
 func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int) string {

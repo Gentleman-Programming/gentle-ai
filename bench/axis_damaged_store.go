@@ -435,12 +435,13 @@ type storeStatus struct {
 	Authoritative bool   `json:"authoritative"`
 	Status        string `json:"status"`
 	Entries       []struct {
-		LineageID        string   `json:"lineage_id"`
-		State            string   `json:"state"`
-		Status           string   `json:"status"`
-		Revision         string   `json:"revision"`
-		SnapshotIdentity string   `json:"snapshot_identity"`
-		Problems         []string `json:"problems"`
+		LineageID        string                 `json:"lineage_id"`
+		State            string                 `json:"state"`
+		Status           string                 `json:"status"`
+		Revision         string                 `json:"revision"`
+		SnapshotIdentity string                 `json:"snapshot_identity"`
+		DiscardedWork    authorityDiscardedWork `json:"discarded_work"`
+		Problems         []string               `json:"problems"`
 	} `json:"entries"`
 }
 
@@ -1002,10 +1003,9 @@ func halfWrittenSuccessor(sandbox *Sandbox) error {
 // Counted operator work
 // ---------------------------------------------------------------------------
 
-// abandonArgs assembles the exit that DOES clear a pristine damaged successor,
-// and it costs the same six-line hand-built binding `review abandon` always
-// costs — which is why every journey that reaches it also moves manual_tokens.
-func abandonArgs(lineageKey, revisionKey, snapshotKey, reason string) func(*Sandbox) ([]string, error) {
+// abandonArgs assembles the V2 exit from the product's current status row. The
+// summary must not be inferred from the fixture: it is part of the binding.
+func abandonArgs(lineageKey, revisionKey, snapshotKey, _ string) func(*Sandbox) ([]string, error) {
 	return func(sandbox *Sandbox) ([]string, error) {
 		lineage, err := scratchValue(sandbox, lineageKey)
 		if err != nil {
@@ -1019,23 +1019,33 @@ func abandonArgs(lineageKey, revisionKey, snapshotKey, reason string) func(*Sand
 		if err != nil {
 			return nil, err
 		}
-		const actor = "bench"
-		authorization := strings.Join([]string{
-			"gentle-ai.review-abandon-authorization/v1",
-			"lineage=" + lineage,
-			"revision=" + revision,
-			"snapshot_identity=" + snapshot,
-			"actor=" + actor,
-			"reason=" + reason,
-		}, "\n")
-		return []string{
-			"review", "abandon", "--cwd", sandbox.Repo,
-			"--lineage", lineage,
-			"--expected-revision", revision,
-			"--reason", reason,
-			"--actor", actor,
-			"--maintainer-authorization", authorization,
-		}, nil
+		status, err := proveStoreStatus(sandbox)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range status.Entries {
+			if entry.LineageID != lineage {
+				continue
+			}
+			if entry.Revision != revision || entry.SnapshotIdentity != snapshot {
+				return nil, fmt.Errorf("review status changed %q from %q/%q to %q/%q before abandonment",
+					lineage, revision, snapshot, entry.Revision, entry.SnapshotIdentity)
+			}
+			const actor = "bench"
+			const reason = "operator_disposition"
+			authorization := renderAbandonAuthorization(authorityEntry{
+				LineageID: lineage, Revision: revision, SnapshotIdentity: snapshot, DiscardedWork: entry.DiscardedWork,
+			}, actor, reason)
+			return []string{
+				"review", "abandon", "--cwd", sandbox.Repo,
+				"--lineage", lineage,
+				"--expected-revision", revision,
+				"--reason", reason,
+				"--actor", actor,
+				"--maintainer-authorization", authorization,
+			}, nil
+		}
+		return nil, fmt.Errorf("review status no longer lists %q for abandonment", lineage)
 	}
 }
 

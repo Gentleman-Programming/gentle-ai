@@ -74,14 +74,12 @@ const compactContentMismatchedRecoveryAuthorizationClass = "content_mismatched_r
 
 // errAuthorityDispositionPlanNotDerivable is returned, always wrapped with a
 // specific cause, whenever derivation refuses to produce a plan: an
-// unclassifiable shape, a mixed/ambiguous set of eligible edges, or an
-// incomplete inspection. There is never a generic fallback plan.
+// unclassifiable shape, a mixed/ambiguous set of eligible edges, or a
+// diagnostic affecting the selected closure. There is never a generic
+// fallback plan.
 var errAuthorityDispositionPlanNotDerivable = errors.New("authority disposition plan refused: anomaly classification is not closed") // refusal:by-design human-authority: an unclassifiable or ambiguous graph shape needs a maintainer's diagnosis before any plan can be derived, not a command this refusal can name
 
 func authorityDispositionSelectors(report CompactRecoveryInspectionReport, records map[string]CompactRecord) ([]AuthorityDispositionSelector, error) {
-	if !report.Complete || len(report.EntryDiagnostics) > 0 {
-		return nil, fmt.Errorf("%w: inspection carries %d entry diagnostic(s)", errAuthorityDispositionPlanNotDerivable, len(report.EntryDiagnostics))
-	}
 	selectors := []AuthorityDispositionSelector{}
 	for _, edge := range report.Edges {
 		if edge.Valid {
@@ -109,8 +107,9 @@ func authorityDispositionSelectors(report CompactRecoveryInspectionReport, recor
 // the single loadCompactRecoveryRecords seam (compact_inspect.go), so no
 // second, independent record-loading path ever feeds derivation (mandatory
 // obligation (a)). It refuses (no plan) unless the inspection that produced
-// report carried no entry diagnostics and exactly one report edge re-derives
-// into the one closed content_mismatched_recovery_authorization class.
+// selected closure carries no entry diagnostics and exactly one report edge
+// re-derives into the one closed content_mismatched_recovery_authorization
+// class.
 func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, records map[string]CompactRecord, binding, actor, reason string, requested ...AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
 	if len(requested) > 1 {
 		return AuthorityDispositionPlan{}, fmt.Errorf("%w: multiple exact content-mismatch selectors supplied", errAuthorityDispositionPlanNotDerivable)
@@ -134,6 +133,15 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 	}
 	seed := selector.SuccessorLineageID
 	closure := authorityDispositionClosure(report, seed)
+	closureMembers := make(map[string]struct{}, len(closure))
+	for _, lineage := range closure {
+		closureMembers[lineage] = struct{}{}
+	}
+	for _, diagnostic := range report.EntryDiagnostics {
+		if _, found := closureMembers[diagnostic.LineageID]; found {
+			return AuthorityDispositionPlan{}, fmt.Errorf("%w: inspection carries %q diagnostic for closure member %q", errAuthorityDispositionPlanNotDerivable, diagnostic.Problem, diagnostic.LineageID)
+		}
+	}
 	expectedRevisions := make(map[string]string, len(closure))
 	for _, lineage := range closure {
 		record, found := records[lineage]
