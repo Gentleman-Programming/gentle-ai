@@ -287,28 +287,38 @@ func TestAbandonRefusesTerminalInvalidatedLineage(t *testing.T) {
 
 func TestRetiredReviewerResultSummaryRejectsCorruptHistoricalShapes(t *testing.T) {
 	tests := []struct {
-		name    string
-		payload string
-		wantErr bool
+		name         string
+		payload      string
+		wantFindings bool
+		wantRetired  bool
+		wantErr      bool
 	}{
-		{name: "exact retired envelope", payload: `{"lens":"review-reliability","findings":[],"evidence":["inspected stale.go"]}`},
-		{name: "finding present", payload: `{"lens":"review-reliability","findings":[{}],"evidence":[]}`},
-		{name: "duplicate keys hide slot and finding", payload: `{"lens":"review-risk","lens":"review-reliability","findings":[{}],"findings":[],"evidence":[]}`, wantErr: true},
-		{name: "duplicate evidence", payload: `{"lens":"review-reliability","findings":[],"evidence":["first"],"evidence":[]}`, wantErr: true},
-		{name: "duplicate identical lens", payload: `{"lens":"review-reliability","lens":"review-reliability","findings":[],"evidence":[]}`, wantErr: true},
-		{name: "wrong findings type", payload: `{"lens":"review-reliability","findings":{},"evidence":[]}`, wantErr: true},
-		{name: "wrong evidence type", payload: `{"lens":"review-reliability","findings":[],"evidence":"x"}`, wantErr: true},
-		{name: "unknown field", payload: `{"lens":"review-reliability","findings":[],"evidence":[],"gate":true}`, wantErr: true},
-		{name: "wrong selected slot", payload: `{"lens":"review-risk","findings":[],"evidence":[]}`, wantErr: true},
+		{name: "exact retired envelope", payload: `{"lens":"review-reliability","findings":[],"evidence":["inspected stale.go"]}`, wantRetired: true},
+		{name: "finding present", payload: `{"lens":"review-reliability","findings":[{}],"evidence":[]}`, wantFindings: true, wantRetired: true},
+		{name: "duplicate keys hide slot and finding", payload: `{"lens":"review-risk","lens":"review-reliability","findings":[{}],"findings":[],"evidence":[]}`, wantRetired: true, wantErr: true},
+		{name: "duplicate evidence", payload: `{"lens":"review-reliability","findings":[],"evidence":["first"],"evidence":[]}`, wantRetired: true, wantErr: true},
+		{name: "duplicate identical lens", payload: `{"lens":"review-reliability","lens":"review-reliability","findings":[],"evidence":[]}`, wantRetired: true, wantErr: true},
+		{name: "wrong findings type", payload: `{"lens":"review-reliability","findings":{},"evidence":[]}`, wantRetired: true, wantErr: true},
+		{name: "wrong evidence type", payload: `{"lens":"review-reliability","findings":[],"evidence":"x"}`, wantRetired: true, wantErr: true},
+		{name: "unknown field", payload: `{"lens":"review-reliability","findings":[],"evidence":[],"gate":true}`, wantRetired: true, wantErr: true},
+		{name: "wrong selected slot", payload: `{"lens":"review-risk","findings":[],"evidence":[]}`, wantRetired: true, wantErr: true},
+		{name: "non-object payload", payload: `[]`},
+		{name: "current schema marker", payload: `{"lens":"review-reliability","schema":"gentle-ai.review-admitted-result/v2"}`},
+		{name: "current subject marker", payload: `{"lens":"review-reliability","subject":{}}`},
+		{name: "current admission marker", payload: `{"lens":"review-reliability","admission":{}}`},
+		{name: "current result marker", payload: `{"lens":"review-reliability","result":{}}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			findings, retired, err := compactRetiredReviewerResultSummary([]byte(tt.payload), "00-review-reliability.json", []string{LensReliability})
-			if !retired || (err != nil) != tt.wantErr {
-				t.Fatalf("summary = findings:%t retired:%t err:%v", findings, retired, err)
+			if findings != tt.wantFindings {
+				t.Errorf("findings = %t, want %t", findings, tt.wantFindings)
 			}
-			if tt.name == "finding present" && !findings {
-				t.Fatal("retired finding was omitted from the audit summary")
+			if retired != tt.wantRetired {
+				t.Errorf("retired = %t, want %t", retired, tt.wantRetired)
+			}
+			if (err != nil) != tt.wantErr {
+				t.Errorf("error = %v, wantErr %t", err, tt.wantErr)
 			}
 		})
 	}
