@@ -1,10 +1,12 @@
 package agentbuilder
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/mutationjournal"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
@@ -14,48 +16,54 @@ type AdapterInfo struct {
 	SkillsDir string
 }
 
+type installJournal interface {
+	Capture(string) error
+	WriteWithMode(string, []byte, os.FileMode) (mutationjournal.OwnedFile, error)
+	Restore() error
+}
+
+type installOperations struct {
+	mkdirAll   func(string, os.FileMode) error
+	newJournal func(...string) installJournal
+}
+
 // Install writes the SKILL.md for agent into each adapter's skills directory.
-// On any write failure all previously written files are rolled back (deleted).
-// Returns one InstallResult per adapter.
+// On failure, every changed SKILL.md is restored to its before-image.
 func Install(agent *GeneratedAgent, adapters []AdapterInfo, _ string) ([]InstallResult, error) {
+	return install(agent, adapters, installOperations{
+		mkdirAll:   os.MkdirAll,
+		newJournal: newInstallJournal,
+	})
+}
+
+func install(agent *GeneratedAgent, adapters []AdapterInfo, ops installOperations) ([]InstallResult, error) {
 	if agent == nil {
 		return nil, fmt.Errorf("install: agent must not be nil")
 	}
 
 	results := make([]InstallResult, 0, len(adapters))
-	written := make([]string, 0, len(adapters)) // paths written so far, for rollback
+	roots := make([]string, 0, len(adapters))
+	for _, adapter := range adapters {
+		roots = append(roots, adapter.SkillsDir)
+	}
+	journal := ops.newJournal(roots...)
 
 	for _, adapter := range adapters {
 		skillDir := filepath.Join(adapter.SkillsDir, agent.Name)
 		skillFile := filepath.Join(skillDir, "SKILL.md")
 
-		if err := os.MkdirAll(skillDir, 0755); err != nil {
-			// Rollback previously written files and mark all results as failed.
-			rollback(written)
-			markAllFailed(results)
-			results = append(results, InstallResult{
-				AgentID: adapter.AgentID,
-				Path:    skillFile,
-				Success: false,
-				Err:     fmt.Errorf("create directory %s: %w", skillDir, err),
-			})
-			return results, fmt.Errorf("install failed for %s: %w", adapter.AgentID, err)
+		if err := journal.Capture(skillFile); err != nil {
+			return rollback(journal, results, adapter, skillFile, fmt.Errorf("capture before-image %s: %w", skillFile, err))
 		}
 
-		if err := os.WriteFile(skillFile, []byte(agent.Content), 0644); err != nil {
-			// Rollback previously written files and mark all results as failed.
-			rollback(written)
-			markAllFailed(results)
-			results = append(results, InstallResult{
-				AgentID: adapter.AgentID,
-				Path:    skillFile,
-				Success: false,
-				Err:     fmt.Errorf("write %s: %w", skillFile, err),
-			})
-			return results, fmt.Errorf("install failed for %s: %w", adapter.AgentID, err)
+		if err := ops.mkdirAll(skillDir, 0755); err != nil {
+			return rollback(journal, results, adapter, skillFile, fmt.Errorf("create directory %s: %w", skillDir, err))
 		}
 
-		written = append(written, skillFile)
+		if _, err := journal.WriteWithMode(skillFile, []byte(agent.Content), 0644); err != nil {
+			return rollback(journal, results, adapter, skillFile, fmt.Errorf("write %s: %w", skillFile, err))
+		}
+
 		results = append(results, InstallResult{
 			AgentID: adapter.AgentID,
 			Path:    skillFile,
@@ -66,11 +74,20 @@ func Install(agent *GeneratedAgent, adapters []AdapterInfo, _ string) ([]Install
 	return results, nil
 }
 
-// rollback removes all files in paths, ignoring errors (best-effort cleanup).
-func rollback(paths []string) {
-	for _, p := range paths {
-		_ = os.Remove(p)
-	}
+func newInstallJournal(roots ...string) installJournal {
+	return mutationjournal.New(roots...)
+}
+
+func rollback(journal installJournal, results []InstallResult, adapter AdapterInfo, skillFile string, cause error) ([]InstallResult, error) {
+	restoreErr := journal.Restore()
+	markAllFailed(results)
+	results = append(results, InstallResult{
+		AgentID: adapter.AgentID,
+		Path:    skillFile,
+		Success: false,
+		Err:     cause,
+	})
+	return results, errors.Join(cause, restoreErr)
 }
 
 // markAllFailed sets Success=false on every result in the slice.
