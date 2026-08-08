@@ -93,6 +93,15 @@ func TestNegotiatedStatusInterpretsCommittedOnlyValue(t *testing.T) {
 		})
 	}
 
+	t.Run("omitted with base preserves compatibility", func(t *testing.T) {
+		err := RunReviewStatus([]string{
+			"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--base-ref", "HEAD",
+		}, io.Discard)
+		if err != nil {
+			t.Fatalf("STATUS rejected --base-ref without --committed-only: %v", err)
+		}
+	})
+
 	t.Run("false with base refuses like START", func(t *testing.T) {
 		statusErr := RunReviewStatus([]string{
 			"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo,
