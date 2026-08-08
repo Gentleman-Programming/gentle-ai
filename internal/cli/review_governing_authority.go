@@ -36,12 +36,11 @@ import (
 // denial). No silent default: every reachable *ReviewReceiptDiscoveryError
 // this function returns has an explicit Kind assigned at its construction
 // site below.
-func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateInput reviewtransaction.NativeGateRequestInput) (bool, reviewtransaction.NativeGateEvaluation, *ReviewReceiptDiscoveryError) {
-	governs, _, evaluation, discoveryErr := resolveGoverningAuthorityReceipt(ctx, root, lineage, gateInput)
-	return governs, evaluation, discoveryErr
-}
-
-func resolveGoverningAuthorityReceipt(ctx context.Context, root, lineage string, gateInput reviewtransaction.NativeGateRequestInput) (governs, receiptBacked bool, evaluation reviewtransaction.NativeGateEvaluation, discoveryErr *ReviewReceiptDiscoveryError) {
+//
+// receiptBacked is true only on the approved path whose receipt loaded, which
+// is the one shape whose allow the caller may gate on managed asset
+// provenance.
+func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateInput reviewtransaction.NativeGateRequestInput) (governs, receiptBacked bool, evaluation reviewtransaction.NativeGateEvaluation, discoveryErr *ReviewReceiptDiscoveryError) {
 	if strings.TrimSpace(lineage) == "" {
 		// Discovery rule (design's corrected Amendment C clause): lineage
 		// kind is established SOLELY by v3/ record presence. No explicit

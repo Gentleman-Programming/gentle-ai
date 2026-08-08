@@ -3187,7 +3187,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	// byte-identical to legacy discovery below. A non-nil discoveryErr here
 	// is always a deny that must never fall through to legacy authorization.
 	// Reviews are ON here — a disabled switch already returned above.
-	if governs, receiptBacked, evaluation, discoveryErr := resolveGoverningAuthorityReceipt(ctx, root, *lineage, gateInput); discoveryErr != nil {
+	if governs, receiptBacked, evaluation, discoveryErr := resolveGoverningAuthority(ctx, root, *lineage, gateInput); discoveryErr != nil {
 		return emitFacadeGateEvaluationNegotiated(stdout, reviewtransaction.NativeGateEvaluation{
 			Result: reviewtransaction.GateInvalidated, Reason: discoveryErr.Error(),
 			Context: reviewtransaction.GateContext{
