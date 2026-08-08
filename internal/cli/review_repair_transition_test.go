@@ -49,6 +49,8 @@ func corruptedDispositionStatus() ReviewTargetStatusResult {
 // once all three are supplied — never a raw flag triad the caller had to
 // already know.
 func TestReviewNextTransitionDispositionCollectThenExecute(t *testing.T) {
+	t.Parallel()
+
 	status := corruptedDispositionStatus()
 
 	t.Run("collect when authorization inputs are missing", func(t *testing.T) {
@@ -116,6 +118,8 @@ func TestReviewNextTransitionDispositionCollectThenExecute(t *testing.T) {
 // possible overlap), the pre-existing classified route wins — Wave 6 adds a
 // new route only for the case the classified vocabulary has nothing to say.
 func TestReviewNextTransitionClassifiedRepairTakesPriorityOverDisposition(t *testing.T) {
+	t.Parallel()
+
 	status := corruptedDispositionStatus()
 	status.Repair = reviewtransaction.AuthorityRepairAssessment{
 		Schema: reviewtransaction.AuthorityRepairAssessmentSchema, Status: reviewtransaction.AuthorityRepairEligible,
@@ -137,6 +141,8 @@ func TestReviewNextTransitionClassifiedRepairTakesPriorityOverDisposition(t *tes
 // with no classified candidate and no derivable disposition plan still
 // stops, naming the same reason code as before Wave 6.
 func TestReviewNextTransitionCorruptedWithNeitherRepairNorDispositionStops(t *testing.T) {
+	t.Parallel()
+
 	status := ReviewTargetStatusResult{
 		Applicability: reviewtransaction.TargetApplicabilityCorrupted, Action: reviewtransaction.TargetStatusActionRepairAuthority,
 		Replayability: reviewtransaction.ReplayabilityManualActionRequired, TargetIdentity: "sha256:" + strings.Repeat("b", 64),
@@ -155,6 +161,8 @@ func TestReviewNextTransitionCorruptedWithNeitherRepairNorDispositionStops(t *te
 // execute-form transition uses), so a caller running the printed command
 // verbatim runs exactly what was named, nothing hidden.
 func TestReviewDispositionTransitionTokensCarryNoAuthorizationBytes(t *testing.T) {
+	t.Parallel()
+
 	status := corruptedDispositionStatus()
 	secretAuthorization := "sha256:top-secret-disposition-authorization-must-never-appear-in-output"
 	input := reviewNextTransitionInput{RepairActor: "maintainer@example.com", RepairReason: "quarantine forged recovery authorization", RepairAuthorization: secretAuthorization}

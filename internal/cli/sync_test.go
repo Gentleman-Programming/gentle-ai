@@ -1882,7 +1882,7 @@ func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) 
 	t.Cleanup(func() { refreshPiCodeGraphIfConfigured = previousRefresh })
 
 	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
-	if err == nil || !strings.Contains(err.Error(), "persist migrated community tool selection") {
+	if err == nil || !strings.Contains(err.Error(), "persist managed asset provenance") {
 		t.Fatalf("RunSyncWithSelection() error = %v, want migration persistence failure", err)
 	}
 	if !result.Selection.HasCommunityTool(model.CommunityToolCodeGraph) {
@@ -4445,6 +4445,11 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 		LastUpdateCheck: &lastUpdate,
 		PendingSync:     true,
 	}
+	writer, err := managedAssetDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before.ManagedAssetDigest = writer
 	if err := state.Write(home, before); err != nil {
 		t.Fatalf("state.Write: %v", err)
 	}

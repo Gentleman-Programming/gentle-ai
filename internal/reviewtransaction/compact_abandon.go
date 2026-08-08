@@ -201,18 +201,15 @@ func InspectCompactPristineAbandonment(ctx context.Context, repo, lineage string
 			return CompactAbandonEligibility{}, nil
 		}
 	}
-	stores, err := DiscoverCompactStores(ctx, repo)
+	// Scoped like every other authority walk (#2743): the probe answers for
+	// THIS lineage, whose own record already loaded above. An unreadable
+	// foreign record is absent from the graph, never a repository-wide
+	// not-eligible verdict that silently locks the abandon escape valve.
+	scan, err := scanCompactAuthority(ctx, repo)
 	if err != nil {
 		return CompactAbandonEligibility{}, err
 	}
-	records := make(map[string]CompactRecord, len(stores))
-	for _, related := range stores {
-		relatedRecord, loadErr := related.Load()
-		if loadErr != nil {
-			return CompactAbandonEligibility{}, nil
-		}
-		records[relatedRecord.State.LineageID] = relatedRecord
-	}
+	records := scan.records
 	for _, related := range records {
 		if related.State.Recovery != nil && related.State.Recovery.PredecessorLineageID == lineage {
 			return CompactAbandonEligibility{}, nil
@@ -369,18 +366,17 @@ func AbandonPristineCompactStore(ctx context.Context, repo string, request Compa
 		return CompactReclaimRecord{}, fmt.Errorf("review abandon requires an exact maintainer authorization binding (schema %s over lineage %s@%s and snapshot %s)",
 			CompactAbandonAuthorizationSchema, request.LineageID, record.Revision, record.State.InitialSnapshot.Identity)
 	}
-	stores, err := DiscoverCompactStores(ctx, repo)
+	// Scoped like every other authority walk (#2743): abandon quarantines
+	// THIS lineage, whose record, revision, and authorization binding were
+	// already validated above. An unreadable foreign record is absent from
+	// the graph — the superseded and remaining-graph rules below judge only
+	// the records that actually load — so one historical entry can never
+	// refuse every abandonment in the repository.
+	scan, err := scanCompactAuthority(ctx, repo)
 	if err != nil {
 		return CompactReclaimRecord{}, err
 	}
-	records := make(map[string]CompactRecord, len(stores))
-	for _, related := range stores {
-		relatedRecord, loadErr := related.Load()
-		if loadErr != nil {
-			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: related compact authority %q does not load: %w", related.lineageID, loadErr)
-		}
-		records[relatedRecord.State.LineageID] = relatedRecord
-	}
+	records := scan.records
 	for lineage, related := range records {
 		if related.State.Recovery != nil && related.State.Recovery.PredecessorLineageID == request.LineageID {
 			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: lineage %q is superseded by recovery successor %q; superseded history is never abandoned", request.LineageID, lineage)

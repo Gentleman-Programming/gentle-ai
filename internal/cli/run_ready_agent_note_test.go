@@ -14,6 +14,8 @@ import (
 // tell the user to "Run `claude` or `opencode`" -- it is the literal last
 // line of the first-run experience and must name only what was installed.
 func TestWithPostInstallNotesNamesOnlyTheInstalledRunnableAgents(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name       string
 		agents     []model.AgentID
@@ -47,6 +49,8 @@ func TestWithPostInstallNotesNamesOnlyTheInstalledRunnableAgents(t *testing.T) {
 // IDE-integrated agent only) gets the generic ready message instead of naming
 // an agent that was never installed.
 func TestWithPostInstallNotesFallsBackWhenNoRunnableAgentSelected(t *testing.T) {
+	t.Parallel()
+
 	report := verify.Report{Ready: true, FinalNote: verify.ReadyMessage}
 	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentAntigravity}}
 
@@ -61,6 +65,8 @@ func TestWithPostInstallNotesFallsBackWhenNoRunnableAgentSelected(t *testing.T) 
 // never clobbers a FinalNote a test (or another note-builder) constructed by
 // hand with different text.
 func TestWithPostInstallNotesDoesNotOverrideAnAlreadyCustomizedFinalNote(t *testing.T) {
+	t.Parallel()
+
 	// AgentClaudeCode (not OpenCode) so withOpenCodeExperimentalNote has
 	// nothing to append -- isolating the ready-agent-run override.
 	report := verify.Report{Ready: true, FinalNote: "You're ready."}

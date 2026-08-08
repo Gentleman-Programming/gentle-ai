@@ -132,9 +132,55 @@ type SDDTaskFailureError = Error & { sddFailure: SDDTaskFailure }
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`
 }
-function sddTaskFailure(phase: string, cwd: string, cause: unknown): SDDTaskFailureError {
+// SDD_TASK_ROUTE_TOKEN bounds one provider or model identifier before it may
+// enter the failure handoff. The hook cannot see the child session's own
+// provider failure -- a pre-inference rejection (for example an HTTP 403
+// region refusal, #2677) is recorded on the child session record, which this
+// plugin deliberately cannot query since the client argument was removed --
+// so the child's model route from the task result metadata is the one causal
+// fact available at this boundary. A value is carried only when it looks
+// like a plain route identifier; anything with separators, whitespace, or
+// path shapes is omitted entirely rather than truncated, so hostile or
+// accidental metadata (absolute paths, provider dumps) never reaches the
+// session transcript.
+const SDD_TASK_ROUTE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/
+
+// taskRouteModel extracts the child task's provider/model route from the
+// task tool's result metadata ({parentSessionId, sessionId, model:
+// {providerID, modelID}}), or undefined when the metadata does not carry a
+// valid route. Absence is tolerated, never invented: the handoff simply
+// omits the field.
+function taskRouteModel(metadata: unknown): string | undefined {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined
+  const model = (metadata as Record<string, unknown>).model
+  if (!model || typeof model !== "object" || Array.isArray(model)) return undefined
+  const providerID = (model as Record<string, unknown>).providerID
+  const modelID = (model as Record<string, unknown>).modelID
+  if (typeof providerID !== "string" || typeof modelID !== "string") return undefined
+  if (!SDD_TASK_ROUTE_TOKEN.test(providerID) || !SDD_TASK_ROUTE_TOKEN.test(modelID)) return undefined
+  return `${providerID}/${modelID}`
+}
+
+// sddTaskFailure builds the terminal transport handoff for one failed SDD
+// phase task. Two different truths get two different summaries (#2677): an
+// empty result means the child task produced no output at all -- observed
+// when the provider rejects the request before generation (authentication,
+// region, or model access), when the task is interrupted, or when a phase
+// genuinely writes nothing -- while a malformed result means the child did
+// produce output that failed the envelope contract. The old single summary
+// claimed "no valid task result" for both, which hid that in the empty case
+// the child never ran inference at all.
+function sddTaskFailure(phase: string, cwd: string, cause: unknown, metadata?: unknown): SDDTaskFailureError {
   const classification = extractionClass(cause, "sddClass")
-  const code = classification === "empty_result" ? "sdd_task_result_empty" : "sdd_task_result_malformed"
+  const empty = classification === "empty_result"
+  const code = empty ? "sdd_task_result_empty" : "sdd_task_result_malformed"
+  const taskModel = taskRouteModel(metadata)
+  const guidance = "Do not retry or advance SDD; inspect the existing artifact state and surface the terminal failure to the user."
+  const summary = empty
+    ? `${phase} produced no task output at all. The child task returned nothing, which most often means the ` +
+      "provider rejected the request before generation (authentication, region, or model access), the task was " +
+      `interrupted, or the phase genuinely wrote nothing. ${guidance}`
+    : `${phase} returned no valid task result. ${guidance}`
   const failure: SDDTaskFailure = {
     phase,
     code,
@@ -143,7 +189,8 @@ function sddTaskFailure(phase: string, cwd: string, cause: unknown): SDDTaskFail
       status: "blocked",
       code,
       phase,
-      summary: `${phase} returned no valid task result. Do not retry or advance SDD; inspect the existing artifact state and surface the terminal failure to the user.`,
+      ...(taskModel === undefined ? {} : { taskModel }),
+      summary,
       continuation: `gentle-ai sdd-status --cwd ${shellQuote(cwd)} --json`,
     }),
   }
@@ -334,7 +381,7 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
       try {
         taskResult(output.output, "SDD phase", "sddClass")
       } catch (cause) {
-        const failure = sddTaskFailure(subagent, captureCwd(worktree, directory), cause)
+        const failure = sddTaskFailure(subagent, captureCwd(worktree, directory), cause, output.metadata)
         failedSDDSessions.set(input.sessionID, failure.sddFailure)
         throw failure
       }

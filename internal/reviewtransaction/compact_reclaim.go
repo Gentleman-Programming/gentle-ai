@@ -202,7 +202,7 @@ func compactReclaimAuthorityRefusal(ctx context.Context, repo, dir, lineageID, a
 			return fmt.Errorf("%s The entry holds no readable review-state.json beside that artifact, so nothing can prove the artifact never carried authority, and no advertised operation admits this shape today."+
 				" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %s` and escalate that report", refused, pathquote.Quote(repo))
 		}
-		return fmt.Errorf("%s Its record cannot be loaded (%v) — inspection classifies it %s, which an interrupted write leaves behind — and no advertised operation admits an unreadable record:"+
+		return fmt.Errorf("%s Its record cannot be loaded (%v) — inspection classifies it %s — and no advertised operation admits an unreadable record:"+
 			" reconciliation re-derives its proof from readable state, and admitting bytes that can prove nothing is a maintainer policy decision, not a repair."+
 			" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %s` and escalate that report",
 			refused, loadErr, compactRecoveryEntryProblem(loadErr), pathquote.Quote(repo))

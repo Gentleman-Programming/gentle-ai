@@ -573,8 +573,8 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 		code      string
 		causeText string
 	}{
-		{name: "timeout", err: &reviewtransaction.GitCommandTimeoutError{Timeout: 15 * time.Second}, code: "git_command_timeout"},
-		{name: "exit", err: &reviewtransaction.GitCommandError{ExitCode: 128}, code: "git_command_failed"},
+		{name: "timeout", err: &reviewtransaction.GitCommandTimeoutError{Timeout: 15 * time.Second}, code: "git_command_timeout", causeText: "15s"},
+		{name: "exit", err: &reviewtransaction.GitCommandError{Args: []string{"write-tree"}, ExitCode: 128, Output: "fatal: not a git repository"}, code: "git_command_failed", causeText: "git write-tree failed with exit code 128: fatal: not a git repository"},
 		{
 			name: "process control",
 			err: &reviewtransaction.GitProcessControlError{
@@ -590,7 +590,11 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 				failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "stop" {
 				t.Fatalf("git failure = %#v", failure)
 			}
-			if tt.causeText != "" && !strings.Contains(failure.Message, tt.causeText) {
+			if tt.causeText != "" && !strings.Contains(failure.Cause, tt.causeText) {
+				t.Fatalf("git failure cause field missing diagnostics %q: %q", tt.causeText, failure.Cause)
+			}
+			if tt.code == "git_command_failed" && tt.name == "process control" && !strings.Contains(failure.Message, tt.causeText) {
+				// Process control includes causeText in Message for immediate diagnosis
 				t.Fatalf("git failure message masks cause: %q", failure.Message)
 			}
 		})
@@ -740,7 +744,12 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 			return err
 		}
 		defer func() { _ = os.Setenv("PATH", oldPath) }()
-		_, err := (reviewtransaction.SnapshotBuilder{Repo: hookRepo}).HasDirtyTrackedChanges(ctx)
+		// Bound only the injected post-commit probe. The committed transition is
+		// already durable, so its Git timeout keeps the required status-only shape
+		// without waiting for the production 15s per-command timeout.
+		hookCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		_, err := (reviewtransaction.SnapshotBuilder{Repo: hookRepo}).HasDirtyTrackedChanges(hookCtx)
 		return err
 	}
 	t.Cleanup(func() { reviewFacadeCommittedTransitionHook = oldTransitionHook })
@@ -1149,4 +1158,46 @@ func decodeReviewIntegrationFailure(t *testing.T, payload []byte) ReviewIntegrat
 		t.Fatalf("validate failure envelope: %v\n%s", err, payload)
 	}
 	return failure
+}
+
+// TestNewReviewIntegrationFailureCauseIsUniversal is root 8's structural fix
+// (#2471): Cause used to be per-branch opt-in, and 17 of 25 return sites
+// forgot it, so a caller read a constant Message while the native reason sat
+// in the discarded typed error. Cause is now projected once at construction,
+// so a branch cannot forget it; this test pins two branches that carried no
+// cause before, plus the one branch whose contract REQUIRES staying
+// content-free.
+func TestNewReviewIntegrationFailureCauseIsUniversal(t *testing.T) {
+	// A branch matched via errors.Is: contention keeps its typed code and now
+	// carries the wrapped operational context too.
+	contention := fmt.Errorf("acquire compact authority for lineage %q: %w", "cause-universal", reviewtransaction.ErrStoreLockContended)
+	failure := newReviewIntegrationFailure("review.start", nil, contention)
+	if failure.Code != "authority_lock_contention" {
+		t.Fatalf("contention envelope code = %q", failure.Code)
+	}
+	if !strings.Contains(failure.Cause, "cause-universal") {
+		t.Fatalf("contention envelope discarded the typed cause: %#v", failure)
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatalf("contention envelope with cause validation = %v", err)
+	}
+
+	// The legacy read-only refusal: constant Message, and before this change
+	// no Cause at all, so the lineage the error names never reached the
+	// caller's machine-readable envelope.
+	legacy := &reviewtransaction.LegacyReadOnlyError{Operation: "review/start", LineageID: "cause-universal-legacy"}
+	failure = newReviewIntegrationFailure("review.start", nil, legacy)
+	if failure.Code != reviewtransaction.LegacyReadOnlyErrorCode {
+		t.Fatalf("legacy envelope code = %q", failure.Code)
+	}
+	if !strings.Contains(failure.Cause, "cause-universal-legacy") {
+		t.Fatalf("legacy envelope discarded the typed cause: %#v", failure)
+	}
+
+	// The read-only catch-all is the ONE branch whose contract is
+	// content-free retry; it must clear the universal default, not inherit it.
+	readOnly := newReviewIntegrationFailure("review.status", nil, errors.New("internal detail that must not leak"))
+	if readOnly.Code != "operation_failed" || readOnly.Cause != "" {
+		t.Fatalf("read-only catch-all = %#v, want content-free", readOnly)
+	}
 }

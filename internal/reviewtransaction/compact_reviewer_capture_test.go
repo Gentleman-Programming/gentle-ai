@@ -592,6 +592,8 @@ func TestCompactStoreCaptureRefusesInvalidLocationsWithoutConsumingTheSlot(t *te
 		{"internal/a.go:3-2", FindingLocationErrorReason("range_must_be_ascending")},
 		{"internal/a.go:0-1", FindingLocationLineNotPositive},
 		{"internal/a.go:" + strings.Repeat("9", 64), FindingLocationErrorReason("line_overflows_integer")},
+		{"internal/a.go:9223372036854775808", FindingLocationErrorReason("line_overflows_integer")},
+		{"internal/a.go:18446744073709551615", FindingLocationErrorReason("line_overflows_integer")},
 		{"internal/a.go", FindingLocationExpectedPathAndLine},
 	} {
 		t.Run(tt.location, func(t *testing.T) {

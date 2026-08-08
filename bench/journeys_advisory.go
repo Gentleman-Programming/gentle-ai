@@ -344,5 +344,22 @@ func advisoryJourneys() []Journey {
 				{Name: "finish the review", Requires: captureResultCapability, Composite: finishAdvisoryReview},
 			},
 		},
+		{
+			ID:     "j76-claude-advisory-result-reaches-delivery",
+			Title:  "Claude advisory result: provider-bound review reaches terminal delivery without reviewer tools",
+			Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2692",
+			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
+				{Name: "fixture: stage auth code", Fixture: stageAuthCode},
+				{Name: "review start (negotiated v2, consent granted)", Requires: startContractCapability, Composite: startAdvisoryReview},
+				{Name: "bind the first pending lens", Requires: statusCapability, Composite: captureAdvisoryBinding},
+				{Name: "render the canonical Claude advisory prompt", Requires: advisoryPromptCapability,
+					Args: advisoryPromptArgs("claude-code"), After: rememberAdvisoryPrompt("issue-2692-claude-prompt")},
+				{Name: "fixture: write the provider-bound reviewer result", Fixture: writeAdvisoryResult("issue-2692-result", "")},
+				{Name: "admit the provider-bound reviewer result", Requires: advisoryValidateCapability,
+					Args: advisoryValidateArgs("issue-2692-result"), After: assertAdvisoryValidateAdmitted},
+				{Name: "capture, finalize, and allow delivery", Requires: captureResultCapability, Composite: finishAdvisoryReview},
+			},
+		},
 	}
 }
