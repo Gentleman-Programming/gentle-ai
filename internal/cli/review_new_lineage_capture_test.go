@@ -132,7 +132,9 @@ func TestReviewFacadeCaptureResultNewLineage_InputPreflightDoesNotCapture(t *tes
 	}
 	var dryRun reviewResultDryRun
 	decodeStrictReviewJSON(t, output.Bytes(), &dryRun)
-	if dryRun.Schema != reviewResultDryRunSchema || dryRun.Validation != "accepted" || dryRun.SubjectHash != wantSubject {
+	if dryRun.Schema != reviewResultDryRunSchema || dryRun.Operation != "review/capture-result" || dryRun.Validation != "accepted" ||
+		dryRun.LineageID != lineage || dryRun.Lens != lens || dryRun.SelectedOrder != 0 || dryRun.SubjectHash != wantSubject ||
+		dryRun.AdmissionDecision != "" {
 		t.Fatalf("new-lineage dry-run response = %#v", dryRun)
 	}
 	assertReviewResultDryRunMatchesPublishedSchema(t, output.Bytes())
