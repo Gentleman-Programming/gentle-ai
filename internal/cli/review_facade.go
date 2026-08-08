@@ -3190,7 +3190,9 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	// removed detail-visibility assertions moved to). Fencing this behind
 	// `!negotiated` used to mean the identical repository exited 0 for a
 	// human and 1 for any agent driving the negotiated contract (#2222).
-	if reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
+	if delivery, err := reviewDeliveryDisposition(ctx, root, false); err != nil {
+		return err
+	} else if delivery == reviewtransaction.RDDDeliveryDisabledUnmanaged {
 		return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, negotiated, *contract)
 	}
 	// Amendment C's single shared branch (design decision 4, Wave 3 Slice

@@ -314,7 +314,7 @@ type ResolveOptions struct {
 	// ReviewDisabledForWorkspace lets the composition root resolve the switch
 	// against the exact workspace normalized by Resolve. When set, it is called
 	// once and its result replaces ReviewDisabled for the whole status decision.
-	ReviewDisabledForWorkspace func(workspaceRoot string) bool
+	ReviewDisabledForWorkspace func(workspaceRoot string) (bool, error)
 }
 
 type CommandArgs struct {
@@ -412,7 +412,10 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 	reviewDisabled := options.ReviewDisabled
 	if options.ReviewDisabledForWorkspace != nil {
-		reviewDisabled = options.ReviewDisabledForWorkspace(workspaceRoot)
+		reviewDisabled, err = options.ReviewDisabledForWorkspace(workspaceRoot)
+		if err != nil {
+			return Status{}, err
+		}
 	}
 	planningHome := filepath.Join(workspaceRoot, "openspec")
 	changesDir := filepath.Join(planningHome, "changes")

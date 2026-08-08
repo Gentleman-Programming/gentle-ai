@@ -95,10 +95,11 @@ type FrozenCandidateContext struct {
 }
 
 type PreparedCandidateInspector struct {
-	frozen    FrozenCandidateContext
-	isolation []string
-	cleanup   func() error
-	closed    bool
+	frozen         FrozenCandidateContext
+	isolation      []string
+	attributesFile string
+	cleanup        func() error
+	closed         bool
 }
 
 // WithLegacyCandidateDiff adds the exact published v1 candidate transport.
@@ -154,7 +155,7 @@ func (builder SnapshotBuilder) PrepareCandidateInspector(ctx context.Context, sn
 	if err := builder.ValidateEvidence(ctx, snapshot); err != nil {
 		return nil, fmt.Errorf("validate frozen candidate snapshot: %w", err)
 	}
-	isolation, cleanup, err := isolatedImmutableTreeGit(ctx, repo)
+	isolation, attributesFile, cleanup, err := isolatedImmutableTreeGitWithAttributesFile(ctx, repo)
 	if err != nil {
 		return nil, fmt.Errorf("prepare isolated frozen candidate Git view: %w", err)
 	}
@@ -216,7 +217,7 @@ func (builder SnapshotBuilder) PrepareCandidateInspector(ctx context.Context, sn
 			BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree,
 			ChangedPathManifest: manifest, repositoryRoot: repo,
 		},
-		isolation: isolation, cleanup: cleanup,
+		isolation: isolation, attributesFile: attributesFile, cleanup: cleanup,
 	}, nil
 }
 
@@ -245,7 +246,7 @@ func (inspector *PreparedCandidateInspector) Inspect(ctx context.Context, operat
 		return nil, errors.New("candidate inspection side is valid only for object content") // refusal:by-design operator-knowledge: reaching this means provider code bypassed the validated native CLI contract
 	}
 
-	common := []string{"--no-pager", "-c", "color.ui=false", "-c", "core.attributesFile=" + os.DevNull, "-c", "diff.external="}
+	common := []string{"--no-pager", "-c", "color.ui=false", "-c", "core.attributesFile=" + inspector.attributesFile, "-c", "diff.external="}
 	var args []string
 	switch operation {
 	case "name-status", "numstat":
@@ -296,30 +297,35 @@ func (builder SnapshotBuilder) InspectCandidate(ctx context.Context, snapshot Sn
 }
 
 func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func() error, error) {
+	isolation, _, cleanup, err := isolatedImmutableTreeGitWithAttributesFile(ctx, repo)
+	return isolation, cleanup, err
+}
+
+func isolatedImmutableTreeGitWithAttributesFile(ctx context.Context, repo string) ([]string, string, func() error, error) {
 	identity, err := reviewRepositoryIdentity(ctx, repo)
 	if err != nil {
-		return nil, func() error { return nil }, err
+		return nil, "", func() error { return nil }, err
 	}
 	objectFormatOutput, err := runGit(ctx, identity.RepositoryRoot, nil, nil, "rev-parse", "--show-object-format")
 	if err != nil {
-		return nil, func() error { return nil }, err
+		return nil, "", func() error { return nil }, err
 	}
 	objectFormat := strings.TrimSpace(string(objectFormatOutput))
 	if objectFormat != "sha1" && objectFormat != "sha256" {
-		return nil, func() error { return nil }, fmt.Errorf("unsupported Git object format %q", objectFormat)
+		return nil, "", func() error { return nil }, fmt.Errorf("unsupported Git object format %q", objectFormat)
 	}
 	// The repository Git directory is the reliable writable location when a
 	// sandboxed caller does not expose an accessible process temp directory.
 	gitDir, err := os.MkdirTemp(identity.GitDir, ".gentle-ai-frozen-git-*")
 	if err != nil {
-		return nil, func() error { return nil }, err
+		return nil, "", func() error { return nil }, err
 	}
 	cleanup := func() error { return os.RemoveAll(gitDir) }
-	fail := func(err error) ([]string, func() error, error) {
+	fail := func(err error) ([]string, string, func() error, error) {
 		if cleanupErr := cleanup(); cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("clean up isolated frozen candidate Git view: %w", cleanupErr))
 		}
-		return nil, func() error { return nil }, err
+		return nil, "", func() error { return nil }, err
 	}
 	for _, dir := range []string{"objects", "refs"} {
 		if err := os.Mkdir(filepath.Join(gitDir, dir), 0o700); err != nil {
@@ -339,16 +345,27 @@ func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func(
 	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte(config), 0o600); err != nil {
 		return fail(err)
 	}
+	emptyFiles := make([]string, 0, 3)
+	for _, prefix := range []string{"git-iso-system-*", "git-iso-global-*", "git-iso-attrs-*"} {
+		file, err := os.CreateTemp(gitDir, prefix)
+		if err != nil {
+			return fail(err)
+		}
+		if err := file.Close(); err != nil {
+			return fail(err)
+		}
+		emptyFiles = append(emptyFiles, file.Name())
+	}
 	return []string{
 		"GIT_DIR=" + gitDir,
 		"GIT_OBJECT_DIRECTORY=" + filepath.Join(identity.GitCommonDir, "objects"),
 		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_SYSTEM=" + os.DevNull,
-		"GIT_CONFIG_GLOBAL=" + os.DevNull,
+		"GIT_CONFIG_SYSTEM=" + emptyFiles[0],
+		"GIT_CONFIG_GLOBAL=" + emptyFiles[1],
 		"GIT_CONFIG_COUNT=0",
 		"GIT_ATTR_NOSYSTEM=1",
 		"LANG=C",
-	}, cleanup, nil
+	}, emptyFiles[2], cleanup, nil
 }
 
 func validateChangedPathManifestEntry(entry ChangedPathManifestEntry) error {

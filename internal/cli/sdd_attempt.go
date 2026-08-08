@@ -85,6 +85,10 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		return errors.New("sdd-attempt requires --change")
 	}
 
+	reviewDisabled, err := reviewDrivenDevelopmentDisabled(ctx, *cwd)
+	if err != nil {
+		return fmt.Errorf("read review mode: %w", err)
+	}
 	store, err := sddstatus.OpenRuntimeStore(ctx, *cwd, *change)
 	if err != nil {
 		return fmt.Errorf("open native SDD runtime authority: %w", err)
@@ -93,7 +97,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	// knows how to read both of its sources. With reviews off, closing an
 	// attempt must not demand a review obligation the operator has no way to
 	// satisfy.
-	store.ReviewDisabled = reviewDrivenDevelopmentDisabled(ctx, *cwd)
+	store.ReviewDisabled = reviewDisabled
 	if missing := missingSDDAttemptOperationFlags(args[1:], operation); len(missing) != 0 {
 		return missingSDDAttemptOperationError(operation, missing)
 	}

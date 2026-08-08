@@ -73,6 +73,11 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 	if err := os.WriteFile(hostileAttributes, []byte("*.txt binary\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	hostileGlobalConfig := filepath.Join(t.TempDir(), "global.gitconfig")
+	if output, err := exec.Command("git", "config", "--file", hostileGlobalConfig, "core.attributesFile", hostileAttributes).CombinedOutput(); err != nil {
+		t.Fatalf("write hostile global Git config: %v\n%s", err, output)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", hostileGlobalConfig)
 	runReviewCLIGit(t, repo, "config", "core.attributesFile", hostileAttributes)
 	if err := os.WriteFile(filepath.Join(repo, ".git", "info", "attributes"), []byte("*.txt binary\n"), 0o644); err != nil {
 		t.Fatal(err)

@@ -74,7 +74,12 @@ func TestStatusValidateTransitionPreservesCustomPublicationBase(t *testing.T) {
 	duplicate := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "origin/release"))
 	runReviewCLIGit(t, repo, "push", "-q", "origin", "release:duplicate")
 	raw := selectorTransitionStatus(t, repo, "--lineage", "selector-validate", "--gate", "pre-pr", "--base-ref", duplicate)
-	if raw.NextTransition.Kind != reviewNextTransitionStop || raw.NextTransition.ReasonCode != "pre_pr_selector_unrepresentable" {
+	// Root 7 (#2471): a raw SHA at the pre-PR gate is a missing input, not a
+	// terminal state. The reason code is unchanged and the kind now collects
+	// the symbolic ref only the caller can choose.
+	if raw.NextTransition.Kind != reviewNextTransitionCollect || raw.NextTransition.ReasonCode != "pre_pr_selector_unrepresentable" ||
+		raw.NextTransition.Collect == nil || len(raw.NextTransition.Collect.Inputs) != 1 ||
+		raw.NextTransition.Collect.Inputs[0].Name != "base_ref" {
 		t.Fatalf("raw SHA pre-PR transition = %#v", raw.NextTransition)
 	}
 	assertReviewGateResult(t, executeSelectorTransition(t, repo, status), reviewtransaction.GateAllow)
@@ -558,8 +563,13 @@ func TestStatusStopsUnrepresentableRecoveryWithoutMutation(t *testing.T) {
 	if status.Action != reviewtransaction.TargetStatusActionRecover {
 		t.Fatalf("unrepresentable recovery status action = %q, target=%s authority=%s projection=%#v", status.Action, status.TargetIdentity, status.AuthorityTargetIdentity, status.Projection)
 	}
-	if status.NextTransition.Kind != reviewNextTransitionStop ||
-		status.NextTransition.ReasonCode != "recovery_target_unrepresentable" {
+	// Root 7 (#2471): an unrepresentable recovery selector is a missing input.
+	// The mutation assertions below still hold: collecting an input persists
+	// nothing, exactly as the stop it replaces did not.
+	if status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "recovery_target_unrepresentable" ||
+		status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 ||
+		status.NextTransition.Collect.Inputs[0].Name != "recovery_target_selector" {
 		t.Fatalf("unrepresentable recovery transition = %#v", status.NextTransition)
 	}
 	after, _ := os.ReadFile(store.StatePath())

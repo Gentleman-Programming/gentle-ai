@@ -209,7 +209,7 @@ func TestFrozenCandidateReviewerDiffUsesLiteralManifestPaths(t *testing.T) {
 	}
 }
 
-func TestFrozenCandidateReviewerDiffIgnoresMutableAttributeSources(t *testing.T) {
+func TestFrozenCandidateReviewerDiffUsesRegularAttributesFileAndIgnoresMutableSources(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "attribute-target.txt", "base\n")
@@ -260,9 +260,63 @@ func TestFrozenCandidateReviewerDiffIgnoresMutableAttributeSources(t *testing.T)
 	t.Setenv("GIT_CONFIG_KEY_0", "core.attributesFile")
 	t.Setenv("GIT_CONFIG_VALUE_0", attributes)
 
+	originalStarter := gitProcessTreeStarter
+	var observedAttributesFile bool
+	var carrierErr error
+	verifyEmptyRegular := func(carrier, path string) error {
+		if path == "" {
+			return errors.New(carrier + " is missing")
+		}
+		if path == os.DevNull {
+			return errors.New(carrier + " still uses os.DevNull")
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Size() != 0 {
+			return errors.New(carrier + " is not an empty regular file")
+		}
+		return nil
+	}
+	gitProcessTreeStarter = func(command *exec.Cmd) (func() error, error) {
+		for _, arg := range command.Args {
+			if !strings.HasPrefix(arg, "core.attributesFile=") {
+				continue
+			}
+			observedAttributesFile = true
+			if err := verifyEmptyRegular("core.attributesFile", strings.TrimPrefix(arg, "core.attributesFile=")); err != nil {
+				carrierErr = err
+			}
+			for _, prefix := range []string{"GIT_CONFIG_SYSTEM=", "GIT_CONFIG_GLOBAL="} {
+				foundCarrier := false
+				for _, entry := range command.Env {
+					if strings.HasPrefix(entry, prefix) {
+						foundCarrier = true
+						if err := verifyEmptyRegular(strings.TrimSuffix(prefix, "="), strings.TrimPrefix(entry, prefix)); err != nil {
+							carrierErr = err
+						}
+						break
+					}
+				}
+				if !foundCarrier {
+					carrierErr = errors.New(strings.TrimSuffix(prefix, "=") + " is missing")
+				}
+			}
+		}
+		return originalStarter(command)
+	}
+	t.Cleanup(func() { gitProcessTreeStarter = originalStarter })
+
 	replayed, err := (SnapshotBuilder{Repo: repo}).InspectCandidate(context.Background(), snapshot, "patch", 0, "")
 	if err != nil {
 		t.Fatalf("InspectCandidate() under hostile configuration: %v", err)
+	}
+	if !observedAttributesFile {
+		t.Fatal("isolated candidate inspection did not run core.attributesFile")
+	}
+	if carrierErr != nil {
+		t.Fatal(carrierErr)
 	}
 	if !bytes.Equal(replayed, baseline) {
 		t.Fatalf("reviewer tree diff changed under mutable Git attributes\nfirst=%s\nreplayed=%s", baseline, replayed)
