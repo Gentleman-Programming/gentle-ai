@@ -156,6 +156,24 @@ func TestLensAgentPromptsStateTheAdmissionEnvelope(t *testing.T) {
 	}
 }
 
+func TestLensAgentPromptsRequireCanonicalProofPaths(t *testing.T) {
+	envelope := reviewtransaction.NewReviewerResultEnvelope()
+	for _, paths := range lensAgentAssetPaths(t, envelope.LensAgentNames) {
+		for _, path := range paths {
+			prompt := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
+			for required, why := range map[string]string{
+				"Copy the exact literal path from changed_path_manifest into finding.location.":                                  "does not require canonical finding locations",
+				"Each path-like token in proof_refs or evidence must use its own exact canonical repository-relative full path.": "does not require canonical proof and evidence paths",
+				"Never use bare basenames, suffix-only or partial paths, absolute paths, or ./ or ../ forms.":                    "does not forbid ambiguous path forms",
+			} {
+				if !strings.Contains(prompt, required) {
+					t.Errorf("%s %s (missing %q)", path, why, required)
+				}
+			}
+		}
+	}
+}
+
 // executionToolVocabulary names the capabilities that would let a reviewer run
 // commands. It is a policy list, not a copy of any prompt: a lens that gains
 // one of these must stop claiming it cannot execute, and a lens that keeps its
