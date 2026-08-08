@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -1477,6 +1478,43 @@ func readMisnamedOpenCodeGentlemanSDDPrompt(settingsPath string) (string, error)
 	return prompt, nil
 }
 
+// skillRegistryHookGOOS is injected so unit tests can exercise the Windows and
+// non-Windows hook command shapes without build tags, mirroring the
+// runtimeGOOS pattern in internal/components/filemerge (issue #2124).
+var skillRegistryHookGOOS = func() string { return runtime.GOOS }
+
+// skillRegistryHookMarker uniquely identifies a gentle-ai skill-registry hook
+// regardless of the exact shell command variant. It is used for idempotency and
+// migration: an already-installed hook (bash or PowerShell) is detected and
+// replaced instead of being duplicated on the next sync (issue #2124).
+const skillRegistryHookMarker = "gentle-ai skill-registry refresh"
+
+// Bash command variants (macOS, Linux, and Windows with Git Bash). The trailing
+// `|| true` keeps the hook non-blocking when the refresh exits non-zero.
+const (
+	claudeSkillRegistryBashCommand = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	codexSkillRegistryBashCommand  = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true`
+)
+
+// PowerShell-safe command variants for Windows without Git Bash, where Claude
+// Code and Codex run the hook through PowerShell 5.1. PowerShell 5.1 rejects the
+// bash `|| true` separator and `${VAR:-default}` expansion, so we branch on the
+// project-dir env var explicitly and swallow non-zero exits with `exit 0`. The
+// `$env:` form is required; the bare `$CLAUDE_PROJECT_DIR` resolves to $null in
+// PowerShell.
+const (
+	claudeSkillRegistryPowerShellCommand = `if ($env:CLAUDE_PROJECT_DIR) { $d = $env:CLAUDE_PROJECT_DIR } else { $d = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$d"; exit 0`
+	codexSkillRegistryPowerShellCommand  = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD"; exit 0`
+)
+
+// isSkillRegistryHookCommand reports whether a hook command string is a
+// gentle-ai skill-registry hook in any shell variant. Used to migrate a
+// previously installed hook to the current platform's command without
+// duplicating it.
+func isSkillRegistryHookCommand(command string) bool {
+	return strings.Contains(command, skillRegistryHookMarker)
+}
+
 func installSkillRegistryAutomation(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	if adapter.Agent() == model.AgentCodex {
 		hooksPath := filepath.Join(adapter.GlobalConfigDir(homeDir), "hooks.json")
@@ -1510,11 +1548,6 @@ func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
 		return false, err
 	}
 
-	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$PWD" || true`
-	if claudeHookExists(root, command) {
-		return false, nil
-	}
-
 	hooksRaw, hasHooks := root["hooks"]
 	hooksMap, _ := hooksRaw.(map[string]any)
 	if hasHooks && hooksMap == nil {
@@ -1529,14 +1562,24 @@ func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
 	if hasSessionStart && sessionStart == nil {
 		return false, fmt.Errorf("Codex hooks %q has unsupported hooks.SessionStart shape: want array", hooksPath)
 	}
+
+	// Codex runs command hooks through PowerShell on Windows, where the bash
+	// `command` fails. Codex exposes a Windows-only `commandWindows` override, so
+	// we ship the bash command plus a PowerShell-safe override and let Codex pick
+	// the right one per platform (issue #2124).
+	sessionStart, hasCurrent, migrated := pruneStaleSkillRegistryHooks(sessionStart, codexSkillRegistryBashCommand)
+	if hasCurrent && !migrated {
+		return false, nil
+	}
 	sessionStart = append(sessionStart, map[string]any{
 		"matcher": "startup|resume|clear|compact",
 		"hooks": []any{
 			map[string]any{
-				"type":          "command",
-				"command":       command,
-				"timeout":       30,
-				"statusMessage": "Refreshing skill registry",
+				"type":           "command",
+				"command":        codexSkillRegistryBashCommand,
+				"commandWindows": codexSkillRegistryPowerShellCommand,
+				"timeout":        30,
+				"statusMessage":  "Refreshing skill registry",
 			},
 		},
 	})
@@ -1568,11 +1611,6 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 		return false, err
 	}
 
-	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
-	if claudeHookExists(root, command) {
-		return false, nil
-	}
-
 	hooksRaw, hasHooks := root["hooks"]
 	hooksMap, _ := hooksRaw.(map[string]any)
 	if hasHooks && hooksMap == nil {
@@ -1586,14 +1624,30 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	if hasUserPromptSubmit && userPromptSubmit == nil {
 		return false, fmt.Errorf("Claude settings %q has unsupported hooks.UserPromptSubmit shape: want array", settingsPath)
 	}
+
+	// On Windows, Claude Code runs a shell-form command hook through Git Bash when
+	// present, but falls back to PowerShell when it is not, and the bash `|| true`
+	// command fails under PowerShell 5.1. To be deterministic regardless of Git
+	// Bash presence, on Windows we emit a PowerShell-safe command tagged with the
+	// `shell: "powershell"` field so Claude Code always runs it through
+	// PowerShell; other platforms keep the bash command (issue #2124).
+	hookHandler := map[string]any{"type": "command"}
+	wantCommand := claudeSkillRegistryBashCommand
+	if skillRegistryHookGOOS() == "windows" {
+		wantCommand = claudeSkillRegistryPowerShellCommand
+		hookHandler["command"] = claudeSkillRegistryPowerShellCommand
+		hookHandler["shell"] = "powershell"
+	} else {
+		hookHandler["command"] = claudeSkillRegistryBashCommand
+	}
+
+	userPromptSubmit, hasCurrent, migrated := pruneStaleSkillRegistryHooks(userPromptSubmit, wantCommand)
+	if hasCurrent && !migrated {
+		return false, nil
+	}
 	userPromptSubmit = append(userPromptSubmit, map[string]any{
 		"matcher": "",
-		"hooks": []any{
-			map[string]any{
-				"type":    "command",
-				"command": command,
-			},
-		},
+		"hooks":   []any{hookHandler},
 	})
 	hooksMap["UserPromptSubmit"] = userPromptSubmit
 	root["hooks"] = hooksMap
@@ -1610,41 +1664,55 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	return wr.Changed, nil
 }
 
-func claudeHookExists(root map[string]any, command string) bool {
-	hooksMap, ok := root["hooks"].(map[string]any)
-	if !ok {
-		return false
-	}
-	for _, key := range []string{"UserPromptSubmit", "SessionStart"} {
-		hookEntries, ok := hooksMap[key].([]any)
-		if !ok {
-			continue
-		}
-		if claudeHookListContains(hookEntries, command) {
-			return true
-		}
-	}
-	return false
-}
-
-func claudeHookListContains(hookEntries []any, command string) bool {
+// pruneStaleSkillRegistryHooks removes any gentle-ai skill-registry hook whose
+// command differs from wantCommand (for example a bash variant left over from a
+// previous install when the current platform now needs the PowerShell variant)
+// from the given hook-event list. It reports whether the list still contains an
+// up-to-date hook with the exact wantCommand, and whether it removed anything.
+// Entries that end up with an empty inner hooks array are dropped so no empty
+// matcher groups linger.
+func pruneStaleSkillRegistryHooks(hookEntries []any, wantCommand string) (kept []any, hasCurrent bool, removed bool) {
+	kept = make([]any, 0, len(hookEntries))
 	for _, item := range hookEntries {
 		itemMap, ok := item.(map[string]any)
 		if !ok {
+			kept = append(kept, item)
 			continue
 		}
 		hooks, ok := itemMap["hooks"].([]any)
 		if !ok {
+			kept = append(kept, item)
 			continue
 		}
+		filtered := make([]any, 0, len(hooks))
 		for _, hook := range hooks {
 			hookMap, ok := hook.(map[string]any)
-			if ok && hookMap["command"] == command {
-				return true
+			if !ok {
+				filtered = append(filtered, hook)
+				continue
 			}
+			command, _ := hookMap["command"].(string)
+			if !isSkillRegistryHookCommand(command) {
+				filtered = append(filtered, hook)
+				continue
+			}
+			if command == wantCommand {
+				hasCurrent = true
+				filtered = append(filtered, hook)
+				continue
+			}
+			// Stale gentle-ai hook variant: drop it so the current-platform
+			// command replaces it instead of accumulating (issue #2124).
+			removed = true
 		}
+		if len(filtered) == 0 {
+			// The matcher group only held stale skill-registry hooks; drop it.
+			continue
+		}
+		itemMap["hooks"] = filtered
+		kept = append(kept, itemMap)
 	}
-	return false
+	return kept, hasCurrent, removed
 }
 
 // ManagedOpenCodePluginNames lists every OpenCode plugin gentle-ai manages as

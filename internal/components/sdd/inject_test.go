@@ -6398,8 +6398,20 @@ func TestEnsureCodexSkillRegistryHookWritesSessionStartHookIdempotently(t *testi
 		t.Fatal(err)
 	}
 	text := string(data)
-	if strings.Count(text, "gentle-ai skill-registry refresh") != 1 {
-		t.Fatalf("hook command count mismatch:\n%s", text)
+	// The hook now carries a bash `command` plus a Windows-only `commandWindows`
+	// override, so the marker string appears twice while there is still exactly
+	// one skill-registry hook entry (issue #2124).
+	if strings.Count(text, `"commandWindows"`) != 1 {
+		t.Fatalf("expected exactly one commandWindows override:\n%s", text)
+	}
+	if strings.Count(text, `"statusMessage": "Refreshing skill registry"`) != 1 {
+		t.Fatalf("expected exactly one skill-registry hook entry:\n%s", text)
+	}
+	if !strings.Contains(text, "gentle-ai skill-registry refresh") {
+		t.Fatalf("Codex hook missing skill-registry command:\n%s", text)
+	}
+	if !strings.Contains(text, "; exit 0") {
+		t.Fatalf("Codex commandWindows should be PowerShell-safe (exit 0), got:\n%s", text)
 	}
 	if !strings.Contains(text, `"SessionStart"`) {
 		t.Fatalf("Codex hook should use SessionStart, got:\n%s", text)
@@ -6410,6 +6422,127 @@ func TestEnsureCodexSkillRegistryHookWritesSessionStartHookIdempotently(t *testi
 	if !strings.Contains(text, "echo keep") {
 		t.Fatalf("existing hooks not preserved:\n%s", text)
 	}
+}
+
+// withSkillRegistryHookGOOS overrides the injected GOOS for the duration of a
+// test and restores it afterward, mirroring the runtimeGOOS pattern in
+// internal/components/filemerge (issue #2124).
+func withSkillRegistryHookGOOS(t *testing.T, goos string) {
+	t.Helper()
+	original := skillRegistryHookGOOS
+	skillRegistryHookGOOS = func() string { return goos }
+	t.Cleanup(func() { skillRegistryHookGOOS = original })
+}
+
+func TestEnsureClaudeSkillRegistryHookUsesPowerShellOnWindows(t *testing.T) {
+	withSkillRegistryHookGOOS(t, "windows")
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	if err != nil {
+		t.Fatalf("ensureClaudeSkillRegistryHook() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("changed = false, want true")
+	}
+
+	text := readFileString(t, settingsPath)
+	if !strings.Contains(text, `"shell": "powershell"`) {
+		t.Fatalf("Windows Claude hook should set shell=powershell:\n%s", text)
+	}
+	if !strings.Contains(text, "; exit 0") {
+		t.Fatalf("Windows Claude hook should be PowerShell-safe (exit 0):\n%s", text)
+	}
+	if strings.Contains(text, "|| true") {
+		t.Fatalf("Windows Claude hook must not use bash || true:\n%s", text)
+	}
+	if strings.Contains(text, "${CLAUDE_PROJECT_DIR:-$PWD}") {
+		t.Fatalf("Windows Claude hook must not use bash parameter expansion:\n%s", text)
+	}
+	if !strings.Contains(text, "$env:CLAUDE_PROJECT_DIR") {
+		t.Fatalf("Windows Claude hook should use $env: form:\n%s", text)
+	}
+}
+
+func TestEnsureClaudeSkillRegistryHookUsesBashOnUnix(t *testing.T) {
+	withSkillRegistryHookGOOS(t, "linux")
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ensureClaudeSkillRegistryHook(settingsPath); err != nil {
+		t.Fatalf("ensureClaudeSkillRegistryHook() error = %v", err)
+	}
+
+	text := readFileString(t, settingsPath)
+	if !strings.Contains(text, "|| true") {
+		t.Fatalf("Unix Claude hook should keep bash || true:\n%s", text)
+	}
+	if strings.Contains(text, `"shell"`) {
+		t.Fatalf("Unix Claude hook must not set the shell field:\n%s", text)
+	}
+}
+
+// TestEnsureClaudeSkillRegistryHookMigratesBashToPowerShell proves that a hook
+// installed as the bash variant on a prior sync is replaced (not duplicated) when
+// the same settings are later synced on Windows (issue #2124).
+func TestEnsureClaudeSkillRegistryHookMigratesBashToPowerShell(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// First sync on a Unix host writes the bash variant.
+	withSkillRegistryHookGOOS(t, "linux")
+	if _, err := ensureClaudeSkillRegistryHook(settingsPath); err != nil {
+		t.Fatalf("first (unix) sync error = %v", err)
+	}
+
+	// Later sync on Windows must replace the stale bash hook.
+	withSkillRegistryHookGOOS(t, "windows")
+	changed, err := ensureClaudeSkillRegistryHook(settingsPath)
+	if err != nil {
+		t.Fatalf("second (windows) sync error = %v", err)
+	}
+	if !changed {
+		t.Fatal("windows sync changed = false, want true (migration)")
+	}
+
+	text := readFileString(t, settingsPath)
+	if strings.Contains(text, "|| true") {
+		t.Fatalf("stale bash hook was not removed on migration:\n%s", text)
+	}
+	if strings.Count(text, "gentle-ai skill-registry refresh") != 1 {
+		t.Fatalf("migration duplicated the hook instead of replacing it:\n%s", text)
+	}
+	if !strings.Contains(text, `"shell": "powershell"`) {
+		t.Fatalf("migrated hook should be the PowerShell variant:\n%s", text)
+	}
+
+	// A repeat Windows sync is idempotent.
+	changed, err = ensureClaudeSkillRegistryHook(settingsPath)
+	if err != nil {
+		t.Fatalf("third (windows) sync error = %v", err)
+	}
+	if changed {
+		t.Fatal("repeat windows sync changed = true, want false (idempotent)")
+	}
+}
+
+func readFileString(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 // ---------------------------------------------------------------------------
