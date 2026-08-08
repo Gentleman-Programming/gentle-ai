@@ -737,7 +737,7 @@ func managedOutputStyleName(persona model.PersonaID) string {
 	switch {
 	case isGentlemanConversationPersona(persona):
 		return "Gentleman"
-	case persona == model.PersonaNeutral:
+	case persona == model.PersonaNeutral, persona == model.PersonaGentlemanNeutralArtifacts:
 		return "Neutral"
 	default:
 		return ""
@@ -1366,7 +1366,7 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 		return
 	}
 	if persisted != "" {
-		if id, err := normalizePersona(persisted); err == nil {
+		if id, _, err := normalizePersona(persisted); err == nil {
 			selection.Persona = id
 			return
 		}
@@ -1376,6 +1376,24 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 	// no Persona field, and unreadable/invalid state must not implicitly restore
 	// regional persona behavior.
 	selection.Persona = model.PersonaNeutral
+}
+
+// migratePersistedPersonaAlias rewrites a persisted legacy
+// gentleman-neutral-artifacts persona to neutral, printing the remap notice
+// once. State that predates persona persistence, explicit gentleman state,
+// and unreadable state are untouched.
+func migratePersistedPersonaAlias(homeDir string, persisted *state.InstallState, persistedErr error) error {
+	if persistedErr != nil || persisted == nil || persisted.Persona != string(model.PersonaGentlemanNeutralArtifacts) {
+		return nil
+	}
+	persisted.Persona = string(model.PersonaNeutral)
+	if err := state.Write(homeDir, *persisted); err != nil {
+		return fmt.Errorf("persist remapped persona: %w", err)
+	}
+	// Notice only after the rewrite is durably persisted: a failed write must
+	// not tell the user the remap happened.
+	fmt.Fprintln(personaNoticeWriter, personaAliasRemapNotice)
+	return nil
 }
 
 // RunSyncWithSelection is the programmatic entry point for sync.
@@ -1396,6 +1414,14 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 		var persistedPersona string
 		persistedPersona = persistedState.Persona
 		applyResolvedPersona(&selection, persistedPersona)
+	}
+
+	// Migrate a persisted legacy alias BEFORE any early return: a no-agent
+	// no-op sync and a failing pipeline must still leave state.json remapped,
+	// otherwise the one-time migration never fires for those users. State
+	// records intent — the next sync applies the neutral assets.
+	if err := migratePersistedPersonaAlias(homeDir, &persistedState, persistedStateErr); err != nil {
+		return SyncResult{Agents: agentIDs, Selection: selection}, err
 	}
 
 	result := SyncResult{

@@ -2024,7 +2024,6 @@ func TestPersonaContentHermesGentleman(t *testing.T) {
 		persona model.PersonaID
 	}{
 		{"gentleman", model.PersonaGentleman},
-		{"gentleman-neutral-artifacts", model.PersonaGentlemanNeutralArtifacts},
 	}
 
 	for _, tt := range tests {
@@ -2047,6 +2046,19 @@ func TestPersonaContentHermesGentleman(t *testing.T) {
 				t.Fatal("hermes gentleman persona is byte-identical to generic — Hermes-specific asset not used")
 			}
 		})
+	}
+}
+
+// TestPersonaContentAliasRoutesToNeutral verifies that the gentleman-neutral-artifacts
+// alias is routed to neutral content, not gentleman content.
+func TestPersonaContentAliasRoutesToNeutral(t *testing.T) {
+	alias := personaContent(model.AgentClaudeCode, model.PersonaGentlemanNeutralArtifacts, false)
+	neutral := personaContent(model.AgentClaudeCode, model.PersonaNeutral, false)
+	if alias != neutral {
+		t.Fatal("gentleman-neutral-artifacts must produce identical content to neutral")
+	}
+	if alias == "" {
+		t.Fatal("alias persona content must not be empty")
 	}
 }
 
