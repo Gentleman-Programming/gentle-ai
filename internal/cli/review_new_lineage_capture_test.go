@@ -108,6 +108,15 @@ func TestReviewFacadeCaptureResultNewLineage_InputPreflightDoesNotCapture(t *tes
 		t.Fatalf("discover new-lineage authority: %#v, %t, %v", before, found, err)
 	}
 	wantSubject := reviewtransaction.NewLineageArtifactSubjectHash(before.Authority, lens, 0)
+	store, err := reviewtransaction.NewLineageAuthorityStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateBefore, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitBefore := runReviewCLIGit(t, repo, "status", "--porcelain=v1")
 	input := filepath.Join(t.TempDir(), "result.json")
 	if err := os.WriteFile(input, []byte(`{"subject_hash":"`+wantSubject+`","findings":[],"evidence":["reviewed"]}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -127,6 +136,13 @@ func TestReviewFacadeCaptureResultNewLineage_InputPreflightDoesNotCapture(t *tes
 		t.Fatalf("new-lineage dry-run response = %#v", dryRun)
 	}
 	assertReviewResultDryRunMatchesPublishedSchema(t, output.Bytes())
+	stateAfter, err := os.ReadFile(store.StatePath())
+	if err != nil || !bytes.Equal(stateAfter, stateBefore) {
+		t.Fatalf("input preflight changed new-lineage authority bytes: %v", err)
+	}
+	if got := runReviewCLIGit(t, repo, "status", "--porcelain=v1"); got != gitBefore {
+		t.Fatalf("input preflight changed Git state: before %q, after %q", gitBefore, got)
+	}
 	before, found, err = reviewtransaction.DiscoverNewLineage(t.Context(), repo, lineage)
 	if err != nil || !found || len(before.Authority.CapturedResults) != 0 {
 		t.Fatalf("input preflight captured a result: %#v, %t, %v", before, found, err)

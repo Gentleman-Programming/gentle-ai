@@ -82,6 +82,7 @@ func TestReviewCaptureResultPreflightVerifiesBindingWithoutMutation(t *testing.T
 func TestReviewCaptureResultInputPreflightValidatesWithoutPersistence(t *testing.T) {
 	repo, started, store, record := newArtifactReview(t, false)
 	lens := record.State.SelectedLenses[0]
+	wantSubject := admittedReviewerResultForTest(t, repo, record, lens, 0).SubjectHash
 	input := filepath.Join(t.TempDir(), "result.json")
 	if err := os.WriteFile(input, admittedReviewerPayloadForTest(t, repo, record, lens, 0), 0o600); err != nil {
 		t.Fatal(err)
@@ -106,7 +107,10 @@ func TestReviewCaptureResultInputPreflightValidatesWithoutPersistence(t *testing
 		"schema": true, "operation": true, "validation": true, "lineage_id": true,
 		"lens": true, "selected_order": true, "subject_hash": true, "admission_decision": true,
 	}
-	if dryRun["schema"] != reviewResultDryRunSchema || dryRun["validation"] != "accepted" || len(dryRun) != len(allowed) {
+	if dryRun["schema"] != reviewResultDryRunSchema || dryRun["operation"] != "review/capture-result" ||
+		dryRun["validation"] != "accepted" || dryRun["lineage_id"] != started.LineageID ||
+		dryRun["lens"] != lens || dryRun["selected_order"] != float64(0) || dryRun["subject_hash"] != wantSubject ||
+		dryRun["admission_decision"] != "completed" || len(dryRun) != len(allowed) {
 		t.Fatalf("dry-run response = %#v", dryRun)
 	}
 	for field := range dryRun {

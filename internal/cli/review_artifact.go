@@ -233,6 +233,7 @@ var syncReviewerArtifactDirectory = func(path string) error {
 	return directory.Close()
 }
 
+// RunReviewCaptureResult validates or captures one result bound to review authority.
 func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review capture-result", stdout, "Capture one strict reviewer result in native authority and emit its bound manifest.")
 	cwd := flags.String("cwd", ".", "repository path")

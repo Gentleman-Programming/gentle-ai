@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"strconv"
+	"strings"
 )
 
 func captureResultDryRunJourneys() []Journey {
@@ -21,7 +24,7 @@ func captureResultDryRunJourneys() []Journey {
 }
 
 func exerciseCaptureResultDryRun(r *journeyRun) error {
-	envelope, err := readStatus(r)
+	envelope, statusBefore, err := readCaptureResultDryRunStatus(r)
 	if err != nil {
 		return err
 	}
@@ -29,6 +32,10 @@ func exerciseCaptureResultDryRun(r *journeyRun) error {
 		return errors.New("expected a reviewer-result collect transition")
 	}
 	input := envelope.NextTransition.Collect.Inputs[0]
+	gitBefore, err := gitOut(r.sandbox, r.sandbox.Repo, "status", "--porcelain=v1")
+	if err != nil {
+		return err
+	}
 	args := []string{
 		"review", "capture-result", "--cwd", r.sandbox.Repo,
 		"--lineage", envelope.argument("lineage"), "--target", envelope.argument("target"),
@@ -64,21 +71,40 @@ func exerciseCaptureResultDryRun(r *journeyRun) error {
 	if err := json.Unmarshal([]byte(observation.Stdout), &response); err != nil {
 		return fmt.Errorf("decode dry-run response: %w", err)
 	}
-	if response["schema"] != "gentle-ai.review-capture-result-dry-run/v1" || response["validation"] != "accepted" {
+	order, err := strconv.Atoi(envelope.argument("order"))
+	if err != nil {
+		return fmt.Errorf("decode collect order: %w", err)
+	}
+	wantFields := map[string]bool{
+		"schema": true, "operation": true, "validation": true, "lineage_id": true,
+		"lens": true, "selected_order": true, "subject_hash": true, "admission_decision": true,
+	}
+	if response["schema"] != "gentle-ai.review-capture-result-dry-run/v1" || response["operation"] != "review/capture-result" ||
+		response["validation"] != "accepted" || response["lineage_id"] != envelope.argument("lineage") ||
+		response["lens"] != envelope.argument("lens") || response["selected_order"] != float64(order) ||
+		response["subject_hash"] != input.ArtifactSubject.SubjectHash || response["admission_decision"] != "completed" ||
+		len(response) != len(wantFields) {
 		return fmt.Errorf("unexpected dry-run response: %#v", response)
 	}
-	for _, forbidden := range []string{"path", "reference", "sha256", "raw_sha256", "canonical_sha256", "result_hash"} {
-		if _, found := response[forbidden]; found {
-			return fmt.Errorf("dry-run response exposed forbidden field %q", forbidden)
+	for field := range response {
+		if !wantFields[field] {
+			return fmt.Errorf("dry-run response exposed forbidden field %q", field)
 		}
 	}
-
-	unchanged, err := readStatus(r)
+	gitAfter, err := gitOut(r.sandbox, r.sandbox.Repo, "status", "--porcelain=v1")
 	if err != nil {
 		return err
 	}
-	if unchanged.argument("lens") != envelope.argument("lens") || unchanged.argument("order") != envelope.argument("order") {
-		return errors.New("dry run advanced review authority")
+	if gitAfter != gitBefore {
+		return fmt.Errorf("dry run changed Git state: before %q, after %q", gitBefore, gitAfter)
+	}
+
+	_, statusAfter, err := readCaptureResultDryRunStatus(r)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(statusAfter, statusBefore) {
+		return errors.New("dry run changed the public status envelope")
 	}
 	realArgs := append(append([]string{}, args[:len(args)-1]...), "--input", validPath)
 	if observation := r.run(realArgs, true); observation.ExitCode != 0 {
@@ -92,4 +118,18 @@ func exerciseCaptureResultDryRun(r *journeyRun) error {
 		return errors.New("real capture did not persist and advance the collect binding")
 	}
 	return nil
+}
+
+func readCaptureResultDryRunStatus(r *journeyRun) (statusEnvelope, any, error) {
+	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}, false)
+	var envelope statusEnvelope
+	var document any
+	payload := []byte(strings.TrimSpace(observation.Stdout))
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return envelope, nil, fmt.Errorf("parse review status: %w (stderr: %s)", err, firstLine(observation.Stderr))
+	}
+	if err := json.Unmarshal(payload, &document); err != nil {
+		return envelope, nil, fmt.Errorf("parse complete review status: %w", err)
+	}
+	return envelope, document, nil
 }
