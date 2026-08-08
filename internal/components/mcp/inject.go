@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -34,7 +35,7 @@ func Inject(homeDir, targetDir string, adapter agents.Adapter) (InjectionResult,
 			if targetDir == homeDir {
 				return injectClaudeUserConfig(homeDir, adapter)
 			}
-			return injectMergeIntoSettings(targetDir, adapter)
+			return injectClaudeWorkspaceConfig(targetDir, adapter)
 		}
 		return injectSeparateFile(targetDir, adapter)
 	case model.StrategyMergeIntoSettings:
@@ -271,6 +272,35 @@ func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionRe
 	// Best-effort: the block is inert, so a settings.json that cannot be
 	// rewritten must not fail the injection that already succeeded above.
 	settingsPath := adapter.SettingsPath(homeDir)
+	if settingsChanged, cleanupErr := removeInertSettingsMCPServers(settingsPath); cleanupErr == nil && settingsChanged {
+		changed = true
+		files = append(files, settingsPath)
+	}
+
+	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+// injectClaudeWorkspaceConfig registers Context7 as a project-scoped MCP server
+// in <workspace>/.mcp.json, the location Claude Code reads workspace-scoped MCP
+// servers from. Earlier versions merged the entry into <workspace>/.claude/
+// settings.json, which Claude Code silently ignores for MCP discovery, so this
+// mirrors the user-scope fix in injectClaudeUserConfig for workspace scope
+// (issue #2213, sibling of #1868). The managed entry is merged so unrelated
+// project servers are preserved, and the project server is not auto-approved —
+// Claude Code requires native project approval on first use.
+func injectClaudeWorkspaceConfig(targetDir string, adapter agents.Adapter) (InjectionResult, error) {
+	mcpPath := filepath.Join(targetDir, ".mcp.json")
+	writeResult, err := mergeJSONFile(mcpPath, DefaultContext7OverlayJSON())
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	changed := writeResult.Changed
+	files := []string{mcpPath}
+	// Best-effort cleanup of the inert mcpServers block previously written to
+	// settings.json. A settings file that cannot be rewritten must not fail the
+	// .mcp.json injection that already succeeded above.
+	settingsPath := adapter.SettingsPath(targetDir)
 	if settingsChanged, cleanupErr := removeInertSettingsMCPServers(settingsPath); cleanupErr == nil && settingsChanged {
 		changed = true
 		files = append(files, settingsPath)

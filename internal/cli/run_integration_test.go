@@ -2605,9 +2605,19 @@ func TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace(t *testing.T) {
 		t.Fatalf("post-apply verification failed for Context7 workspace scope: %#v", result.Verify)
 	}
 
-	// Assert that Context7 MCP configuration was persisted to workspace-scoped Claude settings.
+	// Context7 MCP config must be persisted to workspace-scoped .mcp.json, the
+	// file Claude Code reads project-scoped MCP servers from (issue #2213).
+	workspaceMCPFile := filepath.Join(workspace, ".mcp.json")
+	assertFileContains(t, workspaceMCPFile, "context7")
+
+	// It must NOT be written to the inert workspace settings.json.
 	workspaceSettingsFile := filepath.Join(workspace, ".claude", "settings.json")
-	assertFileContains(t, workspaceSettingsFile, "context7")
+	if _, err := os.Stat(workspaceSettingsFile); err == nil {
+		content, _ := os.ReadFile(workspaceSettingsFile)
+		if strings.Contains(string(content), "context7") {
+			t.Errorf("Context7 must not be written to inert workspace settings.json: %q", workspaceSettingsFile)
+		}
+	}
 
 	// Assert that no Context7 configuration was written to home directory settings.
 	homeSettingsFile := filepath.Join(home, ".claude", "settings.json")

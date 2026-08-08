@@ -624,6 +624,142 @@ func TestInjectClaudeRefusesCorruptUserConfig(t *testing.T) {
 	}
 }
 
+// TestInjectClaudeWorkspaceWritesMCPJson: workspace-scope injection
+// (targetDir != homeDir) must register context7 in <workspace>/.mcp.json — the
+// file Claude Code reads project-scoped MCP servers from — and must not leave a
+// managed mcpServers block in <workspace>/.claude/settings.json (issue #2213).
+func TestInjectClaudeWorkspaceWritesMCPJson(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	mcpPath := filepath.Join(workspace, ".mcp.json")
+
+	first, err := Inject(home, workspace, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject() first changed = false; want true")
+	}
+
+	raw, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("workspace .mcp.json must be written; ReadFile error = %v", err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatalf("Unmarshal(.mcp.json) error = %v", err)
+	}
+	servers, _ := root["mcpServers"].(map[string]any)
+	context7, _ := servers["context7"].(map[string]any)
+	if context7["command"] != "npx" {
+		t.Fatalf(".mcp.json mcpServers.context7.command = %#v; want npx", context7["command"])
+	}
+	if args := fmt.Sprintf("%v", context7["args"]); !strings.Contains(args, versions.Context7MCP) {
+		t.Fatalf("context7.args = %s; want pinned version %s", args, versions.Context7MCP)
+	}
+
+	// The managed entry must NOT be written to the inert settings.json.
+	settingsPath := filepath.Join(workspace, ".claude", "settings.json")
+	if settingsRaw, statErr := os.ReadFile(settingsPath); statErr == nil {
+		settings := map[string]any{}
+		if err := json.Unmarshal(settingsRaw, &settings); err == nil {
+			if _, hasMCP := settings["mcpServers"]; hasMCP {
+				t.Fatalf("workspace settings.json must not carry the managed mcpServers block; got %s", settingsRaw)
+			}
+		}
+	}
+
+	// Idempotent second run.
+	second, err := Inject(home, workspace, claudeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject() second changed = true; want false (idempotent)")
+	}
+}
+
+// TestInjectClaudeWorkspacePreservesForeignServers: an existing .mcp.json with
+// an unrelated MCP server must keep that server after the managed context7 entry
+// is merged in (issue #2213).
+func TestInjectClaudeWorkspacePreservesForeignServers(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	mcpPath := filepath.Join(workspace, ".mcp.json")
+	existing := `{"mcpServers":{"my-server":{"command":"my-own-server","args":["--serve"]}}}`
+	if err := os.WriteFile(mcpPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(existing .mcp.json) error = %v", err)
+	}
+
+	if _, err := Inject(home, workspace, claudeAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	raw, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(.mcp.json) error = %v", err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatalf("Unmarshal(.mcp.json) error = %v", err)
+	}
+	servers, _ := root["mcpServers"].(map[string]any)
+	if mine, _ := servers["my-server"].(map[string]any); mine["command"] != "my-own-server" {
+		t.Fatalf("unrelated my-server must be preserved; got %#v", servers["my-server"])
+	}
+	if context7, _ := servers["context7"].(map[string]any); context7["command"] != "npx" {
+		t.Fatalf("managed context7 must be merged in; got %#v", servers["context7"])
+	}
+}
+
+// TestInjectClaudeWorkspaceCleansInertSettings: a managed mcpServers block left
+// in workspace settings.json by an earlier version is removed once the real
+// registration lives in .mcp.json, while a foreign block is left untouched
+// (issue #2213).
+func TestInjectClaudeWorkspaceCleansInertSettings(t *testing.T) {
+	cases := []struct {
+		name           string
+		settings       string
+		wantKeyRemoved bool
+	}{
+		{"managed-only block is removed", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]}}}`, true},
+		{"foreign block is left alone", `{"theme":"dark","mcpServers":{"stranded":{"command":"stranded-server"}}}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			workspace := t.TempDir()
+			settingsPath := filepath.Join(workspace, ".claude", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatalf("MkdirAll(settings dir) error = %v", err)
+			}
+			if err := os.WriteFile(settingsPath, []byte(tc.settings), 0o644); err != nil {
+				t.Fatalf("WriteFile(settings) error = %v", err)
+			}
+
+			if _, err := Inject(home, workspace, claudeAdapter()); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+
+			settingsRaw, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(settings) error = %v", err)
+			}
+			settings := map[string]any{}
+			if err := json.Unmarshal(settingsRaw, &settings); err != nil {
+				t.Fatalf("Unmarshal(settings) error = %v", err)
+			}
+			_, hasKey := settings["mcpServers"]
+			if tc.wantKeyRemoved && hasKey {
+				t.Fatalf("inert mcpServers key must be removed; got %s", settingsRaw)
+			}
+			if !tc.wantKeyRemoved && !hasKey {
+				t.Fatalf("foreign mcpServers block must be left untouched; got %s", settingsRaw)
+			}
+		})
+	}
+}
+
 func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
 	// Real Windows users may have a ~/.cursor/mcp.json that starts with non-JSON
 	// content (e.g. "allow: all" or just "a"). The installer should recover by
