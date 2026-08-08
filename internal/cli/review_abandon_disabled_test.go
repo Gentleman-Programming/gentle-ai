@@ -49,23 +49,37 @@ func pristineReviewingCLIFixture(t *testing.T, repo string) (revision, snapshotI
 	return revision, state.InitialSnapshot.Identity
 }
 
-func staleReviewingAbandonBinding(revision, snapshotIdentity string) string {
-	return "gentle-ai.review-abandon-authorization/v1\nlineage=abandon-stale-reviewing\nrevision=" + revision +
-		"\nsnapshot_identity=" + snapshotIdentity +
-		"\nactor=maintainer@example.com\nreason=clean up the stale lineage that keeps denying gates"
+func abandonBindingFromInventory(t *testing.T, repo, lineage, revision, snapshotIdentity, actor, reason string) string {
+	t.Helper()
+	report, err := reviewtransaction.InventoryAuthority(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range report.Entries {
+		if entry.LineageID == lineage && entry.DiscardedWork != nil {
+			return reviewtransaction.RenderCompactAbandonAuthorization(lineage, revision, snapshotIdentity, actor, reason, *entry.DiscardedWork)
+		}
+	}
+	t.Fatalf("review status publishes no abandoned-work summary for %q", lineage)
+	return ""
+}
+
+func staleReviewingAbandonBinding(t *testing.T, repo, revision, snapshotIdentity string) string {
+	return abandonBindingFromInventory(t, repo, "abandon-stale-reviewing", revision, snapshotIdentity,
+		"maintainer@example.com", reviewtransaction.CompactAbandonReasonOperatorDisposition)
 }
 
 func staleReviewingAbandonArgs(repo, revision, authorization string) []string {
 	return []string{
 		"abandon", "--cwd", repo,
 		"--lineage", "abandon-stale-reviewing", "--expected-revision", revision,
-		"--reason", "clean up the stale lineage that keeps denying gates", "--actor", "maintainer@example.com",
+		"--reason", reviewtransaction.CompactAbandonReasonOperatorDisposition, "--actor", "maintainer@example.com",
 		"--maintainer-authorization", authorization,
 	}
 }
 
 // TestReviewAbandonSucceedsWhileKillSwitchDisabled is issue #2528: abandoning a
-// pristine lineage is destructive cleanup, not progress on a review, so it must
+// non-terminal lineage is destructive cleanup, not progress on a review, so it must
 // stay available while receipt-driven development is switched off. The primary
 // reason an operator disables the switch is to get delivery past a stale-lineage
 // denial; gating cleanup behind the switch locked in exactly the state that
@@ -77,15 +91,15 @@ func TestReviewAbandonSucceedsWhileKillSwitchDisabled(t *testing.T) {
 	disableReviewForClone(t, repo)
 
 	var output bytes.Buffer
-	if err := RunReview(staleReviewingAbandonArgs(repo, revision, staleReviewingAbandonBinding(revision, snapshotIdentity)), &output); err != nil {
+	if err := RunReview(staleReviewingAbandonArgs(repo, revision, staleReviewingAbandonBinding(t, repo, revision, snapshotIdentity)), &output); err != nil {
 		t.Fatalf("review abandon while the kill switch is off: %v\n%s", err, output.String())
 	}
 	var result ReviewAbandonResult
 	decodeStrictReviewJSON(t, output.Bytes(), &result)
 	if result.Operation != "review/abandon" || result.Record.LineageID != "abandon-stale-reviewing" ||
 		result.Record.Status != reviewtransaction.CompactReclaimCommitted ||
-		result.Record.PristineAbandonment == nil ||
-		result.Record.PristineAbandonment.State != reviewtransaction.StateReviewing {
+		result.Record.Abandonment == nil ||
+		result.Record.Abandonment.Schema != reviewtransaction.CompactAbandonAuthorizationSchema {
 		t.Fatalf("review abandon while disabled result = %#v", result)
 	}
 	if _, err := os.Stat(filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", "abandon-stale-reviewing")); !os.IsNotExist(err) {
@@ -111,7 +125,7 @@ func TestReviewAbandonWhileDisabledStillRequiresTheExactBinding(t *testing.T) {
 	}
 	disableReviewForClone(t, repo)
 
-	wrong := staleReviewingAbandonBinding(snapshotIdentity, revision)
+	wrong := staleReviewingAbandonBinding(t, repo, snapshotIdentity, revision)
 	if err := RunReview(staleReviewingAbandonArgs(repo, revision, wrong), &bytes.Buffer{}); err == nil ||
 		!strings.Contains(err.Error(), "exact maintainer authorization binding") {
 		t.Fatalf("inexact abandon binding while disabled error = %v", err)
@@ -136,7 +150,7 @@ func TestReviewAbandonWhileDisabledKeepsEligibilityAndRevisionChecks(t *testing.
 	}
 	disableReviewForClone(t, repo)
 	wrongRevision := "sha256:" + strings.Repeat("0", 64)
-	if err := RunReview(staleReviewingAbandonArgs(repo, wrongRevision, staleReviewingAbandonBinding(revision, snapshotIdentity)), &bytes.Buffer{}); !errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
+	if err := RunReview(staleReviewingAbandonArgs(repo, wrongRevision, staleReviewingAbandonBinding(t, repo, revision, snapshotIdentity)), &bytes.Buffer{}); !errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
 		t.Fatalf("stale abandon revision while disabled = %v", err)
 	}
 	current, err := os.ReadFile(statePath)
@@ -161,14 +175,13 @@ func TestReviewAbandonWhileDisabledKeepsEligibilityAndRevisionChecks(t *testing.
 	disableReviewForClone(t, terminalRepo)
 
 	const actor = "maintainer@example.com"
-	const reason = "retire terminal authority"
-	authorization := reviewtransaction.RenderCompactAbandonAuthorization(
-		record.State.LineageID, record.Revision, record.State.InitialSnapshot.Identity, actor, reason)
+	const reason = reviewtransaction.CompactAbandonReasonOperatorDisposition
+	authorization := abandonBindingFromInventory(t, terminalRepo, record.State.LineageID, record.Revision, record.State.InitialSnapshot.Identity, actor, reason)
 	if err := RunReview([]string{
 		"abandon", "--cwd", terminalRepo, "--lineage", record.State.LineageID,
 		"--expected-revision", record.Revision, "--reason", reason, "--actor", actor,
 		"--maintainer-authorization", authorization,
-	}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `holds "approved" authority`) {
+	}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `holds terminal "approved" authority`) {
 		t.Fatalf("terminal abandon while disabled = %v", err)
 	}
 	current, err = os.ReadFile(store.StatePath())
@@ -199,15 +212,12 @@ func TestReviewStartStaysRefusedWhileKillSwitchDisabled(t *testing.T) {
 	}
 }
 
-// TestReviewBooleanFlagHelpDoesNotSuggestSeparateValue is the help-text half of
+// TestReviewStartBooleanFlagHelpDoesNotSuggestSeparateValue is the help-text half of
 // issue #2528: rendering a boolean flag as `--committed-only <value>` reads as
 // though `--committed-only true` were a valid invocation, which the parser then
 // refuses. Boolean flags render bare; value-taking flags keep the placeholder.
-func TestReviewBooleanFlagHelpDoesNotSuggestSeparateValue(t *testing.T) {
-	for _, testCase := range []struct{ verb, boolean string }{
-		{verb: "start", boolean: "committed-only"},
-		{verb: "abandon", boolean: "incomplete-inspection"},
-	} {
+func TestReviewStartBooleanFlagHelpDoesNotSuggestSeparateValue(t *testing.T) {
+	for _, testCase := range []struct{ verb, boolean string }{{verb: "start", boolean: "committed-only"}} {
 		var output bytes.Buffer
 		if err := RunReview([]string{testCase.verb, "--help"}, &output); err != nil {
 			t.Fatalf("review %s --help: %v", testCase.verb, err)
