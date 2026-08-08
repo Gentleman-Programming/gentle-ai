@@ -1,8 +1,9 @@
-package catalog
+package catalog_test
 
 import (
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
@@ -13,7 +14,7 @@ import (
 // silently rejected by normalizeSkills in cli/validate.go.
 func TestMVPSkillsCoverAllPresetSkills(t *testing.T) {
 	catalogSet := make(map[model.SkillID]bool)
-	for _, s := range MVPSkills() {
+	for _, s := range catalog.MVPSkills() {
 		catalogSet[s.ID] = true
 	}
 
@@ -28,7 +29,7 @@ func TestMVPSkillsCoverAllPresetSkills(t *testing.T) {
 // TestMVPSkillsNoDuplicates ensures no skill is listed twice in mvpSkills.
 func TestMVPSkillsNoDuplicates(t *testing.T) {
 	seen := make(map[model.SkillID]bool)
-	for _, s := range MVPSkills() {
+	for _, s := range catalog.MVPSkills() {
 		if seen[s.ID] {
 			t.Errorf("duplicate skill %q in mvpSkills", s.ID)
 		}
@@ -51,7 +52,7 @@ func TestMVPSkillsIncludeRequestedBundledSkillsWithCanonicalNames(t *testing.T) 
 	}
 
 	found := make(map[model.SkillID]string)
-	for _, skill := range MVPSkills() {
+	for _, skill := range catalog.MVPSkills() {
 		found[skill.ID] = skill.Name
 		if skill.Name == "judgement-day" {
 			t.Fatalf("catalog uses non-canonical spelling %q; want judgment-day", skill.Name)

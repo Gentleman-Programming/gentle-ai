@@ -9,6 +9,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
@@ -29,6 +30,10 @@ type InjectionResult struct {
 // InjectWithCapability writes skill files like Inject, but for SDD skills
 // it extracts only the section matching the given capability.
 func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID, capability string) (InjectionResult, error) {
+	return injectWithCatalog(homeDir, adapter, skillIDs, capability, catalog.MVPSkills())
+}
+
+func injectWithCatalog(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID, capability string, availableSkills []catalog.Skill) (InjectionResult, error) {
 	if !adapter.SupportsSkills() {
 		return InjectionResult{Skipped: skillIDs}, nil
 	}
@@ -37,7 +42,92 @@ func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []mod
 	if skillDir == "" {
 		return InjectionResult{Skipped: skillIDs}, nil
 	}
-	return InjectDirectoryWithCapability(skillDir, skillIDs, capability)
+
+	skillsByID, err := catalogSkillsByID(availableSkills)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	needsManifest := false
+	for _, id := range skillIDs {
+		if IsSDDSkill(id) && capability == "" {
+			continue
+		}
+		if skill, ok := skillsByID[id]; ok && skill.RequiredCapabilities != (agents.AgentFeatureClaims{}) {
+			needsManifest = true
+			break
+		}
+	}
+
+	var provided agents.AgentFeatureClaims
+	if needsManifest {
+		manifest, manifestErr := agents.ResolveCapabilityManifest(adapter)
+		if manifestErr != nil {
+			return InjectionResult{}, fmt.Errorf("resolve capabilities for agent %q: %w", adapter.Agent(), manifestErr)
+		}
+		provided = manifest.Features
+	}
+
+	candidates := make([]model.SkillID, 0, len(skillIDs))
+	skippedByCapability := make(map[model.SkillID]bool)
+	for _, id := range skillIDs {
+		if IsSDDSkill(id) && capability == "" {
+			continue
+		}
+		if skill, ok := skillsByID[id]; ok && !requiredCapabilitiesCompatible(skill.RequiredCapabilities, provided) {
+			skippedByCapability[id] = true
+			continue
+		}
+		candidates = append(candidates, id)
+	}
+
+	result, injectErr := InjectDirectoryWithCapability(skillDir, candidates, capability)
+	if injectErr != nil {
+		return InjectionResult{}, injectErr
+	}
+	if len(skippedByCapability) == 0 {
+		return result, nil
+	}
+
+	for _, id := range result.Skipped {
+		skippedByCapability[id] = true
+	}
+	result.Skipped = skippedSkills(skillIDs, skippedByCapability)
+	return result, nil
+}
+
+func catalogSkillsByID(availableSkills []catalog.Skill) (map[model.SkillID]catalog.Skill, error) {
+	skillsByID := make(map[model.SkillID]catalog.Skill, len(availableSkills))
+	for _, skill := range availableSkills {
+		if skill.ID == "" {
+			return nil, fmt.Errorf("skill catalog contains an empty skill ID")
+		}
+		if _, exists := skillsByID[skill.ID]; exists {
+			return nil, fmt.Errorf("skill catalog contains duplicate skill ID %q", skill.ID)
+		}
+		skillsByID[skill.ID] = skill
+	}
+	return skillsByID, nil
+}
+
+func requiredCapabilitiesCompatible(required, provided agents.AgentFeatureClaims) bool {
+	return (!required.OutputStyles || provided.OutputStyles) &&
+		(!required.SlashCommands || provided.SlashCommands) &&
+		(!required.FileSubAgents || provided.FileSubAgents) &&
+		(!required.Skills || provided.Skills) &&
+		(!required.SystemPrompt || provided.SystemPrompt) &&
+		(!required.MCP || provided.MCP) &&
+		(!required.Workflows || provided.Workflows)
+}
+
+func skippedSkills(skillIDs []model.SkillID, skippedByID map[model.SkillID]bool) []model.SkillID {
+	skipped := make([]model.SkillID, 0, len(skippedByID))
+	for _, id := range skillIDs {
+		if skippedByID[id] {
+			skipped = append(skipped, id)
+		}
+	}
+	return skipped
 }
 
 type directoryAsset struct {
