@@ -18,8 +18,8 @@ Load this skill whenever you need to:
 
 ## Critical Rules
 
-1. **Blank issues are DISABLED** — `blank_issues_enabled: false` in `.github/ISSUE_TEMPLATE/config.yml`. You MUST use a template.
-2. **Template auto-labels require the web form** — use the web-form URLs below to receive the template's type label and `status:needs-review`. GitHub CLI 2.96.0 supports Markdown issue templates, not YAML issue forms, so CLI-created issues do not inherit these labels. Fork contributors using the CLI must list the missing labels in the issue body for a maintainer.
+1. **Blank issues are DISABLED** — `blank_issues_enabled: false` in `.github/ISSUE_TEMPLATE/config.yml`. Web-form submissions MUST use a template; CLI submissions MUST include every required template field in the body.
+2. **Template auto-labels require the web form** — use the web-form URLs below to receive the template's type label and `status:needs-review`. GitHub CLI 2.96.0 supports Markdown issue templates, not YAML issue forms, so CLI-created issues do not inherit these labels. CLI submitters must list the missing labels in the issue body for a maintainer.
 3. **`status:approved` is REQUIRED before ANY work begins** — a maintainer must label the issue before you or anyone opens a PR.
 4. **Questions go to Discussions** — use [GitHub Discussions](https://github.com/Gentleman-Programming/gentle-ai/discussions), NOT issues, for questions and general conversation.
 5. **No Co-Authored-By trailers** — never add AI attribution to commits.
@@ -90,7 +90,7 @@ Intentionally public identifiers are NOT redacted: tool names (`gentle-ai`, `eng
 
 Use the web form when the template's auto-labels matter:
 
-```
+```text
 https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=bug_report.yml
 ```
 
@@ -127,7 +127,7 @@ gh issue create \
 
 Use the web form when the template's auto-labels matter:
 
-```
+```text
 https://github.com/Gentleman-Programming/gentle-ai/issues/new?template=feature_request.yml
 ```
 
@@ -150,7 +150,7 @@ gh issue create \
 
 | Label | Description | Who Applies |
 |-------|-------------|-------------|
-| `status:needs-review` | Newly opened, awaiting maintainer review | **Auto** (template) |
+| `status:needs-review` | Newly opened, awaiting maintainer review | **Auto** (web form only); CLI submitters list it for a maintainer |
 | `status:approved` | Approved — work can begin | Maintainer only |
 | `status:in-progress` | Being actively worked on | Contributor |
 | `status:blocked` | Blocked by another issue or external dependency | Maintainer / Contributor |
