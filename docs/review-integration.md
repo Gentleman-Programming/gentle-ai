@@ -103,6 +103,8 @@ Consumers MUST NOT reconstruct receipts, derive canonical hashes, inspect the Gi
 
 `gentle-ai review capture-result` is an additive headless command, not a negotiated repository operation. It accepts no `--contract`; the provider-issued subject hash selects the transport version. Capture emits a manifest with capability `review.native_result_artifact` and schema `gentle-ai.review-result-artifact/v2`; the manifest binds `subject_hash` and `admission_decision: completed`, and exactly one provider-owned `path` or opaque `reference` locates the durable admitted-result envelope (`review-admitted-result/v1` for a v1 subject, `review-admitted-result/v2` for a v2 subject). A negotiated capture transition carries `--repository-context <opaque-handle>` plus `--expected-revision <revision>`, so consumers can invoke capture from an unrelated working directory without learning the repository path. Explicit `--cwd` remains the capture compatibility path-manifest mode and cannot be combined with a repository-context handle.
 
+Add `--preflight --input <file>` to validate the same native admission without persistence. A successful input preflight emits `gentle-ai.review-capture-result-dry-run/v1` with `validation: accepted` and the existing lineage, lens, order, and subject binding. It does not emit an artifact path, reference, raw-input hash, or canonical-result hash. `--preflight` without `--input` retains the binding-only response.
+
 ### Choose the target explicitly
 
 | Invocation | Frozen boundary |
@@ -349,7 +351,7 @@ The provider does not auto-upgrade, migrate, rewrite, quarantine, or delete lega
 
 ## Respect compatibility and non-goals
 
-Protocol v1 supports `workspace` and `staged` projections and preserves existing compact authority and receipt schemas. Published archives contain the versioned JSON Schemas and conformance fixtures under `contracts/review-integration/v1/`; consumers should validate against those packaged bytes rather than copying private Go structs.
+Protocol v1 supports `workspace` and `staged` projections and preserves existing compact authority and receipt schemas. Published archives contain the versioned JSON Schemas and conformance fixtures under `contracts/review-integration/v1/` and `contracts/review-integration/v2/`; consumers should validate against those packaged bytes rather than copying private Go structs.
 
 This contract does not implement Gentle Pi, select a model or provider, transmit repository data, add remote telemetry, claim Windows runtime durability, define an archive coordinator, defend against a malicious actor with local filesystem access, or authorize a command merely because review passed.
 
@@ -373,6 +375,8 @@ Each release archive contains:
 
 - `contracts/review-integration/v1/schemas/` — 24 strict JSON Schemas, including preserved capability protocols v1.0–v1.4, current v1.5, versioned START/status/result-artifact contracts, outcome-bound verification evidence, final-verification incident, classified repair, provider subject/admission, correction planning, and targeted validation.
 - `contracts/review-integration/v1/fixtures/` — 27 deterministic conformance fixtures, including all six capability minors, preserved v1 plus current v2 START/status examples, outcome-bound verification evidence, the final-verification incident and retry projection, classified repair preflight, and typed failure envelopes.
+- `contracts/review-integration/v2/schemas/` — 15 strict JSON Schemas, including the capture-result dry-run response contract.
+- `contracts/review-integration/v2/fixtures/` — 9 deterministic conformance fixtures, including the capture-result dry-run response.
 - `docs/review-integration.md` — this ownership and consumption guide.
 
 Repository maintainers can verify source inventory or a complete GoReleaser snapshot:

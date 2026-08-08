@@ -97,6 +97,50 @@ func captureNewLineageLensResults(t *testing.T, repo, lineage string, lenses []s
 	}
 }
 
+func TestReviewFacadeCaptureResultNewLineage_InputPreflightDoesNotCapture(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	const lineage = "new-lineage-input-preflight"
+	started := startMediumTierNewLineage(t, repo, lineage)
+	lens := started.SelectedLenses[0]
+	before, found, err := reviewtransaction.DiscoverNewLineage(t.Context(), repo, lineage)
+	if err != nil || !found {
+		t.Fatalf("discover new-lineage authority: %#v, %t, %v", before, found, err)
+	}
+	wantSubject := reviewtransaction.NewLineageArtifactSubjectHash(before.Authority, lens, 0)
+	input := filepath.Join(t.TempDir(), "result.json")
+	if err := os.WriteFile(input, []byte(`{"subject_hash":"`+wantSubject+`","findings":[],"evidence":["reviewed"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{
+		"--cwd", repo, "--lineage", lineage, "--target", "unused-for-new-lineage",
+		"--lens", lens, "--order", "0", "--input", input,
+	}
+
+	var output bytes.Buffer
+	if err := RunReviewCaptureResult(append(args, "--preflight"), &output); err != nil {
+		t.Fatalf("new-lineage input preflight: %v", err)
+	}
+	var dryRun reviewResultDryRun
+	decodeStrictReviewJSON(t, output.Bytes(), &dryRun)
+	if dryRun.Schema != reviewResultDryRunSchema || dryRun.Validation != "accepted" || dryRun.SubjectHash != wantSubject {
+		t.Fatalf("new-lineage dry-run response = %#v", dryRun)
+	}
+	assertReviewResultDryRunMatchesPublishedSchema(t, output.Bytes())
+	before, found, err = reviewtransaction.DiscoverNewLineage(t.Context(), repo, lineage)
+	if err != nil || !found || len(before.Authority.CapturedResults) != 0 {
+		t.Fatalf("input preflight captured a result: %#v, %t, %v", before, found, err)
+	}
+
+	if err := RunReviewCaptureResult(args, &output); err != nil {
+		t.Fatalf("real new-lineage capture after dry run: %v", err)
+	}
+	after, found, err := reviewtransaction.DiscoverNewLineage(t.Context(), repo, lineage)
+	if err != nil || !found || len(after.Authority.CapturedResults) != 1 {
+		t.Fatalf("real capture did not persist normally: %#v, %t, %v", after, found, err)
+	}
+}
+
 // TestReviewFacadeCaptureResultNewLineage_MediumTierFinalizeAllowsAllFiveGates
 // is C-A's END STATE: the coordinator's exact repro (medium-tier v3, consent
 // granted, capture via the real CLI, finalize -> approved) then all five
