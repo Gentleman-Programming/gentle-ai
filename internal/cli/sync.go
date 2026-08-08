@@ -747,7 +747,11 @@ func managedOutputStyleName(persona model.PersonaID) string {
 	switch {
 	case isGentlemanConversationPersona(persona):
 		return "Gentleman"
-	case persona == model.PersonaNeutral, persona == model.PersonaGentlemanNeutralArtifacts:
+	// The legacy alias never reaches here: both producers of selection.Persona
+	// (normalizePersona for flags, applyResolvedPersona for persisted state)
+	// remap it to neutral first, so a case for it would be decoration that no
+	// test can reach.
+	case persona == model.PersonaNeutral:
 		return "Neutral"
 	default:
 		return ""
@@ -1445,7 +1449,10 @@ func migratePersistedPersonaAlias(homeDir string, persisted *state.InstallState,
 // This is the function the TUI calls directly to avoid CLI flag parsing.
 func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult, error) {
 	agentIDs := selection.Agents
-	persistedState, _ := state.Read(homeDir)
+	// The read error is captured, not discarded: the persona alias migration
+	// below must not rewrite state it could not read. Managed-asset provenance
+	// re-reads under its own lock later (#2685), so this read stays advisory.
+	persistedState, persistedStateErr := state.Read(homeDir)
 	restorePersistedCommunityTools(homeDir, &selection, persistedState)
 
 	// Resolve persona from persisted state when the caller has not provided one.
