@@ -41,9 +41,6 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	if got := len(seen); got != 78 {
 		t.Errorf("core journey count = %d, want 78", got)
 	}
-	if got := len(seen); got != 77 {
-		t.Errorf("core journey count = %d, want 77", got)
-	}
 	for id, found := range want {
 		if !found {
 			t.Errorf("required SDD authority journey %q is not registered", id)
