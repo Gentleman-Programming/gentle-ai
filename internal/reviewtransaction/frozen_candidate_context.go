@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 )
 
@@ -95,10 +96,11 @@ type FrozenCandidateContext struct {
 }
 
 type PreparedCandidateInspector struct {
-	frozen    FrozenCandidateContext
-	isolation []string
-	cleanup   func() error
-	closed    bool
+	frozen         FrozenCandidateContext
+	isolation      []string
+	attributesFile string
+	cleanup        func() error
+	closed         bool
 }
 
 // WithLegacyCandidateDiff adds the exact published v1 candidate transport.
@@ -164,6 +166,10 @@ func (builder SnapshotBuilder) PrepareCandidateInspector(ctx context.Context, sn
 		}
 		return nil, err
 	}
+	attributesFile, err := gitIsolationNullPath(runtime.GOOS, isolation)
+	if err != nil {
+		return fail(err)
+	}
 
 	raw, err := runGitLimited(ctx, repo, isolation, nil, maxFrozenCandidateManifestBytes,
 		"diff",
@@ -216,7 +222,7 @@ func (builder SnapshotBuilder) PrepareCandidateInspector(ctx context.Context, sn
 			BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree,
 			ChangedPathManifest: manifest, repositoryRoot: repo,
 		},
-		isolation: isolation, cleanup: cleanup,
+		isolation: isolation, attributesFile: attributesFile, cleanup: cleanup,
 	}, nil
 }
 
@@ -245,7 +251,10 @@ func (inspector *PreparedCandidateInspector) Inspect(ctx context.Context, operat
 		return nil, errors.New("candidate inspection side is valid only for object content") // refusal:by-design operator-knowledge: reaching this means provider code bypassed the validated native CLI contract
 	}
 
-	common := []string{"--no-pager", "-c", "color.ui=false", "-c", "core.attributesFile=" + os.DevNull, "-c", "diff.external="}
+	if inspector.attributesFile == "" {
+		return nil, errors.New("prepared candidate inspector is missing its isolated empty file")
+	}
+	common := []string{"--no-pager", "-c", "color.ui=false", "-c", "core.attributesFile=" + inspector.attributesFile, "-c", "diff.external="}
 	var args []string
 	switch operation {
 	case "name-status", "numstat":
@@ -349,6 +358,27 @@ func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func(
 		"GIT_ATTR_NOSYSTEM=1",
 		"LANG=C",
 	}, cleanup, nil
+}
+
+func gitIsolationNullPath(goos string, isolation []string) (string, error) {
+	if goos != "windows" {
+		return os.DevNull, nil
+	}
+	gitDir := ""
+	for _, entry := range isolation {
+		if value, ok := strings.CutPrefix(entry, "GIT_DIR="); ok {
+			gitDir = value
+			break
+		}
+	}
+	if gitDir == "" {
+		return "", errors.New("isolated Git environment is missing GIT_DIR")
+	}
+	path := filepath.Join(gitDir, "empty")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		return "", fmt.Errorf("create isolated Git empty file: %w", err)
+	}
+	return path, nil
 }
 
 func validateChangedPathManifestEntry(entry ChangedPathManifestEntry) error {
