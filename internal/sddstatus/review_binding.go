@@ -60,8 +60,15 @@ func BindApprovedReview(ctx context.Context, repo, change, lineage, expected str
 	if err != nil {
 		return ReviewBinding{}, err
 	}
-	if _, err := bindingUsesFileBackedChange(ctx, root, repo, change); err != nil {
+	fileBacked, err := bindingUsesFileBackedChange(ctx, root, repo, change)
+	if err != nil {
 		return ReviewBinding{}, err
+	}
+	if !fileBacked {
+		change, err = authoritativeEngramBindingChange(root, change)
+		if err != nil {
+			return ReviewBinding{}, err
+		}
 	}
 	if err := rejectHistoricalLegacyBinding(ctx, root, lineage); err != nil {
 		return ReviewBinding{}, err
@@ -173,7 +180,34 @@ func prepareApprovedRuntimeSuccessorBinding(ctx context.Context, root, workspace
 	if fileBacked {
 		return prepareApprovedReviewBinding(ctx, root, workspace, change, lineage)
 	}
+	change, err = authoritativeEngramBindingChange(root, change)
+	if err != nil {
+		return ReviewBinding{}, err
+	}
 	return prepareApprovedCompactBinding(ctx, root, change, lineage)
+}
+
+func authoritativeEngramBindingChange(root, requested string) (string, error) {
+	if !shouldTryEngram(root) {
+		// refusal:by-design operator-knowledge: only the operator can identify or publish the intended Engram change.
+		return "", errors.New("authoritative Engram change does not exist")
+	}
+	observations, err := engramExport(root)
+	if err != nil {
+		return "", err
+	}
+	project := inferEngramProject(root)
+	for _, observation := range observations {
+		if !engramObservationMatchesProject(observation, project) {
+			continue
+		}
+		matches := engramTitlePattern.FindStringSubmatch(strings.TrimSpace(observation.Title))
+		if len(matches) == 3 && matches[1] == requested && matches[2] != "state" {
+			return matches[1], nil
+		}
+	}
+	// refusal:by-design operator-knowledge: only the operator can identify or publish the intended Engram change.
+	return "", errors.New("authoritative Engram change does not exist")
 }
 
 func bindingUsesFileBackedChange(ctx context.Context, root, workspace, change string) (bool, error) {

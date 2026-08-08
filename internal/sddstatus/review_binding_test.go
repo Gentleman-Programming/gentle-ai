@@ -54,6 +54,7 @@ func TestBindApprovedReviewCASAndLiveEvidence(t *testing.T) {
 
 func TestBindApprovedReviewBindsPureEngramCompactAuthority(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
+	seedBindingEngramChange(t, repo, "engram-change", "gentle-ai")
 	approved := createApprovedRuntimeAuthority(t, repo, "approved-engram", 1)
 
 	binding, err := BindApprovedReview(context.Background(), repo, "engram-change", approved.State.LineageID, "")
@@ -84,8 +85,42 @@ func TestBindApprovedReviewBindsPureEngramCompactAuthority(t *testing.T) {
 	}
 }
 
+func TestBindApprovedReviewRejectsUnauthoritativeEngramChange(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		change       string
+		observations []engramObservation
+	}{
+		{name: "missing", change: "missing-change"},
+		{name: "stale or mismatched", change: "stale-change", observations: []engramObservation{
+			{Title: "sdd/current-change/proposal", Project: "gentle-ai", Scope: "project"},
+		}},
+		{name: "foreign project", change: "foreign-change", observations: []engramObservation{
+			{Title: "sdd/foreign-change/proposal", Project: "other-project", Scope: "project"},
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initRuntimeLedgerRepo(t)
+			if err := os.MkdirAll(filepath.Join(repo, ".engram"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("ENGRAM_PROJECT", "gentle-ai")
+			t.Cleanup(stubEngramExport(t, tt.observations))
+			approved := createApprovedRuntimeAuthority(t, repo, "approved-engram", 1)
+
+			if _, err := BindApprovedReview(context.Background(), repo, tt.change, approved.State.LineageID, ""); err == nil || !strings.Contains(err.Error(), "authoritative Engram change") {
+				t.Fatalf("BindApprovedReview() error = %v, want authoritative Engram change refusal", err)
+			}
+			if _, err := os.Stat(filepath.Join(repo, ".git", "gentle-ai", "sdd-runtime")); !os.IsNotExist(err) {
+				t.Fatalf("refused Engram change created runtime authority: %v", err)
+			}
+		})
+	}
+}
+
 func TestBindApprovedReviewBindsEngramChangeAlongsideOtherOpenSpecChanges(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
+	seedBindingEngramChange(t, repo, "engram-change", "gentle-ai")
 	write(t, filepath.Join(repo, "openspec", "changes", "other-change", "tasks.md"), "- [x] 1.1 Done\n")
 	runSDDStatusGit(t, repo, "add", "openspec/changes/other-change/tasks.md")
 	approved := createApprovedRuntimeAuthority(t, repo, "approved-engram", 1)
@@ -98,6 +133,17 @@ func TestBindApprovedReviewBindsEngramChangeAlongsideOtherOpenSpecChanges(t *tes
 		t.Fatalf("mixed repository Engram binding = %#v", binding)
 	}
 	assertNativeBinding(t, mustRuntimeStore(t, repo, "engram-change"), binding.Revision)
+}
+
+func seedBindingEngramChange(t *testing.T, repo, change, project string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(repo, ".engram"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ENGRAM_PROJECT", project)
+	t.Cleanup(stubEngramExport(t, []engramObservation{
+		{Title: "sdd/" + change + "/proposal", Content: "# Proposal\n", Project: project, Scope: "project"},
+	}))
 }
 
 func TestBindApprovedReviewUsesNestedOpenSpecPlanningWorkspace(t *testing.T) {

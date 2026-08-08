@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -464,6 +466,7 @@ func TestRunSDDAttemptFinishAcceptsApprovedSelfRemediationSuccessor(t *testing.T
 func TestRunSDDAttemptFinishAcceptsPureEngramBinding(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	change := "cli-engram-change"
+	installCLIEngramExport(t, repo, change)
 	if _, err := os.Stat(filepath.Join(repo, "openspec")); !os.IsNotExist(err) {
 		t.Fatalf("pure Engram repository unexpectedly has an OpenSpec root: %v", err)
 	}
@@ -494,9 +497,15 @@ func TestRunSDDAttemptFinishAcceptsPureEngramBinding(t *testing.T) {
 	writeCLIAttemptFile(t, filepath.Join(repo, "tracked.txt"), "base\nbounded Engram remediation\n")
 	lineage := "cli-engram-lineage"
 	writeCLIApprovedCompactAuthority(t, repo, lineage)
-	binding, err := sddstatus.BindApprovedReview(context.Background(), repo, change, lineage, "")
-	if err != nil {
-		t.Fatalf("bind approved review for a pure Engram change: %v", err)
+	var bound bytes.Buffer
+	if err := RunReviewBindSDD([]string{
+		"--cwd", repo, "--change", change, "--lineage", lineage, "--expected-binding-revision=",
+	}, &bound); err != nil {
+		t.Fatalf("review bind-sdd for a pure Engram change: %v", err)
+	}
+	var binding sddstatus.ReviewBinding
+	if err := json.Unmarshal(bound.Bytes(), &binding); err != nil {
+		t.Fatalf("decode review bind-sdd output: %v\n%s", err, bound.String())
 	}
 	postBind := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
 	if postBind.Binding == nil || postBind.Binding.Revision != binding.Revision {
@@ -526,6 +535,25 @@ func TestRunSDDAttemptFinishAcceptsPureEngramBinding(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repo, "openspec")); !os.IsNotExist(err) {
 		t.Fatalf("pure Engram finish created or required an OpenSpec root: %v", err)
 	}
+}
+
+func installCLIEngramExport(t *testing.T, repo, change string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake Engram export executable requires a POSIX shell")
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".engram"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	payload := fmt.Sprintf(`{"observations":[{"title":"sdd/%s/proposal","content":"# Proposal\\n","project":"gentle-ai","scope":"project"}]}`, change)
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' '%s' > \"$2\"\n", payload)
+	writeCLIAttemptFile(t, filepath.Join(bin, "engram"), script)
+	if err := os.Chmod(filepath.Join(bin, "engram"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ENGRAM_PROJECT", "gentle-ai")
 }
 
 func writeCLIAttemptFile(t *testing.T, path, content string) {

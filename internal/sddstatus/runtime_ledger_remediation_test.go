@@ -469,6 +469,7 @@ func newRuntimeRemediationFixtureWithBinding(t *testing.T, approveSuccessor, nat
 func newRuntimeEngramRemediationFixture(t *testing.T) runtimeRemediationFixture {
 	t.Helper()
 	repo := initRuntimeLedgerRepo(t)
+	seedBindingEngramChange(t, repo, "engram-runtime", "gentle-ai")
 	predecessor := createApprovedRuntimeAuthority(t, repo, "engram-runtime-predecessor", 1)
 	predecessorBinding := runtimeBindingFromCompactRecord(t, repo, "engram-runtime", predecessor)
 	store := mustRuntimeStore(t, repo, "engram-runtime")
