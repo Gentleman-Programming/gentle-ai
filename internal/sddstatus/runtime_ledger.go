@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -40,6 +41,7 @@ const (
 	runtimeOperationReset             = "objective/reset"
 	runtimeOperationRescope           = "objective/rescope"
 	runtimeOperationAdvance           = "objective/advance"
+	runtimeOperationHandoff           = "attempt/handoff"
 	runtimeOperationBind              = "binding/set"
 	runtimeOperationGrant             = "authority/grant"
 	maximumRuntimeGrantRoots          = 32
@@ -117,7 +119,10 @@ var (
 	// under would diff a pinned base tree against an unrelated working tree —
 	// changed_lines: 0 when real work happened, or a wildly inflated delta —
 	// so this refuses before any candidate capture, not after.
-	ErrRuntimeWorktreeMismatch = errors.New("SDD runtime attempt began in a different linked worktree than this finish is running from")
+	ErrRuntimeWorktreeMismatch        = errors.New("SDD runtime attempt began in a different linked worktree than this finish is running from")
+	ErrRuntimeHandoffSource           = errors.New("SDD runtime handoff source does not equal the active attempt's effective worktree")      // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
+	ErrRuntimeHandoffDestination      = errors.New("SDD runtime handoff destination is not a registered linked worktree of this repository") // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
+	ErrRuntimeHandoffAlreadyPerformed = errors.New("SDD runtime attempt has already been handed off")                                        // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
 
 	runtimeRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	runtimeRevisionPattern  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -211,6 +216,8 @@ type RuntimeAttempt struct {
 	// this field existed — that emptiness IS the legacy signal, so replay and
 	// Finish must treat it as "no binding recorded" and enforce nothing.
 	BeginWorktree              string             `json:"begin_worktree,omitempty"`
+	EffectiveWorktree          string             `json:"effective_worktree,omitempty"`
+	Handoff                    *RuntimeHandoff    `json:"handoff,omitempty"`
 	FinishCandidateIdentity    string             `json:"finish_candidate_identity,omitempty"`
 	FinishCandidateTree        string             `json:"finish_candidate_tree,omitempty"`
 	Outcome                    AttemptOutcome     `json:"outcome"`
@@ -222,6 +229,17 @@ type RuntimeAttempt struct {
 	ProcessEvidence            string             `json:"process_evidence,omitempty"`
 	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
 	ChangedLineBudgetExceeded  bool               `json:"changed_line_budget_exceeded,omitempty"`
+}
+
+type RuntimeHandoff struct {
+	Ordinal                      int    `json:"ordinal"`
+	SourceWorktree               string `json:"source_worktree"`
+	DestinationWorktree          string `json:"destination_worktree"`
+	CommonDir                    string `json:"common_dir"`
+	ExpectedRevision             string `json:"expected_revision"`
+	RequestDigest                string `json:"request_digest"`
+	DestinationCandidateIdentity string `json:"destination_candidate_identity"`
+	DestinationCandidateTree     string `json:"destination_candidate_tree"`
 }
 
 type RuntimeReset struct {
@@ -329,6 +347,12 @@ type FinishAttemptRequest struct {
 	ExpectedBindingRevision    string             `json:"expected_binding_revision,omitempty"`
 	SuccessorLineageID         string             `json:"successor_lineage_id,omitempty"`
 	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
+}
+
+type HandoffAttemptRequest struct {
+	ExpectedRevision    string `json:"expected_revision"`
+	RequestID           string `json:"request_id"`
+	DestinationWorktree string `json:"destination_worktree"`
 }
 
 type ResetObjectiveRequest struct {
@@ -451,6 +475,7 @@ type runtimeRecord struct {
 	Reset            *runtimeResetEvent   `json:"reset,omitempty"`
 	Rescope          *runtimeRescopeEvent `json:"rescope,omitempty"`
 	Advance          *runtimeAdvanceEvent `json:"advance,omitempty"`
+	Handoff          *RuntimeHandoff      `json:"handoff,omitempty"`
 	Binding          *runtimeBindingEvent `json:"binding,omitempty"`
 	Receipt          *runtimeReceiptEvent `json:"receipt,omitempty"`
 	Grant            *runtimeGrantEvent   `json:"grant,omitempty"`
@@ -509,7 +534,8 @@ type runtimeBeginEvent struct {
 	// ran under. omitempty is load-bearing — every record predating this field
 	// deserializes it as "", which Finish and replay both treat as "no binding
 	// recorded" rather than as a mismatch, so legacy chains replay unchanged.
-	BeginWorktree string `json:"begin_worktree,omitempty"`
+	BeginWorktree     string `json:"begin_worktree,omitempty"`
+	EffectiveWorktree string `json:"effective_worktree,omitempty"`
 }
 
 type runtimeResetEvent struct {
@@ -691,7 +717,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		advancing := false
 		if status.Complete {
 			if !runtimeObjectiveAdvanceAdmissible(status, request) {
-				return runtimeRecord{}, ErrRuntimeObjectiveDone
+				return runtimeRecord{}, store.runtimeObjectiveCompleteRefusal(status)
 			}
 			advancing = true
 		}
@@ -761,7 +787,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
-			BeginWorktree: store.Workspace,
+			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace,
 		}
 		if advancing {
 			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
@@ -785,11 +811,11 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if active == nil {
 			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
 		}
-		// Enforce the worktree binding before any candidate capture/diff work
-		// runs (#2296 part 1). An empty recorded value means this attempt's
-		// begin record predates the field: no enforcement, byte-identical
-		// behavior to every chain recorded before this slice.
-		if active.BeginWorktree != "" && active.BeginWorktree != store.Workspace {
+		// Check the effective binding before candidate capture or line charging.
+		if active.EffectiveWorktree != "" && active.EffectiveWorktree != store.Workspace {
+			return runtimeRecord{}, store.runtimeEffectiveWorktreeMismatchRefusal(*active)
+		}
+		if active.EffectiveWorktree == "" && active.BeginWorktree != "" && active.BeginWorktree != store.Workspace {
 			return runtimeRecord{}, store.runtimeWorktreeMismatchRefusal(active.Ordinal, active.BeginWorktree)
 		}
 		remediation := finishRequestsRemediation(request)
@@ -939,6 +965,39 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 	})
 }
 
+func (store RuntimeStore) Handoff(ctx context.Context, request HandoffAttemptRequest) (RuntimeStatus, error) {
+	request, err := normalizeHandoffAttemptRequest(request)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	digest := runtimeValueHash("gentle-ai.sdd-runtime-handoff-request/v1", request)
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
+		active := replay.Status.ActiveAttempt
+		if active == nil {
+			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
+		}
+		if active.EffectiveWorktree == "" || active.EffectiveWorktree != store.Workspace {
+			return runtimeRecord{}, store.runtimeHandoffSourceRefusal(*active)
+		}
+		if active.Handoff != nil {
+			return runtimeRecord{}, store.runtimeHandoffAlreadyPerformedRefusal(*active)
+		}
+		commonDir, err := store.validateRuntimeHandoffDestination(ctx, request.DestinationWorktree)
+		if err != nil {
+			return runtimeRecord{}, err
+		}
+		snapshot, err := captureRuntimeHandoffCandidate(ctx, request.DestinationWorktree, active.BeginCandidateTree)
+		if err != nil {
+			return runtimeRecord{}, fmt.Errorf("capture delegated SDD runtime candidate before handoff: %w", err)
+		}
+		return runtimeRecord{Operation: runtimeOperationHandoff, Handoff: &RuntimeHandoff{
+			Ordinal: active.Ordinal, SourceWorktree: store.Workspace, DestinationWorktree: request.DestinationWorktree,
+			CommonDir: commonDir, ExpectedRevision: request.ExpectedRevision, RequestDigest: digest,
+			DestinationCandidateIdentity: snapshot.Identity, DestinationCandidateTree: snapshot.CandidateTree,
+		}}, nil
+	})
+}
+
 // runtimeRemediationExitRefusal turns the bound-passing-finish demand into a
 // refusal that names the continuation that actually clears it.
 //
@@ -1002,18 +1061,18 @@ func (store RuntimeStore) runtimeRemediationExitRefusal(
 // trusts it.
 //
 // The authorization template is rendered by the same function the abandon gate
-// verifies against (reviewtransaction.RenderCompactAbandonAuthorization), with
-// only the two values the operator chooses left as placeholders, so the bytes a
-// reader assembles from this message are the bytes that gate accepts.
+// verifies against (reviewtransaction.RenderCompactAbandonAuthorization), over
+// the exact summary the eligibility probe accepted. Only the actor remains an
+// operator value, so the bytes a reader assembles are the bytes the gate accepts.
 func (store RuntimeStore) runtimeStrandedSuccessorRefusal(binding ReviewBinding, stranded RuntimeStrandedSuccessor, ordinal int) error {
 	// The sentinel stays in the %w position in every branch: callers that
 	// route on errors.Is must keep working no matter which exit is named.
 	return fmt.Errorf(
-		"%w: the candidate changed after attempt %d began, and lineage %q cannot hold the approved review of this candidate because recovery successor %q supersedes it and froze a target this candidate no longer has, so that successor can never be finalized — quarantine it, then re-run this finish: `gentle-ai review abandon --cwd %s --lineage %q --expected-revision %q --reason \"<why-it-is-abandoned>\" --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`; the abandonment quarantines the pristine successor and destroys nothing, because %q keeps the approved review of the corrected candidate. --maintainer-authorization is exactly these six lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
+		"%w: the candidate changed after attempt %d began, and lineage %q cannot hold the approved review of this candidate because recovery successor %q supersedes it and froze a target this candidate no longer has, so that successor can never be finalized — quarantine it, then re-run this finish: `gentle-ai review abandon --cwd %s --lineage %q --expected-revision %q --reason %q --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`; the abandonment quarantines the stranded successor and records its discarded work, because %q keeps the approved review of the corrected candidate. --maintainer-authorization is exactly these nine lines, joined by LF, with no trailing newline, using the same --actor:\n%s",
 		ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage, stranded.Lineage,
-		pathquote.Quote(store.Workspace), stranded.Lineage, stranded.Revision, binding.Lineage,
+		pathquote.Quote(store.Workspace), stranded.Lineage, stranded.Revision, reviewtransaction.CompactAbandonReasonOperatorDisposition, binding.Lineage,
 		reviewtransaction.RenderCompactAbandonAuthorization(
-			stranded.Lineage, stranded.Revision, stranded.SnapshotIdentity, "<--actor>", "<--reason>"))
+			stranded.Lineage, stranded.Revision, stranded.SnapshotIdentity, "<actor>", reviewtransaction.CompactAbandonReasonOperatorDisposition, stranded.DiscardedWork))
 }
 
 // runtimeRemediatesArgument quotes a concrete revision and leaves an operator
@@ -1041,10 +1100,79 @@ func runtimeRemediatesArgument(remediates string) string {
 // way runtimeRemediationExitRefusal's two branches do: the recorded
 // begin-worktree path is itself always the one runnable continuation, so
 // there is only one message to construct.
+// runtimeZeroDriftResetRefusal replaces the bare ErrRuntimeResetNotAllowed at
+// the one refusal site whose state has a runnable continuation the sentinel
+// never named. The sentinel says which shapes reset admits and then points at
+// status; status answers next_action: begin, and for a caller whose failed
+// evidence proves the OBJECTIVE is wrong rather than under-attempted, re-running
+// the identical objective is the one continuation that cannot help. #1974 was
+// filed as a lifecycle deadlock for exactly that reason: rescope already owned
+// this transition and neither surface said so.
+//
+// Both named exits are real for this state, which is why both appear. Rescope
+// is admitted here by construction (this site is reached only when reset is
+// structurally permitted, the objective is neither decision-required nor
+// complete, and the candidate has not drifted, which is precisely
+// runtimeObjectiveRescopeStructurallyPermitted plus zero drift), so it needs no
+// second eligibility probe. It can only narrow or hold the budget, so a caller
+// who needs a WIDER successor scope gets the second exit instead: spend the
+// remaining attempts honestly, which is what reaches decision-required, where
+// this same reset is admitted and opens a fresh budget.
+func (store RuntimeStore) runtimeZeroDriftResetRefusal(status RuntimeStatus) error {
+	objective := status.Objective
+	return fmt.Errorf(
+		"%w: this objective's candidate has not drifted and it still has attempts left, so resetting it now would launder the per-objective budget. If the failed evidence proves this OBJECTIVE is wrong rather than under-attempted, a maintainer may open a narrower successor scope instead — `gentle-ai sdd-attempt rescope --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --work-unit \"<narrower-work-unit>\" --evidence-goal \"<narrower-evidence-goal>\" --max-attempts \"<n, at most %d>\" --max-changed-lines \"<n, at most %d>\" --reason \"<why-the-objective-is-narrowing>\" --actor \"<actor>\"`; rescope carries cumulative_attempts and cumulative_changed_lines forward unchanged and never widens a budget, so if the successor needs MORE than %d changed lines, spend this objective's remaining attempts first: the run that exhausts them reaches decision-required, where this reset is admitted",
+		ErrRuntimeResetNotAllowed, store.Workspace, store.Change, status.Revision,
+		objective.MaxAttempts, objective.MaxChangedLines, objective.MaxChangedLines)
+}
+
+// runtimeRescopeWidenedRefusal is the complement of
+// runtimeZeroDriftResetRefusal (#1974). That one caught the caller who reached
+// for reset and was told nothing about rescope; this catches the caller who
+// reached for rescope and is told only that a wider budget is refused. The
+// state is the same one, so status answers next_action: begin, which repeats
+// the objective at the same ceiling the caller just said is too small.
+//
+// The route that does work is not another operation, it is finishing this one:
+// spending the remaining attempts reaches decision-required, and reset is
+// admitted there with a budget of any size. Naming it costs nothing and does
+// not weaken the narrowing rule, which exists so a successor scope cannot
+// launder a consumed budget.
+func (store RuntimeStore) runtimeRescopeWidenedRefusal(status RuntimeStatus, flag string, requested, allowed int) error {
+	remaining := status.Objective.MaxAttempts - status.CumulativeAttempts
+	return fmt.Errorf(
+		"%w: received %s %d, the current objective allows %d. A wider successor scope is reached by finishing this objective rather than by rescoping it: spend its %d remaining attempt(s), and the run that exhausts them reaches decision-required, where `gentle-ai sdd-attempt reset --cwd %q --change %q --expected-revision \"<revision-from-status>\" --request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"` opens a fresh budget of any size",
+		ErrRuntimeRescopeWidened, flag, requested, allowed, remaining, store.Workspace, store.Change)
+}
+
+// runtimeObjectiveCompleteRefusal names what a completed objective's begin can
+// actually do. The sentinel said only that the objective is complete and
+// pointed at status, whose next_action is `complete` — true, and useless to a
+// caller who has more work to do on this change.
+//
+// Complete is only reachable from a passed attempt within budget, so advance is
+// admissible here whenever the sole failing condition is the repeated work
+// unit: changing --work-unit is the entire difference. Reset is admitted too,
+// for a caller who means to discard this scope rather than succeed it.
+func (store RuntimeStore) runtimeObjectiveCompleteRefusal(status RuntimeStatus) error {
+	return fmt.Errorf(
+		"%w: it passed within budget, so this change continues through a SUCCESSOR objective, not a repeat of this one — re-run this begin with a different --work-unit (everything else may stay as it is) and it is admitted as an advance that carries this objective's evidence forward. To discard this scope instead of succeeding it, run `gentle-ai sdd-attempt reset --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"`",
+		ErrRuntimeObjectiveDone, store.Workspace, store.Change, status.Revision)
+}
+
 func (store RuntimeStore) runtimeWorktreeMismatchRefusal(ordinal int, beginWorktree string) error {
 	return fmt.Errorf(
 		"%w: attempt %d began in %s, and its base candidate tree is pinned to that exact linked worktree, but this finish is running from %s — rerun with --cwd %s so the candidate capture and changed-line measurement use the worktree that actually did the work",
 		ErrRuntimeWorktreeMismatch, ordinal, pathquote.Quote(beginWorktree), pathquote.Quote(store.Workspace), pathquote.Quote(beginWorktree))
+}
+
+func (store RuntimeStore) runtimeEffectiveWorktreeMismatchRefusal(active RuntimeAttempt) error {
+	if active.EffectiveWorktree == active.BeginWorktree {
+		return store.runtimeWorktreeMismatchRefusal(active.Ordinal, active.BeginWorktree)
+	}
+	return fmt.Errorf(
+		"%w: attempt %d began in %s and was explicitly handed off to %s, but this finish is running from %s — rerun with --cwd %s so the candidate capture and changed-line measurement use the delegated worktree",
+		ErrRuntimeWorktreeMismatch, active.Ordinal, pathquote.Quote(active.BeginWorktree), pathquote.Quote(active.EffectiveWorktree), pathquote.Quote(store.Workspace), pathquote.Quote(active.EffectiveWorktree))
 }
 
 // runtimeObjectiveChangeRefusal turns the changed-objective begin demand into
@@ -1231,7 +1359,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 				return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check reset drift eligibility: %w", driftErr)
 			}
 			if candidate.Identity == last.FinishCandidateIdentity && candidate.CandidateTree == last.FinishCandidateTree {
-				return runtimeRecord{}, ErrRuntimeResetNotAllowed
+				return runtimeRecord{}, store.runtimeZeroDriftResetRefusal(status)
 			}
 		}
 		snapshot, err := captureRuntimeCandidate(ctx, store.Repo)
@@ -1310,15 +1438,12 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
 		}
 		if request.MaxChangedLines > objective.MaxChangedLines {
-			return runtimeRecord{}, fmt.Errorf(
-				"%w: received --max-changed-lines %d, the current objective allows %d",
-				ErrRuntimeRescopeWidened, request.MaxChangedLines, objective.MaxChangedLines,
-			)
+			return runtimeRecord{}, store.runtimeRescopeWidenedRefusal(
+				status, "--max-changed-lines", request.MaxChangedLines, objective.MaxChangedLines)
 		}
 		if request.MaxAttempts > objective.MaxAttempts {
-			return runtimeRecord{}, fmt.Errorf(
-				"%w: received --max-attempts %d, the current objective allows %d",
-				ErrRuntimeRescopeWidened, request.MaxAttempts, objective.MaxAttempts,
+			return runtimeRecord{}, store.runtimeRescopeWidenedRefusal(
+				status, "--max-attempts", request.MaxAttempts, objective.MaxAttempts,
 			)
 		}
 		// The zero-drift `drift` snapshot above was captured with
@@ -1649,6 +1774,10 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		if err := applyRuntimeFinishEvent(replay, record.Finish, record.Finish.RemediatesEvidenceRevision != ""); err != nil {
 			return err
 		}
+	case runtimeOperationHandoff:
+		if err := applyRuntimeHandoffEvent(replay, record.Handoff); err != nil {
+			return err
+		}
 
 	case runtimeOperationFinishRemediation:
 		currentBinding := replay.Status.Binding
@@ -1783,7 +1912,8 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 	attempt := RuntimeAttempt{
 		Ordinal: event.Ordinal, ObjectiveID: event.ObjectiveID, ObjectiveGeneration: generation,
 		WorkUnit: event.WorkUnit, BeginCandidateIdentity: event.BeginCandidateIdentity,
-		BeginCandidateTree: event.BeginCandidateTree, BeginWorktree: event.BeginWorktree, Outcome: AttemptRunning,
+		BeginCandidateTree: event.BeginCandidateTree, BeginWorktree: event.BeginWorktree,
+		EffectiveWorktree: event.EffectiveWorktree, Outcome: AttemptRunning,
 	}
 	replay.Status.Attempts = append(replay.Status.Attempts, attempt)
 	replay.AttemptTokens[event.Ordinal] = revision
@@ -1793,6 +1923,22 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 	replay.Status.LifetimeAttempts++
 	replay.Status.NextOrdinal = event.Ordinal + 1
 	replay.Status.NextAction = RuntimeActionFinish
+	return nil
+}
+
+func applyRuntimeHandoffEvent(replay *runtimeReplay, event *RuntimeHandoff) error {
+	active := replay.Status.ActiveAttempt
+	if active == nil || active.Ordinal != event.Ordinal || active.EffectiveWorktree == "" ||
+		active.EffectiveWorktree != event.SourceWorktree || active.Handoff != nil ||
+		len(replay.Status.Attempts) == 0 || replay.Status.Attempts[len(replay.Status.Attempts)-1].Outcome != AttemptRunning {
+		return errors.New("handoff record does not match the active attempt") // refusal:by-design world-action: a contradictory immutable record requires restoring the authority store
+	}
+	attempt := &replay.Status.Attempts[len(replay.Status.Attempts)-1]
+	handoff := *event
+	attempt.EffectiveWorktree = event.DestinationWorktree
+	attempt.Handoff = &handoff
+	activeCopy := *attempt
+	replay.Status.ActiveAttempt = &activeCopy
 	return nil
 }
 
@@ -2030,7 +2176,8 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 		// PRESENT value is still an identity string, not free user input: it
 		// must be a bounded, trimmed, single-line value like every other
 		// recorded text field, not raw garbage.
-		(event.BeginWorktree != "" && validateRuntimeText(event.BeginWorktree, 4096) != nil) {
+		(event.BeginWorktree != "" && validateRuntimeText(event.BeginWorktree, 4096) != nil) ||
+		(event.EffectiveWorktree != "" && (validateRuntimeText(event.EffectiveWorktree, 4096) != nil || event.EffectiveWorktree != event.BeginWorktree)) {
 		return errors.New("invalid SDD runtime begin event")
 	}
 	request := BeginAttemptRequest{
@@ -2051,14 +2198,14 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 	}
 	switch record.Operation {
 	case runtimeOperationBegin:
-		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime begin record shape")
 		}
 		if err := validateRuntimeBeginEvent(record); err != nil {
 			return err
 		}
 	case runtimeOperationAdvance:
-		if record.Begin == nil || record.Advance == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Begin == nil || record.Advance == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime objective advance record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
 		advance := record.Advance
@@ -2072,7 +2219,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return err
 		}
 	case runtimeOperationFinish:
-		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime finish record shape")
 		}
 		event := record.Finish
@@ -2093,8 +2240,25 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		if runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime finish request digest does not match record")
 		}
+	case runtimeOperationHandoff:
+		if record.Handoff == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+			return errors.New("invalid SDD runtime handoff record shape") // refusal:by-design world-action: a malformed immutable record requires restoring the authority store
+		}
+		event := record.Handoff
+		if event.Ordinal < 1 || event.SourceWorktree == event.DestinationWorktree ||
+			validateRuntimeText(event.SourceWorktree, 4096) != nil || !filepath.IsAbs(event.SourceWorktree) ||
+			validateRuntimeText(event.DestinationWorktree, 4096) != nil || !filepath.IsAbs(event.DestinationWorktree) ||
+			validateRuntimeText(event.CommonDir, 4096) != nil || !filepath.IsAbs(event.CommonDir) ||
+			event.ExpectedRevision != record.PreviousRevision || event.RequestDigest != record.RequestDigest ||
+			!runtimeRevisionPattern.MatchString(event.DestinationCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.DestinationCandidateTree) {
+			return errors.New("invalid SDD runtime handoff event") // refusal:by-design world-action: a malformed immutable event requires restoring the authority store
+		}
+		request := HandoffAttemptRequest{ExpectedRevision: event.ExpectedRevision, RequestID: record.RequestID, DestinationWorktree: event.DestinationWorktree}
+		if runtimeValueHash("gentle-ai.sdd-runtime-handoff-request/v1", request) != record.RequestDigest {
+			return errors.New("SDD runtime handoff request digest does not match record") // refusal:by-design world-action: a forged immutable record requires restoring the authority store
+		}
 	case runtimeOperationFinishRemediation:
-		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid atomic SDD runtime remediation record shape")
 		}
 		finish, binding := record.Finish, record.Binding
@@ -2133,7 +2297,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("atomic SDD runtime remediation request digest does not match record")
 		}
 	case runtimeOperationReset:
-		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime reset record shape")
 		}
 		event := record.Reset
@@ -2149,7 +2313,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime reset request digest does not match record")
 		}
 	case runtimeOperationRescope:
-		if record.Rescope == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Rescope == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime rescope record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
 		event := record.Rescope
@@ -2180,7 +2344,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime rescope request digest does not match record") // refusal:by-design world-action: the digest is computed from the same request at write time, so a mismatch is a mutated record and the exit is restoring the store
 		}
 	case runtimeOperationBind:
-		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Receipt != nil || record.Grant != nil {
+		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime binding record shape")
 		}
 		event := record.Binding
@@ -2207,7 +2371,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime binding request digest does not match record")
 		}
 	case runtimeOperationReceipt:
-		if record.Receipt == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Grant != nil {
+		if record.Receipt == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime receipt record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
 		event := record.Receipt
@@ -2235,7 +2399,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime receipt request digest does not match record") // refusal:by-design world-action: the digest is computed from the same request at write time, so a mismatch is a mutated record and the exit is restoring the store
 		}
 	case runtimeOperationGrant:
-		if record.Grant == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
+		if record.Grant == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil {
 			return errors.New("invalid SDD runtime grant record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
 		event := record.Grant
@@ -2393,6 +2557,24 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 			)
 		}
 	}
+	return request, nil
+}
+
+func normalizeHandoffAttemptRequest(request HandoffAttemptRequest) (HandoffAttemptRequest, error) {
+	if !runtimeRevisionPattern.MatchString(request.ExpectedRevision) {
+		return HandoffAttemptRequest{}, errors.New("handoff requires an exact expected runtime revision") // refusal:by-design operator-knowledge: the caller must supply the current runtime revision
+	}
+	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
+		return HandoffAttemptRequest{}, errors.New("request_id must be a canonical lowercase identifier")
+	}
+	if err := validateRuntimeText(request.DestinationWorktree, 4096); err != nil {
+		return HandoffAttemptRequest{}, fmt.Errorf("invalid handoff destination worktree: %w", err)
+	}
+	destination, err := canonicalRuntimeHandoffPath(request.DestinationWorktree)
+	if err != nil {
+		return HandoffAttemptRequest{}, fmt.Errorf("resolve handoff destination worktree: %w", err)
+	}
+	request.DestinationWorktree = destination
 	return request, nil
 }
 
@@ -2593,6 +2775,84 @@ func captureRuntimeTerminalCandidate(ctx context.Context, store RuntimeStore, be
 		Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: beginCandidateTree,
 		Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
 	})
+}
+
+func captureRuntimeHandoffCandidate(ctx context.Context, worktree, beginCandidateTree string) (reviewtransaction.Snapshot, error) {
+	builder := reviewtransaction.SnapshotBuilder{Repo: worktree}
+	return builder.Build(ctx, reviewtransaction.Target{
+		Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: beginCandidateTree,
+		Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	})
+}
+
+func canonicalRuntimeHandoffPath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	if err := validateRuntimeText(resolved, 4096); err != nil || !filepath.IsAbs(resolved) {
+		return "", errors.New("canonical worktree path is not an absolute bounded single-line directory") // refusal:by-design operator-knowledge: only the caller can choose an existing canonical destination
+	}
+	return filepath.Clean(resolved), nil
+}
+
+func (store RuntimeStore) runtimeHandoffStatusExit() string {
+	return fmt.Sprintf("run `gentle-ai sdd-attempt status --cwd %s --change %q` to read the active attempt and its current execution worktree", pathquote.Quote(store.Workspace), store.Change)
+}
+
+func (store RuntimeStore) runtimeHandoffSourceRefusal(active RuntimeAttempt) error {
+	return fmt.Errorf("%w: attempt %d has effective worktree %s, but handoff ran from %s; %s",
+		ErrRuntimeHandoffSource, active.Ordinal, pathquote.Quote(active.EffectiveWorktree), pathquote.Quote(store.Workspace), store.runtimeHandoffStatusExit())
+}
+
+func (store RuntimeStore) runtimeHandoffAlreadyPerformedRefusal(active RuntimeAttempt) error {
+	return fmt.Errorf("%w: attempt %d already moved from %s to %s; %s",
+		ErrRuntimeHandoffAlreadyPerformed, active.Ordinal, pathquote.Quote(active.Handoff.SourceWorktree), pathquote.Quote(active.Handoff.DestinationWorktree), store.runtimeHandoffStatusExit())
+}
+
+func (store RuntimeStore) validateRuntimeHandoffDestination(ctx context.Context, destination string) (string, error) {
+	command := exec.CommandContext(ctx, "git", "-C", store.Repo, "worktree", "list", "--porcelain")
+	output, err := command.Output()
+	if err != nil {
+		return "", fmt.Errorf("%w: cannot read the Git worktree registry: %v; %s", ErrRuntimeHandoffDestination, err, store.runtimeHandoffStatusExit())
+	}
+	registered := false
+	for _, line := range strings.Split(string(output), "\n") {
+		path, ok := strings.CutPrefix(line, "worktree ")
+		if !ok || path == "" {
+			continue
+		}
+		canonical, resolveErr := canonicalRuntimeHandoffPath(path)
+		if resolveErr == nil && canonical == destination {
+			registered = true
+			break
+		}
+	}
+	if !registered || destination == store.Workspace {
+		return "", fmt.Errorf("%w: %s is not a distinct registered linked worktree; %s", ErrRuntimeHandoffDestination, pathquote.Quote(destination), store.runtimeHandoffStatusExit())
+	}
+	command = exec.CommandContext(ctx, "git", "-C", destination, "rev-parse", "--git-common-dir")
+	output, err = command.Output()
+	if err != nil {
+		return "", fmt.Errorf("%w: cannot resolve destination Git common directory: %v; %s", ErrRuntimeHandoffDestination, err, store.runtimeHandoffStatusExit())
+	}
+	commonDir := strings.TrimSpace(string(output))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(destination, commonDir)
+	}
+	commonDir, err = canonicalRuntimeHandoffPath(commonDir)
+	if err != nil {
+		return "", fmt.Errorf("%w: resolve destination Git common directory: %v; %s", ErrRuntimeHandoffDestination, err, store.runtimeHandoffStatusExit())
+	}
+	storeCommonDir, err := canonicalRuntimeHandoffPath(store.commonDir)
+	if err != nil || commonDir != storeCommonDir {
+		return "", fmt.Errorf("%w: %s does not share this ledger's Git common directory; %s", ErrRuntimeHandoffDestination, pathquote.Quote(destination), store.runtimeHandoffStatusExit())
+	}
+	return commonDir, nil
 }
 
 // runtimeResetStructurallyPermitted reports whether the ledger's terminal

@@ -129,8 +129,61 @@ func AssessTargetStatusWithSnapshot(ctx context.Context, repo string, request Ta
 	if err != nil {
 		return TargetStatusResult{}, Snapshot{}, err
 	}
+	if request.LineageID == "" && request.Target.Kind == TargetCurrentChanges && request.Target.Projection == ProjectionWorkspace {
+		candidates, recoveryErr := selectorlessCommittedBaseDiffCorrections(ctx, repo)
+		if recoveryErr != nil {
+			return TargetStatusResult{}, Snapshot{}, recoveryErr
+		}
+		switch len(candidates) {
+		case 0:
+		case 1:
+			live, request.LineageID = candidates[0].snapshot, candidates[0].lineage
+		default:
+			lineages := make([]string, len(candidates))
+			for index, candidate := range candidates {
+				lineages[index] = candidate.lineage
+			}
+			return TargetStatusResult{
+				Applicability: TargetApplicabilityAmbiguous, Action: TargetStatusActionSelectLineage,
+				Replayability: ReplayabilityStatusRequired, TargetIdentity: live.Identity,
+				Projection: targetProjectionFromSnapshot(live), CandidateLineageIDs: lineages,
+			}, live, nil
+		}
+	}
 	result, err := assessTargetStatusSnapshot(ctx, repo, request, live)
 	return result, live, err
+}
+
+type selectorlessCommittedBaseDiffCorrection struct {
+	lineage  string
+	snapshot Snapshot
+}
+
+func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) ([]selectorlessCommittedBaseDiffCorrection, error) {
+	stores, err := DiscoverCompactStores(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	candidates := []selectorlessCommittedBaseDiffCorrection{}
+	for _, store := range stores {
+		record, loadErr := store.LoadContext(ctx)
+		if loadErr != nil {
+			if IsCompactAuthorityOperationalFailure(loadErr) {
+				return nil, loadErr
+			}
+			continue
+		}
+		live, rebuildErr := RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, record.State)
+		if rebuildErr != nil {
+			if IsCompactAuthorityOperationalFailure(rebuildErr) || IsCorrectionBudgetExceeded(rebuildErr) {
+				return nil, rebuildErr
+			}
+			continue
+		}
+		candidates = append(candidates, selectorlessCommittedBaseDiffCorrection{lineage: record.State.LineageID, snapshot: live})
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].lineage < candidates[j].lineage })
+	return candidates, nil
 }
 
 func assessTargetStatusSnapshot(ctx context.Context, repo string, request TargetStatusRequest, live Snapshot) (TargetStatusResult, error) {

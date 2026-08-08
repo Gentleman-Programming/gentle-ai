@@ -8,7 +8,7 @@
   },
   "action": "start",
   "replayability": "not_replayable",
-  "target_identity": "sha256:e3db7d34191519edd300559da8fb0bdb96f820aa6788f1b60589c690d3f95d7c",
+  "target_identity": "sha256:a6fa193a8ffe0c3a805dc689508d4afc211f9765b172bd92ab5c24d4049c1c5d",
   "projection": {
     "schema": "gentle-ai.review-integration.projection/v1",
     "kind": "current-changes",
@@ -22,8 +22,8 @@
     ],
     "intended_untracked": [],
     "intended_untracked_proof": "sha256:b97229718d4c7fe50a8892eb474ae5aa6491697bccb400e3e31dbaca4894d2f3",
-    "initial_snapshot_identity": "sha256:e3db7d34191519edd300559da8fb0bdb96f820aa6788f1b60589c690d3f95d7c",
-    "current_snapshot_identity": "sha256:e3db7d34191519edd300559da8fb0bdb96f820aa6788f1b60589c690d3f95d7c"
+    "initial_snapshot_identity": "sha256:a6fa193a8ffe0c3a805dc689508d4afc211f9765b172bd92ab5c24d4049c1c5d",
+    "current_snapshot_identity": "sha256:a6fa193a8ffe0c3a805dc689508d4afc211f9765b172bd92ab5c24d4049c1c5d"
   },
   "repair": {
     "schema": "gentle-ai.review-authority-repair-assessment/v1",

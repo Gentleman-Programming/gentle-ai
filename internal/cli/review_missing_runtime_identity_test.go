@@ -103,13 +103,19 @@ func TestNegotiatedRouteWithoutRuntimeIdentityReachesStart(t *testing.T) {
 // refuses would assert the defect rather than the property. Kilocode replaces
 // it and keeps this arm's coverage exact: it is eligible, has no transport,
 // and fails with the same reviewImmutableTransportUnsupportedCode, unlike Pi,
-// which fails earlier with reviewTransportCapabilityUnsupportedCode. Codex and
-// the unknown identity are unchanged, so the property this test exists to
-// protect -- a declared identity is validated exactly as before, and every
-// unsupported one still stops -- is still proven by three runtimes.
+// which fails earlier with reviewTransportCapabilityUnsupportedCode.
+//
+// Codex used to stand here too. Its organic runtime proof
+// (TestRealCodexReviewerOrdinarySessionAdmitsRawOutput, e2e/organicruntime)
+// gave it a genuine immutable transport as well (its CodexAdapter's empty
+// scratch-directory boundary), so it is no longer an instance of the class
+// this test is about either. The unknown identity is unchanged, so the
+// property this test exists to protect -- a declared identity is validated
+// exactly as before, and every unsupported one still stops -- is still
+// proven by two runtimes.
 func TestDeclaredUnsupportedRuntimeStillRefusesNegotiatedStatus(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	for _, runtime := range []string{string(model.AgentKilocode), string(model.AgentCodex), "unknown-runtime"} {
+	for _, runtime := range []string{string(model.AgentKilocode), "unknown-runtime"} {
 		t.Run(runtime, func(t *testing.T) {
 			var output bytes.Buffer
 			if err := RunReview([]string{
@@ -125,30 +131,33 @@ func TestDeclaredUnsupportedRuntimeStillRefusesNegotiatedStatus(t *testing.T) {
 	}
 }
 
-// TestDeclaredSupportedRuntimeIsAnsweredByNegotiatedStatus is the positive
-// twin the arm above lost when OpenCode stopped being an unsupported runtime,
-// and it is what keeps that swap honest. Deleting a row from a refusal matrix
-// proves nothing on its own: the same red would go green if the transport
-// check had simply been relaxed for everyone. This asserts the two halves
-// together on one repository -- every declared supported runtime is answered,
-// and the refusals above still stop -- so a gate that widened for everyone
-// fails the arm above, and a gate that never opened fails this one.
-func TestDeclaredSupportedRuntimeIsAnsweredByNegotiatedStatus(t *testing.T) {
+// TestDeclaredBuiltInRuntimeUsesProvenExecutorBoundary prevents the capability
+// declaration from drifting from the supported fresh reviewer paths. Claude
+// and OpenCode use their tool-free fresh agent in an ordinary session, neither
+// depending on OPENCODE_DISABLE_PROJECT_CONFIG or OPENCODE_DISABLE_EXTERNAL_SKILLS
+// (deliberately left unset); Codex uses CodexAdapter's empty scratch-directory
+// process, proven organically by
+// TestRealCodexReviewerOrdinarySessionAdmitsRawOutput (e2e/organicruntime).
+func TestDeclaredBuiltInRuntimeUsesProvenExecutorBoundary(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	for _, runtime := range []string{string(model.AgentClaudeCode), string(model.AgentOpenCode)} {
-		t.Run(runtime, func(t *testing.T) {
+	for _, test := range []struct {
+		runtime string
+	}{
+		{runtime: string(model.AgentClaudeCode)},
+		{runtime: string(model.AgentOpenCode)},
+		{runtime: string(model.AgentCodex)},
+	} {
+		t.Run(test.runtime, func(t *testing.T) {
 			var output bytes.Buffer
 			err := RunReview([]string{
-				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", runtime, "--next-transition",
+				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", test.runtime, "--next-transition",
 			}, &output)
-			if err == nil {
-				return
+			if err != nil {
+				t.Fatalf("declared built-in runtime %q did not reach negotiated STATUS: %v\n%s", test.runtime, err, output.String())
 			}
-			failure := decodeReviewIntegrationFailure(t, output.Bytes())
-			if failure.Code == reviewImmutableTransportUnsupportedCode {
-				t.Fatalf("declared supported runtime %q was refused for transport: %#v", runtime, failure)
+			if strings.Contains(output.String(), reviewImmutableTransportUnsupportedCode) {
+				t.Fatalf("declared built-in runtime %q was rejected by the executor boundary: %s", test.runtime, output.String())
 			}
-			t.Fatalf("negotiated STATUS failed for %q: %v %#v", runtime, err, failure)
 		})
 	}
 }

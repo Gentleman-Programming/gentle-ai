@@ -57,15 +57,11 @@ func TestProbeCapabilityRejectsAMissingFlag(t *testing.T) {
 	}
 }
 
-// The reason Probe exists at all: `sdd-attempt <op> --help` is rejected with
-// the same words a missing flag produces, so the DEFAULT probe reports a build
-// that fully supports the verb as lacking it. This test pins that trap, so
-// nobody quietly converts these capabilities back to the help-reading form.
-func TestHelpProbeMisreadsAVerbThatParsesItsOwnFlags(t *testing.T) {
+func TestHelpProbeRejectsALegacySurface(t *testing.T) {
 	sandbox := fakeBinary(t, `echo "Error: flag provided but not defined: -help" >&2; exit 1`)
-	supported, _ := newCapabilityProbe(sandbox).supported(&Capability{Verb: []string{"sdd-attempt", "finish"}})
+	supported, _ := newCapabilityProbe(sandbox).supported(&Capability{Verb: []string{"legacy", "finish"}})
 	if supported {
-		t.Skip("the help probe no longer misreads this shape; Probe may be unnecessary")
+		t.Fatal("the help read should have reported unsupported for this fake")
 	}
 }
 
@@ -78,12 +74,12 @@ case "$*" in
   *)        echo "Error: sdd-attempt requires --cwd" >&2; exit 1 ;;
 esac`)
 	probe := newCapabilityProbe(sandbox)
-	if supported, _ := probe.supported(&Capability{Verb: []string{"sdd-attempt", "finish"}}); supported {
+	if supported, _ := probe.supported(&Capability{Verb: []string{"legacy", "finish"}}); supported {
 		t.Fatal("the help read should have reported unsupported for this fake")
 	}
 	supported, reason := probe.supported(&Capability{
-		Verb:  []string{"sdd-attempt", "finish"},
-		Probe: []string{"sdd-attempt", "finish", "--expected-binding-revision=probe"},
+		Verb:  []string{"legacy", "finish"},
+		Probe: []string{"legacy", "finish", "--expected-binding-revision=probe"},
 	})
 	if !supported {
 		t.Fatalf("supported = false (%s), want true: the probe answer must not come from the help cache", reason)

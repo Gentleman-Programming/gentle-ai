@@ -359,6 +359,10 @@ func validateLiveReviewRepositoryContext(ctx context.Context, repo string, bindi
 		if record.State.InitialSnapshot.Identity != binding.TargetIdentity {
 			return errors.New("review repository context is stale or has no live matching authority")
 		}
+	case StateValidating:
+		if record.State.CurrentSnapshot.Identity != binding.TargetIdentity {
+			return errors.New("review repository context is stale or has no live matching authority")
+		}
 	case StateCorrectionRequired:
 		if record.State.ProposedCorrectionLines == nil {
 			if record.State.CurrentSnapshot.Identity != binding.TargetIdentity {

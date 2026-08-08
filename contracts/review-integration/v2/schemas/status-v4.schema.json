@@ -26,12 +26,22 @@
     "candidates": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/candidates"},
     "reconciliation": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/reconciliation"},
     "eligibility": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/action_eligibility"},
+    "forecast": {"$ref": "#/$defs/forecast"},
     "next_transition": {"$ref": "#/$defs/next_transition"},
     "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"},
     "final_verification_retry": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/final_verification_retry"}
   },
+  "dependentRequired": {"forecast": ["next_transition"]},
   "$defs": {
     "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "forecast": {
+      "type": "object", "additionalProperties": false, "required": ["horizon", "steps"],
+      "properties": {
+        "horizon": {"enum": ["partial", "terminal"]},
+        "steps": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["step", "kind", "reason_code", "description"], "properties": {"step": {"const": 1}, "kind": {"enum": ["execute", "collect", "stop"]}, "reason_code": {"type": "string", "pattern": "^[a-z0-9_]+$"}, "description": {"type": "string", "minLength": 1}}}}
+      },
+      "allOf": [{"if": {"properties": {"steps": {"contains": {"properties": {"kind": {"const": "stop"}}, "required": ["kind"]}}}}, "then": {"properties": {"horizon": {"const": "terminal"}}}, "else": {"properties": {"horizon": {"const": "partial"}}}}]
+    },
     "next_transition": {
       "type": "object", "additionalProperties": false, "required": ["kind", "reason_code"],
       "properties": {

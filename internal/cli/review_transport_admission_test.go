@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
@@ -94,5 +95,26 @@ func TestUnsupportedReviewTransportCapabilityStopsBeforeAnyAuthority(t *testing.
 	}
 	if len(stores) != 0 {
 		t.Fatalf("unsupported-transport review start created review authority: %#v", stores)
+	}
+}
+
+func TestReviewTransportAdmissionRefusalNamesWorkingExits(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n", 0o644)
+
+	var output bytes.Buffer
+	err := RunReview([]string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--agent", string(model.AgentPi),
+	}, &output)
+	if err == nil {
+		t.Fatalf("review start for Pi succeeded:\n%s", output.String())
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Code != reviewTransportCapabilityUnsupportedCode {
+		t.Fatalf("Pi refusal code = %q, want %q", failure.Code, reviewTransportCapabilityUnsupportedCode)
+	}
+	const exit = "gentle-ai review mode disable --scope clone --cwd <repo>"
+	if !strings.Contains(failure.Cause, exit) || !strings.Contains(failure.Cause, string(model.AgentClaudeCode)) || !strings.Contains(failure.Cause, string(model.AgentOpenCode)) {
+		t.Fatalf("transport refusal does not name actionable exits: %s", failure.Cause)
 	}
 }

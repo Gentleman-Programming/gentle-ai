@@ -275,6 +275,29 @@ func RecoverySelfDerivedInputs(predecessor State) []string {
 	}
 }
 
+// baseAdvanceStatusAllowedForGate is the single source of truth D2 (#2471
+// option a) adds for the per-gate compatible-base-advance attestation policy:
+// GatePrePR alone may carry a CI-attested proof (baseAdvanceCompatibleStatus)
+// or the unrelated, already-existing current-changes boundary reconciliation
+// (currentChangesBoundaryCompatibleStatus, #1376); GatePreCommit and
+// GatePrePush may carry only the unattested local proof
+// (baseAdvanceCompatibleLocalStatus) deriveBaseAdvanceCompatibility issues
+// when its requireAttestation parameter is false. Both validateDerivedGate's
+// carve-out and ParseGateContext's structural validation call this one
+// function, so the attestation policy can never drift between "what a gate
+// accepts at evaluation time" and "what a persisted context is allowed to
+// claim happened."
+func baseAdvanceStatusAllowedForGate(gate GateKind, status string) bool {
+	switch gate {
+	case GatePrePR:
+		return status == baseAdvanceCompatibleStatus || status == currentChangesBoundaryCompatibleStatus
+	case GatePreCommit, GatePrePush:
+		return status == baseAdvanceCompatibleLocalStatus
+	default:
+		return false
+	}
+}
+
 func validateDerivedGate(receipt Receipt, context GateContext) GateResult {
 	if err := validateReceiptStructure(receipt); err != nil {
 		return GateInvalidated
@@ -285,7 +308,7 @@ func validateDerivedGate(receipt Receipt, context GateContext) GateResult {
 	if receipt.TerminalState != TerminalApproved {
 		return GateInvalidated
 	}
-	compatibleAdvance := context.Gate == GatePrePR && context.BaseAdvance != nil && context.BaseAdvance.Compatible
+	compatibleAdvance := context.BaseAdvance != nil && context.BaseAdvance.Compatible && baseAdvanceStatusAllowedForGate(context.Gate, context.BaseAdvance.Status)
 	if receipt.LineageID != context.LineageID || receipt.Generation != context.Generation {
 		return GateScopeChanged
 	}
@@ -344,7 +367,7 @@ func ParseGateContext(payload []byte) (GateContext, error) {
 		}
 	}
 	if context.BaseAdvance != nil {
-		if context.Gate != GatePrePR || !context.BaseAdvance.valid() {
+		if !context.BaseAdvance.valid() || !baseAdvanceStatusAllowedForGate(context.Gate, context.BaseAdvance.Status) {
 			return GateContext{}, errors.New("gate context contains invalid compatible base advance evidence")
 		}
 	}

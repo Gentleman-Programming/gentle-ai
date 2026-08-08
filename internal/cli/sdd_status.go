@@ -9,16 +9,16 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
-func sddReviewDisabledForWorkspace(workspaceRoot string) bool {
+func sddReviewDisabledForWorkspace(workspaceRoot string) (bool, error) {
 	return reviewDrivenDevelopmentDisabled(context.Background(), workspaceRoot)
 }
 
 // RunSDDStatus is the CLI entry point for `gentle-ai sdd-status [change]`.
 //
 // The kill switch reaches SDD status here, at the one layer that owns the
-// single source of truth for both of its sources. An unreadable switch is not a
-// disabled switch: reviewDrivenDevelopmentDisabled fails closed to "enabled",
-// so a broken or tampered mode record can never relax the archive gate.
+// single source of truth for both of its sources. An unreadable switch fails
+// closed to "enabled", while an unsafe RAR path remains an actionable refusal
+// instead of being projected to a misleading gate result.
 func RunSDDStatus(args []string, stdout io.Writer) error {
 	parsed, err := sddstatus.ParseCommandArgs(args)
 	if err != nil {

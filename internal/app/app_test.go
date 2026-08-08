@@ -300,6 +300,33 @@ func TestRunArgsSDDVerifyValidateIsDispatchedBeforePlatformValidation(t *testing
 	}
 }
 
+func TestRunArgsSDDVerifyValidateHelpIsInputFree(t *testing.T) {
+	var output bytes.Buffer
+	err := RunArgs([]string{
+		"sdd-verify-validate", "--input", filepath.Join(t.TempDir(), "missing"), "--requirements", "-1", "--help", "--scenarios", "-1",
+	}, &output)
+	if err != nil {
+		t.Fatalf("RunArgs(sdd-verify-validate --help): %v", err)
+	}
+	for _, want := range []string{"Usage: gentle-ai sdd-verify-validate", "Authority-only fail extension", "maximum report size: 1048576 bytes (1 MiB)"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("sdd-verify-validate help missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestRunArgsSDDVerifyValidateHelpTokensCanBeInputValues(t *testing.T) {
+	for _, input := range []string{"--help", "-h"} {
+		t.Run(input, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunArgs([]string{"sdd-verify-validate", "--input", input, "--requirements", "1", "--scenarios", "1"}, &output)
+			if err == nil || !strings.Contains(err.Error(), "read verify report") || output.Len() != 0 {
+				t.Fatalf("RunArgs(input=%q) = output %q, err %v", input, output.String(), err)
+			}
+		})
+	}
+}
+
 func TestRunArgsSDDAttemptIsDispatchedBeforePlatformValidation(t *testing.T) {
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
@@ -316,6 +343,38 @@ func TestRunArgsSDDAttemptIsDispatchedBeforePlatformValidation(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), `"schema": "gentle-ai.sdd-runtime-status/v1"`) || !strings.Contains(buf.String(), `"change": "app-attempt"`) {
 		t.Fatalf("sdd-attempt output missing native status:\n%s", buf.String())
+	}
+}
+
+func TestRunArgsSDDAttemptHelpBypassesPlatformAndRepositoryValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error { return fmt.Errorf("platform validation should not run for sdd-attempt help") }
+
+	var output bytes.Buffer
+	err := RunArgs([]string{"sdd-attempt", "grant", "--cwd", filepath.Join(t.TempDir(), "missing"), "--change", "missing", "--help"}, &output)
+	if err != nil {
+		t.Fatalf("RunArgs(sdd-attempt grant --help): %v", err)
+	}
+	for _, want := range []string{"Usage: gentle-ai sdd-attempt grant [flags]", "--root <path>...", "repeatable"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("sdd-attempt grant help missing %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestRunArgsSDDAttemptParentHelpDoesNotSelectChangeValueAsOperation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error { return fmt.Errorf("platform validation should not run for sdd-attempt help") }
+
+	var output bytes.Buffer
+	err := RunArgs([]string{"sdd-attempt", "--help", "--cwd", "/definitely/not/a/repository", "--change", "begin"}, &output)
+	if err != nil {
+		t.Fatalf("RunArgs(sdd-attempt --help --cwd /definitely/not/a/repository --change begin): %v", err)
+	}
+	if !strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt <") || strings.Contains(output.String(), "Usage: gentle-ai sdd-attempt begin [flags]") {
+		t.Fatalf("sdd-attempt parent help =\n%s", output.String())
 	}
 }
 
@@ -390,7 +449,7 @@ func TestRunArgsDispatchesCompactReviewFacadeBeforePlatformValidation(t *testing
 	if err := RunArgs([]string{"review", "--help"}, &output); err != nil {
 		t.Fatalf("RunArgs(review --help) error = %v", err)
 	}
-	if !strings.Contains(output.String(), "review <capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|bind-sdd>") {
+	if !strings.Contains(output.String(), "review <advisory|capture-result|lens-context|capture-evidence|preserve-result|capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|bind-sdd>") {
 		t.Fatalf("compact review help missing:\n%s", output.String())
 	}
 	output.Reset()

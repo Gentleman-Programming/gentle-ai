@@ -225,6 +225,44 @@ func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 	}
 }
 
+func TestReviewStatusContractRequirementNamesAllAcceptedContracts(t *testing.T) {
+	var output bytes.Buffer
+	err := RunReview([]string{"status", "--next-transition"}, &output)
+	if err == nil || err.Error() != "--action-eligibility and --next-transition require --contract gentle-ai.review-integration/v1 or gentle-ai.review-integration/v2" {
+		t.Fatalf("unnegotiated next-transition refusal = %q, want both accepted contracts", err)
+	}
+}
+
+func TestV4StatusRemainsReadableAlongsideV5(t *testing.T) {
+	status := ReviewTargetStatusResult{
+		Schema:        ReviewIntegrationStatusSchemaV4,
+		Contract:      ReviewIntegrationContractV2,
+		Operation:     "review.status",
+		Applicability: reviewtransaction.TargetApplicabilityCurrent,
+		Authority: &ReviewTargetStatusAuthority{
+			Version: reviewtransaction.AuthorityVersionCompact, LineageID: "v4-compatibility",
+			State: reviewtransaction.StateValidating, Generation: 1,
+			Revision: "sha256:" + strings.Repeat("a", 64),
+		},
+		Receipt:        ReviewTargetStatusReceipt{Status: ReviewReceiptExpectedMissing},
+		Action:         reviewtransaction.TargetStatusActionFinalize,
+		Replayability:  reviewtransaction.ReplayabilityNotReplayable,
+		Frozen:         &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium, OriginalChangedLines: 2, CorrectionBudget: 1},
+		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+		Projection: ReviewTargetStatusProjection{
+			Schema: ReviewIntegrationProjectionSchema, Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
+			BaseTree: strings.Repeat("c", 40), InitialReviewTree: strings.Repeat("d", 40), CurrentCandidateTree: strings.Repeat("d", 40),
+			PathsDigest: "sha256:" + strings.Repeat("e", 64), Paths: []string{"tracked.txt"}, IntendedUntracked: []string{},
+			IntendedUntrackedProof: "sha256:" + strings.Repeat("f", 64), InitialSnapshotIdentity: "sha256:" + strings.Repeat("b", 64), CurrentSnapshotIdentity: "sha256:" + strings.Repeat("b", 64),
+		},
+		Repair:     reviewtransaction.UnsupportedAuthorityRepairAssessment(),
+		Candidates: []string{},
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("v4 STATUS must remain readable: %v", err)
+	}
+}
+
 func TestNegotiatedPendingFinalizeStatusMatchesPublishedSchema(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {

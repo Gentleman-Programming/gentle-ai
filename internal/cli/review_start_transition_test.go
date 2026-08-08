@@ -30,8 +30,11 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 		writeReviewStartCandidate(t, repo, "tracked.txt", "committed\n", 0o644)
 		runReviewCLIGit(t, repo, "add", "tracked.txt")
 		runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
-		status := negotiatedStartStatus(t, repo, "--base-ref", "moving-base")
+		status := negotiatedStartStatus(t, repo, "--base-ref", "moving-base", "--committed-only")
 		assertStartTransition(t, status, []string{"contract", "target", "projection", "base-ref", "committed-only"})
+		if got := startTransitionArgumentValue(t, status, "committed-only"); got != "true" {
+			t.Fatalf("emitted committed-only = %q, want true", got)
+		}
 		if got := startTransitionArgumentValue(t, status, "base-ref"); got != status.Projection.BaseTree {
 			t.Fatalf("emitted base-ref = %q, want resolved tree %q", got, status.Projection.BaseTree)
 		}
@@ -70,13 +73,62 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 	})
 }
 
+func TestNegotiatedStatusInterpretsCommittedOnlyValue(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "true without base", args: []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--committed-only"}, want: "--committed-only requires --base-ref"},
+		{name: "false without base", args: []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--committed-only=false"}},
+		{name: "false without contract", args: []string{"--cwd", repo, "--committed-only=false"}, want: reviewStatusTargetSelectorsRequireContractReason},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := RunReviewStatus(test.args, io.Discard)
+			if test.want == "" && err != nil || test.want != "" && (err == nil || !strings.Contains(err.Error(), test.want)) {
+				t.Fatalf("status error = %v, want %q", err, test.want)
+			}
+		})
+	}
+
+	t.Run("omitted with base preserves compatibility", func(t *testing.T) {
+		err := RunReviewStatus([]string{
+			"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--base-ref", "HEAD",
+		}, io.Discard)
+		if err != nil {
+			t.Fatalf("STATUS rejected --base-ref without --committed-only: %v", err)
+		}
+	})
+
+	t.Run("false with base refuses like START", func(t *testing.T) {
+		statusErr := RunReviewStatus([]string{
+			"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo,
+			"--base-ref", "HEAD", "--committed-only=false",
+		}, io.Discard)
+		if statusErr == nil {
+			t.Fatal("STATUS accepted --base-ref with --committed-only=false")
+		}
+
+		startErr := RunReviewFacadeStart([]string{
+			"--contract", ReviewIntegrationContractV1, "--cwd", repo,
+			"--target", "sha256:" + strings.Repeat("0", 64), "--projection", "workspace",
+			"--base-ref", "HEAD", "--committed-only=false",
+		}, io.Discard)
+		if startErr == nil {
+			t.Fatal("START accepted --base-ref with --committed-only=false")
+		}
+	})
+}
+
 func TestNegotiatedV2FreshStatusIncludesExactConsentRelay(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
 
 	status := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV2, "--lineage", "status-v2-consent-relay")
-	assertStartTransition(t, status, []string{"contract", "target", "projection", "lineage", "agent", "consent"})
+	assertStartTransition(t, status, []string{"contract", "target", "projection", "lineage", "consent"})
 	consent := status.NextTransition.Execute.Arguments[len(status.NextTransition.Execute.Arguments)-1]
 	if consent != (ReviewTransitionArgument{Name: "consent", Value: "relay", Token: "--consent=relay"}) {
 		t.Fatalf("v2 START consent argument = %#v", consent)
@@ -86,7 +138,6 @@ func TestNegotiatedV2FreshStatusIncludesExactConsentRelay(t *testing.T) {
 		" --target=" + status.TargetIdentity +
 		" --projection=workspace" +
 		" --lineage=status-v2-consent-relay" +
-		" --agent=claude-code" +
 		" --consent=relay"
 	if status.NextTransition.Execute.Command != wantCommand {
 		t.Fatalf("v2 START command = %q, want %q", status.NextTransition.Execute.Command, wantCommand)
@@ -247,9 +298,6 @@ func negotiatedStartStatus(t *testing.T, repo string, selectors ...string) Revie
 func negotiatedStartStatusForContract(t *testing.T, repo, contract string, selectors ...string) ReviewTargetStatusResult {
 	t.Helper()
 	args := []string{"status", "--contract", contract, "--next-transition", "--action-eligibility", "--cwd", repo}
-	if contract == ReviewIntegrationContractV2 {
-		args = append(args, "--agent", "claude-code")
-	}
 	args = append(args, selectors...)
 	var output bytes.Buffer
 	if err := RunReview(args, &output); err != nil {

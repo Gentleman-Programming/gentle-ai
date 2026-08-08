@@ -12,6 +12,8 @@ import (
 )
 
 func TestFinalVerificationIncidentSchemaIsClosedToProceduralToolingFailure(t *testing.T) {
+	t.Parallel()
+
 	var output bytes.Buffer
 	if err := RunReviewSchema([]string{"final-verification-incident"}, &output); err != nil {
 		t.Fatal(err)
@@ -45,6 +47,8 @@ func TestFinalVerificationIncidentSchemaIsClosedToProceduralToolingFailure(t *te
 }
 
 func TestReviewerSchemaMatchesProviderAdmissionEnvelope(t *testing.T) {
+	t.Parallel()
+
 	var output bytes.Buffer
 	if err := RunReviewSchema([]string{"reviewer"}, &output); err != nil {
 		t.Fatal(err)
@@ -71,10 +75,18 @@ func TestReviewerSchemaMatchesProviderAdmissionEnvelope(t *testing.T) {
 	if !containsString(inspectionRequired, "status") || !containsString(inspectionRequired, "paths") {
 		t.Fatalf("reviewer inspection required fields = %v", inspectionRequired)
 	}
+	paths := inspection["properties"].(map[string]any)["paths"].(map[string]any)
+	if paths["uniqueItems"] != true || paths["description"] != "Complete unique unordered set of every changed_path_manifest.path." {
+		t.Fatalf("reviewer inspection.paths schema = %#v", paths)
+	}
 	finding := properties["findings"].(map[string]any)["items"].(map[string]any)
 	id := finding["properties"].(map[string]any)["id"].(map[string]any)
 	if id["pattern"] != "^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*$" {
 		t.Fatalf("reviewer finding id pattern = %#v", id)
+	}
+	location := finding["properties"].(map[string]any)["location"].(map[string]any)
+	if location["pattern"] != "^.+:[1-9][0-9]*(?:-[1-9][0-9]*)?$" || location["description"] != "One canonical repository-relative path:line or inclusive path:start-end span." {
+		t.Fatalf("reviewer finding location schema = %#v", location)
 	}
 }
 
@@ -84,6 +96,8 @@ func TestReviewerSchemaMatchesProviderAdmissionEnvelope(t *testing.T) {
 // non-empty evidence content up to the native artifact bound — not an
 // invented structured shape.
 func TestReviewSchemaVerificationEvidenceEntry(t *testing.T) {
+	t.Parallel()
+
 	var output bytes.Buffer
 	if err := RunReviewSchema([]string{"verification-evidence"}, &output); err != nil {
 		t.Fatal(err)
@@ -112,6 +126,8 @@ func TestReviewSchemaVerificationEvidenceEntry(t *testing.T) {
 }
 
 func TestReviewSchemaVerificationEvidenceRecordMatchesContractFixture(t *testing.T) {
+	t.Parallel()
+
 	var output bytes.Buffer
 	if err := RunReviewSchema([]string{"verification-evidence-record"}, &output); err != nil {
 		t.Fatal(err)

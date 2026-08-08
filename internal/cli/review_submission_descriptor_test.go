@@ -57,19 +57,17 @@ func TestSubmissionDescriptorsAreBoundAndExecuteOneValueOnly(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "candidate.go"), []byte("package candidate\n\nfunc value() int { return 2 }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, forecasted.State, forecasted.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
 	evidence := filepath.Join(t.TempDir(), "correction-evidence.txt")
 	if err := os.WriteFile(evidence, []byte("repository verification passed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewCaptureEvidence([]string{
-		"--cwd", repo, "--lineage", started.LineageID, "--target", request.CorrectionTargetIdentity,
-		"--expected-revision", forecasted.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidence,
-	}, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
+	waiting := submissionDescriptorStatus(t, repo, started.LineageID)
+	capture := captureEvidenceSubmissionInput(t, waiting)
+	assertCaptureEvidenceSubmissionDescriptor(t, capture, waiting)
+	if output, err := runCaptureEvidenceSubmission(t, *capture.Submission, map[string]string{
+		"outcome": string(reviewtransaction.VerificationOutcomePassed), "input": evidence,
+	}); err != nil {
+		t.Fatalf("execute correction evidence descriptor: %v\n%s", err, output)
 	}
 
 	ready := submissionDescriptorStatus(t, repo, started.LineageID)
@@ -158,7 +156,7 @@ func submissionDescriptorCorrectionFixture(t *testing.T) (string, ReviewIntegrat
 func submissionDescriptorStatus(t *testing.T, repo, lineage string) ReviewTargetStatusResult {
 	t.Helper()
 	var output bytes.Buffer
-	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition", "--cwd", repo, "--lineage", lineage}, &output); err != nil {
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", repo, "--lineage", lineage}, &output); err != nil {
 		t.Fatalf("descriptor status: %v\n%s", err, output.String())
 	}
 	var status ReviewTargetStatusResult
@@ -227,7 +225,114 @@ func assertSubmissionTransitionSchema(t *testing.T, status ReviewTargetStatusRes
 	if err != nil {
 		t.Fatal(err)
 	}
-	validateAgainstPublishedNextTransitionSchemaV4(t, payload)
+	validateAgainstPublishedNextTransitionSchemaV5(t, payload)
+}
+
+func TestCaptureEvidenceDescriptorExecutesExactV5Transition(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	repo, started, _, _, _ := capturedArtifact(t)
+	if err := RunReviewFacadeFinalize([]string{
+		"--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", repo,
+		"--lineage", started.LineageID, "--captured-results=true",
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	status := submissionDescriptorStatus(t, repo, started.LineageID)
+	capture := captureEvidenceSubmissionInput(t, status)
+	assertCaptureEvidenceSubmissionDescriptor(t, capture, status)
+	evidence := filepath.Join(t.TempDir(), "verification-evidence.txt")
+	if err := os.WriteFile(evidence, []byte("verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := runCaptureEvidenceSubmission(t, *capture.Submission, map[string]string{
+		"outcome": string(reviewtransaction.VerificationOutcomePassed), "input": evidence,
+	})
+	if err != nil {
+		t.Fatalf("execute exact evidence descriptor: %v\n%s", err, output)
+	}
+	var captured reviewtransaction.VerificationEvidenceRecord
+	decodeStrictReviewJSON(t, output, &captured)
+	if captured.Outcome != reviewtransaction.VerificationOutcomePassed {
+		t.Fatalf("captured evidence = %#v", captured)
+	}
+	ready := submissionDescriptorStatus(t, repo, started.LineageID)
+	if ready.NextTransition == nil || ready.NextTransition.Kind != reviewNextTransitionExecute ||
+		ready.NextTransition.Execute == nil || ready.NextTransition.Execute.Operation != "review.finalize" {
+		t.Fatalf("captured evidence was reoffered instead of advancing authority: %#v", ready.NextTransition)
+	}
+}
+
+func captureEvidenceSubmissionInput(t *testing.T, status ReviewTargetStatusResult) ReviewTransitionInput {
+	t.Helper()
+	if status.Schema != ReviewIntegrationStatusSchemaV5 || status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.Collect == nil ||
+		len(status.NextTransition.Collect.Inputs) != 1 || status.NextTransition.Collect.Inputs[0].Submission == nil {
+		t.Fatalf("capture-evidence submission transition = %#v", status.NextTransition)
+	}
+	return status.NextTransition.Collect.Inputs[0]
+}
+
+func assertCaptureEvidenceSubmissionDescriptor(t *testing.T, input ReviewTransitionInput, status ReviewTargetStatusResult) {
+	t.Helper()
+	descriptor := input.Submission
+	if descriptor == nil || descriptor.OperationToken != "capture-evidence" || descriptor.Value != nil ||
+		input.Schema != reviewVerificationEvidenceSchemaID || status.Authority == nil || len(descriptor.Values) != 2 {
+		t.Fatalf("capture-evidence submission descriptor = %#v", descriptor)
+	}
+	if err := descriptor.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(sortedReviewStatusStrings(mapKeys(fields)), []string{"argument_tokens", "operation_token", "values"}) {
+		t.Fatalf("capture-evidence descriptor fields = %s", payload)
+	}
+	arguments, err := reviewTransitionArgumentMap(input.Arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if arguments["lineage"] != status.Authority.LineageID || arguments["expected-revision"] != status.Authority.Revision ||
+		arguments["target"] == "" || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil {
+		t.Fatalf("capture-evidence provider arguments = %#v", arguments)
+	}
+	for _, token := range descriptor.ArgumentTokens {
+		if strings.HasPrefix(token, "--cwd=") {
+			t.Fatalf("capture-evidence descriptor leaked cwd: %q", token)
+		}
+	}
+	if descriptor.Values[0].Slot != "outcome" || descriptor.Values[0].SubstitutionLocation != 4 ||
+		!reflect.DeepEqual(descriptor.Values[0].AllowedValues, []string{
+			string(reviewtransaction.VerificationOutcomePassed),
+			string(reviewtransaction.VerificationOutcomeFailed),
+			string(reviewtransaction.VerificationOutcomeProceduralFailure),
+		}) || descriptor.Values[1].Slot != "input" || descriptor.Values[1].Schema != reviewVerificationEvidenceSchemaID ||
+		descriptor.Values[1].SubstitutionLocation != 5 {
+		t.Fatalf("capture-evidence descriptor values = %#v", descriptor.Values)
+	}
+	assertSubmissionTransitionSchema(t, status)
+}
+
+func runCaptureEvidenceSubmission(t *testing.T, descriptor ReviewTransitionSubmission, values map[string]string) ([]byte, error) {
+	t.Helper()
+	arguments := append([]string{descriptor.OperationToken}, descriptor.ArgumentTokens...)
+	for _, slot := range descriptor.Values {
+		value, found := values[slot.Slot]
+		if !found {
+			t.Fatalf("missing consumer substitution for %q", slot.Slot)
+		}
+		index := slot.SubstitutionLocation + 1
+		arguments[index] = strings.Replace(arguments[index], "{{"+slot.Slot+"}}", value, 1)
+	}
+	var output bytes.Buffer
+	err := RunReview(arguments, &output)
+	return output.Bytes(), err
 }
 
 func runSubmissionDescriptor(t *testing.T, descriptor ReviewTransitionSubmission, value string) ([]byte, error) {

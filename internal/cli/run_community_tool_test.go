@@ -161,6 +161,199 @@ func TestBackupTargetsSnapshotCrossAgentCodeGraphGuidance(t *testing.T) {
 	}
 }
 
+func TestBackupTargetsIncludeSelectedOpenCodePluginPaths(t *testing.T) {
+	home := t.TempDir()
+	targets, err := backupTargets(home, "", ScopeGlobal, model.Selection{
+		OpenCodePlugins: []model.OpenCodeCommunityPluginID{
+			model.OpenCodePluginSubAgentStatusline,
+			model.OpenCodePluginGentleLogo,
+		},
+	}, planner.ResolvedPlan{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{
+		filepath.Join(home, ".config", "opencode", "tui.json"),
+		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
+	} {
+		if !slices.Contains(targets, path) {
+			t.Fatalf("backup targets = %v, missing selected plugin path %q", targets, path)
+		}
+	}
+}
+
+func TestCodeGraphFailureDoesNotLeaveEarlierOpenCodePluginRegistration(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	previousInstall := installCommunityToolWithHome
+	t.Cleanup(func() { installCommunityToolWithHome = previousInstall })
+	installCommunityToolWithHome = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector) (communitytool.Result, error) {
+		return communitytool.Result{Tool: model.CommunityToolCodeGraph}, errors.New("CodeGraph reconciliation failed")
+	}
+
+	runtime, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, model.Selection{
+		Agents:          []model.AgentID{model.AgentOpenCode},
+		OpenCodePlugins: []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline},
+		CommunityTools:  []model.CommunityToolID{model.CommunityToolCodeGraph},
+	}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, system.PlatformProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(runtime.state.cleanupCompatibilityTransaction)
+
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(runtime.stagePlan())
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "CodeGraph reconciliation failed") {
+		t.Fatalf("install pipeline error = %v, want CodeGraph reconciliation failure", result.Err)
+	}
+
+	tuiPath := filepath.Join(home, ".config", "opencode", "tui.json")
+	if _, err := os.Stat(tuiPath); !os.IsNotExist(err) {
+		t.Fatalf("OpenCode plugin registration remains after CodeGraph failure: %v", err)
+	}
+}
+
+func TestInstallRollbackRestoresSelectedOpenCodePluginPathsAfterPluginRegistration(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		preexisting bool
+	}{
+		{name: "removes paths created by plugins"},
+		{name: "restores pre-existing bytes", preexisting: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			tuiPath := filepath.Join(home, ".config", "opencode", "tui.json")
+			logoPath := filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx")
+			originalTUI := []byte("{\n  \"plugin\": [\"existing-plugin\"]\n}\n")
+			originalLogo := []byte("pre-existing Gentle Logo bytes\n")
+			if test.preexisting {
+				mustWriteFile(t, tuiPath, originalTUI)
+				mustWriteFile(t, logoPath, originalLogo)
+			}
+
+			previousInstall := installCommunityToolWithHome
+			t.Cleanup(func() { installCommunityToolWithHome = previousInstall })
+			codeGraphSucceeded := false
+			installCommunityToolWithHome = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector) (communitytool.Result, error) {
+				codeGraphSucceeded = true
+				return communitytool.Result{Tool: model.CommunityToolCodeGraph}, nil
+			}
+
+			runtime, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, model.Selection{
+				Agents: []model.AgentID{model.AgentOpenCode},
+				OpenCodePlugins: []model.OpenCodeCommunityPluginID{
+					model.OpenCodePluginSubAgentStatusline,
+					model.OpenCodePluginGentleLogo,
+				},
+				CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
+			}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, system.PlatformProfile{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(runtime.state.cleanupCompatibilityTransaction)
+
+			plan := runtime.stagePlan()
+			plan.Apply = append(plan.Apply, failAfterPluginRegistrationStep{
+				codeGraphSucceeded: &codeGraphSucceeded,
+				tuiPath:            tuiPath,
+				logoPath:           logoPath,
+			})
+			result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+			if result.Err == nil || !strings.Contains(result.Err.Error(), "late plugin rollback control") {
+				t.Fatalf("install pipeline error = %v, want late plugin rollback failure", result.Err)
+			}
+			if !result.Rollback.Success {
+				t.Fatalf("rollback = %#v, want successful outer restore", result.Rollback)
+			}
+
+			if !test.preexisting {
+				for _, path := range []string{tuiPath, logoPath} {
+					if _, err := os.Stat(path); !os.IsNotExist(err) {
+						t.Fatalf("created plugin path remains after rollback %q: %v", path, err)
+					}
+				}
+				return
+			}
+			for path, want := range map[string][]byte{tuiPath: originalTUI, logoPath: originalLogo} {
+				got, err := os.ReadFile(path)
+				if err != nil || !reflect.DeepEqual(got, want) {
+					t.Fatalf("restored %q = %q, %v; want original bytes %q", path, got, err, want)
+				}
+			}
+		})
+	}
+}
+
+type failAfterPluginRegistrationStep struct {
+	codeGraphSucceeded *bool
+	tuiPath            string
+	logoPath           string
+}
+
+func (s failAfterPluginRegistrationStep) ID() string { return "test:late-plugin-rollback-control" }
+
+func (s failAfterPluginRegistrationStep) Run() error {
+	if s.codeGraphSucceeded == nil || !*s.codeGraphSucceeded {
+		return errors.New("CodeGraph did not complete before plugin rollback control")
+	}
+	tui, err := os.ReadFile(s.tuiPath)
+	if err != nil {
+		return fmt.Errorf("read plugin registration before rollback control: %w", err)
+	}
+	var config struct {
+		Plugin []string `json:"plugin"`
+	}
+	if err := json.Unmarshal(tui, &config); err != nil {
+		return fmt.Errorf("decode plugin registration %q: %w", s.tuiPath, err)
+	}
+	for _, plugin := range []string{"opencode-subagent-statusline", s.logoPath} {
+		if !slices.Contains(config.Plugin, plugin) {
+			return fmt.Errorf("plugin registration %q is missing exact plugin %q", s.tuiPath, plugin)
+		}
+	}
+	if _, err := os.Stat(s.logoPath); err != nil {
+		return fmt.Errorf("Gentle Logo was not written before rollback control: %w", err)
+	}
+	return errors.New("late plugin rollback control")
+}
+
+func TestSuccessfulCodeGraphReconciliationStillRegistersOpenCodePlugin(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	previousInstall := installCommunityToolWithHome
+	t.Cleanup(func() { installCommunityToolWithHome = previousInstall })
+	installCommunityToolWithHome = func(model.CommunityToolID, string, string, communitytool.Runner, communitytool.Detector) (communitytool.Result, error) {
+		return communitytool.Result{Tool: model.CommunityToolCodeGraph}, nil
+	}
+
+	runtime, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, model.Selection{
+		Agents:          []model.AgentID{model.AgentOpenCode},
+		OpenCodePlugins: []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline},
+		CommunityTools:  []model.CommunityToolID{model.CommunityToolCodeGraph},
+	}, planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}}, system.PlatformProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(runtime.state.cleanupCompatibilityTransaction)
+
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(runtime.stagePlan())
+	if result.Err != nil {
+		t.Fatalf("install pipeline error = %v", result.Err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "tui.json"))
+	if err != nil || !strings.Contains(string(data), "opencode-subagent-statusline") {
+		t.Fatalf("OpenCode plugin registration = %q, %v; want successful registration", data, err)
+	}
+}
+
 func TestPiCodeGraphReconcileStepRollbackRemovesDynamicPackageOverlay(t *testing.T) {
 	home := t.TempDir()
 	overlay := filepath.Join(home, ".pi", "agent", "subagents", "package.md")

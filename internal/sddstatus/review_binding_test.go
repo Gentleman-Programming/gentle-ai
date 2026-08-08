@@ -652,3 +652,71 @@ func corruptNativeRuntimeBinding(t *testing.T, store RuntimeStore) {
 		t.Fatal(err)
 	}
 }
+
+// TestParseBindingNamesTheConditionItFailed is root 8 (#2471) on the SDD
+// binding surface: twelve integrity conditions used to answer with one shared
+// "invalid binding", so an operator holding that error knew only that bytes
+// this package wrote itself were wrong. These are OUR persisted ledger bytes,
+// so a violation is tamper or corruption, which is exactly why the condition
+// has to be named: it decides whether the reader escalates or repairs.
+func TestParseBindingNamesTheConditionItFailed(t *testing.T) {
+	valid := ReviewBinding{
+		Schema: reviewBindingSchema, Change: "root8-binding", Lineage: "root8-lineage",
+		AuthorityRevision: "sha256:" + strings.Repeat("a", 64),
+		ReceiptHash:       "sha256:" + strings.Repeat("b", 64),
+		GateContext: reviewtransaction.GateContext{
+			Gate: reviewtransaction.GatePostApply, LineageID: "root8-lineage",
+			StoreRevision: "sha256:" + strings.Repeat("a", 64),
+		},
+	}
+	valid.Revision = bindingDigest(valid)
+	payload, err := bindingBytes(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseBinding(payload); err != nil {
+		t.Fatalf("valid fixture rejected: %v", err)
+	}
+
+	for name, corrupt := range map[string]func(ReviewBinding) ReviewBinding{
+		"schema is not":                    func(b ReviewBinding) ReviewBinding { b.Schema = "gentle-ai.wrong/v1"; return b },
+		"change name is not":               func(b ReviewBinding) ReviewBinding { b.Change = "../escape"; return b },
+		"lineage is not":                   func(b ReviewBinding) ReviewBinding { b.Lineage = "not a lineage!"; return b },
+		"receipt_hash is not":              func(b ReviewBinding) ReviewBinding { b.ReceiptHash = "notadigest"; return b },
+		"gate_context.gate is not":         func(b ReviewBinding) ReviewBinding { b.GateContext.Gate = reviewtransaction.GatePreCommit; return b },
+		"gate_context.lineage_id does not": func(b ReviewBinding) ReviewBinding { b.GateContext.LineageID = "other-lineage"; return b },
+		"gate_context.store_revision does not": func(b ReviewBinding) ReviewBinding {
+			b.GateContext.StoreRevision = "sha256:" + strings.Repeat("c", 64)
+			return b
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			broken := corrupt(valid)
+			broken.Revision = bindingDigest(broken)
+			brokenPayload, err := bindingBytes(broken)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, parseErr := parseBinding(brokenPayload)
+			if parseErr == nil {
+				t.Fatal("corrupted binding was accepted")
+			}
+			if !strings.Contains(parseErr.Error(), name) {
+				t.Fatalf("error %q does not name the failed condition %q", parseErr, name)
+			}
+		})
+	}
+
+	// The digest condition needs its own case: it is the one violation that
+	// cannot be reached by recomputing Revision after corrupting a field.
+	tampered := valid
+	tampered.Revision = "sha256:" + strings.Repeat("d", 64)
+	tamperedPayload, err := bindingBytes(tampered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseBinding(tamperedPayload); err == nil ||
+		!strings.Contains(err.Error(), "revision does not match the digest") {
+		t.Fatalf("tampered revision error = %v", err)
+	}
+}

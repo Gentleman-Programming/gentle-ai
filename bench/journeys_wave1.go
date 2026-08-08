@@ -12,17 +12,18 @@ import (
 )
 
 const (
-	correctedDeliveryLineage = "wave-one-corrected-delivery"
-	retrySourceLineage       = "wave-one-final-verification-source"
-	retrySuccessorLineage    = "wave-one-final-verification-successor"
-	stagedRecoveryLineage    = "wave-one-staged-recovery-source"
-	stagedSuccessorLineage   = "wave-one-staged-recovery-successor"
-	fullScopeLineage         = "wave-one-full-scope-source"
-	fullScopeSuccessor       = "wave-one-full-scope-successor"
-	declineCandidateLineage  = "wave-one-candidate-decline"
-	declineCandidatePath     = "scripts/deploy.sh"
-	declineCandidateContents = "#!/bin/sh\necho deploy\n"
-	reviewContractV2         = "gentle-ai.review-integration/v2"
+	correctedDeliveryLineage   = "wave-one-corrected-delivery"
+	retrySourceLineage         = "wave-one-final-verification-source"
+	retrySuccessorLineage      = "wave-one-final-verification-successor"
+	stagedRecoveryLineage      = "wave-one-staged-recovery-source"
+	stagedSuccessorLineage     = "wave-one-staged-recovery-successor"
+	fullScopeLineage           = "wave-one-full-scope-source"
+	fullScopeSuccessor         = "wave-one-full-scope-successor"
+	committedCorrectionLineage = "wave-one-committed-correction"
+	declineCandidateLineage    = "wave-one-candidate-decline"
+	declineCandidatePath       = "scripts/deploy.sh"
+	declineCandidateContents   = "#!/bin/sh\necho deploy\n"
+	reviewContractV2           = "gentle-ai.review-integration/v2"
 )
 
 var startNamedCapability = &Capability{Verb: []string{"review", "start"}, Flags: []string{"--cwd", "--lineage"}}
@@ -45,6 +46,7 @@ type waveOperationResult struct {
 }
 
 type waveCorrectionStatus struct {
+	Schema         string `json:"schema"`
 	TargetIdentity string `json:"target_identity"`
 	Authority      *struct {
 		LineageID string `json:"lineage_id"`
@@ -75,20 +77,30 @@ type waveCorrectionStatus struct {
 		ReasonCode string `json:"reason_code"`
 		Collect    *struct {
 			Inputs []struct {
-				Name       string                    `json:"name"`
-				Submission *waveSubmissionDescriptor `json:"submission"`
+				Name             string                    `json:"name"`
+				CaptureOperation string                    `json:"capture_operation"`
+				Submission       *waveSubmissionDescriptor `json:"submission"`
 			} `json:"inputs"`
 		} `json:"collect"`
+		Execute *struct {
+			Operation string `json:"operation"`
+		} `json:"execute"`
 	} `json:"next_transition"`
 }
 
 type waveSubmissionDescriptor struct {
-	OperationToken string   `json:"operation_token"`
-	ArgumentTokens []string `json:"argument_tokens"`
-	Value          struct {
-		Slot                 string `json:"slot"`
-		SubstitutionLocation int    `json:"substitution_location"`
-	} `json:"value"`
+	OperationToken string                `json:"operation_token"`
+	ArgumentTokens []string              `json:"argument_tokens"`
+	Value          *waveSubmissionValue  `json:"value,omitempty"`
+	Values         []waveSubmissionValue `json:"values,omitempty"`
+}
+
+type waveSubmissionValue struct {
+	Slot                 string   `json:"slot"`
+	Domain               string   `json:"domain"`
+	Schema               string   `json:"schema,omitempty"`
+	AllowedValues        []string `json:"allowed_values,omitempty"`
+	SubstitutionLocation int      `json:"substitution_location"`
 }
 
 type waveRetryStatus struct {
@@ -485,9 +497,11 @@ func readCorrectionStatusFor(r *journeyRun, lineage string) (waveCorrectionStatu
 }
 
 func readCorrectionStatusForContract(r *journeyRun, lineage, contract string) (waveCorrectionStatus, error) {
-	arguments := []string{"review", "status", "--contract", contract, "--next-transition", "--lineage", lineage}
-	if contract == reviewContractV2 {
-		arguments = append(arguments, "--agent", "claude-code")
+	// These journeys create their authority through the manual compatibility
+	// path, so they must not invent a runtime identity for a later STATUS read.
+	arguments := []string{"review", "status", "--contract", contract, "--next-transition"}
+	if lineage != "" {
+		arguments = append(arguments, "--lineage", lineage)
 	}
 	observation := r.run(productArgsFor(r, arguments...), false)
 	var status waveCorrectionStatus
@@ -500,7 +514,7 @@ func correctionSubmissionArguments(r *journeyRun, status waveCorrectionStatus, r
 		return nil, fmt.Errorf("submission descriptor transition = %+v", status.NextTransition)
 	}
 	descriptor := status.NextTransition.Collect.Inputs[0].Submission
-	if descriptor == nil || descriptor.OperationToken != "finalize" || descriptor.Value.Slot != slot ||
+	if descriptor == nil || descriptor.OperationToken != "finalize" || descriptor.Value == nil || descriptor.Value.Slot != slot ||
 		descriptor.Value.SubstitutionLocation < 0 || descriptor.Value.SubstitutionLocation >= len(descriptor.ArgumentTokens) {
 		return nil, fmt.Errorf("submission descriptor = %+v", descriptor)
 	}
@@ -621,16 +635,71 @@ func completeCorrectedReviewForContract(r *journeyRun, lineage, contract string)
 		}
 		return nil
 	}
-	observation := r.run(productArgsFor(r, "review", "finalize", "--lineage", lineage,
-		"--validation", path, "--captured-evidence=true"), false)
+	arguments := []string{"review", "finalize"}
+	if lineage != "" {
+		arguments = append(arguments, "--lineage", lineage)
+	}
+	arguments = append(arguments, "--validation", path, "--captured-evidence=true")
+	observation := r.run(productArgsFor(r, arguments...), false)
 	result, err := decodeWaveOperation(observation, "corrected review finalize")
 	if err != nil {
 		return err
 	}
-	if result.State != "approved" || result.LineageID != lineage {
+	if result.State != "approved" || lineage != "" && result.LineageID != lineage {
 		return fmt.Errorf("corrected review finalized as %+v", result)
 	}
 	return nil
+}
+
+func startCommittedCorrection(r *journeyRun) error {
+	status, err := readStatusFor(r, "--lineage", committedCorrectionLineage, "--base-ref", r.sandbox.Scratch["staged-recovery-base"])
+	if err != nil || status.NextTransition.Kind != "execute" {
+		return fmt.Errorf("committed correction start = %+v, %v", status.NextTransition, err)
+	}
+	result, err := runPrintedTransition(r, status)
+	if err != nil {
+		return err
+	}
+	operation, err := decodeWaveOperation(result, "committed correction start")
+	if err != nil || operation.LineageID != committedCorrectionLineage || operation.State != "reviewing" {
+		return fmt.Errorf("committed correction start result = %+v, %v", operation, err)
+	}
+	return nil
+}
+
+func commitCorrectedCandidate(sandbox *Sandbox) error {
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\n\nfunc value() int {\n\treturn 2\n}\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "candidate.go"); err != nil {
+		return err
+	}
+	return sandbox.git(sandbox.Repo, "commit", "-qm", "fix: correct reviewed candidate")
+}
+
+func commitSelectorlessCorrectionCandidate(sandbox *Sandbox) error {
+	base, err := gitOut(sandbox, sandbox.Repo, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	sandbox.Scratch["staged-recovery-base"] = base
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\nfunc value() int {\n\treturn 1\n}\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "candidate.go"); err != nil {
+		return err
+	}
+	return sandbox.git(sandbox.Repo, "commit", "-qm", "feat: add selectorless candidate")
+}
+
+func commitSelectorlessCorrectedCandidate(sandbox *Sandbox) error {
+	if err := sandbox.write(filepath.Join(sandbox.Repo, "candidate.go"), "package candidate\nfunc value() int {\n\treturn 2\n}\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "add", "candidate.go"); err != nil {
+		return err
+	}
+	return sandbox.git(sandbox.Repo, "commit", "-qm", "fix: correct selectorless candidate")
 }
 
 func proveCorrectedReceipt(sandbox *Sandbox, observation Observation) error {
@@ -1107,7 +1176,7 @@ func prepareDeclinedCandidate(sandbox *Sandbox) error {
 
 func declineCandidateFromStatus(r *journeyRun) error {
 	statusObservation := r.run(productArgsFor(r, "review", "status", "--contract", reviewContractV2,
-		"--agent", "claude-code", "--next-transition", "--lineage", declineCandidateLineage), false)
+		"--next-transition", "--lineage", declineCandidateLineage), false)
 	var status statusEnvelope
 	if err := decodeWaveObservation(statusObservation, &status, "candidate decline status"); err != nil {
 		return err
@@ -1189,7 +1258,7 @@ func waveOneJourneys() []Journey {
 				{Name: "capture passed repository evidence for the provider correction target", Requires: captureOutcomeEvidenceCapability, Composite: capturePassedCorrectionEvidence},
 				{Name: "execute the targeted validation submission descriptor and approve the corrected receipt", Requires: finalizeValidationCapability, Composite: completeCorrectedReview},
 				{Name: "corrected receipt and advanced current snapshot are proven", Requires: statusCapability,
-					Args: productArgs("review", "status", "--contract", reviewContractV2, "--agent", "claude-code", "--lineage", correctedDeliveryLineage), After: proveCorrectedReceipt},
+					Args: productArgs("review", "status", "--contract", reviewContractV2, "--lineage", correctedDeliveryLineage), After: proveCorrectedReceipt},
 				{Name: "fixture: corrected candidate staged tree matches the receipt", Fixture: stageCorrectedTree},
 				{Name: "gate pre-commit on the corrected receipt", Requires: validateCapability,
 					Args: productArgs("review", "validate", "--gate", "pre-commit"),
@@ -1411,6 +1480,24 @@ func waveOneJourneys() []Journey {
 				{Name: "fixture: corrected candidate proven to change only the reviewed path", Fixture: writeCorrectedCandidate},
 				{Name: "post-correction status requests repository evidence", Requires: captureOutcomeEvidenceCapability, Composite: capturePassedCorrectionEvidence},
 				{Name: "post-correction status requests targeted validation", Requires: finalizeValidationCapability, Composite: completeCorrectedReview},
+			},
+		},
+		{
+			ID:     "j65-selectorless-committed-correction-continuation",
+			Title:  "Committed-only correction: selector-less status and finalize rebuild the frozen base boundary",
+			Source: "issue #1925",
+			Steps: []Step{
+				{Name: "fixture: repository", Fixture: baseRepo},
+				{Name: "fixture: committed four-line base-diff candidate", Fixture: commitSelectorlessCorrectionCandidate},
+				{Name: "start committed-only review", Requires: statusCapability, Composite: startCommittedCorrection},
+				{Name: "capture one blocking finding and finish the lens set", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
+					return captureCorrectableFindingFor(r, "--lineage", committedCorrectionLineage, "--base-ref", r.sandbox.Scratch["staged-recovery-base"])
+				}},
+				{Name: "enter correction-required", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", committedCorrectionLineage, "--captured-results=true")},
+				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability, Args: productArgs("review", "finalize", "--lineage", committedCorrectionLineage, "--correction-lines", "2")},
+				{Name: "fixture: commit the two-line in-budget correction", Fixture: commitSelectorlessCorrectedCandidate},
+				{Name: "selector-less status requests and captures repository evidence", Requires: captureOutcomeEvidenceCapability, Composite: func(r *journeyRun) error { return capturePassedCorrectionEvidenceFor(r, "") }},
+				{Name: "selector-less status submits targeted validation and mints receipt", Requires: finalizeValidationCapability, Composite: func(r *journeyRun) error { return completeCorrectedReviewFor(r, "") }},
 			},
 		},
 	}

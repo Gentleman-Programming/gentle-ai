@@ -1,6 +1,7 @@
 package sddstatus
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -94,6 +95,16 @@ func TestValidateVerifyReportAdmission(t *testing.T) {
 				t.Fatalf("admission = %#v, want valid=%v reason containing %q", got, tt.valid, tt.reason)
 			}
 		})
+	}
+}
+
+func TestVerifyReportAuthorityOnlyFieldCountUsesContract(t *testing.T) {
+	partial := strings.TrimSuffix(testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0), "```") + "authority_only_failure: true\n```"
+	admission := ValidateVerifyReportAdmission(partial, SpecCounts{Requirements: 2, Scenarios: 3})
+	contract := VerifyReportValidationContract()
+	want := fmt.Sprintf("authority-only extension must contain exactly %d fields", len(contract.AuthorityOnlyFields))
+	if admission.Valid || admission.Reason != want {
+		t.Fatalf("admission = %#v, want invalid reason %q", admission, want)
 	}
 }
 

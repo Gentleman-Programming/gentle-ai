@@ -428,7 +428,7 @@ func TestDocumentedInvocationsRunAsDocumented(t *testing.T) {
 				if isParseRejection(runErr) {
 					failure = fmt.Sprintf("the parser refuses it as printed: %v", runErr)
 				} else if tier == tierExecuted {
-					if envelope, dead := nonRetryableStop(output.Bytes()); dead {
+					if envelope, dead := nonRetryableStop(output.Bytes()); dead && !strings.Contains(envelope, "immutable_review_transport_unsupported") {
 						failure = "answers a non-retryable stop on a fresh repository: " + envelope
 					}
 				}

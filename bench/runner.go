@@ -285,12 +285,8 @@ func (s *Sandbox) readBack(args ...string) Observation {
 // Capability is the CLI surface a step needs. It is probed before the step
 // runs so a build without that surface records `unsupported` and never a pass.
 //
-// The default probe is `<verb> --help`, read for the flag names. That works for
-// every verb whose `--help` really is a help surface. Some are not: the
-// `sdd-attempt` operations parse `--help` as an ordinary flag and reject it with
-// `flag provided but not defined: -help`, which the unsupported patterns match —
-// so the default probe would report a build that fully supports the verb as
-// lacking it. Probe exists for exactly that case.
+// The default probe is `<verb> --help`, read for the flag names. Probe exists
+// for legacy surfaces whose invocation cannot render user-facing help.
 type Capability struct {
 	Verb  []string
 	Flags []string
@@ -364,8 +360,11 @@ func (p *capabilityProbe) probed(argv []string) (bool, string) {
 // Step is one unit of a journey. Journeys are data: adding one is adding a
 // Step to a slice.
 type Step struct {
-	Name     string
-	Fixture  func(*Sandbox) error
+	Name    string
+	Fixture func(*Sandbox) error
+	// Skip reports why an externally-backed step cannot run in this environment.
+	// The runner records the journey as unsupported rather than a false pass.
+	Skip     func(*Sandbox) string
 	Requires *Capability
 	Args     func(*Sandbox) ([]string, error)
 	// Composite drives a multi-command sub-flow (a lens loop, a rejected
@@ -506,6 +505,13 @@ func runJourney(binary string, journey Journey) JourneyResult {
 
 	for _, step := range journey.Steps {
 		run.step = step.Name
+		if step.Skip != nil {
+			if reason := step.Skip(run.sandbox); reason != "" {
+				result.Status = StatusUnsupported
+				result.UnsupportedSteps = append(result.UnsupportedSteps, step.Name+" ("+reason+")")
+				break
+			}
+		}
 
 		if step.Fixture != nil {
 			if err := step.Fixture(sandbox); err != nil {

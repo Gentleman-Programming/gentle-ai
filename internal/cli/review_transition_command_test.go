@@ -31,6 +31,10 @@ func reviewStartTransitionForCommand(t *testing.T, lineage string, kind reviewtr
 		Projection: ReviewTargetStatusProjection{
 			Kind: kind, Projection: reviewtransaction.ProjectionWorkspace,
 			BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40),
+			// A fresh candidate that really has changes: base and candidate
+			// trees already differ here, and an empty workspace path set now
+			// routes to a base-ref collection instead (issue #2584).
+			Paths: []string{"internal/cli/review_next_transition.go"},
 		},
 	}
 	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: lineage})
@@ -65,6 +69,7 @@ func TestReviewNextTransitionV2StartCommandCarriesConsentRelay(t *testing.T) {
 		Projection: ReviewTargetStatusProjection{
 			Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
 			BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40),
+			Paths: []string{"internal/cli/review_next_transition.go"},
 		},
 	}
 	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-v2-consent-command"})

@@ -26,9 +26,10 @@ import (
 // source for the refusal when --action-eligibility or --next-transition is
 // requested without --contract. Both runReviewStatus and
 // runReviewFacadeFinalize emit it so the two call sites cannot drift, and it
-// names the exact contract value the caller must pass rather than only
-// describing the requirement.
-const reviewContractRequiredForActionEligibilityReason = "--action-eligibility and --next-transition require --contract " + ReviewIntegrationContractV1
+// names every accepted contract value rather than only describing the
+// requirement.
+const reviewContractRequiredForActionEligibilityReason = "--action-eligibility and --next-transition require --contract " +
+	ReviewIntegrationContractV1 + " or " + ReviewIntegrationContractV2
 
 // reviewStatusTargetSelectorsRequireContractReason is the sibling of
 // reviewContractRequiredForActionEligibilityReason above: it names the same
@@ -185,12 +186,20 @@ func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAg
 type ReviewFacadeLensBinding struct {
 	Lens  string `json:"lens"`
 	Order int    `json:"order"`
+	// FindingIDPrefix is the prefix admission requires for explicit finding
+	// IDs bound to this lens. It follows the lens, not the selection order:
+	// high-risk START selects review-resilience at order 1, but its explicit
+	// IDs must still carry R4-.
+	FindingIDPrefix string `json:"finding_id_prefix"`
 }
 
 func facadeLensBindings(lenses []string) []ReviewFacadeLensBinding {
 	bindings := make([]ReviewFacadeLensBinding, len(lenses))
 	for order, lens := range lenses {
-		bindings[order] = ReviewFacadeLensBinding{Lens: lens, Order: order}
+		bindings[order] = ReviewFacadeLensBinding{
+			Lens: lens, Order: order,
+			FindingIDPrefix: reviewtransaction.FindingIDPrefixForLens(lens),
+		}
 	}
 	return bindings
 }
@@ -620,8 +629,7 @@ func (err *reviewStartContextError) Unwrap() error { return err.Cause }
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Use review retry-final-verification only for a provider-proven completed failed final-verification tooling incident. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
-		_, _ = fmt.Fprintln(stdout, "Additive headless capabilities: gentle-ai review capture-result (with --preflight), gentle-ai review inspect-candidate, and gentle-ai review preserve-result.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <advisory|capture-result|lens-context|capture-evidence|preserve-result|capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. `review advisory` validates model transport output for later native admission; it never directly creates a receipt or delivery decision. Use review retry-final-verification only for a provider-proven completed failed final-verification tooling incident. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
 		return nil
 	}
 	operation, negotiated, preflightFailure := reviewIntegrationFailureRoute(args)
@@ -632,7 +640,7 @@ func RunReview(args []string, stdout io.Writer) error {
 		return newReviewIntegrationFailureError(*preflightFailure, nil)
 	}
 	if !negotiated {
-		if err := runReviewCommand(args, stdout); err != nil {
+		if err := runReviewCommandContext(context.Background(), args, stdout); err != nil {
 			// The plain form has no envelope contract, but an unanticipated
 			// internal fault on a mutating operation is the same product defect
 			// there (issue #1881 crashed exactly this way): attach the saved
@@ -709,6 +717,8 @@ func runReviewCommandContext(ctx context.Context, args []string, stdout io.Write
 
 func runReviewCommand(args []string, stdout io.Writer) error {
 	switch args[0] {
+	case "advisory":
+		return RunReviewAdvisory(args[1:], stdout)
 	case "capture-result":
 		return RunReviewCaptureResult(args[1:], stdout)
 	case "inspect-candidate":
@@ -721,24 +731,12 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewPreserveResult(args[1:], stdout)
 	case "capabilities":
 		return RunReviewCapabilities(args[1:], stdout)
-	case "start":
-		return RunReviewFacadeStart(args[1:], stdout)
-	case "finalize":
-		return RunReviewFacadeFinalize(args[1:], stdout)
-	case "validate":
-		return RunReviewFacadeValidate(args[1:], stdout)
-	case "status":
-		return RunReviewStatus(args[1:], stdout)
-	case "repair":
-		return RunReviewRepair(args[1:], stdout)
 	case "invalidate":
 		return RunReviewInvalidate(args[1:], stdout)
 	case "abandon":
 		return RunReviewAbandon(args[1:], stdout)
 	case "recover":
 		return RunReviewRecover(args[1:], stdout)
-	case "retry-final-verification":
-		return RunReviewRetryFinalVerification(args[1:], stdout)
 	case "reclaim":
 		return RunReviewReclaim(args[1:], stdout)
 	case "inspect-authority":
@@ -749,15 +747,9 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewReopenResults(args[1:], stdout)
 	case "schema":
 		return RunReviewSchema(args[1:], stdout)
-	case "bind-sdd":
-		return RunReviewBindSDD(args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown review command %q", args[0])
 	}
-}
-
-func RunReviewStatus(args []string, stdout io.Writer) error {
-	return runReviewStatus(context.Background(), args, stdout)
 }
 
 func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error {
@@ -771,6 +763,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "negotiated target projection: workspace or staged")
 	baseRef := flags.String("base-ref", "", "optional negotiated immutable base-to-HEAD target")
 	baseTree := flags.String("base-tree", "", "optional negotiated resolved immutable overlay base tree")
+	committedOnly := flags.Bool("committed-only", false, "acknowledge that --base-ref selects committed-only review scope")
 	workspaceOverlay := flags.Bool("workspace-overlay", false, "select a negotiated base-ref workspace overlay target")
 	gate := flags.String("gate", string(reviewtransaction.GatePreCommit), "lifecycle gate for an approved receipt transition")
 	recoverySuccessor := flags.String("recovery-successor-lineage", "", "authorized successor lineage for a recovery transition")
@@ -780,6 +773,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	repairActor := flags.String("repair-actor", "", "authorized classified repair actor")
 	repairReason := flags.String("repair-reason", "", "authorized classified repair reason")
 	repairAuthorization := flags.String("repair-authorization", "", "exact classified repair authorization binding")
+	untrackedScope := reviewSingleValueFlag{}
+	intendedUntracked := reviewRepeatedPathFlag{}
+	expectedUntrackedInventory := reviewSingleValueFlag{}
+	flags.Var(&untrackedScope, "untracked-scope", "explicit untracked scope: exclude or select")
+	flags.Var(&intendedUntracked, "intended-untracked", "repo-relative untracked path to include; repeat for each path")
+	flags.Var(&expectedUntrackedInventory, "expected-untracked-inventory", "sha256 inventory digest from review status")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -789,6 +788,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if flags.NArg() != 0 {
 		return reviewPreflightError(fmt.Errorf("unexpected review status argument %q", flags.Arg(0)))
 	}
+	committedOnlyProvided := reviewFlagWasProvided(flags, "committed-only")
 	if *contract != "" {
 		if err := validateReviewIntegrationContract(*contract); err != nil {
 			return err
@@ -820,6 +820,12 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		selectedBaseRef := strings.TrimSpace(*baseRef)
 		selectedBaseTree := strings.TrimSpace(*baseTree)
+		if *committedOnly && (selectedBaseRef == "" || *workspaceOverlay) {
+			return errors.New("review status --committed-only requires --base-ref without --workspace-overlay; rerun `gentle-ai review status --base-ref <ref> --committed-only`")
+		}
+		if selectedBaseRef != "" && committedOnlyProvided && !*committedOnly && !*workspaceOverlay {
+			return errors.New("review status --base-ref requires --committed-only; rerun `gentle-ai review status --base-ref <ref> --committed-only`")
+		}
 		stagedRecoveryOverlay := *workspaceOverlay && selectedProjection == reviewtransaction.ProjectionStaged
 		if *workspaceOverlay && stagedRecoveryOverlay && (selectedBaseRef == "" || selectedBaseTree != "") {
 			return errors.New("staged --workspace-overlay requires exactly --base-ref")
@@ -839,9 +845,17 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if err != nil {
 			return fmt.Errorf("resolve negotiated review repository root: %w", err)
 		}
-		// Issue #2394: review scope is declared, never inferred from the
-		// worktree. STATUS derives the same target START will freeze, so it
-		// declares no untracked scope either.
+		intendedScope := reviewIntendedUntrackedScope{Intended: []string{}}
+		if selectedProjection == reviewtransaction.ProjectionStaged {
+			if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
+				return reviewPreflightError(errors.New("staged projection does not accept intended-untracked selection; remove those flags and rerun `gentle-ai review status --projection staged`"))
+			}
+		} else {
+			intendedScope, err = reviewIntendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: root}, untrackedScope, intendedUntracked, expectedUntrackedInventory)
+			if err != nil {
+				return reviewPreflightError(err)
+			}
+		}
 		target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: []string{}}
 		if selectedBaseRef != "" {
 			target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, selectedBaseRef
@@ -852,6 +866,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				target.BaseRef = selectedBaseTree
 			}
 		}
+		target.IntendedUntracked = intendedScope.Intended
 		selector := &reviewTransitionSelector{
 			Kind: target.Kind, Projection: selectedProjection, BaseRef: selectedBaseRef,
 			BaseTree: selectedBaseTree, WorkspaceOverlay: *workspaceOverlay, PrePRRepresentable: true,
@@ -869,6 +884,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			return errors.New("--base-tree does not identify an exact Git tree object")
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
+		result.intendedUntracked = intendedScope
 		if native.Applicability == reviewtransaction.TargetApplicabilityCorrupted &&
 			native.Action == reviewtransaction.TargetStatusActionRepairAuthority {
 			repair, repairErr := reviewtransaction.AssessAuthorityRepairAtRepositoryRoot(ctx, root)
@@ -951,7 +967,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								result.ValidationRequest = validationRequest
 							}
 						}
-						if *contract == ReviewIntegrationContractV2 && record.State.State == reviewtransaction.StateCorrectionRequired {
+						if *contract == ReviewIntegrationContractV2 && (record.State.State == reviewtransaction.StateCorrectionRequired || record.State.State == reviewtransaction.StateValidating) {
 							contextTarget := record.State.CurrentSnapshot.Identity
 							if validationRequest != nil {
 								contextTarget = validationRequest.CorrectionTargetIdentity
@@ -1005,7 +1021,8 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if startLineage == "" && native.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
 				startLineage = reviewAvailableStartLineage(ctx, root, native.TargetIdentity)
 			}
-			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector})
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope}
+			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, input)
 			result.NextTransition = &transition
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&
 				transition.ReasonCode != "correction_repository_tooling_failed" {
@@ -1019,6 +1036,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				reviewNarrateStopReason(transition.ReasonCode, runtime)
 			}
 		}
+		if intendedScope.NeedsSelection {
+			transition := reviewIntendedUntrackedCollection(result, intendedScope)
+			result.NextTransition = &transition
+		}
+		if *contract == ReviewIntegrationContractV2 && result.NextTransition != nil {
+			forecast := newReviewForecast(*result.NextTransition)
+			result.Forecast = &forecast
+			reviewNarrateForecast(forecast)
+		}
 		if err := result.Validate(); err != nil {
 			return fmt.Errorf("validate negotiated review status: %w", err)
 		}
@@ -1027,7 +1053,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if *actionEligibility || *nextTransition {
 		return errors.New(reviewContractRequiredForActionEligibilityReason)
 	}
-	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" {
+	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || committedOnlyProvided || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" || reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
 		return errors.New(reviewStatusTargetSelectorsRequireContractReason)
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
@@ -1307,10 +1333,6 @@ func reviewNotInvalidatedPredecessorRefusal(cause error, cwd, predecessor, expec
 		reviewRecoverCommand(cwd, predecessor, expected, successor, string(reviewtransaction.RecoveryScopeChanged)))
 }
 
-func RunReviewBindSDD(args []string, stdout io.Writer) error {
-	return runReviewBindSDD(context.Background(), args, stdout)
-}
-
 func runReviewBindSDD(ctx context.Context, args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review bind-sdd", stdout, "Bind an explicit approved compact lineage to an OpenSpec change.")
 	cwd := flags.String("cwd", "", "repository path")
@@ -1441,10 +1463,6 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 	return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: *lineage, State: reviewtransaction.StateInvalidated, StoreRevision: revision})
 }
 
-func RunReviewFacadeStart(args []string, stdout io.Writer) error {
-	return runReviewFacadeStart(context.Background(), args, stdout)
-}
-
 func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review start", stdout, "Freeze live Git scope and derive the bounded review tier, lenses, and correction budget.")
 	cwd := flags.String("cwd", ".", "repository path")
@@ -1461,6 +1479,12 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	tracePath := flags.String("trace", "", "optional diagnostic operation metadata trace path")
 	consent := flags.String("consent", "", "negotiated consent declaration: relay to receive the typed blocking consent question, granted or declined to answer it for the exact frozen candidate")
 	locale := flags.String("locale", "", "optional consent-envelope locale: en or es")
+	untrackedScope := reviewSingleValueFlag{}
+	intendedUntracked := reviewRepeatedPathFlag{}
+	expectedUntrackedInventory := reviewSingleValueFlag{}
+	flags.Var(&untrackedScope, "untracked-scope", "explicit untracked scope: exclude or select")
+	flags.Var(&intendedUntracked, "intended-untracked", "repo-relative untracked path to include; repeat for each path")
+	flags.Var(&expectedUntrackedInventory, "expected-untracked-inventory", "sha256 inventory digest from review status")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -1538,17 +1562,21 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			return errors.New("review start with --base-ref omits dirty tracked changes; rerun with --committed-only to acknowledge committed-only review scope")
 		}
 	}
-	// Issue #2394: START used to sweep every unignored untracked path in the
-	// worktree into the frozen candidate. Existing on disk is not a
-	// declaration, and the sweep handed a reviewer the exact bytes of files
-	// the user never submitted -- two unrelated credential files, in the
-	// reported occurrence. Review scope is now only what the user declared
-	// through Git's own mechanism: tracked modifications, plus new files put
-	// in the index with `git add`, which the candidate is already built from.
-	// Nothing here has to be configured for that to be safe, because there is
-	// no longer anything to configure: the sweep is gone rather than filtered.
-	intended := []string{}
-	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: intended}
+	intendedScope := reviewIntendedUntrackedScope{Intended: []string{}}
+	if selectedProjection == reviewtransaction.ProjectionStaged {
+		if reviewIntendedUntrackedDeclared(untrackedScope, intendedUntracked, expectedUntrackedInventory) {
+			return reviewPreflightError(errors.New("staged projection does not accept intended-untracked selection; remove those flags and rerun `gentle-ai review start --projection staged`"))
+		}
+	} else {
+		intendedScope, err = reviewIntendedUntrackedScopeForTarget(ctx, reviewtransaction.SnapshotBuilder{Repo: root}, untrackedScope, intendedUntracked, expectedUntrackedInventory)
+		if err != nil {
+			return reviewPreflightError(err)
+		}
+		if intendedScope.NeedsSelection {
+			return reviewPreflightError(reviewIntendedUntrackedSelectionRequired(intendedScope))
+		}
+	}
+	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: intendedScope.Intended}
 	if strings.TrimSpace(*baseRef) != "" {
 		target.Kind = reviewtransaction.TargetBaseDiff
 		target.BaseRef = strings.TrimSpace(*baseRef)
@@ -1563,6 +1591,28 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if negotiated && snapshot.Identity != *targetIdentity {
 		return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
 			errors.New("review start target does not match the freshly built snapshot"))
+	}
+	// Issue #2586: a TargetCurrentChanges candidate with zero changed paths
+	// (a clean, fully-committed worktree) or a TargetBaseDiff candidate
+	// whose named base nets zero changed paths (a mode-only or truly-empty
+	// diff) would otherwise freeze as an empty candidate, pass risk
+	// assessment, and mint an approved receipt that inspected nothing. Left
+	// alive on ANY route, that receipt's base_tree/final_candidate_tree can
+	// coincide with a genuinely unreviewed candidate's tree and get
+	// discovered ahead of it. This guard used to fire only on the negotiated
+	// route and only for TargetCurrentChanges, so a plain (non-negotiated)
+	// `review start` on a clean worktree minted exactly this receipt
+	// (reported in #2586) and a `--base-ref` netting no manifest entries was
+	// unguarded on either route. Refusing here, before any authority is
+	// created, for both routes and both target kinds, and naming --base-ref
+	// as the way to name a real comparison base instead of silently deriving
+	// one, is cheaper and safer than the two narrower guards it replaces.
+	// This refusal already spells out its own runnable resolution
+	// (reviewStartEmptyCandidateHint), exactly as it did before this change,
+	// so no additional exemption marker is needed here.
+	if len(snapshot.Paths) == 0 && (snapshot.Kind == reviewtransaction.TargetCurrentChanges || snapshot.Kind == reviewtransaction.TargetBaseDiff) {
+		return reviewPreflightRefusal(reviewPreflightEmptyCandidateReason,
+			errors.New(reviewStartEmptyCandidateHint))
 	}
 	assessment, err := (reviewtransaction.SnapshotBuilder{Repo: root}).AssessSnapshotRisk(ctx, snapshot)
 	if err != nil {
@@ -1607,7 +1657,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			question, questionErr := newReviewIntegrationConsentResult(snapshot, assessment,
 				reviewConsentFollowUpBase(*cwd, snapshot.Identity, selectedProjection, strings.TrimSpace(*lineage),
 					strings.TrimSpace(*baseRef), strings.TrimSpace(*policySource), strings.TrimSpace(*focus),
-					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract, *runtimeAgent, strings.TrimSpace(*locale)), *contract, consentLocale)
+					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract, *runtimeAgent, strings.TrimSpace(*locale), intendedScope), *contract, *runtimeAgent, consentLocale)
 			if questionErr != nil {
 				return questionErr
 			}
@@ -1852,6 +1902,11 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	beforeCreate := func() error {
 		if requestedContextErr != nil {
 			return requestedContextErr
+		}
+		if intendedScope.Declared {
+			if _, err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateIntendedUntrackedSelection(ctx, intendedScope.Digest, intendedScope.Intended); err != nil {
+				return reviewPreflightError(err)
+			}
 		}
 		if !negotiated {
 			return nil
@@ -2110,7 +2165,7 @@ func reviewConsentFollowUpBase(
 	lineage, baseRef, policy, focus, trace string,
 	committedOnly, workspaceOverlay bool,
 	contract, runtimeAgent string,
-	locale string,
+	locale string, intendedScope reviewIntendedUntrackedScope,
 ) string {
 	parts := []string{
 		"gentle-ai review start",
@@ -2147,6 +2202,9 @@ func reviewConsentFollowUpBase(
 	}
 	if locale != "" {
 		parts = append(parts, "--locale "+locale)
+	}
+	for _, argument := range reviewStartIntendedUntrackedArguments(intendedScope) {
+		parts = append(parts, reviewTransitionShellWord("--"+argument.Name+"="+argument.Value))
 	}
 	return strings.Join(parts, " ")
 }
@@ -2209,10 +2267,6 @@ var reviewUnadmittedResultRefusal = "review finalize no longer accepts --result:
 	"so it cannot prove the lens inspected the frozen candidate. " +
 	"Capture each selected lens with `" + reviewCaptureResultCommandName() + "` (see `" + reviewNextTransitionRefreshCommand + "` for the exact lineage/target/lens/order bindings), " +
 	"then run `gentle-ai review finalize --captured-results=true`"
-
-func RunReviewFacadeFinalize(args []string, stdout io.Writer) error {
-	return runReviewFacadeFinalize(context.Background(), args, stdout)
-}
 
 func reviewFinalizeFlagProvided(args []string, name string) bool {
 	for _, argument := range args {
@@ -2780,6 +2834,9 @@ func validateReviewFinalizeSubmission(ctx context.Context, repo string, state re
 	if submission == nil {
 		return errors.New("review finalize submission is unavailable") // refusal:by-design world-action: the provider must issue a complete descriptor before a submission can be executed
 	}
+	if submission.Value == nil {
+		return errors.New("review finalize submission has no value slot") // refusal:by-design world-action: a finalize request cannot execute a capture-evidence descriptor
+	}
 	expected := append([]string{}, submission.ArgumentTokens...)
 	slot := submission.Value.SubstitutionLocation
 	expected[slot] = strings.Replace(expected[slot], reviewSubmissionValuePlaceholder, value, 1)
@@ -3048,10 +3105,6 @@ func facadeFinalizeReplayRequestDigest(lineage, revision string, receipt reviewt
 	})
 }
 
-func RunReviewFacadeValidate(args []string, stdout io.Writer) error {
-	return runReviewFacadeValidate(context.Background(), args, stdout)
-}
-
 func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := validateReviewTransitionSelectorFlagCounts(args, ReviewIntegrationOperationValidate); err != nil {
 		return err
@@ -3137,7 +3190,9 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	// removed detail-visibility assertions moved to). Fencing this behind
 	// `!negotiated` used to mean the identical repository exited 0 for a
 	// human and 1 for any agent driving the negotiated contract (#2222).
-	if reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
+	if delivery, err := reviewDeliveryDisposition(ctx, root, false); err != nil {
+		return err
+	} else if delivery == reviewtransaction.RDDDeliveryDisabledUnmanaged {
 		return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, negotiated, *contract)
 	}
 	// Amendment C's single shared branch (design decision 4, Wave 3 Slice
@@ -3146,7 +3201,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	// byte-identical to legacy discovery below. A non-nil discoveryErr here
 	// is always a deny that must never fall through to legacy authorization.
 	// Reviews are ON here — a disabled switch already returned above.
-	if governs, evaluation, discoveryErr := resolveGoverningAuthority(ctx, root, *lineage, gateInput); discoveryErr != nil {
+	if governs, receiptBacked, evaluation, discoveryErr := resolveGoverningAuthority(ctx, root, *lineage, gateInput); discoveryErr != nil {
 		return emitFacadeGateEvaluationNegotiated(stdout, reviewtransaction.NativeGateEvaluation{
 			Result: reviewtransaction.GateInvalidated, Reason: discoveryErr.Error(),
 			Context: reviewtransaction.GateContext{
@@ -3154,6 +3209,11 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 			},
 		}, negotiated, *contract)
 	} else if governs {
+		if receiptBacked && evaluation.Result == reviewtransaction.GateAllow {
+			if err := authorizeManagedReviewerAssets(); err != nil {
+				return err
+			}
+		}
 		return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 	}
 
@@ -3186,6 +3246,11 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		input.LineageID = compactRecord.State.LineageID
 		input.IntendedUntracked = append([]string(nil), compactRecord.State.InitialSnapshot.IntendedUntracked...)
 		evaluation := reviewtransaction.EvaluateCompactGate(ctx, root, receipt, input)
+		if evaluation.Result == reviewtransaction.GateAllow {
+			if err := authorizeManagedReviewerAssets(); err != nil {
+				return err
+			}
+		}
 		return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 	}
 	// Wave 5 (Gate Cutover) Slice 6, design decision 6: a candidate decline no
@@ -3252,6 +3317,11 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	evaluation := reviewtransaction.EvaluateLegacyGate(
 		ctx, root, chain, artifacts.receipt, live, strings.TrimSpace(gateInput.PolicyArtifact) != "", evidence, gateInput,
 	)
+	if evaluation.Result == reviewtransaction.GateAllow {
+		if err := authorizeManagedReviewerAssets(); err != nil {
+			return err
+		}
+	}
 	return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 }
 
@@ -3812,7 +3882,19 @@ func discoverCompactFacadeFinalize(ctx context.Context, repo, lineage string) (r
 	if len(candidates) > 1 {
 		exact := candidates[:0]
 		for _, candidate := range candidates {
-			if (reviewtransaction.SnapshotBuilder{Repo: repo}).ValidateLiveSnapshot(ctx, candidate.record.State.CurrentSnapshot) == nil {
+			validationErr := (reviewtransaction.SnapshotBuilder{Repo: repo}).ValidateLiveSnapshot(ctx, candidate.record.State.CurrentSnapshot)
+			if validationErr != nil && reviewtransaction.IsCompactAuthorityOperationalFailure(validationErr) {
+				return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, validationErr
+			}
+			matches := validationErr == nil
+			if !matches {
+				_, rebuildErr := reviewtransaction.RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, candidate.record.State)
+				if rebuildErr != nil && (reviewtransaction.IsCompactAuthorityOperationalFailure(rebuildErr) || reviewtransaction.IsCorrectionBudgetExceeded(rebuildErr)) {
+					return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, rebuildErr
+				}
+				matches = rebuildErr == nil
+			}
+			if matches {
 				exact = append(exact, candidate)
 			}
 		}
@@ -4049,7 +4131,7 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 				}
 			}
 		}
-		if nextTransition && contract == ReviewIntegrationContractV2 && state.State == reviewtransaction.StateCorrectionRequired {
+		if nextTransition && contract == ReviewIntegrationContractV2 && (state.State == reviewtransaction.StateCorrectionRequired || state.State == reviewtransaction.StateValidating) {
 			contextTarget := state.CurrentSnapshot.Identity
 			if validationRequest != nil {
 				contextTarget = validationRequest.CorrectionTargetIdentity

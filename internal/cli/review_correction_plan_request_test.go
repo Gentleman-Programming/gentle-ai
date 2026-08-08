@@ -15,6 +15,8 @@ import (
 )
 
 func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) {
+	t.Parallel()
+
 	for _, tt := range []struct {
 		name             string
 		path             string
@@ -90,7 +92,7 @@ func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) 
 			}
 
 			args := []string{
-				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", "claude-code",
+				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
 				"--next-transition", "--lineage", started.LineageID,
 			}
 			var first, restarted bytes.Buffer

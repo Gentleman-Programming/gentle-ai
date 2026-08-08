@@ -181,9 +181,10 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "final privacy scan", text: "Immediately before the first GitHub operation, perform a final privacy scan"},
 		{name: "privacy ordering", text: "This scan precedes the duplicate search, report creation, and occurrence comment"},
 		{name: "privacy exclusions", text: "raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values"},
-		{name: "published fix only", text: "Resume only after an installed published fix"},
+		{name: "published fix remains a normal resumption route", text: "an installed published fix"},
 		{name: "native status re-entry", text: "re-enter through native status"},
 		{name: "installed prerelease qualifies", text: "A published prerelease or release candidate the user installed satisfies this."},
+		{name: "maintainer-authorized native recovery", text: "an explicit maintainer-authorized, documented native recovery or reset that the runtime contract supports"},
 		{name: "no unpublished code resume", text: "Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request"},
 	}
 
@@ -215,6 +216,13 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 						t.Errorf("provider-defect handoff missing %q", requirement.text)
 					}
 				})
+			}
+			for _, prohibited := range []string{
+				"Resume only after an installed published fix",
+			} {
+				if strings.Contains(contract, prohibited) {
+					t.Errorf("provider-defect handoff must not make published fixes the only resumption route: %q", prohibited)
+				}
 			}
 			for _, invariant := range []struct {
 				name   string

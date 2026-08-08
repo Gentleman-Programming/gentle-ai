@@ -121,29 +121,31 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 	t.Parallel()
 
 	const wantRoutingDigest = "sha256:ed03b86f20c9449a6e4c018f51d1e05619e1070b1076287a0792a74c458762b2"
-	// Digests intentionally changed here: AgentFeatureClaims dropped the
-	// AutoInstall field (gentle-ai no longer installs agent runtimes on the
-	// user's behalf — see agentInstallStep in internal/cli/run.go), which is
-	// content the canonical JSON payload — and therefore the digest —
-	// legitimately covers for every agent, whether that agent's AutoInstall
-	// claim used to be true or false.
+	// Digests pin the three providers with an enforceable fresh-reviewer
+	// boundary: Claude Code's generated reviewer has no live tools, OpenCode
+	// replaces the task prompt with provider-bound evidence from an ordinary
+	// already-running session (no restart, child process, special session,
+	// or OPENCODE_DISABLE_* variable), and Codex's CodexAdapter launches a
+	// brand-new `codex exec` process in an empty scratch directory (organic
+	// proof: TestRealCodexReviewerOrdinarySessionAdmitsRawOutput,
+	// e2e/organicruntime).
 	wantManifestDigests := map[model.AgentID]string{
-		model.AgentAntigravity:   "sha256:6d9ccea52a22a523d90b35d2c9540e2953a0d1dd44b368922546d6e3690180c8",
-		model.AgentClaudeCode:    "sha256:a330f5e7d36a83fe98aea15fbf6d81a445f0073e6b0b7bfebe052466b0539e05",
-		model.AgentCodex:         "sha256:986cdb1c75d26840217634f720093511369e902c14b068a3245e8ebf98c41a5c",
-		model.AgentCursor:        "sha256:d5be74e67fa7b78c6b8aeee602894395ddb9e9f481b797693f16c348c0274b0a",
-		model.AgentGeminiCLI:     "sha256:3178d298a261cc1bfae1c96201f022f3d5b81135089130e5c747afb2ae39450f",
-		model.AgentHermes:        "sha256:f042913fabdc55ad918cd792dab5566b281fa568d37384bf613a9bef13d00850",
-		model.AgentKilocode:      "sha256:ba4d977d58b8974db2dcabc3df80432fded140c4a57a16e7be68167639d768d2",
-		model.AgentKimi:          "sha256:4f17a25513153d27df042fa7211af1f1520f635e216b3b00e1ae71aa1390b93b",
-		model.AgentKiroIDE:       "sha256:e6ea2bbb0848263e2f75b49d462dd853ff59549b9bb2051a8adea963515f8023",
-		model.AgentOpenClaw:      "sha256:0ec685b0076d542e3a9762e1fd5bfaccb9113673e2c2d2af530ec88d216f9c4d",
-		model.AgentOpenCode:      "sha256:a2ee7d6528f50f709335326aa5f06123d7223df6092e85198bf7a0d4fbf2aa29",
-		model.AgentPi:            "sha256:5e2201bf60bf3943ae43afde1327da5fbcc2eb70701feb3bd1bd06c6e4e3172c",
-		model.AgentQwenCode:      "sha256:13b640c6f6c2b9b287d4cbeb3777fee052777433db8551cdd1210ffc11bd6923",
-		model.AgentTrae:          "sha256:d20a478bc6bce2fa52fbe9dd6735ba6926d89f2bdc97fd8e096d7025274bfdc3",
-		model.AgentVSCodeCopilot: "sha256:995c53449c739c4ceeb18c61ce012f27090a263f5d02080982ffffd1266e5e37",
-		model.AgentWindsurf:      "sha256:72479f4114b47d93c4ac2b4facd471ab173c456cd77fee7d3df52152938bac4c",
+		model.AgentAntigravity:   "sha256:962eb63dc7f59a0b4c9c011dbb890aca1b40ecbfd3800c3e69b08f8b1639332c",
+		model.AgentClaudeCode:    "sha256:132b9219b222d35b0e4eafce3dae965c56eb8d79f07dff6d45c42c137e36fd9b",
+		model.AgentCodex:         "sha256:dbf94a3b7815cf68ccd6299c634f3e17be9abc305b3849adee382c65055c5ed9",
+		model.AgentCursor:        "sha256:2cf80b9bd4cdc9a9d3586e6d02dc2207f326841bba935c6f11f257a20756d821",
+		model.AgentGeminiCLI:     "sha256:463fdc93ad387c9b107c5f031f806dece9da3e2d47300b88d7640174bcb22a1e",
+		model.AgentHermes:        "sha256:ec03506bc4cb0d4850542412630ada103c882d61fa372075f5f8db209a301127",
+		model.AgentKilocode:      "sha256:08dc6df101bb042e2da1673a213032b12ecf49ef15fc463d856fecb0a052951e",
+		model.AgentKimi:          "sha256:565e369cacfdbc128166512040fe1b5a18eada11b333a9c153f85d6661762dc9",
+		model.AgentKiroIDE:       "sha256:3be196483ed199894062892c9367b3772bb66e18d6ec7b64e477ea201851a44a",
+		model.AgentOpenClaw:      "sha256:0fb9cb07a7be9174e93793678ad7cd4618c58c6a0d284be2fa1b6acd4d409014",
+		model.AgentOpenCode:      "sha256:3df2c0ee0a61774b7b7f0d547abed55721cc37ecc332c131935ce72fb142103f",
+		model.AgentPi:            "sha256:346579cb9f505086cb9e429a36e857ed7fa5880171af1ad55bf6d9a8a0d53fcd",
+		model.AgentQwenCode:      "sha256:897dd9264f92356375d1255949e1170938222853524d4b65e62b642a04b41c52",
+		model.AgentTrae:          "sha256:65234f37e1142edae7fff865613970e6ab0433b783df2e4c05b0023fb1c31ffe",
+		model.AgentVSCodeCopilot: "sha256:d1ceedd93c41dc1c34cce4accef239ca4e1bf4a643f203d5b3f8d031c4b4117b",
+		model.AgentWindsurf:      "sha256:660efc2939546f9e3517115aa1400af1d5e5f1d4d10bb4475f2569fba1267312",
 	}
 
 	for agent, wantDigest := range wantManifestDigests {
@@ -161,6 +163,17 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 			}
 			if manifest.Advertises(ContractWorkRoutingV1) {
 				t.Fatal("work-routing must remain unadvertised before final activation")
+			}
+			wantImmutableExecutor := agent == model.AgentClaudeCode || agent == model.AgentOpenCode || agent == model.AgentCodex
+			if got := manifest.Advertises(ContractImmutableReviewExecutorV1); got != wantImmutableExecutor {
+				t.Fatalf("immutable reviewer execution advertised = %t, want %t", got, wantImmutableExecutor)
+			}
+			wantExposure := ContractExposureDormant
+			if wantImmutableExecutor {
+				wantExposure = ContractExposureAdvertised
+			}
+			if got := manifest.Contracts.ImmutableReviewExecutorV1.Exposure; got != wantExposure {
+				t.Fatalf("immutable reviewer execution exposure = %q, want %q", got, wantExposure)
 			}
 
 			payload, err := manifest.CanonicalJSON()

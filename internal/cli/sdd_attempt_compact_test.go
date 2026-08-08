@@ -175,6 +175,36 @@ func TestRunSDDAttemptCompactBlocksWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestCompactHandoffRefusalPreservesTypedDetailAndRunnableExit(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	const change = "compact-handoff-refusal"
+	started, _ := runCompactSDDAttempt(t, compactAcquireArgs(repo, change, "handoff-owner", 2))
+	foreign := initReviewCLIRepo(t)
+
+	var output bytes.Buffer
+	if err := RunSDDAttempt([]string{
+		"handoff", "--cwd", repo, "--change", change, "--expected-revision", started.Token,
+		"--request-id", "handoff-foreign", "--destination-worktree", foreign,
+	}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var result compactAttemptOutput
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.State != "blocked" || result.Reason != "invalid_continuation" || result.Detail == "" || result.Exit != result.Detail {
+		t.Fatalf("foreign compact handoff = %#v", result)
+	}
+	wantExit := "gentle-ai sdd-attempt status --cwd \"" + repo + "\" --change \"" + change + "\""
+	if !strings.Contains(result.Exit, wantExit) {
+		t.Fatalf("handoff exit = %q, want runnable %q", result.Exit, wantExit)
+	}
+	var status bytes.Buffer
+	if err := RunSDDAttempt([]string{"status", "--cwd", repo, "--change", change}, &status); err != nil {
+		t.Fatalf("handoff exit did not name a runnable status command: %v", err)
+	}
+}
+
 // TestActiveAttemptBlockedExitNamesAGenuinelyRunnableCommand is the
 // execution-based RED-first proof for adversarial finding F2: the
 // active_attempt Exit text used to print `gentle-ai sdd-attempt acquire

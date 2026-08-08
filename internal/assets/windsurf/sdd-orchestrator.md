@@ -31,7 +31,7 @@ Before losslessly relaying any blocking choice envelope, classify its semantic a
      - On retry, perform a fresh final privacy scan first, then re-resolve that exact created issue identity, inspect whether `gentle-report` is already present, and apply only a missing label idempotently. Never search and label an arbitrary equivalent/pre-existing issue. If the exact created issue identity cannot be proven, STOP and require a human decision, with no label or duplicate issue/comment. Then STOP with all consumer state preserved.
   2. **Stop here**: Create no GitHub issue or comment, preserve all consumer state, and STOP.
 - Report observed evidence, not an unconfirmed root cause. Include or reuse sanitized version/build, OS/architecture/client, the operation shape without secrets, bounded attempts and outcomes, failure envelopes, mutation outcome, expected and actual behavior, a minimal reproduction, safe opaque reason/revision identifiers, and preserved-state evidence.
-- Resume only after an installed published fix, then re-enter through native status. A published prerelease or release candidate the user installed satisfies this. Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request.
+- Resume after an installed published fix or an explicit maintainer-authorized, documented native recovery or reset that the runtime contract supports; then re-enter through native status. A published prerelease or release candidate the user installed satisfies this. Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request.
 
 #### SDD Edit-Authority Consent Relay (MANDATORY)
 

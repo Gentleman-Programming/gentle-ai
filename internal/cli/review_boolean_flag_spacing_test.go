@@ -22,6 +22,9 @@ import (
 func TestReviewBooleanFlagSpacedValueNamesTheEqualsForm(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/second.md", "# second\n\nplain prose, no executable content.\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "docs/second.md")
+	runReviewCLIGit(t, repo, "commit", "-qm", "second")
 
 	t.Run("review start --committed-only true names the = form", func(t *testing.T) {
 		var output bytes.Buffer
@@ -40,7 +43,7 @@ func TestReviewBooleanFlagSpacedValueNamesTheEqualsForm(t *testing.T) {
 
 	t.Run("review start --committed-only=true still works", func(t *testing.T) {
 		var output bytes.Buffer
-		err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", "HEAD", "--committed-only=true"}, &output)
+		err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", "HEAD~1", "--committed-only=true"}, &output)
 		if err != nil {
 			t.Fatalf("the = form must keep working: %v\n%s", err, output.String())
 		}

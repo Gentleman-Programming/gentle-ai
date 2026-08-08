@@ -1,3 +1,8 @@
+internal/advisoryreview/codex_adapter.go	CodexAdapter.Review
+internal/advisoryreview/codex_adapter.go	NewCodexAdapter
+internal/advisoryreview/codex_adapter.go	codexAdvisoryEnvironment
+internal/advisoryreview/contract.go	RuntimeNames
+internal/advisoryreview/contract.go	SupportedRuntimes
 internal/agentbuilder/engine.go	MockEngine.Agent
 internal/agentbuilder/engine.go	MockEngine.Available
 internal/agentbuilder/engine.go	MockEngine.Generate
@@ -41,7 +46,6 @@ internal/components/engram/inject.go	ensureAntigravitySettings
 internal/components/engram/inject.go	isAbsoluteEngramPath
 internal/components/engram/verify.go	CountVersionCallsForTest
 internal/components/engram/verify.go	SetVersionForTest
-internal/components/engram/verify.go	VerifyHealth
 internal/components/filemerge/toml.go	RemoveTOMLTableKeys
 internal/components/filemerge/toml.go	UpsertCodexMCPServerBlock
 internal/components/gga/config.go	InjectionResult.FilesWritten

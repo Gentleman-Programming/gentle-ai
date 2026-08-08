@@ -348,6 +348,7 @@ type RuntimeStrandedSuccessor struct {
 	Lineage          string
 	Revision         string
 	SnapshotIdentity string
+	DiscardedWork    reviewtransaction.CompactDiscardedWorkSummary
 }
 
 // runtimeStrandedSuccessor answers exactly one question: is the ONLY thing
@@ -414,7 +415,7 @@ func runtimeStrandedSuccessor(ctx context.Context, repo string, binding ReviewBi
 	if err != nil || !eligibility.Eligible {
 		return RuntimeStrandedSuccessor{}, false
 	}
-	found.Revision, found.SnapshotIdentity = eligibility.Revision, eligibility.SnapshotIdentity
+	found.Revision, found.SnapshotIdentity, found.DiscardedWork = eligibility.Revision, eligibility.SnapshotIdentity, eligibility.DiscardedWork
 	return found, true
 }
 
@@ -718,9 +719,52 @@ func parseBinding(payload []byte) (ReviewBinding, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return ReviewBinding{}, errors.New("multiple binding values")
 	}
-	canonical, err := bindingBytes(binding)
-	if err != nil || !bytes.Equal(payload, canonical) || binding.Schema != reviewBindingSchema || !validReviewBindingChange(binding.Change) || !validReviewBindingLineage(binding.Lineage) || !reviewBindingHash.MatchString(binding.Revision) || !reviewBindingHash.MatchString(binding.AuthorityRevision) || !reviewBindingHash.MatchString(binding.ReceiptHash) || binding.Revision != bindingDigest(binding) || binding.GateContext.Gate != reviewtransaction.GatePostApply || binding.GateContext.LineageID != binding.Lineage || binding.GateContext.StoreRevision != binding.AuthorityRevision {
-		return ReviewBinding{}, errors.New("invalid binding")
+	if violation := reviewBindingViolation(payload, binding); violation != "" {
+		return ReviewBinding{}, fmt.Errorf("invalid binding: %s", violation) // refusal:by-design world-action: this binding is written and digested by this package itself, so a violation is a mutated or corrupted record and the exit is restoring the Git-common-dir store, not a command
 	}
 	return binding, nil
+}
+
+// reviewBindingViolation names WHICH of the twelve integrity conditions a
+// binding failed, or "" when it satisfies all of them. Root 8 (#2471): these
+// twelve used to answer with one shared `errors.New("invalid binding")`, so a
+// caller holding the error learned only that something was wrong with bytes
+// this package wrote itself.
+//
+// Unlike the reviewer-input surfaces, this validates OUR OWN persisted ledger
+// bytes, so a violation is tamper or corruption rather than user error. That
+// is exactly why naming the condition matters: the reader is an operator
+// diagnosing a damaged store, and "invalid binding" tells them to escalate
+// while "gate context lineage does not match" tells them what broke. The
+// values themselves are never echoed, only the condition that failed, so a
+// damaged binding cannot use this to reflect arbitrary bytes into a message.
+func reviewBindingViolation(payload []byte, binding ReviewBinding) string {
+	canonical, err := bindingBytes(binding)
+	switch {
+	case err != nil:
+		return "binding could not be re-encoded for canonical comparison"
+	case !bytes.Equal(payload, canonical):
+		return "payload is not the canonical encoding of its own fields"
+	case binding.Schema != reviewBindingSchema:
+		return "schema is not " + reviewBindingSchema
+	case !validReviewBindingChange(binding.Change):
+		return "change name is not a valid change identifier"
+	case !validReviewBindingLineage(binding.Lineage):
+		return "lineage is not a valid lineage identifier"
+	case !reviewBindingHash.MatchString(binding.Revision):
+		return "revision is not a sha256 digest"
+	case !reviewBindingHash.MatchString(binding.AuthorityRevision):
+		return "authority_revision is not a sha256 digest"
+	case !reviewBindingHash.MatchString(binding.ReceiptHash):
+		return "receipt_hash is not a sha256 digest"
+	case binding.Revision != bindingDigest(binding):
+		return "revision does not match the digest of its own fields"
+	case binding.GateContext.Gate != reviewtransaction.GatePostApply:
+		return "gate_context.gate is not " + string(reviewtransaction.GatePostApply)
+	case binding.GateContext.LineageID != binding.Lineage:
+		return "gate_context.lineage_id does not match the binding lineage"
+	case binding.GateContext.StoreRevision != binding.AuthorityRevision:
+		return "gate_context.store_revision does not match authority_revision"
+	}
+	return ""
 }

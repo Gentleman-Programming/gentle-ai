@@ -68,6 +68,13 @@ func TestLegacyOrdinaryMutationRoutesShareTypedReadOnlyErrorWithoutMutation(t *t
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
+			// The "start collision" case drives a real `review start`, which
+			// issue #2586's unified empty-candidate guard would otherwise
+			// refuse first on a clean worktree, masking the legacy-collision
+			// refusal this test exists to pin. A staged, low-risk change
+			// gives every subtest a non-empty candidate; the other subtests
+			// never build a fresh candidate at all, so it is inert for them.
+			writeReviewStartCandidate(t, repo, "docs/pending.md", "# pending\n\nplain prose, no executable content.\n", 0o644)
 			lineage := "legacy-route-" + strings.ReplaceAll(tt.name, " ", "-")
 			store := addPristineLegacyAuthority(t, repo, lineage)
 			chain, err := store.LoadChain()

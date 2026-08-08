@@ -34,8 +34,13 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 			want[journey.ID] = true
 		}
 	}
-	if got := len(seen); got != 64 {
-		t.Errorf("core journey count = %d, want 64", got)
+	// 79 since j76-claude-advisory-result-reaches-delivery (#2692, #2566),
+	// j77-capture-result-input-preflight-is-read-only (#2630 D2) and
+	// j78-lens-finding-id-prefix-discovery (#1844).
+	// Bump this deliberately when a journey is added, and name it here: the
+	// count exists so a journey cannot appear or vanish unnoticed.
+	if got := len(seen); got != 79 {
+		t.Errorf("core journey count = %d, want 79", got)
 	}
 	for id, found := range want {
 		if !found {

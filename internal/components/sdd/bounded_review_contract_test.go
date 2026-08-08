@@ -19,6 +19,10 @@ func boundedReviewRequiredClausesFor(agent model.AgentID) []string {
 		"Parent orchestrator and native CLI only",
 		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + string(agent) + " --next-transition",
 		"route only from the returned `next_transition`",
+		"relay it losslessly in the user's language",
+		"preserve every step's order and fields",
+		"Never route or execute from forecast; route only from `next_transition`",
+		"re-query STATUS after completing it",
 		"exact operation and ordered argument tokens unchanged",
 		"exact `review.capture-result` collection input once per provider-returned collection attempt",
 		"After empty, malformed, schema-invalid, access/provider failure, or incomplete inspection, query negotiated STATUS again",
@@ -91,24 +95,25 @@ func TestBoundedReviewConsentLocalizationPreservesMachineDomain(t *testing.T) {
 func TestBoundedReviewContractRequiresRuntimeBoundReviewerContext(t *testing.T) {
 	content := boundedReviewContract()
 	for _, want := range []string{
+		"The active host/orchestrator and fresh reviewer executor are distinct roles",
+		"Prompt prose coordinates launch; it never proves isolation",
+		"Claude Code, OpenCode, and Codex advertise immutable reviewer execution",
+		"Claude's generated reviewer has no live tools",
+		"OpenCode's provider plugin replaces the task prompt",
+		"Codex's shared advisory adapter launches a brand-new `codex exec` process",
+		"Prompt prose alone never proves any of these boundaries",
+		"Kilo remains dormant",
+		"compiled capability is authoritative before repository, target, authority, collection, or process work",
+		"normal SDD and ordinary agent support remain available",
 		"Never hand candidate bytes through `/tmp`",
 		"another external file",
 		"a repository scratch file",
 		"`GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`",
-		"Claude Code carries immutable candidate evidence directly in the reviewer task prompt",
-		"path evidence for every manifest index in exact order",
-		"gentle-ai review inspect-candidate --repository-context <repository_context> --expected-revision <revision> --lineage <lineage> --target <target> --lens <lens> --order <order> --operation <operation>",
-		"its lens agents expose no shell outside prompt-carried context",
-		"Claude Code is the only supported immutable receipt-review runtime",
-		"OpenCode and Codex are eligible but transport-disabled",
-		"Pi, Kilo, and unknown identities are ineligible",
-		"before repository, target, authority, collection, or process work",
 		"read-only native Git commands against those exact immutable trees",
 		"compact `--name-status`/`--numstat` discovery",
 		"replacement objects, external diff and textconv, forces `--text`",
 		"literal pathspecs",
 		"Never pass `--binary`",
-		"Claude Code carries immutable candidate evidence only in its provider-built prompt",
 		"read live worktree/index/HEAD",
 	} {
 		if !strings.Contains(content, want) {
@@ -246,13 +251,21 @@ func TestRenderedReviewersAreReadOnlyAndSingleResult(t *testing.T) {
 			path := family + "/agents/review-" + lens + ".md"
 			t.Run(family+"/"+lens, func(t *testing.T) {
 				content := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
-				for _, want := range []string{"Review once", "changed_path_manifest", "base_tree", "candidate_tree", "incomplete inspection", "Never read the live worktree", "## Candidate-Causal Admission", "Return one JSON object and no prose", `"subject_hash":"<artifact_subject.subject_hash>"`, "GENTLE_AI_REVIEW_BINDING.subject_hash", `"inspection":{"status":"completed","paths":["<every changed_path_manifest.path in exact order>"]}`, "lens triage", "Emit no unknown fields"} {
+				for _, want := range []string{"Review once", "changed_path_manifest", "base_tree", "candidate_tree", "incomplete inspection", "Never read the live worktree", "## Candidate-Causal Admission", "Return one JSON object and no prose", `"subject_hash":"<artifact_subject.subject_hash>"`, "GENTLE_AI_REVIEW_BINDING.subject_hash", `"inspection":{"status":"completed","paths":["<complete unique unordered set>"]}`, "path:line or path:start-end", "complete unique unordered manifest set", "lens triage", "Emit no unknown fields"} {
 					if !strings.Contains(content, want) {
 						t.Errorf("%s missing %q", path, want)
 					}
 				}
 				if family == "claude" {
-					for _, want := range []string{"GENTLE_AI_CLAUDE_REVIEW_CONTEXT", "prompt-carried immutable context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
+					// "provider-injected context" replaced the Claude-only
+					// "prompt-carried immutable context" wording when
+					// claudeReviewerPrompt and openCodeProviderInjectedReviewerPrompt
+					// were unified into one shared template
+					// (runtimeReviewerPrompt): the two runtimes now render
+					// identical wording and differ only in which process
+					// supplies the block, so the reviewer input contract no
+					// longer names a Claude-specific nature for the context.
+					for _, want := range []string{"GENTLE_AI_CLAUDE_REVIEW_CONTEXT", "provider-injected context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
 						if !strings.Contains(content, want) {
 							t.Errorf("%s missing Claude transport clause %q", path, want)
 						}
@@ -347,6 +360,11 @@ func TestAuthorityFirstLifecycleRendersIdenticallyForEverySupportedAgent(t *test
 			content := renderSDDOrchestratorAsset(agent.ID)
 			if strings.Count(content, procedure) != 1 {
 				t.Fatal("rendered orchestrator does not contain exactly one canonical terminal procedure")
+			}
+			for _, want := range []string{"relay it losslessly in the user's language", "preserve every step's order and fields", "Never route or execute from forecast; route only from `next_transition`", "re-query STATUS after completing it"} {
+				if !strings.Contains(content, want) {
+					t.Errorf("rendered orchestrator missing forecast contract %q", want)
+				}
 			}
 		})
 	}

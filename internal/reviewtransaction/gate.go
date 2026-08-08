@@ -331,7 +331,7 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 		gateContext.PrePRBoundary = &boundary
 	}
 	if request.Gate == GatePrePR && snapshot.BaseTree != receipt.BaseTree {
-		if compatibility, compatibilityErr := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, resolvedPrePR, preimages); compatibilityErr == nil {
+		if compatibility, compatibilityErr := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, resolvedPrePR, preimages, true); compatibilityErr == nil {
 			gateContext.BaseAdvance = &compatibility
 		}
 	}

@@ -388,3 +388,24 @@ func substituteReplayRuntimeIdentity(t *testing.T, arguments []string, caller mo
 	}
 	return substituted
 }
+
+// withoutReplayRuntimeIdentity exercises the manual compatibility route while
+// retaining every frozen selector emitted by a direct-route continuation.
+func withoutReplayRuntimeIdentity(t *testing.T, arguments []string) []string {
+	t.Helper()
+
+	without := make([]string, 0, len(arguments)-2)
+	removed := false
+	for index := 0; index < len(arguments); index++ {
+		if arguments[index] == "--agent" && index+1 < len(arguments) && arguments[index+1] == reviewUndeclaredRuntimeIdentitySlot {
+			removed = true
+			index++
+			continue
+		}
+		without = append(without, arguments[index])
+	}
+	if !removed {
+		t.Fatalf("printed command carried no removable runtime-identity slot: %v", arguments)
+	}
+	return without
+}

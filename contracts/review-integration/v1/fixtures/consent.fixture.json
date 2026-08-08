@@ -4,7 +4,7 @@
   "operation": "review.start",
   "action": "consent_required",
   "blocking": true,
-  "target_identity": "sha256:ddc783ecb013d1610c3f35fb7f8655051669a762ea9fd04af55999763a57496b",
+  "target_identity": "sha256:04c970c2b0f7c128751ed2b0f7e672a2fe26dc267f018bf10e612096d19cfa04",
   "projection": "workspace",
   "risk_level": "high",
   "changed_files": 1,
@@ -20,13 +20,13 @@
       "answer": "granted",
       "label": "Run the review now",
       "effect": "Reviews this exact frozen candidate now; nothing is granted for later candidates, so each later medium- or high-risk candidate asks again.",
-      "invocation": "gentle-ai review start --contract gentle-ai.review-integration/v1 --cwd /repo --target sha256:ddc783ecb013d1610c3f35fb7f8655051669a762ea9fd04af55999763a57496b --projection workspace --lineage review-consent-fixture --consent granted"
+      "invocation": "gentle-ai review start --contract gentle-ai.review-integration/v1 --cwd /repo --target sha256:04c970c2b0f7c128751ed2b0f7e672a2fe26dc267f018bf10e612096d19cfa04 --projection workspace --lineage review-consent-fixture --consent granted"
     },
     {
       "answer": "declined",
       "label": "Not now, just this once",
       "effect": "Skips the review for this candidate only; nothing is persisted and the next candidate is asked again. This is not the kill switch.",
-      "invocation": "gentle-ai review start --contract gentle-ai.review-integration/v1 --cwd /repo --target sha256:ddc783ecb013d1610c3f35fb7f8655051669a762ea9fd04af55999763a57496b --projection workspace --lineage review-consent-fixture --consent declined"
+      "invocation": "gentle-ai review start --contract gentle-ai.review-integration/v1 --cwd /repo --target sha256:04c970c2b0f7c128751ed2b0f7e672a2fe26dc267f018bf10e612096d19cfa04 --projection workspace --lineage review-consent-fixture --consent declined"
     }
   ],
   "off_path": {

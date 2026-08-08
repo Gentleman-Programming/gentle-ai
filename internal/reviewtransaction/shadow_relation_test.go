@@ -332,7 +332,7 @@ func buildShadowBaseAdvanceFixture(t *testing.T, breakMergeBasePreservation bool
 // here only for this file's own direct characterization of Amendment A
 // delegation, independent of any observer.
 func deriveBaseAdvanceCompatibilityPtr(ctx context.Context, repo string, receipt Receipt, request GateRequest, snapshot Snapshot, refs *resolvedPrePRRefs, preimages gateArtifactPreimages) *BaseAdvanceCompatibility {
-	proof, err := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, refs, preimages)
+	proof, err := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, refs, preimages, true)
 	if err != nil {
 		return nil
 	}

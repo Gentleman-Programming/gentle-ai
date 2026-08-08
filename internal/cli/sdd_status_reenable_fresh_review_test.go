@@ -14,6 +14,7 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
@@ -38,6 +39,25 @@ func dispatchNamedReviewStart(t *testing.T, repo string, tokens []string, extra 
 	var started ReviewFacadeStartResult
 	decodeStrictReviewJSON(t, output.Bytes(), &started)
 	return started
+}
+
+// dispatchNamedReviewStartExpectingRefusal is dispatchNamedReviewStart's
+// negative twin: issue #2586's unified empty-candidate guard means a named
+// continuation run over a clean worktree now refuses up front instead of
+// freezing an empty candidate and hinting the rerun only afterward. This
+// requires exactly that refusal and returns its text.
+func dispatchNamedReviewStartExpectingRefusal(t *testing.T, repo string, tokens []string) string {
+	t.Helper()
+	if len(tokens) < 2 || tokens[0] != "review" || tokens[1] != "start" {
+		t.Fatalf("named continuation is %v, want gentle-ai review start", tokens)
+	}
+	args := append(append([]string{}, tokens[1:]...), "--cwd", repo)
+	var output bytes.Buffer
+	err := RunReview(args, &output)
+	if err == nil {
+		t.Fatalf("the named continuation on a clean worktree unexpectedly succeeded: gentle-ai review %v:\n%s", args, output.String())
+	}
+	return err.Error()
 }
 
 func commitAllSDDStatus(t *testing.T, repo, message string) string {
@@ -104,36 +124,31 @@ func TestSDDStatusReEnableSequenceLandsOnTheFreshFullReview(t *testing.T) {
 	}
 	tokens := namedReviewCommandTokens(t, blocked.ReviewGate.Reason)
 
-	// Run exactly what the stop names. The tree is clean, so this start
-	// freezes an empty candidate and its hint names the --base-ref rerun.
-	emptyStart := dispatchNamedReviewStart(t, root, tokens)
-	if emptyStart.ChangedFiles != 0 {
-		t.Fatalf("clean-tree start froze %d files, fixture is wrong", emptyStart.ChangedFiles)
+	// Run exactly what the stop names. The tree is clean, so issue #2586's
+	// unified empty-candidate guard now refuses this up front -- before this
+	// fix, the same command froze an empty candidate and named --base-ref
+	// only in the after-the-fact hint on a SUCCESSFUL response; the guard
+	// this change adds moves that same --base-ref hint into the refusal
+	// itself, before any authority is created.
+	refusal := dispatchNamedReviewStartExpectingRefusal(t, root, tokens)
+	if !strings.Contains(refusal, "--base-ref") {
+		t.Fatalf("empty-candidate refusal does not name the committed-work rerun: %q", refusal)
 	}
-	if !strings.Contains(emptyStart.Hint, "--base-ref") {
-		t.Fatalf("empty start hint does not name the committed-work rerun: %q", emptyStart.Hint)
-	}
-	finalizeFacadeLineage(t, root, emptyStart.LineageID)
 
-	// The approved empty receipt reviewed nothing, so it must not read as
-	// coverage of the unmanaged history: the archive stop stays blocked and
-	// keeps naming the fresh review.
+	// Nothing was created by the refused attempt, so the archive stop is
+	// unchanged: still blocked, still naming the same bare start.
 	stillBlocked := resolveSDDStatusJSON(t, root)
 	if stillBlocked.Dependencies.Archive != sddstatus.DependencyBlocked || stillBlocked.ReviewGate == nil {
-		t.Fatalf("an empty-candidate review unblocked the archive: %#v", stillBlocked.Dependencies)
+		t.Fatalf("a refused empty-candidate start left a trace that unblocked the archive: %#v", stillBlocked.Dependencies)
 	}
 	if stillBlocked.ReviewGate.Result == reviewtransaction.GateAllow {
-		t.Fatalf("an empty-candidate review fabricated coverage of unmanaged history: %#v", stillBlocked.ReviewGate)
+		t.Fatalf("a refused empty-candidate start fabricated coverage of unmanaged history: %#v", stillBlocked.ReviewGate)
 	}
-	tokens = namedReviewCommandTokens(t, stillBlocked.ReviewGate.Reason)
 
-	// Run the base-ref rerun the message names, supplying the one
-	// operator-owned placeholder value: the boundary to re-govern from. The
-	// fresh full review freezes the delivered range.
-	if tokens[len(tokens)-1] != "--base-ref" {
-		t.Fatalf("empty-receipt continuation = %v, want it to end at the operator's --base-ref value", tokens)
-	}
-	freshStart := dispatchNamedReviewStart(t, root, tokens, baselineCommit)
+	// Run the real fresh full review, guided by the refusal's own --base-ref
+	// hint: the operator-owned placeholder value is the boundary to
+	// re-govern from. The fresh full review freezes the delivered range.
+	freshStart := dispatchNamedReviewStart(t, root, tokens, "--base-ref", baselineCommit)
 	if freshStart.ChangedFiles == 0 {
 		t.Fatalf("the fresh full review froze no content: %#v", freshStart)
 	}
@@ -159,6 +174,14 @@ func TestSDDStatusReEnableSequenceLandsOnTheFreshFullReview(t *testing.T) {
 // delivered history, and a single approved empty-candidate receipt. The
 // archive must record that nothing was reviewed and keep naming the fresh
 // review with its base-ref selector.
+//
+// Issue #2586's unified empty-candidate guard refuses to CREATE this receipt
+// through the live CLI (RunReviewFacadeStart / RunReview) on any route --
+// that refusal is this repository's fix. The receipt this test needs, to
+// prove archive-side defense-in-depth never treats it as coverage, can
+// therefore only exist as historical bytes an old build minted before this
+// fix; runLegacyFacadeStartForTest reproduces exactly that pre-guard START
+// pipeline, on purpose, for fixtures like this one.
 func TestSDDStatusArchiveNeverTreatsAnEmptyCandidateReviewAsCoverage(t *testing.T) {
 	reviewModeHome(t)
 	root := t.TempDir()
@@ -169,11 +192,10 @@ func TestSDDStatusArchiveNeverTreatsAnEmptyCandidateReviewAsCoverage(t *testing.
 	commitAllSDDStatus(t, root, "unmanaged delivery")
 	enableReviewForClone(t, root)
 
-	emptyStart := startFacadeReviewResult(t, root, "reenable-empty-only")
-	if emptyStart.ChangedFiles != 0 {
-		t.Fatalf("clean-tree start froze %d files, fixture is wrong", emptyStart.ChangedFiles)
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", root, "--lineage", "reenable-empty-only"}, io.Discard); err != nil {
+		t.Fatalf("construct historical empty-candidate authority: %v", err)
 	}
-	finalizeFacadeLineage(t, root, emptyStart.LineageID)
+	finalizeFacadeLineage(t, root, "reenable-empty-only")
 
 	status := resolveSDDStatusJSON(t, root)
 	if status.ReviewGate == nil || status.ReviewGate.Result == reviewtransaction.GateAllow {

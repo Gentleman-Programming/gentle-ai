@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -75,6 +77,8 @@ func TestValidatingEvidenceCollectionUnblocksFinalizeAndPreCommit(t *testing.T) 
 }
 
 func TestFinalizeNextTransitionBindsCorrectedCurrentSnapshot(t *testing.T) {
+	t.Parallel()
+
 	initialTarget := strings.Repeat("a", 64)
 	currentTarget := strings.Repeat("b", 64)
 	transition := reviewFinalizeNextTransition(reviewtransaction.CompactState{
@@ -216,6 +220,8 @@ func TestCorrectionNextTransitionAgreesBetweenFinalizeAndRestartStatus(t *testin
 }
 
 func TestConsumedHistoricalCorrectionRoutesToRecoveryOrStop(t *testing.T) {
+	t.Parallel()
+
 	forecast := 1
 	for _, proposed := range []*int{nil, &forecast} {
 		for _, changed := range []bool{false, true} {
@@ -314,7 +320,7 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 	repo, started, _, record := newArtifactReview(t, true)
 	var output bytes.Buffer
 	if err := RunReview([]string{
-		"status", "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition",
+		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
 		"--cwd", repo, "--lineage", started.LineageID,
 	}, &output); err != nil {
 		t.Fatal(err)
@@ -363,6 +369,8 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 }
 
 func TestReviewNextTransitionStateTable(t *testing.T) {
+	t.Parallel()
+
 	status := func(applicability reviewtransaction.TargetApplicability, state reviewtransaction.State, action reviewtransaction.TargetStatusAction, replayability reviewtransaction.Replayability) ReviewTargetStatusResult {
 		return ReviewTargetStatusResult{
 			Applicability: applicability, Action: action, Replayability: replayability,
@@ -429,6 +437,8 @@ func TestReviewNextTransitionStateTable(t *testing.T) {
 // emitted Execute.Arguments entry must carry the exact, literally executable
 // argv token, and Preconditions (assertions, not argv) must never carry one.
 func TestReviewTransitionArgumentToken(t *testing.T) {
+	t.Parallel()
+
 	status := func(applicability reviewtransaction.TargetApplicability, state reviewtransaction.State, action reviewtransaction.TargetStatusAction, replayability reviewtransaction.Replayability) ReviewTargetStatusResult {
 		return ReviewTargetStatusResult{
 			Applicability: applicability, Action: action, Replayability: replayability,
@@ -527,6 +537,8 @@ func TestReviewTransitionArgumentToken(t *testing.T) {
 // still applies — that guard is unrelated to StateEscalated and is not
 // softened by this fix.
 func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
+	t.Parallel()
+
 	baseStatus := func(target, authorityTarget string) ReviewTargetStatusResult {
 		return ReviewTargetStatusResult{
 			Applicability: reviewtransaction.TargetApplicabilityCurrent, Action: reviewtransaction.TargetStatusActionRecover,
@@ -774,6 +786,11 @@ func validateAgainstPublishedNextTransitionSchemaV4(t *testing.T, payload []byte
 	validateAgainstPublishedStatusNextTransitionSchema(t, "v2", "status-v4.schema.json", payload)
 }
 
+func validateAgainstPublishedNextTransitionSchemaV5(t *testing.T, payload []byte) {
+	t.Helper()
+	validateAgainstPublishedStatusNextTransitionSchema(t, "v2", "status-v5.schema.json", payload)
+}
+
 // validateAgainstPublishedStatusNextTransitionSchema is the shared engine
 // behind both the v1 and v2 published-schema validators above. It registers
 // every schema file that either version's $defs/next_transition subtree can
@@ -891,4 +908,195 @@ func TestReviewNextTransitionRefusesTargetDriftAndUnverifiableCaptures(t *testin
 	if got.Kind != reviewNextTransitionStop || got.ReasonCode != "captured_artifacts_unverifiable" || got.Execute != nil || got.Collect != nil {
 		t.Fatalf("target drift transition = %#v", got)
 	}
+}
+
+func TestReviewForecastMirrorsExactlyOneNextTransition(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		status  ReviewTargetStatusResult
+		horizon ReviewForecastHorizon
+	}{
+		{name: "stop", status: ReviewTargetStatusResult{Applicability: reviewtransaction.TargetApplicabilityCorrupted}, horizon: ForecastHorizonTerminal},
+		{name: "execute", status: ReviewTargetStatusResult{Applicability: reviewtransaction.TargetApplicabilityUnrelated, TargetIdentity: "sha256:" + strings.Repeat("a", 64)}, horizon: ForecastHorizonPartial},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			head := newReviewNextTransition(tt.status, nil, nil, nil, nil, reviewNextTransitionInput{})
+			forecast := newReviewForecast(head)
+			if forecast.Horizon != tt.horizon || len(forecast.Steps) != 1 {
+				t.Fatalf("forecast = %#v, want one %s step", forecast, tt.horizon)
+			}
+			step := forecast.Steps[0]
+			if step.Step != 1 || step.Kind != head.Kind || step.ReasonCode != head.ReasonCode || strings.TrimSpace(step.Description) == "" {
+				t.Fatalf("forecast step = %#v, head = %#v", step, head)
+			}
+		})
+	}
+}
+
+func TestReviewStatusValidateRejectsMalformedForecast(t *testing.T) {
+	item := ReviewForecastItem{Step: 1, Kind: "stop", ReasonCode: "corrupted_or_unverifiable_authority", Description: "desc"}
+	tests := []struct {
+		name, wantErr string
+		forecast      ReviewForecast
+		next          bool
+	}{
+		{"missing next", "forecast without next_transition is invalid", ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{item}}, false},
+		{"invalid horizon", `invalid forecast horizon "invalid_horizon"`, ReviewForecast{Horizon: "invalid_horizon", Steps: []ReviewForecastItem{item}}, true},
+		{"complete horizon", `invalid forecast horizon "complete"`, ReviewForecast{Horizon: "complete", Steps: []ReviewForecastItem{item}}, true},
+		{"multiple steps", "forecast must contain exactly one step", ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{item, item}}, true},
+		{"step is not one", "forecast step must be 1, got 2", ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{{Step: 2, Kind: item.Kind, ReasonCode: item.ReasonCode, Description: item.Description}}}, true},
+		{"invalid kind", `forecast step 1 has invalid kind "invalid_kind"`, ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{{Step: 1, Kind: "invalid_kind", ReasonCode: item.ReasonCode, Description: item.Description}}}, true},
+		{"empty reason", "forecast step 1 has empty reason_code", ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{{Step: 1, Kind: item.Kind, Description: item.Description}}}, true},
+		{"empty description", "forecast step 1 has empty description", ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{{Step: 1, Kind: item.Kind, ReasonCode: item.ReasonCode}}}, true},
+		{"head divergence", "forecast head (execute/corrupted_or_unverifiable_authority) diverges", ReviewForecast{Horizon: ForecastHorizonTerminal, Steps: []ReviewForecastItem{{Step: 1, Kind: "execute", ReasonCode: item.ReasonCode, Description: item.Description}}}, true},
+		{"stop partial", "stop transition requires a terminal forecast", ReviewForecast{Horizon: ForecastHorizonPartial, Steps: []ReviewForecastItem{item}}, true},
+	}
+	status := newReviewTargetStatusResultForContract(reviewtransaction.TargetStatusResult{Applicability: reviewtransaction.TargetApplicabilityCorrupted, AuthorityVersion: reviewtransaction.AuthorityVersionCompact, Action: reviewtransaction.TargetStatusActionStop, Replayability: reviewtransaction.ReplayabilityNotReplayable}, ReviewIntegrationContractV2)
+	status.TargetIdentity = "sha256:" + strings.Repeat("a", 64)
+	status.Projection = ReviewTargetStatusProjection{Schema: ReviewIntegrationProjectionSchema, Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("a", 40), InitialReviewTree: strings.Repeat("b", 40), CurrentCandidateTree: strings.Repeat("c", 40), PathsDigest: "sha256:" + strings.Repeat("a", 64), IntendedUntrackedProof: "sha256:" + strings.Repeat("b", 64), InitialSnapshotIdentity: status.TargetIdentity, CurrentSnapshotIdentity: status.TargetIdentity, Paths: []string{"tracked.txt"}, IntendedUntracked: []string{}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := status
+			got.Forecast = &tt.forecast
+			if tt.next {
+				got.NextTransition = &ReviewNextTransition{Kind: item.Kind, ReasonCode: item.ReasonCode}
+			}
+			err := got.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestNegotiatedStatusForecastStaysOnStderrAndV1StaysFrozen(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("forecast\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previous := reviewNarrationOutput
+	var stderr bytes.Buffer
+	reviewNarrationOutput = &stderr
+	t.Cleanup(func() { reviewNarrationOutput = previous })
+
+	var stdout bytes.Buffer
+	if err := RunReviewStatus([]string{"--cwd", repo, "--contract", ReviewIntegrationContractV2, "--next-transition"}, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("status envelope is invalid: %v", err)
+	}
+	if status.NextTransition == nil || status.Forecast == nil || len(status.Forecast.Steps) != 1 {
+		t.Fatalf("status forecast = %#v, transition = %#v", status.Forecast, status.NextTransition)
+	}
+	step := status.Forecast.Steps[0]
+	if status.Forecast.Horizon != ForecastHorizonPartial || step.Step != 1 || step.Kind != status.NextTransition.Kind || step.ReasonCode != status.NextTransition.ReasonCode || strings.TrimSpace(step.Description) == "" {
+		t.Fatalf("status forecast = %#v, transition = %#v", status.Forecast, status.NextTransition)
+	}
+	for _, want := range []string{"Forecast horizon: partial", "step 1", step.Kind, step.ReasonCode, step.Description, "Re-query STATUS"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr forecast missing %q:\n%s", want, stderr.String())
+		}
+	}
+
+	var legacy bytes.Buffer
+	if err := RunReviewStatus([]string{"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition"}, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	var v1 map[string]any
+	if err := json.Unmarshal(legacy.Bytes(), &v1); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := v1["forecast"]; found {
+		t.Fatalf("v1 status gained forecast: %s", legacy.String())
+	}
+}
+
+func TestNativeStatusSchemasValidateWholeForecastEnvelope(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "status-v5.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"status-v4.schema.json", "status-v5.schema.json"} {
+		t.Run(name, func(t *testing.T) {
+			var document map[string]any
+			if err := json.Unmarshal(fixture, &document); err != nil {
+				t.Fatal(err)
+			}
+			document["schema"] = "gentle-ai.review-integration.status/v" + strings.TrimSuffix(strings.TrimPrefix(name, "status-v"), ".schema.json")
+			schema := compileWholeNativeStatusSchema(t, name)
+			if err := schema.Validate(document); err != nil {
+				t.Fatalf("whole %s envelope rejected fixture: %v", name, err)
+			}
+			document["unknown"] = true
+			if err := schema.Validate(document); err == nil {
+				t.Fatal("whole schema accepted an unknown property")
+			}
+		})
+	}
+}
+
+func compileWholeNativeStatusSchema(t *testing.T, name string) *jsonschema.Schema {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.UseRegexpEngine(reviewSchemaRegexpEngine)
+	for _, version := range []string{"v1", "v2"} {
+		paths, err := filepath.Glob(filepath.Join(root, version, "schemas", "*.schema.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range paths {
+			payload, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document map[string]any
+			if err := json.Unmarshal(payload, &document); err != nil {
+				t.Fatal(err)
+			}
+			if err := compiler.AddResource(document["$id"].(string), document); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	id := "https://gentle-ai.dev/contracts/review-integration/v2/schemas/" + name
+	schema, err := compiler.Compile(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return schema
+}
+
+type reviewSchemaRegexp struct {
+	pattern string
+	re      *regexp.Regexp
+}
+
+func (r reviewSchemaRegexp) String() string { return r.pattern }
+
+func (r reviewSchemaRegexp) MatchString(value string) bool {
+	if r.re == nil {
+		return value != "" && !strings.HasPrefix(value, "/") && !strings.Contains(value, "\n") && !slices.Contains(strings.Split(value, "/"), "..")
+	}
+	return r.re.MatchString(value)
+}
+
+func reviewSchemaRegexpEngine(pattern string) (jsonschema.Regexp, error) {
+	if pattern == "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$" {
+		return reviewSchemaRegexp{pattern: pattern}, nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	return reviewSchemaRegexp{pattern: pattern, re: re}, nil
 }

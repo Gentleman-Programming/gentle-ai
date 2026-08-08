@@ -99,6 +99,7 @@ func TestReviewFinalizeNoDiscoverableLineageNamesStartCommand(t *testing.T) {
 func TestReviewValidateReceiptNotAvailableNamesFinalizeCommandWithLineage(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	lineage := "receipt-not-available-needs-finalize"
+	writeReviewStartCandidate(t, repo, "docs/pending.md", "# pending\n\nplain prose, no executable content.\n", 0o644)
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)
 	}

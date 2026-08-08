@@ -48,7 +48,17 @@ type prePRCITrust struct {
 }
 
 const (
-	baseAdvanceCompatibleStatus            = "base-advanced-compatible"
+	baseAdvanceCompatibleStatus = "base-advanced-compatible"
+	// baseAdvanceCompatibleLocalStatus is the D2 (#2471 option a) local-gate
+	// counterpart of baseAdvanceCompatibleStatus (#2388): the exact same five
+	// content checks deriveBaseAdvanceCompatibility already enforces for
+	// pre-PR, reused verbatim at pre-commit/pre-push, minus the trusted CI
+	// attestation pre-PR alone can obtain. It is issued only by
+	// deriveBaseAdvanceCompatibility(requireAttestation=false) and is never
+	// accepted at GatePrePR (receipt.go's baseAdvanceStatusAllowedForGate) --
+	// that byte-strict split is the whole point of a second status constant
+	// instead of relaxing baseAdvanceCompatibleStatus's own validity rule.
+	baseAdvanceCompatibleLocalStatus       = "base-advanced-compatible-local"
 	currentChangesBoundaryCompatibleStatus = "current-changes-boundary-compatible"
 	currentChangesBoundaryCIStatus         = "not-required"
 )
@@ -62,7 +72,7 @@ func (proof BaseAdvanceCompatibility) valid() bool {
 	case baseAdvanceCompatibleStatus:
 		return core && validSHA256(proof.CIAttestationArtifactHash) &&
 			strings.TrimSpace(proof.CIAttestationIssuer) != "" && proof.CIStatus == "success"
-	case currentChangesBoundaryCompatibleStatus:
+	case baseAdvanceCompatibleLocalStatus, currentChangesBoundaryCompatibleStatus:
 		return core && proof.CIAttestationArtifactHash == "" && proof.CIAttestationIssuer == "" &&
 			proof.CIStatus == currentChangesBoundaryCIStatus
 	default:
@@ -70,14 +80,28 @@ func (proof BaseAdvanceCompatibility) valid() bool {
 	}
 }
 
-func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Receipt, request GateRequest, snapshot Snapshot, refs *resolvedPrePRRefs, preimages gateArtifactPreimages) (BaseAdvanceCompatibility, error) {
+// deriveBaseAdvanceCompatibility runs the five content checks D2 (#2471
+// option a, filed against #2388) designates as the complete, gate-agnostic
+// compatible-base-advance contract: merge-base tree preservation, delivered
+// path identity, delivered patch identity, base-advance/delivered path
+// disjointness, and a conflict-free `merge-tree --write-tree`. requireAttestation
+// is the ONLY axis that varies by gate: true reproduces the exact pre-PR
+// behavior this function always had (a trusted CI attestation over the merged
+// result is mandatory, and the returned proof carries baseAdvanceCompatibleStatus);
+// false skips the attestation lookup/verification entirely and returns
+// baseAdvanceCompatibleLocalStatus instead, so a caller can never launder a
+// locally-derived proof into the CI-attested shape pre-PR's byte-strict
+// validation (receipt.go's baseAdvanceStatusAllowedForGate) requires. The five
+// content checks themselves are not duplicated, weakened, or parameterized --
+// same code, same order, same failure strings, for every caller.
+func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Receipt, request GateRequest, snapshot Snapshot, refs *resolvedPrePRRefs, preimages gateArtifactPreimages, requireAttestation bool) (BaseAdvanceCompatibility, error) {
 	if refs == nil {
 		return BaseAdvanceCompatibility{}, errors.New("resolved pre-PR refs are missing")
 	}
 	if request.ExternalEvidence != ExternalEvidenceNone {
 		return BaseAdvanceCompatibility{}, errors.New("external evidence invalidates or escalates compatibility")
 	}
-	if request.PrePR == nil || strings.TrimSpace(request.PrePR.CIAttestationArtifact) == "" {
+	if requireAttestation && (request.PrePR == nil || strings.TrimSpace(request.PrePR.CIAttestationArtifact) == "") {
 		return BaseAdvanceCompatibility{}, errors.New("trusted CI attestation is required")
 	}
 	mergeBase, err := runGit(ctx, repo, nil, nil, "merge-base", refs.Selection.Commit, refs.HeadCommit)
@@ -124,15 +148,18 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 	if len(mergedFields) == 0 || !validGitTree(mergedFields[0]) {
 		return BaseAdvanceCompatibility{}, errors.New("merged result tree cannot be derived")
 	}
-	attestationHash, issuer, err := verifyPrePRCIAttestation(preimages.policy, preimages.ciAttestation, mergedFields[0])
-	if err != nil {
-		return BaseAdvanceCompatibility{}, err
+	var attestationHash, issuer string
+	if requireAttestation {
+		attestationHash, issuer, err = verifyPrePRCIAttestation(preimages.policy, preimages.ciAttestation, mergedFields[0])
+		if err != nil {
+			return BaseAdvanceCompatibility{}, err
+		}
 	}
 	selector := ""
 	if refs.Selection.Source == PrePRBoundaryExplicit {
 		selector = refs.Selection.Selector
 	}
-	selectionNow, err := selectPrePRBoundary(ctx, repo, selector)
+	selectionNow, err := reselectBoundaryForGate(ctx, repo, request.Gate, selector)
 	if err != nil || selectionNow != refs.Selection {
 		return BaseAdvanceCompatibility{}, errors.New("pre-PR base ref advanced during validation")
 	}
@@ -140,17 +167,35 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 	if err != nil || headNow != refs.HeadCommit {
 		return BaseAdvanceCompatibility{}, errors.New("HEAD advanced during validation")
 	}
+	status, ciStatus := baseAdvanceCompatibleLocalStatus, currentChangesBoundaryCIStatus
+	if requireAttestation {
+		status, ciStatus = baseAdvanceCompatibleStatus, "success"
+	}
 	proof := BaseAdvanceCompatibility{
-		Status: baseAdvanceCompatibleStatus, Compatible: true, OriginalMergeBaseTree: receipt.BaseTree, NewBaseTree: snapshot.BaseTree,
+		Status: status, Compatible: true, OriginalMergeBaseTree: receipt.BaseTree, NewBaseTree: snapshot.BaseTree,
 		OriginalPatchIdentity: originalPatch, DeliveredPatchIdentity: currentPatch,
 		DeliveredPathsDigest: receipt.PathsDigest, BaseAdvancePathsDigest: digestPaths(basePaths), PathsDisjoint: true,
 		MergedResultTree: mergedFields[0], CIAttestationArtifactHash: attestationHash,
-		CIAttestationIssuer: issuer, CIStatus: "success",
+		CIAttestationIssuer: issuer, CIStatus: ciStatus,
 	}
 	if !proof.valid() {
 		return BaseAdvanceCompatibility{}, errors.New("compatible base advance proof is incomplete")
 	}
 	return proof, nil
+}
+
+// reselectBoundaryForGate re-derives the boundary selector using exactly the
+// same resolution algorithm the target's own gate used the first time
+// (gate.go's prePRBoundaryForRequest vs. buildPushTarget/selectPrePushBoundary
+// diverge on how an empty/default selector resolves), so the freshness check
+// below compares like with like instead of risking a false "advanced during
+// validation" -- or worse, a false pass -- from mixing the two boundary
+// resolvers.
+func reselectBoundaryForGate(ctx context.Context, repo string, gate GateKind, selector string) (PrePRBoundarySelection, error) {
+	if gate == GatePrePush {
+		return selectPrePushBoundary(ctx, repo, selector)
+	}
+	return selectPrePRBoundary(ctx, repo, selector)
 }
 
 // deriveCurrentChangesBoundaryCompatibility reconciles an approved

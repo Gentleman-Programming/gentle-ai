@@ -228,18 +228,29 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		Persona:                     string(input.Selection.Persona),
 	}
 	newState.SetSelection(input.Selection)
-	if len(flags.Agents) > 0 {
-		merged, err := mergeExplicitAgentInstallState(homeDir, newState, agentIDs, flags)
-		if err != nil {
-			return result, fmt.Errorf("merge explicit agent install state: %w", err)
-		}
-		newState = merged
+	writer, err := managedAssetDigest()
+	if err != nil {
+		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
 	}
-	if err := state.Write(homeDir, newState); err != nil {
+	if err := persistInstallState(homeDir, newState, agentIDs, flags, writer); err != nil {
 		return result, fmt.Errorf("persist install state: %w", err)
 	}
 
 	return result, nil
+}
+
+func persistInstallState(homeDir string, newState state.InstallState, agentIDs []string, flags InstallFlags, writer string) error {
+	return withInstallStateLock(homeDir, func() error {
+		if len(flags.Agents) > 0 {
+			merged, err := mergeExplicitAgentInstallState(homeDir, newState, agentIDs, flags)
+			if err != nil {
+				return fmt.Errorf("merge explicit agent install state: %w", err)
+			}
+			newState = merged
+		}
+		newState.ManagedAssetDigest = writer
+		return state.Write(homeDir, newState)
+	})
 }
 
 // mergeExplicitAgentInstallState merges a fresh single-agent install's state
@@ -662,14 +673,14 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		apply = append(apply, agentInstallStep{id: "agent:" + string(agent), agent: agent, homeDir: r.homeDir, profile: r.profile})
 	}
 
+	for _, tool := range r.selection.CommunityTools {
+		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, state: r.state})
+	}
+
 	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
 		for _, plugin := range r.selection.OpenCodePlugins {
 			apply = append(apply, openCodePluginInstallStep{id: "opencode-plugin:" + string(plugin), plugin: plugin, homeDir: r.homeDir})
 		}
-	}
-
-	for _, tool := range r.selection.CommunityTools {
-		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, state: r.state})
 	}
 
 	for _, component := range r.resolved.OrderedComponents {
@@ -1823,6 +1834,16 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 				}
 			}
 		}
+		// Persona backup captures every managed output-style file, not just the
+		// selected one, so a failed persona switch can restore the file its
+		// cleanup removed. Backup-only: verification stays on the selected file.
+		if component == model.ComponentPersona {
+			for _, path := range managedOutputStyleBackupPaths(selection, adapters, func(a agents.Adapter) string {
+				return a.OutputStyleDir(componentPathDirScoped(homeDir, workspaceDir, scope, a, model.ComponentPersona))
+			}) {
+				paths[path] = struct{}{}
+			}
+		}
 	}
 	// Routing guidance is delivered per agent outside the component loop, so a
 	// selection whose components do not happen to cover the same file would be
@@ -1861,6 +1882,13 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
 			paths[path] = struct{}{}
 		}
+	}
+	pluginPaths, err := opencodeplugin.InstallPaths(homeDir, selection.OpenCodePlugins)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range pluginPaths {
+		paths[path] = struct{}{}
 	}
 
 	targets := make([]string, 0, len(paths))

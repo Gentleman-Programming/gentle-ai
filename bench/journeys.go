@@ -30,8 +30,9 @@ type statusEnvelope struct {
 		Paths                []string `json:"paths"`
 	} `json:"projection"`
 	NextTransition struct {
-		Kind    string `json:"kind"`
-		Collect struct {
+		Kind       string `json:"kind"`
+		ReasonCode string `json:"reason_code"`
+		Collect    struct {
 			Inputs []struct {
 				Name             string `json:"name"`
 				CaptureOperation string `json:"capture_operation"`
@@ -106,7 +107,11 @@ func readStatus(r *journeyRun) (statusEnvelope, error) {
 }
 
 func readStatusFor(r *journeyRun, selectors ...string) (statusEnvelope, error) {
-	args := append([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}, selectors...)
+	return readStatusForContract(r, reviewContract, selectors...)
+}
+
+func readStatusForContract(r *journeyRun, contract string, selectors ...string) (statusEnvelope, error) {
+	args := append([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", contract, "--next-transition"}, selectors...)
 	observation := r.run(args, false)
 	var envelope statusEnvelope
 	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &envelope); err != nil {
@@ -124,8 +129,9 @@ func synthesizeReviewerResult(subjectHash string, paths []string) ([]byte, error
 	if subjectHash == "" {
 		return nil, errors.New("collect envelope carried no subject hash")
 	}
-	if len(paths) == 0 {
-		paths = []string{"."}
+	paths = append([]string{}, paths...)
+	for left, right := 0, len(paths)-1; left < right; left, right = left+1, right-1 {
+		paths[left], paths[right] = paths[right], paths[left]
 	}
 	return json.Marshal(map[string]any{
 		"subject_hash": subjectHash,
@@ -229,7 +235,7 @@ func rejectedThenRecapture(r *journeyRun) error {
 		return errors.New("expected a reviewer-result collect transition")
 	}
 	bad, err := synthesizeReviewerResult(
-		"sha256:0000000000000000000000000000000000000000000000000000000000000000", envelope.paths())
+		envelope.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash, nil)
 	if err != nil {
 		return err
 	}
@@ -425,6 +431,12 @@ func stageOrdinaryCode(sandbox *Sandbox) error {
 	if err := sandbox.write(path, content); err != nil {
 		return err
 	}
+	// j12 reverses the inspected-path manifest; two ordinary files make that proof observable.
+	path = filepath.Join(sandbox.Repo, "internal", "format", "whitespace.go")
+	content = "package format\n\n// IsBlank reports whether a label contains no characters.\nfunc IsBlank(label string) bool {\n\treturn label == \"\"\n}\n"
+	if err := sandbox.write(path, content); err != nil {
+		return err
+	}
 	return sandbox.git(sandbox.Repo, "add", "-A")
 }
 
@@ -516,9 +528,18 @@ func Journeys() []Journey {
 	journeys := append(coreJourneys(), edgeJourneys()...)
 	journeys = append(journeys, sddJourneys()...)
 	journeys = append(journeys, sddChainJourneys()...)
+	journeys = append(journeys, captureEvidenceDescriptorJourneys()...)
+	journeys = append(journeys, scopeChangedFixtureJourneys()...)
 	journeys = append(journeys, waveOneJourneys()...)
 	journeys = append(journeys, waveThreeJourneys()...)
-	return append(journeys, waveFiveJourneys()...)
+	journeys = append(journeys, waveFiveJourneys()...)
+	journeys = append(journeys, advisoryJourneys()...)
+	journeys = append(journeys, zeroDeltaJourneys()...)
+	journeys = append(journeys, localGateBaseAdvanceJourneys()...)
+	journeys = append(journeys, intendedUntrackedJourneys()...)
+	journeys = append(journeys, captureResultDryRunJourneys()...)
+	journeys = append(journeys, findingIDPrefixJourneys()...)
+	return append(journeys, handoffJourneys()...)
 }
 
 func coreJourneys() []Journey {
@@ -686,7 +707,7 @@ func coreJourneys() []Journey {
 		{
 			ID:     "j12-rejected-capture-then-recapture",
 			Title:  "Failure path: a reviewer result the product rejects, then a recapture",
-			Source: "community failure path: binding mismatch",
+			Source: "#2614: incomplete inspection coverage refuses, then an unordered complete manifest recaptures",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage ordinary code", Fixture: stageOrdinaryCode},
@@ -711,54 +732,49 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j14-abandon-needs-a-hand-built-token",
-			Title:  "Maintainer path: abandoning a pristine lineage needs an assembled authorization",
+			Title:  "Maintainer path: abandoning a non-terminal lineage binds its discarded work",
 			Source: "review abandon contract",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage docs", Fixture: stageDocs("abandoned")},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "abandon a pristine lineage", Requires: abandonCapability, Composite: abandonPristineLineage},
+				{Name: "abandon a non-terminal lineage with its V2 binding", Requires: abandonCapability, Composite: abandonNonTerminalLineage},
 			},
 		},
 	}
 }
 
-// abandonPristineLineage is the manual_tokens exhibit. Abandoning a lineage
-// needs an exact six-line LF-only binding assembled by hand from three values
-// the caller must first go and read out of the authority.
-func abandonPristineLineage(r *journeyRun) error {
-	envelope, err := readStatus(r)
-	if err != nil {
-		return err
+// abandonNonTerminalLineage is the manual_tokens exhibit. Abandoning a lineage
+// needs an exact nine-line LF-only V2 binding assembled from its status row,
+// including the discarded-work summary the gate re-derives.
+func abandonNonTerminalLineage(r *journeyRun) error {
+	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo}, false)
+	var head authorityHead
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &head); err != nil {
+		return fmt.Errorf("parse review status: %w (stderr: %s)", err, firstLine(observation.Stderr))
 	}
-	lineage := envelope.Authority.LineageID
-	revision := envelope.Authority.Revision
-	target := envelope.TargetIdentity
+	if len(head.Entries) != 1 {
+		return fmt.Errorf("review status listed %d authorities, want exactly one", len(head.Entries))
+	}
+	entry := head.Entries[0]
 	const actor = "bench"
-	const reason = "benchmark abandons a pristine lineage"
+	const reason = "operator_disposition"
 
 	// Attempt one: everything the help text lists except the token.
 	r.run([]string{
 		"review", "abandon", "--cwd", r.sandbox.Repo,
-		"--lineage", lineage,
-		"--expected-revision", revision,
+		"--lineage", entry.LineageID,
+		"--expected-revision", entry.Revision,
 		"--reason", reason,
 		"--actor", actor,
 	}, false)
 
-	authorization := strings.Join([]string{
-		"gentle-ai.review-abandon-authorization/v1",
-		"lineage=" + lineage,
-		"revision=" + revision,
-		"snapshot_identity=" + target,
-		"actor=" + actor,
-		"reason=" + reason,
-	}, "\n")
+	authorization := renderAbandonAuthorization(entry, actor, reason)
 
 	r.run([]string{
 		"review", "abandon", "--cwd", r.sandbox.Repo,
-		"--lineage", lineage,
-		"--expected-revision", revision,
+		"--lineage", entry.LineageID,
+		"--expected-revision", entry.Revision,
 		"--reason", reason,
 		"--actor", actor,
 		"--maintainer-authorization", authorization,

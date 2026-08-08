@@ -319,6 +319,150 @@ func TestSnapshotProjectionValidationAndIdentity(t *testing.T) {
 	}
 }
 
+// TestSnapshotIdentityIsRepresentationInvariant is the headline proof for
+// issue #2659 (root 21 of #2471): a declared intended-untracked path and the
+// exact same path staged into the index instead are two REPRESENTATIONS of
+// byte-identical candidate content, and the purified identity domain must not
+// distinguish them. Before the purification, snapshotIdentityForProjection
+// folded IntendedUntracked and its untracked-replay proof into the hash, so
+// these two snapshots carried different Identity values despite an identical
+// CandidateTree -- the bug this change fixes.
+func TestSnapshotIdentityIsRepresentationInvariant(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "declared.txt", "same bytes\n")
+	builder := SnapshotBuilder{Repo: repo}
+
+	declared, err := builder.Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"declared.txt"}})
+	if err != nil {
+		t.Fatalf("Build(declared untracked) error = %v", err)
+	}
+
+	gitSnapshot(t, repo, "add", "--", "declared.txt")
+	staged, err := builder.Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatalf("Build(staged instead) error = %v", err)
+	}
+
+	if declared.CandidateTree != staged.CandidateTree {
+		t.Fatalf("fixture is not content-identical: declared candidate=%s staged candidate=%s", declared.CandidateTree, staged.CandidateTree)
+	}
+	if declared.IntendedUntrackedProof == staged.IntendedUntrackedProof && !equalStrings(declared.IntendedUntracked, staged.IntendedUntracked) {
+		t.Fatalf("fixture did not actually change representation: declared=%#v staged=%#v", declared.IntendedUntracked, staged.IntendedUntracked)
+	}
+	if declared.Identity != staged.Identity {
+		t.Fatalf("purified identity is not representation-invariant: declared=%#v staged=%#v", declared, staged)
+	}
+}
+
+// TestLegacyFrozenSnapshotIdentityFailsValidationClosed is the maintainer-
+// directed inverse of the migration question for #2659: there is no dual
+// recognition of the retired pre-purification identity domain. A snapshot
+// whose Identity was minted under the OLD hash (kind/projection tag folding
+// IntendedUntracked and its proof into the hash) fails ValidateEvidence and
+// ValidateLiveSnapshot closed against the purified recomputation -- it does
+// not silently validate, and it does not panic or surface a cryptic
+// corruption/store error. It fails with the exact same "does not match Git
+// tree evidence" / "no longer matches" shape any other stale target produces,
+// which is the shape internal/cli already classifies as the actionable
+// reviewPreflightStaleTargetReason refusal (see
+// internal/cli/review_start_evidence_test.go, which proves that refusal shape
+// is reachable and actionable) -- so an operator who replays an old hint
+// lands on "re-derive the exact next transition", i.e. run review again, not
+// on a raw internal error.
+func TestLegacyFrozenSnapshotIdentityFailsValidationClosed(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "changed\n")
+	builder := SnapshotBuilder{Repo: repo}
+
+	snapshot, err := builder.Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if err := builder.ValidateEvidence(context.Background(), snapshot); err != nil {
+		t.Fatalf("freshly minted snapshot must validate: %v", err)
+	}
+
+	legacy := snapshot
+	legacy.Identity = legacyPreCutSnapshotIdentityForTest(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree,
+		snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
+	if legacy.Identity == snapshot.Identity {
+		t.Fatal("legacy identity fixture did not actually differ from the purified identity")
+	}
+
+	err = builder.ValidateEvidence(context.Background(), legacy)
+	if err == nil {
+		t.Fatal("legacy-frozen identity validated against the purified recomputation")
+	}
+	if !strings.Contains(err.Error(), "match Git tree evidence") {
+		t.Fatalf("legacy-frozen identity failure is not the actionable stale-target shape: %v", err)
+	}
+
+	if err := builder.ValidateLiveSnapshot(context.Background(), legacy); err == nil {
+		t.Fatal("ValidateLiveSnapshot accepted a legacy-frozen identity")
+	} else if !strings.Contains(err.Error(), "match Git tree evidence") {
+		t.Fatalf("ValidateLiveSnapshot legacy-frozen failure is not the actionable stale-target shape: %v", err)
+	}
+}
+
+// legacyPreCutSnapshotIdentityForTest reconstructs, byte for byte, the
+// identity domain snapshotIdentityForProjection used before the #2659
+// purification: it folds proof and intended into the hash under the original
+// v1/v2/base-workspace-overlay-v1 tags. Production code deletes this domain
+// outright (maintainer decision: outdated identities are unusable, not
+// dual-recognized) so this exists ONLY here, as a fixture generator for
+// TestLegacyFrozenSnapshotIdentityFailsValidationClosed. It must stay a
+// byte-for-byte match of the retired formula or the test proves nothing.
+func legacyPreCutSnapshotIdentityForTest(kind TargetKind, projection Projection, baseTree, candidateTree, pathsDigest, proof string, intended, ledgerIDs []string) string {
+	hash := sha256.New()
+	if kind == TargetBaseWorkspaceOverlay {
+		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v1\x00"))
+	} else if projection == ProjectionStaged {
+		hash.Write([]byte("gentle-ai.review-snapshot/v2\x00"))
+	} else {
+		hash.Write([]byte("gentle-ai.review-snapshot/v1\x00"))
+	}
+	values := []string{string(kind), baseTree, candidateTree, pathsDigest, proof}
+	if projection == ProjectionStaged {
+		values = []string{string(kind), string(projection), baseTree, candidateTree, pathsDigest, proof}
+	}
+	for _, value := range values {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	for _, value := range intended {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	for _, value := range ledgerIDs {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+// TestSnapshotIdentityKindDomainSeparationRegression guards the one invariant
+// the #2659 purification explicitly keeps: kind and projection stay in the
+// identity hash domain. Identical baseTree/candidateTree/pathsDigest/ledgerIDs
+// under TargetCurrentChanges vs TargetBaseWorkspaceOverlay must still mint
+// different identities, or a current-changes receipt could be recognized as a
+// base-workspace-overlay review of identical bytes.
+func TestSnapshotIdentityKindDomainSeparationRegression(t *testing.T) {
+	baseTree := strings.Repeat("a", 40)
+	candidateTree := strings.Repeat("b", 40)
+	pathsDigest := digestPaths([]string{"shared.txt"})
+
+	currentChanges := snapshotIdentityForProjection(TargetCurrentChanges, "", baseTree, candidateTree, pathsDigest, "", nil, nil)
+	overlay := snapshotIdentityForProjection(TargetBaseWorkspaceOverlay, "", baseTree, candidateTree, pathsDigest, "", nil, nil)
+	if currentChanges == overlay {
+		t.Fatalf("current-changes and base-workspace-overlay identities collided for identical content: %s", currentChanges)
+	}
+
+	workspace := snapshotIdentityForProjection(TargetCurrentChanges, ProjectionWorkspace, baseTree, candidateTree, pathsDigest, "", nil, nil)
+	staged := snapshotIdentityForProjection(TargetCurrentChanges, ProjectionStaged, baseTree, candidateTree, pathsDigest, "", nil, nil)
+	if workspace == staged {
+		t.Fatalf("workspace and staged projection identities collided for identical content: %s", workspace)
+	}
+}
+
 func TestBuildStagedWorkspaceOverlayRecoveryUsesOnlyTheRealIndex(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)

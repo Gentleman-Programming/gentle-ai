@@ -221,6 +221,45 @@ func TestSyncRuntimeOpenClawUsesConfiguredActiveWorkspace(t *testing.T) {
 	assertNoOpenClawInstructionsInCurrentProject(t, currentProject)
 }
 
+func TestRunSyncOpenClawSkillsUseConfiguredActiveWorkspace(t *testing.T) {
+	home := t.TempDir()
+	activeWorkspace := t.TempDir()
+	currentProject := t.TempDir()
+	writeOpenClawConfigWithWorkspace(t, home, activeWorkspace)
+	t.Chdir(currentProject)
+
+	skillIDs := []model.SkillID{
+		model.SkillGoTesting,
+		model.SkillBranchPR,
+		model.SkillWorkUnitCommits,
+	}
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenClaw},
+		Components: []model.ComponentID{model.ComponentSkills},
+		Skills:     skillIDs,
+	}
+
+	result, err := RunSyncWithSelection(home, selection)
+	if err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("post-sync verification ready = false, report = %#v", result.Verify)
+	}
+
+	for _, skillID := range skillIDs {
+		workspaceSkill := filepath.Join(activeWorkspace, ".openclaw", "skills", string(skillID), "SKILL.md")
+		if _, err := os.Stat(workspaceSkill); err != nil {
+			t.Errorf("configured OpenClaw workspace skill %q missing: %v", workspaceSkill, err)
+		}
+
+		homeSkill := filepath.Join(home, ".openclaw", "skills", string(skillID), "SKILL.md")
+		if _, err := os.Stat(homeSkill); !os.IsNotExist(err) {
+			t.Errorf("OpenClaw sync must not write home-root skill %q; stat err=%v", homeSkill, err)
+		}
+	}
+}
+
 func writeOpenClawConfigWithWorkspace(t *testing.T, home, workspace string) {
 	t.Helper()
 	configDir := filepath.Join(home, ".openclaw")

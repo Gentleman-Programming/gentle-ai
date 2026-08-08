@@ -145,6 +145,8 @@ func TestLockContentionAfterACommittedTransitionStillReportsUnknown(t *testing.T
 // with explicit-maintainer-action. The reporter saw 19 of 20 concurrent
 // pre-commit gates report exactly that against a healthy authority.
 func TestConcurrentDeliveryGateContentionIsNotReportedAsInvalidated(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	lineage := approvedLowRiskFacadeReview(t, repo)
 
@@ -341,13 +343,11 @@ func startLowRiskFacadeReview(t *testing.T, repo string) string {
 	for index := range lines {
 		lines[index] = fmt.Sprintf("ordinary documentation line %03d", index+1)
 	}
-	path := filepath.Join(repo, "docs", "ordinary-guide.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// Declared, not merely written: since #2394 an untracked path only enters
+	// the candidate once the user stages it, so writing this file raw would
+	// leave START with nothing to freeze — and every caller here needs a real
+	// low-risk candidate to reach the lifecycle it is actually testing.
+	writeReviewStartCandidate(t, repo, "docs/ordinary-guide.md", strings.Join(lines, "\n")+"\n", 0o644)
 	var startOutput bytes.Buffer
 	if err := RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo,

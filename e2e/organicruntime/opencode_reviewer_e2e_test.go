@@ -19,11 +19,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 )
 
-// openCodePoisonedReviewSetup is everything both the positive proof
-// (isolation variables set) and the refusal proof (isolation variables
-// unset) share: a real negotiated review, walked through to its exactly-one
-// reviewer collect input, with the live worktree poisoned strictly after the
-// candidate froze.
+// openCodePoisonedReviewSetup is the shared fixture for the ordinary-session
+// adapter conformance proof below: a real negotiated review, walked through
+// to its exactly-one reviewer collect input, with the live worktree poisoned
+// strictly after the candidate froze.
 type openCodePoisonedReviewSetup struct {
 	harness       *organicHarness
 	lineage       string
@@ -36,15 +35,23 @@ type openCodePoisonedReviewSetup struct {
 
 // poisonMarker is planted, after the candidate freezes, into the reviewed
 // file, a brand-new secret-shaped file, AND AGENTS.md at the worktree root.
-// The third location is what proves the CRITICAL fix: OpenCode concatenates
-// AGENTS.md into every session's system prompt regardless of the agent's
-// tools map, a channel entirely outside the `task` args.prompt this plugin
-// controls.
+// The reviewer holds no bash and no read tool, and the plugin replaces its
+// task prompt wholesale with the provider-injected frozen context, so none
+// of these three locations can ever reach the reviewer's own task prompt or
+// the OpenCode session transcript, regardless of host isolation
+// configuration.
 const openCodePoisonMarker = "POISON-MARKER-2417-b6b2c1"
+
+func requireOpenCodeImmutableReviewExecutor(t *testing.T) {
+	t.Helper()
+	if os.Getenv(realAgentE2EEnvironment) != "1" {
+		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real OpenCode reviewer proof")
+	}
+}
 
 // setupOpenCodePoisonedReview drives a real negotiated review to its
 // reviewer collect point and poisons the worktree. It does not launch
-// OpenCode: callers configure their own isolation environment and fixture.
+// OpenCode: the caller configures its own environment and fixture.
 func setupOpenCodePoisonedReview(t *testing.T, lineage string) openCodePoisonedReviewSetup {
 	t.Helper()
 	requireOrganicExecutableVersion(t, "opencode", pinnedOpenCodeVersion)
@@ -118,9 +125,8 @@ func setupOpenCodePoisonedReview(t *testing.T, lineage string) openCodePoisonedR
 	}
 
 	// Poison the worktree strictly AFTER the candidate froze: the reviewed
-	// file, a brand-new secret-shaped file, and -- the CRITICAL channel --
-	// AGENTS.md at the worktree root, which OpenCode concatenates into every
-	// session's system prompt regardless of the agent's tools map.
+	// file, a brand-new secret-shaped file, and AGENTS.md at the worktree
+	// root.
 	poisonedCandidate := "package mechanical\n\n// " + openCodePoisonMarker + "\nfunc Compute(value int) int {\n\treturn 0\n}\n"
 	if err := os.WriteFile(filepath.Join(harness.repo.worktree, candidatePath), []byte(poisonedCandidate), 0o644); err != nil {
 		t.Fatal(err)
@@ -140,8 +146,10 @@ func setupOpenCodePoisonedReview(t *testing.T, lineage string) openCodePoisonedR
 }
 
 // openCodeReviewEnvironment builds the environment for the `opencode run`
-// process, minus the two isolation variables: callers add those explicitly,
-// since whether they are present is exactly what each test below varies.
+// process. It sets no OPENCODE_DISABLE_PROJECT_CONFIG or
+// OPENCODE_DISABLE_EXTERNAL_SKILLS: the shared advisory transport
+// (rdd-advisory-transport SKILL.md) requires neither, and this is the
+// ordinary-session adapter conformance proof.
 func (setup openCodePoisonedReviewSetup) openCodeReviewEnvironment(t *testing.T, configJSON string) []string {
 	t.Helper()
 	return replaceOrganicEnvironment(organicEnvironment(setup.home), map[string]string{
@@ -172,7 +180,7 @@ func (setup openCodePoisonedReviewSetup) openCodeReviewEnvironment(t *testing.T,
 // runOpenCodeReview launches the review-driver against a real `opencode`
 // process. It deliberately omits --pure: --pure disables every local
 // OpenCode plugin, including review-result-artifacts.ts, so a --pure run
-// would prove nothing about either channel under test.
+// would prove nothing about the transport under test.
 func runOpenCodeReview(t *testing.T, setup openCodePoisonedReviewSetup, environment []string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), organicAgentTimeout)
@@ -188,44 +196,51 @@ func runOpenCodeReview(t *testing.T, setup openCodePoisonedReviewSetup, environm
 	return stdout.String()
 }
 
-// TestRealOpenCodeReviewerLensCannotSeeLiveState is issue #2417's organic
-// support proof, run under the exact isolation configuration the plugin's
-// own gate now requires (OPENCODE_DISABLE_PROJECT_CONFIG=1,
-// OPENCODE_DISABLE_EXTERNAL_SKILLS=1). It replaces the earlier fail-closed
-// rejection proof: since #2417 restored genuine OpenCode immutable
-// receipt-review through the provider-injected shell-less channel, "OpenCode
-// rejects the reviewer" is no longer the guarantee to prove. The guarantee
-// now is that a genuinely launched review-risk lens -- holding no bash and
-// no read tool, and running under the required isolation environment --
-// cannot see anything except the frozen candidate the OpenCode plugin
+// TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutput
+// is the ordinary-session adapter conformance proof (rdd-advisory-transport
+// SKILL.md, replacing issue #2417's isolation-gated proof): a genuinely
+// launched review-risk lens -- holding no bash and no read tool, running in
+// an ordinary already-running OpenCode session with no
+// OPENCODE_DISABLE_PROJECT_CONFIG or OPENCODE_DISABLE_EXTERNAL_SKILLS set --
+// still only ever sees the frozen candidate the OpenCode plugin
 // (review-result-artifacts.ts) injected into its prompt before it launched:
 // not the reviewed file's live content, not a brand-new secret-shaped file,
 // not AGENTS.md, and not the caller-authored prose the driver's task call
 // carried before provider injection replaced it.
-func TestRealOpenCodeReviewerLensCannotSeeLiveState(t *testing.T) {
-	if os.Getenv(realAgentE2EEnvironment) != "1" {
-		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real OpenCode reviewer support proof")
-	}
-	setup := setupOpenCodePoisonedReview(t, "opencode-poisoned-worktree-isolated")
+//
+// It also proves the reduced plugin's second half: the completed reviewer
+// task's own output is the model's raw final text, not a native capture
+// manifest the plugin built itself (the plugin no longer calls
+// `review capture-result` or `review preserve-result` at all). Native
+// admission is exercised exactly as a real driver would: this test extracts
+// that raw text from the OpenCode transcript and routes it through the
+// exact native capture operation the negotiated collect step named, then
+// finalizes -- proving raw output reaches native admission and creates
+// review authority.
+func TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutput(t *testing.T) {
+	requireOpenCodeImmutableReviewExecutor(t)
+	setup := setupOpenCodePoisonedReview(t, "opencode-poisoned-worktree-ordinary-session")
 
 	fixture := newOpenCodeReviewerFixture(t, setup.binding, setup.manifestPaths)
 	defer fixture.Close()
 
 	config := generatedOpenCodeReviewConfig(t, filepath.Join(setup.configRoot, "opencode", "opencode.json"), fixture.URL)
 	environment := setup.openCodeReviewEnvironment(t, config)
-	environment = replaceOrganicEnvironment(environment, map[string]string{
-		"OPENCODE_DISABLE_PROJECT_CONFIG":  "1",
-		"OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
-	})
 
 	transcript := runOpenCodeReview(t, setup, environment)
 	if strings.Contains(transcript, openCodePoisonMarker) {
 		t.Fatalf("poison marker leaked into the OpenCode transcript:\n%s", transcript)
 	}
 	assertNoBashOrReadToolUse(t, transcript)
-	launches, completed := countTaskLaunches(t, transcript)
-	if launches != 1 || !completed {
-		t.Fatalf("expected exactly one completed reviewer task launch, got launches=%d completed=%t:\n%s", launches, completed, transcript)
+	launches, rawOutput := lastCompletedTaskRawOutput(t, transcript)
+	if launches != 1 || strings.TrimSpace(rawOutput) == "" {
+		t.Fatalf("expected exactly one completed reviewer task launch with raw output, got launches=%d output=%q:\n%s", launches, rawOutput, transcript)
+	}
+	// The reduced plugin hands back the model's raw final text: no native
+	// capture manifest field can appear in a task's own output, because the
+	// plugin never calls `review capture-result` itself anymore.
+	if strings.Contains(rawOutput, "admission_decision") {
+		t.Fatalf("task output still carries a native capture manifest; the plugin must hand back raw text: %s", rawOutput)
 	}
 
 	fixture.mu.Lock()
@@ -244,6 +259,28 @@ func TestRealOpenCodeReviewerLensCannotSeeLiveState(t *testing.T) {
 		t.Fatalf("reviewer did not receive the provider-injected context block:\n%s", received)
 	}
 
+	// Raw-output-to-native-admission: route the exact raw text the plugin
+	// handed back through the exact capture operation the negotiated collect
+	// step named for this binding, precisely as the launching session -- not
+	// the plugin -- is now responsible for doing.
+	resultPath := filepath.Join(t.TempDir(), "reviewer-result.json")
+	if err := os.WriteFile(resultPath, []byte(rawOutput), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := setup.harness.gentleAllowFailure(
+		"review", "capture-result",
+		"--repository-context", setup.binding["repository-context"],
+		"--expected-revision", setup.binding["expected-revision"],
+		"--lineage", setup.binding["lineage"],
+		"--target", setup.binding["target"],
+		"--lens", setup.binding["lens"],
+		"--order", setup.binding["order"],
+		"--subject-hash", setup.binding["subject-hash"],
+		"--input", resultPath,
+	); err != nil {
+		t.Fatalf("native admission refused the plugin's raw output: %v", err)
+	}
+
 	// The receipt materializes: finalize succeeds against the exact captured
 	// lineage and creates durable review authority. STATUS is not re-queried
 	// here: STATUS's fresh-target derivation always reflects the live
@@ -253,144 +290,6 @@ func TestRealOpenCodeReviewerLensCannotSeeLiveState(t *testing.T) {
 	setup.harness.gentle("review", "finalize", "--cwd", setup.harness.repo.worktree, "--lineage", setup.lineage, "--captured-results=true")
 	if _, err := os.Stat(filepath.Join(setup.harness.commonDir(), "gentle-ai", "review-transactions", "v2")); err != nil {
 		t.Fatalf("captured reviewer result never created review authority: %v", err)
-	}
-}
-
-// TestRealOpenCodeReviewerRefusesWithoutIsolationEnvironment is the CRITICAL
-// fix's own proof, run WITHOUT setting OPENCODE_DISABLE_PROJECT_CONFIG or
-// OPENCODE_DISABLE_EXTERNAL_SKILLS -- the realistic "operator never
-// configured them" shape, which is what an ordinary shell environment looks
-// like by default. This is the production configuration, not a test-only
-// one: nothing about this test's OpenCode config, plugin, or generated
-// review-risk agent differs from TestRealOpenCodeReviewerLensCannotSeeLiveState
-// above, only the ambient environment the real `opencode` process runs
-// under. Proven against real OpenCode 1.18.10 without the plugin's isolation
-// gate: a review-risk session with no bash and no read tool still received a
-// marker planted in AGENTS.md after the candidate froze, verbatim, in its
-// system message (see the plugin's REQUIRED_ISOLATION_ENVIRONMENT comment).
-// With the gate in place, the reviewer must never launch at all.
-func TestRealOpenCodeReviewerRefusesWithoutIsolationEnvironment(t *testing.T) {
-	if os.Getenv(realAgentE2EEnvironment) != "1" {
-		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real OpenCode reviewer isolation-refusal proof")
-	}
-	setup := setupOpenCodePoisonedReview(t, "opencode-poisoned-worktree-unisolated")
-
-	fixture := newOpenCodeReviewerFixture(t, setup.binding, setup.manifestPaths)
-	defer fixture.Close()
-
-	config := generatedOpenCodeReviewConfig(t, filepath.Join(setup.configRoot, "opencode", "opencode.json"), fixture.URL)
-	// Deliberately does NOT set OPENCODE_DISABLE_PROJECT_CONFIG or
-	// OPENCODE_DISABLE_EXTERNAL_SKILLS: this is the exact scenario the
-	// plugin's isolation gate must refuse.
-	environment := setup.openCodeReviewEnvironment(t, config)
-
-	transcript := runOpenCodeReview(t, setup, environment)
-	if strings.Contains(transcript, openCodePoisonMarker) {
-		t.Fatalf("poison marker leaked into the OpenCode transcript even though the reviewer must never launch:\n%s", transcript)
-	}
-	launches, refused := taskLaunchRefusal(t, transcript)
-	if launches != 1 {
-		t.Fatalf("expected exactly one refused reviewer task attempt, got %d:\n%s", launches, transcript)
-	}
-	if !strings.Contains(refused, "OPENCODE_DISABLE_PROJECT_CONFIG") || !strings.Contains(refused, "OPENCODE_DISABLE_EXTERNAL_SKILLS") {
-		t.Fatalf("refusal does not name both missing isolation variables: %q", refused)
-	}
-	if !strings.Contains(refused, "The reviewer was not launched") {
-		t.Fatalf("isolation refusal lost its exactly-once guarantee: %q", refused)
-	}
-
-	fixture.mu.Lock()
-	received := fixture.receivedContext
-	fixture.mu.Unlock()
-	if received != "" {
-		t.Fatalf("the reviewer's own model call happened despite the missing isolation environment:\n%s", received)
-	}
-
-	// No capture happened: finalize requires the captured_artifacts:complete
-	// precondition, so it must refuse for this lineage's still-unfulfilled
-	// review-risk result. STATUS is not re-queried here for the same reason
-	// as the positive test above: its fresh-target derivation reflects the
-	// live workspace this test just poisoned, so it would offer a fresh
-	// review.start for the (now-poisoned) diff instead of recognizing the
-	// lineage already reviewing -- finalize is bound to the lineage itself
-	// and needs no such re-derivation.
-	if _, _, err := setup.harness.gentleAllowFailure(
-		"review", "finalize", "--cwd", setup.harness.repo.worktree, "--lineage", setup.lineage, "--captured-results=true",
-	); err == nil {
-		t.Fatal("finalize succeeded despite a refused, never-captured reviewer result")
-	}
-}
-
-// TestRealOpenCodeReviewerRefusesRemoteInstructionsEntry is the residual
-// fix's own proof: OPENCODE_DISABLE_PROJECT_CONFIG and
-// OPENCODE_DISABLE_EXTERNAL_SKILLS do not close every channel. A remote
-// (http/https) `instructions` config entry is fetched by OpenCode
-// unconditionally into every session's system prompt, from any config
-// layer, regardless of either variable. This journey sets both variables
-// correctly (the exact isolated shape TestRealOpenCodeReviewerLensCannotSeeLiveState
-// uses) and adds only a remote `instructions` entry to the generated global
-// config, proving the plugin's own client.config.get() check is a genuinely
-// separate gate: the reviewer must still refuse to launch.
-func TestRealOpenCodeReviewerRefusesRemoteInstructionsEntry(t *testing.T) {
-	if os.Getenv(realAgentE2EEnvironment) != "1" {
-		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real OpenCode remote-instructions refusal proof")
-	}
-	setup := setupOpenCodePoisonedReview(t, "opencode-poisoned-worktree-remote-instructions")
-
-	instructionsServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Content-Type", "text/plain")
-		_, _ = writer.Write([]byte(openCodePoisonMarker + "\nremote instructions poison, fetched unconditionally by OpenCode.\n"))
-	}))
-	defer instructionsServer.Close()
-	remoteInstructionsURL := instructionsServer.URL + "/poison.md"
-
-	fixture := newOpenCodeReviewerFixture(t, setup.binding, setup.manifestPaths)
-	defer fixture.Close()
-
-	config := generatedOpenCodeReviewConfig(t, filepath.Join(setup.configRoot, "opencode", "opencode.json"), fixture.URL, remoteInstructionsURL)
-	environment := setup.openCodeReviewEnvironment(t, config)
-	// Both isolation variables ARE set here, unlike
-	// TestRealOpenCodeReviewerRefusesWithoutIsolationEnvironment: this test
-	// proves the remote-instructions gate refuses even when that other gate
-	// is fully satisfied.
-	environment = replaceOrganicEnvironment(environment, map[string]string{
-		"OPENCODE_DISABLE_PROJECT_CONFIG":  "1",
-		"OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
-	})
-
-	transcript := runOpenCodeReview(t, setup, environment)
-	if strings.Contains(transcript, openCodePoisonMarker) {
-		t.Fatalf("poison marker leaked into the OpenCode transcript even though the reviewer must never launch:\n%s", transcript)
-	}
-	launches, refused := taskLaunchRefusal(t, transcript)
-	if launches != 1 {
-		t.Fatalf("expected exactly one refused reviewer task attempt, got %d:\n%s", launches, transcript)
-	}
-	if !strings.Contains(refused, "refuses a remote `instructions` entry") {
-		t.Fatalf("refusal does not name the remote-instructions gate: %q", refused)
-	}
-	if !strings.Contains(refused, remoteInstructionsURL) {
-		t.Fatalf("refusal does not name the offending entry %q: %q", remoteInstructionsURL, refused)
-	}
-	if !strings.Contains(refused, "The reviewer was not launched") {
-		t.Fatalf("remote-instructions refusal lost its exactly-once guarantee: %q", refused)
-	}
-
-	fixture.mu.Lock()
-	received := fixture.receivedContext
-	fixture.mu.Unlock()
-	if received != "" {
-		t.Fatalf("the reviewer's own model call happened despite the remote instructions entry:\n%s", received)
-	}
-
-	// No capture happened: finalize requires captured_artifacts:complete, so
-	// it must refuse for this lineage's still-unfulfilled review-risk
-	// result. See TestRealOpenCodeReviewerRefusesWithoutIsolationEnvironment
-	// above for why STATUS is not re-queried here instead.
-	if _, _, err := setup.harness.gentleAllowFailure(
-		"review", "finalize", "--cwd", setup.harness.repo.worktree, "--lineage", setup.lineage, "--captured-results=true",
-	); err == nil {
-		t.Fatal("finalize succeeded despite a refused, never-captured reviewer result")
 	}
 }
 
@@ -479,8 +378,10 @@ func organicNegotiatedStatus(t *testing.T, harness *organicHarness, lineage stri
 }
 
 // organicCollectBindingFields flattens one collect input's arguments into a
-// name->value map and requires the exact fields the OpenCode plugin's
-// GENTLE_AI_REVIEW_BINDING must carry.
+// name->value map and requires the exact fields this test's own native
+// capture-result call must relay -- the same fields the OpenCode plugin used
+// to parse out of GENTLE_AI_REVIEW_BINDING before the shared advisory
+// transport made that the launching session's job, not the plugin's.
 func organicCollectBindingFields(t *testing.T, input organicCollectionInput) map[string]string {
 	t.Helper()
 	fields := make(map[string]string, len(input.Arguments))
@@ -540,7 +441,8 @@ func (fixture *openCodeReviewerFixture) serveHTTP(writer http.ResponseWriter, re
 			// This is the reviewer's own model call: the plugin already
 			// replaced the driver's short prompt with the full
 			// provider-injected block. Record exactly what arrived and
-			// answer with a genuine completed result.
+			// answer with a genuine completed result -- the plugin hands
+			// this raw text straight back to the driver, unmodified.
 			fixture.mu.Lock()
 			fixture.receivedContext = text
 			fixture.mu.Unlock()
@@ -579,9 +481,8 @@ func (fixture *openCodeReviewerFixture) serveHTTP(writer http.ResponseWriter, re
 		"subject_hash": fixture.binding["subject-hash"],
 	})
 	// The caller-authored prose below must never survive provider injection:
-	// TestRealOpenCodeReviewerLensCannotSeeLiveState's transcript assertions
-	// implicitly cover this, since the reviewer's completed result contains
-	// no trace of it.
+	// this test's transcript assertions implicitly cover this, since the
+	// reviewer's completed result contains no trace of it.
 	prompt := "GENTLE_AI_REVIEW_BINDING " + string(bindingPayload) + "\n" +
 		"caller prose that provider injection must discard: read the live worktree directly"
 	fixture.writeTool(writer, "reviewer-launch", "task", map[string]any{
@@ -675,9 +576,13 @@ func assertNoBashOrReadToolUse(t *testing.T, transcript string) {
 	}
 }
 
-// countTaskLaunches returns how many "task" tool_use events occurred and
-// whether the last one completed with a "completed" inspection status.
-func countTaskLaunches(t *testing.T, transcript string) (launches int, completed bool) {
+// lastCompletedTaskRawOutput returns how many "task" tool_use events
+// occurred and the last completed one's raw output. The reduced plugin
+// hands back the model's raw final text (SKILL.md: adapters return raw
+// bytes plus a transport error, never a captured artifact), so this is the
+// exact text a real launching session would route through native admission
+// next -- there is no more capture manifest for a mutation-proof to inspect.
+func lastCompletedTaskRawOutput(t *testing.T, transcript string) (launches int, rawOutput string) {
 	t.Helper()
 	decoder := json.NewDecoder(strings.NewReader(transcript))
 	for {
@@ -693,7 +598,7 @@ func countTaskLaunches(t *testing.T, transcript string) (launches int, completed
 			} `json:"part"`
 		}
 		if err := decoder.Decode(&event); errors.Is(err, io.EOF) {
-			return launches, completed
+			return launches, rawOutput
 		} else if err != nil {
 			t.Fatalf("decode OpenCode JSON event: %v", err)
 		}
@@ -701,43 +606,8 @@ func countTaskLaunches(t *testing.T, transcript string) (launches int, completed
 			continue
 		}
 		launches++
-		// The task's final output is the plugin's capture-result artifact
-		// manifest (tool.execute.after replaces output.output with it), not
-		// the raw reviewer JSON, so completion is proven by a completed
-		// admission decision on that manifest.
-		completed = event.Part.State.Status == "completed" && strings.Contains(event.Part.State.Output, `"admission_decision": "completed"`)
-	}
-}
-
-// taskLaunchRefusal returns how many "task" tool_use events occurred and the
-// error text of the last one whose status is "error" -- the shape a
-// pre-launch throw in the plugin's "tool.execute.before" hook produces.
-func taskLaunchRefusal(t *testing.T, transcript string) (launches int, refused string) {
-	t.Helper()
-	decoder := json.NewDecoder(strings.NewReader(transcript))
-	for {
-		var event struct {
-			Type string `json:"type"`
-			Part *struct {
-				Type  string `json:"type"`
-				Tool  string `json:"tool"`
-				State struct {
-					Status string `json:"status"`
-					Error  string `json:"error"`
-				} `json:"state"`
-			} `json:"part"`
-		}
-		if err := decoder.Decode(&event); errors.Is(err, io.EOF) {
-			return launches, refused
-		} else if err != nil {
-			t.Fatalf("decode OpenCode JSON event: %v", err)
-		}
-		if event.Type != "tool_use" || event.Part == nil || event.Part.Tool != "task" {
-			continue
-		}
-		launches++
-		if event.Part.State.Status == "error" {
-			refused = event.Part.State.Error
+		if event.Part.State.Status == "completed" {
+			rawOutput = event.Part.State.Output
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package reviewtransaction
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -125,6 +126,45 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 			_, admission, err := AdmitArtifact(t.Context(), candidate)
 			if err == nil || admission.Decision != tc.decision {
 				t.Fatalf("AdmitArtifact() decision = %q, error = %v; want %q", admission.Decision, err, tc.decision)
+			}
+		})
+	}
+}
+
+func TestAdmitArtifactCanonicalizesCompleteInspectionCoverage(t *testing.T) {
+	tests := []struct {
+		name           string
+		paths          []string
+		location       string
+		decision       ArtifactAdmissionDecision
+		wantDiagnostic string
+	}{
+		{name: "unordered complete manifest and contiguous location", paths: []string{"internal/b.go", "internal/a.go"}, location: "internal/a.go:7-7", decision: ArtifactAdmissionCompleted},
+		{name: "duplicate path", paths: []string{"internal/a.go", "internal/a.go", "internal/b.go"}, decision: ArtifactAdmissionOutOfScope},
+		{name: "missing frozen path", paths: []string{"internal/a.go"}, decision: ArtifactAdmissionIncomplete, wantDiagnostic: `{"code":"inspection_coverage","reason":"missing_frozen_manifest_paths","missing_path_count":1}`},
+		{name: "foreign path", paths: []string{"internal/a.go", "outside/private.go", "internal/b.go"}, decision: ArtifactAdmissionOutOfScope, wantDiagnostic: `{"code":"inspection_coverage","reason":"foreign_inspection_paths","foreign_path_count":1}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, request := admittedArtifactFixture(t)
+			request.Inspection.Paths = tt.paths
+			if tt.location != "" {
+				request.Result.Findings[0].Location = tt.location
+			}
+			_, admission, err := AdmitArtifact(t.Context(), request)
+			if (err != nil) != (tt.decision != ArtifactAdmissionCompleted) || admission.Decision != tt.decision {
+				t.Fatalf("AdmitArtifact() = %q, %v; want %q", admission.Decision, err, tt.decision)
+			}
+			if tt.wantDiagnostic == "" {
+				return
+			}
+			var admissionErr *ArtifactAdmissionError
+			if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil {
+				t.Fatalf("AdmitArtifact() error = %v; want structured diagnostic", err)
+			}
+			got, marshalErr := json.Marshal(admissionErr.Diagnostic)
+			if marshalErr != nil || string(got) != tt.wantDiagnostic || strings.Contains(err.Error(), "outside/private.go") {
+				t.Fatalf("coverage diagnostic = %s, error = %v", got, err)
 			}
 		})
 	}
@@ -292,7 +332,7 @@ func TestArtifactAdmissionCandidateCausalCanonicalization(t *testing.T) {
 
 func TestAdmitArtifactReturnsStructuredInvalidLocationDiagnostic(t *testing.T) {
 	request := admittedCandidateCausalArtifactFixture(t)
-	request.Result.Findings[0].Location = "internal/a.go:7-9"
+	request.Result.Findings[0].Location = "internal/a.go:7-9,10"
 
 	_, admission, err := AdmitArtifact(t.Context(), request)
 	var admissionErr *ArtifactAdmissionError
@@ -304,7 +344,7 @@ func TestAdmitArtifactReturnsStructuredInvalidLocationDiagnostic(t *testing.T) {
 	if admissionErr.Diagnostic == nil ||
 		admissionErr.Diagnostic.Code != "invalid_finding_location" ||
 		admissionErr.Diagnostic.FindingID != "R3-001" ||
-		admissionErr.Diagnostic.Location != "internal/a.go:7-9" ||
+		admissionErr.Diagnostic.Location != "internal/a.go:7-9,10" ||
 		admissionErr.Diagnostic.Reason != "line_suffix_not_integer" {
 		t.Fatalf("structured diagnostic = %#v", admissionErr.Diagnostic)
 	}
@@ -332,9 +372,9 @@ func TestFindingAdmissionDiagnosticRequiresCompatibleLocation(t *testing.T) {
 		name, code, location, reason string
 		wantLocation                 bool
 	}{
-		{"invalid range", "invalid_finding_location", "internal/a.go:7-9", "line_suffix_not_integer", true},
+		{"invalid comma list", "invalid_finding_location", "internal/a.go:7-9,10", "line_suffix_not_integer", true},
 		{"candidate line", "candidate_causality_unproven", "internal/a.go:7", "line_not_changed_by_candidate", true},
-		{"candidate range", "candidate_causality_unproven", "internal/a.go:7-9", "line_not_changed_by_candidate", false},
+		{"candidate range", "candidate_causality_unproven", "internal/a.go:7-9", "line_not_changed_by_candidate", true},
 		{"invalid valid line", "invalid_finding_location", "internal/a.go:7", "line_suffix_not_integer", false},
 		{"invalid reason mismatch", "invalid_finding_location", "internal/a.go:7-9", "line_must_be_positive", false},
 	}

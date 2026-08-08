@@ -352,20 +352,32 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 	if err := builder.ValidateEvidence(ctx, snapshot); err != nil {
 		return false, err
 	}
-	logicalPath, line, err := parseFindingLocation(location)
+	finding, err := parseFindingLocation(location)
 	if err != nil {
 		return false, err
 	}
-	if stringIndex(snapshot.Paths, logicalPath) < 0 {
+	return builder.candidateFindingSupportsCausality(ctx, snapshot, finding, causality)
+}
+
+// candidateFindingSupportsCausality answers causality for an already parsed
+// finding location. The non-positive line refusal lives here, at the level the
+// causality comparisons actually consume, so a start or end line below 1 can
+// never be judged causal even when it reaches this point without having been
+// filtered by the location parser.
+func (builder SnapshotBuilder) candidateFindingSupportsCausality(ctx context.Context, snapshot Snapshot, finding findingLocation, causality CausalDisposition) (bool, error) {
+	if stringIndex(snapshot.Paths, finding.Path) < 0 {
+		return false, nil
+	}
+	if !findingLocationHasPositiveLines(finding) {
 		return false, nil
 	}
 	if causality == CausalBehaviorActivated {
-		entry, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(logicalPath))
+		entry, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(finding.Path))
 		if err != nil || len(entry) == 0 {
 			return false, err
 		}
 		for _, tree := range []string{snapshot.CandidateTree} {
-			blob, err := runGit(ctx, builder.Repo, nil, nil, "show", tree+":"+logicalPath)
+			blob, err := runGit(ctx, builder.Repo, nil, nil, "show", tree+":"+finding.Path)
 			if err != nil {
 				return false, err
 			}
@@ -373,7 +385,7 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 			if len(blob) > 0 && blob[len(blob)-1] != '\n' {
 				lines++
 			}
-			if line <= lines {
+			if finding.EndLine <= lines {
 				return true, nil
 			}
 		}
@@ -382,7 +394,7 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 	if causality != CausalIntroduced && causality != CausalWorsened {
 		return false, nil
 	}
-	output, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--unified=0", "--no-renames", "--no-ext-diff", "--no-textconv", snapshot.BaseTree, snapshot.CandidateTree, "--", literalPathspec(logicalPath))
+	output, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--unified=0", "--no-renames", "--no-ext-diff", "--no-textconv", snapshot.BaseTree, snapshot.CandidateTree, "--", literalPathspec(finding.Path))
 	if err != nil {
 		return false, err
 	}
@@ -393,7 +405,7 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 		if len(match[offset+1]) > 0 {
 			count, _ = strconv.Atoi(string(match[offset+1]))
 		}
-		if count > 0 && line >= start && line < start+count {
+		if count > 0 && finding.StartLine >= start && finding.EndLine < start+count {
 			return true, nil
 		}
 	}
@@ -654,6 +666,49 @@ func (builder SnapshotBuilder) DiscoverUnignoredUntracked(ctx context.Context) (
 	return canonical, nil
 }
 
+// IntendedUntrackedInventory returns the canonical digest-bound eligible workspace inventory.
+func (builder SnapshotBuilder) IntendedUntrackedInventory(ctx context.Context) ([]string, string, error) {
+	paths, err := builder.DiscoverUnignoredUntracked(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	return paths, intendedUntrackedInventoryDigest(paths), nil
+}
+
+// ValidateIntendedUntrackedSelection proves paths remain eligible in STATUS's inventory.
+func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Context, expectedDigest string, selected []string) ([]string, error) {
+	paths, digest, err := builder.IntendedUntrackedInventory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if expectedDigest != digest {
+		return nil, errors.New("untracked inventory changed; rerun `gentle-ai review status --next-transition` before selecting paths")
+	}
+	selected, err = canonicalPaths(selected)
+	if err != nil {
+		return nil, err
+	}
+	eligible := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		eligible[path] = struct{}{}
+	}
+	for _, path := range selected {
+		if _, ok := eligible[path]; !ok {
+			return nil, fmt.Errorf("intended-untracked path %q is not in the current eligible inventory; rerun `gentle-ai review status --next-transition`", path)
+		}
+	}
+	return selected, nil
+}
+
+func intendedUntrackedInventoryDigest(paths []string) string {
+	hash := sha256.New()
+	writeLengthPrefixed(hash, []byte("gentle-ai.intended-untracked-inventory/v1"))
+	for _, path := range paths {
+		writeLengthPrefixed(hash, []byte(path))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
 // UntrackedScopeRefusalError marks a working-tree shape that untracked-scope
 // discovery refuses as a NAMED, anticipated condition: an embedded foreign
 // repository, or an untracked path Git reported that cannot be addressed as
@@ -770,6 +825,85 @@ func (builder SnapshotBuilder) HasDirtyTrackedChanges(ctx context.Context) (bool
 		return false, err
 	}
 	return len(output) != 0, nil
+}
+
+func (builder SnapshotBuilder) WorktreeClean(ctx context.Context) (bool, error) {
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return false, err
+	}
+	output, err := runGit(ctx, root, nil, nil, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return false, err
+	}
+	return len(output) == 0, nil
+}
+
+// RebuildCommittedBaseDiffCorrectionCandidate derives a committed correction
+// from the immutable initial boundary, never from the mutable original ref.
+func RebuildCommittedBaseDiffCorrectionCandidate(ctx context.Context, repo string, state CompactState) (Snapshot, error) {
+	if err := state.Validate(); err != nil {
+		return Snapshot{}, fmt.Errorf("validate committed correction authority: %w", err)
+	}
+	initial := state.InitialSnapshot
+	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil || state.CorrectionAttemptConsumed() || initial.Kind != TargetBaseDiff {
+		return Snapshot{}, errors.New("committed correction reconstruction is not eligible") // refusal:by-design world-action: only an open committed correction can rebuild its frozen boundary
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	clean, err := builder.WorktreeClean(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if !clean {
+		return Snapshot{}, errors.New("committed correction reconstruction requires a clean worktree") // refusal:by-design world-action: commit or discard workspace changes before recovering a committed-only correction
+	}
+	projection, err := canonicalProjection(initial.Projection)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	live, err := builder.BuildStoredSnapshot(ctx, Target{
+		Kind: TargetBaseDiff, Projection: projection, BaseRef: initial.BaseTree,
+		IntendedUntracked: append([]string(nil), initial.IntendedUntracked...),
+	})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err := builder.ValidateEvidence(ctx, live); err != nil {
+		return Snapshot{}, fmt.Errorf("validate rebuilt committed correction: %w", err)
+	}
+	if live.UnbornHead != initial.UnbornHead || live.BaseTree != initial.BaseTree || live.Projection != projection ||
+		!equalStrings(live.IntendedUntracked, initial.IntendedUntracked) || live.IntendedUntrackedProof != initial.IntendedUntrackedProof {
+		return Snapshot{}, errors.New("committed correction reconstruction does not match frozen authority") // refusal:by-design world-action: repository history must match the immutable authority before correction routing can continue
+	}
+	if err := pathsAreSubset(live.Paths, state.GenesisPaths); err != nil {
+		return Snapshot{}, fmt.Errorf("committed correction exceeds frozen genesis paths: %w", err)
+	}
+	intended := append([]string(nil), initial.IntendedUntracked...)
+	if intended == nil {
+		intended = []string{}
+	}
+	fix, err := builder.Build(ctx, Target{
+		Kind: TargetFixDiff, Projection: projection, BaseRef: state.CurrentSnapshot.CandidateTree,
+		IntendedUntracked: intended, LedgerIDs: append([]string(nil), state.FixFindingIDs...),
+	})
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("rebuild committed correction delta: %w", err)
+	}
+	if fix.CandidateTree != live.CandidateTree {
+		return Snapshot{}, fmt.Errorf("%w: rebuilt committed correction candidate changed while measuring", ErrConcurrentUpdate)
+	}
+	remaining, err := compactCorrectionRemainingBudget(state)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("derive rebuilt committed correction remaining budget: %w", err)
+	}
+	actual, err := builder.ChangedLines(ctx, fix)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("measure rebuilt committed correction: %w", err)
+	}
+	if actual > remaining {
+		return Snapshot{}, fmt.Errorf("rebuild committed correction: %w", &CorrectionBudgetExceededError{Actual: actual, Remaining: remaining})
+	}
+	return live, nil
 }
 
 func canonicalRepositoryPath(path string) (string, error) {
@@ -1352,23 +1486,36 @@ func snapshotIdentity(kind TargetKind, baseTree, candidateTree, pathsDigest, pro
 	return snapshotIdentityForProjection(kind, "", baseTree, candidateTree, pathsDigest, proof, intended, ledgerIDs)
 }
 
+// snapshotIdentityForProjection mints the purified, content-addressed
+// identity domain (issue #2659, root 21 of #2471): a domain-separation tag
+// for kind/projection, then baseTree, candidateTree, pathsDigest, and
+// ledgerIDs. proof and intended are deliberately NOT part of this hash: they
+// describe HOW the candidate bytes were declared (a staged path vs. a
+// declared intended-untracked path), not WHAT those bytes are, so folding
+// them into identity let two byte-identical candidates carry different
+// identities. Maintainer decision D1 (recorded in #2471) keeps the
+// untracked-replay proof alive as SIDE-BAND evidence only -- still consumed
+// by BuildStagedWorkspaceOverlayRecovery and BuildCorrectedCandidate for
+// replay validation -- so the parameters stay for call-site compatibility
+// but are intentionally unused here.
+//
+// kind and projection stay in the hash domain on purpose: they are the
+// load-bearing separation that keeps a current-changes receipt from being
+// recognized as a base-workspace-overlay review of identical bytes.
 func snapshotIdentityForProjection(kind TargetKind, projection Projection, baseTree, candidateTree, pathsDigest, proof string, intended, ledgerIDs []string) string {
 	hash := sha256.New()
 	if kind == TargetBaseWorkspaceOverlay {
-		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v1\x00"))
+		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v2\x00"))
 	} else if projection == ProjectionStaged {
-		hash.Write([]byte("gentle-ai.review-snapshot/v2\x00"))
+		hash.Write([]byte("gentle-ai.review-snapshot/v4\x00"))
 	} else {
-		hash.Write([]byte("gentle-ai.review-snapshot/v1\x00"))
+		hash.Write([]byte("gentle-ai.review-snapshot/v3\x00"))
 	}
-	values := []string{string(kind), baseTree, candidateTree, pathsDigest, proof}
+	values := []string{string(kind), baseTree, candidateTree, pathsDigest}
 	if projection == ProjectionStaged {
-		values = []string{string(kind), string(projection), baseTree, candidateTree, pathsDigest, proof}
+		values = []string{string(kind), string(projection), baseTree, candidateTree, pathsDigest}
 	}
 	for _, value := range values {
-		writeLengthPrefixed(hash, []byte(value))
-	}
-	for _, value := range intended {
 		writeLengthPrefixed(hash, []byte(value))
 	}
 	for _, value := range ledgerIDs {

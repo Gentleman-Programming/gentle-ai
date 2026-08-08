@@ -28,6 +28,11 @@ const ContractWorkRoutingV1 ContractID = "gentle-ai.work-routing/v1"
 // claim fails closed.
 const ContractReviewTransportV1 ContractID = "gentle-ai.review-transport/v1"
 
+// ContractImmutableReviewExecutorV1 is independent of host/orchestrator
+// support. It is advertised only when a provider can launch a fresh,
+// constrained reviewer and prove that boundary before review START.
+const ContractImmutableReviewExecutorV1 ContractID = "gentle-ai.immutable-review-executor/v1"
+
 type ContractExposure string
 
 const (
@@ -97,8 +102,9 @@ type SDDProposalFacts struct {
 }
 
 type ContractClaims struct {
-	WorkRoutingV1     ContractClaim `json:"workRoutingV1"`
-	ReviewTransportV1 ContractClaim `json:"reviewTransportV1"`
+	WorkRoutingV1             ContractClaim `json:"workRoutingV1"`
+	ReviewTransportV1         ContractClaim `json:"reviewTransportV1"`
+	ImmutableReviewExecutorV1 ContractClaim `json:"immutableReviewExecutorV1"`
 }
 
 type ContractClaim struct {
@@ -127,6 +133,10 @@ func ForAgent(agent model.AgentID) (AgentCapabilityManifest, error) {
 				ID:       ContractReviewTransportV1,
 				Exposure: reviewTransportExposureByAgent[agent],
 			},
+			ImmutableReviewExecutorV1: ContractClaim{
+				ID:       ContractImmutableReviewExecutorV1,
+				Exposure: immutableReviewExecutorExposureByAgent[agent],
+			},
 		},
 	}, nil
 }
@@ -146,6 +156,31 @@ var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
 		exposure[agent] = ContractExposureAdvertised
 	}
 	exposure[model.AgentPi] = ContractExposureDormant
+	return exposure
+}()
+
+// immutableReviewExecutorExposureByAgent declares only providers with an
+// enforceable fresh-reviewer boundary. Claude launches a generated subagent
+// with no live tools and receives only the native prompt-carried evidence;
+// OpenCode replaces the task prompt through its provider plugin from an
+// ordinary already-running session -- no restart, child process, special
+// user-visible session, or `OPENCODE_DISABLE_*` variable (rdd-advisory-
+// transport SKILL.md). Codex's boundary is the shared advisory transport's
+// CodexAdapter
+// (internal/advisoryreview): a brand-new `codex exec` process, launched in an
+// empty scratch directory the adapter creates and deletes itself, receiving
+// only the canonical provider-rendered prompt -- proven organically by
+// TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and its fail-closed
+// companions in e2e/organicruntime. Kilo and every other runtime remain
+// explicitly dormant until they own an equivalent native boundary.
+var immutableReviewExecutorExposureByAgent = func() map[model.AgentID]ContractExposure {
+	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
+	for agent := range featureClaimsByAgent {
+		exposure[agent] = ContractExposureDormant
+	}
+	exposure[model.AgentClaudeCode] = ContractExposureAdvertised
+	exposure[model.AgentOpenCode] = ContractExposureAdvertised
+	exposure[model.AgentCodex] = ContractExposureAdvertised
 	return exposure
 }()
 
@@ -204,6 +239,9 @@ func (m AgentCapabilityManifest) Advertises(contract ContractID) bool {
 	case ContractReviewTransportV1:
 		return m.Contracts.ReviewTransportV1.ID == contract &&
 			m.Contracts.ReviewTransportV1.Exposure == ContractExposureAdvertised
+	case ContractImmutableReviewExecutorV1:
+		return m.Contracts.ImmutableReviewExecutorV1.ID == contract &&
+			m.Contracts.ImmutableReviewExecutorV1.Exposure == ContractExposureAdvertised
 	default:
 		return false
 	}

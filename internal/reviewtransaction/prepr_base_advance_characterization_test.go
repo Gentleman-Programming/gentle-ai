@@ -68,6 +68,14 @@ type baseAdvanceScenario struct {
 	// deriveBaseAdvanceCompatibility is called, so it can move live Git state
 	// out from under the already-captured refs. Used to isolate condition 7.
 	afterRefsCaptured func(t *testing.T, repo string)
+
+	// localGate runs deriveBaseAdvanceCompatibility with requireAttestation
+	// false -- the D2 (#2471 option a) local-gate policy pre-commit/pre-push
+	// consult instead of pre-PR's CI-backed one -- and skips building the
+	// attestation/policy artifacts a local gate request never carries. The
+	// five content checks (conditions 1-5 and 7) are otherwise identical;
+	// condition 6 (CI attestation) does not apply.
+	localGate bool
 }
 
 type baseAdvanceScenarioResult struct {
@@ -161,25 +169,38 @@ func runBaseAdvanceScenario(t *testing.T, scenario baseAdvanceScenario) baseAdva
 		}
 	}
 
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("ed25519.GenerateKey: %v", err)
+	requireAttestation := !scenario.localGate
+	var preimages gateArtifactPreimages
+	request := GateRequest{Gate: GatePrePR, ExternalEvidence: ExternalEvidenceNone}
+	if scenario.localGate {
+		// A real pre-commit/pre-push GateRequest never carries a PrePR block;
+		// leaving it unset here (instead of a present-but-empty one) proves
+		// requireAttestation=false genuinely never dereferences it. request.Gate
+		// stays GatePrePR so reselectBoundaryForGate below re-derives the
+		// boundary exactly the way it was captured above (selectPrePRBoundary);
+		// the gate-conditional reselect branch (selectPrePushBoundary) is
+		// covered separately and is orthogonal to this file's five-content-
+		// check characterization.
+	} else {
+		publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatalf("ed25519.GenerateKey: %v", err)
+		}
+		attestation := prePRCIAttestation{Schema: prePRCIAttestationSchema, Issuer: "trusted-ci", MergedTree: mergedTree, Status: "success"}
+		if scenario.mutateAttestation != nil {
+			scenario.mutateAttestation(&attestation)
+		}
+		attestation.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, prePRCIAttestationPreimage(attestation)))
+		attestationPayload, err := json.Marshal(attestation)
+		if err != nil {
+			t.Fatalf("marshal attestation: %v", err)
+		}
+		policy := []byte("# Bounded review policy\n\npre_pr_ci_issuer: trusted-ci\npre_pr_ci_ed25519_public_key: " + base64.StdEncoding.EncodeToString(publicKey) + "\n")
+		preimages = gateArtifactPreimages{policy: policy, ciAttestation: attestationPayload}
+		request.PrePR = &PrePRRequest{CIAttestationArtifact: "ci-attestation-present"}
 	}
-	attestation := prePRCIAttestation{Schema: prePRCIAttestationSchema, Issuer: "trusted-ci", MergedTree: mergedTree, Status: "success"}
-	if scenario.mutateAttestation != nil {
-		scenario.mutateAttestation(&attestation)
-	}
-	attestation.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, prePRCIAttestationPreimage(attestation)))
-	attestationPayload, err := json.Marshal(attestation)
-	if err != nil {
-		t.Fatalf("marshal attestation: %v", err)
-	}
-	policy := []byte("# Bounded review policy\n\npre_pr_ci_issuer: trusted-ci\npre_pr_ci_ed25519_public_key: " + base64.StdEncoding.EncodeToString(publicKey) + "\n")
 
-	preimages := gateArtifactPreimages{policy: policy, ciAttestation: attestationPayload}
-	request := GateRequest{ExternalEvidence: ExternalEvidenceNone, PrePR: &PrePRRequest{CIAttestationArtifact: "ci-attestation-present"}}
-
-	proof, deriveErr := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, refs, preimages)
+	proof, deriveErr := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, refs, preimages, requireAttestation)
 	return baseAdvanceScenarioResult{proof: proof, err: deriveErr, repo: repo, receipt: receipt, snapshot: snapshot, refs: refs, mergedTree: mergedTree}
 }
 
@@ -323,6 +344,114 @@ func TestDeriveBaseAdvanceCompatibilityFailsClosedOnSingleConditionViolation(t *
 			}
 			if (result.proof != BaseAdvanceCompatibility{}) {
 				t.Fatalf("condition %s: proof = %#v, want zero value on failure", tt.condition, result.proof)
+			}
+		})
+	}
+}
+
+// TestDeriveBaseAdvanceCompatibilityCertifiesLocalGateWithoutAttestation is
+// the #2388 / D2 (#2471 option a) characterization at the derivation layer:
+// requireAttestation=false runs the exact same five content checks (merge-base
+// tree preservation, path digest identity, patch identity, path disjointness,
+// conflict-free merge-tree) without ever requiring or reading a CI
+// attestation, and returns a proof carrying baseAdvanceCompatibleLocalStatus
+// instead of baseAdvanceCompatibleStatus. This is the reusable machinery a
+// pre-commit/pre-push gate would consult for a disjoint, content-identical
+// parent advance; see the compact_gate_local_advance_test.go stop-evidence for
+// why no gate currently reaches this precondition (gate-request derivation,
+// not this function, is the missing piece).
+func TestDeriveBaseAdvanceCompatibilityCertifiesLocalGateWithoutAttestation(t *testing.T) {
+	result := runBaseAdvanceScenario(t, baseAdvanceScenario{localGate: true})
+	if result.err != nil {
+		t.Fatalf("deriveBaseAdvanceCompatibility(requireAttestation=false) error = %v, want nil", result.err)
+	}
+	if !result.proof.valid() {
+		t.Fatalf("proof.valid() = false, proof = %#v", result.proof)
+	}
+	if !result.proof.Compatible || result.proof.Status != baseAdvanceCompatibleLocalStatus {
+		t.Fatalf("proof compatibility/status = %#v, want Compatible=true Status=%q", result.proof, baseAdvanceCompatibleLocalStatus)
+	}
+	if result.proof.CIAttestationArtifactHash != "" || result.proof.CIAttestationIssuer != "" {
+		t.Fatalf("local proof carries CI attestation evidence: %#v", result.proof)
+	}
+	if result.proof.CIStatus != currentChangesBoundaryCIStatus {
+		t.Fatalf("local proof CIStatus = %q, want %q", result.proof.CIStatus, currentChangesBoundaryCIStatus)
+	}
+	// The five content checks are unaffected: same merge-base/patch/paths
+	// evidence as the attested success characterization above.
+	if result.proof.OriginalMergeBaseTree != result.receipt.BaseTree || result.proof.DeliveredPathsDigest != result.receipt.PathsDigest ||
+		result.proof.OriginalPatchIdentity != result.proof.DeliveredPatchIdentity || !result.proof.PathsDisjoint ||
+		!validGitTree(result.proof.MergedResultTree) || result.proof.MergedResultTree != result.mergedTree {
+		t.Fatalf("local proof content evidence diverged from the attested contract: %#v", result.proof)
+	}
+}
+
+// TestDeriveBaseAdvanceCompatibilityFailsClosedAtLocalGate reruns the same
+// fail-closed conditions 1-5 and 7 (condition 6, CI attestation, does not
+// exist at requireAttestation=false) with localGate:true, proving the local
+// policy reuses the identical content checks rather than a parallel, looser
+// implementation -- overlapping paths, a changed patch identity, and an
+// unresolvable merge conflict are refused exactly like the attested path.
+func TestDeriveBaseAdvanceCompatibilityFailsClosedAtLocalGate(t *testing.T) {
+	tests := []struct {
+		name       string
+		scenario   baseAdvanceScenario
+		wantErrSub string
+	}{
+		{
+			name:       "merge-base tree not preserved",
+			scenario:   baseAdvanceScenario{localGate: true, mutateReceipt: func(receipt *Receipt) { receipt.BaseTree = emptyGitTreeSHA1 }},
+			wantErrSub: "original reviewed merge-base tree is not preserved",
+		},
+		{
+			name:       "path digest mismatch",
+			scenario:   baseAdvanceScenario{localGate: true, mutateReceipt: func(receipt *Receipt) { receipt.PathsDigest = digestPaths([]string{"unrelated-path.txt"}) }},
+			wantErrSub: "delivered path identity changed",
+		},
+		{
+			name: "patch identity changed",
+			scenario: baseAdvanceScenario{
+				localGate: true,
+				mutateContent: func(t *testing.T, repo string) {
+					writeSnapshotFile(t, repo, "delivery.txt", "changed after review\n")
+					gitSnapshot(t, repo, "add", "--", "delivery.txt")
+					gitSnapshot(t, repo, "commit", "-m", "unreviewed content change")
+				},
+			},
+			wantErrSub: "delivered patch identity changed",
+		},
+		{
+			name:       "base advance overlaps delivered paths",
+			scenario:   baseAdvanceScenario{localGate: true, deliveryPath: "shared.txt", basePath: "shared.txt"},
+			wantErrSub: "base advance overlaps delivered paths",
+		},
+		{
+			name:       "merge against new base is not conflict-free",
+			scenario:   baseAdvanceScenario{localGate: true, deliveryPath: "conflict/file.txt", basePath: "conflict"},
+			wantErrSub: "merge against new base is not conflict-free",
+		},
+		{
+			name: "HEAD advances after refs are captured",
+			scenario: baseAdvanceScenario{
+				localGate: true,
+				afterRefsCaptured: func(t *testing.T, repo string) {
+					gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "advance head after refs captured")
+				},
+			},
+			wantErrSub: "HEAD advanced during validation",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := runBaseAdvanceScenario(t, tt.scenario)
+			if result.err == nil {
+				t.Fatalf("deriveBaseAdvanceCompatibility(requireAttestation=false) error = nil, want failure containing %q", tt.wantErrSub)
+			}
+			if !strings.Contains(result.err.Error(), tt.wantErrSub) {
+				t.Fatalf("error = %q, want substring %q", result.err.Error(), tt.wantErrSub)
+			}
+			if (result.proof != BaseAdvanceCompatibility{}) {
+				t.Fatalf("proof = %#v, want zero value on failure", result.proof)
 			}
 		})
 	}

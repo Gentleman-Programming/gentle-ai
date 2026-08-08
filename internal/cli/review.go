@@ -573,6 +573,9 @@ func RunReviewBundleImport(args []string, stdout io.Writer) error {
 	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*bundlePath) == "" {
 		return errors.New("review-bundle-import requires --cwd and --bundle")
 	}
+	if err := authorizeManagedReviewerAssets(); err != nil {
+		return err
+	}
 	bundlePayload, err := os.ReadFile(*bundlePath)
 	if err != nil {
 		return fmt.Errorf("read review chain bundle: %w", err)
@@ -706,6 +709,9 @@ func runReviewValidate(ctx context.Context, args []string, stdout io.Writer) err
 	}
 	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*receiptPath) == "" {
 		return errors.New("review-validate requires --cwd and --receipt")
+	}
+	if _, err := reviewDrivenDevelopmentDisabled(ctx, *cwd); err != nil {
+		return fmt.Errorf("read review mode: %w", err)
 	}
 	receiptPayload, err := os.ReadFile(*receiptPath)
 	if err != nil {

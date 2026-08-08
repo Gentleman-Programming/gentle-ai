@@ -283,7 +283,7 @@ func deriveCompactRecoveryAdvanceCompatibility(ctx context.Context, repo string,
 		BaseTree: binding.BaseTree, FinalCandidateTree: snapshot.CandidateTree,
 		PathsDigest: frozen.PathsDigest,
 	}
-	proof, err := deriveBaseAdvanceCompatibility(ctx, repo, synthetic, request, snapshot, refs, preimages)
+	proof, err := deriveBaseAdvanceCompatibility(ctx, repo, synthetic, request, snapshot, refs, preimages, true)
 	if err != nil {
 		return BaseAdvanceCompatibility{}, err
 	}

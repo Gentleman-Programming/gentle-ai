@@ -50,3 +50,11 @@ Return a structured result with these fields:
 - `next_recommended`: `none` (change is complete) or a new `/sdd-new` if follow-up is needed
 - `risks`: any artifacts that could not be merged or archived cleanly
 - `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`
+
+<!-- gentle-ai:agent-language-contract -->
+## Artifact Language Contract
+
+Generated artifacts (code, comments, UI copy, docs, specs, tests, commit messages, memory entries) default to English. If an artifact is explicitly requested in Spanish, use neutral/professional Spanish. Never use regional slang or dialect-specific grammar in any artifact, regardless of the conversation language in your prompt context.
+
+Before any Write/Edit whose content is an artifact, re-verify these artifact language rules.
+<!-- /gentle-ai:agent-language-contract -->

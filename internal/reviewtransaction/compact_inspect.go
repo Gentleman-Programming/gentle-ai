@@ -17,6 +17,12 @@ const (
 	compactInspectionEntryMissing    = "missing_compact_state"
 	compactInspectionEntryUnreadable = "unreadable_compact_state"
 	compactInspectionEntryMalformed  = "malformed_compact_state"
+	// compactInspectionEntryOutdated classifies a record whose bytes parse
+	// intact but whose frozen snapshot identity was computed by an earlier
+	// release's retired formula (#2743). It is historical, not damaged:
+	// gate-invalid under the clean-break policy, preserved unrewritten for
+	// forensics, and never a verdict on any other lineage.
+	compactInspectionEntryOutdated   = "outdated_compact_state"
 	compactInspectionEntryUnexpected = "unexpected_authority_root_entry"
 )
 
@@ -253,7 +259,9 @@ func CompactAuthorityDamageKinds(report CompactRecoveryInspectionReport) []strin
 	for _, diagnostic := range report.EntryDiagnostics {
 		switch diagnostic.Problem {
 		case compactInspectionEntryMalformed:
-			kinds = append(kinds, fmt.Sprintf("store entry %q holds a record that does not parse (%s), which an interrupted write leaves behind", diagnostic.LineageID, diagnostic.Problem))
+			kinds = append(kinds, fmt.Sprintf("store entry %q holds a record that does not load (%s): either its bytes do not parse — what an interrupted write leaves behind — or its persisted state is semantically invalid", diagnostic.LineageID, diagnostic.Problem))
+		case compactInspectionEntryOutdated:
+			kinds = append(kinds, fmt.Sprintf("store entry %q holds authority frozen by an earlier release under a retired snapshot-identity formula (%s); it is outdated — gate-invalid, preserved for forensics — not damaged, and it never blocks another lineage's operation", diagnostic.LineageID, diagnostic.Problem))
 		case compactInspectionEntryMissing:
 			kinds = append(kinds, fmt.Sprintf("store entry %q holds no compact state (%s)", diagnostic.LineageID, diagnostic.Problem))
 		case compactInspectionEntryUnreadable:
@@ -419,6 +427,10 @@ func compactRecoveryEntryProblem(err error) string {
 	var pathErr *os.PathError
 	if errors.As(err, &pathErr) {
 		return compactInspectionEntryUnreadable
+	}
+	var semantic *CompactSemanticStateError
+	if errors.As(err, &semantic) && semantic.OutdatedIdentity {
+		return compactInspectionEntryOutdated
 	}
 	return compactInspectionEntryMalformed
 }

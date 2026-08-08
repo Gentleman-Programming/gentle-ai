@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -360,7 +359,7 @@ func TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector(t *testing.T) {
 	if len(command) < 4 || !reflect.DeepEqual(command[:3], []string{"gentle-ai", "review", "start"}) {
 		t.Fatalf("hint command = %v", command)
 	}
-	args := append([]string{"start", "--cwd", repo}, substituteReplayRuntimeIdentity(t, command[3:], model.AgentClaudeCode)...)
+	args := append([]string{"start", "--cwd", repo}, withoutReplayRuntimeIdentity(t, command[3:])...)
 	var replay bytes.Buffer
 	if err := RunReview(args, &replay); err != nil {
 		t.Fatalf("hinted negotiated START failed: %v\n%s", err, replay.String())
@@ -436,7 +435,7 @@ func TestReviewFacadeStartBaseDiffRefusalReplaysFrozenSelector(t *testing.T) {
 	if len(command) < 3 || !reflect.DeepEqual(command[:3], []string{"gentle-ai", "review", "start"}) {
 		t.Fatalf("refusal command = %v", command)
 	}
-	args := append([]string{"start", "--cwd", repo}, substituteReplayRuntimeIdentity(t, command[3:], model.AgentClaudeCode)...)
+	args := append([]string{"start", "--cwd", repo}, withoutReplayRuntimeIdentity(t, command[3:])...)
 	var replay bytes.Buffer
 	if err := RunReview(args, &replay); err != nil {
 		t.Fatalf("named negotiated START failed: %v\n%s", err, replay.String())

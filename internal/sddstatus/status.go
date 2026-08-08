@@ -314,7 +314,7 @@ type ResolveOptions struct {
 	// ReviewDisabledForWorkspace lets the composition root resolve the switch
 	// against the exact workspace normalized by Resolve. When set, it is called
 	// once and its result replaces ReviewDisabled for the whole status decision.
-	ReviewDisabledForWorkspace func(workspaceRoot string) bool
+	ReviewDisabledForWorkspace func(workspaceRoot string) (bool, error)
 }
 
 type CommandArgs struct {
@@ -412,7 +412,10 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 	reviewDisabled := options.ReviewDisabled
 	if options.ReviewDisabledForWorkspace != nil {
-		reviewDisabled = options.ReviewDisabledForWorkspace(workspaceRoot)
+		reviewDisabled, err = options.ReviewDisabledForWorkspace(workspaceRoot)
+		if err != nil {
+			return Status{}, err
+		}
 	}
 	planningHome := filepath.Join(workspaceRoot, "openspec")
 	changesDir := filepath.Join(planningHome, "changes")
@@ -1153,13 +1156,57 @@ func inferEngramProject(workspaceRoot string) string {
 	if project := strings.TrimSpace(os.Getenv("ENGRAM_PROJECT")); project != "" {
 		return strings.ToLower(project)
 	}
-	config, err := os.ReadFile(filepath.Join(workspaceRoot, ".git", "config"))
-	if err == nil {
-		if project := projectFromGitConfig(string(config)); project != "" {
-			return project
+	if path := gitConfigPathFor(workspaceRoot); path != "" {
+		config, err := os.ReadFile(path)
+		if err == nil {
+			if project := projectFromGitConfig(string(config)); project != "" {
+				return project
+			}
 		}
 	}
 	return strings.ToLower(filepath.Base(workspaceRoot))
+}
+
+// gitConfigPathFor resolves the `config` file that governs workspaceRoot. The
+// `.git` entry is a directory for an ordinary checkout but a file holding a
+// `gitdir:` pointer for a linked worktree, and a linked worktree keeps `config`
+// in the shared common dir rather than under its own gitdir. Reading
+// `<root>/.git/config` blindly therefore fails for every worktree. An empty
+// result means workspaceRoot has no readable Git configuration.
+func gitConfigPathFor(workspaceRoot string) string {
+	gitEntry := filepath.Join(workspaceRoot, ".git")
+	info, err := os.Stat(gitEntry)
+	if err != nil {
+		return ""
+	}
+	if info.IsDir() {
+		return filepath.Join(gitEntry, "config")
+	}
+
+	pointer, err := os.ReadFile(gitEntry)
+	if err != nil {
+		return ""
+	}
+	gitDir := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(pointer)), "gitdir:"))
+	if gitDir == "" {
+		return ""
+	}
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(workspaceRoot, gitDir)
+	}
+
+	// A linked worktree records the shared directory in `commondir`, relative
+	// to its own gitdir. Without it the gitdir already is the common dir.
+	commonDir := gitDir
+	if content, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
+		if trimmed := strings.TrimSpace(string(content)); trimmed != "" {
+			commonDir = trimmed
+			if !filepath.IsAbs(commonDir) {
+				commonDir = filepath.Join(gitDir, commonDir)
+			}
+		}
+	}
+	return filepath.Join(commonDir, "config")
 }
 
 func projectFromGitConfig(content string) string {

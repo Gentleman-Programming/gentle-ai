@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/consentenvelope"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -221,11 +222,21 @@ func reviewConsentSpanishSignalSubject(signal reviewtransaction.RiskSignal) stri
 // assessment, and the caller's own invocation into the typed consent question.
 // Every phrase comes from the same wording sources the interactive prompt
 // uses, so the relayed question and the terminal question cannot drift.
+//
+// runtimeAgent is the exact generated runtime identity the caller's own
+// negotiated START already validated (review_facade.go's
+// reviewRuntimeWithImmutableTransport gate runs before this constructor is
+// ever reached whenever a runtime is declared at all), never a re-parse of
+// followUpBase: parsing a rendered command back into structured data is
+// exactly the class of bug this repo refuses. An undeclared runtime (the
+// manual/non-agent compatibility path -- see review_facade.go's own comment
+// on that path being "not gated") keeps today's compatibility default.
 func newReviewIntegrationConsentResult(
 	snapshot reviewtransaction.Snapshot,
 	assessment reviewtransaction.RiskAssessment,
 	followUpBase string,
 	contract string,
+	runtimeAgent string,
 	locale reviewConsentLocale,
 ) (ReviewIntegrationConsentResult, error) {
 	// The evidence phrases may legitimately be empty (a large change with no
@@ -270,7 +281,18 @@ func newReviewIntegrationConsentResult(
 		},
 	}
 	if contract == ReviewIntegrationContractV2 {
-		result.Schema, result.Contract, result.Agent = ReviewIntegrationConsentSchemaV3, ReviewIntegrationContractV2, "claude-code"
+		// Issue #2676: this literal used to be unconditional, so a negotiated
+		// START explicitly bound to another runtime (OpenCode, Codex) still
+		// reported "claude-code" here while its own follow-up invocations
+		// below were already rendered from the real binding. Bind the same
+		// declared identity the caller proved eligible; only the undeclared
+		// compatibility path (no runtime named at all) keeps the historical
+		// default, matching every existing manual-caller test and fixture.
+		agent := strings.TrimSpace(runtimeAgent)
+		if agent == "" {
+			agent = "claude-code"
+		}
+		result.Schema, result.Contract, result.Agent = ReviewIntegrationConsentSchemaV3, ReviewIntegrationContractV2, agent
 	}
 	if err := result.Validate(); err != nil {
 		return ReviewIntegrationConsentResult{}, fmt.Errorf("validate consent question: %w", err)
@@ -297,7 +319,18 @@ func validateReviewConsentInvocations(result ReviewIntegrationConsentResult, fol
 func (result ReviewIntegrationConsentResult) Validate() error {
 	legacyContract := result.Schema == ReviewIntegrationConsentSchema && result.Contract == ReviewIntegrationContractV1
 	historicalNativeGitContract := result.Schema == ReviewIntegrationConsentSchemaV2 && result.Contract == ReviewIntegrationContractV2 && result.Agent == ""
-	currentNativeGitContract := result.Schema == ReviewIntegrationConsentSchemaV3 && result.Contract == ReviewIntegrationContractV2 && result.Agent == "claude-code"
+	// The v3 shape must name a runtime that can actually carry immutable
+	// receipt-review transport -- the exact same authority
+	// reviewRuntimeWithImmutableTransport gates negotiated START on (Wave 4
+	// S4's fixed RDD policy) -- rather than a fresh allowlist that could drift
+	// from it. This accepts every declared runtime proven eligible at START
+	// (claude-code, opencode, codex today), and fail-closed rejects an empty
+	// identity, an unknown string, and a runtime that is eligible under the
+	// RDD policy but still dormant for this contract (e.g. Kilocode has no
+	// proven fresh-reviewer boundary yet), because none of those can ever
+	// legitimately reach this envelope.
+	currentNativeGitContract := result.Schema == ReviewIntegrationConsentSchemaV3 && result.Contract == ReviewIntegrationContractV2 &&
+		reviewImmutableRuntimeCapability(model.AgentID(result.Agent)).supportsImmutableReceiptReview()
 	if (!legacyContract && !historicalNativeGitContract && !currentNativeGitContract) ||
 		result.Operation != "review.start" || result.Action != reviewConsentActionRequired || !result.Blocking {
 		return errors.New("invalid consent question identity") // refusal:by-design world-action: this envelope is built and validated by the same file; the exit is a code fix, not a command

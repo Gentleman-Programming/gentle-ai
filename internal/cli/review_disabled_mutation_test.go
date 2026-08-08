@@ -38,6 +38,7 @@ func disabledReviewRepo(t *testing.T, lineage string) (repo string, started Revi
 	if err := os.WriteFile(filepath.Join(repo, "docs", "frozen.md"), []byte("frozen by the kill switch\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runReviewCLIGit(t, repo, "add", "docs/frozen.md")
 	started = startFacadeReviewResult(t, repo, lineage)
 	disableReviewForClone(t, repo)
 	return repo, started
@@ -258,6 +259,7 @@ func TestDisabledReviewReplaysTerminalAuthorityWhileDisabled(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "docs", "terminal.md"), []byte("approved before the switch went off\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runReviewCLIGit(t, repo, "add", "docs/terminal.md")
 	const lineage = "review-disabled-terminal-replay"
 	startFacadeReviewResult(t, repo, lineage)
 

@@ -73,14 +73,11 @@ func requireNoReviewProcessTempResidue(t *testing.T, repo string) {
 	}
 }
 
-// negotiatedStatusArgs builds one negotiated status invocation. The v2 contract
-// gates on a generated runtime identity (#2207), so it must name an agent; v1
-// does not, and reporters confirmed both versions failed identically.
+// negotiatedStatusArgs exercises the manual compatibility route. Generated
+// runtimes declare --agent and are rejected before snapshot work when no
+// executor capability is advertised.
 func negotiatedStatusArgs(repo, contract string, selectors ...string) []string {
 	args := []string{"status", "--cwd", repo, "--contract", contract}
-	if contract == ReviewIntegrationContractV2 {
-		args = append(args, "--agent", "claude-code")
-	}
 	args = append(args, "--next-transition")
 	return append(args, selectors...)
 }

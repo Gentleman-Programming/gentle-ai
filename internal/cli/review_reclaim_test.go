@@ -113,6 +113,7 @@ func TestReviewStartSucceedsDespiteIncompleteStoreResidue(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "docs", "start.md"), []byte("start\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runReviewCLIGit(t, repo, "add", "docs/start.md")
 	var output bytes.Buffer
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-reclaim-start"}, &output); err != nil {
 		t.Fatalf("review start with incomplete residue present: %v\n%s", err, output.String())
@@ -137,6 +138,7 @@ func TestReviewReclaimClearsEnumeratedResidueThatNeverBlockedStart(t *testing.T)
 	if err := os.WriteFile(filepath.Join(repo, "docs", "start.md"), []byte("start\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runReviewCLIGit(t, repo, "add", "docs/start.md")
 	var output bytes.Buffer
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-reclaim-start"}, &output); err != nil {
 		t.Fatalf("enumerated residue blocked an unrelated start: %v\n%s", err, output.String())

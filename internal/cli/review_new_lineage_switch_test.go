@@ -25,6 +25,7 @@ func TestReviewStartNewLineageSwitchOffCreatesNoV3Entries(t *testing.T) {
 	if err := os.WriteFile(path, []byte("kill-switch-off structural-unfailure fixture\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runReviewCLIGit(t, repo, "add", "docs/kill-switch-off.md")
 
 	var out bytes.Buffer
 	if err := RunReviewFacadeStart([]string{"--cwd", repo}, &out); err != nil {

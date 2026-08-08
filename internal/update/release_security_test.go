@@ -75,6 +75,83 @@ func TestReleaseWorkflowUsesFailClosedLeastPrivilegeGates(t *testing.T) {
 	}
 }
 
+func TestStablePromotionWorkflowUsesBoundSourceAndProtectedPublication(t *testing.T) {
+	workflow := readRepositoryFile(t, ".github", "workflows", "promote-stable-rc.yml")
+	for _, required := range []string{
+		"workflow_dispatch:",
+		"source_prerelease_tag:",
+		"stable_tag:",
+		"release_environment_policy_id:",
+		"concurrency:",
+		"./scripts/promote-stable-preflight.sh",
+		"ref: ${{ steps.provenance.outputs.source_sha }}",
+		"reset-empty-draft",
+		"environment: release",
+		"actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd",
+		"recovery_state",
+		"stable tag recovery identity changed",
+		"test -n \"$GH_TOKEN\"",
+		"./scripts/release-signing-preflight.sh",
+		"RELEASE_SIGNING_TAG: ${{ inputs.stable_tag }}",
+		"GORELEASER_CURRENT_TAG",
+		"ref: ${{ github.sha }}",
+		"path: orchestration",
+		"RELEASE_VERIFICATION_TAG: ${{ inputs.stable_tag }}",
+		"./scripts/verify-release-assets.sh",
+		"stable published recovery state changed",
+		"RELEASE_ENVIRONMENT_POLICY_TOKEN",
+		"--method DELETE",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Errorf("stable promotion workflow is missing %q", required)
+		}
+	}
+	if regexp.MustCompile(`(?i)actions/workflows/.*/disable`).MatchString(workflow) {
+		t.Error("stable promotion workflow must not disable the legacy publisher")
+	}
+	if regexp.MustCompile(`(?m)\bgit push\b`).MatchString(workflow) {
+		t.Error("stable promotion workflow must not push a tag from a shell step")
+	}
+	if strings.Contains(workflow, "GITHUB_REF_NAME: ${{ inputs.stable_tag }}") {
+		t.Error("stable promotion workflow must not override reserved GITHUB_REF_NAME")
+	}
+	action := regexp.MustCompile(`^\s*(-\s*)?uses:\s*[^@\s]+@([0-9a-f]{40})(?:\s|$)`)
+	scanner := bufio.NewScanner(strings.NewReader(workflow))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "uses:") && !action.MatchString(line) {
+			t.Errorf("stable promotion action is not pinned to a full commit SHA: %s", strings.TrimSpace(line))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSigningMaterialCleanupFallsBackAndProvesAbsence(t *testing.T) {
+	for _, workflowPath := range [][]string{
+		{".github", "workflows", "release.yml"},
+		{".github", "workflows", "promote-stable-rc.yml"},
+	} {
+		workflow := readRepositoryFile(t, workflowPath...)
+		for _, required := range []string{
+			"- name: Remove signing material",
+			"if: always()",
+			`shred --remove "$MINISIGN_SECRET_KEY_FILE" 2>/dev/null || rm -f "$MINISIGN_SECRET_KEY_FILE"`,
+			`rm -f "$MINISIGN_SIGNING_PUBLIC_KEY_FILE"`,
+			`test ! -e "$MINISIGN_SECRET_KEY_FILE"`,
+			`test ! -e "$MINISIGN_SIGNING_PUBLIC_KEY_FILE"`,
+		} {
+			if !strings.Contains(workflow, required) {
+				t.Errorf("%s cleanup is missing %q", filepath.Join(workflowPath...), required)
+			}
+		}
+		if strings.Contains(workflow, `shred --remove "$MINISIGN_SECRET_KEY_FILE" 2>/dev/null || true`) {
+			t.Errorf("%s cleanup masks shred failure", filepath.Join(workflowPath...))
+		}
+	}
+}
+
 func TestReleaseAssetVerifierPreservesReadOnlyRotationVerification(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("release verification runtime is Ubuntu-specific")
@@ -102,13 +179,14 @@ func TestReleaseAssetVerifierPreservesReadOnlyRotationVerification(t *testing.T)
 	writeExecutable("gh", `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$GH_CALL_LOG"
-if [[ "$1" == api && "$2" == "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" ]]; then
+tag=${RELEASE_VERIFICATION_TAG:-$GITHUB_REF_NAME}
+if [[ "$1" == api && "$2" == "repos/$GITHUB_REPOSITORY/releases/tags/$tag" ]]; then
   cat <<JSON
-{"tag_name":"$GITHUB_REF_NAME","draft":false,"prerelease":false,"assets":[{"name":"gentle-ai_1.2.3_darwin_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_darwin_arm64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_arm64.tar.gz"},{"name":"checksums.txt"},{"name":"checksums.txt.minisig"}]}
+{"tag_name":"$tag","draft":false,"prerelease":false,"assets":[{"name":"gentle-ai_1.2.3_darwin_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_darwin_arm64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_arm64.tar.gz"},{"name":"checksums.txt"},{"name":"checksums.txt.minisig"}]}
 JSON
   exit 0
 fi
-if [[ "$1" == release && "$2" == download && "$3" == "$GITHUB_REF_NAME" ]]; then
+if [[ "$1" == release && "$2" == download && "$3" == "$tag" ]]; then
   shift 3
   directory=
   while (( $# > 0 )); do
@@ -138,31 +216,126 @@ while (( $# > 0 )); do
   esac
 done
 [[ "$public_key" == "$EXPECTED_SIGNING_KEY" ]] || exit 1
-printf 'repo=%s;tag=%s\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+printf 'repo=%s;tag=%s\n' "$GITHUB_REPOSITORY" "${RELEASE_VERIFICATION_TAG:-$GITHUB_REF_NAME}"
 `)
 
 	root := filepath.Clean(filepath.Join("..", ".."))
-	command := exec.Command("bash", "scripts/verify-release-assets.sh")
-	command.Dir = root
-	command.Env = append(os.Environ(),
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"GH_CALL_LOG="+ghLog,
-		"GH_TOKEN=read-only-test-token",
-		"GITHUB_REPOSITORY=Gentleman-Programming/gentle-ai",
-		"GITHUB_REF_NAME=v1.2.3",
-		"MINISIGN_PUBLIC_KEYS="+firstKey+","+signingKey,
-		"EXPECTED_SIGNING_KEY="+signingKey,
-	)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("read-only release verification failed: %v\n%s", err, output)
+	for _, tc := range []struct {
+		name            string
+		githubRef       string
+		verificationTag string
+		setExplicitTag  bool
+		wantSuccess     bool
+		wantOutput      string
+	}{
+		{
+			name:            "promotion tag overrides workflow dispatch main ref",
+			githubRef:       "main",
+			verificationTag: "v1.2.3",
+			setExplicitTag:  true,
+			wantSuccess:     true,
+		},
+		{
+			name:        "native tag ref remains supported",
+			githubRef:   "v1.2.3",
+			wantSuccess: true,
+		},
+		{
+			name:            "empty explicit promotion tag fails closed",
+			githubRef:       "v1.2.3",
+			verificationTag: "",
+			setExplicitTag:  true,
+			wantOutput:      "RELEASE_VERIFICATION_TAG is empty",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(ghLog, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command("bash", "scripts/verify-release-assets.sh")
+			command.Dir = root
+			environment := make([]string, 0, len(os.Environ())+8)
+			for _, value := range os.Environ() {
+				name, _, _ := strings.Cut(value, "=")
+				switch name {
+				case "PATH", "GH_CALL_LOG", "GH_TOKEN", "GITHUB_REPOSITORY", "GITHUB_REF_NAME", "MINISIGN_PUBLIC_KEYS", "EXPECTED_SIGNING_KEY", "RELEASE_VERIFICATION_TAG":
+					continue
+				}
+				environment = append(environment, value)
+			}
+			command.Env = append(environment,
+				"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"GH_CALL_LOG="+ghLog,
+				"GH_TOKEN=read-only-test-token",
+				"GITHUB_REPOSITORY=Gentleman-Programming/gentle-ai",
+				"GITHUB_REF_NAME="+tc.githubRef,
+				"MINISIGN_PUBLIC_KEYS="+firstKey+","+signingKey,
+				"EXPECTED_SIGNING_KEY="+signingKey,
+			)
+			if tc.setExplicitTag {
+				command.Env = append(command.Env, "RELEASE_VERIFICATION_TAG="+tc.verificationTag)
+			}
+			output, err := command.CombinedOutput()
+			if tc.wantSuccess && err != nil {
+				t.Fatalf("read-only release verification failed: %v\n%s", err, output)
+			}
+			if !tc.wantSuccess && err == nil {
+				t.Fatalf("release verification accepted an unsafe tag binding:\n%s", output)
+			}
+			if tc.wantOutput != "" && !strings.Contains(string(output), tc.wantOutput) {
+				t.Fatalf("release verification output = %q, want %q", output, tc.wantOutput)
+			}
+			if !tc.wantSuccess {
+				return
+			}
+			calls, err := os.ReadFile(ghLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
+			if len(lines) != 2 || !strings.HasPrefix(lines[0], "api repos/") || !strings.HasPrefix(lines[1], "release download v1.2.3 ") {
+				t.Fatalf("release verifier used commands outside the approved read-only surface: %q", lines)
+			}
+		})
 	}
-	calls, err := os.ReadFile(ghLog)
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestStablePromotionVerifyExistingRecoveryIsVerificationOnly(t *testing.T) {
+	workflow := readRepositoryFile(t, ".github", "workflows", "promote-stable-rc.yml")
+	for _, required := range []string{
+		"if (recovery === 'verify-existing' && (!release || release.data.draft || release.data.prerelease || !release.data.immutable",
+		"core.setOutput('publish', recovery === 'verify-existing' ? 'false' : 'true');",
+		"if: steps.tag.outputs.publish == 'true'",
+		"HOMEBREW_TAP_TOKEN",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Errorf("stable promotion recovery contract is missing %q", required)
+		}
 	}
-	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
-	if len(lines) != 2 || !strings.HasPrefix(lines[0], "api repos/") || !strings.HasPrefix(lines[1], "release download v1.2.3 ") {
-		t.Fatalf("release verifier used commands outside the approved read-only surface: %q", lines)
+	for _, forbidden := range []string{
+		"github.rest.repos.updateRelease",
+		"github.rest.repos.uploadReleaseAsset",
+	} {
+		if strings.Contains(workflow, forbidden) {
+			t.Errorf("verify-existing recovery must not mutate published releases: found %q", forbidden)
+		}
+	}
+}
+
+func TestStablePromotionPreflightUsesRESTCompatibleReleaseID(t *testing.T) {
+	preflight := readRepositoryFile(t, "scripts", "promote-stable-preflight.sh")
+	for _, required := range []string{
+		"release(tagName: $tag) { databaseId }",
+		".data.repository.release.databaseId // empty",
+		"recovery_state=verify-existing",
+		"repos/$GITHUB_REPOSITORY/releases/$stable_release",
+	} {
+		if !strings.Contains(preflight, required) {
+			t.Errorf("stable promotion preflight is missing %q", required)
+		}
+	}
+	if strings.Contains(preflight, "release(tagName: $tag) { id }") {
+		t.Error("stable promotion preflight must not pass a GraphQL node ID to the REST release endpoint")
 	}
 }
 
@@ -218,6 +391,18 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 			},
 		},
 		{
+			path: "promote-stable-preflight.sh",
+			required: []string{
+				`databaseId`,
+				`source prerelease tag must be canonical`,
+				`workflow revision is not exact current origin/main`,
+				`stable tag is incompatible with the admitted source`,
+				`stable release state is incompatible with safe recovery`,
+				`recovery_state=%s`,
+				`GITHUB_SHA=$source_sha ./scripts/require-ci-success.sh`,
+			},
+		},
+		{
 			path: "release-preflight.sh",
 			required: []string{
 				`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`,
@@ -230,6 +415,7 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 		{
 			path: "release-signing-preflight.sh",
 			required: []string{
+				`RELEASE_SIGNING_TAG`,
 				`MINISIGN_PUBLIC_KEYS_CANONICAL`,
 				`minisign -R`,
 				`minisign -S`,
@@ -240,6 +426,7 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 		{
 			path: "verify-release-assets.sh",
 			required: []string{
+				`RELEASE_VERIFICATION_TAG`,
 				`gh release download`,
 				`minisign -VQ`,
 				`canonicalize-release-public-keys.sh`,

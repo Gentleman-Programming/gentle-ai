@@ -464,7 +464,7 @@ func TestCorrectionScopeExpansionPrioritizesPendingFinalize(t *testing.T) {
 	}
 }
 
-func TestCompactTargetStatusUsesCurrentProofAndLiveProjection(t *testing.T) {
+func TestCompactTargetStatusUsesExactCurrentCandidateAndLiveProjection(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 	writeSnapshotFile(t, repo, "new.txt", "initial\n")
@@ -475,12 +475,12 @@ func TestCompactTargetStatusUsesCurrentProofAndLiveProjection(t *testing.T) {
 	fix, _ := builder.Build(context.Background(), Target{Kind: TargetFixDiff, BaseRef: initial.CandidateTree, IntendedUntracked: []string{"new.txt"}, LedgerIDs: []string{"R1-001"}})
 	state := CompactState{InitialSnapshot: initial, CurrentSnapshot: fix, GenesisPaths: initial.Paths}
 	if !compactLiveTargetMatchesSnapshot(context.Background(), repo, state, live, true) {
-		t.Fatal("terminal correction did not match current intended-untracked proof")
+		t.Fatal("terminal correction did not match the exact current candidate")
 	}
 	wrongProof := state
 	wrongProof.CurrentSnapshot.IntendedUntrackedProof = initial.IntendedUntrackedProof
-	if compactLiveTargetMatchesSnapshot(context.Background(), repo, wrongProof, live, true) {
-		t.Fatal("terminal correction accepted a stale intended-untracked proof")
+	if !compactLiveTargetMatchesSnapshot(context.Background(), repo, wrongProof, live, true) {
+		t.Fatal("terminal correction rejected an exact candidate for a stale intended-untracked proof")
 	}
 	projection := targetProjectionFromCompact(state, targetProjectionFromSnapshot(live))
 	if projection.Kind != live.Kind || projection.PathsDigest != live.PathsDigest || projection.IntendedUntrackedProof != live.IntendedUntrackedProof || projection.CurrentSnapshotIdentity != live.Identity || projection.InitialSnapshotIdentity != initial.Identity {
@@ -973,7 +973,7 @@ func TestCompactAuthorityLockFailuresAreOperational(t *testing.T) {
 		&AuthorityLockTimeoutError{Timeout: 2 * time.Second},
 		&AuthorityLockCancelledError{Cause: context.Canceled},
 	} {
-		if !compactAuthorityOperationalFailure(err) {
+		if !IsCompactAuthorityOperationalFailure(err) {
 			t.Fatalf("authority lock failure classified as semantic corruption: %T", err)
 		}
 	}

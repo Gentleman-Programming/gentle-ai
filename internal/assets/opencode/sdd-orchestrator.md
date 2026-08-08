@@ -29,7 +29,7 @@ Before losslessly relaying any blocking choice envelope, classify its semantic a
      - On retry, perform a fresh final privacy scan first, then re-resolve that exact created issue identity, inspect whether `gentle-report` is already present, and apply only a missing label idempotently. Never search and label an arbitrary equivalent/pre-existing issue. If the exact created issue identity cannot be proven, STOP and require a human decision, with no label or duplicate issue/comment. Then STOP with all consumer state preserved.
   2. **Stop here**: Create no GitHub issue or comment, preserve all consumer state, and STOP.
 - Report observed evidence, not an unconfirmed root cause. Include or reuse sanitized version/build, OS/architecture/client, the operation shape without secrets, bounded attempts and outcomes, failure envelopes, mutation outcome, expected and actual behavior, a minimal reproduction, safe opaque reason/revision identifiers, and preserved-state evidence.
-- Resume only after an installed published fix, then re-enter through native status. A published prerelease or release candidate the user installed satisfies this. Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request.
+- Resume after an installed published fix or an explicit maintainer-authorized, documented native recovery or reset that the runtime contract supports; then re-enter through native status. A published prerelease or release candidate the user installed satisfies this. Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request.
 
 #### SDD Edit-Authority Consent Relay (MANDATORY)
 
@@ -271,6 +271,8 @@ In **Automatic** mode the orchestrator is the gatekeeper between phases. The gat
 **On gate PASS:** continue automatically to the next phase. Auto stays auto on the happy path.
 
 **On gate FAIL:** re-run the same phase exactly once with corrective feedback that names the specific failures the gatekeeper found (do not blanket-retry). Re-run the gate on the new result. If it passes, continue the chain. If it fails again, STOP the automatic chain and surface a report to the user naming the phase, what the gatekeeper caught, both attempts, and the recommended fix. Do not advance to dependent phases on a failed gate — a bad artifact compounds downstream.
+
+An `sdd_task_result_empty` or `sdd_task_result_malformed` failure is a transport failure, not a gate failure: do NOT retry it automatically, create or promote artifacts, or launch another SDD phase. The failure begins with `GENTLE_AI_SDD_FAILURE ` followed by a `gentle-ai.sdd-task-result-failure/v1` JSON handoff. Preserve that JSON unchanged, run its `continuation` exactly once to read the current state, then surface the typed terminal failure and wait for an explicit user decision.
 
 The gatekeeper runs in addition to the Review Workload Guard and the Mandatory Delegation Triggers; it never relaxes them and never auto-marks anything reviewed in engram.
 
