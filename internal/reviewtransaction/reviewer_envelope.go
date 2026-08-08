@@ -56,7 +56,7 @@ const ReviewerResultSchema = `{
           "then": {"required": ["evidence_class", "causal_disposition"]}
         }],
         "properties": {
-          "id": {"type": "string", "pattern": "^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*$"},
+          "id": {"type": "string", "pattern": "^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*$", "description": "Optional explicit ID; omit it to receive a native-assigned ID. When present it must carry the prefix bound to the selected lens, not the selection order: review-risk=R1-, review-readability=R2-, review-reliability=R3-, review-resilience=R4-."},
           "lens": {"type": "string", "enum": ["risk", "resilience", "readability", "reliability", "review-risk", "review-resilience", "review-readability", "review-reliability"]},
           "location": {"type": "string", "description": "One canonical repository-relative path:line or inclusive path:start-end span.", "pattern": "^.+:[1-9][0-9]*(?:-[1-9][0-9]*)?$"},
           "severity": {"type": "string", "enum": ["BLOCKER", "CRITICAL", "WARNING", "SUGGESTION"]},
@@ -277,6 +277,21 @@ func requiredReviewerResultFields(fields map[string]json.RawMessage) bool {
 	return true
 }
 
+// findingIDPrefixByLens is the single authoritative lens-to-finding-ID-prefix
+// mapping: admission enforces it and START publishes it, so the two cannot
+// drift apart.
+var findingIDPrefixByLens = map[string]string{
+	LensRisk: "R1-", LensReadability: "R2-", LensReliability: "R3-", LensResilience: "R4-",
+}
+
+// FindingIDPrefixForLens returns the prefix an explicit finding ID must carry
+// to be admitted for the given lens, or "" for an unsupported lens. The
+// published reviewer schema regex admits any R[1-4]- prefix, so this mapping
+// is the machine-readable source of the per-lens namespace.
+func FindingIDPrefixForLens(lens string) string {
+	return findingIDPrefixByLens[lens]
+}
+
 // canonicalReviewerResult contains the result-shape checks shared by native
 // admission and read-only advisory transport validation.
 func canonicalReviewerResult(result LensResult, expectedLens string) (LensResult, error) {
@@ -290,7 +305,7 @@ func canonicalReviewerResult(result LensResult, expectedLens string) (LensResult
 			message:  "reviewer result is not bound to the selected lens",
 		}
 	}
-	wantPrefix := map[string]string{LensRisk: "R1-", LensReadability: "R2-", LensReliability: "R3-", LensResilience: "R4-"}[canonical.Lens]
+	wantPrefix := FindingIDPrefixForLens(canonical.Lens)
 	for _, finding := range canonical.Findings {
 		if !artifactFindingID.MatchString(finding.ID) {
 			return LensResult{}, &reviewerResultShapeError{
@@ -301,7 +316,7 @@ func canonicalReviewerResult(result LensResult, expectedLens string) (LensResult
 		if !strings.HasPrefix(finding.ID, wantPrefix) {
 			return LensResult{}, &reviewerResultShapeError{
 				decision: ArtifactAdmissionBindingMismatch,
-				message:  "reviewer finding ID is not bound to the selected lens",
+				message:  fmt.Sprintf("reviewer finding ID is not bound to the selected lens: expected_prefix=%s received_id=%s", wantPrefix, finding.ID),
 			}
 		}
 		if isSevereSeverity(finding.Severity) && (!isSupportedEvidenceClass(finding.EvidenceClass) || !isSupportedCausalDisposition(finding.CausalDisposition)) {
