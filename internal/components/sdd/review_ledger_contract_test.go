@@ -331,10 +331,10 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// orchestrator contract, so the hash moved again. Deliberate, not drift.
 	//
 	// The canonical artifact language contract is appended to all eight agent
-	// prompts (+458 characters each); no key is added, removed, or otherwise
+	// prompts; no key is added, removed, or otherwise
 	// changed. The hash is recomputed from the rebased tree. Deliberate, not
 	// drift.
-	const want = "2d9538ea2271fcc92aae8007ae0a0918f746ad2f95697f1777f7dd114a658dd0"
+	const want = "d4b7d0f3ebc856767ce81fc0dbbe6c46327f9478989cfba93a7306b0863fef0f"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -559,8 +559,9 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// rendered sub-agent prompt, so executors no longer depend on the orchestrator
 		// remembering to forward it. The ceilings move to preserve the required 15%
 		// headroom after that deliberate increase.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 21_073, maxCharacters: 24_300},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 33_418, maxCharacters: 38_500},
+		// Canonical proof-path requirements add 281 characters per rendered lens.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 21_354, maxCharacters: 24_600},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_542, maxCharacters: 39_800},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
