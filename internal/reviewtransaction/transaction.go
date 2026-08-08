@@ -369,7 +369,7 @@ func canonicalLensResult(result LensResult, allowMissingSevereLocation bool) (Le
 		return LensResult{}, errors.New("lens result requires explicit findings and concrete evidence")
 	}
 	wantFindingLens := strings.TrimPrefix(result.Lens, "review-")
-	idPrefix := map[string]string{LensRisk: "R1", LensReadability: "R2", LensReliability: "R3", LensResilience: "R4"}[result.Lens]
+	idPrefix := strings.TrimSuffix(FindingIDPrefixForLens(result.Lens), "-")
 	findings := make([]Finding, len(result.Findings))
 	for index, finding := range result.Findings {
 		finding.ID = strings.TrimSpace(finding.ID)

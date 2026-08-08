@@ -86,6 +86,51 @@ func TestSchemaExampleShapedResultIsAdmitted(t *testing.T) {
 	}
 }
 
+// TestFindingIDPrefixForLensPublishesAdmissionMapping pins the exported
+// lens→prefix mapping to the exact prefixes admission enforces, so START can
+// publish the same namespace the published regex leaves ambiguous.
+func TestFindingIDPrefixForLensPublishesAdmissionMapping(t *testing.T) {
+	want := map[string]string{
+		LensRisk:        "R1-",
+		LensReadability: "R2-",
+		LensReliability: "R3-",
+		LensResilience:  "R4-",
+	}
+	for _, lens := range supportedLenses {
+		if got := FindingIDPrefixForLens(lens); got != want[lens] {
+			t.Fatalf("FindingIDPrefixForLens(%q) = %q, want %q", lens, got, want[lens])
+		}
+	}
+	if got := FindingIDPrefixForLens("review-unknown"); got != "" {
+		t.Fatalf("FindingIDPrefixForLens(unknown) = %q, want empty", got)
+	}
+
+	// The published schema is the only artifact a reviewer reads before
+	// submitting, so its explicit-ID property must name the same mapping.
+	var document struct {
+		Properties struct {
+			Findings struct {
+				Items struct {
+					Properties struct {
+						ID struct {
+							Description string `json:"description"`
+						} `json:"id"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"findings"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(ReviewerResultSchema), &document); err != nil {
+		t.Fatal(err)
+	}
+	description := document.Properties.Findings.Items.Properties.ID.Description
+	for lens, prefix := range want {
+		if !strings.Contains(description, lens+"="+prefix) {
+			t.Fatalf("schema finding id description %q does not publish %s=%s", description, lens, prefix)
+		}
+	}
+}
+
 func TestValidateReviewerResultMatchesNativeAdmissionShape(t *testing.T) {
 	subject, frozen, request := admittedArtifactFixture(t)
 	base := ReviewerResult{
@@ -111,6 +156,9 @@ func TestValidateReviewerResultMatchesNativeAdmissionShape(t *testing.T) {
 		{name: "binding hash", mutate: func(result *ReviewerResult) { result.SubjectHash = "sha256:" + strings.Repeat("0", 64) }, wantErr: true},
 		{name: "selected lens", mutate: func(result *ReviewerResult) { result.Lens = LensRisk }, wantErr: true},
 		{name: "missing lens binding", mutate: func(result *ReviewerResult) { result.Lens = "" }, wantErr: true},
+		{name: "foreign lens prefix names expected and received", mutate: func(result *ReviewerResult) {
+			result.Findings[0].ID = "R2-001"
+		}, wantErr: true, wantMessage: "reviewer finding ID is not bound to the selected lens: expected_prefix=R3- received_id=R2-001"},
 		{name: "missing frozen path", mutate: func(result *ReviewerResult) { result.Inspection.Paths = result.Inspection.Paths[:1] }, wantErr: true, wantMessage: "reviewer inspection coverage: missing_frozen_manifest_paths=1"},
 		{name: "foreign path", mutate: func(result *ReviewerResult) {
 			result.Inspection.Paths = append(result.Inspection.Paths, "outside/private.go")

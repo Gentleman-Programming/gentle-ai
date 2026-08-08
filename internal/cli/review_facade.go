@@ -185,12 +185,20 @@ func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAg
 type ReviewFacadeLensBinding struct {
 	Lens  string `json:"lens"`
 	Order int    `json:"order"`
+	// FindingIDPrefix is the prefix admission requires for explicit finding
+	// IDs bound to this lens. It follows the lens, not the selection order:
+	// high-risk START selects review-resilience at order 1, but its explicit
+	// IDs must still carry R4-.
+	FindingIDPrefix string `json:"finding_id_prefix"`
 }
 
 func facadeLensBindings(lenses []string) []ReviewFacadeLensBinding {
 	bindings := make([]ReviewFacadeLensBinding, len(lenses))
 	for order, lens := range lenses {
-		bindings[order] = ReviewFacadeLensBinding{Lens: lens, Order: order}
+		bindings[order] = ReviewFacadeLensBinding{
+			Lens: lens, Order: order,
+			FindingIDPrefix: reviewtransaction.FindingIDPrefixForLens(lens),
+		}
 	}
 	return bindings
 }

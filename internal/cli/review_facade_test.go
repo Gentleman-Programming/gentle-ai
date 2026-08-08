@@ -21,6 +21,35 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
+// TestFacadeLensBindingsPublishFindingIDPrefix proves START output carries the
+// lens-bound finding-ID prefix admission enforces, in the canonical high-risk
+// selection order where lens order and prefix number diverge.
+func TestFacadeLensBindingsPublishFindingIDPrefix(t *testing.T) {
+	lenses := []string{
+		reviewtransaction.LensRisk,
+		reviewtransaction.LensResilience,
+		reviewtransaction.LensReadability,
+		reviewtransaction.LensReliability,
+	}
+	bindings := facadeLensBindings(lenses)
+	if len(bindings) != len(lenses) {
+		t.Fatalf("facadeLensBindings() = %#v, want one binding per lens %v", bindings, lenses)
+	}
+	for index, binding := range bindings {
+		want := reviewtransaction.FindingIDPrefixForLens(lenses[index])
+		if want == "" || binding.FindingIDPrefix != want {
+			t.Fatalf("binding[%d] finding ID prefix = %q, want %q for lens %q", index, binding.FindingIDPrefix, want, lenses[index])
+		}
+	}
+	encoded, err := json.Marshal(bindings[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"finding_id_prefix":"R4-"`) {
+		t.Fatalf("binding JSON = %s, want published finding_id_prefix R4- for %q", encoded, reviewtransaction.LensResilience)
+	}
+}
+
 func TestReviewFacadeStartStagedProjectionFreezesOnlyIndex(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))

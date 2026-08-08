@@ -17,7 +17,7 @@ import (
 // Three independent prose copies of this envelope are what let a lens agent
 // emit findings/evidence with no subject_hash and no inspection (community
 // report, PR #1801).
-const ReviewerResultSchema = `{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://gentle-ai.dev/schema/review/reviewer/v1","title":"Gentle AI reviewer result","type":"object","additionalProperties":false,"required":["subject_hash","inspection","findings","evidence"],"properties":{"subject_hash":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"inspection":{"type":"object","additionalProperties":false,"required":["status","paths"],"properties":{"status":{"const":"completed"},"paths":{"type":"array","description":"Complete unique unordered set of every changed_path_manifest.path.","uniqueItems":true,"items":{"type":"string","minLength":1}}}},"lens":{"type":"string","enum":["risk","resilience","readability","reliability","review-risk","review-resilience","review-readability","review-reliability"]},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["location","severity","claim","proof_refs"],"allOf":[{"if":{"properties":{"severity":{"enum":["BLOCKER","CRITICAL"]}},"required":["severity"]},"then":{"required":["evidence_class","causal_disposition"]}}],"properties":{"id":{"type":"string","pattern":"^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*$"},"lens":{"type":"string","enum":["risk","resilience","readability","reliability"]},"location":{"type":"string","description":"One canonical repository-relative path:line or inclusive path:start-end span.","pattern":"^.+:[1-9][0-9]*(?:-[1-9][0-9]*)?$"},"severity":{"type":"string","enum":["BLOCKER","CRITICAL","WARNING","SUGGESTION"]},"claim":{"type":"string","minLength":1},"proof_refs":{"type":"array","minItems":1,"items":{"type":"string","pattern":"\\S","not":{"pattern":"^\\s*(?:[nN]/[aA]|[nN][aA]|[nN][oO][nN][eE]|[tT][oO][dD][oO]|[tT][bB][dD]|[pP][aA][sS][sS]|[pP][aA][sS][sS][eE][dD]|[sS][uU][cC][cC][eE][sS][sS]|[pP][lL][aA][cC][eE][hH][oO][lL][dD][eE][rR])\\s*$"}}},"evidence_class":{"type":"string","enum":["deterministic","inferential","insufficient"]},"causal_disposition":{"type":"string","enum":["introduced","behavior-activated","worsened","pre-existing","base-only","unknown"]}}}},"evidence":{"type":"array","minItems":1,"items":{"type":"string","pattern":"\\S","not":{"pattern":"^\\s*(?:[nN]/[aA]|[nN][aA]|[nN][oO][nN][eE]|[tT][oO][dD][oO]|[tT][bB][dD]|[pP][aA][sS][sS]|[pP][aA][sS][sS][eE][dD]|[sS][uU][cC][cC][eE][sS][sS]|[pP][lL][aA][cC][eE][hH][oO][lL][dD][eE][rR])\\s*$"}}}},"examples":[{"subject_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","inspection":{"status":"completed","paths":["internal/example.go"]},"findings":[],"evidence":["reviewed the complete candidate scope"]}]}`
+const ReviewerResultSchema = `{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://gentle-ai.dev/schema/review/reviewer/v1","title":"Gentle AI reviewer result","type":"object","additionalProperties":false,"required":["subject_hash","inspection","findings","evidence"],"properties":{"subject_hash":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},"inspection":{"type":"object","additionalProperties":false,"required":["status","paths"],"properties":{"status":{"const":"completed"},"paths":{"type":"array","description":"Complete unique unordered set of every changed_path_manifest.path.","uniqueItems":true,"items":{"type":"string","minLength":1}}}},"lens":{"type":"string","enum":["risk","resilience","readability","reliability","review-risk","review-resilience","review-readability","review-reliability"]},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["location","severity","claim","proof_refs"],"allOf":[{"if":{"properties":{"severity":{"enum":["BLOCKER","CRITICAL"]}},"required":["severity"]},"then":{"required":["evidence_class","causal_disposition"]}}],"properties":{"id":{"type":"string","pattern":"^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*$","description":"Optional explicit ID; omit it to receive a native-assigned ID. When present it must carry the prefix bound to the selected lens, not the selection order: review-risk=R1-, review-readability=R2-, review-reliability=R3-, review-resilience=R4-."},"lens":{"type":"string","enum":["risk","resilience","readability","reliability"]},"location":{"type":"string","description":"One canonical repository-relative path:line or inclusive path:start-end span.","pattern":"^.+:[1-9][0-9]*(?:-[1-9][0-9]*)?$"},"severity":{"type":"string","enum":["BLOCKER","CRITICAL","WARNING","SUGGESTION"]},"claim":{"type":"string","minLength":1},"proof_refs":{"type":"array","minItems":1,"items":{"type":"string","pattern":"\\S","not":{"pattern":"^\\s*(?:[nN]/[aA]|[nN][aA]|[nN][oO][nN][eE]|[tT][oO][dD][oO]|[tT][bB][dD]|[pP][aA][sS][sS]|[pP][aA][sS][sS][eE][dD]|[sS][uU][cC][cC][eE][sS][sS]|[pP][lL][aA][cC][eE][hH][oO][lL][dD][eE][rR])\\s*$"}}},"evidence_class":{"type":"string","enum":["deterministic","inferential","insufficient"]},"causal_disposition":{"type":"string","enum":["introduced","behavior-activated","worsened","pre-existing","base-only","unknown"]}}}},"evidence":{"type":"array","minItems":1,"items":{"type":"string","pattern":"\\S","not":{"pattern":"^\\s*(?:[nN]/[aA]|[nN][aA]|[nN][oO][nN][eE]|[tT][oO][dD][oO]|[tT][bB][dD]|[pP][aA][sS][sS]|[pP][aA][sS][sS][eE][dD]|[sS][uU][cC][cC][eE][sS][sS]|[pP][lL][aA][cC][eE][hH][oO][lL][dD][eE][rR])\\s*$"}}}},"examples":[{"subject_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","inspection":{"status":"completed","paths":["internal/example.go"]},"findings":[],"evidence":["reviewed the complete candidate scope"]}]}`
 
 // ReviewerResultEnvelope is the machine-readable summary of what admission
 // demands of a reviewer result, parsed out of ReviewerResultSchema. Callers
@@ -137,6 +137,21 @@ func requiredReviewerResultFields(fields map[string]json.RawMessage) bool {
 	return true
 }
 
+// findingIDPrefixByLens is the single authoritative lens→finding-ID-prefix
+// mapping: admission enforces it and START publishes it, so the two can never
+// drift apart.
+var findingIDPrefixByLens = map[string]string{
+	LensRisk: "R1-", LensReadability: "R2-", LensReliability: "R3-", LensResilience: "R4-",
+}
+
+// FindingIDPrefixForLens returns the prefix an explicit finding ID must carry
+// to be admitted for the given lens, or "" for an unsupported lens. The
+// published reviewer schema regex admits any R[1-4]- prefix, so this mapping
+// is the only machine-readable source of the per-lens namespace.
+func FindingIDPrefixForLens(lens string) string {
+	return findingIDPrefixByLens[lens]
+}
+
 // canonicalReviewerResult contains the result-shape checks shared by native
 // admission and read-only advisory transport validation.
 func canonicalReviewerResult(result LensResult, expectedLens string) (LensResult, error) {
@@ -150,7 +165,7 @@ func canonicalReviewerResult(result LensResult, expectedLens string) (LensResult
 			message:  "reviewer result is not bound to the selected lens",
 		}
 	}
-	wantPrefix := map[string]string{LensRisk: "R1-", LensReadability: "R2-", LensReliability: "R3-", LensResilience: "R4-"}[canonical.Lens]
+	wantPrefix := FindingIDPrefixForLens(canonical.Lens)
 	for _, finding := range canonical.Findings {
 		if !artifactFindingID.MatchString(finding.ID) {
 			return LensResult{}, &reviewerResultShapeError{
@@ -161,7 +176,7 @@ func canonicalReviewerResult(result LensResult, expectedLens string) (LensResult
 		if !strings.HasPrefix(finding.ID, wantPrefix) {
 			return LensResult{}, &reviewerResultShapeError{
 				decision: ArtifactAdmissionBindingMismatch,
-				message:  "reviewer finding ID is not bound to the selected lens",
+				message:  fmt.Sprintf("reviewer finding ID is not bound to the selected lens: expected_prefix=%s received_id=%s", wantPrefix, finding.ID),
 			}
 		}
 		if isSevereSeverity(finding.Severity) && (!isSupportedEvidenceClass(finding.EvidenceClass) || !isSupportedCausalDisposition(finding.CausalDisposition)) {
