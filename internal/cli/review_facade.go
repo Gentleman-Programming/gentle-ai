@@ -935,13 +935,23 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							record.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff &&
 							target.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
 							selector.Projection == reviewtransaction.ProjectionStaged && selector.WorkspaceOverlay
-						approvedRebasedRecovery := result.Action == reviewtransaction.TargetStatusActionRecover &&
+						// The store already decided this. It admits an approved
+						// predecessor as a scope-changed recovery through a
+						// deliberately kind-agnostic predicate
+						// (compactStartTargetKindsCompatible pairs
+						// current-changes with base-diff on purpose), so
+						// re-deriving representability from kind equality here
+						// withholds a RECOVER the store accepts and leaves the
+						// candidate with no reachable continuation. Consume the
+						// classification instead of reconstructing it: this
+						// replaces the narrower rebased-only reconstruction,
+						// which recognized only the disjoint base advance and
+						// missed the ordinary committed-delivery shape whose
+						// base tree is unchanged by construction.
+						approvedScopeChangedRecovery := result.Action == reviewtransaction.TargetStatusActionRecover &&
 							result.ActionDisposition == reviewtransaction.RecoveryScopeChanged &&
-							record.State.State == reviewtransaction.StateApproved &&
-							record.State.InitialSnapshot.Kind == reviewtransaction.TargetCurrentChanges &&
-							target.Kind == reviewtransaction.TargetBaseDiff &&
-							record.State.InitialSnapshot.BaseTree != liveSnapshot.BaseTree
-						selector.RecoveryRepresentable = record.State.InitialSnapshot.Kind == target.Kind || stagedScopeRecovery || approvedRebasedRecovery
+							record.State.State == reviewtransaction.StateApproved
+						selector.RecoveryRepresentable = record.State.InitialSnapshot.Kind == target.Kind || stagedScopeRecovery || approvedScopeChangedRecovery
 						if stagedScopeRecovery || selector.RecoveryRepresentable && result.ActionDisposition == reviewtransaction.RecoveryInvalidated && target.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && selector.Projection == reviewtransaction.ProjectionStaged {
 							selector.RecoveryProjection = reviewtransaction.ProjectionStaged
 						} else if selector.RecoveryRepresentable && predecessorProjection != selector.Projection {

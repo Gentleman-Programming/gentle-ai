@@ -569,6 +569,70 @@ func TestStatusStopsUnrepresentableRecoveryWithoutMutation(t *testing.T) {
 	}
 }
 
+// TestStatusRepresentsApprovedScopeChangedRecoveryAcrossTargetKinds covers the
+// ordinary committed-delivery shape: an approved current-changes candidate is
+// committed, the work continues on the same paths, and the caller then asks for
+// base-diff authority. The store classifies that as a scope-changed recovery --
+// compactStartTargetKindsCompatible admits current-changes into base-diff on
+// purpose -- so STATUS must be able to represent the recovery it just reported.
+func TestStatusRepresentsApprovedScopeChangedRecoveryAcrossTargetKinds(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "selector-scope-changed"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	result := filepath.Join(t.TempDir(), "clean.json")
+	writeReviewCLIJSON(t, result, facadeReviewerResult{
+		Lens: started.SelectedLenses[0], Findings: []facadeFinding{},
+		Evidence: []string{"reviewed exact current changes"},
+	})
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", result}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	evidence := filepath.Join(t.TempDir(), "tests.txt")
+	if err := os.WriteFile(evidence, []byte("go test ./...: pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--evidence", evidence}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.State.State != reviewtransaction.StateApproved {
+		t.Fatalf("predecessor state = %q, want approved", record.State.State)
+	}
+	// Commit the approved candidate, then keep working on the exact same path so
+	// the delivery scope still matches while the candidate tree moves on.
+	runReviewCLIGit(t, repo, "add", "candidate.go")
+	runReviewCLIGit(t, repo, "commit", "-qm", "commit approved candidate")
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "candidate.go")
+	runReviewCLIGit(t, repo, "commit", "-qm", "continue on the reviewed path")
+	before, _ := os.ReadFile(store.StatePath())
+	storesBefore, _ := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	status := selectorTransitionStatus(t, repo, "--lineage", record.State.LineageID, "--base-ref", base)
+	if status.Action != reviewtransaction.TargetStatusActionRecover ||
+		status.ActionDisposition != reviewtransaction.RecoveryScopeChanged {
+		t.Fatalf("scope-changed status action = %q disposition = %q", status.Action, status.ActionDisposition)
+	}
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "recovery_authorization_required" {
+		t.Fatalf("scope-changed recovery transition = %#v", status.NextTransition)
+	}
+	after, _ := os.ReadFile(store.StatePath())
+	storesAfter, _ := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	if !bytes.Equal(before, after) || len(storesAfter) != len(storesBefore) {
+		t.Fatal("scope-changed recovery status mutated authority")
+	}
+}
+
 func TestTransitionSelectorFlagsRejectMixedAliases(t *testing.T) {
 	tests := []struct {
 		name      string
