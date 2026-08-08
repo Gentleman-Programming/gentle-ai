@@ -823,7 +823,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if *committedOnly && (selectedBaseRef == "" || *workspaceOverlay) {
 			return errors.New("review status --committed-only requires --base-ref without --workspace-overlay; rerun `gentle-ai review status --base-ref <ref> --committed-only`")
 		}
-		if selectedBaseRef != "" && !*committedOnly && !*workspaceOverlay {
+		if selectedBaseRef != "" && committedOnlyProvided && !*committedOnly && !*workspaceOverlay {
 			return errors.New("review status --base-ref requires --committed-only; rerun `gentle-ai review status --base-ref <ref> --committed-only`")
 		}
 		stagedRecoveryOverlay := *workspaceOverlay && selectedProjection == reviewtransaction.ProjectionStaged
