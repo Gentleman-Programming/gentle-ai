@@ -569,7 +569,10 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 // syncBackupTargets returns the file paths that need to be backed up
 // before sync executes. Uses syncComponentPaths so that the backup/verify
 // contract matches the actual files sync touches (which differ from install
-// for ComponentPersona — see syncComponentPaths).
+// for ComponentPersona, see syncComponentPaths). One deliberate exception:
+// persona backup also captures the non-selected managed output-style file so a
+// failed persona switch can be rolled back (verification still declares only
+// the selected file).
 func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
 	paths := map[string]struct{}{}
 	for _, component := range selection.Components {
@@ -581,6 +584,13 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 				if adapter.Agent() == model.AgentClaudeCode {
 					paths[adapter.MCPConfigPath(homeDir, "engram")] = struct{}{}
 				}
+			}
+		}
+		if component == model.ComponentPersona {
+			for _, path := range managedOutputStyleBackupPaths(selection, adapters, func(a agents.Adapter) string {
+				return a.OutputStyleDir(componentInjectionDir(homeDir, workspaceDir, a))
+			}) {
+				paths[path] = struct{}{}
 			}
 		}
 	}
@@ -753,6 +763,39 @@ func managedOutputStyleFile(persona model.PersonaID) string {
 	default:
 		return ""
 	}
+}
+
+// managedOutputStyleFiles returns every managed output-style filename.
+func managedOutputStyleFiles() []string {
+	return []string{"gentleman.md", "neutral.md"}
+}
+
+// managedOutputStyleBackupPaths returns the full set of managed output-style
+// file paths for the adapters. Backup enumeration needs all of them, not only
+// the selected persona's: switching personas removes the previously selected
+// file (persona inject step 3b), so the pre-run snapshot must hold it to roll a
+// failed switch back. This is intentionally backup-only. Post-apply
+// verification keeps declaring just the selected persona's file, since the other
+// one is correctly absent after a switch. outputStyleDir resolves the adapter's
+// output-style directory in the caller's scope (install and sync differ).
+func managedOutputStyleBackupPaths(selection model.Selection, adapters []agents.Adapter, outputStyleDir func(agents.Adapter) string) []string {
+	if managedOutputStyleName(selection.Persona) == "" {
+		return nil
+	}
+	var paths []string
+	for _, adapter := range adapters {
+		if !adapter.SupportsOutputStyles() {
+			continue
+		}
+		dir := outputStyleDir(adapter)
+		if dir == "" {
+			continue
+		}
+		for _, styleFile := range managedOutputStyleFiles() {
+			paths = append(paths, filepath.Join(dir, styleFile))
+		}
+	}
+	return paths
 }
 
 // componentSyncStep is the sync-specific apply step.
