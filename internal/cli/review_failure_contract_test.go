@@ -1159,3 +1159,45 @@ func decodeReviewIntegrationFailure(t *testing.T, payload []byte) ReviewIntegrat
 	}
 	return failure
 }
+
+// TestNewReviewIntegrationFailureCauseIsUniversal is root 8's structural fix
+// (#2471): Cause used to be per-branch opt-in, and 17 of 25 return sites
+// forgot it, so a caller read a constant Message while the native reason sat
+// in the discarded typed error. Cause is now projected once at construction,
+// so a branch cannot forget it; this test pins two branches that carried no
+// cause before, plus the one branch whose contract REQUIRES staying
+// content-free.
+func TestNewReviewIntegrationFailureCauseIsUniversal(t *testing.T) {
+	// A branch matched via errors.Is: contention keeps its typed code and now
+	// carries the wrapped operational context too.
+	contention := fmt.Errorf("acquire compact authority for lineage %q: %w", "cause-universal", reviewtransaction.ErrStoreLockContended)
+	failure := newReviewIntegrationFailure("review.start", nil, contention)
+	if failure.Code != "authority_lock_contention" {
+		t.Fatalf("contention envelope code = %q", failure.Code)
+	}
+	if !strings.Contains(failure.Cause, "cause-universal") {
+		t.Fatalf("contention envelope discarded the typed cause: %#v", failure)
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatalf("contention envelope with cause validation = %v", err)
+	}
+
+	// The legacy read-only refusal: constant Message, and before this change
+	// no Cause at all, so the lineage the error names never reached the
+	// caller's machine-readable envelope.
+	legacy := &reviewtransaction.LegacyReadOnlyError{Operation: "review/start", LineageID: "cause-universal-legacy"}
+	failure = newReviewIntegrationFailure("review.start", nil, legacy)
+	if failure.Code != reviewtransaction.LegacyReadOnlyErrorCode {
+		t.Fatalf("legacy envelope code = %q", failure.Code)
+	}
+	if !strings.Contains(failure.Cause, "cause-universal-legacy") {
+		t.Fatalf("legacy envelope discarded the typed cause: %#v", failure)
+	}
+
+	// The read-only catch-all is the ONE branch whose contract is
+	// content-free retry; it must clear the universal default, not inherit it.
+	readOnly := newReviewIntegrationFailure("review.status", nil, errors.New("internal detail that must not leak"))
+	if readOnly.Code != "operation_failed" || readOnly.Cause != "" {
+		t.Fatalf("read-only catch-all = %#v, want content-free", readOnly)
+	}
+}

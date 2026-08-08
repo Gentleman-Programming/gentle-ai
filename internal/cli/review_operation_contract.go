@@ -422,6 +422,14 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
 	}
 	failure.LineageID = safeReviewIntegrationLineage(operation, args)
+	// Root 8 (#2471): the typed cause is projected ONCE, here, for every
+	// branch below. Before this, Cause was per-branch opt-in and 17 of 25
+	// return sites forgot it, so the caller read a constant Message with the
+	// native reason already in the tool's hands and discarded. The helper
+	// scrubs and bounds to the schema's own maxLength, and the field is
+	// additive, so no branch has a reason to suppress it; a branch that needs
+	// a MORE specific cause may still overwrite this default.
+	failure.Cause = reviewIntegrationFailureCause(runErr)
 	// Both branches below refuse inside authorizeReviewStart, strictly before
 	// any review authority is created or mutated (organic-dx Phase 3b task
 	// 3b.6). Falling through to the generic operation_outcome_unknown default
@@ -521,6 +529,12 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 			failure.RequestDigest = publication.RequestDigest
 			failure.RequiredInputs = []string{}
 			failure.NextAction = "explicit-maintainer-action"
+			// Publication errors wrap raw provider/subprocess bytes, which no
+			// scrubber can prove safe; this envelope already carries lineage,
+			// request digest and exact replayability, so it stays content-free
+			// like the read-only catch-all rather than inheriting the universal
+			// cause default.
+			failure.Cause = ""
 			return failure
 		}
 		failure.Code = "receipt_publication_pending"
@@ -532,6 +546,12 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RequestDigest = publication.RequestDigest
 		failure.RequiredInputs = []string{"lineage_id"}
 		failure.NextAction = "review.finalize"
+		// Publication errors wrap raw provider/subprocess bytes, which no
+		// scrubber can prove safe; this envelope already carries lineage,
+		// request digest and exact replayability, so it stays content-free
+		// like the read-only catch-all rather than inheriting the universal
+		// cause default.
+		failure.Cause = ""
 		return failure
 	}
 	var bindingPublication *sddstatus.ReviewBindingPublicationError
@@ -546,6 +566,12 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RequestDigest = facadeValueHash("bind-sdd-request", args)
 		failure.RequiredInputs = []string{"change", "lineage_id", "expected_binding_revision"}
 		failure.NextAction = ReviewIntegrationOperationBindSDD
+		// Publication errors wrap raw provider/subprocess bytes, which no
+		// scrubber can prove safe; this envelope already carries lineage,
+		// request digest and exact replayability, so it stays content-free
+		// like the read-only catch-all rather than inheriting the universal
+		// cause default.
+		failure.Cause = ""
 		return failure
 	}
 	var startContext *reviewStartContextError
@@ -947,6 +973,11 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RetrySafe = true
 		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
 		failure.NextAction = "retry"
+		// The read-only catch-all is deliberately content-free: it is the one
+		// envelope whose whole contract is "retry safely", so it clears the
+		// universal cause default rather than leaking an arbitrary internal
+		// error to a caller who has nothing to repair.
+		failure.Cause = ""
 		return failure
 	}
 	// The true operation_outcome_unknown default: no typed branch above
