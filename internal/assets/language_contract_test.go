@@ -461,3 +461,47 @@ func readRepoRootFile(t *testing.T, rel string) string {
 	}
 	return string(content)
 }
+
+const preWriteArtifactSelfCheckRequired = "Before any Write/Edit whose content is an artifact, re-verify the artifact language rules."
+
+const neutralToneDialectAntiDriftRequired = "The same rule applies to tone and dialect: do not adopt regional forms from memory context, prior turns, or quoted material."
+
+func TestPersonaChannelsCarryPreWriteArtifactSelfCheck(t *testing.T) {
+	paths := []string{
+		"claude/output-style-gentleman.md",
+		"claude/output-style-neutral.md",
+		"kimi/output-style-gentleman.md",
+		"kimi/output-style-neutral.md",
+		"generic/persona-gentleman.md",
+		"generic/persona-neutral.md",
+		"hermes/persona-gentleman.md",
+		"hermes/persona-neutral.md",
+		"kiro/persona-gentleman.md",
+		"opencode/persona-gentleman.md",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			if !strings.Contains(content, preWriteArtifactSelfCheckRequired) {
+				t.Fatalf("%s: missing pre-write artifact self-check sentence", path)
+			}
+		})
+	}
+}
+
+func TestNeutralChannelsExtendAntiDriftToToneAndDialect(t *testing.T) {
+	paths := []string{
+		"claude/output-style-neutral.md",
+		"kimi/output-style-neutral.md",
+		"generic/persona-neutral.md",
+		"hermes/persona-neutral.md",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			if !strings.Contains(content, neutralToneDialectAntiDriftRequired) {
+				t.Fatalf("%s: missing tone/dialect anti-drift sentence", path)
+			}
+		})
+	}
+}
