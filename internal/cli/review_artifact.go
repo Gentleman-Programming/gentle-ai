@@ -64,6 +64,9 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 		root, err = resolveOpaqueReviewRepositoryRoot(ctx, contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
 			LineageID: *lineage, TargetIdentity: *target, Revision: *revision,
 		})
+		if err == nil {
+			err = authorizeManagedReviewerAssets()
+		}
 	} else {
 		root, err = resolveReviewMutationRoot(ctx, *cwd)
 	}

@@ -3187,7 +3187,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	// byte-identical to legacy discovery below. A non-nil discoveryErr here
 	// is always a deny that must never fall through to legacy authorization.
 	// Reviews are ON here — a disabled switch already returned above.
-	if governs, evaluation, discoveryErr := resolveGoverningAuthority(ctx, root, *lineage, gateInput); discoveryErr != nil {
+	if governs, receiptBacked, evaluation, discoveryErr := resolveGoverningAuthorityReceipt(ctx, root, *lineage, gateInput); discoveryErr != nil {
 		return emitFacadeGateEvaluationNegotiated(stdout, reviewtransaction.NativeGateEvaluation{
 			Result: reviewtransaction.GateInvalidated, Reason: discoveryErr.Error(),
 			Context: reviewtransaction.GateContext{
@@ -3195,6 +3195,11 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 			},
 		}, negotiated, *contract)
 	} else if governs {
+		if receiptBacked {
+			if err := authorizeManagedReviewerAssets(); err != nil {
+				return err
+			}
+		}
 		return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 	}
 
@@ -3227,6 +3232,11 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		input.LineageID = compactRecord.State.LineageID
 		input.IntendedUntracked = append([]string(nil), compactRecord.State.InitialSnapshot.IntendedUntracked...)
 		evaluation := reviewtransaction.EvaluateCompactGate(ctx, root, receipt, input)
+		if evaluation.Result == reviewtransaction.GateAllow {
+			if err := authorizeManagedReviewerAssets(); err != nil {
+				return err
+			}
+		}
 		return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 	}
 	// Wave 5 (Gate Cutover) Slice 6, design decision 6: a candidate decline no
@@ -3293,6 +3303,11 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	evaluation := reviewtransaction.EvaluateLegacyGate(
 		ctx, root, chain, artifacts.receipt, live, strings.TrimSpace(gateInput.PolicyArtifact) != "", evidence, gateInput,
 	)
+	if evaluation.Result == reviewtransaction.GateAllow {
+		if err := authorizeManagedReviewerAssets(); err != nil {
+			return err
+		}
+	}
 	return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 }
 

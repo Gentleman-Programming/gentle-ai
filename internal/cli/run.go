@@ -235,6 +235,10 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		}
 		newState = merged
 	}
+	newState.ManagedAssetWriter, err = managedAssetWriterIdentity()
+	if err != nil {
+		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
+	}
 	if err := state.Write(homeDir, newState); err != nil {
 		return result, fmt.Errorf("persist install state: %w", err)
 	}

@@ -18,6 +18,10 @@ import (
 func TestReviewModeStatusReportsBothSourcesWithoutMutating(t *testing.T) {
 	home := reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
+	before, err := os.ReadFile(state.Path(home))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var output bytes.Buffer
 	if err := RunReviewMode([]string{"status", "--cwd", repo, "--json"}, &output); err != nil {
@@ -33,8 +37,9 @@ func TestReviewModeStatusReportsBothSourcesWithoutMutating(t *testing.T) {
 		result.Status.CloneLocal != reviewtransaction.RDDModeUnset {
 		t.Fatalf("status did not report both sources and the effective mode: %#v", result.Status)
 	}
-	if _, err := os.Lstat(state.Path(home)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("status created global user state: %v", err)
+	after, err := os.ReadFile(state.Path(home))
+	if err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("status changed global user state: err=%v before=%q after=%q", err, before, after)
 	}
 	if _, err := os.Lstat(filepath.Join(repo, ".git", "gentle-ai")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("status created repository state: %v", err)
@@ -526,6 +531,8 @@ func reviewModeHome(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv(reviewTestHomeEnv, home)
+	stampReviewTestAssets(t)
 	return home
 }
 

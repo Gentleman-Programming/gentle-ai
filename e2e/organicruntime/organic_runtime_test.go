@@ -31,6 +31,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
@@ -1129,7 +1130,28 @@ type organicHarness struct {
 
 func newOrganicHarness(t *testing.T) *organicHarness {
 	t.Helper()
-	return &organicHarness{t: t, repo: initOrganicRepository(t), home: t.TempDir()}
+	harness := &organicHarness{t: t, repo: initOrganicRepository(t), home: t.TempDir()}
+	stampOrganicManagedAssetWriter(t, harness)
+	return harness
+}
+
+func stampOrganicManagedAssetWriter(t *testing.T, harness *organicHarness) {
+	t.Helper()
+	stdout, stderr, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, harness.environment(), "review", "capabilities")
+	if err != nil {
+		t.Fatalf("read organic binary build identity: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	var capabilities struct {
+		Build struct {
+			ID string `json:"id"`
+		} `json:"build"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &capabilities); err != nil || capabilities.Build.ID == "" {
+		t.Fatalf("decode organic binary build identity: %v\n%s", err, stdout)
+	}
+	if err := state.Write(harness.home, state.InstallState{ManagedAssetWriter: capabilities.Build.ID}); err != nil {
+		t.Fatalf("stamp organic managed assets: %v", err)
+	}
 }
 
 // environment isolates the run from the developer's own global review mode. A

@@ -1453,11 +1453,28 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	if !result.Verify.Ready {
 		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
-	if persistedStateErr == nil && !persistedState.CommunityToolsConfigured && selection.CommunityTools != nil {
+	writer, err := managedAssetWriterIdentity()
+	if err != nil {
+		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
+	}
+	if errors.Is(persistedStateErr, os.ErrNotExist) {
+		persistedState = state.InstallState{}
+	} else if persistedStateErr != nil {
+		return result, fmt.Errorf("read install state for managed asset provenance: %w", persistedStateErr)
+	}
+	shouldWriteState := false
+	if persistedState.ManagedAssetWriter != writer {
+		persistedState.ManagedAssetWriter = writer
+		shouldWriteState = true
+	}
+	if !persistedState.CommunityToolsConfigured && selection.CommunityTools != nil {
 		persistedState.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
 		persistedState.CommunityToolsConfigured = true
+		shouldWriteState = true
+	}
+	if shouldWriteState {
 		if err := state.Write(homeDir, persistedState); err != nil {
-			return result, fmt.Errorf("persist migrated community tool selection: %w", err)
+			return result, fmt.Errorf("persist managed asset provenance: %w", err)
 		}
 	}
 
