@@ -48,7 +48,7 @@ func truncateCompactStateFile(t *testing.T, store CompactStore) []byte {
 // a refusal's template would: the persisted values come from the same
 // read-only prediction the refusal rendered, and only the operator-owned
 // actor and reason are supplied here.
-func abandonPerEligibility(t *testing.T, repo, lineage, reason string) CompactReclaimRecord {
+func abandonPerEligibility(t *testing.T, repo, lineage, _ string) CompactReclaimRecord {
 	t.Helper()
 	ctx := context.Background()
 	eligibility, err := InspectCompactPristineAbandonment(ctx, repo, lineage)
@@ -60,10 +60,10 @@ func abandonPerEligibility(t *testing.T, repo, lineage, reason string) CompactRe
 	}
 	request := CompactAbandonRequest{
 		LineageID: lineage, ExpectedRevision: eligibility.Revision,
-		Reason: reason, Actor: "maintainer@example.com",
+		Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
 	}
 	request.MaintainerAuthorization = RenderCompactAbandonAuthorization(
-		lineage, eligibility.Revision, eligibility.SnapshotIdentity, request.Actor, request.Reason)
+		lineage, eligibility.Revision, eligibility.SnapshotIdentity, request.Actor, request.Reason, eligibility.DiscardedWork)
 	record, err := AbandonPristineCompactStore(ctx, repo, request)
 	if err != nil {
 		t.Fatalf("abandon %q: %v", lineage, err)
@@ -165,7 +165,7 @@ func TestReclaimRefusalNamesTheOperationThatAdmitsTheShape(t *testing.T) {
 		requireAuthoritativeInventory(t, repo)
 	})
 
-	t.Run("successor holding captured results names no clearing command", func(t *testing.T) {
+	t.Run("successor holding review metadata names abandonment", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		_, successor, _ := forgedRecoveryPair(t, repo, "reclaim-captured", "forged captured reclaim target\n", func(state *CompactState) {
 			results := make([]LensResult, 0, len(state.SelectedLenses))
@@ -180,18 +180,15 @@ func TestReclaimRefusalNamesTheOperationThatAdmitsTheShape(t *testing.T) {
 		})
 		refusal := reclaim(t, repo, successor.State.LineageID)
 		for _, want := range []string{
-			"never discarded",
-			"gentle-ai review inspect-authority",
+			"gentle-ai review abandon",
+			CompactAbandonAuthorizationSchema,
 		} {
 			if !strings.Contains(refusal, want) {
 				t.Fatalf("reclaim refusal does not carry %q:\n%s", want, refusal)
 			}
 		}
-		for _, deadEnd := range []string{"gentle-ai review abandon", "gentle-ai review reconcile-authority"} {
-			if strings.Contains(refusal, deadEnd) {
-				t.Fatalf("reclaim names %q for a shape it does not clear (named dead end):\n%s", deadEnd, refusal)
-			}
-		}
+		abandonPerEligibility(t, repo, successor.State.LineageID, "clear the damaged entry")
+		requireAuthoritativeInventory(t, repo)
 	})
 
 	t.Run("unreadable record names the diagnosis, not an operation that cannot load it", func(t *testing.T) {
@@ -338,18 +335,7 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 		}
 	})
 
-	// TestStartOverInvalidGraphRefusalNamesSanctionedExit/forged successor
-	// holding captured results names the repair that clears it pins the one
-	// remaining edge SanctionedCompactRecoveryExits (Wave 2 Slice S3) names
-	// review repair for: reconcile refuses it as corruption and abandon
-	// refuses to discard its captured review data, but the leaf authority
-	// disposition plan closes exactly this class. Before this test, the
-	// refusal's continuation switch had no case for
-	// CompactRecoveryEdgeExitRepair, so it fell through silently and this
-	// edge's refusal named nothing — the operator was told only to run
-	// inspect-authority even though SanctionedCompactRecoveryExits already
-	// named a runnable exit.
-	t.Run("forged successor holding captured results names the repair that clears it", func(t *testing.T) {
+	t.Run("forged successor holding review metadata names abandonment", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		_, capturedSuccessor, _ := forgedRecoveryPair(t, repo, "start-captured", "forged captured start target\n", func(state *CompactState) {
 			results := make([]LensResult, 0, len(state.SelectedLenses))
@@ -367,31 +353,16 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 		}
 		refusal := blockedStart(t, repo, capturedSuccessor.State.LineageID)
 		for _, want := range []string{
-			"gentle-ai review repair",
-			"--plan-digest",
-			"--inventory-revision",
-			authorityDispositionAuthorizationSchema,
+			"gentle-ai review abandon",
+			CompactAbandonAuthorizationSchema,
 		} {
 			if !strings.Contains(refusal, want) {
 				t.Fatalf("start refusal does not name %q:\n%s", want, refusal)
 			}
 		}
-		if strings.Contains(refusal, "gentle-ai review abandon") {
-			t.Fatalf("start names an abandonment the gate rejects for captured review data:\n%s", refusal)
-		}
-
-		ctx := context.Background()
-		plan, err := DeriveAuthorityDispositionPlanAtRepo(ctx, repo, "maintainer@example.com", "clear the content-mismatched leaf")
-		_ = plan
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := AdmitAuthorityDispositionClosure(plan); err != nil {
-			t.Fatal(err)
-		}
-		plan.Authorization = authorityDispositionAuthorizationBinding(plan)
-		if _, err := RepairAuthorityDisposition(ctx, repo, plan.PlanDigest, plan.AuthorityInventoryRevision, plan.Actor, plan.Reason, plan.Authorization); err != nil {
-			t.Fatalf("the named repair does not run: %v", err)
+		abandonPerEligibility(t, repo, capturedSuccessor.State.LineageID, "clear the content-mismatched leaf")
+		if err := freshStart(t, repo, "start-over-captured"); err != nil {
+			t.Fatalf("start still refuses after the named exit ran: %v", err)
 		}
 		if err := freshStart(t, repo, "start-over-captured"); err != nil {
 			t.Fatalf("start still refuses after the named exit ran: %v", err)

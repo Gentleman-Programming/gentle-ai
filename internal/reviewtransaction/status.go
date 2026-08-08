@@ -71,10 +71,11 @@ type AuthorityInventoryEntry struct {
 	// identity its own authority was frozen at. The negotiated target status
 	// cannot serve that role: it recomputes the identity from the worktree
 	// and withholds the authority block entirely once the target drifts.
-	SnapshotIdentity string                     `json:"snapshot_identity,omitempty"`
-	ChainIdentity    string                     `json:"chain_identity,omitempty"`
-	Recovery         *CompactRecoveryProvenance `json:"recovery,omitempty"`
-	Problems         []string                   `json:"problems"`
+	SnapshotIdentity string                       `json:"snapshot_identity,omitempty"`
+	DiscardedWork    *CompactDiscardedWorkSummary `json:"discarded_work,omitempty"`
+	ChainIdentity    string                       `json:"chain_identity,omitempty"`
+	Recovery         *CompactRecoveryProvenance   `json:"recovery,omitempty"`
+	Problems         []string                     `json:"problems"`
 	compact          *CompactRecord
 }
 
@@ -301,8 +302,15 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 		}
 		entry.Revision, entry.State, entry.Recovery = record.Revision, record.State.State, record.State.Recovery
 		entry.SnapshotIdentity = record.State.InitialSnapshot.Identity
+		if discarded, summaryErr := compactDiscardedWorkSummary(ctx, store, record); summaryErr == nil {
+			entry.DiscardedWork = &discarded
+		} else {
+			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"inspect discarded work: " + summaryErr.Error()}
+		}
 		entry.compact = &record
-		entry.Status = authorityStatusForState(record.State.State)
+		if entry.Status != AuthorityStatusInvalid {
+			entry.Status = authorityStatusForState(record.State.State)
+		}
 		if payload, err := os.ReadFile(store.ReceiptPath()); err == nil {
 			receipt, parseErr := ParseCompactReceipt(payload)
 			authoritative, authorityErr := record.State.Receipt()

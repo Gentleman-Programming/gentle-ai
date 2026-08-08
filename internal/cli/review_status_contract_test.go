@@ -225,6 +225,14 @@ func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 	}
 }
 
+func TestReviewStatusContractRequirementNamesAllAcceptedContracts(t *testing.T) {
+	var output bytes.Buffer
+	err := RunReview([]string{"status", "--next-transition"}, &output)
+	if err == nil || err.Error() != "--action-eligibility and --next-transition require --contract gentle-ai.review-integration/v1 or gentle-ai.review-integration/v2" {
+		t.Fatalf("unnegotiated next-transition refusal = %q, want both accepted contracts", err)
+	}
+}
+
 func TestV4StatusRemainsReadableAlongsideV5(t *testing.T) {
 	status := ReviewTargetStatusResult{
 		Schema:        ReviewIntegrationStatusSchemaV4,

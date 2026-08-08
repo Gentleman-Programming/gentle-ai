@@ -732,54 +732,49 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j14-abandon-needs-a-hand-built-token",
-			Title:  "Maintainer path: abandoning a pristine lineage needs an assembled authorization",
+			Title:  "Maintainer path: abandoning a non-terminal lineage binds its discarded work",
 			Source: "review abandon contract",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage docs", Fixture: stageDocs("abandoned")},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "abandon a pristine lineage", Requires: abandonCapability, Composite: abandonPristineLineage},
+				{Name: "abandon a non-terminal lineage with its V2 binding", Requires: abandonCapability, Composite: abandonNonTerminalLineage},
 			},
 		},
 	}
 }
 
-// abandonPristineLineage is the manual_tokens exhibit. Abandoning a lineage
-// needs an exact six-line LF-only binding assembled by hand from three values
-// the caller must first go and read out of the authority.
-func abandonPristineLineage(r *journeyRun) error {
-	envelope, err := readStatus(r)
-	if err != nil {
-		return err
+// abandonNonTerminalLineage is the manual_tokens exhibit. Abandoning a lineage
+// needs an exact nine-line LF-only V2 binding assembled from its status row,
+// including the discarded-work summary the gate re-derives.
+func abandonNonTerminalLineage(r *journeyRun) error {
+	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo}, false)
+	var head authorityHead
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &head); err != nil {
+		return fmt.Errorf("parse review status: %w (stderr: %s)", err, firstLine(observation.Stderr))
 	}
-	lineage := envelope.Authority.LineageID
-	revision := envelope.Authority.Revision
-	target := envelope.TargetIdentity
+	if len(head.Entries) != 1 {
+		return fmt.Errorf("review status listed %d authorities, want exactly one", len(head.Entries))
+	}
+	entry := head.Entries[0]
 	const actor = "bench"
-	const reason = "benchmark abandons a pristine lineage"
+	const reason = "operator_disposition"
 
 	// Attempt one: everything the help text lists except the token.
 	r.run([]string{
 		"review", "abandon", "--cwd", r.sandbox.Repo,
-		"--lineage", lineage,
-		"--expected-revision", revision,
+		"--lineage", entry.LineageID,
+		"--expected-revision", entry.Revision,
 		"--reason", reason,
 		"--actor", actor,
 	}, false)
 
-	authorization := strings.Join([]string{
-		"gentle-ai.review-abandon-authorization/v1",
-		"lineage=" + lineage,
-		"revision=" + revision,
-		"snapshot_identity=" + target,
-		"actor=" + actor,
-		"reason=" + reason,
-	}, "\n")
+	authorization := renderAbandonAuthorization(entry, actor, reason)
 
 	r.run([]string{
 		"review", "abandon", "--cwd", r.sandbox.Repo,
-		"--lineage", lineage,
-		"--expected-revision", revision,
+		"--lineage", entry.LineageID,
+		"--expected-revision", entry.Revision,
 		"--reason", reason,
 		"--actor", actor,
 		"--maintainer-authorization", authorization,

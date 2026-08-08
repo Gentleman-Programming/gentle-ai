@@ -334,7 +334,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// prompts; no key is added, removed, or otherwise
 	// changed. The hash is recomputed from the rebased tree. Deliberate, not
 	// drift.
-	const want = "d4b7d0f3ebc856767ce81fc0dbbe6c46327f9478989cfba93a7306b0863fef0f"
+	const want = "de8170827f886831a555be14779920dc9b3a09d604faa837557102cbe0d93476"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -559,9 +559,14 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// rendered sub-agent prompt, so executors no longer depend on the orchestrator
 		// remembering to forward it. The ceilings move to preserve the required 15%
 		// headroom after that deliberate increase.
+		// Root 7 (#2471) removed two stop-reason rows from the shipped contract
+		// because the machine now routes them as collect transitions, so the
+		// rendered protocol got 372 characters cheaper. The pins move DOWN,
+		// which is the direction this table exists to protect.
 		// Canonical proof-path requirements add 281 characters per rendered lens.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 21_354, maxCharacters: 24_600},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_542, maxCharacters: 39_800},
+		// The standard ceiling retains its margin; full-4R moves only to restore it.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_982, maxCharacters: 24_300},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_170, maxCharacters: 39_300},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

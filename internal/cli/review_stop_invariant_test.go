@@ -117,17 +117,9 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Terminal:      false,
 		Justification: "caller-continuable: re-run `review finalize --lineage <id>` with the exact original content-bound payload — a concrete, flag-driven command; design.md previously misclassified this as terminal (Phase 3 task 3.10 contradiction fix)",
 	},
-	"pre_pr_selector_unrepresentable": {
-		Terminal:      false,
-		Justification: "caller-continuable: pass a symbolic ref name for --base-ref instead of a raw commit SHA — a concrete, flag-driven fix; no in-process routing substitutes a different gate, because the caller explicitly chose the pre-pr gate and silently validating against a different gate would answer a different question than the one asked",
-	},
 	"recovery_scope_unchanged": {
 		Terminal:      false,
 		Justification: "caller-continuable: change the candidate so its target identity differs from the current authority's, then retry the same selector-scoped review.recover — a concrete, flag-driven command; design.md previously misclassified this as terminal (Phase 3 task 3.10 contradiction fix)",
-	},
-	"recovery_target_unrepresentable": {
-		Terminal:      false,
-		Justification: "caller-continuable: use one of the three representable recovery selector shapes — a concrete, flag-driven fix; design.md previously misclassified this as terminal (Phase 3 task 3.10 contradiction fix)",
 	},
 	"staged_workspace_overlay_recovery_unavailable": {
 		Terminal:      true,

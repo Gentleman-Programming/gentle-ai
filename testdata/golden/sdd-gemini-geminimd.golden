@@ -117,9 +117,7 @@ When v2 returns `forecast`, relay it losslessly in the user's language: preserve
 | `missing_authority_binding` | Internal invariant violation with no caller-side retry. File a defect with the lineage id, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
 | `native_stop_required` | Escalated lineage not yet eligible for automated action. Ask a maintainer to review it, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
 | `original_finalize_request_required` | Re-run `gentle-ai review finalize --lineage <id>` with the exact original content-bound payload. |
-| `pre_pr_selector_unrepresentable` | Pass a symbolic ref (for example `origin/<branch>`) to `--base-ref`, not a raw commit SHA. |
 | `recovery_scope_unchanged` | Change the candidate's target identity, then retry the same `review.recover` selector, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
-| `recovery_target_unrepresentable` | Use one of: no base selector for current changes, `--base-ref <ref> --committed-only` for base-diff, or `--workspace-overlay --base-ref <ref>` (optionally `--projection staged`) for workspace overlay. |
 | `staged_workspace_overlay_recovery_unavailable` | Pass `--lineage <id>` to recover an existing lineage, or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh. |
 | `unchanged_or_unverified_authority` | `gentle-ai review start` on this exact unchanged candidate only resumes this same review, not a fresh one. Change the candidate content first, then run `gentle-ai review start` to begin a genuinely new one, or run `gentle-ai review mode disable --scope clone --cwd <repo>` to deliver under ordinary policy instead. |
 

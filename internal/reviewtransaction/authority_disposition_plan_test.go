@@ -228,6 +228,47 @@ func TestAuthorityDispositionPlanRequiresClosedClassification(t *testing.T) {
 	})
 }
 
+func TestAuthorityDispositionPlanScopesEntryDiagnosticsToClosure(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	predecessor, successor, _ := forgedRecoveryPair(t, repo, "diagnostic-scope", "diagnostic scope target\n")
+	report, records, err := loadCompactRecoveryRecords(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector := AuthorityDispositionSelector{
+		PredecessorLineageID: predecessor.State.LineageID, PredecessorExpectedRevision: predecessor.Revision,
+		SuccessorLineageID: successor.State.LineageID, SuccessorExpectedRevision: successor.Revision,
+	}
+
+	t.Run("foreign entry diagnostic does not block the selected closure", func(t *testing.T) {
+		withForeignDiagnostic := report
+		withForeignDiagnostic.Complete = false
+		withForeignDiagnostic.EntryDiagnostics = []CompactRecoveryEntryDiagnostic{
+			{LineageID: "unrelated-entry", Problem: compactInspectionEntryMalformed},
+		}
+
+		plan, err := deriveAuthorityDispositionPlan(withForeignDiagnostic, records, "binding", "maintainer@example.com", "diagnostic scope", selector)
+		if err != nil {
+			t.Fatalf("foreign entry diagnostic blocked selected closure derivation: %v", err)
+		}
+		if !reflect.DeepEqual(plan.Closure, []string{successor.State.LineageID}) {
+			t.Fatalf("plan closure = %v, want selected successor only", plan.Closure)
+		}
+	})
+
+	t.Run("closure-member entry diagnostic still fails closed", func(t *testing.T) {
+		withClosureDiagnostic := report
+		withClosureDiagnostic.Complete = false
+		withClosureDiagnostic.EntryDiagnostics = []CompactRecoveryEntryDiagnostic{
+			{LineageID: successor.State.LineageID, Problem: compactInspectionEntryMalformed},
+		}
+
+		if _, err := deriveAuthorityDispositionPlan(withClosureDiagnostic, records, "binding", "maintainer@example.com", "diagnostic scope", selector); !errors.Is(err, errAuthorityDispositionPlanNotDerivable) {
+			t.Fatalf("closure-member diagnostic derivation error = %v, want errAuthorityDispositionPlanNotDerivable", err)
+		}
+	})
+}
+
 // TestAuthorityDispositionPlanDigestDeterminism satisfies tasks.md 1.6 and
 // the "Plan Digest Binds Exact Content" requirement: same records derive the
 // same plan_digest; any change to ordered_closure, expected_revisions, or
