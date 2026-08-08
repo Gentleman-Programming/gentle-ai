@@ -35,6 +35,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 var gateBoundaryMatrixGates = []string{
@@ -195,10 +197,23 @@ func gateBoundaryMatrixEnvironment(home string) []string {
 
 func stampGateBoundaryMatrixManagedAssetWriter(t *testing.T, binary, home string) {
 	t.Helper()
-	command := exec.CommandContext(context.Background(), binary, "sync", "--agents", "opencode")
+	command := exec.CommandContext(context.Background(), binary, "review", "capabilities")
 	command.Env = gateBoundaryMatrixEnvironment(home)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("sync gate boundary matrix managed assets: %v\n%s", err, output)
+	var output, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &output, &stderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("read gate boundary matrix binary build identity: %v\nstdout:\n%s\nstderr:\n%s", err, output.String(), stderr.String())
+	}
+	var capabilities struct {
+		Build struct {
+			ID string `json:"id"`
+		} `json:"build"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &capabilities); err != nil || capabilities.Build.ID == "" {
+		t.Fatalf("decode gate boundary matrix binary build identity: %v\n%s", err, output.String())
+	}
+	if err := state.Write(home, state.InstallState{ManagedAssetWriter: capabilities.Build.ID}); err != nil {
+		t.Fatalf("stamp gate boundary matrix managed assets: %v", err)
 	}
 }
 

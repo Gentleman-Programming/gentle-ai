@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 func TestWindowsPowerShell51ArtifactManifestFileFinalize(t *testing.T) {
@@ -40,7 +41,9 @@ func TestWindowsPowerShell51ArtifactManifestFileFinalize(t *testing.T) {
 		t.Skipf("requires Windows PowerShell 5.1, got %q", got)
 	}
 
+	home := binaryReviewTestHome(t)
 	repo := initReviewCLIRepo(t)
+	stampBinaryManagedAssetWriter(t, binary, home)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -238,9 +241,9 @@ func TestMainBinaryExecutesSubmissionDescriptorsFromArbitraryCWD(t *testing.T) {
 	if _, err := os.Stat(binary); err != nil {
 		t.Fatalf("GENTLE_AI_TEST_BINARY: %v", err)
 	}
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	home := binaryReviewTestHome(t)
 	repo := initReviewCLIRepo(t)
+	stampBinaryManagedAssetWriter(t, binary, home)
 	outside := t.TempDir()
 	writeBinaryCandidate(t, repo, "wrong")
 	var started ReviewFacadeStartResult
@@ -414,7 +417,9 @@ func withoutBinaryDescriptorToken(t *testing.T, args []string, prefix string) []
 
 func prepareBinaryCorrection(t *testing.T, binary string) (string, string, ReviewFacadeStartResult) {
 	t.Helper()
+	home := binaryReviewTestHome(t)
 	repo := initReviewCLIRepo(t)
+	stampBinaryManagedAssetWriter(t, binary, home)
 	change := filepath.Join(repo, "openspec", "changes", "binary-review")
 	for path, content := range map[string]string{
 		"tasks.md":    "- [x] 1.1 Exercise the native review lifecycle\n",
@@ -468,6 +473,31 @@ func writeBinaryCandidate(t *testing.T, repo, value string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\n"+value+"\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func binaryReviewTestHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv(reviewTestHomeEnv, home)
+	return home
+}
+
+func stampBinaryManagedAssetWriter(t *testing.T, binary, home string) {
+	t.Helper()
+	var capabilities struct {
+		Build struct {
+			ID string `json:"id"`
+		} `json:"build"`
+	}
+	decodeBinaryJSON(t, runReviewBinary(t, binary, true, "capabilities"), &capabilities)
+	if capabilities.Build.ID == "" {
+		t.Fatal("binary review capabilities omitted build identity")
+	}
+	if err := state.Write(home, state.InstallState{ManagedAssetWriter: capabilities.Build.ID}); err != nil {
+		t.Fatalf("stamp binary managed assets: %v", err)
 	}
 }
 
