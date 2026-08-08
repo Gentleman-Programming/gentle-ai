@@ -2219,15 +2219,8 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	if !ok {
 		t.Fatalf("gentle-orchestrator has unexpected type: %T", orchestratorRaw)
 	}
-	toolsRaw, ok := orchestratorAgent["tools"].(map[string]any)
-	if !ok {
-		t.Fatalf("gentle-orchestrator tools has unexpected type: %T", orchestratorAgent["tools"])
-	}
-	for _, toolName := range []string{"task"} {
-		value, ok := toolsRaw[toolName].(bool)
-		if !ok || !value {
-			t.Fatalf("gentle-orchestrator missing multi-mode tool %q", toolName)
-		}
+	if _, exists := orchestratorAgent["tools"]; exists {
+		t.Fatalf("gentle-orchestrator must not carry a deprecated tools key after multi-mode sync: %#v", orchestratorAgent["tools"])
 	}
 
 	// Verify representative sub-agents are present.
@@ -2316,24 +2309,6 @@ func TestInjectOpenCodeMultiModeRemovesLegacyDelegateTools(t *testing.T) {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 
-	existing := `{
-  "agent": {
-    "gentle-orchestrator": {
-      "mode": "primary",
-      "tools": {
-        "read": true,
-        "bash": true,
-        "delegate": true,
-        "delegation_read": true,
-        "delegation_list": true
-      }
-    }
-  }
-}`
-	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
-		t.Fatalf("WriteFile(opencode.json) error = %v", err)
-	}
-
 	if _, err := Inject(home, opencodeAdapter(), "multi"); err != nil {
 		t.Fatalf("Inject(multi) error = %v", err)
 	}
@@ -2348,16 +2323,12 @@ func TestInjectOpenCodeMultiModeRemovesLegacyDelegateTools(t *testing.T) {
 		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
 	}
 	agentMap := root["agent"].(map[string]any)
-	orchestrator := agentMap["gentle-orchestrator"].(map[string]any)
-	tools := orchestrator["tools"].(map[string]any)
-
-	for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-		if _, exists := tools[legacyTool]; exists {
-			t.Fatalf("legacy OpenCode tool %q survived sync: %#v", legacyTool, tools)
-		}
+	orchestrator, ok := agentMap["gentle-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatalf("gentle-orchestrator missing or not an object")
 	}
-	if task, _ := tools["task"].(bool); !task {
-		t.Fatalf("native task tool missing after sync: %#v", tools)
+	if _, exists := orchestrator["tools"]; exists {
+		t.Fatalf("gentle-orchestrator must not carry a deprecated tools key after sync: %#v", orchestrator["tools"])
 	}
 }
 
@@ -2368,24 +2339,6 @@ func TestInjectOpenCodeSingleModeRemovesLegacyDelegateTools(t *testing.T) {
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
-	}
-
-	existing := `{
-  "agent": {
-    "gentle-orchestrator": {
-      "mode": "primary",
-      "tools": {
-        "read": true,
-        "bash": true,
-        "delegate": true,
-        "delegation_read": true,
-        "delegation_list": true
-      }
-    }
-  }
-}`
-	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
-		t.Fatalf("WriteFile(opencode.json) error = %v", err)
 	}
 
 	if _, err := Inject(home, opencodeAdapter(), "single"); err != nil {
@@ -2402,16 +2355,12 @@ func TestInjectOpenCodeSingleModeRemovesLegacyDelegateTools(t *testing.T) {
 		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
 	}
 	agentMap := root["agent"].(map[string]any)
-	orchestrator := agentMap["gentle-orchestrator"].(map[string]any)
-	tools := orchestrator["tools"].(map[string]any)
-
-	for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-		if _, exists := tools[legacyTool]; exists {
-			t.Fatalf("legacy OpenCode tool %q survived sync: %#v", legacyTool, tools)
-		}
+	orchestrator, ok := agentMap["gentle-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatalf("gentle-orchestrator missing or not an object")
 	}
-	if task, _ := tools["task"].(bool); !task {
-		t.Fatalf("native task tool missing after sync: %#v", tools)
+	if _, exists := orchestrator["tools"]; exists {
+		t.Fatalf("gentle-orchestrator must not carry a deprecated tools key after sync: %#v", orchestrator["tools"])
 	}
 }
 

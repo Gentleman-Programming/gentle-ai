@@ -714,21 +714,8 @@ func TestDefaultOverlayToolsUseReplaceSentinel(t *testing.T) {
 
 			agentMap := root["agent"].(map[string]any)
 			orch := agentMap["gentle-orchestrator"].(map[string]any)
-			toolsWrapper := orch["tools"].(map[string]any)
-			tools, hasSentinel := toolsWrapper["__replace__"].(map[string]any)
-			if !hasSentinel {
-				t.Fatal("tools block must use __replace__ sentinel to discard legacy delegate tools on sync")
-			}
-
-			for _, required := range []string{"read", "write", "edit", "bash", "task"} {
-				if enabled, _ := tools[required].(bool); !enabled {
-					t.Fatalf("required tool %q missing or disabled: %#v", required, tools)
-				}
-			}
-			for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-				if _, exists := tools[legacyTool]; exists {
-					t.Fatalf("legacy OpenCode tool %q must not be present: %#v", legacyTool, tools)
-				}
+			if _, exists := orch["tools"]; exists {
+				t.Fatalf("default overlay %s must not carry a deprecated tools key on gentle-orchestrator after deletion-first migration: %#v", assetPath, orch["tools"])
 			}
 		})
 	}

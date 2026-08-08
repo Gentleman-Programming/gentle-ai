@@ -251,6 +251,10 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256(settings))
+	// #1889 Phase 1: removal of the deprecated `tools` blocks from
+	// opencode/sdd-overlay-{single,multi}.json shrinks the merged kilocode
+	// settings (kilocode consumes the same overlay asset). The hash moved
+	// accordingly. Deliberate, not drift.
 	// Corrective verify cycle 5, CRITICAL-D: review-ledger-contract.md's
 	// Delivery section archive-gate sentence was corrected (see
 	// TestOpenCodeRenderedReviewProtocolCost's changelog comment above for
@@ -334,7 +338,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// prompts (+458 characters each); no key is added, removed, or otherwise
 	// changed. The hash is recomputed from the rebased tree. Deliberate, not
 	// drift.
-	const want = "2d9538ea2271fcc92aae8007ae0a0918f746ad2f95697f1777f7dd114a658dd0"
+	const want = "21113283d82755957c51ad1ed4b0917b49e798aa645b19b2ca39dc06110b7277"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

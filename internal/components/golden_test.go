@@ -5,7 +5,6 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -170,11 +169,6 @@ func TestGoldenSDD_OpenCode_Multi(t *testing.T) {
 
 	// Golden-check the settings file with multi overlay merged.
 	settingsJSON := readTestFile(t, filepath.Join(home, ".config", "opencode", "opencode.json"))
-	for _, toolName := range []string{"\"task\""} {
-		if !strings.Contains(string(settingsJSON), toolName) {
-			t.Fatalf("multi-mode settings missing orchestrator tool %s", toolName)
-		}
-	}
 	assertGolden(t, "sdd-opencode-multi-settings.golden", settingsJSON)
 
 	legacyPluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
