@@ -3,7 +3,8 @@ FROM golang:1.25.10-bookworm
 WORKDIR /src
 COPY . .
 ADD --chmod=0555 --checksum=sha256:674f61f20ff306f3100cf9200e4c36c4b70278b5bef2884549819b942a89c863 https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.220/linux-x64/claude /usr/local/bin/claude
-RUN go test -c -o /usr/local/bin/claude-review-e2e ./internal/components/sdd
+RUN go build -trimpath -o /usr/local/bin/gentle-ai ./cmd/gentle-ai && \
+    go test -c -o /usr/local/bin/claude-review-e2e ./e2e/organicruntime
 USER 65532:65532
-ENV GENTLE_AI_CLAUDE_RUNTIME_E2E=1 GENTLE_AI_CLAUDE_RUNTIME_REQUIRED=1 GENTLE_AI_CLAUDE_RUNTIME_BINARY=/usr/local/bin/claude TMPDIR=/tmp
-ENTRYPOINT ["/usr/local/bin/claude-review-e2e", "-test.v", "-test.run=^TestClaudeReviewerTransportInNetworkNone$", "-test.count=1", "-test.timeout=6m"]
+ENV GENTLE_AI_CLAUDE_RUNTIME_E2E=1 GENTLE_AI_CLAUDE_RUNTIME_REQUIRED=1 GENTLE_AI_CLAUDE_RUNTIME_BINARY=/usr/local/bin/claude GENTLE_AI_ORGANIC_TEST_BINARY=/usr/local/bin/gentle-ai GOCACHE=/tmp/go-build GOTMPDIR=/tmp TMPDIR=/tmp
+ENTRYPOINT ["/usr/local/bin/claude-review-e2e", "-test.v", "-test.run=^TestRealClaudeReviewerOrdinarySessionAdmitsRawOutput$", "-test.count=1", "-test.timeout=10m"]

@@ -740,7 +740,12 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 			return err
 		}
 		defer func() { _ = os.Setenv("PATH", oldPath) }()
-		_, err := (reviewtransaction.SnapshotBuilder{Repo: hookRepo}).HasDirtyTrackedChanges(ctx)
+		// Bound only the injected post-commit probe. The committed transition is
+		// already durable, so its Git timeout keeps the required status-only shape
+		// without waiting for the production 15s per-command timeout.
+		hookCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		_, err := (reviewtransaction.SnapshotBuilder{Repo: hookRepo}).HasDirtyTrackedChanges(hookCtx)
 		return err
 	}
 	t.Cleanup(func() { reviewFacadeCommittedTransitionHook = oldTransitionHook })

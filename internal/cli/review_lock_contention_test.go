@@ -145,6 +145,8 @@ func TestLockContentionAfterACommittedTransitionStillReportsUnknown(t *testing.T
 // with explicit-maintainer-action. The reporter saw 19 of 20 concurrent
 // pre-commit gates report exactly that against a healthy authority.
 func TestConcurrentDeliveryGateContentionIsNotReportedAsInvalidated(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	lineage := approvedLowRiskFacadeReview(t, repo)
 

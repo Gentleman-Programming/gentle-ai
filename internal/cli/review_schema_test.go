@@ -12,6 +12,8 @@ import (
 )
 
 func TestFinalVerificationIncidentSchemaIsClosedToProceduralToolingFailure(t *testing.T) {
+	t.Parallel()
+
 	var output bytes.Buffer
 	if err := RunReviewSchema([]string{"final-verification-incident"}, &output); err != nil {
 		t.Fatal(err)
@@ -45,6 +47,8 @@ func TestFinalVerificationIncidentSchemaIsClosedToProceduralToolingFailure(t *te
 }
 
 func TestReviewerSchemaMatchesProviderAdmissionEnvelope(t *testing.T) {
+	t.Parallel()
+
 	var output bytes.Buffer
 	if err := RunReviewSchema([]string{"reviewer"}, &output); err != nil {
 		t.Fatal(err)
@@ -92,6 +96,8 @@ func TestReviewerSchemaMatchesProviderAdmissionEnvelope(t *testing.T) {
 // non-empty evidence content up to the native artifact bound — not an
 // invented structured shape.
 func TestReviewSchemaVerificationEvidenceEntry(t *testing.T) {
+	t.Parallel()
+
 	var output bytes.Buffer
 	if err := RunReviewSchema([]string{"verification-evidence"}, &output); err != nil {
 		t.Fatal(err)
@@ -120,6 +126,8 @@ func TestReviewSchemaVerificationEvidenceEntry(t *testing.T) {
 }
 
 func TestReviewSchemaVerificationEvidenceRecordMatchesContractFixture(t *testing.T) {
+	t.Parallel()
+
 	var output bytes.Buffer
 	if err := RunReviewSchema([]string{"verification-evidence-record"}, &output); err != nil {
 		t.Fatal(err)

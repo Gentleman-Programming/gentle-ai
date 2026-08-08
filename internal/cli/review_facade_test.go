@@ -202,6 +202,8 @@ func TestReviewFacadeStartStagedProjectionBaseRefContinuationRefused(t *testing.
 }
 
 func TestReviewFacadeStagedReceiptAllowsDeliveredTreePrePushAndPrePR(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	configureCLIReviewPublicationRemote(t, repo, branch)
@@ -240,6 +242,8 @@ func TestReviewFacadeStagedReceiptAllowsDeliveredTreePrePushAndPrePR(t *testing.
 }
 
 func TestReviewFacadeCleanFlowReplacesOneCompactStateAndUsesOnlyReceipt(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate behavior\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -361,6 +365,8 @@ func TestReviewFacadeCleanFlowReplacesOneCompactStateAndUsesOnlyReceipt(t *testi
 }
 
 func TestReviewFacadeStartSupportsCommittedBaseDiff(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
@@ -435,6 +441,8 @@ func TestReviewFacadeStartSupportsCommittedBaseDiff(t *testing.T) {
 }
 
 func TestReviewFacadeStartRequiresCommittedOnlyAndReusesEquivalentAuthority(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("committed candidate\n"), 0o644); err != nil {
@@ -584,6 +592,8 @@ func TestReviewFacadeStartServiceTokenSelectsCanonicalHighRiskLenses(t *testing.
 }
 
 func TestReviewFacadeStartProvableShellAndModeRiskSelectsCanonical4R(t *testing.T) {
+	t.Parallel()
+
 	want := []string{reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability}
 	tests := []struct {
 		name  string
@@ -978,6 +988,8 @@ func TestReadFacadeReviewerResultsRejectsNonNativeFields(t *testing.T) {
 }
 
 func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
@@ -1137,6 +1149,8 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 // escalating afterwards, so this test asserts the refusal and the untouched
 // authority rather than the escalated state that route no longer reaches.
 func TestReviewFacadeRefusesFalseIntroducedFindingOutsideGenesis(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	legacyDir := filepath.Join(repo, "internal", "legacy")
 	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
@@ -1273,6 +1287,8 @@ func TestReviewFacadeStartCannotResetActiveCorrectionBudget(t *testing.T) {
 // corrected candidate -- and therefore must not block the correction either,
 // which is the false blocker that guard would have become.
 func TestReviewFacadeFinalizeIgnoresCorrectionCreatedUntrackedPath(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1329,6 +1345,8 @@ func TestReviewFacadeFinalizeIgnoresCorrectionCreatedUntrackedPath(t *testing.T)
 	}
 }
 func TestReviewFacadePersistsOverBudgetForecastAndActual(t *testing.T) {
+	t.Parallel()
+
 	newCandidate := func(t *testing.T) (string, ReviewFacadeStartResult, string) {
 		t.Helper()
 		repo := initReviewCLIRepo(t)
@@ -1780,6 +1798,8 @@ func TestReviewSchemasRequireConcreteEvidenceStrings(t *testing.T) {
 }
 
 func TestReviewFacadeRejectsMalformedInputsWithoutConsumingTerminalValidator(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -2073,6 +2093,8 @@ func TestLegacyV1LineageRemainsReadableButRejectsAppend(t *testing.T) {
 }
 
 func TestCompactTransportCommandsRoundTripWithoutEventReconstruction(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -2113,6 +2135,8 @@ func TestCompactTransportCommandsRoundTripWithoutEventReconstruction(t *testing.
 }
 
 func TestCompactTransportAllowsCorrectedPrePushWithoutTransientBaseObject(t *testing.T) {
+	t.Parallel()
+
 	source := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(source, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -2342,6 +2366,8 @@ func facadeReviewerResultArgs(t *testing.T, repo string, started ReviewFacadeSta
 // reviewtransaction.EscalationAccountingReasonTemplate, the same template the
 // organic gate and the SDD-bound remediation surface use.
 func TestReviewFacadeFinalizeSurfacesEscalationAccounting(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -2522,6 +2548,8 @@ func TestReviewFacadeOperationDeadlineSelector(t *testing.T) {
 // review state" without ever consuming canonical captured evidence or telling
 // the caller why nothing happened.
 func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
+	t.Parallel()
+
 	setup := func(t *testing.T) (string, ReviewFacadeStartResult) {
 		t.Helper()
 		repo := initReviewCLIRepo(t)

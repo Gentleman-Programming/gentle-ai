@@ -120,6 +120,8 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 }
 
 func TestNegotiatedReviewStartLargeRepositoryUsesBoundedReferenceAdmission(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("uses real git commands and a repository tree larger than 4 MiB")
 	}

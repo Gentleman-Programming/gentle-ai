@@ -62,6 +62,8 @@ var wantLegacyReasonTaxonomyGateResult = map[ReviewReceiptDiscoveryKind]reviewtr
 // checked explicitly, proving legacyReasonTaxonomyGateResult never silently
 // reports more than the one GateResult each kind legitimately reaches.
 func TestNewLineageReasonTaxonomyCoversLegacyRefusalsClosedMatrix(t *testing.T) {
+	t.Parallel()
+
 	kinds := []ReviewReceiptDiscoveryKind{
 		ReviewReceiptMissing, ReviewReceiptUnrelated, ReviewReceiptScopeChanged,
 		ReviewReceiptAmbiguous, ReviewAuthorityCorrupted, ReviewReceiptTargetUnresolvable,
@@ -211,6 +213,8 @@ func TestNewLineageReasonTaxonomyCoversLegacyRefusals(t *testing.T) {
 // CoreTransitionKind values ReviewCore.validate() itself never returns is
 // silently mapped to allow by newLineageGateEvaluation's now-explicit cases.
 func TestNewLineageGateEvaluationClosedSwitchNeverAllowsUnreachableKinds(t *testing.T) {
+	t.Parallel()
+
 	fixtureRecord := reviewtransaction.NewLineageRecord{
 		Authority: reviewtransaction.NewLineageAuthority{LineageID: "taxonomy-fixture", State: reviewtransaction.NewLineageStateReviewing},
 	}

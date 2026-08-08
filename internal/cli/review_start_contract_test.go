@@ -140,6 +140,8 @@ func TestNegotiatedReviewStartRiskReasonsUseOnlyImmutableSnapshotEvidence(t *tes
 // named evidence is one consolidated review, and only genuine risk evidence
 // reaches focused 4R. The former 401-line escalation is deliberately gone.
 func TestNegotiatedReviewStartRoutesLargeCandidatesByEvidence(t *testing.T) {
+	t.Parallel()
+
 	full4R := []string{
 		reviewtransaction.LensRisk, reviewtransaction.LensResilience,
 		reviewtransaction.LensReadability, reviewtransaction.LensReliability,
