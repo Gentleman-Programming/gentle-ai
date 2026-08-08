@@ -2512,34 +2512,41 @@ func (s checkDependenciesStep) Run() error {
 	// failing with real error messages.
 	_ = system.DetectDependencies(context.Background(), s.profile)
 	for _, agent := range s.selection.Agents {
-		// Only Pi still executes anything on the user's behalf (its own
-		// already-present `pi` subcommands, which need npm/pnpm — see
-		// agentInstallStep). Every other agent's "not installed" outcome is
-		// now a printed refusal, which needs no local dependency at all, so
-		// failing this whole pipeline early over an unrelated agent's
-		// missing npm/uv would abort work agentInstallStep would otherwise
-		// complete correctly by just naming the command.
-		if agent != model.AgentPi {
-			continue
-		}
-
 		adapter, err := agents.NewAdapter(agent)
 		if err != nil {
 			return fmt.Errorf("create adapter for %q: %w", agent, err)
 		}
 
-		if s.homeDir != "" {
+		// Preflight: verify the agent runtime is installed (except Pi, which installs its own packages).
+		// This fails fast with a clear error message instead of letting
+		// the pipeline proceed only to refuse at agentInstallStep.
+		if s.homeDir != "" && agent != model.AgentPi {
 			installed, _, _, _, err := adapter.Detect(context.Background(), s.homeDir)
 			if err != nil {
 				return fmt.Errorf("detect agent %q: %w", agent, err)
 			}
-			if installed {
-				continue
+			if !installed {
+				// Agent not installed - provide actionable error with install command.
+				commands, cmdErr := adapter.InstallCommand(s.profile)
+				if cmdErr != nil {
+					return fmt.Errorf("agent %q is not installed. Gentle-AI does not install agent runtimes; run this yourself, then retry:\n  (could not resolve install command: %v)", agent, cmdErr)
+				}
+				if len(commands) == 0 {
+					return fmt.Errorf("agent %q is not installed and Gentle-AI has no install command to suggest for this platform", agent)
+				}
+				var lines []string
+				for _, cmd := range commands {
+					lines = append(lines, "  "+strings.Join(cmd, " "))
+				}
+				return fmt.Errorf("agent %q is not installed. Gentle-AI does not install agent runtimes; run this yourself, then retry:\n%s", agent, strings.Join(lines, "\n"))
 			}
 		}
 
-		if err := installcmd.ValidateAgentInstallPreflight(s.profile, agent); err != nil {
-			return fmt.Errorf("preflight for agent %q: %w", agent, err)
+		// Pi has additional preflight requirements (npm/pnpm via pi subcommands).
+		if agent == model.AgentPi {
+			if err := installcmd.ValidateAgentInstallPreflight(s.profile, agent); err != nil {
+				return fmt.Errorf("preflight for agent %q: %w", agent, err)
+			}
 		}
 	}
 	return nil
