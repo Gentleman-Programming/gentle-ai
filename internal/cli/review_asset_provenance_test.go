@@ -102,6 +102,7 @@ func TestManagedReviewerAssetProvenanceReceiptOrdering(t *testing.T) {
 		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", "provenance-inflight", "--gate", "pre-commit"}, &bytes.Buffer{}), reviewFacadeReceiptNotAvailableReason("provenance-inflight"))
 	})
 }
+
 // TestManagedReviewerAssetProvenanceRefusesOnlyRecordedSkew pins the two
 // shapes the refusal must NOT take. Only a recorded digest that disagrees is
 // stale; a home that never installed anything has no managed assets to be
