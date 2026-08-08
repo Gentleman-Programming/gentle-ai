@@ -1460,7 +1460,12 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	if errors.Is(persistedStateErr, os.ErrNotExist) {
 		persistedState = state.InstallState{}
 	} else if persistedStateErr != nil {
-		return result, fmt.Errorf("read install state for managed asset provenance: %w", persistedStateErr)
+		// Review refuses managed assets until sync records this writer, so a
+		// sync that cannot read the state file must name the command that
+		// rewrites it whole. Otherwise the refusal points back at this failure.
+		return result, fmt.Errorf(
+			"read install state for managed asset provenance: %w; run `gentle-ai install` to rewrite %s",
+			persistedStateErr, state.Path(homeDir))
 	}
 	shouldWriteState := false
 	if persistedState.ManagedAssetWriter != writer {

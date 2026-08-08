@@ -59,10 +59,16 @@ func resolveReviewOperationRoot(ctx context.Context, cwd string, operation revie
 	if err != nil {
 		return "", err
 	}
-	if operation == reviewtransaction.RDDOperationMutate {
+	switch operation {
+	case reviewtransaction.RDDOperationMutate:
+		// authorizeReviewAuthorityMutation already applies the asset gate.
 		err = authorizeReviewAuthorityMutation(ctx, root)
-	} else if err = authorizeReviewRDDOperation(ctx, root, operation); err == nil && operation == reviewtransaction.RDDOperationAbandon {
-		err = authorizeManagedReviewerAssets()
+	case reviewtransaction.RDDOperationAbandon:
+		if err = authorizeReviewRDDOperation(ctx, root, operation); err == nil {
+			err = authorizeManagedReviewerAssets()
+		}
+	default:
+		err = authorizeReviewRDDOperation(ctx, root, operation)
 	}
 	if err != nil {
 		return "", err
