@@ -717,7 +717,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		advancing := false
 		if status.Complete {
 			if !runtimeObjectiveAdvanceAdmissible(status, request) {
-				return runtimeRecord{}, ErrRuntimeObjectiveDone
+				return runtimeRecord{}, store.runtimeObjectiveCompleteRefusal(status)
 			}
 			advancing = true
 		}
@@ -1098,6 +1098,66 @@ func runtimeRemediatesArgument(remediates string) string {
 // way runtimeRemediationExitRefusal's two branches do: the recorded
 // begin-worktree path is itself always the one runnable continuation, so
 // there is only one message to construct.
+// runtimeZeroDriftResetRefusal replaces the bare ErrRuntimeResetNotAllowed at
+// the one refusal site whose state has a runnable continuation the sentinel
+// never named. The sentinel says which shapes reset admits and then points at
+// status; status answers next_action: begin, and for a caller whose failed
+// evidence proves the OBJECTIVE is wrong rather than under-attempted, re-running
+// the identical objective is the one continuation that cannot help. #1974 was
+// filed as a lifecycle deadlock for exactly that reason: rescope already owned
+// this transition and neither surface said so.
+//
+// Both named exits are real for this state, which is why both appear. Rescope
+// is admitted here by construction (this site is reached only when reset is
+// structurally permitted, the objective is neither decision-required nor
+// complete, and the candidate has not drifted, which is precisely
+// runtimeObjectiveRescopeStructurallyPermitted plus zero drift), so it needs no
+// second eligibility probe. It can only narrow or hold the budget, so a caller
+// who needs a WIDER successor scope gets the second exit instead: spend the
+// remaining attempts honestly, which is what reaches decision-required, where
+// this same reset is admitted and opens a fresh budget.
+func (store RuntimeStore) runtimeZeroDriftResetRefusal(status RuntimeStatus) error {
+	objective := status.Objective
+	return fmt.Errorf(
+		"%w: this objective's candidate has not drifted and it still has attempts left, so resetting it now would launder the per-objective budget. If the failed evidence proves this OBJECTIVE is wrong rather than under-attempted, a maintainer may open a narrower successor scope instead — `gentle-ai sdd-attempt rescope --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --work-unit \"<narrower-work-unit>\" --evidence-goal \"<narrower-evidence-goal>\" --max-attempts \"<n, at most %d>\" --max-changed-lines \"<n, at most %d>\" --reason \"<why-the-objective-is-narrowing>\" --actor \"<actor>\"`; rescope carries cumulative_attempts and cumulative_changed_lines forward unchanged and never widens a budget, so if the successor needs MORE than %d changed lines, spend this objective's remaining attempts first: the run that exhausts them reaches decision-required, where this reset is admitted",
+		ErrRuntimeResetNotAllowed, store.Workspace, store.Change, status.Revision,
+		objective.MaxAttempts, objective.MaxChangedLines, objective.MaxChangedLines)
+}
+
+// runtimeRescopeWidenedRefusal is the complement of
+// runtimeZeroDriftResetRefusal (#1974). That one caught the caller who reached
+// for reset and was told nothing about rescope; this catches the caller who
+// reached for rescope and is told only that a wider budget is refused. The
+// state is the same one, so status answers next_action: begin, which repeats
+// the objective at the same ceiling the caller just said is too small.
+//
+// The route that does work is not another operation, it is finishing this one:
+// spending the remaining attempts reaches decision-required, and reset is
+// admitted there with a budget of any size. Naming it costs nothing and does
+// not weaken the narrowing rule, which exists so a successor scope cannot
+// launder a consumed budget.
+func (store RuntimeStore) runtimeRescopeWidenedRefusal(status RuntimeStatus, flag string, requested, allowed int) error {
+	remaining := status.Objective.MaxAttempts - status.CumulativeAttempts
+	return fmt.Errorf(
+		"%w: received %s %d, the current objective allows %d. A wider successor scope is reached by finishing this objective rather than by rescoping it: spend its %d remaining attempt(s), and the run that exhausts them reaches decision-required, where `gentle-ai sdd-attempt reset --cwd %q --change %q --expected-revision \"<revision-from-status>\" --request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"` opens a fresh budget of any size",
+		ErrRuntimeRescopeWidened, flag, requested, allowed, remaining, store.Workspace, store.Change)
+}
+
+// runtimeObjectiveCompleteRefusal names what a completed objective's begin can
+// actually do. The sentinel said only that the objective is complete and
+// pointed at status, whose next_action is `complete` — true, and useless to a
+// caller who has more work to do on this change.
+//
+// Complete is only reachable from a passed attempt within budget, so advance is
+// admissible here whenever the sole failing condition is the repeated work
+// unit: changing --work-unit is the entire difference. Reset is admitted too,
+// for a caller who means to discard this scope rather than succeed it.
+func (store RuntimeStore) runtimeObjectiveCompleteRefusal(status RuntimeStatus) error {
+	return fmt.Errorf(
+		"%w: it passed within budget, so this change continues through a SUCCESSOR objective, not a repeat of this one — re-run this begin with a different --work-unit (everything else may stay as it is) and it is admitted as an advance that carries this objective's evidence forward. To discard this scope instead of succeeding it, run `gentle-ai sdd-attempt reset --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"`",
+		ErrRuntimeObjectiveDone, store.Workspace, store.Change, status.Revision)
+}
+
 func (store RuntimeStore) runtimeWorktreeMismatchRefusal(ordinal int, beginWorktree string) error {
 	return fmt.Errorf(
 		"%w: attempt %d began in %s, and its base candidate tree is pinned to that exact linked worktree, but this finish is running from %s — rerun with --cwd %s so the candidate capture and changed-line measurement use the worktree that actually did the work",
@@ -1297,7 +1357,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 				return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check reset drift eligibility: %w", driftErr)
 			}
 			if candidate.Identity == last.FinishCandidateIdentity && candidate.CandidateTree == last.FinishCandidateTree {
-				return runtimeRecord{}, ErrRuntimeResetNotAllowed
+				return runtimeRecord{}, store.runtimeZeroDriftResetRefusal(status)
 			}
 		}
 		snapshot, err := captureRuntimeCandidate(ctx, store.Repo)
@@ -1376,15 +1436,12 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
 		}
 		if request.MaxChangedLines > objective.MaxChangedLines {
-			return runtimeRecord{}, fmt.Errorf(
-				"%w: received --max-changed-lines %d, the current objective allows %d",
-				ErrRuntimeRescopeWidened, request.MaxChangedLines, objective.MaxChangedLines,
-			)
+			return runtimeRecord{}, store.runtimeRescopeWidenedRefusal(
+				status, "--max-changed-lines", request.MaxChangedLines, objective.MaxChangedLines)
 		}
 		if request.MaxAttempts > objective.MaxAttempts {
-			return runtimeRecord{}, fmt.Errorf(
-				"%w: received --max-attempts %d, the current objective allows %d",
-				ErrRuntimeRescopeWidened, request.MaxAttempts, objective.MaxAttempts,
+			return runtimeRecord{}, store.runtimeRescopeWidenedRefusal(
+				status, "--max-attempts", request.MaxAttempts, objective.MaxAttempts,
 			)
 		}
 		// The zero-drift `drift` snapshot above was captured with

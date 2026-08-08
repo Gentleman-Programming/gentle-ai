@@ -1139,7 +1139,8 @@ type organicHarness struct {
 
 func newOrganicHarness(t *testing.T) *organicHarness {
 	t.Helper()
-	return &organicHarness{t: t, repo: initOrganicRepository(t), home: t.TempDir()}
+	harness := &organicHarness{t: t, repo: initOrganicRepository(t), home: t.TempDir()}
+	return harness
 }
 
 // environment isolates the run from the developer's own global review mode. A

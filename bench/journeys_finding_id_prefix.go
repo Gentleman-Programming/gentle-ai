@@ -11,7 +11,7 @@ const findingIDPrefixScratchKey = "finding-id-prefix:"
 func findingIDPrefixJourneys() []Journey {
 	return []Journey{
 		{
-			ID:     "j77-lens-finding-id-prefix-discovery",
+			ID:     "j78-lens-finding-id-prefix-discovery",
 			Title:  "Reviewer discovers lens finding-ID prefixes before native admission",
 			Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/1844",
 			Steps: []Step{

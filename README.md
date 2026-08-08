@@ -100,6 +100,9 @@ go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 > [!WARNING]
 > Windows source builds and CI/runtime tests remain supported, but official Windows binary distribution and Scoop are temporarily unavailable. Windows installation and upgrades require Go 1.25.10+ and fail closed to source-install guidance; they never download an unsigned Gentle AI executable or execute a remote update script.
 
+> [!IMPORTANT]
+> After replacing or upgrading the `gentle-ai` binary, run `gentle-ai sync` to refresh its managed assets. See the [sync and upgrade reference](docs/usage.md#sync).
+
 ### Configure project context
 
 Once your agents are configured, open your AI agent in a project and run these two commands to register the project context:

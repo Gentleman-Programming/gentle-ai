@@ -137,7 +137,7 @@ func TestNewLineageReasonTaxonomyCoversLegacyRefusals(t *testing.T) {
 		// guarantees for every one of its non-governing early returns —
 		// receipt_missing and target_unresolvable share that contract by
 		// construction, not by coincidence.
-		if _, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), "", "", reviewtransaction.NativeGateRequestInput{}); discoveryErr != nil || evaluation != (reviewtransaction.NativeGateEvaluation{}) {
+		if _, _, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), "", "", reviewtransaction.NativeGateRequestInput{}); discoveryErr != nil || evaluation != (reviewtransaction.NativeGateEvaluation{}) {
 			t.Fatalf("resolveGoverningAuthority(no governing v3 authority) must be a pure defer, got evaluation=%#v discoveryErr=%v", evaluation, discoveryErr)
 		}
 	})

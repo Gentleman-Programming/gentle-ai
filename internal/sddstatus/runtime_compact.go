@@ -506,9 +506,14 @@ func compactBlockedExitText(reason CompactBlockReason, token string) string {
 			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to see the live attempt and its " +
 			"current revision, then reissue this call against that state"
 	case CompactBlockMaintainerDecision:
+		// #2530: this said "rescope or reset", and rescope is structurally
+		// refused for exactly this state — runtimeObjectiveRescopeStructurally
+		// Permitted returns false whenever DecisionRequired is set, which is
+		// the only way this block is reached. Reset is the admitted one, and
+		// the ledger's own next_action has said so all along.
 		return "this work unit's attempt or changed-line budget needs a maintainer decision; run " +
 			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` for the accounting, then ask a " +
-			"maintainer to rescope or reset the objective, or run " + compactBlockedReviewModeDisableExit
+			"maintainer to reset the objective, or run " + compactBlockedReviewModeDisableExit
 	case CompactBlockActiveAttempt:
 		// Adversarial finding F2: the bare `sdd-attempt acquire --token <t>`
 		// / `settle --token <t>` forms are not complete commands -- each

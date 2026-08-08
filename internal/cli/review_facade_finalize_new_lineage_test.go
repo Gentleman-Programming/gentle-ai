@@ -342,7 +342,7 @@ func TestReviewFacadeFinalizeNewLineageEscalatedReceiptDeniesEveryGate(t *testin
 	// receipt — must DENY here, not allow, even though its live candidate
 	// relates exactly to the frozen one. This is the exact shape the
 	// verify report's C5 repro used (`review start`, never finalized).
-	if governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit}); !governs {
+	if governs, _, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit}); !governs {
 		t.Fatalf("fixture sanity check failed: an in-flight v3 record must still govern (deny), got governs=false")
 	} else if discoveryErr == nil && evaluation.Result == reviewtransaction.GateAllow {
 		t.Fatalf("fixture sanity check failed: a never-approved, receipt-less reviewing authority must never allow, got evaluation=%#v", evaluation)
@@ -360,7 +360,7 @@ func TestReviewFacadeFinalizeNewLineageEscalatedReceiptDeniesEveryGate(t *testin
 		reviewtransaction.GatePrePR, reviewtransaction.GateRelease,
 	} {
 		t.Run(string(gate), func(t *testing.T) {
-			governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: gate})
+			governs, _, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: gate})
 			if !governs {
 				t.Fatalf("gate %q: an escalated v3 record must still govern (deny), got governs=false", gate)
 			}
