@@ -285,6 +285,35 @@ func TestAbandonRefusesTerminalInvalidatedLineage(t *testing.T) {
 	}
 }
 
+func TestRetiredReviewerResultSummaryRejectsCorruptHistoricalShapes(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		wantErr bool
+	}{
+		{name: "exact retired envelope", payload: `{"lens":"review-reliability","findings":[],"evidence":["inspected stale.go"]}`},
+		{name: "finding present", payload: `{"lens":"review-reliability","findings":[{}],"evidence":[]}`},
+		{name: "duplicate keys hide slot and finding", payload: `{"lens":"review-risk","lens":"review-reliability","findings":[{}],"findings":[],"evidence":[]}`, wantErr: true},
+		{name: "duplicate evidence", payload: `{"lens":"review-reliability","findings":[],"evidence":["first"],"evidence":[]}`, wantErr: true},
+		{name: "duplicate identical lens", payload: `{"lens":"review-reliability","lens":"review-reliability","findings":[],"evidence":[]}`, wantErr: true},
+		{name: "wrong findings type", payload: `{"lens":"review-reliability","findings":{},"evidence":[]}`, wantErr: true},
+		{name: "wrong evidence type", payload: `{"lens":"review-reliability","findings":[],"evidence":"x"}`, wantErr: true},
+		{name: "unknown field", payload: `{"lens":"review-reliability","findings":[],"evidence":[],"gate":true}`, wantErr: true},
+		{name: "wrong selected slot", payload: `{"lens":"review-risk","findings":[],"evidence":[]}`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			findings, retired, err := compactRetiredReviewerResultSummary([]byte(tt.payload), "00-review-reliability.json", []string{LensReliability})
+			if !retired || (err != nil) != tt.wantErr {
+				t.Fatalf("summary = findings:%t retired:%t err:%v", findings, retired, err)
+			}
+			if tt.name == "finding present" && !findings {
+				t.Fatal("retired finding was omitted from the audit summary")
+			}
+		})
+	}
+}
+
 func TestAbandonRefusesIneligibleTargetsAndBindings(t *testing.T) {
 	repo := initSnapshotRepo(t)
 

@@ -44,6 +44,7 @@ func journeySources() []journeySource {
 		{"journeys_reviewed_superset.go", reviewedSupersetJourneys()},
 		{"journeys_staged_delivery.go", stagedDeliveryJourneys()},
 		{"journeys_managed_assets.go", managedAssetJourneys()},
+		{"journeys_issue2539.go", issue2539Journeys()},
 	}
 }
 

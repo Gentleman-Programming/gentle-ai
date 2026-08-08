@@ -112,10 +112,8 @@ func compactDiscardedWorkSummary(ctx context.Context, store CompactStore, record
 		return CompactDiscardedWorkSummary{}, errors.New("reviewer result store has no repository")
 	}
 	builder := SnapshotBuilder{Repo: store.repo}
-	frozen, err := builder.FrozenCandidateContext(ctx, record.State.InitialSnapshot)
-	if err != nil {
-		return CompactDiscardedWorkSummary{}, fmt.Errorf("derive frozen reviewer context: %w", err)
-	}
+	var frozen FrozenCandidateContext
+	frozenReady := false
 	for _, name := range captured {
 		payload, _, err := readCompactReviewerArtifact(filepath.Join(store.Dir, CompactReviewerResultsDir, name))
 		if err != nil {
@@ -125,7 +123,15 @@ func compactDiscardedWorkSummary(ctx context.Context, store CompactStore, record
 		decoder := json.NewDecoder(bytes.NewReader(payload))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&envelope); err != nil {
-			return CompactDiscardedWorkSummary{}, fmt.Errorf("decode captured reviewer result %q: %w", name, err)
+			findings, retired, retiredErr := compactRetiredReviewerResultSummary(payload, name, record.State.SelectedLenses)
+			if retiredErr != nil {
+				return CompactDiscardedWorkSummary{}, fmt.Errorf("decode retired captured reviewer result %q: %w", name, retiredErr)
+			}
+			if !retired {
+				return CompactDiscardedWorkSummary{}, fmt.Errorf("decode captured reviewer result %q: %w", name, err)
+			}
+			summary.FindingsPresent = summary.FindingsPresent || findings
+			continue
 		}
 		if err := decoder.Decode(new(struct{})); err != io.EOF ||
 			envelope.Subject.SelectedOrder < 0 || envelope.Subject.SelectedOrder >= len(record.State.SelectedLenses) ||
@@ -133,6 +139,13 @@ func compactDiscardedWorkSummary(ctx context.Context, store CompactStore, record
 			name != fmt.Sprintf("%02d-%s.json", envelope.Subject.SelectedOrder, envelope.Subject.Lens) {
 			// refusal:by-design world-action: malformed persisted reviewer bytes cannot be safely discarded as admitted work
 			return CompactDiscardedWorkSummary{}, fmt.Errorf("decode captured reviewer result %q", name)
+		}
+		if !frozenReady {
+			frozen, err = builder.FrozenCandidateContext(ctx, record.State.InitialSnapshot)
+			if err != nil {
+				return CompactDiscardedWorkSummary{}, fmt.Errorf("derive frozen reviewer context: %w", err)
+			}
+			frozenReady = true
 		}
 		nativeFrozen, expected, err := artifactSubjectForSchema(ctx, builder, record.State, envelope.Subject.AuthorityRevision,
 			frozen, envelope.Subject.Lens, envelope.Subject.SelectedOrder, envelope.Subject.CorrectionTargetIdentity, envelope.Subject.Schema)
@@ -150,6 +163,90 @@ func compactDiscardedWorkSummary(ctx context.Context, store CompactStore, record
 		}
 	}
 	return summary, nil
+}
+
+// compactRetiredReviewerResultSummary recognizes only the byte shape persisted
+// before admitted-result envelopes existed. It is an audit projection, never a
+// reviewer-result admission or a source of gate evidence.
+func compactRetiredReviewerResultSummary(payload []byte, name string, selected []string) (findings, retired bool, err error) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return false, false, nil
+	}
+	fields := make(map[string]json.RawMessage, 3)
+	duplicate, unknown := "", ""
+	currentLike := false
+	for decoder.More() {
+		token, err = decoder.Token()
+		if err != nil {
+			return false, fields["lens"] != nil && !currentLike, err
+		}
+		key, ok := token.(string)
+		if !ok {
+			// refusal:by-design world-action: a structurally invalid historical object has no safe audit projection.
+			return false, fields["lens"] != nil && !currentLike, errors.New("retired reviewer result contains a non-string field name")
+		}
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			return false, fields["lens"] != nil && !currentLike, err
+		}
+		switch key {
+		case "lens", "findings", "evidence":
+			if fields[key] != nil && duplicate == "" {
+				duplicate = key
+			}
+			fields[key] = raw
+		case "schema", "subject", "admission", "result":
+			currentLike = true
+		default:
+			if unknown == "" {
+				unknown = key
+			}
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return false, fields["lens"] != nil && !currentLike, err
+	}
+	if err := decoder.Decode(new(struct{})); err != io.EOF {
+		// refusal:by-design world-action: trailing persisted JSON makes the historical audit meaning ambiguous.
+		return false, fields["lens"] != nil && !currentLike, errors.New("retired reviewer result contains trailing JSON")
+	}
+	if fields["lens"] == nil || currentLike {
+		return false, false, nil
+	}
+	if duplicate != "" {
+		// refusal:by-design world-action: duplicate historical fields make the persisted audit meaning ambiguous.
+		return false, true, fmt.Errorf("retired reviewer result repeats field %q", duplicate)
+	}
+	if unknown != "" {
+		// refusal:by-design world-action: unrecognized historical fields cannot be safely interpreted for disposition.
+		return false, true, fmt.Errorf("retired reviewer result contains unknown field %q", unknown)
+	}
+	var result struct {
+		Lens     string            `json:"lens"`
+		Findings []json.RawMessage `json:"findings"`
+		Evidence []string          `json:"evidence"`
+	}
+	if err := json.Unmarshal(fields["lens"], &result.Lens); err != nil {
+		return false, true, err
+	}
+	if err := json.Unmarshal(fields["findings"], &result.Findings); err != nil {
+		return false, true, err
+	}
+	if err := json.Unmarshal(fields["evidence"], &result.Evidence); err != nil {
+		return false, true, err
+	}
+	if result.Findings == nil || result.Evidence == nil {
+		// refusal:by-design world-action: corrupt persisted audit bytes have no safe automatic repair.
+		return false, true, errors.New("retired reviewer result requires one JSON object with explicit findings and evidence arrays")
+	}
+	order := stringIndex(selected, result.Lens)
+	if order < 0 || name != fmt.Sprintf("%02d-%s.json", order, result.Lens) {
+		// refusal:by-design world-action: a mismatched historical slot cannot be safely attributed or discarded.
+		return false, true, errors.New("retired reviewer result lens does not match its selected slot")
+	}
+	return len(result.Findings) > 0, true, nil
 }
 
 func compactAbandonV2Rerun(repo, lineage, revision, snapshotIdentity, actor, reason string, discarded CompactDiscardedWorkSummary) string {

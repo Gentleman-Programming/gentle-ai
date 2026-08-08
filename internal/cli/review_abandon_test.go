@@ -3,8 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -142,6 +145,79 @@ func TestReviewAbandonRequiresFlagsAndExactBinding(t *testing.T) {
 	current, err := os.ReadFile(statePath)
 	if err != nil || !bytes.Equal(current, payload) {
 		t.Fatalf("refused abandon mutated the entry: %v", err)
+	}
+}
+
+func TestReviewAbandonDisposesRetiredReviewerResultWithoutRelaxingCurrentAdmission(t *testing.T) {
+	const retired = `{"lens":"review-reliability","findings":[],"evidence":["inspected stale.go"]}`
+	tests := []struct {
+		name  string
+		setup func(*testing.T, string, string, string)
+	}{
+		{name: "retired envelope", setup: func(t *testing.T, repo, lineage, target string) {
+			resultDir := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", lineage, reviewtransaction.CompactReviewerResultsDir)
+			if err := os.MkdirAll(resultDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			payload := []byte(retired)
+			path := filepath.Join(resultDir, "00-review-reliability.json")
+			if err := os.WriteFile(path, payload, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(payload)
+			if err := os.WriteFile(path+".sha256", []byte("sha256:"+hex.EncodeToString(digest[:])+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "current admitted envelope", setup: func(t *testing.T, repo, lineage, target string) {
+			captureCLIReviewerResult(t, repo, ReviewFacadeStartResult{
+				LineageID: lineage, TargetIdentity: target, SelectedLenses: []string{reviewtransaction.LensReliability},
+			}, 0)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			revision, target := pristineReviewingCLIFixture(t, repo)
+			tt.setup(t, repo, "abandon-stale-reviewing", target)
+
+			var status bytes.Buffer
+			if err := RunReview([]string{"status", "--cwd", repo}, &status); err != nil {
+				t.Fatalf("review status: %v", err)
+			}
+			var report reviewtransaction.AuthorityStatusReport
+			decodeStrictReviewJSON(t, status.Bytes(), &report)
+			if len(report.Entries) != 1 || report.Entries[0].DiscardedWork == nil {
+				t.Fatalf("status entries = %#v", report.Entries)
+			}
+			discarded := *report.Entries[0].DiscardedWork
+			if len(discarded.CapturedLensResults) != 1 || discarded.CapturedLensResults[0] != "00-review-reliability.json" ||
+				discarded.FindingsPresent || discarded.EvidenceRecordsPresent {
+				t.Fatalf("discarded_work = %#v", discarded)
+			}
+
+			const actor = "maintainer@example.com"
+			const reason = reviewtransaction.CompactAbandonReasonRetiredSchema
+			authorization := reviewtransaction.RenderCompactAbandonAuthorization(
+				"abandon-stale-reviewing", revision, target, actor, reason, discarded)
+			var output bytes.Buffer
+			if err := RunReview([]string{
+				"abandon", "--cwd", repo, "--lineage", "abandon-stale-reviewing",
+				"--expected-revision", revision, "--reason", reason, "--actor", actor,
+				"--maintainer-authorization", authorization,
+			}, &output); err != nil {
+				t.Fatalf("review abandon: %v\n%s", err, output.String())
+			}
+			var result ReviewAbandonResult
+			decodeStrictReviewJSON(t, output.Bytes(), &result)
+			if result.Record.Status != reviewtransaction.CompactReclaimCommitted || result.Record.Abandonment == nil ||
+				!reflect.DeepEqual(result.Record.Abandonment.DiscardedWork, discarded) {
+				t.Fatalf("abandon result = %#v", result)
+			}
+			if _, err := os.Stat(filepath.Join(result.Record.QuarantinePath, "residue", "review-receipt.json")); !os.IsNotExist(err) {
+				t.Fatalf("discarded lineage produced a usable receipt: %v", err)
+			}
+		})
 	}
 }
 

@@ -796,6 +796,7 @@ type authorityEntry struct {
 	Revision         string                 `json:"revision"`
 	SnapshotIdentity string                 `json:"snapshot_identity"`
 	DiscardedWork    authorityDiscardedWork `json:"discarded_work"`
+	Problems         []string               `json:"problems"`
 }
 
 // entry finds one lineage by name. Journeys that hold more than one authority
