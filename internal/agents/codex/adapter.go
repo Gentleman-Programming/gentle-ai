@@ -2,9 +2,11 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -12,6 +14,24 @@ import (
 )
 
 var LookPathOverride = exec.LookPath
+
+// capabilitiesProbeTimeout bounds the live `codex debug models` invocation
+// inside Capabilities. The picker renders inside 2s or it falls back to
+// curated — a hung CLI must never block the TUI.
+const capabilitiesProbeTimeout = 2 * time.Second
+
+// runCapabilitiesCommand is the package-level hook for the
+// `codex debug models` invocation. Tests swap it via
+// SetCapabilitiesProbeForTest; production code calls the default below.
+var runCapabilitiesCommand = func(ctx context.Context, binaryPath string) ([]byte, error) {
+	return exec.CommandContext(ctx, binaryPath, "debug", "models").CombinedOutput()
+}
+
+// curatedFallbackModelID is the model identifier the curated fallback
+// uses when the runtime catalog is unavailable. sol is the broadest of the
+// three Codex rails (low through ultra), so it is the safest default when
+// the picker cannot ask the CLI.
+const curatedFallbackModelID = "gpt-5.6-sol"
 
 type statResult struct {
 	isDir bool
@@ -38,6 +58,73 @@ func (a *Adapter) Agent() model.AgentID {
 
 func (a *Adapter) Tier() model.SupportTier {
 	return model.TierFull
+}
+
+// --- Capability discovery ---
+
+// Capabilities returns the Codex capability record the picker renders:
+// reasoning/speed/service tiers, the multi-agent version stamp, and the
+// provenance of the data. It is a synchronous sibling of Tier(): Tier()
+// reports agent support (Full/Partial); Capabilities reports what the
+// model itself can do. The two never share fields and never replace each
+// other.
+//
+// Behavior:
+//   - Invoke `codex debug models` with a 2s timeout. On success, parse the
+//     JSON payload and stamp CapabilitySource = "runtime".
+//   - On any failure (lookup, timeout, non-zero exit, parse error) fall
+//     back to the curated sol row and stamp CapabilitySource = "curated".
+//     The picker MUST receive a non-nil record even when the CLI is
+//     missing or hanging — discovery never blocks the UI.
+//
+// The method is intentionally synchronous: no goroutines, no tea.Cmd,
+// returns before the picker's first Update(). Callers wire it into the
+// picker's initial state.
+func (a *Adapter) Capabilities(ctx context.Context, lookup func(string) (string, error)) (model.CapabilityRecord, error) {
+	lookPath := a.lookPath
+	if lookup != nil {
+		lookPath = lookup
+	}
+
+	if lookPath == nil {
+		return curatedFallback(), nil
+	}
+
+	binaryPath, err := lookPath("codex")
+	if err != nil || binaryPath == "" {
+		return curatedFallback(), nil
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, capabilitiesProbeTimeout)
+	defer cancel()
+
+	output, err := runCapabilitiesCommand(probeCtx, binaryPath)
+	if err != nil {
+		// Distinguish "codex not on PATH" errors from a hung timeout using
+		// context.DeadlineExceeded so future diagnostics can attribute the
+		// fallback correctly. We always fall back, regardless.
+		if errors.Is(err, context.DeadlineExceeded) {
+			return curatedFallback(), nil
+		}
+		// Non-zero exit also falls back. The combined output may carry an
+		// error message we deliberately ignore — the picker only needs the
+		// curated matrix in this branch.
+		_ = output
+		return curatedFallback(), nil
+	}
+
+	rec, parseErr := model.RecordFromRuntime(output)
+	if parseErr != nil {
+		return curatedFallback(), nil
+	}
+	return rec, nil
+}
+
+// curatedFallback returns the curated CapabilityRecord stamped with
+// CapabilitySource = "curated". It is the universal fallback whenever the
+// runtime cannot answer — the picker relies on a non-nil record.
+func curatedFallback() model.CapabilityRecord {
+	return model.RecordFromCurated(curatedFallbackModelID)
 }
 
 // --- Detection ---
