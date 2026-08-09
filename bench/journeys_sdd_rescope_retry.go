@@ -60,6 +60,10 @@ func sddRescopeEvidenceOnlyRetry(r *journeyRun) error {
 		return err
 	}
 	if !completed.Complete || completed.Binding != nil || len(completed.Attempts) != 2 ||
+		completed.Attempts[0].FinishCandidateTree == "" ||
+		completed.Attempts[1].BeginCandidateTree == "" ||
+		completed.Attempts[1].FinishCandidateTree == "" ||
+		completed.Attempts[0].FinishCandidateTree != completed.Attempts[1].BeginCandidateTree ||
 		completed.Attempts[1].RemediatesEvidenceRevision != sddFailedEvidence ||
 		completed.Attempts[1].FinishCandidateTree != completed.Attempts[1].BeginCandidateTree {
 		return fmt.Errorf("rescope-authorized unchanged settle did not survive replay: %#v", completed)
