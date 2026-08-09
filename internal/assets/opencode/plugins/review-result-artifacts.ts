@@ -127,7 +127,7 @@ function isSDDPhase(agent: string): boolean {
   return SDD_PHASES.some((phase) => agent === phase || agent.startsWith(phase + "-"))
 }
 const SDD_TASK_FAILURE_PREFIX = "GENTLE_AI_SDD_FAILURE "
-type SDDTaskFailure = { phase: string, code: string, handoff: string }
+type SDDTaskFailure = { phase: string, code: string, taskModel?: string, summary: string, continuation: string }
 type SDDTaskFailureError = Error & { sddFailure: SDDTaskFailure }
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`
@@ -170,6 +170,28 @@ function taskRouteModel(metadata: unknown): string | undefined {
 // produce output that failed the envelope contract. The old single summary
 // claimed "no valid task result" for both, which hid that in the empty case
 // the child never ran inference at all.
+function sddFailureError(failure: SDDTaskFailure): SDDTaskFailureError {
+  const handoff = SDD_TASK_FAILURE_PREFIX + JSON.stringify({
+    schemaName: "gentle-ai.sdd-task-result-failure/v1",
+    status: "blocked",
+    code: failure.code,
+    phase: failure.phase,
+    ...(failure.taskModel === undefined ? {} : { taskModel: failure.taskModel }),
+    summary: failure.summary,
+    continuation: failure.continuation,
+  })
+  return Object.assign(new Error(handoff), { sddFailure: failure }) as SDDTaskFailureError
+}
+
+function blockedSDDTaskFailure(failure: SDDTaskFailure, requestedPhase: string): SDDTaskFailureError {
+  return sddFailureError({
+    ...failure,
+    summary: `${failure.phase} previously failed. ${requestedPhase} was not launched. ` +
+      "The original failure remains terminal for this parent session. " +
+      `Run \`${failure.continuation}\` exactly once, surface the prior failure, and after an explicit user decision start a new OpenCode session/conversation to continue.`,
+  })
+}
+
 function sddTaskFailure(phase: string, cwd: string, cause: unknown, metadata?: unknown): SDDTaskFailureError {
   const classification = extractionClass(cause, "sddClass")
   const empty = classification === "empty_result"
@@ -184,20 +206,11 @@ function sddTaskFailure(phase: string, cwd: string, cause: unknown, metadata?: u
   const failure: SDDTaskFailure = {
     phase,
     code,
-    handoff: SDD_TASK_FAILURE_PREFIX + JSON.stringify({
-      schemaName: "gentle-ai.sdd-task-result-failure/v1",
-      status: "blocked",
-      code,
-      phase,
-      ...(taskModel === undefined ? {} : { taskModel }),
-      summary,
-      continuation: `gentle-ai sdd-status --cwd ${shellQuote(cwd)} --json`,
-    }),
+    ...(taskModel === undefined ? {} : { taskModel }),
+    summary,
+    continuation: `gentle-ai sdd-status --cwd ${shellQuote(cwd)} --json`,
   }
-  return Object.assign(
-    new Error(failure.handoff),
-    { sddFailure: failure },
-  ) as SDDTaskFailureError
+  return sddFailureError(failure)
 }
 
 function captureCwd(worktree: string | undefined, directory: string): string {
@@ -356,9 +369,7 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
     const subagent = output.args.subagent_type
     if (isSDDPhase(subagent)) {
       const failure = failedSDDSessions.get(input.sessionID)
-      if (failure) {
-        throw new Error(failure.handoff)
-      }
+      if (failure) throw blockedSDDTaskFailure(failure, subagent)
       return
     }
     if (!REVIEW_AGENTS.has(subagent)) return

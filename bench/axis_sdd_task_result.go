@@ -16,10 +16,10 @@ const sddTaskResultAxis = "sdd-task-result"
 func init() {
 	RegisterAxis(Axis{
 		Name:     sddTaskResultAxis,
-		Title:    "OpenCode SDD task-result transport failures",
+		Title:    "OpenCode SDD task-result terminal enforcement",
 		BlackBox: false,
 		Properties: []string{
-			"Runs the installed OpenCode plugin through Node with a provider-shaped empty task_result; it does not drive the gentle-ai CLI alone.",
+			"Runs the installed OpenCode plugin through Node with a provider-shaped empty task_result and proves it hard-blocks a downstream SDD launch with a truthful new-session recovery; it does not drive the gentle-ai CLI alone.",
 			"Requires GENTLE_AI_BENCH_SDD_PLUGIN and a Node runtime that executes .mts files with built-in TypeScript type stripping; skips honestly when the plugin or runtime capability is unavailable.",
 		},
 		Journeys: sddTaskResultJourneys,
@@ -29,7 +29,7 @@ func init() {
 func sddTaskResultJourneys() []Journey {
 	return []Journey{{
 		ID:     "tr01-sdd-empty-task-result",
-		Title:  "Empty SDD task result: typed terminal failure without artifact mutation or downstream launch",
+		Title:  "Empty SDD task result: terminal downstream block with new-session recovery",
 		Source: "issue #2117 provider transport report",
 		Steps: []Step{{
 			Name:      "provider-shaped empty task result reaches the installed OpenCode plugin",
@@ -137,8 +137,11 @@ func sddEmptyTaskResult(r *journeyRun) error {
 	if len(parts) != 3 {
 		return fmt.Errorf("task-result harness output = %q", output.String())
 	}
-	if !strings.Contains(parts[0], "sdd_task_result_empty") || !strings.Contains(parts[1], "sdd_task_result_empty") {
-		return fmt.Errorf("empty result was not routed as one typed terminal failure: %q", parts[:2])
+	if !strings.Contains(parts[0], "sdd_task_result_empty") || !strings.Contains(parts[0], "Do not retry or advance SDD") {
+		return fmt.Errorf("empty result did not produce a typed terminal handoff: %q", parts[0])
+	}
+	if !strings.Contains(parts[1], "sdd_task_result_empty") || !strings.Contains(parts[1], `"phase":"sdd-propose"`) || !strings.Contains(parts[1], "sdd-apply was not launched") || !strings.Contains(parts[1], "start a new OpenCode session/conversation") {
+		return fmt.Errorf("downstream SDD launch was not truthfully blocked: %q", parts[1])
 	}
 	if parts[2] != "existing artifact" {
 		return fmt.Errorf("task-result failure mutated artifact state: %q", parts[2])

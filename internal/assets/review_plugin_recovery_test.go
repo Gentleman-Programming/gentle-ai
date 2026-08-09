@@ -71,7 +71,7 @@ const runAfter = async (outputText: string) => {
 
 try {
   if (scenario.startsWith("sdd-")) {
-    const phase = scenario.startsWith("sdd-profile-") ? "sdd-propose-cheap" : scenario === "sdd-unrelated" ? "sdd-custom" : "sdd-propose"
+    const phase = scenario.startsWith("sdd-profile-") ? "sdd-propose-cheap" : scenario.startsWith("sdd-design-") ? "sdd-design" : scenario === "sdd-unrelated" ? "sdd-custom" : "sdd-propose"
     const result = scenario.includes("malformed") ? "<task_result>broken" : scenario.includes("empty") ? "<task id=\"phase\" state=\"completed\">\n<task_result>\n\n</task_result>\n</task>" : ""
     const artifact = cwd + "/proposal.md"
     await writeFile(artifact, "existing artifact")
@@ -96,12 +96,19 @@ try {
       let afterDispose = "NO_ERROR"
       try { await hooks["tool.execute.before"]({ ...input, callID: "call-after-dispose" }, { args: { subagent_type: phase, prompt: "reuse" } }) } catch (cause: unknown) { afterDispose = cause instanceof Error ? cause.message : String(cause) }
       console.log([failure, beforeDispose, afterDispose, await readFile(artifact, "utf8")].join("\n---\n"))
+    } else if (scenario === "sdd-unrelated") {
+      console.log([failure, "NOT_ATTEMPTED", "NOT_ATTEMPTED", await readFile(artifact, "utf8")].join("\n---\n"))
     } else {
-      let downstream = "NOT_ATTEMPTED"
-      if (scenario !== "sdd-unrelated") {
-        try { await hooks["tool.execute.before"]({ ...input, callID: "call-next", args: { subagent_type: "sdd-apply", prompt: "downstream" } }, { args: { subagent_type: "sdd-apply", prompt: "downstream" } }) } catch (cause: unknown) { downstream = cause instanceof Error ? cause.message : String(cause) }
-      }
-      console.log([failure, downstream, await readFile(artifact, "utf8")].join("\n---\n"))
+      let sameSession = "NO_ERROR"
+      const nextPhase = scenario.startsWith("sdd-design-") ? "sdd-spec" : "sdd-apply"
+      try {
+        await hooks["tool.execute.before"]({ ...input, callID: "call-next", args: { subagent_type: nextPhase, prompt: "downstream" } }, { args: { subagent_type: nextPhase, prompt: "downstream" } })
+      } catch (cause: unknown) { sameSession = cause instanceof Error ? cause.message : String(cause) }
+      let otherSession = "NO_ERROR"
+      try {
+        await hooks["tool.execute.before"]({ ...input, sessionID: "other-sdd-session", callID: "call-other", args: { subagent_type: nextPhase, prompt: "downstream" } }, { args: { subagent_type: nextPhase, prompt: "downstream" } })
+      } catch (cause: unknown) { otherSession = cause instanceof Error ? cause.message : String(cause) }
+      console.log([failure, sameSession, otherSession, await readFile(artifact, "utf8")].join("\n---\n"))
     }
   } else if (scenario === "before-background") {
     console.log(await runBefore("review-risk", true))
@@ -169,7 +176,7 @@ func runReviewPluginScenario(t *testing.T, scenario, nativeStderr string) string
 
 func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPluginStub) string {
 	t.Helper()
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" && !strings.HasPrefix(scenario, "sdd-") {
 		t.Skip("the stub native binary requires a POSIX shell")
 	}
 	node, err := exec.LookPath("node")
@@ -282,39 +289,50 @@ func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 		scenario    string
 		wantCode    string
 		wantPhase   string
-		wantBlocked bool
+		nextPhase   string
 		wantSummary string
 		wantModel   string
 		forbid      []string
 	}{
 		{
 			name: "empty unsuffixed phase", scenario: "sdd-empty",
-			wantCode: "sdd_task_result_empty", wantPhase: "sdd-propose", wantBlocked: true,
+			wantCode: "sdd_task_result_empty", wantPhase: "sdd-propose", nextPhase: "sdd-apply",
 			wantSummary: sddEmptySummaryFragment, wantModel: "opencode-go/deepseek-v4-flash",
 		},
 		{
 			name: "empty phase without model metadata", scenario: "sdd-empty-no-model",
-			wantCode: "sdd_task_result_empty", wantPhase: "sdd-propose", wantBlocked: true,
+			wantCode: "sdd_task_result_empty", wantPhase: "sdd-propose", nextPhase: "sdd-apply",
 			wantSummary: sddEmptySummaryFragment,
 		},
 		{
 			name: "empty phase with hostile model metadata", scenario: "sdd-empty-hostile-model",
-			wantCode: "sdd_task_result_empty", wantPhase: "sdd-propose", wantBlocked: true,
+			wantCode: "sdd_task_result_empty", wantPhase: "sdd-propose", nextPhase: "sdd-apply",
 			wantSummary: sddEmptySummaryFragment,
 			forbid:      []string{"/home/user/secret-provider", "RegionError", "xxxxxxxxxx"},
 		},
 		{
 			name: "malformed profile-suffixed phase", scenario: "sdd-profile-malformed",
-			wantCode: "sdd_task_result_malformed", wantPhase: "sdd-propose-cheap", wantBlocked: true,
+			wantCode: "sdd_task_result_malformed", wantPhase: "sdd-propose-cheap", nextPhase: "sdd-apply",
 			wantSummary: "returned no valid task result", wantModel: "opencode-go/deepseek-v4-flash",
 			forbid: []string{sddEmptySummaryFragment},
+		},
+		{
+			name: "malformed design does not replay into spec", scenario: "sdd-design-malformed",
+			wantCode: "sdd_task_result_malformed", wantPhase: "sdd-design", nextPhase: "sdd-spec",
+			wantSummary: "returned no valid task result", wantModel: "opencode-go/deepseek-v4-flash",
+			forbid: []string{sddEmptySummaryFragment},
+		},
+		{
+			name: "empty design does not replay into spec", scenario: "sdd-design-empty",
+			wantCode: "sdd_task_result_empty", wantPhase: "sdd-design", nextPhase: "sdd-spec",
+			wantSummary: sddEmptySummaryFragment, wantModel: "opencode-go/deepseek-v4-flash",
 		},
 		{name: "unrelated sdd-prefixed agent", scenario: "sdd-unrelated", wantCode: "NO_ERROR"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			parts := strings.Split(runReviewPluginScenario(t, tt.scenario, "unused"), "\n---\n")
-			if len(parts) != 3 {
+			if len(parts) != 4 {
 				t.Fatalf("scenario output = %q", parts)
 			}
 			if !strings.Contains(parts[0], tt.wantCode) {
@@ -323,25 +341,43 @@ func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 			if tt.wantPhase != "" && !strings.Contains(parts[0], tt.wantPhase) {
 				t.Fatalf("failure = %q, want phase %q", parts[0], tt.wantPhase)
 			}
-			if tt.wantBlocked && (!strings.Contains(parts[1], tt.wantCode) || !strings.Contains(parts[1], "Do not retry or advance SDD")) {
-				t.Fatalf("downstream SDD launch was not terminally blocked: %q", parts[1])
-			}
-			if tt.wantBlocked {
+			if tt.nextPhase != "" {
 				assertSDDTaskResultHandoff(t, parts[0], tt.wantCode, tt.wantPhase, tt.wantSummary, tt.wantModel)
-				assertSDDTaskResultHandoff(t, parts[1], tt.wantCode, tt.wantPhase, tt.wantSummary, tt.wantModel)
+				assertSDDTaskResultHandoff(t, parts[1], tt.wantCode, tt.wantPhase, tt.nextPhase+" was not launched", tt.wantModel)
+				if !strings.Contains(parts[1], tt.wantPhase+" previously failed") || !strings.Contains(parts[1], "original failure remains terminal for this parent session") || !strings.Contains(parts[1], "Run `gentle-ai sdd-status") || !strings.Contains(parts[1], "exactly once, surface the prior failure") || !strings.Contains(parts[1], "start a new OpenCode session/conversation") {
+					t.Fatalf("blocked SDD launch does not name truthful recovery: %q", parts[1])
+				}
+				if parts[2] != "NO_ERROR" {
+					t.Fatalf("SDD failure leaked into a different parent session: %q", parts[2])
+				}
 			}
 			for _, leaked := range tt.forbid {
 				if strings.Contains(parts[0], leaked) || strings.Contains(parts[1], leaked) {
 					t.Fatalf("failure handoff leaked %q: %q", leaked, parts[:2])
 				}
 			}
-			if !tt.wantBlocked && parts[1] != "NOT_ATTEMPTED" {
-				t.Fatalf("unrelated agent unexpectedly entered SDD routing: %q", parts[1])
+			if tt.nextPhase == "" && (parts[1] != "NOT_ATTEMPTED" || parts[2] != "NOT_ATTEMPTED") {
+				t.Fatalf("unrelated agent unexpectedly entered SDD routing: %q", parts[1:3])
 			}
-			if parts[2] != "existing artifact" {
-				t.Fatalf("task-result handling mutated the existing artifact: %q", parts[2])
+			if parts[3] != "existing artifact" {
+				t.Fatalf("task-result handling mutated the existing artifact: %q", parts[3])
 			}
 		})
+	}
+}
+
+func TestReviewPluginDisposeClearsSDDSessionFailure(t *testing.T) {
+	parts := strings.Split(runReviewPluginScenario(t, "sdd-lifecycle", "unused"), "\n---\n")
+	if len(parts) != 4 {
+		t.Fatalf("SDD lifecycle outcomes = %q", parts)
+	}
+	assertSDDTaskResultHandoff(t, parts[0], "sdd_task_result_empty", "sdd-propose", sddEmptySummaryFragment, "opencode-go/deepseek-v4-flash")
+	assertSDDTaskResultHandoff(t, parts[1], "sdd_task_result_empty", "sdd-propose", "sdd-propose was not launched", "opencode-go/deepseek-v4-flash")
+	if parts[2] != "NO_ERROR" {
+		t.Fatalf("dispose retained a failed SDD session for its reused ID: %q", parts[2])
+	}
+	if parts[3] != "existing artifact" {
+		t.Fatalf("SDD lifecycle handling mutated the existing artifact: %q", parts[3])
 	}
 }
 
@@ -370,7 +406,7 @@ func assertSDDTaskResultHandoff(t *testing.T, message, code, phase, summary, mod
 	if !strings.Contains(handoff.Summary, summary) {
 		t.Fatalf("failure handoff summary = %q, want it to contain %q", handoff.Summary, summary)
 	}
-	if code == "sdd_task_result_empty" && !strings.Contains(handoff.Summary, sddEmptyCauseFragment) {
+	if code == "sdd_task_result_empty" && summary == sddEmptySummaryFragment && !strings.Contains(handoff.Summary, sddEmptyCauseFragment) {
 		t.Fatalf("empty-result summary does not name the likeliest cause class: %q", handoff.Summary)
 	}
 	if handoff.TaskModel != model {
@@ -383,22 +419,6 @@ func assertSDDTaskResultHandoff(t *testing.T, message, code, phase, summary, mod
 	}
 	if !strings.HasPrefix(handoff.Continuation, "gentle-ai sdd-status --cwd '") || !strings.HasSuffix(handoff.Continuation, "' --json") {
 		t.Fatalf("failure handoff names no runnable sdd-status continuation: %#v", handoff)
-	}
-}
-
-func TestReviewPluginDisposeClearsSDDSessionFailure(t *testing.T) {
-	parts := strings.Split(runReviewPluginScenario(t, "sdd-lifecycle", "unused"), "\n---\n")
-	if len(parts) != 4 {
-		t.Fatalf("SDD lifecycle outcomes = %q", parts)
-	}
-	if !strings.Contains(parts[0], "sdd_task_result_empty") || !strings.Contains(parts[1], "sdd_task_result_empty") {
-		t.Fatalf("SDD failure was not retained before dispose: %q", parts[:2])
-	}
-	if parts[2] != "NO_ERROR" {
-		t.Fatalf("dispose retained a failed SDD session for its reused ID: %q", parts[2])
-	}
-	if parts[3] != "existing artifact" {
-		t.Fatalf("SDD lifecycle handling mutated the existing artifact: %q", parts[3])
 	}
 }
 

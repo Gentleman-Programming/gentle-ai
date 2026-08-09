@@ -518,6 +518,7 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`"sdd_task_result_empty"`,
 		`"sdd_task_result_malformed"`,
 		`failedSDDSessions`,
+		`function blockedSDDTaskFailure(`,
 		`extractionClass(cause, "sddClass")`,
 		// #2677: an empty result means the child produced no output at all
 		// (for example a provider rejection before generation), and the
