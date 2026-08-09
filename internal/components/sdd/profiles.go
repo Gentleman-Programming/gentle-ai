@@ -295,18 +295,9 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 		"prompt":      orchestratorPrompt,
 		"permission": map[string]any{
 			"question": "allow",
+			"bash":     "deny",
 			"task": map[string]any{
 				"__replace__": taskPerms,
-			},
-		},
-		"tools": map[string]any{
-			"__replace__": map[string]any{
-				"read":     true,
-				"write":    true,
-				"edit":     true,
-				"bash":     true,
-				"question": true,
-				"task":     true,
 			},
 		},
 	}
@@ -357,12 +348,6 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 			"hidden":      true,
 			"description": phaseDescriptions[phase],
 			"prompt":      prompt,
-			"tools": map[string]any{
-				"read":  true,
-				"write": true,
-				"edit":  true,
-				"bash":  true,
-			},
 		}
 		// Issue #557: consult fallback when the profile did not set the phase,
 		// so generated *-{name} agents stay consistent with what the user sees
@@ -507,10 +492,6 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": "Adversarial code reviewer — blind judge A for judgment-day protocol",
 			"prompt":      "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
-			"tools": map[string]any{
-				"read": true,
-				"bash": true,
-			},
 		}
 	case "jd-judge-b":
 		return map[string]any{
@@ -518,10 +499,6 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": "Adversarial code reviewer — blind judge B for judgment-day protocol",
 			"prompt":      "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
-			"tools": map[string]any{
-				"read": true,
-				"bash": true,
-			},
 		}
 	case "jd-fix-agent":
 		return map[string]any{
@@ -529,12 +506,6 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": "Surgical fix agent for judgment-day protocol",
 			"prompt":      "You are a judgment-day surgical fix agent. Execute the fix instructions provided in the task prompt exactly. Do NOT delegate further. Fix ONLY the confirmed issues listed — do NOT refactor beyond what is strictly needed.",
-			"tools": map[string]any{
-				"read":  true,
-				"write": true,
-				"edit":  true,
-				"bash":  true,
-			},
 		}
 	default:
 		return map[string]any{
@@ -542,10 +513,6 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"hidden":      true,
 			"description": jd,
 			"prompt":      "Execute the task prompt exactly. Do NOT delegate further.",
-			"tools": map[string]any{
-				"read": true,
-				"bash": true,
-			},
 		}
 	}
 }

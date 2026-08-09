@@ -648,24 +648,15 @@ func TestGenerateProfileOverlay_ToolsUseReplaceSentinel(t *testing.T) {
 
 	agentMap := root["agent"].(map[string]any)
 	orch := agentMap["sdd-orchestrator-cheap"].(map[string]any)
-	toolsWrapper, ok := orch["tools"].(map[string]any)
+	if toolsWrapper, hasTools := orch["tools"]; hasTools {
+		t.Fatalf("sdd-orchestrator-cheap must not carry a tools block (deletion-first migration; permission.bash:deny + read/basic tools inherited from global policy): %#v", toolsWrapper)
+	}
+	permission, ok := orch["permission"].(map[string]any)
 	if !ok {
-		t.Fatal("sdd-orchestrator-cheap tools is not an object")
+		t.Fatal("sdd-orchestrator-cheap permission is not an object")
 	}
-	tools, hasSentinel := toolsWrapper["__replace__"].(map[string]any)
-	if !hasSentinel {
-		t.Fatal("tools block must use __replace__ sentinel to discard legacy delegate tools on sync")
-	}
-
-	for _, required := range []string{"read", "write", "edit", "bash", "task"} {
-		if enabled, _ := tools[required].(bool); !enabled {
-			t.Fatalf("required tool %q missing or disabled: %#v", required, tools)
-		}
-	}
-	for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-		if _, exists := tools[legacyTool]; exists {
-			t.Fatalf("legacy OpenCode tool %q must not be present: %#v", legacyTool, tools)
-		}
+	if bash, _ := permission["bash"].(string); bash != "deny" {
+		t.Fatalf("sdd-orchestrator-cheap permission.bash = %q, want \"deny\"", bash)
 	}
 }
 
