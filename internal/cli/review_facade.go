@@ -2678,42 +2678,6 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		}
 		return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>", reviewFinalizeOutputContext{Context: ctx, Repo: root})
 	}
-	var attempt reviewtransaction.FinalizeAttempt
-	attemptLoaded := false
-	var pendingAtEntry *reviewtransaction.FinalizeAttempt
-	if !terminalAtEntry {
-		pendingAtEntry, err = store.PendingFinalizeAttempt()
-		if err != nil {
-			return err
-		}
-		if index := facadeFinalizeTransitionIndex(pendingAtEntry, record.Revision); index >= 0 {
-			replayEvidence := evidence
-			if len(replayEvidence) == 0 && facadeNativeLowRiskCandidate(state) {
-				replayEvidence, err = prepareFacadeNativeLowRiskVerification(ctx, root, state)
-				if err != nil {
-					return reviewPreflightError(err)
-				}
-			}
-			replayRequest := facadeFinalizeAttemptRequestForCandidate(record, state.CurrentSnapshot, reviewerResults, validation, refuter, replayEvidence, *correctionLines, effectiveFailed, capturedVerification)
-			attempt, attemptLoaded, err = store.ReconcileFinalizeAttempt(ctx, replayRequest)
-			if err != nil {
-				return err
-			}
-			if index == len(attempt.Transitions)-1 {
-				if err := store.CompleteFinalizeAttempt(attempt.Request.RequestDigest); err != nil {
-					return err
-				}
-				return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "continue the current review state", reviewFinalizeOutputContext{Context: ctx, Repo: root})
-			}
-		}
-	}
-	if !terminalAtEntry && pendingAtEntry == nil {
-		if err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateEvidence(ctx, state.CurrentSnapshot); err != nil {
-			// Keep negotiated Git failures classified as preflight/not_started.
-			return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
-				fmt.Errorf("validate FINALIZE current snapshot: %v", err))
-		}
-	}
 	if rawEvidenceSupplied {
 		evidenceState, evidenceRevision := state, record.Revision
 		if state.State == reviewtransaction.StateReviewing {
@@ -2761,6 +2725,42 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		capturedVerification = &captured
 		evidence = captured.Payload
 		effectiveFailed = captured.Record.Outcome != reviewtransaction.VerificationOutcomePassed
+	}
+	var attempt reviewtransaction.FinalizeAttempt
+	attemptLoaded := false
+	var pendingAtEntry *reviewtransaction.FinalizeAttempt
+	if !terminalAtEntry {
+		pendingAtEntry, err = store.PendingFinalizeAttempt()
+		if err != nil {
+			return err
+		}
+		if index := facadeFinalizeTransitionIndex(pendingAtEntry, record.Revision); index >= 0 {
+			replayEvidence := evidence
+			if len(replayEvidence) == 0 && facadeNativeLowRiskCandidate(state) {
+				replayEvidence, err = prepareFacadeNativeLowRiskVerification(ctx, root, state)
+				if err != nil {
+					return reviewPreflightError(err)
+				}
+			}
+			replayRequest := facadeFinalizeAttemptRequestForCandidate(record, state.CurrentSnapshot, reviewerResults, validation, refuter, replayEvidence, *correctionLines, effectiveFailed, capturedVerification)
+			attempt, attemptLoaded, err = store.ReconcileFinalizeAttempt(ctx, replayRequest)
+			if err != nil {
+				return err
+			}
+			if index == len(attempt.Transitions)-1 {
+				if err := store.CompleteFinalizeAttempt(attempt.Request.RequestDigest); err != nil {
+					return err
+				}
+				return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "continue the current review state", reviewFinalizeOutputContext{Context: ctx, Repo: root})
+			}
+		}
+	}
+	if !terminalAtEntry && pendingAtEntry == nil {
+		if err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateEvidence(ctx, state.CurrentSnapshot); err != nil {
+			// Keep negotiated Git failures classified as preflight/not_started.
+			return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
+				fmt.Errorf("validate FINALIZE current snapshot: %v", err))
+		}
 	}
 	plan, err := prepareFacadeFinalizePlan(ctx, root, record.Revision, state, reviewerResults, refuter, validation, evidence, *correctionLines, effectiveFailed, capturedVerification)
 	if err != nil {

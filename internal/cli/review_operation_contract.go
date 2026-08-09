@@ -391,7 +391,7 @@ func reviewOpaqueRetryContextProvided(args []string) bool {
 			return index+1 < len(args)
 		}
 		if strings.HasPrefix(argument, "--repository-context=") {
-			return strings.TrimSpace(strings.TrimPrefix(argument, "--repository-context=")) != ""
+			return true
 		}
 	}
 	return false

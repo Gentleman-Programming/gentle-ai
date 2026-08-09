@@ -50,7 +50,7 @@ const (
 // both name this same runnable command instead of only describing the
 // concept, so they cannot drift from each other.
 const reviewNextTransitionRefreshCommand = "gentle-ai review status --cwd <repo> --contract " + ReviewIntegrationContractV1 + " --next-transition"
-const reviewNextTransitionRefreshCommandV21 = "gentle-ai review status --cwd <repo> --contract " + ReviewIntegrationContractV2 + " --next-transition"
+const reviewNextTransitionRefreshCommandV21 = "gentle-ai review status --cwd <repo> --contract " + ReviewIntegrationContractV2 + " --agent <agent> --next-transition"
 
 var reviewCapabilitiesBuildInfoReader = debug.ReadBuildInfo
 var reviewCapabilitiesExecutablePath = os.Executable

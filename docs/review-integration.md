@@ -60,7 +60,7 @@ gentle-ai review bind-sdd --contract gentle-ai.review-integration/v2 --cwd . --c
 When capabilities advertise `native_next_transition`, the parent orchestrator starts lifecycle routing exactly once with:
 
 ```bash
-gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition
+gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent <agent> --next-transition
 ```
 
 Append a target selector only when its type is already known: `--projection staged`, `--base-ref <ref>`, `--workspace-overlay --base-ref <ref>`, or `--workspace-overlay --base-tree <tree>`. If the feature is unavailable, query exactly once `gentle-ai review capabilities --contract gentle-ai.review-integration/v2` and stop with `unsupported-capability`; do not explore commands or consult help. After bootstrap, only the parent executes the exact native `next_transition`. Reviewers, validators, executors, and refuters receive role inputs and return artifacts; they never invoke review lifecycle commands.
