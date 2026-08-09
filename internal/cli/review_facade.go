@@ -2595,7 +2595,8 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	var evidence []byte
 	var capturedVerification *reviewtransaction.CapturedVerificationEvidence
 	effectiveFailed := *failed
-	if strings.TrimSpace(*evidencePath) != "" {
+	rawEvidenceSupplied := strings.TrimSpace(*evidencePath) != ""
+	if rawEvidenceSupplied {
 		evidence, err = readFacadeBytes(*evidencePath)
 		if err != nil {
 			return reviewPreflightError(fmt.Errorf("read final review evidence: %w", err))
@@ -2675,6 +2676,54 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
 				fmt.Errorf("validate FINALIZE current snapshot: %v", err))
 		}
+	}
+	if rawEvidenceSupplied {
+		evidenceState, evidenceRevision := state, record.Revision
+		if state.State == reviewtransaction.StateReviewing {
+			// The eventual write-ahead journal derives this exact revision from the
+			// same native transition; no authority is written during this preview.
+			preview, previewErr := prepareFacadeFinalizePlan(ctx, root, record.Revision, state, reviewerResults, refuter, validation, evidence, *correctionLines, effectiveFailed, nil)
+			if previewErr != nil {
+				return reviewPreflightError(previewErr)
+			}
+			foundValidating := false
+			for _, transition := range preview.Transitions {
+				if transition.State.State != reviewtransaction.StateValidating {
+					continue
+				}
+				evidenceState = transition.State
+				var revisionErr error
+				evidenceRevision, revisionErr = reviewtransaction.CompactRevisionForState(transition.State)
+				if revisionErr != nil {
+					return reviewPreflightError(fmt.Errorf("derive validating evidence revision: %w", revisionErr))
+				}
+				foundValidating = true
+			}
+			if !foundValidating {
+				return reviewPreflightError(errors.New("raw final review evidence requires a planned validating authority"))
+			}
+		}
+		evidenceTarget, targetErr := facadeVerificationEvidenceTarget(ctx, root, evidenceState, evidenceRevision)
+		if targetErr != nil {
+			return reviewPreflightError(targetErr)
+		}
+		outcome := reviewtransaction.VerificationOutcomePassed
+		if *failed {
+			outcome = reviewtransaction.VerificationOutcomeFailed
+		}
+		if _, publishErr := reviewtransaction.PublishCapturedVerificationEvidence(reviewtransaction.CaptureVerificationEvidenceRequest{
+			StoreDir: store.Dir, LineageID: state.LineageID, AuthorityRevision: evidenceRevision,
+			Target: evidenceTarget, Payload: evidence, Outcome: outcome,
+		}); publishErr != nil {
+			return reviewPreflightError(fmt.Errorf("publish final review evidence: %w", publishErr))
+		}
+		captured, captureErr := reviewtransaction.ReadCapturedVerificationEvidence(store.Dir, state.LineageID, evidenceRevision, evidenceTarget)
+		if captureErr != nil {
+			return reviewPreflightError(fmt.Errorf("read published final review evidence: %w", captureErr))
+		}
+		capturedVerification = &captured
+		evidence = captured.Payload
+		effectiveFailed = captured.Record.Outcome != reviewtransaction.VerificationOutcomePassed
 	}
 	plan, err := prepareFacadeFinalizePlan(ctx, root, record.Revision, state, reviewerResults, refuter, validation, evidence, *correctionLines, effectiveFailed, capturedVerification)
 	if err != nil {
