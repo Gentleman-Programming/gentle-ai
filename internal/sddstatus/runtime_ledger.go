@@ -342,6 +342,18 @@ type RuntimeStatus struct {
 	Receipt *reviewtransaction.SDDReceiptRef `json:"receipt,omitempty"`
 }
 
+// SliceAssignment is the per-objective obligation projection (Requirement:
+// Provider-Owned Slice Identity): the content-addressed RuntimeObjective.ID
+// plus the assignment IDs that bound it. Projected during replay so a
+// downstream validator (PR2) can compare report metadata against the bound
+// assignment without re-walking the chain. The SliceID IS the identity; the
+// rule is exhaustive, not configurable.
+type SliceAssignment struct {
+	SliceID        string
+	RequirementIDs []string
+	ScenarioIDs    []string
+}
+
 type BeginAttemptRequest struct {
 	ExpectedRevision             string   `json:"expected_revision"`
 	RequestID                    string   `json:"request_id"`
@@ -656,6 +668,11 @@ type runtimeReplay struct {
 	// S5): applyRuntimeGrantEvent projects a grant into GrantedRoots only
 	// when the record's identity equals this one. Empty projects nothing.
 	Instance string
+	// Assignments is the supersede-projected SliceAssignment list (design
+	// D6): the live objective plus any advance-predecessor whose assignment
+	// was bound, with rescope ancestors and reset predecessors excluded.
+	// Populated by the apply functions; read via RuntimeStore.SliceAssignments.
+	Assignments []SliceAssignment
 }
 
 func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, error) {
@@ -781,7 +798,15 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			generation = status.Objective.Generation
 			if request.WorkUnit != status.Objective.WorkUnit || request.EvidenceGoal != status.Objective.EvidenceGoal ||
 				request.MaxAttempts != status.Objective.MaxAttempts ||
-				request.MaxChangedLines != status.Objective.MaxChangedLines {
+				request.MaxChangedLines != status.Objective.MaxChangedLines ||
+				// The assignment is part of the objective's immutable scope
+				// (Requirement: Immutable Obligation ID Assignment): an altered
+				// or silently-unbound assignment is a changed objective, not a
+				// continuing attempt, so it must take the same refusal path
+				// (`reset` or `rescope`) as any other scope change.
+				!runtimeAssignmentFieldsEqual(
+					request.ObligationAssignmentExplicit, request.AssignedRequirementIDs, request.AssignedScenarioIDs,
+					status.Objective.ObligationAssignmentExplicit, status.Objective.AssignedRequirementIDs, status.Objective.AssignedScenarioIDs) {
 				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 			}
 			last := status.Attempts[len(status.Attempts)-1]
@@ -806,7 +831,10 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			generation = status.Objective.Generation
 			if request.WorkUnit != status.Objective.WorkUnit || request.EvidenceGoal != status.Objective.EvidenceGoal ||
 				request.MaxAttempts != status.Objective.MaxAttempts ||
-				request.MaxChangedLines != status.Objective.MaxChangedLines {
+				request.MaxChangedLines != status.Objective.MaxChangedLines ||
+				!runtimeAssignmentFieldsEqual(
+					request.ObligationAssignmentExplicit, request.AssignedRequirementIDs, request.AssignedScenarioIDs,
+					status.Objective.ObligationAssignmentExplicit, status.Objective.AssignedRequirementIDs, status.Objective.AssignedScenarioIDs) {
 				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 			}
 			snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
@@ -1495,6 +1523,17 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 				status, "--max-attempts", request.MaxAttempts, objective.MaxAttempts,
 			)
 		}
+		// D4 obligation assignment (Requirement: Immutable Obligation ID
+		// Assignment / Scenario: Rescope carries forward or reassigns): the
+		// marker is part of the objective's scope. Equal is carry-forward,
+		// a proper subset is narrowing reassign, a widen or a silent un-bind
+		// (bound previous + absent flags) or a silent bind (unbound previous
+		// + present flags) all fail closed -- the same changed-objective
+		// refusal the budget checks above route through, because a rescope
+		// that re-shaped the assignment is a different objective.
+		if !runtimeRescopeAssignmentAdmissible(request, objective) {
+			return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+		}
 		// The zero-drift `drift` snapshot above was captured with
 		// TargetBaseWorkspaceOverlay (same Kind/BaseRef Finish itself used),
 		// so its Identity is only comparable against another
@@ -1959,6 +1998,11 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 			event.PreviousGeneration != replay.Status.ObjectiveGeneration {
 			return errors.New("objective reset does not match the terminal objective")
 		}
+		// Reset excludes the predecessor from the slice projection: the
+		// maintained abandonment erases the previous slice identity, and a
+		// reconstructed successor is a different objective that must bind
+		// its own assignment. D6.
+		discardBoundObjective(&replay.Assignments, objective.ID)
 		replay.Status.Objective = nil
 		replay.Status.CumulativeAttempts = 0
 		replay.Status.CumulativeChangedLines = 0
@@ -2034,6 +2078,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 			AssignedScenarioIDs:          append([]string(nil), event.AssignedScenarioIDs...),
 		}
 		replay.Status.ObjectiveGeneration = generation
+		projectBoundObjective(&replay.Assignments, replay.Status.Objective)
 	} else {
 		objective := replay.Status.Objective
 		if event.ObjectiveID != objective.ID || generation != objective.Generation || event.EvidenceGoal != objective.EvidenceGoal ||
@@ -2140,6 +2185,10 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 	if generation != replay.Status.ObjectiveGeneration+1 || event.ObjectiveID != expectedObjectiveID {
 		return errors.New("objective rescope identity is invalid") // refusal:by-design world-action: the successor identity is derived deterministically at publication, so a mismatch is a mutated record and the exit is restoring the store
 	}
+	// Rescope supersedes the predecessor: the predecessor's slice
+	// identity is excluded from the projection, and the new (narrower)
+	// successor takes its place when its assignment is bound. D6.
+	discardBoundObjective(&replay.Assignments, objective.ID)
 	replay.Status.Objective = &RuntimeObjective{
 		ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 		InitialCandidateIdentity: event.RescopeCandidateIdentity, InitialCandidateTree: event.RescopeCandidateTree,
@@ -2149,6 +2198,7 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 		AssignedScenarioIDs:          append([]string(nil), event.AssignedScenarioIDs...),
 	}
 	replay.Status.ObjectiveGeneration = generation
+	projectBoundObjective(&replay.Assignments, replay.Status.Objective)
 	replay.Status.EvidenceRevision = ""
 	replay.Status.DecisionRequired = false
 	replay.Status.Complete = false
@@ -2675,6 +2725,97 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 
 func runtimeAssignmentFieldsEqual(explicitA bool, requirementsA, scenariosA []string, explicitB bool, requirementsB, scenariosB []string) bool {
 	return explicitA == explicitB && slices.Equal(requirementsA, requirementsB) && slices.Equal(scenariosA, scenariosB)
+}
+
+// runtimeRescopeAssignmentAdmissible enforces the D4 subset rule that pins an
+// obligation assignment to the new (narrower) scope without ever silently
+// un-binding a bound predecessor or silently binding an unbound one. Equal
+// IDs are a carry-forward, a strict subset is a narrowing reassignment, and
+// any widen, altered membership, or marker-only flip is refused.
+func runtimeRescopeAssignmentAdmissible(request RescopeObjectiveRequest, objective *RuntimeObjective) bool {
+	if request.ObligationAssignmentExplicit != objective.ObligationAssignmentExplicit {
+		return false
+	}
+	if !request.ObligationAssignmentExplicit {
+		return true
+	}
+	return runtimeIDsAreSubsetOrEqual(request.AssignedRequirementIDs, objective.AssignedRequirementIDs) &&
+		runtimeIDsAreSubsetOrEqual(request.AssignedScenarioIDs, objective.AssignedScenarioIDs)
+}
+
+// runtimeIDsAreSubsetOrEqual reports whether every element of smaller appears
+// in larger. Equal slices return true (carry-forward); a strict subset returns
+// true (narrowing reassignment); any element not in larger fails closed.
+func runtimeIDsAreSubsetOrEqual(smaller, larger []string) bool {
+	if len(smaller) > len(larger) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(larger))
+	for _, id := range larger {
+		seen[id] = struct{}{}
+	}
+	for _, id := range smaller {
+		if _, ok := seen[id]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// projectBoundObjective adds the slice's bound assignment to the chain
+// projection if and only if the marker is true. Unbound objectives are
+// excluded (Requirement: Provider-Owned Slice Identity -- no slice identity
+// exists for an objective that did not bind one).
+func projectBoundObjective(assignments *[]SliceAssignment, objective *RuntimeObjective) {
+	if objective == nil || !objective.ObligationAssignmentExplicit {
+		return
+	}
+	for _, existing := range *assignments {
+		if existing.SliceID == objective.ID {
+			return
+		}
+	}
+	*assignments = append(*assignments, SliceAssignment{
+		SliceID:        objective.ID,
+		RequirementIDs: append([]string(nil), objective.AssignedRequirementIDs...),
+		ScenarioIDs:    append([]string(nil), objective.AssignedScenarioIDs...),
+	})
+}
+
+// discardBoundObjective removes the predecessor from the projection. Used by
+// reset (predecessor excluded) and rescope (predecessor excluded); advance
+// does NOT call this -- the advance-predecessor is retained so an upstream
+// slice's earned credit is overlap-protected (design D6).
+func discardBoundObjective(assignments *[]SliceAssignment, objectiveID string) {
+	for index, existing := range *assignments {
+		if existing.SliceID == objectiveID {
+			*assignments = append((*assignments)[:index], (*assignments)[index+1:]...)
+			return
+		}
+	}
+}
+
+// SliceAssignments returns the supersede-projected slice list (design D6):
+// the live bound objective plus any advance-predecessor whose assignment
+// was bound, with rescope ancestors and reset predecessors already excluded.
+// Unbound objectives are excluded by definition. The result is suitable for
+// overlap / duplicate-coverage detection in the slice-scoped verify validator
+// (PR2); the runtime ledger never re-orders the immutable chain, so the
+// projection is stable as long as the chain itself is.
+func (store RuntimeStore) SliceAssignments() ([]SliceAssignment, error) {
+	replay, err := store.load()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SliceAssignment, len(replay.Assignments))
+	for index, assignment := range replay.Assignments {
+		out[index] = SliceAssignment{
+			SliceID:        assignment.SliceID,
+			RequirementIDs: append([]string(nil), assignment.RequirementIDs...),
+			ScenarioIDs:    append([]string(nil), assignment.ScenarioIDs...),
+		}
+	}
+	return out, nil
 }
 
 func normalizeRuntimeAssignmentFields(explicit bool, requirements, scenarios []string) ([]string, []string, error) {

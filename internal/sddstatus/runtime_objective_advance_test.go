@@ -255,3 +255,87 @@ func TestCompactAcquireStaysCompleteForTheSettledWorkUnit(t *testing.T) {
 		t.Fatalf("settled-scope acquire = %#v records=%d", result, countRuntimeRecords(t, fixture.store.Dir))
 	}
 }
+
+// #2268 advance variant: a passed bound apply objective hands the chain to a
+// distinct bound verification objective with a DISJOINT assignment. Each
+// objective retains its own assignment (#2268 Requirement: Immutable
+// Obligation ID Assignment) and the advance's replay re-projects the
+// predecessor into the SliceAssignments list (design D6). Two identical
+// advance replays must produce the same digest without altering either
+// objective's bound assignment.
+func TestAdvanceVariantDisjointBoundAssignmentsIdempotent(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "advance-disjoint-assign")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "advance-apply-begin", WorkUnit: advanceApplyWorkUnit,
+		EvidenceGoal: advanceApplyGoal, MaxAttempts: advanceApplyMaxAttempts, MaxChangedLines: advanceApplyMaxLines,
+		ObligationAssignmentExplicit: true,
+		AssignedRequirementIDs:       []string{"REQ-1"},
+		AssignedScenarioIDs:          []string{"S1", "S2"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	passed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "advance-apply-finish", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('a'), Diagnosis: "apply gates passed",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "apply cleanup completed",
+		ProcessEvidence: "apply process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := countRuntimeRecords(t, store.Dir)
+
+	verifyRequest := BeginAttemptRequest{
+		ExpectedRevision: passed.Revision, RequestID: "advance-verify-begin", WorkUnit: advanceVerifyWorkUnit,
+		EvidenceGoal: advanceVerifyGoal, MaxAttempts: advanceVerifyMaxAttempts, MaxChangedLines: advanceVerifyMaxLines,
+		ObligationAssignmentExplicit: true,
+		AssignedRequirementIDs:       []string{"REQ-2"},
+		AssignedScenarioIDs:          []string{"S3"},
+	}
+	advanced, err := store.Begin(context.Background(), verifyRequest)
+	if err != nil {
+		t.Fatalf("distinct bound verification was refused after a passed apply: %v", err)
+	}
+	if !advanced.Objective.ObligationAssignmentExplicit ||
+		len(advanced.Objective.AssignedRequirementIDs) != 1 ||
+		advanced.Objective.AssignedRequirementIDs[0] != "REQ-2" {
+		t.Fatalf("successor lost its bound assignment: %#v", advanced.Objective)
+	}
+	if passed.Objective == nil || !passed.Objective.ObligationAssignmentExplicit ||
+		passed.Objective.AssignedRequirementIDs[0] != "REQ-1" {
+		t.Fatalf("predecessor lost its bound assignment: %#v", passed.Objective)
+	}
+
+	assignments, err := store.SliceAssignments()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assignments) != 2 {
+		t.Fatalf("advance did not retain the bound predecessor: assignments=%#v", assignments)
+	}
+	gotIDs := map[string]bool{}
+	for _, entry := range assignments {
+		gotIDs[entry.SliceID] = true
+	}
+	if !gotIDs[passed.Objective.ID] || !gotIDs[advanced.Objective.ID] {
+		t.Fatalf("projection lost the advance-predecessor or the current slice: %v", gotIDs)
+	}
+
+	replayed, err := store.Begin(context.Background(), verifyRequest)
+	if err != nil || replayed.Revision != advanced.Revision ||
+		countRuntimeRecords(t, store.Dir) != before+1 {
+		t.Fatalf("advance replay = %#v err=%v records=%d", replayed, err, countRuntimeRecords(t, store.Dir))
+	}
+	reassignments, err := store.SliceAssignments()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reassignments) != 2 {
+		t.Fatalf("advance replay changed the projection: assignments=%#v", reassignments)
+	}
+}

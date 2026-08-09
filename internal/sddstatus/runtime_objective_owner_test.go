@@ -46,4 +46,16 @@ func TestRuntimeObjectiveIsSoleWorkUnitScopeOwner(t *testing.T) {
 	if !embedded {
 		t.Fatal("CompactAcquireRequest must embed BeginAttemptRequest anonymously — BeginAttemptRequest is the single work-unit-scope owner per decision 9")
 	}
+	// #2268: the obligation assignment fields belong to BeginAttemptRequest
+	// (Requirement: Provider-Owned Slice Identity). If any of them are
+	// missing, the guard above is silently out of date -- a future change
+	// could add the field to BeginAttemptRequest without tripping the
+	// redeclaration check, so pin the field names here.
+	for _, expected := range []string{
+		"ObligationAssignmentExplicit", "AssignedRequirementIDs", "AssignedScenarioIDs",
+	} {
+		if !beginFieldNames[expected] {
+			t.Fatalf("BeginAttemptRequest missing %q -- the slice identity is incomplete without it", expected)
+		}
+	}
 }
