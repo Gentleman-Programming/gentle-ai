@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -755,6 +756,7 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review status", stdout, "Read every compact-v2 and shipped legacy-v1 authority from the shared Git common directory without mutation.")
 	cwd := flags.String("cwd", ".", "repository path")
+	repositoryContext := flags.String("repository-context", "", "provider-issued opaque repository context")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
 	runtimeAgent := flags.String("agent", "", "generated active runtime identity for negotiated lifecycle routing")
 	actionEligibility := flags.Bool("action-eligibility", false, "include optional machine-readable review action eligibility in negotiated output")
@@ -787,6 +789,16 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	}
 	if flags.NArg() != 0 {
 		return reviewPreflightError(fmt.Errorf("unexpected review status argument %q", flags.Arg(0)))
+	}
+	if strings.TrimSpace(*repositoryContext) != "" {
+		if *contract != ReviewIntegrationContractV2 || !reviewFlagWasProvided(flags, "contract") || reviewOpaqueStatusSelectorProvided(flags) {
+			return reviewPreflightError(errors.New("opaque review status requires only --repository-context with the v2 contract and cannot combine repository selectors"))
+		}
+		root, binding, contextErr := reviewtransaction.ResolveReviewRepositoryContextBinding(ctx, *repositoryContext)
+		if contextErr != nil {
+			return reviewRepositoryContextResolutionFailure(contextErr)
+		}
+		*cwd, *lineage = root, binding.LineageID
 	}
 	committedOnlyProvided := reviewFlagWasProvided(flags, "committed-only")
 	if *contract != "" {
@@ -973,7 +985,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								result.ValidationRequest = validationRequest
 							}
 						}
-						if *contract == ReviewIntegrationContractV2 && (record.State.State == reviewtransaction.StateCorrectionRequired || record.State.State == reviewtransaction.StateValidating) {
+						if *contract == ReviewIntegrationContractV2 && (record.State.State == reviewtransaction.StateCorrectionRequired || record.State.State == reviewtransaction.StateValidating || result.Action == reviewtransaction.TargetStatusActionRetryFinalVerification) {
 							contextTarget := record.State.CurrentSnapshot.Identity
 							if validationRequest != nil {
 								contextTarget = validationRequest.CorrectionTargetIdentity
@@ -1077,6 +1089,20 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		return fmt.Errorf("inventory review authority: %w", err)
 	}
 	return encodeReviewJSON(stdout, report)
+}
+
+var reviewOpaqueStatusSelectorFlags = []string{
+	"cwd", "lineage", "projection", "base-ref", "base-tree", "committed-only", "workspace-overlay",
+	"untracked-scope", "intended-untracked", "expected-untracked-inventory",
+}
+
+func reviewOpaqueStatusSelectorProvided(flags *flag.FlagSet) bool {
+	for _, name := range reviewOpaqueStatusSelectorFlags {
+		if reviewFlagWasProvided(flags, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func RunReviewRecover(args []string, stdout io.Writer) error {

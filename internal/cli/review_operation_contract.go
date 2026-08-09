@@ -87,9 +87,9 @@ var reviewIntegrationOperationRegistry = []reviewIntegrationOperationMetadata{
 	// take, and metadata nothing exercises is metadata nothing keeps honest.
 	{Command: "recover", Operation: "review.recover", Label: "Review RECOVER"},
 	{Command: "repair", Operation: "review.repair", Label: "Review REPAIR", Negotiated: true, ValueFlags: []string{"cwd", "class", "lineage", "expected-revision", "cause", "disposition", "repository-binding", "actor", "reason", "maintainer-authorization"}, BoolFlags: []string{"preflight"}, MutatesAuthority: true, JoinOnTimeout: true, ReadOnlyFlag: "preflight"},
-	{Command: "retry-final-verification", Operation: ReviewIntegrationOperationRetryFinalVerification, Label: "Review RETRY-FINAL-VERIFICATION", Negotiated: true, ValueFlags: []string{"cwd", "predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "incident", "actor", "reason", "maintainer-authorization"}, MutatesAuthority: true, JoinOnTimeout: true},
+	{Command: "retry-final-verification", Operation: ReviewIntegrationOperationRetryFinalVerification, Label: "Review RETRY-FINAL-VERIFICATION", Negotiated: true, ValueFlags: []string{"cwd", "predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "incident", "actor", "reason", "maintainer-authorization", "repository-context", "consent"}, MutatesAuthority: true, JoinOnTimeout: true},
 	{Command: "start", Operation: "review.start", Label: "Review START", Negotiated: true, ValueFlags: []string{"cwd", "agent", "target", "lineage", "policy", "focus", "base-ref", "projection", "trace", "consent", "locale", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},
-	{Command: "status", Operation: "review.status", Label: "Review STATUS", Negotiated: true, ValueFlags: []string{"cwd", "agent", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay", "action-eligibility", "next-transition"}},
+	{Command: "status", Operation: "review.status", Label: "Review STATUS", Negotiated: true, ValueFlags: []string{"cwd", "repository-context", "agent", "lineage", "projection", "base-ref", "base-tree", "gate", "recovery-successor-lineage", "recovery-reason", "recovery-actor", "recovery-authorization", "repair-actor", "repair-reason", "repair-authorization", "untracked-scope", "intended-untracked", "expected-untracked-inventory"}, BoolFlags: []string{"committed-only", "workspace-overlay", "action-eligibility", "next-transition"}},
 	{Command: "validate", Operation: ReviewIntegrationOperationValidate, Label: "Review VALIDATE", Negotiated: true, ValueFlags: []string{"cwd", "lineage", "gate", "base-ref", "pre-pr-ci-attestation", "policy", "release-configuration", "release-generated", "release-provenance", "release-publication-boundary", "release-evidence-freshness"}},
 }
 
@@ -357,7 +357,11 @@ func reviewIntegrationFailureRoute(args []string) (string, bool, *ReviewIntegrat
 	}
 	operation := metadata.Operation
 	provided, contract, missing := reviewIntegrationContractArgument(args[1:])
+	opaqueRetry := operation == ReviewIntegrationOperationRetryFinalVerification && reviewOpaqueRetryContextProvided(args[1:])
 	if args[0] != "capabilities" && !provided {
+		if opaqueRetry {
+			return operation, true, nil
+		}
 		return operation, false, nil
 	}
 	if !provided {
@@ -379,6 +383,18 @@ func reviewIntegrationFailureRoute(args []string) (string, bool, *ReviewIntegrat
 		return operation, true, &failure
 	}
 	return operation, true, nil
+}
+
+func reviewOpaqueRetryContextProvided(args []string) bool {
+	for index, argument := range args {
+		if argument == "--repository-context" {
+			return index+1 < len(args)
+		}
+		if strings.HasPrefix(argument, "--repository-context=") {
+			return strings.TrimSpace(strings.TrimPrefix(argument, "--repository-context=")) != ""
+		}
+	}
+	return false
 }
 
 func reviewIntegrationContractArgument(args []string) (provided bool, value string, missing bool) {
@@ -418,7 +434,8 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		MutationOutcome: ReviewMutationUnknown, AuthorityApplicability: "not_evaluated", RetrySafe: false,
 		Replayability: reviewtransaction.ReplayabilityStatusRequired, RequiredInputs: []string{}, NextAction: "review.status",
 	}
-	if provided, contract, _ := reviewIntegrationContractArgument(args); provided && contract == ReviewIntegrationContractV2 {
+	if provided, contract, _ := reviewIntegrationContractArgument(args); provided && contract == ReviewIntegrationContractV2 ||
+		operation == ReviewIntegrationOperationRetryFinalVerification && reviewOpaqueRetryContextProvided(args) {
 		failure.Schema, failure.Contract = ReviewIntegrationFailureSchemaV2, ReviewIntegrationContractV2
 	}
 	failure.LineageID = safeReviewIntegrationLineage(operation, args)
@@ -1511,11 +1528,15 @@ func (result ReviewIntegrationOperationResult) Validate() error {
 		}
 	case ReviewIntegrationOperationRetryFinalVerification:
 		var retried ReviewFinalVerificationRetryResult
-		if err := decodeStrictReviewIntegrationResult(result.Result, &retried); err != nil {
-			return err
-		}
-		if err := retried.Validate(); err != nil {
-			return err
+		if err := decodeStrictReviewIntegrationResult(result.Result, &retried); err == nil {
+			if err := retried.Validate(); err != nil {
+				return err
+			}
+		} else {
+			var declined ReviewFinalVerificationRetryConsentResult
+			if declineErr := decodeStrictReviewIntegrationResult(result.Result, &declined); declineErr != nil || declined.Validate() != nil {
+				return err
+			}
 		}
 	default:
 		return fmt.Errorf("unsupported negotiated review operation %q", result.Operation)

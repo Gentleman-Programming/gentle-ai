@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -164,6 +165,239 @@ func TestReviewRetryFinalVerificationCorrectedRestartUsesFrozenAuthorityTarget(t
 	if finalized.State != reviewtransaction.StateApproved {
 		t.Fatalf("corrected retry final state = %#v", finalized)
 	}
+}
+
+func TestStatusFinalVerificationRetryProjectsOpaqueConsentEnvelope(t *testing.T) {
+	fixture := failedFinalVerificationCLIFixture(t)
+	var output bytes.Buffer
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition", "--cwd", fixture.repo, "--lineage", fixture.predecessor.State.LineageID}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	decodeStrictReviewJSON(t, output.Bytes(), &payload)
+	transition := payload["next_transition"].(map[string]any)
+	collection := transition["collect"].(map[string]any)
+	consent, ok := collection["consent"].(map[string]any)
+	if !ok || consent["schema"] != "gentle-ai.review-final-verification-retry-consent/v1" {
+		t.Fatalf("retry STATUS did not project a typed consent envelope: %#v", collection)
+	}
+	transitionPayload, err := json.Marshal(transition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateAgainstPublishedNextTransitionSchemaV5(t, transitionPayload)
+	choices := consent["choices"].([]any)
+	if len(choices) != 2 || choices[0].(map[string]any)["answer"] != "granted" || choices[1].(map[string]any)["answer"] != "declined" {
+		t.Fatalf("retry consent choices = %#v", choices)
+	}
+	for _, choice := range choices {
+		invocation := choice.(map[string]any)["invocation"].(string)
+		if !strings.Contains(invocation, "gentle-ai review retry-final-verification --repository-context rctx1_") || !strings.Contains(invocation, " --consent "+choice.(map[string]any)["answer"].(string)) {
+			t.Fatalf("retry consent invocation = %q", invocation)
+		}
+	}
+	offPath := consent["off_path"].(map[string]any)["command"].(string)
+	if !strings.Contains(offPath, "--contract gentle-ai.review-integration/v2 --agent opencode --next-transition --repository-context rctx1_") || strings.Contains(offPath, fixture.repo) {
+		t.Fatalf("retry consent off-path = %q", offPath)
+	}
+	parts := strings.Fields(offPath)
+	oldWorkingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWorkingDirectory) })
+	var rechecked bytes.Buffer
+	if err := RunReview(parts[2:], &rechecked); err != nil {
+		t.Fatalf("off-path STATUS outside repository: %v\n%s", err, rechecked.String())
+	}
+	if !strings.Contains(rechecked.String(), ReviewFinalVerificationRetryConsentSchema) || strings.Contains(rechecked.String(), fixture.repo) {
+		t.Fatalf("off-path STATUS projection = %s", rechecked.String())
+	}
+}
+
+func TestOpaqueStatusRejectsEveryExternalSelector(t *testing.T) {
+	fixture := failedFinalVerificationCLIFixture(t)
+	context := finalVerificationRetryContext(t, fixture)
+	base := []string{"status", "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition", "--repository-context", context}
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "cwd", args: []string{"--cwd", fixture.repo}},
+		{name: "lineage", args: []string{"--lineage", fixture.predecessor.State.LineageID}},
+		{name: "projection", args: []string{"--projection", "staged"}},
+		{name: "base ref", args: []string{"--base-ref", "HEAD"}},
+		{name: "base tree", args: []string{"--base-tree", strings.Repeat("a", 40)}},
+		{name: "committed only", args: []string{"--committed-only"}},
+		{name: "workspace overlay", args: []string{"--workspace-overlay"}},
+		{name: "untracked scope", args: []string{"--untracked-scope", "select"}},
+		{name: "intended untracked", args: []string{"--intended-untracked", "tracked.txt"}},
+		{name: "untracked inventory", args: []string{"--expected-untracked-inventory", "sha256:" + strings.Repeat("a", 64)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := cliReviewAuthoritySnapshot(t, fixture.repo)
+			var output bytes.Buffer
+			err := RunReview(append(append([]string{}, base...), tt.args...), &output)
+			if err == nil {
+				t.Fatalf("opaque STATUS selector error = %v\n%s", err, output.String())
+			}
+			var failure ReviewIntegrationFailure
+			decodeStrictReviewJSON(t, output.Bytes(), &failure)
+			if failure.Schema != ReviewIntegrationFailureSchemaV2 || failure.Contract != ReviewIntegrationContractV2 ||
+				failure.MutationOutcome != ReviewMutationNotStarted || !strings.Contains(failure.Cause, "cannot combine repository selectors") {
+				t.Fatalf("opaque STATUS selector failure = %#v", failure)
+			}
+			if after := cliReviewAuthoritySnapshot(t, fixture.repo); !reflect.DeepEqual(after, before) {
+				t.Fatalf("opaque STATUS selector mutated authority: %#v != %#v", after, before)
+			}
+		})
+	}
+}
+
+func TestFinalVerificationRetryConsentGrantIsExactAndOneShot(t *testing.T) {
+	fixture := failedFinalVerificationCLIFixture(t)
+	context := finalVerificationRetryContext(t, fixture)
+	args := []string{"retry-final-verification", "--repository-context", context, "--consent", "granted"}
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("grant opaque retry consent: %v\n%s", err, output.String())
+	}
+	var first ReviewFinalVerificationRetryResult
+	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &first)
+	if first.PredecessorLineageID != fixture.predecessor.State.LineageID || first.PredecessorRevision != fixture.predecessor.Revision || first.State != reviewtransaction.StateValidating {
+		t.Fatalf("grant result = %#v", first)
+	}
+	var replay bytes.Buffer
+	if err := RunReview(args, &replay); err != nil {
+		t.Fatalf("exact consent replay: %v\n%s", err, replay.String())
+	}
+	var second ReviewFinalVerificationRetryResult
+	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, replay.Bytes()).Result, &second)
+	if second.LineageID != first.LineageID || second.StoreRevision != first.StoreRevision {
+		t.Fatalf("one-shot replay = %#v, want %#v", second, first)
+	}
+	beforeDecline := cliReviewAuthoritySnapshot(t, fixture.repo)
+	var declinedOutput bytes.Buffer
+	err := RunReview([]string{"retry-final-verification", "--repository-context", context, "--consent", "declined"}, &declinedOutput)
+	if err == nil {
+		t.Fatalf("decline after grant error = %v", err)
+	}
+	var failure ReviewIntegrationFailure
+	decodeStrictReviewJSON(t, declinedOutput.Bytes(), &failure)
+	if failure.Schema != ReviewIntegrationFailureSchemaV2 || failure.Contract != ReviewIntegrationContractV2 ||
+		failure.MutationOutcome != ReviewMutationNotStarted || failure.Operation != ReviewIntegrationOperationRetryFinalVerification {
+		t.Fatalf("decline after grant did not produce a typed v2 refusal: %#v", failure)
+	}
+	if !strings.Contains(failure.Cause, "already consumed by grant") {
+		t.Fatalf("decline after grant cause = %#v", failure)
+	}
+	if afterDecline := cliReviewAuthoritySnapshot(t, fixture.repo); !reflect.DeepEqual(afterDecline, beforeDecline) {
+		t.Fatalf("decline after grant mutated authority: %#v != %#v", afterDecline, beforeDecline)
+	}
+}
+
+func TestFinalVerificationRetryConsentDeclineIsExactAndNonMutating(t *testing.T) {
+	fixture := failedFinalVerificationCLIFixture(t)
+	context := finalVerificationRetryContext(t, fixture)
+	before := cliReviewAuthoritySnapshot(t, fixture.repo)
+	var output bytes.Buffer
+	if err := RunReview([]string{"retry-final-verification", "--repository-context", context, "--consent", "declined"}, &output); err != nil {
+		t.Fatalf("decline opaque retry consent: %v\n%s", err, output.String())
+	}
+	var result map[string]any
+	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &result)
+	if result["disposition"] != "declined" {
+		t.Fatalf("decline result = %#v", result)
+	}
+	if after := cliReviewAuthoritySnapshot(t, fixture.repo); !reflect.DeepEqual(after, before) {
+		t.Fatalf("decline mutated authority: %#v != %#v", after, before)
+	}
+	var repeated bytes.Buffer
+	if err := RunReview([]string{"retry-final-verification", "--repository-context", context, "--consent", "declined"}, &repeated); err != nil {
+		t.Fatalf("repeat eligible decline: %v\n%s", err, repeated.String())
+	}
+	if repeated.String() != output.String() {
+		t.Fatalf("repeat decline result changed:\nfirst=%s\nsecond=%s", output.String(), repeated.String())
+	}
+}
+
+func TestFinalVerificationRetryConsentNeverGrantsInvalidSource(t *testing.T) {
+	t.Run("stale repository context", func(t *testing.T) {
+		fixture := failedFinalVerificationCLIFixture(t)
+		before := cliReviewAuthoritySnapshot(t, fixture.repo)
+		context := finalVerificationRetryContext(t, fixture)
+		stale := context[:len(context)-1] + "0"
+		if stale == context {
+			stale = context[:len(context)-1] + "1"
+		}
+		if err := RunReview([]string{"retry-final-verification", "--repository-context", stale, "--consent", "granted"}, io.Discard); err == nil {
+			t.Fatal("stale repository context granted retry")
+		}
+		if after := cliReviewAuthoritySnapshot(t, fixture.repo); !reflect.DeepEqual(after, before) {
+			t.Fatalf("stale context mutated authority: %#v != %#v", after, before)
+		}
+	})
+	t.Run("wrong candidate", func(t *testing.T) {
+		fixture := failedFinalVerificationCLIFixture(t)
+		if err := os.WriteFile(filepath.Join(fixture.repo, "tracked.txt"), []byte("different candidate\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		other := startFacadeReview(t, fixture.repo)
+		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), fixture.repo, other.LineageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		handle, err := reviewtransaction.PublishReviewRepositoryContext(context.Background(), fixture.repo, reviewtransaction.ReviewRepositoryContextBinding{
+			LineageID: record.State.LineageID, Revision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := cliReviewAuthoritySnapshot(t, fixture.repo)
+		if err := RunReview([]string{"retry-final-verification", "--repository-context", handle, "--consent", "granted"}, io.Discard); err == nil {
+			t.Fatal("wrong candidate context granted retry")
+		}
+		if after := cliReviewAuthoritySnapshot(t, fixture.repo); !reflect.DeepEqual(after, before) {
+			t.Fatalf("wrong candidate mutated authority: %#v != %#v", after, before)
+		}
+	})
+	t.Run("non-procedural failure", func(t *testing.T) {
+		fixture := prepareFacadeRawFailedEvidence(t)
+		evidence := filepath.Join(t.TempDir(), "verification-failed.txt")
+		if err := os.WriteFile(evidence, []byte("verification failed\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := RunReviewFacadeFinalize([]string{"--cwd", fixture.repo, "--lineage", fixture.started.LineageID, "--evidence", evidence, "--failed"}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		var status bytes.Buffer
+		if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition", "--cwd", fixture.repo, "--lineage", fixture.started.LineageID}, &status); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(status.String(), ReviewFinalVerificationRetryConsentSchema) {
+			t.Fatalf("non-procedural failure exposed retry consent:\n%s", status.String())
+		}
+	})
+}
+
+func finalVerificationRetryContext(t *testing.T, fixture failedFinalVerificationCLI) string {
+	t.Helper()
+	handle, err := reviewtransaction.PublishReviewRepositoryContext(context.Background(), fixture.repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: fixture.predecessor.State.LineageID, Revision: fixture.predecessor.Revision,
+		TargetIdentity: fixture.predecessor.State.CurrentSnapshot.Identity,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handle
 }
 
 func TestReviewRetryFinalVerificationNegotiatedDenialIsNoMutation(t *testing.T) {
