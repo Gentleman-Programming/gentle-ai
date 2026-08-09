@@ -129,7 +129,7 @@ func shadowBaseAdvanceApplies(input shadowRelationInput) bool {
 	proof := input.BaseAdvance
 	return proof != nil && proof.valid() &&
 		proof.OriginalMergeBaseTree == input.Frozen.BaseTree &&
-		proof.NewBaseTree == input.Live.BaseTree &&
+		(proof.OriginalMergeBaseTree == input.Live.BaseTree || proof.NewBaseTree == input.Live.BaseTree) &&
 		input.Frozen.CandidateTree == input.Live.CandidateTree
 }
 

@@ -8,10 +8,12 @@ import (
 )
 
 const (
-	reviewedSupersetJourneyID = "j82-reviewed-superset-pre-push-allows-unpublished-subset"
-	reviewedSupersetLineage   = "reviewed-superset-pre-push"
-	reviewedSupersetPathA     = "docs/reviewed-a.md"
-	reviewedSupersetPathB     = "docs/reviewed-b.md"
+	reviewedSupersetJourneyID           = "j82-reviewed-superset-pre-push-allows-unpublished-subset"
+	reviewedSupersetMovingBaseJourneyID = "j83-pre-pr-moving-advertised-base-binds-merge-base"
+	reviewedSupersetLineage             = "reviewed-superset-pre-push"
+	reviewedSupersetPathA               = "docs/reviewed-a.md"
+	reviewedSupersetPathB               = "docs/reviewed-b.md"
+	reviewedSupersetBaseAdvancePath     = "docs/disjoint-base-advance.md"
 )
 
 var reviewedSupersetFinalizeCapability = &Capability{
@@ -230,6 +232,84 @@ func requireReviewedSupersetPrePushAllow(sandbox *Sandbox, observation Observati
 	return nil
 }
 
+// advanceReviewedSupersetAdvertisedMain moves the advertised publication
+// boundary from a sibling clone. The feature candidate remains untouched and
+// the new base path is intentionally disjoint from the reviewed paths.
+func advanceReviewedSupersetAdvertisedMain(sandbox *Sandbox) error {
+	sibling := filepath.Join(sandbox.Root, "main-advance")
+	if err := sandbox.git(sandbox.Root, "clone", "-q", "--no-checkout", sandbox.Remote, sibling); err != nil {
+		return err
+	}
+	if err := sandbox.git(sibling, "checkout", "-q", "-B", "main", "origin/main"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sibling, "config", "user.email", "bench@example.invalid"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sibling, "config", "user.name", "Bench"); err != nil {
+		return err
+	}
+	if err := sandbox.write(filepath.Join(sibling, reviewedSupersetBaseAdvancePath), "# Disjoint base advance\n"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sibling, "add", "--", reviewedSupersetBaseAdvancePath); err != nil {
+		return err
+	}
+	if err := sandbox.git(sibling, "commit", "-qm", "docs: advance main"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sibling, "push", "-q", "origin", "main"); err != nil {
+		return err
+	}
+	if err := sandbox.git(sandbox.Repo, "fetch", "-q", "origin", "main"); err != nil {
+		return err
+	}
+	paths, err := gitOut(sandbox, sandbox.Repo, "diff", "--name-only", sandbox.Scratch["reviewed-superset-base"]+"..origin/main")
+	if err != nil {
+		return err
+	}
+	if paths != reviewedSupersetBaseAdvancePath {
+		return fmt.Errorf("advertised main paths = %q, want %q", paths, reviewedSupersetBaseAdvancePath)
+	}
+	return nil
+}
+
+func requireReviewedSupersetPrePRAllow(sandbox *Sandbox, observation Observation) error {
+	var gate waveGateResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &gate); err != nil {
+		if observation.ExitCode != 0 {
+			return fmt.Errorf("moving-base pre-PR exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
+		}
+		return fmt.Errorf("parse moving-base pre-PR result: %w (stderr: %s)", err, firstLine(observation.Stderr))
+	}
+	if !gate.Allowed || gate.Result != "allow" || gate.Context.LineageID != sandbox.Lineage {
+		stage, code := "", ""
+		if gate.Context.Denial != nil {
+			stage, code = gate.Context.Denial.Stage, gate.Context.Denial.Code
+		}
+		return fmt.Errorf("moving advertised base pre-PR rejected: exit=%d result=%q allowed=%t denial_stage=%q denial_code=%q gate=%+v", observation.ExitCode, gate.Result, gate.Allowed, stage, code, gate)
+	}
+	return nil
+}
+
+// executeReviewedSupersetMovingBaseTransition executes the exact validate
+// command that negotiated STATUS prints after the advertised base advances.
+func executeReviewedSupersetMovingBaseTransition(run *journeyRun) error {
+	envelope, err := readStatusFor(run, "--gate", "pre-pr", "--base-ref", "origin/main")
+	if err != nil {
+		return err
+	}
+	if envelope.NextTransition.Kind != "execute" || envelope.NextTransition.Execute.Operation != "review.validate" ||
+		envelope.executeArgument("gate") != "pre-pr" || envelope.executeArgument("base-ref") != "origin/main" {
+		return fmt.Errorf("moving-base pre-PR transition = %+v, want review.validate --gate pre-pr --base-ref origin/main", envelope.NextTransition)
+	}
+	observation, err := runPrintedTransition(run, envelope)
+	if err != nil {
+		return err
+	}
+	return requireReviewedSupersetPrePRAllow(run.sandbox, observation)
+}
+
 func reviewedSupersetJourneys() []Journey {
 	return []Journey{
 		{
@@ -243,6 +323,19 @@ func reviewedSupersetJourneys() []Journey {
 				{Name: "native status proves the approved receipt covers the exact full candidate and paths A and B", Requires: statusCapability, Composite: proveReviewedSupersetReceipt},
 				{Name: "fixture: publish only reviewed prefix A and prove B remains unpublished", Fixture: publishReviewedPrefix},
 				{Name: "pre-push allows the one-path unpublished subset B", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-push"), After: requireReviewedSupersetPrePushAllow},
+			},
+		},
+		{
+			ID:     reviewedSupersetMovingBaseJourneyID,
+			Title:  "Approved feature receipt: pre-PR binds the merge-base after advertised main advances",
+			Source: "#2127 R2 ratified content proof: an advertised ref is a publication boundary, while the unique merge-base binds candidate comparison",
+			Steps: []Step{
+				{Name: "fixture: feature tracks origin and commits reviewed paths A and B", Fixture: reviewedSupersetFixture},
+				{Name: "negotiate and execute review start for the full feature candidate", Requires: statusCapability, Composite: startReviewedSupersetBaseDiff},
+				{Name: "review finalize the full feature candidate", Requires: reviewedSupersetFinalizeCapability, Args: productArgs("review", "finalize", "--lineage", reviewedSupersetLineage)},
+				{Name: "fixture: sibling clone advances advertised main on a disjoint path and feature fetches it", Fixture: advanceReviewedSupersetAdvertisedMain},
+				{Name: "negotiated pre-PR STATUS executes its exact printed validation for origin/main", Requires: statusCapability, Composite: executeReviewedSupersetMovingBaseTransition},
+				{Name: "unqualified pre-PR validation against origin/main allows the approved feature candidate", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-pr", "--base-ref", "origin/main"), After: requireReviewedSupersetPrePRAllow},
 			},
 		},
 	}
