@@ -879,15 +879,26 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 		}
 		target.IntendedUntracked = intendedScope.Intended
+		var prePR *reviewtransaction.PrePRRequest
+		prePRRepresentable := true
+		if reviewtransaction.GateKind(*gate) == reviewtransaction.GatePrePR {
+			prePRTarget := target
+			target, prePR, err = reviewtransaction.BuildPrePRTarget(ctx, root, selectedBaseRef, "", intendedScope.Intended)
+			if err != nil {
+				var resolutionErr *reviewtransaction.GateTargetResolutionError
+				if !errors.As(err, &resolutionErr) {
+					return fmt.Errorf("resolve negotiated pre-PR target: %w", err)
+				}
+				target = prePRTarget
+				prePRRepresentable = false
+			}
+		}
 		selector := &reviewTransitionSelector{
 			Kind: target.Kind, Projection: selectedProjection, BaseRef: selectedBaseRef,
-			BaseTree: selectedBaseTree, WorkspaceOverlay: *workspaceOverlay, PrePRRepresentable: true,
-		}
-		if reviewtransaction.GateKind(*gate) == reviewtransaction.GatePrePR {
-			selector.PrePRRepresentable = reviewtransaction.ValidatePrePRBoundarySelector(ctx, root, selectedBaseRef) == nil
+			BaseTree: selectedBaseTree, WorkspaceOverlay: *workspaceOverlay, PrePRRepresentable: prePRRepresentable,
 		}
 		native, liveSnapshot, err := reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{
-			Target: target, LineageID: *lineage,
+			Target: target, LineageID: *lineage, PrePR: prePR,
 		})
 		if err != nil {
 			return fmt.Errorf("assess negotiated review target: %w", err)

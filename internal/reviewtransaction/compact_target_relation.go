@@ -55,7 +55,8 @@ func classifyCompactTargetRelation(frozen, live Snapshot, genesisPaths []string,
 	}
 
 	if proof := evidence.CompatibleAdvance; proof != nil && proof.valid() &&
-		proof.OriginalMergeBaseTree == frozen.BaseTree && proof.NewBaseTree == live.BaseTree &&
+		proof.OriginalMergeBaseTree == frozen.BaseTree &&
+		(proof.OriginalMergeBaseTree == live.BaseTree || proof.NewBaseTree == live.BaseTree) &&
 		frozen.CandidateTree == live.CandidateTree && proof.DeliveredPathsDigest == digestPaths(frozen.Paths) {
 		relation.Kind = compactTargetCompatibleAdvance
 		return relation

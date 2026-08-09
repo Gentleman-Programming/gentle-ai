@@ -73,6 +73,15 @@ func (e statusEnvelope) argument(name string) string {
 	return ""
 }
 
+func (e statusEnvelope) executeArgument(name string) string {
+	for _, argument := range e.NextTransition.Execute.Arguments {
+		if argument.Name == name {
+			return argument.Value
+		}
+	}
+	return ""
+}
+
 func (e statusEnvelope) paths() []string {
 	if len(e.NextTransition.Collect.Inputs) == 0 {
 		return nil

@@ -275,22 +275,11 @@ func RecoverySelfDerivedInputs(predecessor State) []string {
 	}
 }
 
-// baseAdvanceStatusAllowedForGate is the single source of truth D2 (#2471
-// option a) adds for the per-gate compatible-base-advance attestation policy:
-// GatePrePR alone may carry a CI-attested proof (baseAdvanceCompatibleStatus)
-// or the unrelated, already-existing current-changes boundary reconciliation
-// (currentChangesBoundaryCompatibleStatus, #1376); GatePreCommit and
-// GatePrePush may carry only the unattested local proof
-// (baseAdvanceCompatibleLocalStatus) deriveBaseAdvanceCompatibility issues
-// when its requireAttestation parameter is false. Both validateDerivedGate's
-// carve-out and ParseGateContext's structural validation call this one
-// function, so the attestation policy can never drift between "what a gate
-// accepts at evaluation time" and "what a persisted context is allowed to
-// claim happened."
+// baseAdvanceStatusAllowedForGate keeps evaluation and persisted contexts aligned.
 func baseAdvanceStatusAllowedForGate(gate GateKind, status string) bool {
 	switch gate {
 	case GatePrePR:
-		return status == baseAdvanceCompatibleStatus || status == currentChangesBoundaryCompatibleStatus
+		return status == baseAdvanceCompatibleStatus || status == baseAdvanceCompatibleLocalStatus || status == currentChangesBoundaryCompatibleStatus
 	case GatePreCommit, GatePrePush:
 		return status == baseAdvanceCompatibleLocalStatus
 	default:
@@ -374,7 +363,7 @@ func ParseGateContext(payload []byte) (GateContext, error) {
 	if context.PrePRBoundary != nil {
 		boundary := context.PrePRBoundary
 		unavailable := boundary.Commit == "" && context.Denial != nil && context.Denial.Stage == "boundary-selection" && context.Denial.Code == "unavailable"
-		if context.Gate != GatePrePR || (!validGitTree(boundary.Commit) && !unavailable) || strings.TrimSpace(boundary.Selector) == "" ||
+		if context.Gate != GatePrePR || (unavailable && boundary.MergeBase != "") || ((!validGitTree(boundary.Commit) || !validGitTree(boundary.MergeBase)) && !unavailable) || strings.TrimSpace(boundary.Selector) == "" ||
 			(boundary.Source != PrePRBoundaryExplicit && boundary.Source != PrePRBoundaryPublicationDefault) {
 			return GateContext{}, errors.New("gate context contains invalid pre-PR boundary evidence")
 		}

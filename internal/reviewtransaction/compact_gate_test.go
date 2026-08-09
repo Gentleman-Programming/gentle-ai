@@ -1294,7 +1294,7 @@ func TestCompactDeliveryGateRejectsNonGenesisPath(t *testing.T) {
 	}
 }
 
-func TestCompactPrePRGateAllowsOnlyAttestedCompatibleSelectedBaseAdvance(t *testing.T) {
+func TestCompactPrePRGateAllowsContentCompatibleSelectedBaseAdvance(t *testing.T) {
 	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
 	state, receipt := approvedCompactPrePRFixture(t, fixture)
 	input := NativeGateRequestInput{
@@ -1306,8 +1306,8 @@ func TestCompactPrePRGateAllowsOnlyAttestedCompatibleSelectedBaseAdvance(t *test
 		t.Fatalf("attested compact compatible advance = %#v", allowed)
 	}
 	input.PrePRCIAttestation = ""
-	if denied := EvaluateCompactGate(context.Background(), fixture.repo, receipt, input); denied.Result == GateAllow {
-		t.Fatalf("unattested compact compatible advance = %#v", denied)
+	if contentOnly := EvaluateCompactGate(context.Background(), fixture.repo, receipt, input); contentOnly.Result != GateAllow || contentOnly.Context.BaseAdvance == nil || contentOnly.Context.BaseAdvance.Status != baseAdvanceCompatibleLocalStatus {
+		t.Fatalf("content-only compact compatible advance = %#v", contentOnly)
 	}
 }
 

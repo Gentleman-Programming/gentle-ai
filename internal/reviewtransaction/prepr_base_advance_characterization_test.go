@@ -153,7 +153,7 @@ func runBaseAdvanceScenario(t *testing.T, scenario baseAdvanceScenario) baseAdva
 	}
 	refs := &resolvedPrePRRefs{Selection: selection, HeadCommit: headCommit}
 
-	snapshot, err := builder.Build(ctx, Target{Kind: TargetBaseDiff, BaseRef: "main"})
+	snapshot, err := builder.Build(ctx, Target{Kind: TargetBaseDiff, BaseRef: selection.MergeBase})
 	if err != nil {
 		t.Fatalf("Build(TargetBaseDiff): %v", err)
 	}
@@ -245,8 +245,9 @@ func TestDeriveBaseAdvanceCompatibilitySucceedsWhenAllSevenConditionsHold(t *tes
 	// Condition 7: base/HEAD non-advance revalidation — a nil error already
 	// proves the final re-check found no drift between the captured refs and
 	// live repository state.
-	if result.proof.NewBaseTree != result.snapshot.BaseTree {
-		t.Fatalf("NewBaseTree = %q, want snapshot.BaseTree %q", result.proof.NewBaseTree, result.snapshot.BaseTree)
+	advertisedBaseTree := trimGit(gitSnapshot(t, result.repo, "rev-parse", result.refs.Selection.Commit+"^{tree}"))
+	if result.proof.NewBaseTree != advertisedBaseTree {
+		t.Fatalf("NewBaseTree = %q, want advertised base tree %q", result.proof.NewBaseTree, advertisedBaseTree)
 	}
 }
 

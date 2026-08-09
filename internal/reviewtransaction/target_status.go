@@ -51,6 +51,7 @@ const (
 type TargetStatusRequest struct {
 	Target    Target
 	LineageID string
+	PrePR     *PrePRRequest
 }
 
 type TargetProjectionStatus struct {
@@ -302,6 +303,9 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				continue
 			}
 		} else if compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
+			if !compactPrePRContentCompatible(ctx, repo, state, live, request.PrePR) {
+				continue
+			}
 			candidates = append(candidates, candidate)
 			continue
 		}
@@ -387,6 +391,26 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		}
 		return base, nil
 	}
+}
+
+func compactPrePRContentCompatible(ctx context.Context, repo string, state CompactState, snapshot Snapshot, prePR *PrePRRequest) bool {
+	if prePR == nil || prePR.Boundary == nil || prePR.Boundary.Commit == prePR.Boundary.MergeBase {
+		return true
+	}
+	receipt, err := state.Receipt()
+	if err != nil {
+		return false
+	}
+	head, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		return false
+	}
+	_, err = deriveBaseAdvanceCompatibility(ctx, repo, Receipt{
+		BaseTree: receipt.BaseTree, FinalCandidateTree: receipt.FinalCandidateTree, PathsDigest: receipt.PathsDigest,
+	}, GateRequest{Gate: GatePrePR, PrePR: prePR}, snapshot, &resolvedPrePRRefs{
+		Selection: *prePR.Boundary, HeadCommit: head,
+	}, gateArtifactPreimages{}, false)
+	return err == nil
 }
 
 func corruptedTargetStatus(result TargetStatusResult) TargetStatusResult {

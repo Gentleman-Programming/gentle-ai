@@ -349,17 +349,30 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	var compatibility *BaseAdvanceCompatibility
 	var recoveryCompatibility *BaseAdvanceCompatibility
 	if recoveryAdvance {
-		if proof, proofErr := deriveCompactRecoveryAdvanceCompatibility(ctx, repo, recoveryBinding, request, snapshot, resolvedPrePR, preimages); proofErr == nil {
-			compatibility = &proof
-			recoveryCompatibility = &proof
-			compatibleAdvance = proof.Compatible
+		proof, proofErr := deriveCompactRecoveryAdvanceCompatibility(ctx, repo, recoveryBinding, request, snapshot, resolvedPrePR, preimages)
+		if proofErr != nil {
+			denialContext.Denial = &GateDenial{Stage: "base-advance", Code: "unproven"}
+			return NativeGateEvaluation{Result: GateInvalidated, Reason: "compatible pre-PR recovery base advance cannot be proven: " + proofErr.Error(), Context: denialContext}
 		}
-	} else if request.Gate == GatePrePR && snapshot.BaseTree != receipt.BaseTree {
-		legacyShape := Receipt{BaseTree: receipt.BaseTree, FinalCandidateTree: receipt.FinalCandidateTree, PathsDigest: receipt.PathsDigest}
-		if proof, proofErr := deriveBaseAdvanceCompatibility(ctx, repo, legacyShape, request, snapshot, resolvedPrePR, preimages, true); proofErr == nil {
+		compatibility = &proof
+		recoveryCompatibility = &proof
+		compatibleAdvance = proof.Compatible
+	} else if request.Gate == GatePrePR && prePRBoundaryAdvanced(resolvedPrePR) && snapshot.CandidateTree == receipt.FinalCandidateTree && snapshot.PathsDigest == receipt.PathsDigest {
+		if record.State.InitialSnapshot.Kind == TargetCurrentChanges {
+			proof, proofErr := deriveCurrentChangesBoundaryCompatibility(ctx, repo, record.State, request, snapshot, resolvedPrePR)
+			if proofErr != nil {
+				denialContext.Denial = &GateDenial{Stage: "base-advance", Code: "unproven"}
+				return NativeGateEvaluation{Result: GateInvalidated, Reason: "compatible pre-PR base advance cannot be proven: " + proofErr.Error(), Context: denialContext}
+			}
 			compatibility = &proof
 			compatibleAdvance = proof.Compatible
-		} else if proof, boundaryErr := deriveCurrentChangesBoundaryCompatibility(ctx, repo, record.State, request, snapshot, resolvedPrePR); boundaryErr == nil {
+		} else {
+			legacyShape := Receipt{BaseTree: receipt.BaseTree, FinalCandidateTree: receipt.FinalCandidateTree, PathsDigest: receipt.PathsDigest}
+			proof, proofErr := deriveBaseAdvanceCompatibility(ctx, repo, legacyShape, request, snapshot, resolvedPrePR, preimages, prePRAttestationRequested(request))
+			if proofErr != nil {
+				denialContext.Denial = &GateDenial{Stage: "base-advance", Code: "unproven"}
+				return NativeGateEvaluation{Result: GateInvalidated, Reason: "compatible pre-PR base advance cannot be proven: " + proofErr.Error(), Context: denialContext}
+			}
 			compatibility = &proof
 			compatibleAdvance = proof.Compatible
 		}
@@ -514,16 +527,18 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		}
 		finalRecoveryBinding = finalChain
 	}
-	if compatibility != nil && compatibility.Status == baseAdvanceCompatibleStatus {
+	if compatibility != nil {
 		finalPreimages, preimageErr := rereadGateArtifactPreimages(request)
 		var finalCompatibility BaseAdvanceCompatibility
 		compatibilityErr := preimageErr
 		if compatibilityErr == nil {
 			if recoveryAdvance {
 				finalCompatibility, compatibilityErr = deriveCompactRecoveryAdvanceCompatibility(ctx, repo, finalRecoveryBinding, request, finalSnapshot, finalRefs, finalPreimages)
+			} else if record.State.InitialSnapshot.Kind == TargetCurrentChanges {
+				finalCompatibility, compatibilityErr = deriveCurrentChangesBoundaryCompatibility(ctx, repo, finalRecord.State, request, finalSnapshot, finalRefs)
 			} else {
 				legacyShape := Receipt{BaseTree: receipt.BaseTree, FinalCandidateTree: receipt.FinalCandidateTree, PathsDigest: receipt.PathsDigest}
-				finalCompatibility, compatibilityErr = deriveBaseAdvanceCompatibility(ctx, repo, legacyShape, request, finalSnapshot, finalRefs, finalPreimages, true)
+				finalCompatibility, compatibilityErr = deriveBaseAdvanceCompatibility(ctx, repo, legacyShape, request, finalSnapshot, finalRefs, finalPreimages, prePRAttestationRequested(request))
 			}
 		}
 		if compatibilityErr != nil || finalCompatibility != *compatibility {
