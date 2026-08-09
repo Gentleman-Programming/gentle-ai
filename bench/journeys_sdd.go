@@ -83,6 +83,8 @@ type sddRuntimeStatus struct {
 	Attempts []struct {
 		Ordinal                    int    `json:"ordinal"`
 		Outcome                    string `json:"outcome"`
+		BeginCandidateTree         string `json:"begin_candidate_tree"`
+		FinishCandidateTree        string `json:"finish_candidate_tree"`
 		EvidenceRevision           string `json:"evidence_revision"`
 		RemediatesEvidenceRevision string `json:"remediates_evidence_revision"`
 	} `json:"attempts"`

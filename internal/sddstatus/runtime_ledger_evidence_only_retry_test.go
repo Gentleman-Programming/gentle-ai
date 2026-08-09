@@ -91,6 +91,100 @@ func TestRuntimeEvidenceOnlyRetrySettlesOnAuditedResetAuthority(t *testing.T) {
 	}
 }
 
+func TestRuntimeEvidenceOnlyRetrySettlesOnAuditedRescopeAuthority(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "evidence-only-rescope-retry")
+	store.ReviewDisabled = true
+	first, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "rescope-retry-begin-verification", WorkUnit: "verify",
+		EvidenceGoal: "independent verification", MaxAttempts: 3, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedEvidence := runtimeTestHash('c')
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: first.Revision, RequestID: "rescope-retry-finish-verification", Outcome: AttemptFailed,
+		EvidenceRevision: failedEvidence, Diagnosis: "authoritative suite failed a transient test unrelated to the candidate",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification cleanup completed",
+		ProcessEvidence: "verification process scan completed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.DecisionRequired || failed.CumulativeAttempts != 1 || failed.NextAction != RuntimeActionBegin {
+		t.Fatalf("failed verification with remaining budget = %#v", failed)
+	}
+	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "rescope-retry-audited-rescope",
+		WorkUnit: "narrower-verification", EvidenceGoal: "rerun the focused independent verification",
+		MaxAttempts: 2, MaxChangedLines: 10,
+		Reason: "maintainer narrowed the transient verification failure to one evidence-only retry", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: rescoped.Revision, RequestID: "rescope-retry-begin-reverification",
+		WorkUnit: "narrower-verification", EvidenceGoal: "rerun the focused independent verification",
+		MaxAttempts: 2, MaxChangedLines: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: active.Revision, RequestID: "rescope-retry-finish-reverification", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('d'), Diagnosis: "focused and full suites passed against the unchanged candidate",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "retry cleanup completed",
+		ProcessEvidence: "retry process scan completed", RemediatesEvidenceRevision: failedEvidence,
+	})
+	if err != nil {
+		t.Fatalf("rescope-authorized evidence-only retry was refused: %v", err)
+	}
+	last := completed.Attempts[len(completed.Attempts)-1]
+	if !completed.Complete || completed.CumulativeAttempts != 2 || completed.CumulativeChangedLines != 0 ||
+		last.RemediatesEvidenceRevision != failedEvidence || last.FinishCandidateTree != last.BeginCandidateTree {
+		t.Fatalf("rescope-authorized evidence-only retry = %#v", completed)
+	}
+	reopened := mustRuntimeStore(t, repo, "evidence-only-rescope-retry")
+	reopened.ReviewDisabled = true
+	replayed, err := reopened.Status()
+	if err != nil || replayed.Revision != completed.Revision || !replayed.Complete {
+		t.Fatalf("full-chain replay of rescope-authorized retry = %#v err=%v", replayed, err)
+	}
+}
+
+func TestRuntimeEvidenceOnlyRetryRescopeAuthorityMustMatchFailure(t *testing.T) {
+	failed := RuntimeAttempt{ObjectiveID: "failed-objective", ObjectiveGeneration: 2}
+	matching := &RuntimeRescope{
+		Actor: "maintainer", Reason: "authorize retry", PreviousObjectiveID: failed.ObjectiveID,
+		PreviousGeneration: failed.ObjectiveGeneration, RescopeCandidateTree: "candidate-tree",
+	}
+	tests := []struct {
+		name      string
+		authority *RuntimeRescope
+		tree      string
+	}{
+		{name: "missing authority", authority: nil, tree: "candidate-tree"},
+		{name: "stale objective", authority: func() *RuntimeRescope {
+			value := *matching
+			value.PreviousObjectiveID = "older-objective"
+			return &value
+		}(), tree: "candidate-tree"},
+		{name: "stale generation", authority: func() *RuntimeRescope { value := *matching; value.PreviousGeneration--; return &value }(), tree: "candidate-tree"},
+		{name: "mismatched candidate tree", authority: matching, tree: "other-tree"},
+		{name: "missing actor", authority: func() *RuntimeRescope { value := *matching; value.Actor = ""; return &value }(), tree: "candidate-tree"},
+		{name: "missing reason", authority: func() *RuntimeRescope { value := *matching; value.Reason = ""; return &value }(), tree: "candidate-tree"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if runtimeEvidenceOnlyRetryAuthorized(RuntimeStatus{LastRescope: tt.authority}, failed, tt.tree) {
+				t.Fatal("mismatched rescope authority authorized an evidence-only retry")
+			}
+		})
+	}
+}
+
 // The waiver is scoped to the audited reset that authorized it. A failure with
 // attempts still available needs no reset, so an unchanged-candidate pass there
 // is the laundering the original demand exists to refuse, and it must stay

@@ -895,9 +895,9 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			return runtimeRecord{}, fmt.Errorf("disabled failed verification requires --remediates-evidence-revision %q on the correction settle; rerun `gentle-ai sdd-attempt settle` with that flag", chainFailedEvidence)
 		}
 		if unmanagedRemediation {
-			evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(status.LastReset, chainFailedAttempt, snapshot.CandidateTree)
+			evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(status, chainFailedAttempt, snapshot.CandidateTree)
 			if !evidenceOnly && (snapshot.Identity == active.BeginCandidateIdentity || snapshot.CandidateTree == active.BeginCandidateTree) {
-				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed by the active correction attempt, or an audited reset authorizing this exact unchanged candidate.
+				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed by the active correction attempt, or an audited scope transition authorizing this exact unchanged candidate.
 				return runtimeRecord{}, errors.New("unmanaged remediation requires a changed correction candidate")
 			}
 			if request.EvidenceRevision == request.RemediatesEvidenceRevision {
@@ -2074,10 +2074,10 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		// audited reset stay valid. The chain walk requires a settled failed
 		// predecessor, which subsumes the former len(Attempts) < 2 conjunct.
 		chainFailedAttempt, chainHasFailedEvidence := runtimeChainFailedAttempt(replay.Status.Attempts)
-		// #2621 lockstep twin: an audited reset that terminated the failing
-		// objective against these exact bytes authorizes one evidence-only
-		// retry, so a replayed correction may leave the candidate unchanged.
-		evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(replay.Status.LastReset, chainFailedAttempt, event.FinishCandidateTree)
+		// #2621 lockstep twin: an audited reset or rescope that terminated the
+		// failing objective against these exact bytes authorizes one
+		// evidence-only retry, so a replayed correction may stay unchanged.
+		evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(replay.Status, chainFailedAttempt, event.FinishCandidateTree)
 		unchangedCandidate := event.FinishCandidateIdentity == active.BeginCandidateIdentity ||
 			event.FinishCandidateTree == active.BeginCandidateTree
 		if replay.Status.Binding != nil || event.Outcome != AttemptPassed ||
@@ -2923,24 +2923,33 @@ func runtimeChainFailedAttempt(attempts []RuntimeAttempt) (RuntimeAttempt, bool)
 // weakened for candidates nobody vouched for. So the waiver rests entirely on
 // authority the ledger ALREADY records rather than on a new operator claim:
 //
-//   - The reset names a maintainer and a reason. It is an audited human act.
+//   - The reset or rescope names a maintainer and reason: an audited human act.
 //   - It terminated the exact objective+generation the failure was recorded
-//     under, so a reset taken before that failure can never authorize it.
-//   - Its candidate tree is these bytes, so the maintainer authorized the
-//     retry while looking at precisely the content that is about to pass.
+//     under, so an earlier transition can never authorize that failure.
+//   - Its candidate tree is these bytes, so the maintainer authorized the retry
+//     while looking at precisely the content that is about to pass.
 //
 // Everything else the correction owes stays enforced by the caller: review must
 // be disabled with no binding, the chain must still hold the failed evidence
 // being repaired, and the corrected evidence must be fresh and distinct. No
 // approval is fabricated -- one that a human already gave is honored.
-func runtimeEvidenceOnlyRetryAuthorized(reset *RuntimeReset, failed RuntimeAttempt, candidateTree string) bool {
-	if reset == nil || reset.Actor == "" || reset.Reason == "" || candidateTree == "" {
+func runtimeEvidenceOnlyRetryAuthorized(status RuntimeStatus, failed RuntimeAttempt, candidateTree string) bool {
+	if candidateTree == "" {
 		return false
 	}
-	if reset.PreviousObjectiveID != failed.ObjectiveID || reset.PreviousGeneration != failed.ObjectiveGeneration {
-		return false
+	matches := func(actor, reason, previousObjectiveID string, previousGeneration int, authorityTree string) bool {
+		return actor != "" && reason != "" && previousObjectiveID == failed.ObjectiveID &&
+			previousGeneration == failed.ObjectiveGeneration && authorityTree == candidateTree
 	}
-	return reset.ResetCandidateTree == candidateTree
+	if reset := status.LastReset; reset != nil && matches(
+		reset.Actor, reset.Reason, reset.PreviousObjectiveID, reset.PreviousGeneration, reset.ResetCandidateTree,
+	) {
+		return true
+	}
+	rescope := status.LastRescope
+	return rescope != nil && matches(
+		rescope.Actor, rescope.Reason, rescope.PreviousObjectiveID, rescope.PreviousGeneration, rescope.RescopeCandidateTree,
+	)
 }
 
 func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int) string {
