@@ -225,10 +225,10 @@ The managed installer tracks the channel's latest version and does not accept an
 
 > **Trust what the system can derive, not agent narration.** [Chapter 21 — Verifiable Trust](https://the-amazing-gentleman-programming-book.vercel.app/en/book/Chapter21_Verifiable-Trust) explains the mental model: agents assess the candidate; native authority and delivery gates independently derive what may be trusted.
 
-5. **Upgrade, then sync.** Refresh the binary and the managed agent assets together:
+5. **Refresh the binary, then sync.** Re-run the installer or use `go install ...@main` to refresh the binary, then sync the managed agent assets:
 
    ```bash
-   gentle-ai upgrade
+   go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
    gentle-ai sync
    ```
 
