@@ -735,6 +735,27 @@ func discoverReviewerContextLevel(ctx context.Context, repo, storeDir string, st
 	return reviewtransaction.DiscoverReviewerContextLevel(storeDir, state.LineageID, state.InitialSnapshot.Identity, revision, state.SelectedLenses, subjects)
 }
 
+// discoverPendingRefuterClaims answers, before finalize is offered, whether
+// the captured results carry an inferential severe candidate-causal finding
+// that finalize will refuse to resolve without a refuter outcome.
+//
+// It is read-only and deliberately silent on failure: any error here means
+// finalize itself will produce the exact, already-tested refusal for the same
+// input, and a second diagnosis raised from the router would only compete
+// with it. Answering "no pending claims" restores exactly the pre-existing
+// behavior for every input this cannot read.
+func discoverPendingRefuterClaims(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) []reviewtransaction.RefuterClaim {
+	results, err := readCapturedReviewerResults(ctx, repo, storeDir, state, revision)
+	if err != nil {
+		return nil
+	}
+	input, err := prepareCompactReviewerResults(state, results, facadeRefuterResult{}, facadeRepositoryEvidence{ctx: ctx, repo: repo})
+	if err != nil {
+		return nil
+	}
+	return reviewtransaction.PendingRefuterClaims(state, input)
+}
+
 func readCapturedReviewerResults(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) ([]facadeReviewerResult, error) {
 	artifacts, err := discoverCapturedReviewerArtifacts(ctx, repo, storeDir, state, revision)
 	if err != nil {

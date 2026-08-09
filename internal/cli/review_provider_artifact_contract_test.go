@@ -98,7 +98,12 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/status-v5.fixture.json": "1a6d002c9691c87e50687f8d5f3e59013e9229d93004028f746bfcda7947d5fc",
-		"schemas/status-v5.schema.json":   "32dd99042d11c06cc4dbc1f9f8396b5e32ea9ded7f2177a97b90398923d282b3",
+		// status-v5 gained the `refuter_outcomes_required` collect transition
+		// and its `refuter_claims` input payload (issue #2823: the negotiated
+		// route had no way to obtain the refuter outcome finalize demands for
+		// an inferential severe finding, so it re-offered the same finalize
+		// forever). Additive: every existing transition shape is unchanged.
+		"schemas/status-v5.schema.json": "06c64c4f64b870a77cb6f7be2cd36b554425c7d83d35ad94317a17cd0d97174c",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))

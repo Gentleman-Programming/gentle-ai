@@ -19,8 +19,8 @@ const reviewerBindingEnvironmentVariable = "GENTLE_AI_REVIEW_BINDING"
 const claudeReviewerContextMarker = "GENTLE_AI_CLAUDE_REVIEW_CONTEXT"
 const openCodeReviewContextMarker = "GENTLE_AI_REVIEW_CONTEXT"
 
-const nativeReviewerResultSchema = `{"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
-const providerReviewerResultSchema = `{"subject_hash":"<artifact_subject.subject_hash>","inspection":{"status":"completed","paths":["<complete unique unordered set>"]},"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
+const nativeReviewerResultSchema = `{"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic | inferential | insufficient","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
+const providerReviewerResultSchema = `{"subject_hash":"<artifact_subject.subject_hash>","inspection":{"status":"completed","paths":["<complete unique unordered set>"]},"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic | inferential | insufficient","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
 
 const reviewerInspectionCommandPrefix = `gentle-ai review inspect-candidate --repository-context <repository_context> --expected-revision <revision> --lineage <lineage> --target <target> --lens <lens> --order <order> --operation `
 

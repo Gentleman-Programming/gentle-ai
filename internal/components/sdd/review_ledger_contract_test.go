@@ -334,7 +334,15 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// prompts (+458 characters each); no key is added, removed, or otherwise
 	// changed. The hash is recomputed from the rebased tree. Deliberate, not
 	// drift.
-	const want = "d696513e55fd4556b325f0f11658053a52cbf48832757000454fa0af90920736"
+	//
+	// The reviewer result exemplar stopped hardcoding the single literal
+	// evidence_class "deterministic" and now names that field's whole
+	// enumeration, in the same placeholder style the exemplar's other fields
+	// already used. One literal was the only example a reviewer ever saw, which
+	// anchored every severe finding onto the one class native finalize
+	// corroborates with no adversarial check (issue #2866). The shared contract
+	// also names the refuter collection (issue #2823). Deliberate, not drift.
+	const want = "a20a4d553def2d8b3e2d2a09599fff306cc04f1d158b70e7898f52dc5df1e772"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -563,8 +571,18 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// because the machine now routes them as collect transitions, so the
 		// rendered protocol got 372 characters cheaper. The pins move DOWN,
 		// which is the direction this table exists to protect.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_701, maxCharacters: 24_300},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 33_046, maxCharacters: 38_500},
+		// Two deliberate shipped-asset changes, both additive. The reviewer
+		// result exemplar now names the whole evidence_class enumeration
+		// instead of the single literal "deterministic" (+28 characters per
+		// rendered lens prompt): that literal was the only example a reviewer
+		// ever saw, and it anchored severe findings onto the one class native
+		// finalize corroborates with no adversarial check (issue #2866). The
+		// shared contract also names the refuter collection the negotiated
+		// route can finally reach (issue #2823), counted once. The ceilings do
+		// NOT move: both rows still keep more than 15% headroom, which is why
+		// the contract sentence is stated in one line rather than a paragraph.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_903, maxCharacters: 24_300},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 33_335, maxCharacters: 38_500},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

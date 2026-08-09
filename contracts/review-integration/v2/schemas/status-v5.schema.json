@@ -58,6 +58,7 @@
         {"if": {"properties": {"reason_code": {"enum": ["correction_plan_required", "corrected_candidate_unavailable"]}}, "required": ["reason_code"]}, "then": {"required": ["correction_request"]}, "else": {"not": {"required": ["correction_request"]}}},
         {"if": {"properties": {"reason_code": {"const": "correction_plan_required"}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "external.plan_correction"}}, "required": ["capture_operation", "submission"]}}}}}}},
         {"if": {"properties": {"reason_code": {"const": "targeted_validation_required"}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "external.run_targeted_validation"}}, "required": ["capture_operation", "submission"]}}}}}}},
+        {"if": {"properties": {"reason_code": {"const": "refuter_outcomes_required"}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "external.run_refuter"}}, "required": ["capture_operation", "refuter_claims"]}}}}}}},
         {"if": {"properties": {"reason_code": {"enum": ["verification_evidence_required", "correction_repository_verification_required"]}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "review.capture-evidence"}}, "required": ["capture_operation", "submission"]}}}}}}}
       ]
     },
@@ -78,10 +79,12 @@
         "base_tree": {"$ref": "#/$defs/git_tree"},
         "candidate_tree": {"$ref": "#/$defs/git_tree"},
         "changed_path_manifest": {"type": "array", "uniqueItems": true, "items": {"$ref": "start.schema.json#/$defs/changed_path"}},
-        "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"}
+        "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"},
+        "refuter_claims": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/refuter_claim"}}
       },
       "allOf": [
         {"if": {"properties": {"capture_operation": {"const": "external.run_targeted_validation"}}, "required": ["capture_operation"]}, "then": {"required": ["validation_request", "submission"], "properties": {"schema": {"const": "gentle-ai.review-targeted-validation-request/v1"}}}, "else": {"not": {"required": ["validation_request"]}}},
+        {"if": {"properties": {"capture_operation": {"const": "external.run_refuter"}}, "required": ["capture_operation"]}, "then": {"required": ["refuter_claims"], "properties": {"schema": {"const": "https://gentle-ai.dev/schema/review/refuter/v1"}}}, "else": {"not": {"required": ["refuter_claims"]}}},
         {"if": {"properties": {"capture_operation": {"const": "external.plan_correction"}}, "required": ["capture_operation"]}, "then": {"required": ["submission"], "properties": {"schema": {"const": "gentle-ai.review-correction-plan/v1"}}}},
         {"if": {"properties": {"capture_operation": {"const": "review.capture-evidence"}}, "required": ["capture_operation"]}, "then": {"required": ["submission"], "properties": {"schema": {"const": "https://gentle-ai.dev/schema/review/verification-evidence/v1"}, "submission": {"$ref": "#/$defs/capture_evidence_submission_descriptor"}}}},
         {"if": {"properties": {"capture_operation": {"not": {"enum": ["external.plan_correction", "external.run_targeted_validation", "review.capture-evidence"]}}}, "required": ["capture_operation"]}, "then": {"not": {"required": ["submission"]}}},
@@ -146,7 +149,16 @@
         "substitution_location": {"const": 5}
       }
     },
-    "git_tree": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}
+    "git_tree": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+    "refuter_claim": {
+      "type": "object", "additionalProperties": false,
+      "required": ["finding_id", "snapshot_identity", "proof"],
+      "properties": {
+        "finding_id": {"type": "string", "pattern": "^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*$"},
+        "snapshot_identity": {"type": "string", "minLength": 1},
+        "proof": {"type": "string", "minLength": 1}
+      }
+    }
   },
   "allOf": [
     {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/0"},

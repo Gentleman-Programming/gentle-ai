@@ -1057,12 +1057,7 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 		if !severeFinding {
 			continue
 		}
-		switch item.Causality {
-		case CausalIntroduced, CausalBehaviorActivated, CausalWorsened:
-			if !findingLocationInGenesis(finding.Location, state.GenesisPaths) {
-				item.Causality = CausalUnknown
-			}
-		}
+		item.Causality = effectiveCausality(finding, item.Causality, state.GenesisPaths)
 		state.Classifications[finding.ID] = item
 		if item.Class == EvidenceInsufficient {
 			state.Outcomes[finding.ID] = OutcomeInconclusive

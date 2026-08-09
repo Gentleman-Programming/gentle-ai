@@ -58,6 +58,11 @@ type ReviewTransitionInput struct {
 	CandidateTree       string                                        `json:"candidate_tree,omitempty"`
 	ChangedPathManifest *[]reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest,omitempty"`
 	ValidationRequest   *reviewtransaction.TargetedValidationRequest  `json:"validation_request,omitempty"`
+	// RefuterClaims carries the complete merged list of inferential severe
+	// candidates one read-only refuter batch must return a verdict for. It is
+	// the whole payload of the refuter collect input: the refuter is a
+	// detached actor that receives claims, never the candidate itself.
+	RefuterClaims *[]reviewtransaction.RefuterClaim `json:"refuter_claims,omitempty"`
 }
 
 // ReviewTransitionSubmission is the provider-owned argv template. Consumers
@@ -195,6 +200,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		}
 		if len(artifacts) != len(selectedLenses) {
 			return reviewMissingCaptureTransition(binding, selectedLenses, artifacts, input.CaptureContext)
+		}
+		if len(input.RefuterClaims) > 0 {
+			return reviewRefuterCollection(binding, input.RefuterClaims)
 		}
 		return reviewExecuteTransition("captured_results_ready", "review.finalize", []ReviewTransitionArgument{
 			{Name: "lineage", Value: binding.LineageID}, {Name: "captured_results", Value: "true"},
@@ -352,6 +360,7 @@ type reviewFinalizeTransitionContext struct {
 	CaptureContext    *reviewCaptureContext
 	CapturedEvidence  *reviewtransaction.VerificationEvidenceRecord
 	EvidenceErr       error
+	RefuterClaims     []reviewtransaction.RefuterClaim
 }
 
 func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision string, artifacts []ReviewTransitionArtifact, artifactErr error, contexts ...reviewFinalizeTransitionContext) ReviewNextTransition {
@@ -379,6 +388,10 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 	}
 	if state.State == reviewtransaction.StateReviewing && artifactErr == nil && len(artifacts) != len(state.SelectedLenses) {
 		return reviewMissingCaptureTransition(reviewTransitionBinding(status.Authority, status.TargetIdentity, transitionContext.RepositoryContext), state.SelectedLenses, artifacts, transitionContext.CaptureContext)
+	}
+	if state.State == reviewtransaction.StateReviewing && artifactErr == nil && len(transitionContext.RefuterClaims) > 0 {
+		return reviewRefuterCollection(
+			reviewTransitionBinding(status.Authority, status.TargetIdentity, transitionContext.RepositoryContext), transitionContext.RefuterClaims)
 	}
 	if state.State == reviewtransaction.StateReviewing && artifactErr == nil {
 		return reviewExecuteTransition("captured_results_ready", "review.finalize", []ReviewTransitionArgument{{Name: "lineage", Value: state.LineageID}, {Name: "captured_results", Value: "true"}}, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, reviewTransitionBinding(status.Authority, status.TargetIdentity), artifacts)
@@ -488,6 +501,7 @@ type reviewNextTransitionInput struct {
 	CaptureContext                                 *reviewCaptureContext
 	Selector                                       *reviewTransitionSelector
 	IntendedUntracked                              reviewIntendedUntrackedScope
+	RefuterClaims                                  []reviewtransaction.RefuterClaim
 }
 
 const reviewSubmissionValuePlaceholder = "{{value}}"
@@ -526,6 +540,30 @@ func reviewTargetedValidationSubmission(contract string, binding ReviewTransitio
 	}, ReviewTransitionSubmissionValue{
 		Slot: "validation", Domain: "artifact_path_or_stdin", Schema: reviewValidatorSchemaID,
 		SubstitutionLocation: 6,
+	})
+}
+
+// reviewRefuterCollection asks for the one read-only refuter batch compact
+// finalize requires before it can resolve an inferential severe finding. It
+// carries an "external.*" capture operation because the refuter runs where
+// this product does not.
+//
+// It carries no submission descriptor: that machinery exists for the two
+// finalize slots whose value the provider must bind and re-verify byte for
+// byte (correction lines, targeted validation). The refuter's outcomes reach
+// finalize through its existing `--refuter` flag, so a descriptor here would
+// add a third validated slot to buy nothing the tokenized binding arguments
+// do not already carry.
+//
+// One collect input carries every claim. The refuter budget is review-level
+// and structural — one batch per review, never one task per finding — so
+// splitting these into an input each would misstate the contract the refuter
+// agent is launched under.
+func reviewRefuterCollection(binding ReviewTransitionBinding, claims []reviewtransaction.RefuterClaim) ReviewNextTransition {
+	batch := append([]reviewtransaction.RefuterClaim(nil), claims...)
+	return reviewCollectTransition("refuter_outcomes_required", ReviewTransitionInput{
+		Name: "refuter_outcomes", Schema: reviewRefuterSchemaID, CaptureOperation: "external.run_refuter",
+		Arguments: reviewBindingArguments(binding), RefuterClaims: &batch,
 	})
 }
 
@@ -1012,6 +1050,8 @@ func reviewReasonDescription(reason string) string {
 		return "Multiple lineages match target; select an explicit lineage"
 	case "reviewer_results_required":
 		return "Reviewer lens artifacts required for current revision"
+	case "refuter_outcomes_required":
+		return "One read-only refuter batch required for inferential severe findings"
 	case "targeted_validation_required":
 		return "Targeted validation run required for correction plan"
 	case "correction_plan_required":
