@@ -1386,6 +1386,11 @@ func (store RuntimeStore) AdmitSliceProof(ctx context.Context, report, scope, sl
 	if !admitted.Valid {
 		return admitted, nil
 	}
+	if admitted.Verdict != "pass" && admitted.Verdict != "pass_with_warnings" {
+		admitted.Valid = false
+		admitted.Reason = "slice proof requires a complete passing report"
+		return admitted, nil
+	}
 	if admitted.EvidenceRevision != replay.Status.EvidenceRevision {
 		return VerifyReportAdmission{}, errors.New("slice proof evidence revision does not match the completed runtime objective") // refusal:by-design world-action: the report must be regenerated from the objective's current recorded evidence
 	}
@@ -1408,6 +1413,9 @@ func (store RuntimeStore) AdmitSliceProof(ctx context.Context, report, scope, sl
 		currentAdmission := ValidateVerifyReportAdmission(report, SpecCounts{}, *objective)
 		if !currentAdmission.Valid {
 			return runtimeRecord{}, errors.New(currentAdmission.Reason)
+		}
+		if currentAdmission.Verdict != "pass" && currentAdmission.Verdict != "pass_with_warnings" {
+			return runtimeRecord{}, errors.New("slice proof requires a complete passing report") // refusal:by-design world-action: only a successful completed verification report can become advancement authority
 		}
 		if currentAdmission.EvidenceRevision != status.EvidenceRevision {
 			return runtimeRecord{}, errors.New("slice proof evidence revision does not match the completed runtime objective") // refusal:by-design world-action: the report must be regenerated from the objective's current recorded evidence

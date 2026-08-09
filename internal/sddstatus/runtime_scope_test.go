@@ -141,8 +141,49 @@ func TestRuntimeTaskOnlyFoundationSliceAdmitsZeroTotals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report := strings.TrimSuffix(testVerifyEnvelope("pass", 0, 0, "0/0", "0/0", 0, 0), "```") + "scope: slice\nslice_id: " + passed.Objective.ID + "\n```"
+	report := strings.TrimSuffix(testVerifyEnvelope("pass_with_warnings", 0, 0, "0/0", "0/0", 0, 0), "```") + "scope: slice\nslice_id: " + passed.Objective.ID + "\n```"
 	if admission, err := store.AdmitSliceProof(context.Background(), report, "slice", passed.Objective.ID); err != nil || !admission.Valid {
 		t.Fatalf("foundational proof = %#v err=%v", admission, err)
+	}
+}
+
+func TestRuntimeSliceProofRejectsValidFailReportWithoutMutation(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "slice-proof-fail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "slice-proof-fail-begin", WorkUnit: "slice-fail", EvidenceGoal: "prove failing slice report", MaxAttempts: 1, MaxChangedLines: 20,
+		Scope: &RuntimeScope{Tasks: []string{"1.1"}, Requirements: []string{"REQ-A"}, Scenarios: []string{"scenario-a"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRuntimeLedgerFile(t, repo, "slice-proof-fail\n")
+	completed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "slice-proof-fail-finish", Outcome: AttemptPassed, EvidenceRevision: runtimeTestHash('a'),
+		Diagnosis: "slice completed", HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup complete", ProcessEvidence: "processes stopped",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := strings.TrimSuffix(testVerifyEnvelope("fail", 0, 0, "1/1", "1/1", 1, 0), "```") + "scope: slice\nslice_id: " + completed.Objective.ID + "\n```"
+	if general := ValidateVerifyReportAdmission(report, SpecCounts{}, *completed.Objective); !general.Valid || general.Verdict != "fail" {
+		t.Fatalf("valid fail report = %#v", general)
+	}
+	admission, err := store.AdmitSliceProof(context.Background(), report, "slice", completed.Objective.ID)
+	if err != nil || admission.Valid || admission.Reason != "slice proof requires a complete passing report" {
+		t.Fatalf("failing slice proof = %#v err=%v", admission, err)
+	}
+	status, err := store.Status()
+	if err != nil || status.Revision != completed.Revision || len(status.SliceProofs) != 0 {
+		t.Fatalf("failing slice proof mutated state = %#v err=%v", status, err)
+	}
+	if _, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: status.Revision, RequestID: "slice-proof-fail-successor", WorkUnit: "slice-successor", EvidenceGoal: "prove successor", MaxAttempts: 1, MaxChangedLines: 20,
+		Scope: &RuntimeScope{Tasks: []string{"1.2"}, Requirements: []string{"REQ-B"}, Scenarios: []string{"scenario-b"}},
+	}); !errors.Is(err, ErrRuntimeObjectiveDone) {
+		t.Fatalf("advance after failing slice proof = %v, want ErrRuntimeObjectiveDone", err)
 	}
 }

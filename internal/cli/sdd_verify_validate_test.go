@@ -99,6 +99,38 @@ func TestRunSDDVerifyValidateScopedProofPersistsAndRefusesInvalidReport(t *testi
 	if err != nil || afterInvalid.Revision != accepted.Revision || len(afterInvalid.SliceProofs) != 1 {
 		t.Fatalf("invalid scoped validation changed accepted state = %#v err=%v", afterInvalid, err)
 	}
+	startedFailure, err := store.Begin(context.Background(), sddstatus.BeginAttemptRequest{
+		ExpectedRevision: afterInvalid.Revision, RequestID: "scoped-proof-fail-begin", WorkUnit: "slice-b", EvidenceGoal: "prove failed scoped validation", MaxAttempts: 1, MaxChangedLines: 20,
+		Scope: &sddstatus.RuntimeScope{Tasks: []string{"1.2"}, Requirements: []string{"REQ-B"}, Scenarios: []string{"scenario-b"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "scoped-proof-fail.txt"), []byte("failed proof\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	completedFailure, err := store.Finish(context.Background(), sddstatus.FinishAttemptRequest{
+		ExpectedRevision: startedFailure.Revision, RequestID: "scoped-proof-fail-finish", Outcome: sddstatus.AttemptPassed, EvidenceRevision: cliAttemptHash('a'),
+		Diagnosis: "scoped validation completed", HarnessDisposition: sddstatus.HarnessReused, CleanupEvidence: "cleanup complete", ProcessEvidence: "processes stopped",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failingReport := strings.Replace(cliScopedVerifyReport(completedFailure.Objective.ID), "verdict: pass", "verdict: fail", 1)
+	failingReport = strings.Replace(failingReport, "blockers: 0", "blockers: 1", 1)
+	if admission := sddstatus.ValidateVerifyReportAdmission(failingReport, sddstatus.SpecCounts{}, *completedFailure.Objective); !admission.Valid || admission.Verdict != "fail" {
+		t.Fatalf("valid failing scoped report = %#v", admission)
+	}
+	failingArgs := append([]string(nil), baseArgs...)
+	failingArgs = append(failingArgs, "--scope", "slice", "--slice-id", completedFailure.Objective.ID)
+	err = runSDDVerifyValidate(failingArgs, strings.NewReader(failingReport), &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "verify report admission denied: slice proof requires a complete passing report") {
+		t.Fatalf("failing scoped validation error = %v", err)
+	}
+	afterFailure, err := store.Status()
+	if err != nil || afterFailure.Revision != completedFailure.Revision || len(afterFailure.SliceProofs) != 1 || afterFailure.SliceProofs[0].ObjectiveID == completedFailure.Objective.ID {
+		t.Fatalf("failing scoped validation mutated state = %#v err=%v", afterFailure, err)
+	}
 }
 
 func TestRunSDDVerifyValidateHelpIsSuccessfulAndInputFree(t *testing.T) {
