@@ -902,6 +902,8 @@ func retryFinalVerification(r *journeyRun) error {
 	if err != nil {
 		return err
 	}
+	r.sandbox.Scratch["retry-source"] = status.Authority.LineageID
+	r.sandbox.Scratch["retry-source-target"] = status.TargetIdentity
 	declinedInvocation, err := retryConsentInvocation(status.NextTransition.Collect.Consent, "declined")
 	if err != nil {
 		return err
@@ -931,6 +933,9 @@ func retryFinalVerification(r *journeyRun) error {
 	if err != nil {
 		return err
 	}
+	if status.Authority.LineageID != r.sandbox.Scratch["retry-source"] || status.TargetIdentity != r.sandbox.Scratch["retry-source-target"] {
+		return fmt.Errorf("retry consent re-entry changed the provider source: %+v", status)
+	}
 	grantedInvocation, err := retryConsentInvocation(status.NextTransition.Collect.Consent, "granted")
 	if err != nil {
 		return err
@@ -946,8 +951,8 @@ func retryFinalVerification(r *journeyRun) error {
 	if err != nil {
 		return err
 	}
-	if result.Operation != "review.retry_final_verification" || result.LineageID == "" || result.LineageID == retrySourceLineage ||
-		result.PredecessorLineageID != retrySourceLineage || result.State != "validating" || result.TargetIdentity != status.TargetIdentity {
+	if result.Operation != "review.retry_final_verification" || result.LineageID == "" || result.LineageID == r.sandbox.Scratch["retry-source"] ||
+		result.PredecessorLineageID != r.sandbox.Scratch["retry-source"] || result.State != "validating" || result.TargetIdentity != r.sandbox.Scratch["retry-source-target"] {
 		return fmt.Errorf("provider-derived retry result = %+v", result)
 	}
 	r.sandbox.Scratch["retry-successor"] = result.LineageID
@@ -1070,7 +1075,8 @@ func proveCompletedRetryInventory(sandbox *Sandbox, observation Observation) err
 		states[entry.LineageID] = entry.State
 	}
 	successor := sandbox.Scratch["retry-successor"]
-	if successor == "" || statuses[retrySourceLineage] != "superseded" || states[retrySourceLineage] != "escalated" ||
+	source := sandbox.Scratch["retry-source"]
+	if source == "" || successor == "" || statuses[source] != "superseded" || states[source] != "escalated" ||
 		statuses[successor] != "recovered" || states[successor] != "approved" {
 		return fmt.Errorf("completed retry inventory statuses = %+v, states = %+v", statuses, states)
 	}

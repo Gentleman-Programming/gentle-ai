@@ -205,6 +205,7 @@ func TestStatusFinalVerificationRetryProjectsOpaqueConsentEnvelope(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// os.Chdir changes process-wide state, so this off-path test cannot run in parallel.
 	if err := os.Chdir(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
@@ -218,10 +219,66 @@ func TestStatusFinalVerificationRetryProjectsOpaqueConsentEnvelope(t *testing.T)
 	}
 }
 
+func TestStatusV5RetryConsentIsRequiredOnlyForItsCollectReason(t *testing.T) {
+	fixture := failedFinalVerificationCLIFixture(t)
+	handle := finalVerificationRetryContext(t, fixture)
+	var output bytes.Buffer
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition", "--repository-context", handle}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(output.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	schema := compileWholeNativeStatusSchema(t, "status-v5.schema.json")
+	if err := schema.Validate(document); err != nil {
+		t.Fatalf("status-v5 rejected the provider retry consent: %v", err)
+	}
+	next := document["next_transition"].(map[string]any)
+	collect := next["collect"].(map[string]any)
+	delete(collect, "consent")
+	if err := schema.Validate(document); err == nil {
+		t.Fatal("status-v5 accepted retry consent collection without consent")
+	}
+	if err := json.Unmarshal(output.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	next = document["next_transition"].(map[string]any)
+	next["reason_code"] = "reviewer_results_required"
+	if err := schema.Validate(document); err == nil {
+		t.Fatal("status-v5 accepted consent for an unrelated collect reason")
+	}
+}
+
+func TestOpaqueRetryEmptyRepositoryContextUsesV2FailureEnvelope(t *testing.T) {
+	forms := [][]string{
+		{"retry-final-verification", "--repository-context", "", "--consent", "granted"},
+		{"retry-final-verification", "--repository-context=", "--consent", "granted"},
+	}
+	var first string
+	for _, args := range forms {
+		var output bytes.Buffer
+		if err := RunReview(args, &output); err == nil {
+			t.Fatalf("empty opaque context unexpectedly succeeded for %v", args)
+		}
+		var failure ReviewIntegrationFailure
+		decodeStrictReviewJSON(t, output.Bytes(), &failure)
+		if failure.Schema != ReviewIntegrationFailureSchemaV2 || failure.Contract != ReviewIntegrationContractV2 ||
+			failure.Operation != ReviewIntegrationOperationRetryFinalVerification || failure.MutationOutcome != ReviewMutationNotStarted || failure.Code != "invalid_request" {
+			t.Fatalf("empty opaque context failure for %v = %#v", args, failure)
+		}
+		if first == "" {
+			first = output.String()
+		} else if output.String() != first {
+			t.Fatalf("empty opaque context forms diverged:\nseparate=%s\nequals=%s", first, output.String())
+		}
+	}
+}
+
 func TestOpaqueStatusRejectsEveryExternalSelector(t *testing.T) {
 	fixture := failedFinalVerificationCLIFixture(t)
-	context := finalVerificationRetryContext(t, fixture)
-	base := []string{"status", "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition", "--repository-context", context}
+	handle := finalVerificationRetryContext(t, fixture)
+	base := []string{"status", "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition", "--repository-context", handle}
 	tests := []struct {
 		name string
 		args []string
@@ -260,8 +317,8 @@ func TestOpaqueStatusRejectsEveryExternalSelector(t *testing.T) {
 
 func TestFinalVerificationRetryConsentGrantIsExactAndOneShot(t *testing.T) {
 	fixture := failedFinalVerificationCLIFixture(t)
-	context := finalVerificationRetryContext(t, fixture)
-	args := []string{"retry-final-verification", "--repository-context", context, "--consent", "granted"}
+	handle := finalVerificationRetryContext(t, fixture)
+	args := []string{"retry-final-verification", "--repository-context", handle, "--consent", "granted"}
 	var output bytes.Buffer
 	if err := RunReview(args, &output); err != nil {
 		t.Fatalf("grant opaque retry consent: %v\n%s", err, output.String())
@@ -282,7 +339,7 @@ func TestFinalVerificationRetryConsentGrantIsExactAndOneShot(t *testing.T) {
 	}
 	beforeDecline := cliReviewAuthoritySnapshot(t, fixture.repo)
 	var declinedOutput bytes.Buffer
-	err := RunReview([]string{"retry-final-verification", "--repository-context", context, "--consent", "declined"}, &declinedOutput)
+	err := RunReview([]string{"retry-final-verification", "--repository-context", handle, "--consent", "declined"}, &declinedOutput)
 	if err == nil {
 		t.Fatalf("decline after grant error = %v", err)
 	}
@@ -302,10 +359,10 @@ func TestFinalVerificationRetryConsentGrantIsExactAndOneShot(t *testing.T) {
 
 func TestFinalVerificationRetryConsentDeclineIsExactAndNonMutating(t *testing.T) {
 	fixture := failedFinalVerificationCLIFixture(t)
-	context := finalVerificationRetryContext(t, fixture)
+	handle := finalVerificationRetryContext(t, fixture)
 	before := cliReviewAuthoritySnapshot(t, fixture.repo)
 	var output bytes.Buffer
-	if err := RunReview([]string{"retry-final-verification", "--repository-context", context, "--consent", "declined"}, &output); err != nil {
+	if err := RunReview([]string{"retry-final-verification", "--repository-context", handle, "--consent", "declined"}, &output); err != nil {
 		t.Fatalf("decline opaque retry consent: %v\n%s", err, output.String())
 	}
 	var result map[string]any
@@ -317,7 +374,7 @@ func TestFinalVerificationRetryConsentDeclineIsExactAndNonMutating(t *testing.T)
 		t.Fatalf("decline mutated authority: %#v != %#v", after, before)
 	}
 	var repeated bytes.Buffer
-	if err := RunReview([]string{"retry-final-verification", "--repository-context", context, "--consent", "declined"}, &repeated); err != nil {
+	if err := RunReview([]string{"retry-final-verification", "--repository-context", handle, "--consent", "declined"}, &repeated); err != nil {
 		t.Fatalf("repeat eligible decline: %v\n%s", err, repeated.String())
 	}
 	if repeated.String() != output.String() {
@@ -326,7 +383,7 @@ func TestFinalVerificationRetryConsentDeclineIsExactAndNonMutating(t *testing.T)
 }
 
 func TestFinalVerificationRetryConsentNeverGrantsInvalidSource(t *testing.T) {
-	t.Run("stale repository context", func(t *testing.T) {
+	t.Run("unknown repository context", func(t *testing.T) {
 		fixture := failedFinalVerificationCLIFixture(t)
 		before := cliReviewAuthoritySnapshot(t, fixture.repo)
 		context := finalVerificationRetryContext(t, fixture)

@@ -84,7 +84,7 @@
     ]
   },
   "bootstrap": {
-    "command": "gentle-ai review status --cwd \u003crepo\u003e --contract gentle-ai.review-integration/v2 --next-transition",
+    "command": "gentle-ai review status --cwd \u003crepo\u003e --contract gentle-ai.review-integration/v2 --agent \u003cagent\u003e --next-transition",
     "target_selector_variants": [
       {"target_type": "staged", "arguments": ["--projection", "staged"]},
       {"target_type": "base_ref", "arguments": ["--base-ref", "\u003cref\u003e"]},

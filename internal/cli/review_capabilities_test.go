@@ -106,8 +106,8 @@ func TestReviewCapabilitiesV22MatchesConformanceFixture(t *testing.T) {
 	if err := json.Unmarshal(fixture, &want); err != nil {
 		t.Fatal(err)
 	}
-	if got.Bootstrap == nil || strings.Contains(got.Bootstrap.Command, " --agent ") {
-		t.Fatalf("v2.2 capability bootstrap must not declare an unavailable runtime identity: %#v", got.Bootstrap)
+	if got.Bootstrap == nil || got.Bootstrap.Command != reviewNextTransitionRefreshCommandV21 {
+		t.Fatalf("v2.2 capability bootstrap must declare the required runtime placeholder: %#v", got.Bootstrap)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("v2.2 capabilities do not match conformance fixture:\ngot=%#v\nwant=%#v", got, want)

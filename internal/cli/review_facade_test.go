@@ -892,6 +892,62 @@ func TestReviewFacadeFinalizePlannedTransitionInterruptionResumesWithoutDuplicat
 	}
 }
 
+func TestReviewFacadeFinalizeRawEvidenceInterruptionReplaysCapturedReadback(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(evidencePath, []byte("raw verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, repo, started)...)
+	args = append(args, "--evidence", evidencePath)
+	interrupted := errors.New("interrupt after raw evidence import")
+	original := reviewFacadePlannedTransitionHook
+	reviewFacadePlannedTransitionHook = func(_ context.Context, _ string, operation, _ string) error {
+		if operation == "review/complete-review" {
+			return interrupted
+		}
+		return nil
+	}
+	t.Cleanup(func() { reviewFacadePlannedTransitionHook = original })
+	if err := RunReviewFacadeFinalize(args, io.Discard); !errors.Is(err, interrupted) {
+		t.Fatalf("raw evidence interruption = %v", err)
+	}
+	pending, err := store.PendingFinalizeAttempt()
+	if err != nil || pending == nil || len(pending.Transitions) == 0 || pending.Request.EvidenceRecordDigest == "" {
+		t.Fatalf("raw evidence interruption journal = %#v, %v", pending, err)
+	}
+	captured, err := reviewtransaction.ReadCapturedVerificationEvidence(store.Dir, started.LineageID, pending.Transitions[0].Revision, before.State.CurrentSnapshot)
+	if err != nil || captured.Record.RecordDigest != pending.Request.EvidenceRecordDigest {
+		t.Fatalf("raw evidence import was not durably readable: %#v, %v", captured, err)
+	}
+	reviewFacadePlannedTransitionHook = original
+	if err := RunReviewFacadeFinalize(args, io.Discard); err != nil {
+		t.Fatalf("raw evidence exact replay: %v", err)
+	}
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State.State != reviewtransaction.StateApproved || after.Revision == before.Revision {
+		t.Fatalf("raw evidence replay state = %#v", after)
+	}
+	if pending, err := store.PendingFinalizeAttempt(); err != nil || pending != nil {
+		t.Fatalf("raw evidence replay left pending attempt: %#v, %v", pending, err)
+	}
+}
+
 func TestReviewFacadeFinalizeReceiptReplayRejectsNonExactAndUnsafeRequests(t *testing.T) {
 	t.Run("explicit lineage is required", func(t *testing.T) {
 		fixture := prepareFacadeReceiptPending(t)
