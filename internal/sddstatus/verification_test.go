@@ -98,6 +98,30 @@ func TestValidateVerifyReportAdmission(t *testing.T) {
 	}
 }
 
+// A completed work unit may prove its assigned slice without claiming the
+// later work units' global obligations. The current whole-change-only gate
+// rejects this honest report; #2268 makes the provider-bound form admissible.
+func TestScopedPassedSliceIsAdmittedWithoutGlobalCredit(t *testing.T) {
+	report := strings.TrimSuffix(testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0), "```") + strings.Join([]string{
+		"scope: slice",
+		"slice_id: sha256:" + strings.Repeat("d", 64),
+		"```",
+	}, "\n")
+
+	objective := RuntimeObjective{
+		ID: "sha256:" + strings.Repeat("d", 64), EvidenceGoal: "prove slice A", Scope: &RuntimeScope{
+			Tasks: []string{"1.1"}, Requirements: []string{"REQ-A"}, Scenarios: []string{"scenario-a"},
+		},
+	}
+	admission := ValidateVerifyReportAdmission(report, SpecCounts{Requirements: 2, Scenarios: 2}, objective)
+	if !admission.Valid {
+		t.Fatalf("completed slice A admission = %#v, want admitted while slice B remains pending", admission)
+	}
+	if global := parseVerifyResult(testVerifyEnvelope("pass", 0, 0, "1/2", "1/2", 0, 0), SpecCounts{Requirements: 2, Scenarios: 2}); global.Passing {
+		t.Fatal("slice A proof granted whole-change verification or archive credit")
+	}
+}
+
 func TestVerifyReportAuthorityOnlyFieldCountUsesContract(t *testing.T) {
 	partial := strings.TrimSuffix(testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0), "```") + "authority_only_failure: true\n```"
 	admission := ValidateVerifyReportAdmission(partial, SpecCounts{Requirements: 2, Scenarios: 3})

@@ -22,6 +22,7 @@ type VerifyReportContract struct {
 	RequiredFields      []string
 	Verdicts            []string
 	AuthorityOnlyFields []string
+	ScopeFields         []string
 	EmptyOutputHash     string
 }
 
@@ -36,6 +37,8 @@ var verifyReportAuthorityOnlyFields = []string{
 	"command_failed", "observed_authority_revision",
 }
 
+var verifyReportScopeFields = []string{"scope", "slice_id"}
+
 var verifyReportVerdicts = []string{"pass", "pass_with_warnings", "fail"}
 
 func VerifyReportValidationContract() VerifyReportContract {
@@ -45,6 +48,7 @@ func VerifyReportValidationContract() VerifyReportContract {
 		RequiredFields:      append([]string(nil), verifyReportRequiredFields...),
 		Verdicts:            append([]string(nil), verifyReportVerdicts...),
 		AuthorityOnlyFields: append([]string(nil), verifyReportAuthorityOnlyFields...),
+		ScopeFields:         append([]string(nil), verifyReportScopeFields...),
 		EmptyOutputHash:     VerifyEmptyOutputHash,
 	}
 }
@@ -82,6 +86,7 @@ type verifyReport struct {
 	Blockers, Critical, TestExit, BuildExit int
 	Requirements, Scenarios                 verifyCompletion
 	AuthorityOnly                           bool
+	Scope, SliceID                          string
 }
 
 var sha256IdentityPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -149,7 +154,7 @@ func parseVerifyResult(text string, expected SpecCounts) verifyResultEvaluation 
 }
 
 // ValidateVerifyReportAdmission validates exact report bytes before persistence.
-func ValidateVerifyReportAdmission(text string, expected SpecCounts) VerifyReportAdmission {
+func ValidateVerifyReportAdmission(text string, expected SpecCounts, objectives ...RuntimeObjective) VerifyReportAdmission {
 	report, reason := parseVerifyReport(text)
 	result := VerifyReportAdmission{Reason: reason}
 	if reason != "" {
@@ -159,6 +164,13 @@ func ValidateVerifyReportAdmission(text string, expected SpecCounts) VerifyRepor
 	if expected.Requirements < 0 || expected.Scenarios < 0 {
 		result.Reason = "expected requirement and scenario counts must be nonnegative"
 		return result
+	}
+	if report.Scope != "" || report.SliceID != "" {
+		if report.Scope != "slice" || len(objectives) != 1 || objectives[0].Scope == nil || report.SliceID != objectives[0].ID {
+			result.Reason = "slice report does not match provider-owned runtime objective"
+			return result
+		}
+		expected = objectives[0].Scope.counts()
 	}
 	if report.Requirements.Total != expected.Requirements {
 		result.Reason = fmt.Sprintf("verify result total %d does not match actual requirement count %d", report.Requirements.Total, expected.Requirements)
@@ -193,8 +205,8 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	if reason != "" {
 		return verifyReport{}, reason
 	}
-	allowed := make(map[string]bool, len(verifyReportRequiredFields)+len(verifyReportAuthorityOnlyFields))
-	for _, field := range append(append([]string{}, verifyReportRequiredFields...), verifyReportAuthorityOnlyFields...) {
+	allowed := make(map[string]bool, len(verifyReportRequiredFields)+len(verifyReportAuthorityOnlyFields)+len(verifyReportScopeFields))
+	for _, field := range append(append(append([]string{}, verifyReportRequiredFields...), verifyReportAuthorityOnlyFields...), verifyReportScopeFields...) {
 		allowed[field] = true
 	}
 	fields, reason := parseScalarFields(lines[1:end], allowed, "verify result")
@@ -219,6 +231,15 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	if extensionCount != 0 && extensionCount != len(verifyReportAuthorityOnlyFields) {
 		return report, fmt.Sprintf("authority-only extension must contain exactly %d fields", len(verifyReportAuthorityOnlyFields))
 	}
+	scopeCount := 0
+	for _, field := range verifyReportScopeFields {
+		if _, ok := fields[field]; ok {
+			scopeCount++
+		}
+	}
+	if scopeCount != 0 && scopeCount != len(verifyReportScopeFields) {
+		return report, fmt.Sprintf("slice scope must contain exactly %d fields", len(verifyReportScopeFields))
+	}
 	if fields["schema"] != VerifyResultSchema {
 		return report, fmt.Sprintf("unsupported verify result schema %s", fields["schema"])
 	}
@@ -231,6 +252,10 @@ func parseVerifyReport(text string) (verifyReport, string) {
 		return report, "test_command and build_command require concrete current execution evidence"
 	}
 	report.Verdict, report.AuthorityOnly = fields["verdict"], extensionCount != 0
+	report.Scope, report.SliceID = fields["scope"], fields["slice_id"]
+	if scopeCount != 0 && (report.Scope != "slice" || !sha256IdentityPattern.MatchString(report.SliceID)) {
+		return report, "invalid slice scope extension"
+	}
 	for _, target := range []struct {
 		name  string
 		value *int
