@@ -788,6 +788,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
+		m.ModelPicker.Resize(msg.Height)
 		m.clampAdvisoryScroll()
 		return m, nil
 	case TickMsg:

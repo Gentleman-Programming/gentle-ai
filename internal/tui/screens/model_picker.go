@@ -26,8 +26,14 @@ const (
 	ModeEffortSelect                          // Sub-mode: pick a reasoning effort level
 )
 
-// maxVisibleItems is the maximum number of items shown in scrollable sub-lists.
+// maxVisibleItems is the fallback number of rows rendered in scrollable
+// sub-lists (provider, model, effort). It is used when the picker has no
+// known terminal height (tests, profile-create scaffolding) so behaviour
+// matches the pre-adaptive implementation.
 const maxVisibleItems = 10
+
+// maxVisiblePhaseRows is the fallback number of assignment rows rendered
+// on the phase-list screen. Same fallback contract as maxVisibleItems.
 const maxVisiblePhaseRows = 16
 
 var fetchDynamicModels = opencode.FetchDynamicModels
@@ -87,6 +93,18 @@ type ModelPickerState struct {
 	// When true, the row list still includes optional profile-scoped Judgment Day
 	// agents alongside SDD rows.
 	ForProfile bool
+
+	// Height is the current terminal height in rows. When > 0, renderers
+	// compute the visible list-row budget from the available space after
+	// subtracting fixed screen chrome (title, subtext, actions, help,
+	// warnings). When 0, renderers fall back to the fixed maxVisibleItems
+	// and maxVisiblePhaseRows budgets so tests and the profile-create
+	// scaffolding preserve their existing behaviour.
+	//
+	// The parent TUI syncs this field on every tea.WindowSizeMsg via
+	// (*ModelPickerState).Resize. ClampPickerViewport, exported below,
+	// keeps the cursor and scroll offsets inside the new window.
+	Height int
 
 	lmStudioURL       string
 	lmStudioConfig    opencode.ConfigProvider
@@ -207,6 +225,123 @@ func (state *ModelPickerState) refreshAvailableModels() {
 	}
 }
 
+// Resize updates the picker's height and clamps cursor / scroll offsets for
+// the currently visible lists. Call this from the parent TUI on every
+// tea.WindowSizeMsg so the picker reflects the new viewport without losing
+// the selected row or leaving stale scroll offsets behind.
+//
+// The phase list itself does not have a scroll offset (rows are static, so
+// the renderer computes the visible window directly from cursor + budget),
+// but the sub-lists (provider, model, effort) all carry explicit scroll
+// offsets that must be clamped after the budget changes.
+func (state *ModelPickerState) Resize(height int) {
+	state.Height = height
+
+	// Phase list: clamp SelectedPhaseIdx against the row count even though
+	// the renderer uses the caller-supplied cursor. The cursor is owned by
+	// the parent TUI; this guard only catches direct mutations of state.
+	rows := ModelPickerRows()
+	if state.ForProfile {
+		rows = ModelPickerRowsForProfile()
+	}
+	if state.SelectedPhaseIdx >= len(rows) {
+		state.SelectedPhaseIdx = len(rows) - 1
+	}
+	if state.SelectedPhaseIdx < 0 {
+		state.SelectedPhaseIdx = 0
+	}
+
+	// Provider list.
+	entries := ProviderEntries(*state)
+	ClampPickerScroll(&state.ProviderScroll, &state.ProviderCursor, len(entries), listBudget(height, providerSelectChromeLines(), maxVisibleItems))
+
+	// Model list (uses the current search filter).
+	models := FilteredModelEntries(*state)
+	ClampPickerScroll(&state.ModelScroll, &state.ModelCursor, len(models), listBudget(height, modelSelectChromeLines(), maxVisibleItems))
+
+	// Effort list (empty outside ModeEffortSelect, where the clamp is a no-op).
+	opts := effortOptionsFromLevels(state.SelectedModelEffortLevels)
+	ClampPickerScroll(&state.EffortScroll, &state.EffortCursor, len(opts), listBudget(height, effortSelectChromeLines(), maxVisibleItems))
+}
+
+// listBudget returns the number of list rows that fit in the available
+// terminal height after subtracting the given chrome. When stateHeight is
+// non-positive (no real terminal), the fallback is returned unchanged so
+// callers preserve the pre-adaptive fixed budgets.
+func listBudget(stateHeight, chrome, fallback int) int {
+	if stateHeight <= 0 {
+		return fallback
+	}
+	budget := stateHeight - chrome
+	if budget < fallback {
+		return fallback
+	}
+	return budget
+}
+
+// ClampPickerScroll keeps the cursor inside [scroll, scroll+budget) and the
+// scroll offset inside [0, max(0, items-budget)]. Call this whenever the
+// item count or viewport budget changes (resize, search filtering, mode
+// switch). All clamp logic happens in place on the supplied pointers.
+//
+// When items is empty the cursor is reset to 0 as well so that subsequent
+// re-population of the list (e.g. clearing a search query) starts the
+// cursor at the first entry instead of an out-of-bounds index.
+func ClampPickerScroll(scroll *int, cursor *int, items, budget int) {
+	if items <= 0 {
+		*scroll = 0
+		*cursor = 0
+		return
+	}
+	if *cursor >= items {
+		*cursor = items - 1
+	}
+	if *cursor < 0 {
+		*cursor = 0
+	}
+	if budget <= 0 {
+		budget = 1
+	}
+	if *cursor < *scroll {
+		*scroll = *cursor
+	} else if *cursor >= *scroll+budget {
+		*scroll = *cursor - budget + 1
+	}
+	maxScroll := items - budget
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if *scroll > maxScroll {
+		*scroll = maxScroll
+	}
+}
+
+// phaseListChromeLines returns the rows consumed by title, warnings,
+// actions, help, and inter-section blanks in renderPhaseList — everything
+// except the assignment rows themselves.
+func phaseListChromeLines(state ModelPickerState) int {
+	chrome := 8 // title + blank + subtext + blank + blank + actions + blank + help
+	if state.ConfigWarning != "" {
+		chrome += 2 // warning + blank
+	}
+	return chrome
+}
+
+// providerSelectChromeLines returns the chrome for renderProviderSelect.
+func providerSelectChromeLines() int {
+	return 4 // title + blank + blank + help
+}
+
+// modelSelectChromeLines returns the chrome for renderModelSelect.
+func modelSelectChromeLines() int {
+	return 6 // title + blank + search + blank + blank + help
+}
+
+// effortSelectChromeLines returns the chrome for renderEffortSelect.
+func effortSelectChromeLines() int {
+	return 4 // title + blank + blank + help
+}
+
 func appendConfigWarning(existing, warning string) string {
 	if existing == "" {
 		return warning
@@ -311,6 +446,8 @@ func handleProviderNav(key string, state *ModelPickerState) bool {
 		return false
 	}
 
+	budget := listBudget(state.Height, providerSelectChromeLines(), maxVisibleItems)
+
 	switch key {
 	case "up", "k":
 		if state.ProviderCursor > 0 {
@@ -323,8 +460,8 @@ func handleProviderNav(key string, state *ModelPickerState) bool {
 	case "down", "j":
 		if state.ProviderCursor < len(entries)-1 {
 			state.ProviderCursor++
-			if state.ProviderCursor >= state.ProviderScroll+maxVisibleItems {
-				state.ProviderScroll = state.ProviderCursor - maxVisibleItems + 1
+			if state.ProviderCursor >= state.ProviderScroll+budget {
+				state.ProviderScroll = state.ProviderCursor - budget + 1
 			}
 		}
 		return true
@@ -350,6 +487,7 @@ func handleModelNav(
 	assignments map[string]model.ModelAssignment,
 ) (bool, map[string]model.ModelAssignment) {
 	models := FilteredModelEntries(*state)
+	budget := listBudget(state.Height, modelSelectChromeLines(), maxVisibleItems)
 
 	switch key {
 	case "up", "k":
@@ -363,8 +501,8 @@ func handleModelNav(
 	case "down", "j":
 		if state.ModelCursor < len(models)-1 {
 			state.ModelCursor++
-			if state.ModelCursor >= state.ModelScroll+maxVisibleItems {
-				state.ModelScroll = state.ModelCursor - maxVisibleItems + 1
+			if state.ModelCursor >= state.ModelScroll+budget {
+				state.ModelScroll = state.ModelCursor - budget + 1
 			}
 		}
 		return true, assignments
@@ -638,6 +776,7 @@ func handleEffortNav(
 	assignments map[string]model.ModelAssignment,
 ) (ModelPickerState, map[string]model.ModelAssignment) {
 	opts := effortOptionsFromLevels(state.SelectedModelEffortLevels)
+	budget := listBudget(state.Height, effortSelectChromeLines(), maxVisibleItems)
 
 	switch key {
 	case "up", "k":
@@ -650,8 +789,8 @@ func handleEffortNav(
 	case "down", "j":
 		if state.EffortCursor < len(opts)-1 {
 			state.EffortCursor++
-			if state.EffortCursor >= state.EffortScroll+maxVisibleItems {
-				state.EffortScroll = state.EffortCursor - maxVisibleItems + 1
+			if state.EffortCursor >= state.EffortScroll+budget {
+				state.EffortScroll = state.EffortCursor - budget + 1
 			}
 		}
 	case "enter":
@@ -692,7 +831,10 @@ func renderEffortSelect(state ModelPickerState) string {
 
 	opts := effortOptionsFromLevels(state.SelectedModelEffortLevels)
 
-	end := state.EffortScroll + maxVisibleItems
+	budget := listBudget(state.Height, effortSelectChromeLines(), maxVisibleItems)
+	ClampPickerScroll(&state.EffortScroll, &state.EffortCursor, len(opts), budget)
+
+	end := state.EffortScroll + budget
 	if end > len(opts) {
 		end = len(opts)
 	}
@@ -786,10 +928,11 @@ func renderPhaseList(
 	} else {
 		rows = ModelPickerRows()
 	}
+	budget := listBudget(state.Height, phaseListChromeLines(state), maxVisiblePhaseRows)
 	start, end := 0, len(rows)
-	if len(rows) > maxVisiblePhaseRows {
-		start = max(0, min(cursor-maxVisiblePhaseRows+1, len(rows)-maxVisiblePhaseRows))
-		end = start + maxVisiblePhaseRows
+	if len(rows) > budget {
+		start = max(0, min(cursor-budget+1, len(rows)-budget))
+		end = start + budget
 	}
 	if start > 0 {
 		b.WriteString(styles.SubtextStyle.Render("  ↑ more assignments") + "\n")
@@ -868,7 +1011,10 @@ func renderProviderSelect(state ModelPickerState) string {
 
 	entries := ProviderEntries(state)
 
-	end := state.ProviderScroll + maxVisibleItems
+	budget := listBudget(state.Height, providerSelectChromeLines(), maxVisibleItems)
+	ClampPickerScroll(&state.ProviderScroll, &state.ProviderCursor, len(entries), budget)
+
+	end := state.ProviderScroll + budget
 	if end > len(entries) {
 		end = len(entries)
 	}
@@ -913,17 +1059,13 @@ func renderModelSelect(state ModelPickerState) string {
 	b.WriteString("\n\n")
 
 	models := FilteredModelEntries(state)
-	if state.ModelCursor >= len(models) && len(models) > 0 {
-		state.ModelCursor = len(models) - 1
-	}
-	if state.ModelScroll > state.ModelCursor {
-		state.ModelScroll = state.ModelCursor
-	}
+	budget := listBudget(state.Height, modelSelectChromeLines(), maxVisibleItems)
+	ClampPickerScroll(&state.ModelScroll, &state.ModelCursor, len(models), budget)
 
 	b.WriteString(styles.SubtextStyle.Render("Search: " + modelSearchDisplay(state.ModelSearch)))
 	b.WriteString("\n\n")
 
-	end := state.ModelScroll + maxVisibleItems
+	end := state.ModelScroll + budget
 	if end > len(models) {
 		end = len(models)
 	}
