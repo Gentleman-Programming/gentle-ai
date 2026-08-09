@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,6 +30,8 @@ const (
 	DefaultRuntimeChangedLines               = 200
 	maximumRuntimeAttemptLimit               = 100
 	maximumRuntimeChangedLines               = 1_000_000
+	maximumRuntimeAssignmentIDs              = 4096
+	runtimeAssignmentEmptySentinel           = "none"
 	maximumRuntimeRecordBytes                = 1 << 20
 	maximumRuntimeChainRecords               = 10_000
 	RuntimeActionBegin                       = "begin"
@@ -195,14 +198,17 @@ const (
 )
 
 type RuntimeObjective struct {
-	ID                       string `json:"id"`
-	Generation               int    `json:"generation"`
-	WorkUnit                 string `json:"work_unit"`
-	EvidenceGoal             string `json:"evidence_goal"`
-	InitialCandidateIdentity string `json:"initial_candidate_identity"`
-	InitialCandidateTree     string `json:"initial_candidate_tree"`
-	MaxAttempts              int    `json:"max_attempts"`
-	MaxChangedLines          int    `json:"max_changed_lines"`
+	ID                           string   `json:"id"`
+	Generation                   int      `json:"generation"`
+	WorkUnit                     string   `json:"work_unit"`
+	EvidenceGoal                 string   `json:"evidence_goal"`
+	InitialCandidateIdentity     string   `json:"initial_candidate_identity"`
+	InitialCandidateTree         string   `json:"initial_candidate_tree"`
+	MaxAttempts                  int      `json:"max_attempts"`
+	MaxChangedLines              int      `json:"max_changed_lines"`
+	ObligationAssignmentExplicit bool     `json:"obligation_assignment_explicit,omitempty"`
+	AssignedRequirementIDs       []string `json:"assigned_requirement_ids,omitempty"`
+	AssignedScenarioIDs          []string `json:"assigned_scenario_ids,omitempty"`
 }
 
 type RuntimeAttempt struct {
@@ -337,12 +343,15 @@ type RuntimeStatus struct {
 }
 
 type BeginAttemptRequest struct {
-	ExpectedRevision string `json:"expected_revision"`
-	RequestID        string `json:"request_id"`
-	WorkUnit         string `json:"work_unit"`
-	EvidenceGoal     string `json:"evidence_goal"`
-	MaxAttempts      int    `json:"max_attempts"`
-	MaxChangedLines  int    `json:"max_changed_lines"`
+	ExpectedRevision             string   `json:"expected_revision"`
+	RequestID                    string   `json:"request_id"`
+	WorkUnit                     string   `json:"work_unit"`
+	EvidenceGoal                 string   `json:"evidence_goal"`
+	MaxAttempts                  int      `json:"max_attempts"`
+	MaxChangedLines              int      `json:"max_changed_lines"`
+	ObligationAssignmentExplicit bool     `json:"obligation_assignment_explicit,omitempty"`
+	AssignedRequirementIDs       []string `json:"assigned_requirement_ids,omitempty"`
+	AssignedScenarioIDs          []string `json:"assigned_scenario_ids,omitempty"`
 }
 
 type FinishAttemptRequest struct {
@@ -389,14 +398,17 @@ type RepairConsecutiveRescopeRequest struct {
 // explicitly): a narrowing operation must state its narrower ceiling, not
 // silently inherit DefaultRuntimeAttemptLimit/DefaultRuntimeChangedLines.
 type RescopeObjectiveRequest struct {
-	ExpectedRevision string `json:"expected_revision"`
-	RequestID        string `json:"request_id"`
-	WorkUnit         string `json:"work_unit"`
-	EvidenceGoal     string `json:"evidence_goal"`
-	MaxAttempts      int    `json:"max_attempts"`
-	MaxChangedLines  int    `json:"max_changed_lines"`
-	Reason           string `json:"reason"`
-	Actor            string `json:"actor"`
+	ExpectedRevision             string   `json:"expected_revision"`
+	RequestID                    string   `json:"request_id"`
+	WorkUnit                     string   `json:"work_unit"`
+	EvidenceGoal                 string   `json:"evidence_goal"`
+	MaxAttempts                  int      `json:"max_attempts"`
+	MaxChangedLines              int      `json:"max_changed_lines"`
+	Reason                       string   `json:"reason"`
+	Actor                        string   `json:"actor"`
+	ObligationAssignmentExplicit bool     `json:"obligation_assignment_explicit,omitempty"`
+	AssignedRequirementIDs       []string `json:"assigned_requirement_ids,omitempty"`
+	AssignedScenarioIDs          []string `json:"assigned_scenario_ids,omitempty"`
 }
 
 // GrantRootsRequest records a per-change edit-authority grant (#2540 S2).
@@ -554,8 +566,11 @@ type runtimeBeginEvent struct {
 	// ran under. omitempty is load-bearing — every record predating this field
 	// deserializes it as "", which Finish and replay both treat as "no binding
 	// recorded" rather than as a mismatch, so legacy chains replay unchanged.
-	BeginWorktree     string `json:"begin_worktree,omitempty"`
-	EffectiveWorktree string `json:"effective_worktree,omitempty"`
+	BeginWorktree                string   `json:"begin_worktree,omitempty"`
+	EffectiveWorktree            string   `json:"effective_worktree,omitempty"`
+	ObligationAssignmentExplicit bool     `json:"obligation_assignment_explicit,omitempty"`
+	AssignedRequirementIDs       []string `json:"assigned_requirement_ids,omitempty"`
+	AssignedScenarioIDs          []string `json:"assigned_scenario_ids,omitempty"`
 }
 
 type runtimeResetEvent struct {
@@ -575,20 +590,23 @@ type runtimeResetEvent struct {
 // narrow, because replay recomputes the previous ceiling from the actual
 // replayed objective, never from the record's own claim.
 type runtimeRescopeEvent struct {
-	PreviousObjectiveID      string `json:"previous_objective_id"`
-	PreviousGeneration       int    `json:"previous_generation"`
-	PreviousMaxAttempts      int    `json:"previous_max_attempts"`
-	PreviousMaxChangedLines  int    `json:"previous_max_changed_lines"`
-	RescopeCandidateIdentity string `json:"rescope_candidate_identity"`
-	RescopeCandidateTree     string `json:"rescope_candidate_tree"`
-	ObjectiveID              string `json:"objective_id"`
-	ObjectiveGeneration      int    `json:"objective_generation"`
-	WorkUnit                 string `json:"work_unit"`
-	EvidenceGoal             string `json:"evidence_goal"`
-	MaxAttempts              int    `json:"max_attempts"`
-	MaxChangedLines          int    `json:"max_changed_lines"`
-	Reason                   string `json:"reason"`
-	Actor                    string `json:"actor"`
+	PreviousObjectiveID          string   `json:"previous_objective_id"`
+	PreviousGeneration           int      `json:"previous_generation"`
+	PreviousMaxAttempts          int      `json:"previous_max_attempts"`
+	PreviousMaxChangedLines      int      `json:"previous_max_changed_lines"`
+	RescopeCandidateIdentity     string   `json:"rescope_candidate_identity"`
+	RescopeCandidateTree         string   `json:"rescope_candidate_tree"`
+	ObjectiveID                  string   `json:"objective_id"`
+	ObjectiveGeneration          int      `json:"objective_generation"`
+	WorkUnit                     string   `json:"work_unit"`
+	EvidenceGoal                 string   `json:"evidence_goal"`
+	MaxAttempts                  int      `json:"max_attempts"`
+	MaxChangedLines              int      `json:"max_changed_lines"`
+	Reason                       string   `json:"reason"`
+	Actor                        string   `json:"actor"`
+	ObligationAssignmentExplicit bool     `json:"obligation_assignment_explicit,omitempty"`
+	AssignedRequirementIDs       []string `json:"assigned_requirement_ids,omitempty"`
+	AssignedScenarioIDs          []string `json:"assigned_scenario_ids,omitempty"`
 }
 
 type runtimeRepairEvent struct {
@@ -815,6 +833,9 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
 			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace,
+			ObligationAssignmentExplicit: request.ObligationAssignmentExplicit,
+			AssignedRequirementIDs:       request.AssignedRequirementIDs,
+			AssignedScenarioIDs:          request.AssignedScenarioIDs,
 		}
 		if advancing {
 			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
@@ -1504,6 +1525,9 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Reason: request.Reason, Actor: request.Actor,
+			ObligationAssignmentExplicit: request.ObligationAssignmentExplicit,
+			AssignedRequirementIDs:       request.AssignedRequirementIDs,
+			AssignedScenarioIDs:          request.AssignedScenarioIDs,
 		}}, nil
 	})
 }
@@ -2005,6 +2029,9 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 			ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 			InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree,
 			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+			ObligationAssignmentExplicit: event.ObligationAssignmentExplicit,
+			AssignedRequirementIDs:       append([]string(nil), event.AssignedRequirementIDs...),
+			AssignedScenarioIDs:          append([]string(nil), event.AssignedScenarioIDs...),
 		}
 		replay.Status.ObjectiveGeneration = generation
 	} else {
@@ -2117,6 +2144,9 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 		ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 		InitialCandidateIdentity: event.RescopeCandidateIdentity, InitialCandidateTree: event.RescopeCandidateTree,
 		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+		ObligationAssignmentExplicit: event.ObligationAssignmentExplicit,
+		AssignedRequirementIDs:       append([]string(nil), event.AssignedRequirementIDs...),
+		AssignedScenarioIDs:          append([]string(nil), event.AssignedScenarioIDs...),
 	}
 	replay.Status.ObjectiveGeneration = generation
 	replay.Status.EvidenceRevision = ""
@@ -2353,9 +2383,16 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 		(event.EffectiveWorktree != "" && (validateRuntimeText(event.EffectiveWorktree, 4096) != nil || event.EffectiveWorktree != event.BeginWorktree)) {
 		return errors.New("invalid SDD runtime begin event")
 	}
+	if _, _, err := normalizeRuntimeAssignmentFields(
+		event.ObligationAssignmentExplicit, event.AssignedRequirementIDs, event.AssignedScenarioIDs); err != nil {
+		return errors.New("invalid SDD runtime begin obligation assignment")
+	}
 	request := BeginAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
 		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+		ObligationAssignmentExplicit: event.ObligationAssignmentExplicit,
+		AssignedRequirementIDs:       event.AssignedRequirementIDs,
+		AssignedScenarioIDs:          event.AssignedScenarioIDs,
 	}
 	if runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request) != record.RequestDigest {
 		return errors.New("SDD runtime begin request digest does not match record")
@@ -2510,11 +2547,18 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
 			return errors.New("invalid SDD runtime rescope event") // refusal:by-design world-action: this shape (including narrowing) is enforced before publication, so a violation is a mutated record and the exit is restoring the store
 		}
+		if _, _, err := normalizeRuntimeAssignmentFields(
+			event.ObligationAssignmentExplicit, event.AssignedRequirementIDs, event.AssignedScenarioIDs); err != nil {
+			return errors.New("invalid SDD runtime rescope obligation assignment") // refusal:by-design world-action: assignments are shape-validated before publication, so an invalid persisted assignment is mutated authority
+		}
 		request := RescopeObjectiveRequest{
 			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID,
 			WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
 			Reason: event.Reason, Actor: event.Actor,
+			ObligationAssignmentExplicit: event.ObligationAssignmentExplicit,
+			AssignedRequirementIDs:       event.AssignedRequirementIDs,
+			AssignedScenarioIDs:          event.AssignedScenarioIDs,
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-rescope-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime rescope request digest does not match record") // refusal:by-design world-action: the digest is computed from the same request at write time, so a mismatch is a mutated record and the exit is restoring the store
@@ -2629,6 +2673,54 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 	return nil
 }
 
+func runtimeAssignmentFieldsEqual(explicitA bool, requirementsA, scenariosA []string, explicitB bool, requirementsB, scenariosB []string) bool {
+	return explicitA == explicitB && slices.Equal(requirementsA, requirementsB) && slices.Equal(scenariosA, scenariosB)
+}
+
+func normalizeRuntimeAssignmentFields(explicit bool, requirements, scenarios []string) ([]string, []string, error) {
+	if !explicit && (len(requirements) != 0 || len(scenarios) != 0) {
+		return nil, nil, errors.New("obligation assignment IDs require obligation_assignment_explicit")
+	}
+	if !explicit {
+		return nil, nil, nil
+	}
+
+	normalize := func(field string, ids []string) ([]string, error) {
+		if len(ids) > maximumRuntimeAssignmentIDs {
+			return nil, fmt.Errorf("%s exceeds the maximum of %d IDs", field, maximumRuntimeAssignmentIDs)
+		}
+		copyIDs := make([]string, len(ids))
+		seen := make(map[string]struct{}, len(ids))
+		for index, id := range ids {
+			if err := validateRuntimeText(id, 240); err != nil {
+				return nil, fmt.Errorf("invalid %s[%d]: %w", field, index, err)
+			}
+			if strings.Contains(id, ",") {
+				return nil, fmt.Errorf("invalid %s[%d]: IDs must not contain commas", field, index)
+			}
+			if id == runtimeAssignmentEmptySentinel {
+				return nil, fmt.Errorf("invalid %s[%d]: %q is reserved for an explicit empty assignment", field, index, id)
+			}
+			if _, duplicate := seen[id]; duplicate {
+				return nil, fmt.Errorf("duplicate %s ID %q", field, id)
+			}
+			seen[id] = struct{}{}
+			copyIDs[index] = id
+		}
+		return copyIDs, nil
+	}
+
+	requirementIDs, err := normalize("assigned_requirement_ids", requirements)
+	if err != nil {
+		return nil, nil, err
+	}
+	scenarioIDs, err := normalize("assigned_scenario_ids", scenarios)
+	if err != nil {
+		return nil, nil, err
+	}
+	return requirementIDs, scenarioIDs, nil
+}
+
 func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequest, error) {
 	if request.ExpectedRevision != "" && !runtimeRevisionPattern.MatchString(request.ExpectedRevision) {
 		return BeginAttemptRequest{}, errors.New("expected runtime revision must be empty or sha256")
@@ -2653,6 +2745,21 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	}
 	if request.MaxChangedLines < 1 || request.MaxChangedLines > maximumRuntimeChangedLines {
 		return BeginAttemptRequest{}, fmt.Errorf("max_changed_lines must be within 1..%d", maximumRuntimeChangedLines)
+	}
+	requirementIDs, scenarioIDs, err := normalizeRuntimeAssignmentFields(
+		request.ObligationAssignmentExplicit, request.AssignedRequirementIDs, request.AssignedScenarioIDs)
+	if err != nil {
+		return BeginAttemptRequest{}, err
+	}
+	request.AssignedRequirementIDs = requirementIDs
+	request.AssignedScenarioIDs = scenarioIDs
+	if request.ObligationAssignmentExplicit {
+		if request.AssignedRequirementIDs == nil {
+			request.AssignedRequirementIDs = []string{}
+		}
+		if request.AssignedScenarioIDs == nil {
+			request.AssignedScenarioIDs = []string{}
+		}
 	}
 	return request, nil
 }
@@ -2890,6 +2997,21 @@ func normalizeRescopeObjectiveRequest(request RescopeObjectiveRequest) (RescopeO
 	}
 	if err := validateRuntimeText(request.Actor, 128); err != nil {
 		return RescopeObjectiveRequest{}, fmt.Errorf("invalid rescope actor: %w", err)
+	}
+	requirementIDs, scenarioIDs, err := normalizeRuntimeAssignmentFields(
+		request.ObligationAssignmentExplicit, request.AssignedRequirementIDs, request.AssignedScenarioIDs)
+	if err != nil {
+		return RescopeObjectiveRequest{}, err
+	}
+	request.AssignedRequirementIDs = requirementIDs
+	request.AssignedScenarioIDs = scenarioIDs
+	if request.ObligationAssignmentExplicit {
+		if request.AssignedRequirementIDs == nil {
+			request.AssignedRequirementIDs = []string{}
+		}
+		if request.AssignedScenarioIDs == nil {
+			request.AssignedScenarioIDs = []string{}
+		}
 	}
 	return request, nil
 }
