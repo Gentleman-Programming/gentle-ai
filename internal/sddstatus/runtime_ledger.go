@@ -775,7 +775,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			return runtimeRecord{}, ErrRuntimeBudgetExhausted
 		}
 		if (status.Objective == nil || advancing) && runtimeScopeOverlaps(replay.Scopes, request.Scope) {
-			return runtimeRecord{}, errors.New("scoped objective assignment overlaps an existing runtime objective")
+			return runtimeRecord{}, errors.New("scoped objective assignment overlaps an existing runtime objective") // refusal:by-design world-action: provider-owned authority construction must assign a non-overlapping scope
 		}
 
 		generation := status.ObjectiveGeneration + 1
@@ -1365,7 +1365,7 @@ func runtimeHasSliceProof(proofs []SliceProof, objectiveID string) bool {
 // current completed objective is the provider authority the report names.
 func (store RuntimeStore) AdmitSliceProof(ctx context.Context, report, scope, sliceID string) (VerifyReportAdmission, error) {
 	if scope != "slice" || !runtimeRevisionPattern.MatchString(sliceID) {
-		return VerifyReportAdmission{}, errors.New("slice proof requires scope slice and an exact slice_id")
+		return VerifyReportAdmission{}, errors.New("slice proof requires scope slice and an exact slice_id") // refusal:by-design operator-knowledge: only the caller can select slice scope and the exact provider-owned slice identity
 	}
 	requestDigest := runtimeValueHash("gentle-ai.sdd-runtime-slice-proof-request/v1", struct {
 		Scope, SliceID, Report string
@@ -1377,30 +1377,30 @@ func (store RuntimeStore) AdmitSliceProof(ctx context.Context, report, scope, sl
 	}
 	objective := replay.Status.Objective
 	if objective == nil || objective.Scope == nil || !replay.Status.Complete || replay.Status.ActiveAttempt != nil {
-		return VerifyReportAdmission{}, errors.New("slice proof requires a completed scoped runtime objective")
+		return VerifyReportAdmission{}, errors.New("slice proof requires a completed scoped runtime objective") // refusal:by-design world-action: a proof can be admitted only after the provider records the completed scoped objective
 	}
 	admitted := ValidateVerifyReportAdmission(report, SpecCounts{}, *objective)
 	if !admitted.Valid {
 		return admitted, nil
 	}
 	if admitted.EvidenceRevision != replay.Status.EvidenceRevision {
-		return VerifyReportAdmission{}, errors.New("slice proof evidence revision does not match the completed runtime objective")
+		return VerifyReportAdmission{}, errors.New("slice proof evidence revision does not match the completed runtime objective") // refusal:by-design world-action: the report must be regenerated from the objective's current recorded evidence
 	}
 	_, err = store.mutate(ctx, replay.Status.Revision, requestID, requestDigest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
 		objective := status.Objective
 		if objective == nil || objective.Scope == nil || !status.Complete || status.ActiveAttempt != nil {
-			return runtimeRecord{}, errors.New("slice proof requires a completed scoped runtime objective")
+			return runtimeRecord{}, errors.New("slice proof requires a completed scoped runtime objective") // refusal:by-design world-action: a proof can be admitted only after the provider records the completed scoped objective
 		}
 		currentAdmission := ValidateVerifyReportAdmission(report, SpecCounts{}, *objective)
 		if !currentAdmission.Valid {
 			return runtimeRecord{}, errors.New(currentAdmission.Reason)
 		}
 		if currentAdmission.EvidenceRevision != status.EvidenceRevision {
-			return runtimeRecord{}, errors.New("slice proof evidence revision does not match the completed runtime objective")
+			return runtimeRecord{}, errors.New("slice proof evidence revision does not match the completed runtime objective") // refusal:by-design world-action: the report must be regenerated from the objective's current recorded evidence
 		}
 		if runtimeHasSliceProof(status.SliceProofs, objective.ID) {
-			return runtimeRecord{}, errors.New("slice proof already exists for the completed runtime objective")
+			return runtimeRecord{}, errors.New("slice proof already exists for the completed runtime objective") // refusal:by-design world-action: immutable authority permits one proof for the completed objective
 		}
 		return runtimeRecord{Operation: runtimeOperationSliceProof, SliceProof: &runtimeSliceProofEvent{
 			ObjectiveID: objective.ID, SliceID: sliceID, EvidenceRevision: currentAdmission.EvidenceRevision, Report: report,
@@ -2098,7 +2098,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 		}
 		if event.Scope != nil {
 			if runtimeScopeOverlaps(replay.Scopes, event.Scope) {
-				return errors.New("begin record overlaps a prior scoped objective")
+				return errors.New("begin record overlaps a prior scoped objective") // refusal:by-design world-action: overlapping scopes in replay are a mutated immutable record and require store restoration
 			}
 			replay.Scopes = append(replay.Scopes, *event.Scope)
 		}
@@ -2390,11 +2390,11 @@ func applyRuntimeSliceProofEvent(replay *runtimeReplay, event *runtimeSliceProof
 	objective := replay.Status.Objective
 	if event == nil || objective == nil || objective.Scope == nil || !replay.Status.Complete || replay.Status.ActiveAttempt != nil ||
 		event.ObjectiveID != objective.ID || event.SliceID != objective.ID || runtimeHasSliceProof(replay.Status.SliceProofs, objective.ID) {
-		return errors.New("slice proof does not match the completed scoped runtime objective")
+		return errors.New("slice proof does not match the completed scoped runtime objective") // refusal:by-design world-action: a replayed proof mismatch is an immutable-record violation and requires store restoration
 	}
 	admission := ValidateVerifyReportAdmission(event.Report, SpecCounts{}, *objective)
 	if !admission.Valid || admission.EvidenceRevision != event.EvidenceRevision || event.EvidenceRevision != replay.Status.EvidenceRevision {
-		return errors.New("slice proof report is not admitted current objective evidence")
+		return errors.New("slice proof report is not admitted current objective evidence") // refusal:by-design world-action: a replayed proof must retain the current provider-admitted evidence
 	}
 	replay.Status.SliceProofs = append(replay.Status.SliceProofs, SliceProof{
 		ObjectiveID: event.ObjectiveID, SliceID: event.SliceID, EvidenceRevision: event.EvidenceRevision,
@@ -2467,7 +2467,7 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 		return errors.New("invalid SDD runtime begin event")
 	}
 	if normalized, err := normalizeRuntimeScope(event.Scope); err != nil || !runtimeScopeEqual(normalized, event.Scope) {
-		return errors.New("invalid SDD runtime objective scope")
+		return errors.New("invalid SDD runtime objective scope") // refusal:by-design world-action: an invalid persisted scope is an immutable-record violation and requires store restoration
 	}
 	request := BeginAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
@@ -2489,7 +2489,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		return errors.New("unexpected SDD runtime repair event") // refusal:by-design world-action: an immutable record may carry only the event its operation names
 	}
 	if record.SliceProof != nil && record.Operation != runtimeOperationSliceProof {
-		return errors.New("slice proof cannot be combined with another runtime operation")
+		return errors.New("slice proof cannot be combined with another runtime operation") // refusal:by-design world-action: immutable records encode one authority operation at a time
 	}
 	switch record.Operation {
 	case runtimeOperationBegin:
@@ -2744,22 +2744,22 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 	case runtimeOperationSliceProof:
 		if record.SliceProof == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
-			return errors.New("invalid SDD runtime slice proof record shape")
+			return errors.New("invalid SDD runtime slice proof record shape") // refusal:by-design world-action: a slice proof record is provider-constructed and cannot carry a parallel authority mutation
 		}
 		event := record.SliceProof
 		if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || !runtimeRevisionPattern.MatchString(event.SliceID) ||
 			!runtimeRevisionPattern.MatchString(event.EvidenceRevision) || len(event.Report) == 0 || len(event.Report) > MaxVerifyReportBytes {
-			return errors.New("invalid SDD runtime slice proof event")
+			return errors.New("invalid SDD runtime slice proof event") // refusal:by-design world-action: malformed persisted proof fields are an immutable-record violation and require store restoration
 		}
 		report, reason := parseVerifyReport(event.Report)
 		if reason != "" || report.Scope != "slice" || report.SliceID != event.SliceID || report.EvidenceRevision != event.EvidenceRevision {
-			return errors.New("invalid SDD runtime slice proof report")
+			return errors.New("invalid SDD runtime slice proof report") // refusal:by-design world-action: a persisted proof must retain the provider-admitted report it recorded
 		}
 		requestDigest := runtimeValueHash("gentle-ai.sdd-runtime-slice-proof-request/v1", struct {
 			Scope, SliceID, Report string
 		}{"slice", event.SliceID, event.Report})
 		if record.RequestDigest != requestDigest || record.RequestID != "slice-proof-"+strings.TrimPrefix(requestDigest, "sha256:")[:32] {
-			return errors.New("SDD runtime slice proof request digest does not match record")
+			return errors.New("SDD runtime slice proof request digest does not match record") // refusal:by-design world-action: a digest mismatch is a mutated immutable record and requires store restoration
 		}
 	default:
 		return errors.New("invalid SDD runtime record operation")
