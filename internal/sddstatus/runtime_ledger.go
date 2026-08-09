@@ -1379,12 +1379,25 @@ func (store RuntimeStore) AdmitSliceProof(ctx context.Context, report, scope, sl
 	if objective == nil || objective.Scope == nil || !replay.Status.Complete || replay.Status.ActiveAttempt != nil {
 		return VerifyReportAdmission{}, errors.New("slice proof requires a completed scoped runtime objective") // refusal:by-design world-action: a proof can be admitted only after the provider records the completed scoped objective
 	}
+	if sliceID != objective.ID {
+		return VerifyReportAdmission{}, errors.New("slice proof does not match the completed scoped runtime objective") // refusal:by-design operator-knowledge: the caller must name the provider-owned completed objective it is proving
+	}
 	admitted := ValidateVerifyReportAdmission(report, SpecCounts{}, *objective)
 	if !admitted.Valid {
 		return admitted, nil
 	}
 	if admitted.EvidenceRevision != replay.Status.EvidenceRevision {
 		return VerifyReportAdmission{}, errors.New("slice proof evidence revision does not match the completed runtime objective") // refusal:by-design world-action: the report must be regenerated from the objective's current recorded evidence
+	}
+	reportDigest := runtimeValueHash("gentle-ai.sdd-runtime-slice-proof-report/v1", report)
+	for _, proof := range replay.Status.SliceProofs {
+		if proof.ObjectiveID != objective.ID {
+			continue
+		}
+		if proof.EvidenceRevision == admitted.EvidenceRevision && proof.ReportDigest == reportDigest {
+			return admitted, nil
+		}
+		return VerifyReportAdmission{}, errors.New("slice proof conflicts with the completed runtime objective") // refusal:by-design world-action: immutable authority permits one exact proof for the completed objective
 	}
 	_, err = store.mutate(ctx, replay.Status.Revision, requestID, requestDigest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
@@ -1400,7 +1413,7 @@ func (store RuntimeStore) AdmitSliceProof(ctx context.Context, report, scope, sl
 			return runtimeRecord{}, errors.New("slice proof evidence revision does not match the completed runtime objective") // refusal:by-design world-action: the report must be regenerated from the objective's current recorded evidence
 		}
 		if runtimeHasSliceProof(status.SliceProofs, objective.ID) {
-			return runtimeRecord{}, errors.New("slice proof already exists for the completed runtime objective") // refusal:by-design world-action: immutable authority permits one proof for the completed objective
+			return runtimeRecord{}, errors.New("slice proof conflicts with the completed runtime objective") // refusal:by-design world-action: immutable authority permits one exact proof for the completed objective
 		}
 		return runtimeRecord{Operation: runtimeOperationSliceProof, SliceProof: &runtimeSliceProofEvent{
 			ObjectiveID: objective.ID, SliceID: sliceID, EvidenceRevision: currentAdmission.EvidenceRevision, Report: report,

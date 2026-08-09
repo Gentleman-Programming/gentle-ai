@@ -165,12 +165,15 @@ func ValidateVerifyReportAdmission(text string, expected SpecCounts, objectives 
 		result.Reason = "expected requirement and scenario counts must be nonnegative"
 		return result
 	}
-	if report.Scope != "" || report.SliceID != "" {
-		if report.Scope != "slice" || len(objectives) != 1 || objectives[0].Scope == nil || report.SliceID != objectives[0].ID {
+	if len(objectives) != 0 {
+		if len(objectives) != 1 || objectives[0].Scope == nil || report.Scope != "slice" || report.SliceID != objectives[0].ID {
 			result.Reason = "slice report does not match provider-owned runtime objective"
 			return result
 		}
 		expected = objectives[0].Scope.counts()
+	} else if report.Scope != "" || report.SliceID != "" {
+		result.Reason = "slice report does not match provider-owned runtime objective"
+		return result
 	}
 	if report.Requirements.Total != expected.Requirements {
 		result.Reason = fmt.Sprintf("verify result total %d does not match actual requirement count %d", report.Requirements.Total, expected.Requirements)

@@ -75,10 +75,11 @@ func runSDDVerifyValidate(args []string, stdin io.Reader, stdout io.Writer) erro
 	if err != nil {
 		return fmt.Errorf("resolve verify report authority: %w", err)
 	}
-	admission := sddstatus.ValidateVerifyReportAdmission(string(payload), counts)
+	objectives := []sddstatus.RuntimeObjective(nil)
 	if objective != nil {
-		admission = sddstatus.ValidateVerifyReportAdmission(string(payload), counts, *objective)
+		objectives = append(objectives, *objective)
 	}
+	admission := sddstatus.ValidateVerifyReportAdmission(string(payload), counts, objectives...)
 	if !admission.Valid {
 		return fmt.Errorf("verify report admission denied: %s", admission.Reason)
 	}
@@ -90,6 +91,9 @@ func runSDDVerifyValidate(args []string, stdin io.Reader, stdout io.Writer) erro
 		admission, err = store.AdmitSliceProof(context.Background(), string(payload), strings.TrimSpace(*scope), strings.TrimSpace(*sliceID))
 		if err != nil {
 			return fmt.Errorf("verify report admission denied: %w", err)
+		}
+		if !admission.Valid {
+			return fmt.Errorf("verify report admission denied: %s", admission.Reason)
 		}
 	}
 	encoder := json.NewEncoder(stdout)

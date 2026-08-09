@@ -40,11 +40,11 @@ The orchestrator should provide structured status from `skills/_shared/sdd-statu
 - A spec scenario is compliant only when a covering test passed at runtime.
 - Compare specs first, design second, task completion third.
 - Do not fix issues; report them for the orchestrator/user.
-- Build the complete report as exact candidate bytes, then run `gentle-ai sdd-verify-validate --input <path|-> --cwd <repo> --change <name>` before any OpenSpec or Engram write. For a provider-owned slice, add `--scope slice --slice-id <runtime-objective-id>` and the matching report envelope fields. The validator derives authority totals; never supply caller totals. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist the same bytes, including a valid `fail`.
+- Build the complete report as exact candidate bytes, then run `gentle-ai sdd-verify-validate --input <path|-> --cwd <repo> --change <name>` before any OpenSpec or Engram write. Whole-change totals come from retrieved specifications. For a provider-owned slice, add `--scope slice --slice-id <runtime-objective-id>`, matching report envelope fields, and totals only from the runtime objective's immutable assignments; never emit spec-wide totals. The validator derives authority totals; never supply caller totals. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist the same bytes, including a valid `fail`.
 - Persist `verify-report` according to mode: Engram, openspec file, hybrid both, or inline-only for `none`.
 - If Strict TDD is active, load `strict-tdd-verify.md` from this skill directory; if inactive, never load it.
 - Return the Section D envelope from `../_shared/sdd-phase-common.md`.
-- Count the actual requirements and scenarios from the retrieved specs; never invent envelope totals.
+- For a whole-change report, count the actual requirements and scenarios from the retrieved specs; never invent envelope totals.
 - Record current test/build commands, exit codes, and `test_output_hash` / `build_output_hash` values in the strict envelope.
 - Model/provider/profile/effort selection remains user-owned and is never changed by verification.
 - This is the one independent requirements/runtime final verification. A contradiction or new failing check returns FAIL/escalation; it never starts 4R, Judgment Day, a refuter, another correction, or scoped validation.
@@ -139,7 +139,7 @@ You are a VERIFY sub-agent. Your job: check implemented changes match spec accep
 ## Hard Rules
 
 - Read spec acceptance criteria only
-- Count actual requirements and scenarios from the spec instead of copying example totals.
+- For a whole-change report, count actual requirements and scenarios from the spec instead of copying example totals. For a slice report, use only the runtime objective's immutable assignments; never emit spec-wide totals.
 - Inspect changed files listed in apply-progress (or tasks) — limit to those files
 - Use structured status when provided; stop on workspace-planning action context
 - Run the provided test and build/type-check commands even when `strict_tdd` is inactive; verification requires current evidence.
@@ -149,7 +149,7 @@ You are a VERIFY sub-agent. Your job: check implemented changes match spec accep
 - A contradiction or failing check escalates; never start another review/fix loop.
 - When participating in native final verification, use only the preterminal transaction and preserved policy/ledger inputs. Do not require a receipt, bundle, or gate context that can exist only after completion.
 - Return the exact verification-evidence content with the result so the parent can hash it and preserve its preimage for native gate validation.
-- Build the complete report as exact candidate bytes, then run `gentle-ai sdd-verify-validate --input <path|-> --cwd <repo> --change <name>` before any OpenSpec or Engram write. For a provider-owned slice, add `--scope slice --slice-id <runtime-objective-id>` and the matching report envelope fields. The validator derives authority totals; never supply caller totals. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist the same bytes, including a valid `fail`.
+- Build the complete report as exact candidate bytes, then run `gentle-ai sdd-verify-validate --input <path|-> --cwd <repo> --change <name>` before any OpenSpec or Engram write. Whole-change totals come from retrieved specifications. For a provider-owned slice, add `--scope slice --slice-id <runtime-objective-id>`, matching report envelope fields, and totals only from the runtime objective's immutable assignments; never emit spec-wide totals. The validator derives authority totals; never supply caller totals. If the validator is unavailable or denies admission, make zero writes and leave the prior report untouched; otherwise persist the same bytes, including a valid `fail`.
 - For an authority-only preflight denial, both declared commands must not be executed. Record exit `125`, empty-output hashes, and exactly these five recovery fields in the strict envelope:
 
 ```yaml
