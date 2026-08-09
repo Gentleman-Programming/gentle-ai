@@ -92,6 +92,10 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		// Tool-fault: literal internal invariant violation.
 		ToolFault: reviewStopToolFault(true),
 	},
+	"final_verification_retry_context_unavailable": {
+		Terminal:      false,
+		Justification: "caller-continuable: re-query negotiated v2 STATUS with a declared runtime agent so the provider can issue the opaque retry context",
+	},
 	"manual_intervention_required": {
 		Terminal:      true,
 		Justification: "default branch of the Authority.State switch: the authority state is not one of this negotiated protocol's known states. Every state the compact authority (or a legacy chain routed through TargetStatusActionStop) can actually reach is handled by an earlier, explicit branch, so this default is structurally unreachable in practice and exists as a defensive fallback for an unmodeled future state, exactly like Go's convention for an exhaustive string-typed switch — genuinely terminal if it ever fires",
@@ -112,6 +116,11 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		// legitimate business outcome (an escalated lineage genuinely stuck
 		// pending a human's review), not an unreachable/unmodeled state.
 		ToolFault: reviewStopToolFault(false),
+	},
+	"legacy_hash_only_authority": {
+		Terminal:      true,
+		Justification: "applicable non-terminal legacy-v1 authority is read-only and cannot enter compact retry, import, or repair paths; a different candidate starts a distinct review",
+		ToolFault:     reviewStopToolFault(false),
 	},
 	"original_finalize_request_required": {
 		Terminal:      false,

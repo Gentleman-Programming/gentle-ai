@@ -185,6 +185,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		return reviewFinalVerificationRetryCollection(status, binding, string(input.RuntimeAgent))
 	}
 	if status.Action == reviewtransaction.TargetStatusActionStop {
+		if status.Authority.Version == reviewtransaction.AuthorityVersionLegacy {
+			return reviewStopTransition("legacy_hash_only_authority")
+		}
 		if status.Authority.State == reviewtransaction.StateCorrectionRequired {
 			return reviewStopTransition("unchanged_or_unverified_authority")
 		}
@@ -1017,6 +1020,8 @@ func reviewReasonDescription(reason string) string {
 		return "Authority requires a changed or verified candidate"
 	case "native_stop_required":
 		return "Native stop transition required by authority"
+	case "legacy_hash_only_authority":
+		return "Historical hash-only authority requires a fresh review"
 	case "captured_artifacts_unverifiable":
 		return "Captured artifacts failed verification or are missing"
 	case "corrected_candidate_unavailable":

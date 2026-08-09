@@ -141,6 +141,8 @@ var reviewStopReasonNarration = map[string]string{
 	"final_verification_retry_unavailable": "This run reached a state that should never happen: it was routed to retry a final verification it was not eligible to retry. " +
 		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
+	"final_verification_retry_context_unavailable": "Retry consent needs a provider-owned context before it can be offered. Re-run " +
+		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition`.",
 	"manual_intervention_required": "This review reached a state Gentle AI does not recognize. " +
 		"This is a product defect. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, ask a maintainer to review it and report the defect.",
@@ -150,6 +152,9 @@ var reviewStopReasonNarration = map[string]string{
 	"native_stop_required": "This review is stuck at an escalated state that is not yet eligible to continue. " +
 		"Ask a maintainer to review it before doing anything else, or run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
+	"legacy_hash_only_authority": "This historical hash-only review record is terminal and cannot be retried, imported, or repaired. " +
+		"Produce a new candidate target identity, then run `gentle-ai review start --cwd <repo>` to begin a new review, " +
+		"or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"original_finalize_request_required": "Re-run `gentle-ai review finalize` with the exact same results or evidence you submitted before.",
 	"recovery_scope_unchanged": "Change the candidate so it targets something different from what is already on record, then retry the recovery, " +
 		"or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
