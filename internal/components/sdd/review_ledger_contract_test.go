@@ -334,7 +334,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// prompts (+458 characters each); no key is added, removed, or otherwise
 	// changed. The hash is recomputed from the rebased tree. Deliberate, not
 	// drift.
-	const want = "d696513e55fd4556b325f0f11658053a52cbf48832757000454fa0af90920736"
+	// The provider-defect handoff now has three candidate-scoped outcomes;
+	// Kilocode embeds it in the orchestrator prompt, so the hash moved.
+	const want = "15e21d3b3a38028f6f0607313aa11dde02ff89a7721935133cd4f961a4f672ce"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
