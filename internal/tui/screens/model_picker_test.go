@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -64,6 +65,222 @@ func TestRenderModelPickerScrollsToReviewAgents(t *testing.T) {
 	if strings.Contains(output, "gentle-orchestrator") {
 		t.Fatalf("picker did not window rows around review cursor:\n%s", output)
 	}
+}
+
+// ─── Issue #2301: adaptive viewport for the assignment screen ─────────────
+
+// manyModels returns n synthetic models for viewport-budget tests.
+func manyModels(n int) []opencode.Model {
+	models := make([]opencode.Model, n)
+	for i := 0; i < n; i++ {
+		models[i] = opencode.Model{ID: "model-" + strconv.Itoa(i), Name: "Model " + strconv.Itoa(i)}
+	}
+	return models
+}
+
+// TestRenderModelPicker_AdaptiveTallTerminalHidesMoreIndicator verifies that a
+// tall terminal renders the full assignment matrix without "more assignments"
+// indicators and keeps every row reachable (orchestrator at the top, review
+// agents at the bottom).
+//
+// Issue #2301 — adaptive layout.
+func TestRenderModelPicker_AdaptiveTallTerminalHidesMoreIndicator(t *testing.T) {
+	state := ModelPickerState{
+		Height:         60,
+		AvailableIDs:   []string{"openai"},
+		Providers:      map[string]opencode.Provider{"openai": {ID: "openai", Name: "OpenAI"}},
+		SDDModels:      map[string][]opencode.Model{"openai": manyModels(3)},
+		lmStudioURL:    "http://127.0.0.1:1234/v1",
+		lmStudioConfig: opencode.ConfigProvider{URL: "http://127.0.0.1:1234/v1"},
+	}
+	rows := ModelPickerRows()
+
+	for _, cursor := range []int{0, len(rows) - 1, len(rows) / 2} {
+		output := RenderModelPicker(nil, state, cursor)
+		if strings.Contains(output, "↑ more assignments") || strings.Contains(output, "↓ more assignments") {
+			t.Fatalf("cursor=%d: tall terminal should hide overflow indicators; got:\n%s", cursor, output)
+		}
+		if !strings.Contains(output, "gentle-orchestrator") {
+			t.Errorf("cursor=%d: orchestrator row missing in tall terminal; got:\n%s", cursor, output)
+		}
+		if !strings.Contains(output, "review-refuter") {
+			t.Errorf("cursor=%d: review-refuter row missing in tall terminal; got:\n%s", cursor, output)
+		}
+	}
+}
+
+// TestRenderModelPicker_AdaptiveShortTerminalShowsOverflowIndicator verifies
+// that a short terminal keeps the list bounded and surfaces a "more"
+// indicator so the user knows scrollable content exists.
+//
+// Issue #2301 — adaptive layout.
+func TestRenderModelPicker_AdaptiveShortTerminalShowsOverflowIndicator(t *testing.T) {
+	state := ModelPickerState{
+		Height:         18, // chrome 8 → budget 10 < 22 rows
+		AvailableIDs:   []string{"openai"},
+		Providers:      map[string]opencode.Provider{"openai": {ID: "openai", Name: "OpenAI"}},
+		SDDModels:      map[string][]opencode.Model{"openai": manyModels(3)},
+		lmStudioURL:    "http://127.0.0.1:1234/v1",
+		lmStudioConfig: opencode.ConfigProvider{URL: "http://127.0.0.1:1234/v1"},
+	}
+
+	output := RenderModelPicker(nil, state, 0)
+	if !strings.Contains(output, "↓ more assignments") {
+		t.Fatalf("short terminal should show ↓ more assignments; got:\n%s", output)
+	}
+	// Help and Continue/Back chrome must still be present.
+	if !strings.Contains(output, "Continue") || !strings.Contains(output, "Back") {
+		t.Errorf("short terminal lost chrome controls; got:\n%s", output)
+	}
+}
+
+// TestResize_ClampsModelScrollWhenBudgetShrinks verifies that calling Resize
+// with a smaller terminal height keeps the cursor visible by adjusting the
+// scroll offset, instead of leaving the cursor off-screen.
+//
+// Issue #2301 — preserve the selected assignment after resize.
+func TestResize_ClampsModelScrollWhenBudgetShrinks(t *testing.T) {
+	state := ModelPickerState{
+		Height:           60, // large budget at start
+		Mode:             ModeModelSelect,
+		SelectedProvider: "openai",
+		Providers:        map[string]opencode.Provider{"openai": {ID: "openai", Name: "OpenAI"}},
+		SDDModels:        map[string][]opencode.Model{"openai": manyModels(20)},
+		ModelCursor:      15,
+		ModelScroll:      0,
+	}
+
+	state.Resize(20) // shrinks: budget = 20-6 = 14, maxScroll = 20-14 = 6
+	if state.ModelScroll != 2 {
+		t.Errorf("ModelScroll after shrink = %d, want 2 (cursor 15, budget 14)", state.ModelScroll)
+	}
+	if state.ModelCursor != 15 {
+		t.Errorf("ModelCursor preserved = %d, want 15", state.ModelCursor)
+	}
+}
+
+// TestResize_ClampsModelScrollWhenBudgetGrows verifies that a larger terminal
+// does not leave stale scroll offsets that would hide the top of the list.
+//
+// Issue #2301 — preserve the selected assignment after resize.
+func TestResize_ClampsModelScrollWhenBudgetGrows(t *testing.T) {
+	state := ModelPickerState{
+		Height:           20,
+		Mode:             ModeModelSelect,
+		SelectedProvider: "openai",
+		Providers:        map[string]opencode.Provider{"openai": {ID: "openai", Name: "OpenAI"}},
+		SDDModels:        map[string][]opencode.Model{"openai": manyModels(20)},
+		ModelCursor:      18,
+		ModelScroll:      5,
+	}
+
+	state.Resize(60) // grows: budget = 60-6 = 54, maxScroll = max(0, 20-54) = 0
+	if state.ModelScroll != 0 {
+		t.Errorf("ModelScroll after grow = %d, want 0", state.ModelScroll)
+	}
+	if state.ModelCursor != 18 {
+		t.Errorf("ModelCursor preserved = %d, want 18", state.ModelCursor)
+	}
+}
+
+// TestResize_ClampsModelCursorAfterSearchFilter exercises the second reason
+// to clamp: search filtering shrinks the visible list. The cursor and scroll
+// offset must move into a valid range so the next render does not panic or
+// hide every entry.
+//
+// Issue #2301 — search filtering safely clamps cursor and scroll state.
+func TestResize_ClampsModelCursorAfterSearchFilter(t *testing.T) {
+	state := ModelPickerState{
+		Height:           60,
+		Mode:             ModeModelSelect,
+		SelectedProvider: "openai",
+		Providers:        map[string]opencode.Provider{"openai": {ID: "openai", Name: "OpenAI"}},
+		SDDModels: map[string][]opencode.Model{
+			"openai": {
+				{ID: "gpt-5", Name: "GPT-5"},
+				{ID: "gpt-5-mini", Name: "GPT-5 Mini"},
+				{ID: "gpt-4", Name: "GPT-4"},
+			},
+		},
+		ModelCursor: 2,
+		ModelScroll: 1,
+		ModelSearch: "no-match",
+	}
+
+	state.Resize(60)
+	if state.ModelCursor != 0 {
+		t.Errorf("ModelCursor after empty-filter clamp = %d, want 0", state.ModelCursor)
+	}
+	if state.ModelScroll != 0 {
+		t.Errorf("ModelScroll after empty-filter clamp = %d, want 0", state.ModelScroll)
+	}
+}
+
+// TestResize_ZeroHeightFallsBackToFixedBudgets verifies that Resize with a
+// non-positive height (the default for tests and profile-create scaffolding)
+// leaves the cursor and scroll offsets untouched and still exposes the
+// pre-adaptive fixed-budget behaviour.
+//
+// Issue #2301 — backward-compatibility for callers without a terminal height.
+func TestResize_ZeroHeightFallsBackToFixedBudgets(t *testing.T) {
+	state := ModelPickerState{
+		Height:           0,
+		Mode:             ModeModelSelect,
+		SelectedProvider: "openai",
+		Providers:        map[string]opencode.Provider{"openai": {ID: "openai", Name: "OpenAI"}},
+		SDDModels:        map[string][]opencode.Model{"openai": manyModels(20)},
+		ModelCursor:      5,
+		ModelScroll:      0,
+	}
+
+	state.Resize(0)
+	if state.ModelCursor != 5 || state.ModelScroll != 0 {
+		t.Errorf("zero-height Resize should not mutate cursor/scroll; got cursor=%d scroll=%d", state.ModelCursor, state.ModelScroll)
+	}
+
+	// RenderModelPicker with Height=0 still uses maxVisibleItems budget.
+	output := renderModelSelect(state)
+	if !strings.Contains(output, "Search: _") {
+		t.Errorf("zero-height render lost the search input; got:\n%s", output)
+	}
+}
+
+// TestClampPickerScroll_EdgeCases covers the clamp helper directly so the
+// resize and renderer paths can trust it under unusual inputs (empty list,
+// single item, budget=0).
+func TestClampPickerScroll_EdgeCases(t *testing.T) {
+	t.Run("empty items clamps cursor to zero", func(t *testing.T) {
+		scroll, cursor := 3, 7
+		ClampPickerScroll(&scroll, &cursor, 0, 5)
+		if scroll != 0 || cursor != 0 {
+			t.Errorf("empty items: got scroll=%d cursor=%d, want 0/0", scroll, cursor)
+		}
+	})
+
+	t.Run("cursor above scroll snaps down", func(t *testing.T) {
+		scroll, cursor := 10, 3
+		ClampPickerScroll(&scroll, &cursor, 20, 5)
+		if scroll != 3 || cursor != 3 {
+			t.Errorf("snap down: got scroll=%d cursor=%d, want 3/3", scroll, cursor)
+		}
+	})
+
+	t.Run("cursor below scroll+budget scrolls forward", func(t *testing.T) {
+		scroll, cursor := 0, 12
+		ClampPickerScroll(&scroll, &cursor, 20, 5)
+		if scroll != 8 || cursor != 12 {
+			t.Errorf("scroll forward: got scroll=%d cursor=%d, want 8/12", scroll, cursor)
+		}
+	})
+
+	t.Run("cursor above maxScroll clamps scroll", func(t *testing.T) {
+		scroll, cursor := 100, 18
+		ClampPickerScroll(&scroll, &cursor, 20, 5)
+		// maxScroll = max(0, 20-5) = 15
+		if scroll != 15 || cursor != 18 {
+			t.Errorf("max clamp: got scroll=%d cursor=%d, want 15/18", scroll, cursor)
+		}
+	})
 }
 
 func TestModelPickerRows_OrchestratorIsFirst(t *testing.T) {
