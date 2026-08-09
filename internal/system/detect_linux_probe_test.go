@@ -154,6 +154,34 @@ func TestLinuxIsSupportedWheneverAPackageManagerIsOnPath(t *testing.T) {
 	}
 }
 
+// TestAndroidFallsThroughToLinuxProbeLoop verifies that GOOS=android is routed
+// through the SAME package-manager probe loop as linux (not a "pkg" hardcode),
+// so that on Termux (distro debian, apt on $PREFIX/bin) the resolved manager
+// is apt. This covers the no-sudo/no-pkg-hardcode direction of #2501/#2502.
+func TestAndroidFallsThroughToLinuxProbeLoop(t *testing.T) {
+	// Termux: $PREFIX/etc/os-release reports ID=debian; apt is on $PREFIX/bin/apt.
+	termuxOSRelease := "ID=debian\nID_LIKE=debian\n"
+	tools := toolsOnPath("apt")
+
+	profile := resolvePlatformProfile("android", termuxOSRelease, tools)
+
+	// Android must be supported.
+	if !profile.Supported {
+		t.Fatalf("android profile should be supported when apt is on PATH")
+	}
+	// The resolved manager must be apt (via the probe loop), NOT "pkg".
+	if profile.PackageManager != "apt" {
+		t.Fatalf("PackageManager = %q, want \"apt\" (probe-loop, not pkg hardcode)", profile.PackageManager)
+	}
+	// Distro reported verbatim from the Termux os-release for humans.
+	if profile.LinuxDistro != "debian" {
+		t.Fatalf("LinuxDistro = %q, want \"debian\"", profile.LinuxDistro)
+	}
+	if err := EnsureSupportedPlatform(profile); err != nil {
+		t.Fatalf("EnsureSupportedPlatform() = %v, want nil", err)
+	}
+}
+
 // TestLinuxDistroReportsTheOSReleaseIDVerbatim covers the second half of
 // #1669: single-quoted values were left quoted, so `ID='gentoo'` matched
 // nothing. The distro is reported for humans, so it must be the ID the
