@@ -63,7 +63,7 @@
     },
     "transition_collection": {
       "type": "object", "additionalProperties": false, "required": ["inputs"],
-      "properties": {"inputs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/transition_input"}}}
+      "properties": {"inputs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/transition_input"}}, "consent": {"$ref": "final-verification-retry-consent.schema.json"}}
     },
     "transition_input": {
       "type": "object", "additionalProperties": false,

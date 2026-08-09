@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -52,6 +53,8 @@ func runReviewRetryFinalVerification(ctx context.Context, args []string, stdout 
 	actor := flags.String("actor", "", "maintainer actor")
 	reason := flags.String("reason", "", "maintainer reason")
 	authorization := flags.String("maintainer-authorization", "", "exact LF-only final-verification retry authorization")
+	repositoryContext := flags.String("repository-context", "", "provider-issued opaque repository context")
+	consent := flags.String("consent", "", "provider-issued final-verification retry consent: granted or declined")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -64,6 +67,20 @@ func runReviewRetryFinalVerification(ctx context.Context, args []string, stdout 
 	negotiated, err := reviewIntegrationNegotiation(flags, *contract)
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(*repositoryContext) != "" {
+		if reviewFlagWasProvided(flags, "cwd") {
+			return reviewPreflightError(errors.New("opaque final-verification retry cannot combine --repository-context with --cwd"))
+		}
+		for _, name := range []string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "incident", "actor", "reason", "maintainer-authorization"} {
+			if reviewFlagWasProvided(flags, name) {
+				return reviewPreflightError(errors.New("opaque final-verification retry derives predecessor, incident, authorization, successor, actor, and reason provider-side"))
+			}
+		}
+		if reviewFlagWasProvided(flags, "contract") && *contract != ReviewIntegrationContractV2 {
+			return reviewPreflightError(errors.New("opaque final-verification retry requires the v2 contract when --contract is supplied"))
+		}
+		return runReviewRetryFinalVerificationConsent(ctx, *repositoryContext, *consent, stdout)
 	}
 	if strings.TrimSpace(*predecessor) == "" || strings.TrimSpace(*expected) == "" ||
 		strings.TrimSpace(*successor) == "" || strings.TrimSpace(*incidentPath) == "" ||
@@ -125,4 +142,74 @@ func runReviewRetryFinalVerification(ctx context.Context, args []string, stdout 
 		return err
 	}
 	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationRetryFinalVerification, result, result, *contract)
+}
+
+func runReviewRetryFinalVerificationConsent(ctx context.Context, handle, consent string, stdout io.Writer) error {
+	if consent != reviewFinalVerificationRetryConsentGranted && consent != reviewFinalVerificationRetryConsentDeclined {
+		return reviewPreflightError(errors.New("opaque final-verification retry consent must be granted or declined"))
+	}
+	root, binding, err := reviewtransaction.ResolveReviewRepositoryContextBinding(ctx, handle)
+	if err != nil {
+		return reviewRepositoryContextResolutionFailure(err)
+	}
+	successor := finalVerificationRetryConsentSuccessor(binding)
+	if store, storeErr := reviewtransaction.CompactAuthoritativeStore(ctx, root, successor); storeErr == nil {
+		if existing, loadErr := store.Load(); loadErr == nil && existing.State.Recovery != nil &&
+			existing.State.Recovery.Disposition == reviewtransaction.RecoveryFinalVerificationRetry &&
+			existing.State.Recovery.PredecessorLineageID == binding.LineageID && existing.State.Recovery.PredecessorRevision == binding.Revision {
+			if consent == reviewFinalVerificationRetryConsentDeclined {
+				return reviewPreflightError(errors.New("final-verification retry consent slot was already consumed by grant"))
+			}
+			incident := existing.State.Recovery.FinalVerificationRetry.Incident
+			result := finalVerificationRetryConsentResult(existing, binding, incident)
+			return encodeReviewIntegrationOperation(stdout, true, ReviewIntegrationOperationRetryFinalVerification, result, result, ReviewIntegrationContractV2)
+		}
+	}
+	eligibility, eligible, err := reviewtransaction.InspectCompactFinalVerificationRetrySource(ctx, root, binding.LineageID, binding.Revision)
+	if err != nil {
+		return err
+	}
+	if !eligible || eligibility.TargetIdentity != binding.TargetIdentity {
+		return reviewPreflightError(errors.New("opaque final-verification retry context no longer binds an eligible procedural failure"))
+	}
+	if consent == reviewFinalVerificationRetryConsentDeclined {
+		result := ReviewFinalVerificationRetryConsentResult{Operation: ReviewIntegrationOperationRetryFinalVerification,
+			Disposition: reviewFinalVerificationRetryConsentDeclined, PredecessorLineageID: binding.LineageID,
+			PredecessorRevision: binding.Revision, TargetIdentity: binding.TargetIdentity}
+		if err := result.Validate(); err != nil {
+			return err
+		}
+		return encodeReviewIntegrationOperation(stdout, true, ReviewIntegrationOperationRetryFinalVerification, result, result, ReviewIntegrationContractV2)
+	}
+	incident := reviewtransaction.FinalVerificationIncident{Schema: eligibility.IncidentSchema, Class: eligibility.IncidentClass,
+		LineageID: binding.LineageID, TerminalRevision: binding.Revision, ValidatingRevision: eligibility.ValidatingRevision,
+		TargetIdentity: eligibility.TargetIdentity, FailedEvidenceHash: eligibility.FailedEvidenceHash, FinalizeRequestDigest: eligibility.FinalizeRequestDigest}
+	request := reviewtransaction.FinalVerificationRetryRequest{PredecessorLineageID: binding.LineageID, ExpectedPredecessorRevision: binding.Revision,
+		SuccessorLineageID: successor, Incident: incident, Actor: "gentle-ai", Reason: "retry final verification after provider tooling failure"}
+	request.MaintainerAuthorization, err = reviewtransaction.FinalVerificationRetryAuthorization(request)
+	if err != nil {
+		return err
+	}
+	record, err := reviewtransaction.RetryCompactFinalVerification(ctx, root, request)
+	if err != nil {
+		return err
+	}
+	result := finalVerificationRetryConsentResult(record, binding, incident)
+	if err := result.Validate(); err != nil {
+		return err
+	}
+	return encodeReviewIntegrationOperation(stdout, true, ReviewIntegrationOperationRetryFinalVerification, result, result, ReviewIntegrationContractV2)
+}
+
+func finalVerificationRetryConsentResult(record reviewtransaction.CompactRecord, binding reviewtransaction.ReviewRepositoryContextBinding, incident reviewtransaction.FinalVerificationIncident) ReviewFinalVerificationRetryResult {
+	return ReviewFinalVerificationRetryResult{Operation: ReviewIntegrationOperationRetryFinalVerification,
+		PredecessorLineageID: binding.LineageID, PredecessorRevision: binding.Revision,
+		LineageID: record.State.LineageID, State: record.State.State, StoreRevision: record.Revision,
+		TargetIdentity: record.State.CurrentSnapshot.Identity, IncidentDigest: reviewtransaction.FinalVerificationIncidentDigest(incident),
+		RecoveryDisposition: reviewtransaction.RecoveryFinalVerificationRetry}
+}
+
+func finalVerificationRetryConsentSuccessor(binding reviewtransaction.ReviewRepositoryContextBinding) string {
+	sum := sha256.Sum256([]byte(binding.LineageID + "\n" + binding.Revision + "\n" + binding.TargetIdentity))
+	return fmt.Sprintf("retry-%x", sum[:8])
 }

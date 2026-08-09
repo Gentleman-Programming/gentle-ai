@@ -98,7 +98,7 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/status-v5.fixture.json": "1a6d002c9691c87e50687f8d5f3e59013e9229d93004028f746bfcda7947d5fc",
-		"schemas/status-v5.schema.json":   "32dd99042d11c06cc4dbc1f9f8396b5e32ea9ded7f2177a97b90398923d282b3",
+		"schemas/status-v5.schema.json":   "5b7abcd4f6dffadd6d200952e5372be906a5b50546ce8304621dd5ea42110dc4",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -215,6 +215,7 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "capabilities.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV2},
 		{name: "capabilities-v2.1.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV21},
 		{name: "capabilities-v2.2.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV22},
+		{name: "final-verification-retry-consent.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/final-verification-retry-consent.schema.json"},
 		{name: "consent.schema.json", id: ReviewIntegrationConsentSchemaIDV2},
 		{name: "consent-v3.schema.json", id: ReviewIntegrationConsentSchemaIDV3},
 		{name: "failure.schema.json", id: ReviewIntegrationFailureSchemaIDV2},

@@ -317,6 +317,7 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 			}
 		}
 		result.Schemas = append(result.Schemas, ReviewIntegrationConsentSchemaV3)
+		result.Schemas = append(result.Schemas, ReviewFinalVerificationRetryConsentSchema)
 		result.Features.Optional = append(result.Features.Optional, ReviewCapabilityFeature{
 			Name: "provider_bound_native_git_context", Supported: true,
 			Requires: []string{"native_frozen_candidate_context", "opaque_repository_context", "provider_artifact_admission"},
@@ -324,6 +325,10 @@ func reviewCapabilitiesStaticSurface(contracts ...string) ReviewCapabilitiesResu
 		result.Features.Optional = append(result.Features.Optional, ReviewCapabilityFeature{
 			Name: "provider_submission_descriptors", Supported: true,
 			Requires: []string{"native_next_transition", "opaque_repository_context", "provider_targeted_validation_request"},
+		})
+		result.Features.Optional = append(result.Features.Optional, ReviewCapabilityFeature{
+			Name: "opaque_final_verification_retry_consent", Supported: true,
+			Requires: []string{"one_shot_final_verification_retry", "opaque_repository_context", "native_next_transition"},
 		})
 		result.Bootstrap.Command = reviewNextTransitionRefreshCommandV21
 		result.Compatibility.MinimumProtocolMajor, result.Compatibility.MaximumProtocolMajor = 2, 2
