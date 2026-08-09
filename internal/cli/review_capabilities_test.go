@@ -106,8 +106,8 @@ func TestReviewCapabilitiesV22MatchesConformanceFixture(t *testing.T) {
 	if err := json.Unmarshal(fixture, &want); err != nil {
 		t.Fatal(err)
 	}
-	if got.Bootstrap == nil || strings.Contains(got.Bootstrap.Command, " --agent ") {
-		t.Fatalf("v2.2 capability bootstrap must not declare an unavailable runtime identity: %#v", got.Bootstrap)
+	if got.Bootstrap == nil || got.Bootstrap.Command != reviewNextTransitionRefreshCommandV21 {
+		t.Fatalf("v2.2 capability bootstrap must declare the required runtime placeholder: %#v", got.Bootstrap)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("v2.2 capabilities do not match conformance fixture:\ngot=%#v\nwant=%#v", got, want)
@@ -675,12 +675,16 @@ func TestReviewIntegrationDocumentationMatchesRuntimeContract(t *testing.T) {
 		"`native_low_risk_verification`", "`selected_lenses: []`", "`receipt_scope_changed`",
 		"25-second aggregate budget", "120-second budget", "180-second budget", "one-second wait delay",
 		"Persistent compact `LOCK` JSON is advisory diagnostics", "`context.scope_change`", "`review.recover`",
+		"`gentle-ai.review-final-verification-retry-consent/v1`", "`next_transition.collect.consent`",
+		"Quick path: query STATUS with `--next-transition`; relay the complete consent envelope as a blocking prompt",
+		"execute the exact returned invocation once", "MUST NOT build an incident, authorization, successor identity, or substitute command",
+		"`legacy_hash_only_authority`",
 	} {
 		if !strings.Contains(document, required) {
 			t.Fatalf("review integration documentation is missing %q", required)
 		}
 	}
-	for _, stale := range []string{"five strict JSON Schemas", "nine strict JSON Schemas", "ten strict JSON Schemas", "sixteen strict JSON Schemas", "eighteen strict JSON Schemas", "twenty strict JSON Schemas", "twenty-two strict JSON Schemas", "eleven deterministic conformance fixtures", "eighteen deterministic conformance fixtures", "nineteen deterministic conformance fixtures", "twenty-one deterministic conformance fixtures", "twenty-four deterministic conformance fixtures", "twenty-six deterministic conformance fixtures"} {
+	for _, stale := range []string{"The incident file must be", "The maintainer authorization is exact LF-only text", "five strict JSON Schemas", "nine strict JSON Schemas", "ten strict JSON Schemas", "sixteen strict JSON Schemas", "eighteen strict JSON Schemas", "twenty strict JSON Schemas", "twenty-two strict JSON Schemas", "eleven deterministic conformance fixtures", "eighteen deterministic conformance fixtures", "nineteen deterministic conformance fixtures", "twenty-one deterministic conformance fixtures", "twenty-four deterministic conformance fixtures", "twenty-six deterministic conformance fixtures"} {
 		if strings.Contains(document, stale) {
 			t.Fatalf("review integration documentation retains stale claim %q", stale)
 		}

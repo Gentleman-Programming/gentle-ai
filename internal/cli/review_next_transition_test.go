@@ -839,6 +839,7 @@ func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, s
 	if version == "v2" {
 		resources = append(resources,
 			struct{ version, name string }{"v2", "artifact-subject.schema.json"},
+			struct{ version, name string }{"v2", "final-verification-retry-consent.schema.json"},
 			struct{ version, name string }{"v2", "start.schema.json"},
 		)
 	}

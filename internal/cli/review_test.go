@@ -370,6 +370,43 @@ type legacyCLIFixture struct {
 	head                                                             string
 }
 
+func newLegacyReviewingCLIFixture(t *testing.T, lineage string) legacyCLIFixture {
+	t.Helper()
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	policyPath := filepath.Join(t.TempDir(), "policy.md")
+	if err := os.WriteFile(policyPath, []byte("legacy bounded policy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyHash, err := reviewtransaction.HashArtifact(policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := reviewtransaction.NewTransaction(reviewtransaction.Start{
+		LineageID: lineage, Mode: reviewtransaction.ModeOrdinary4R, Generation: 1, Snapshot: snapshot, PolicyHash: policyHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.AuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	head := appendLegacyCLIRecord(t, store, "", "review/start", *transaction)
+	return legacyCLIFixture{repo: repo, lineage: lineage, policyPath: policyPath, store: store, head: head}
+}
+
 func newLegacyCLIFixture(t *testing.T, lineage string) legacyCLIFixture {
 	t.Helper()
 	repo := initReviewCLIRepo(t)

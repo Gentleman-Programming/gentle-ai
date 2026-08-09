@@ -925,30 +925,35 @@ func reviewAuthorityTargetIdentity(status ReviewTargetStatusResult) string {
 
 func (result ReviewTargetStatusResult) validateFinalVerificationRetryNextTransition() error {
 	transition, retry := result.NextTransition, result.FinalVerificationRetry
-	if transition == nil || retry == nil || result.Authority == nil ||
-		transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != "final_verification_retry_authorization_required" ||
+	if transition == nil || retry == nil || result.Authority == nil || transition.Kind != reviewNextTransitionCollect ||
 		transition.Collect == nil || len(transition.Collect.Inputs) != 1 {
-		return errors.New("final-verification retry authorization transition is incomplete")
+		return errors.New("final-verification retry transition is incomplete")
 	}
 	input := transition.Collect.Inputs[0]
 	arguments, err := reviewTransitionArgumentMap(input.Arguments)
-	want := map[string]string{
-		"predecessor-lineage":           result.Authority.LineageID,
-		"expected-predecessor-revision": result.Authority.Revision,
-		"validating-revision":           retry.ValidatingRevision,
-		"target":                        retry.TargetIdentity,
-		"failed-evidence-hash":          retry.FailedEvidenceHash,
-		"finalize-request-digest":       retry.FinalizeRequestDigest,
-		"incident-schema":               retry.IncidentSchema,
-		"incident-class":                retry.IncidentClass,
+	if result.Contract != ReviewIntegrationContractV2 {
+		want := map[string]string{
+			"predecessor-lineage": result.Authority.LineageID, "expected-predecessor-revision": result.Authority.Revision,
+			"validating-revision": retry.ValidatingRevision, "target": retry.TargetIdentity,
+			"failed-evidence-hash": retry.FailedEvidenceHash, "finalize-request-digest": retry.FinalizeRequestDigest,
+			"incident-schema": retry.IncidentSchema, "incident-class": retry.IncidentClass,
+		}
+		if retry.FailedEvidenceRecordDigest != "" {
+			want["failed-evidence-record-digest"] = retry.FailedEvidenceRecordDigest
+		}
+		if err != nil || transition.ReasonCode != "final_verification_retry_authorization_required" ||
+			input.Name != "final_verification_retry_authorization" || input.Schema != reviewtransaction.FinalVerificationRetryAuthorizationSchema ||
+			input.CaptureOperation != "external.authorize_final_verification_retry" || !reflect.DeepEqual(arguments, want) || transition.Collect.Consent != nil {
+			return errors.New("final-verification retry authorization transition is not provider-bound")
+		}
+		return nil
 	}
-	if retry.FailedEvidenceRecordDigest != "" {
-		want["failed-evidence-record-digest"] = retry.FailedEvidenceRecordDigest
-	}
-	if err != nil || input.Name != "final_verification_retry_authorization" ||
-		input.Schema != reviewtransaction.FinalVerificationRetryAuthorizationSchema ||
-		input.CaptureOperation != "external.authorize_final_verification_retry" || !reflect.DeepEqual(arguments, want) {
-		return errors.New("final-verification retry authorization transition is not provider-bound")
+	binding := ReviewTransitionBinding{LineageID: result.Authority.LineageID, Revision: result.Authority.Revision,
+		TargetIdentity: reviewAuthorityTargetIdentity(result), RepositoryContext: arguments["repository-context"]}
+	if err != nil || transition.ReasonCode != "final_verification_retry_consent_required" || input.Name != "final_verification_retry_consent" || input.Schema != ReviewFinalVerificationRetryConsentSchema ||
+		input.CaptureOperation != "external.relay_final_verification_retry_consent" || len(arguments) != 1 || binding.RepositoryContext == "" ||
+		transition.Collect.Consent == nil || transition.Collect.Consent.Validate(binding, *retry) != nil {
+		return errors.New("final-verification retry consent transition is not provider-bound")
 	}
 	return nil
 }

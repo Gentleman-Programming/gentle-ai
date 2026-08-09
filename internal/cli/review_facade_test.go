@@ -248,6 +248,14 @@ func TestReviewFacadeStagedReceiptAllowsDeliveredTreePrePushAndPrePR(t *testing.
 	if err := json.Unmarshal(output.Bytes(), &started); err != nil {
 		t.Fatal(err)
 	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
 	resultPath := filepath.Join(t.TempDir(), "review.json")
 	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{Findings: []facadeFinding{}, Evidence: []string{"reviewed staged candidate"}})
@@ -256,6 +264,17 @@ func TestReviewFacadeStagedReceiptAllowsDeliveredTreePrePushAndPrePR(t *testing.
 	}
 	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath, "--evidence", evidencePath}, io.Discard); err != nil {
 		t.Fatal(err)
+	}
+	terminal, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal.State.EvidenceAuthorityRevision == before.Revision {
+		t.Fatalf("combined finalize bound evidence to reviewing revision %q", before.Revision)
+	}
+	captured, err := reviewtransaction.ReadCapturedVerificationEvidence(store.Dir, started.LineageID, terminal.State.EvidenceAuthorityRevision, terminal.State.CurrentSnapshot)
+	if err != nil || !bytes.Equal(captured.Payload, []byte("tests pass\n")) || captured.Record.Outcome != reviewtransaction.VerificationOutcomePassed {
+		t.Fatalf("combined finalize provider evidence = %#v, %q, %v", captured.Record, captured.Payload, err)
 	}
 	runReviewCLIGit(t, repo, "commit", "-qm", "staged candidate")
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("unstaged workspace divergence\n"), 0o644); err != nil {
@@ -323,7 +342,7 @@ func TestReviewFacadeCleanFlowReplacesOneCompactStateAndUsesOnlyReceipt(t *testi
 	if approved.State != reviewtransaction.StateApproved || approved.ReceiptPath != store.ReceiptPath() {
 		t.Fatalf("approved result = %#v", approved)
 	}
-	assertCompactLineageFiles(t, store, []string{"finalize-attempt-journal.json", "review-receipt.json", "review-state.json", "reviewer-results"})
+	assertCompactLineageFiles(t, store, []string{"final-evidence", "finalize-attempt-journal.json", "review-receipt.json", "review-state.json", "reviewer-results"})
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo}, io.Discard); err != nil {
 		t.Fatalf("terminal restart: %v", err)
 	}
@@ -870,6 +889,62 @@ func TestReviewFacadeFinalizePlannedTransitionInterruptionResumesWithoutDuplicat
 	pending, err = store.PendingFinalizeAttempt()
 	if err != nil || pending != nil {
 		t.Fatalf("successful replay left pending attempt: %#v, %v", pending, err)
+	}
+}
+
+func TestReviewFacadeFinalizeRawEvidenceInterruptionReplaysCapturedReadback(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(evidencePath, []byte("raw verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, repo, started)...)
+	args = append(args, "--evidence", evidencePath)
+	interrupted := errors.New("interrupt after raw evidence import")
+	original := reviewFacadePlannedTransitionHook
+	reviewFacadePlannedTransitionHook = func(_ context.Context, _ string, operation, _ string) error {
+		if operation == "review/complete-review" {
+			return interrupted
+		}
+		return nil
+	}
+	t.Cleanup(func() { reviewFacadePlannedTransitionHook = original })
+	if err := RunReviewFacadeFinalize(args, io.Discard); !errors.Is(err, interrupted) {
+		t.Fatalf("raw evidence interruption = %v", err)
+	}
+	pending, err := store.PendingFinalizeAttempt()
+	if err != nil || pending == nil || len(pending.Transitions) == 0 || pending.Request.EvidenceRecordDigest == "" {
+		t.Fatalf("raw evidence interruption journal = %#v, %v", pending, err)
+	}
+	captured, err := reviewtransaction.ReadCapturedVerificationEvidence(store.Dir, started.LineageID, pending.Transitions[0].Revision, before.State.CurrentSnapshot)
+	if err != nil || captured.Record.RecordDigest != pending.Request.EvidenceRecordDigest {
+		t.Fatalf("raw evidence import was not durably readable: %#v, %v", captured, err)
+	}
+	reviewFacadePlannedTransitionHook = original
+	if err := RunReviewFacadeFinalize(args, io.Discard); err != nil {
+		t.Fatalf("raw evidence exact replay: %v", err)
+	}
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State.State != reviewtransaction.StateApproved || after.Revision == before.Revision {
+		t.Fatalf("raw evidence replay state = %#v", after)
+	}
+	if pending, err := store.PendingFinalizeAttempt(); err != nil || pending != nil {
+		t.Fatalf("raw evidence replay left pending attempt: %#v, %v", pending, err)
 	}
 }
 
@@ -2116,6 +2191,50 @@ func TestLegacyV1LineageRemainsReadableButRejectsAppend(t *testing.T) {
 	}
 }
 
+func TestLegacyHashOnlyStatusNamesFreshReviewAndCloneDisableWithoutRetry(t *testing.T) {
+	fixture := newLegacyReviewingCLIFixture(t, "legacy-hash-only-stop")
+	before, err := fixture.store.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousNarration := reviewNarrationOutput
+	var narration, output bytes.Buffer
+	reviewNarrationOutput = &narration
+	t.Cleanup(func() { reviewNarrationOutput = previousNarration })
+
+	err = RunReview([]string{"status", "--cwd", fixture.repo, "--lineage", fixture.lineage,
+		"--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition"}, &output)
+	if err != nil {
+		t.Fatalf("legacy STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.Authority == nil || status.Authority.Version != reviewtransaction.AuthorityVersionLegacy ||
+		status.Authority.State != reviewtransaction.StateReviewing || status.Action != reviewtransaction.TargetStatusActionStop ||
+		status.FinalVerificationRetry != nil || status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionStop || status.NextTransition.ReasonCode != "legacy_hash_only_authority" {
+		t.Fatalf("legacy hash-only STATUS routed outside terminal refusal: %#v", status)
+	}
+	for _, command := range []string{
+		"gentle-ai review start --cwd <repo>",
+		"gentle-ai review mode disable --scope clone --cwd <repo>",
+	} {
+		if !strings.Contains(narration.String(), command) {
+			t.Fatalf("legacy terminal narration omits runnable exit %q:\n%s", command, narration.String())
+		}
+	}
+	if strings.Contains(narration.String(), "retry-final-verification") || strings.Contains(output.String(), "retry_final_verification") {
+		t.Fatalf("legacy terminal status advertised retry eligibility:\nstdout=%s\nstderr=%s", output.String(), narration.String())
+	}
+	after, err := fixture.store.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("legacy STATUS mutated authority")
+	}
+}
+
 func TestCompactTransportCommandsRoundTripWithoutEventReconstruction(t *testing.T) {
 	t.Parallel()
 
@@ -2730,6 +2849,113 @@ func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
 			}
 		}
 	})
+}
+
+type facadeRawFailedEvidenceFixture struct {
+	repo       string
+	started    ReviewFacadeStartResult
+	store      reviewtransaction.CompactStore
+	validating reviewtransaction.CompactRecord
+}
+
+func prepareFacadeRawFailedEvidence(t *testing.T) facadeRawFailedEvidenceFixture {
+	t.Helper()
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte(strings.Repeat("candidate line\n", 40)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	if len(started.SelectedLenses) == 0 {
+		t.Fatal("fixture must select at least one lens to reach StateValidating")
+	}
+	args := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, repo, started)...)
+	if err := RunReviewFacadeFinalize(args, io.Discard); err != nil {
+		t.Fatalf("reach validating authority: %v", err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validating, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validating.State.State != reviewtransaction.StateValidating {
+		t.Fatalf("fixture state = %q, want validating", validating.State.State)
+	}
+	return facadeRawFailedEvidenceFixture{repo: repo, started: started, store: store, validating: validating}
+}
+
+func TestFinalizeRawFailedEvidenceAtomicallyImportsProviderOwnedArtifact(t *testing.T) {
+	fixture := prepareFacadeRawFailedEvidence(t)
+	evidence := []byte("final verification failed\x00with exact bytes\n")
+	evidencePath := filepath.Join(t.TempDir(), "failed-evidence.txt")
+	if err := os.WriteFile(evidencePath, evidence, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--cwd", fixture.repo, "--lineage", fixture.started.LineageID, "--evidence", evidencePath, "--failed"}, &output); err != nil {
+		t.Fatalf("finalize raw failed evidence: %v\n%s", err, output.String())
+	}
+	result := decodeFacadeFinalize(t, output.Bytes())
+	if result.State != reviewtransaction.StateEscalated {
+		t.Fatalf("finalize state = %q, want escalated\n%s", result.State, output.String())
+	}
+	captured, err := reviewtransaction.ReadCapturedVerificationEvidence(fixture.store.Dir, fixture.started.LineageID, fixture.validating.Revision, fixture.validating.State.CurrentSnapshot)
+	if err != nil {
+		t.Fatalf("read provider-owned evidence: %v", err)
+	}
+	if !bytes.Equal(captured.Payload, evidence) || captured.Record.Outcome != reviewtransaction.VerificationOutcomeFailed {
+		t.Fatalf("captured evidence = %#v, %q, want exact failed artifact", captured.Record, captured.Payload)
+	}
+	terminal, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal.State.EvidenceHash != captured.Record.RawPayloadSHA256 ||
+		terminal.State.EvidenceRecordDigest != captured.Record.RecordDigest ||
+		terminal.State.EvidenceOutcome != captured.Record.Outcome ||
+		terminal.State.EvidenceAuthorityRevision != fixture.validating.Revision {
+		t.Fatalf("terminal authority did not bind reread provider evidence: %#v", terminal.State)
+	}
+	if _, err := os.Stat(fixture.store.ReceiptPath()); err != nil {
+		t.Fatalf("terminal receipt was not published: %v", err)
+	}
+}
+
+func TestFinalizeRawFailedEvidencePublicationFailureLeavesNoTerminalAuthority(t *testing.T) {
+	fixture := prepareFacadeRawFailedEvidence(t)
+	existing := []byte("already captured failure\n")
+	if _, err := reviewtransaction.PublishCapturedVerificationEvidence(reviewtransaction.CaptureVerificationEvidenceRequest{
+		StoreDir: fixture.store.Dir, LineageID: fixture.started.LineageID, AuthorityRevision: fixture.validating.Revision,
+		Target: fixture.validating.State.CurrentSnapshot, Payload: existing, Outcome: reviewtransaction.VerificationOutcomeFailed,
+	}); err != nil {
+		t.Fatalf("seed provider-owned evidence: %v", err)
+	}
+	evidencePath := filepath.Join(t.TempDir(), "conflicting-failed-evidence.txt")
+	if err := os.WriteFile(evidencePath, []byte("different raw failure\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RunReviewFacadeFinalize([]string{"--cwd", fixture.repo, "--lineage", fixture.started.LineageID, "--evidence", evidencePath, "--failed"}, io.Discard)
+	if !errors.Is(err, reviewtransaction.ErrCapturedVerificationEvidenceConflict) {
+		t.Fatalf("raw evidence publication error = %v, want immutable evidence conflict", err)
+	}
+	var preflight *reviewIntegrationPreflightError
+	if !errors.As(err, &preflight) {
+		t.Fatalf("raw evidence publication error type = %T, want pre-publication envelope", err)
+	}
+	after, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, fixture.validating) {
+		t.Fatalf("publication failure changed terminal authority: before %#v after %#v", fixture.validating, after)
+	}
+	if _, err := os.Stat(fixture.store.ReceiptPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("publication failure wrote a terminal receipt: %v", err)
+	}
 }
 
 func assertFacadeReceiptReplayRejected(t *testing.T, fixture facadeReceiptPendingFixture, args []string) {

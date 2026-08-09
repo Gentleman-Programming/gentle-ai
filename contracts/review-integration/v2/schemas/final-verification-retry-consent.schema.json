@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/final-verification-retry-consent.schema.json",
+  "title": "Gentle AI final verification retry consent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "operation", "action", "blocking", "headline", "reason", "value", "evidence", "choices", "off_path"],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-final-verification-retry-consent/v1"},
+    "operation": {"const": "review.retry_final_verification"},
+    "action": {"const": "consent_required"},
+    "agent": {"type": "string", "minLength": 1},
+    "blocking": {"const": true},
+    "headline": {"type": "string", "minLength": 1},
+    "reason": {"type": "string", "minLength": 1},
+    "value": {"type": "string", "minLength": 1},
+    "evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "choices": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"$ref": "#/$defs/granted"}, {"$ref": "#/$defs/declined"}], "items": false},
+    "off_path": {"type": "object", "additionalProperties": false, "required": ["note", "command"], "properties": {"note": {"type": "string", "minLength": 1}, "command": {"type": "string", "minLength": 1}}}
+  },
+  "$defs": {
+    "choice": {"type": "object", "additionalProperties": false, "required": ["answer", "label", "effect", "invocation"], "properties": {"answer": {"type": "string"}, "label": {"type": "string", "minLength": 1}, "effect": {"type": "string", "minLength": 1}, "invocation": {"type": "string", "minLength": 1}}},
+    "granted": {"allOf": [{"$ref": "#/$defs/choice"}, {"properties": {"answer": {"const": "granted"}, "invocation": {"pattern": "^gentle-ai review retry-final-verification --repository-context rctx1_[0-9a-f]{64} --consent granted$"}}}]},
+    "declined": {"allOf": [{"$ref": "#/$defs/choice"}, {"properties": {"answer": {"const": "declined"}, "invocation": {"pattern": "^gentle-ai review retry-final-verification --repository-context rctx1_[0-9a-f]{64} --consent declined$"}}}]}
+  }
+}

@@ -374,6 +374,60 @@ func TestCoordinatorOrchestratorsCarrySDDEditAuthorityConsentRelay(t *testing.T)
 	}
 }
 
+// TestCoordinatorOrchestratorsCarryFinalVerificationRetryConsentRelay guards
+// the embedded assets that installation actually distributes. Documentation is
+// not sufficient: every supported orchestrator must relay the provider-owned
+// retry choice without rebuilding its historical authority inputs.
+func TestCoordinatorOrchestratorsCarryFinalVerificationRetryConsentRelay(t *testing.T) {
+	requirements := []string{
+		"final_verification_retry_consent_required",
+		"gentle-ai.review-final-verification-retry-consent/v1",
+		"Lossless Blocking Prompt",
+		"complete envelope",
+		"headline, reason, value, evidence, choices, choice effects, off-path instruction, order, labels, machine answer tokens, and exact invocations",
+		"map that label exactly once to its original `answer` token",
+		"run exactly that choice's returned invocation unchanged",
+		"Never call `external.authorize_final_verification_retry`",
+		"construct an incident or authorization",
+		"infer a successor",
+		"append flags",
+		"choose on the human's behalf",
+		"On either `granted` or `declined`, re-enter through native STATUS.",
+	}
+
+	canonical := finalVerificationRetryConsentRelaySection(t, providerDefectHandoffCanonicalPath)
+	for _, path := range allSDDOrchestratorAssetPaths(t) {
+		t.Run(path, func(t *testing.T) {
+			section := finalVerificationRetryConsentRelaySection(t, path)
+			if section != canonical {
+				t.Error("final-verification retry consent relay differs from the canonical cross-variant block")
+			}
+			for _, required := range requirements {
+				if !strings.Contains(section, required) {
+					t.Errorf("final-verification retry consent relay missing %q", required)
+				}
+			}
+		})
+	}
+}
+
+func finalVerificationRetryConsentRelaySection(t *testing.T, path string) string {
+	t.Helper()
+	const heading = "**Final-Verification Retry Consent Relay (MANDATORY)**"
+	const endMarker = "On either `granted` or `declined`, re-enter through native STATUS."
+	content := MustRead(path)
+	start := strings.Index(content, heading)
+	if start == -1 {
+		t.Fatalf("%s missing %q", path, heading)
+	}
+	section := content[start:]
+	end := strings.Index(section, endMarker)
+	if end == -1 {
+		t.Fatalf("%s final-verification retry consent relay missing terminal boundary", path)
+	}
+	return strings.TrimSpace(section[:end+len(endMarker)])
+}
+
 func sddConsentRelaySection(t *testing.T, path string) string {
 	t.Helper()
 	const heading = "#### SDD Edit-Authority Consent Relay (MANDATORY)"

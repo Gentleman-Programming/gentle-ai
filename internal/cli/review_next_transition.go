@@ -44,7 +44,8 @@ type ReviewTransitionExecution struct {
 }
 
 type ReviewTransitionCollection struct {
-	Inputs []ReviewTransitionInput `json:"inputs"`
+	Inputs  []ReviewTransitionInput              `json:"inputs"`
+	Consent *ReviewFinalVerificationRetryConsent `json:"consent,omitempty"`
 }
 
 type ReviewTransitionInput struct {
@@ -181,9 +182,12 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		return reviewStopTransition("original_finalize_request_required")
 	}
 	if status.Action == reviewtransaction.TargetStatusActionRetryFinalVerification {
-		return reviewFinalVerificationRetryCollection(status, binding)
+		return reviewFinalVerificationRetryCollection(status, binding, string(input.RuntimeAgent))
 	}
 	if status.Action == reviewtransaction.TargetStatusActionStop {
+		if status.Authority.Version == reviewtransaction.AuthorityVersionLegacy {
+			return reviewStopTransition("legacy_hash_only_authority")
+		}
 		if status.Authority.State == reviewtransaction.StateCorrectionRequired {
 			return reviewStopTransition("unchanged_or_unverified_authority")
 		}
@@ -798,26 +802,33 @@ func (selector reviewTransitionSelector) recoveryArguments() ([]ReviewTransition
 	return arguments, true
 }
 
-func reviewFinalVerificationRetryCollection(status ReviewTargetStatusResult, binding ReviewTransitionBinding) ReviewNextTransition {
+func reviewFinalVerificationRetryCollection(status ReviewTargetStatusResult, binding ReviewTransitionBinding, agent string) ReviewNextTransition {
 	retry := status.FinalVerificationRetry
 	if retry == nil || status.ActionDisposition != reviewtransaction.RecoveryFinalVerificationRetry {
 		return reviewStopTransition("final_verification_retry_unavailable")
 	}
-	return reviewCollectTransition("final_verification_retry_authorization_required", ReviewTransitionInput{
-		Name: "final_verification_retry_authorization", Schema: reviewtransaction.FinalVerificationRetryAuthorizationSchema,
-		CaptureOperation: "external.authorize_final_verification_retry",
-		Arguments: []ReviewTransitionArgument{
-			{Name: "predecessor-lineage", Value: binding.LineageID},
-			{Name: "expected-predecessor-revision", Value: binding.Revision},
-			{Name: "validating-revision", Value: retry.ValidatingRevision},
-			{Name: "target", Value: retry.TargetIdentity},
-			{Name: "failed-evidence-hash", Value: retry.FailedEvidenceHash},
-			{Name: "failed-evidence-record-digest", Value: retry.FailedEvidenceRecordDigest},
-			{Name: "finalize-request-digest", Value: retry.FinalizeRequestDigest},
-			{Name: "incident-schema", Value: retry.IncidentSchema},
-			{Name: "incident-class", Value: retry.IncidentClass},
-		},
-	})
+	if status.Contract != ReviewIntegrationContractV2 {
+		return reviewCollectTransition("final_verification_retry_authorization_required", ReviewTransitionInput{
+			Name: "final_verification_retry_authorization", Schema: reviewtransaction.FinalVerificationRetryAuthorizationSchema,
+			CaptureOperation: "external.authorize_final_verification_retry",
+			Arguments: []ReviewTransitionArgument{
+				{Name: "predecessor-lineage", Value: binding.LineageID}, {Name: "expected-predecessor-revision", Value: binding.Revision},
+				{Name: "validating-revision", Value: retry.ValidatingRevision}, {Name: "target", Value: retry.TargetIdentity},
+				{Name: "failed-evidence-hash", Value: retry.FailedEvidenceHash}, {Name: "failed-evidence-record-digest", Value: retry.FailedEvidenceRecordDigest},
+				{Name: "finalize-request-digest", Value: retry.FinalizeRequestDigest}, {Name: "incident-schema", Value: retry.IncidentSchema},
+				{Name: "incident-class", Value: retry.IncidentClass},
+			},
+		})
+	}
+	if binding.RepositoryContext == "" {
+		return reviewStopTransition("final_verification_retry_context_unavailable")
+	}
+	consent := newFinalVerificationRetryConsent(binding, *retry, agent)
+	return ReviewNextTransition{Kind: reviewNextTransitionCollect, ReasonCode: "final_verification_retry_consent_required", Collect: &ReviewTransitionCollection{
+		Consent: &consent,
+		Inputs: []ReviewTransitionInput{{Name: "final_verification_retry_consent", Schema: ReviewFinalVerificationRetryConsentSchema,
+			CaptureOperation: "external.relay_final_verification_retry_consent", Arguments: []ReviewTransitionArgument{{Name: "repository-context", Value: binding.RepositoryContext}}}},
+	}}
 }
 
 func (input reviewNextTransitionInput) recoveryAuthorized(binding ReviewTransitionBinding) bool {
@@ -1009,6 +1020,8 @@ func reviewReasonDescription(reason string) string {
 		return "Authority requires a changed or verified candidate"
 	case "native_stop_required":
 		return "Native stop transition required by authority"
+	case "legacy_hash_only_authority":
+		return "Historical hash-only authority requires a fresh review"
 	case "captured_artifacts_unverifiable":
 		return "Captured artifacts failed verification or are missing"
 	case "corrected_candidate_unavailable":

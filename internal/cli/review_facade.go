@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -755,6 +756,7 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review status", stdout, "Read every compact-v2 and shipped legacy-v1 authority from the shared Git common directory without mutation.")
 	cwd := flags.String("cwd", ".", "repository path")
+	repositoryContext := flags.String("repository-context", "", "provider-issued opaque repository context")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
 	runtimeAgent := flags.String("agent", "", "generated active runtime identity for negotiated lifecycle routing")
 	actionEligibility := flags.Bool("action-eligibility", false, "include optional machine-readable review action eligibility in negotiated output")
@@ -787,6 +789,16 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	}
 	if flags.NArg() != 0 {
 		return reviewPreflightError(fmt.Errorf("unexpected review status argument %q", flags.Arg(0)))
+	}
+	if strings.TrimSpace(*repositoryContext) != "" {
+		if *contract != ReviewIntegrationContractV2 || !reviewFlagWasProvided(flags, "contract") || reviewOpaqueStatusSelectorProvided(flags) {
+			return reviewPreflightError(errors.New("opaque review status requires only --repository-context with the v2 contract and cannot combine repository selectors"))
+		}
+		root, binding, contextErr := reviewtransaction.ResolveReviewRepositoryContextBinding(ctx, *repositoryContext)
+		if contextErr != nil {
+			return reviewRepositoryContextResolutionFailure(contextErr)
+		}
+		*cwd, *lineage = root, binding.LineageID
 	}
 	committedOnlyProvided := reviewFlagWasProvided(flags, "committed-only")
 	if *contract != "" {
@@ -984,7 +996,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								result.ValidationRequest = validationRequest
 							}
 						}
-						if *contract == ReviewIntegrationContractV2 && (record.State.State == reviewtransaction.StateCorrectionRequired || record.State.State == reviewtransaction.StateValidating) {
+						if *contract == ReviewIntegrationContractV2 && (record.State.State == reviewtransaction.StateCorrectionRequired || record.State.State == reviewtransaction.StateValidating || result.Action == reviewtransaction.TargetStatusActionRetryFinalVerification) {
 							contextTarget := record.State.CurrentSnapshot.Identity
 							if validationRequest != nil {
 								contextTarget = validationRequest.CorrectionTargetIdentity
@@ -1088,6 +1100,20 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		return fmt.Errorf("inventory review authority: %w", err)
 	}
 	return encodeReviewJSON(stdout, report)
+}
+
+var reviewOpaqueStatusSelectorFlags = []string{
+	"cwd", "lineage", "projection", "base-ref", "base-tree", "committed-only", "workspace-overlay",
+	"untracked-scope", "intended-untracked", "expected-untracked-inventory",
+}
+
+func reviewOpaqueStatusSelectorProvided(flags *flag.FlagSet) bool {
+	for _, name := range reviewOpaqueStatusSelectorFlags {
+		if reviewFlagWasProvided(flags, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func RunReviewRecover(args []string, stdout io.Writer) error {
@@ -2606,7 +2632,8 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	var evidence []byte
 	var capturedVerification *reviewtransaction.CapturedVerificationEvidence
 	effectiveFailed := *failed
-	if strings.TrimSpace(*evidencePath) != "" {
+	rawEvidenceSupplied := strings.TrimSpace(*evidencePath) != ""
+	if rawEvidenceSupplied {
 		evidence, err = readFacadeBytes(*evidencePath)
 		if err != nil {
 			return reviewPreflightError(fmt.Errorf("read final review evidence: %w", err))
@@ -2650,6 +2677,54 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			return fmt.Errorf("sync completed finalize journal directory: %w", err)
 		}
 		return encodeCompactFacadeFinalize(stdout, negotiated, *contract, *actionEligibility, *nextTransition, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>", reviewFinalizeOutputContext{Context: ctx, Repo: root})
+	}
+	if rawEvidenceSupplied {
+		evidenceState, evidenceRevision := state, record.Revision
+		if state.State == reviewtransaction.StateReviewing {
+			// The eventual write-ahead journal derives this exact revision from the
+			// same native transition; no authority is written during this preview.
+			preview, previewErr := prepareFacadeFinalizePlan(ctx, root, record.Revision, state, reviewerResults, refuter, validation, evidence, *correctionLines, effectiveFailed, nil)
+			if previewErr != nil {
+				return reviewPreflightError(previewErr)
+			}
+			foundValidating := false
+			for _, transition := range preview.Transitions {
+				if transition.State.State != reviewtransaction.StateValidating {
+					continue
+				}
+				evidenceState = transition.State
+				var revisionErr error
+				evidenceRevision, revisionErr = reviewtransaction.CompactRevisionForState(transition.State)
+				if revisionErr != nil {
+					return reviewPreflightError(fmt.Errorf("derive validating evidence revision: %w", revisionErr))
+				}
+				foundValidating = true
+			}
+			if !foundValidating {
+				return reviewPreflightError(errors.New("raw final review evidence requires a planned validating authority"))
+			}
+		}
+		evidenceTarget, targetErr := facadeVerificationEvidenceTarget(ctx, root, evidenceState, evidenceRevision)
+		if targetErr != nil {
+			return reviewPreflightError(targetErr)
+		}
+		outcome := reviewtransaction.VerificationOutcomePassed
+		if *failed {
+			outcome = reviewtransaction.VerificationOutcomeFailed
+		}
+		if _, publishErr := reviewtransaction.PublishCapturedVerificationEvidence(reviewtransaction.CaptureVerificationEvidenceRequest{
+			StoreDir: store.Dir, LineageID: state.LineageID, AuthorityRevision: evidenceRevision,
+			Target: evidenceTarget, Payload: evidence, Outcome: outcome,
+		}); publishErr != nil {
+			return reviewPreflightError(fmt.Errorf("publish final review evidence: %w", publishErr))
+		}
+		captured, captureErr := reviewtransaction.ReadCapturedVerificationEvidence(store.Dir, state.LineageID, evidenceRevision, evidenceTarget)
+		if captureErr != nil {
+			return reviewPreflightError(fmt.Errorf("read published final review evidence: %w", captureErr))
+		}
+		capturedVerification = &captured
+		evidence = captured.Payload
+		effectiveFailed = captured.Record.Outcome != reviewtransaction.VerificationOutcomePassed
 	}
 	var attempt reviewtransaction.FinalizeAttempt
 	attemptLoaded := false
