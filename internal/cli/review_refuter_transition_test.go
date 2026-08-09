@@ -53,7 +53,7 @@ func capturedInferentialArtifact(t *testing.T) (string, ReviewFacadeStartResult,
 // returned the same finalize — a loop with no route to the outcome it demands.
 // The negotiated route must ask for the refuter outcomes it needs.
 func TestStatusOffersRefuterBeforeFinalizeForInferentialFinding(t *testing.T) {
-	repo, started, _ := capturedInferentialArtifact(t)
+	repo, started, record := capturedInferentialArtifact(t)
 
 	var out bytes.Buffer
 	if err := RunReview([]string{
@@ -88,6 +88,9 @@ func TestStatusOffersRefuterBeforeFinalizeForInferentialFinding(t *testing.T) {
 	claim := (*input.RefuterClaims)[0]
 	if claim.FindingID == "" || claim.Proof == "" {
 		t.Fatalf("refuter claim carries no finding or proof: %#v", claim)
+	}
+	if claim.SnapshotIdentity != record.State.InitialSnapshot.Identity {
+		t.Fatalf("refuter claim snapshot identity = %q, want initial snapshot identity %q", claim.SnapshotIdentity, record.State.InitialSnapshot.Identity)
 	}
 	// The refuter reaches finalize through its existing --refuter flag, so this
 	// input intentionally carries no submission descriptor: only the two
