@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestRuntimeSliceProofPersistsBeforeAdvancingDistinctWorkUnit(t *testing.T) {
@@ -185,5 +187,208 @@ func TestRuntimeSliceProofRejectsValidFailReportWithoutMutation(t *testing.T) {
 		Scope: &RuntimeScope{Tasks: []string{"1.2"}, Requirements: []string{"REQ-B"}, Scenarios: []string{"scenario-b"}},
 	}); !errors.Is(err, ErrRuntimeObjectiveDone) {
 		t.Fatalf("advance after failing slice proof = %v, want ErrRuntimeObjectiveDone", err)
+	}
+}
+
+func TestRuntimeSliceProofConcurrentIdenticalAdmissionIsIdempotent(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "slice-proof-concurrent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := &RuntimeScope{Tasks: []string{"1.1"}, Requirements: []string{"REQ-A"}, Scenarios: []string{"scenario-a"}}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "slice-proof-concurrent-begin", WorkUnit: "slice-a", EvidenceGoal: "prove concurrent slice admission", MaxAttempts: 1, MaxChangedLines: 20, Scope: scope,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRuntimeLedgerFile(t, repo, "slice-proof-concurrent\n")
+	completed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "slice-proof-concurrent-finish", Outcome: AttemptPassed, EvidenceRevision: runtimeTestHash('a'),
+		Diagnosis: "slice completed", HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup complete", ProcessEvidence: "processes stopped",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := strings.TrimSuffix(testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0), "```") + "scope: slice\nslice_id: " + completed.Objective.ID + "\n```"
+	requestDigest := runtimeValueHash("gentle-ai.sdd-runtime-slice-proof-request/v1", struct{ Scope, SliceID, Report string }{
+		Scope: "slice", SliceID: completed.Objective.ID, Report: report,
+	})
+	requestID := "slice-proof-" + strings.TrimPrefix(requestDigest, "sha256:")[:32]
+
+	// Inject the other writer after AdmitSliceProof's precheck but before its
+	// locked mutation, proving the exact immutable request receipt converges
+	// without publishing a second proof.
+	originalAcquire := runtimeAcquireAuthorityFileLock
+	injected := false
+	var injectedErr error
+	runtimeAcquireAuthorityFileLock = func(path string) (*reviewtransaction.AuthorityFileLock, error) {
+		if !injected {
+			injected = true
+			runtimeAcquireAuthorityFileLock = originalAcquire
+			_, injectedErr = store.mutate(context.Background(), completed.Revision, requestID, requestDigest, func(runtimeReplay) (runtimeRecord, error) {
+				return runtimeRecord{Operation: runtimeOperationSliceProof, SliceProof: &runtimeSliceProofEvent{
+					ObjectiveID: completed.Objective.ID, SliceID: completed.Objective.ID, EvidenceRevision: completed.EvidenceRevision, Report: report,
+				}}, nil
+			})
+			if injectedErr != nil {
+				return nil, injectedErr
+			}
+		}
+		return originalAcquire(path)
+	}
+	t.Cleanup(func() { runtimeAcquireAuthorityFileLock = originalAcquire })
+
+	admission, err := store.AdmitSliceProof(context.Background(), report, "slice", completed.Objective.ID)
+	if injectedErr != nil || err != nil || !admission.Valid {
+		t.Fatalf("concurrent identical proof = %#v err=%v injected=%v", admission, err, injectedErr)
+	}
+	status, err := store.Status()
+	if err != nil || len(status.SliceProofs) != 1 || countRuntimeRecords(t, store.Dir) != 3 {
+		t.Fatalf("concurrent identical proof changed immutable state = %#v err=%v records=%d", status, err, countRuntimeRecords(t, store.Dir))
+	}
+}
+
+func TestRuntimeSliceProofMutationDuplicateCheckUsesProofEvidence(t *testing.T) {
+	const objectiveID = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const evidenceRevision = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const reportDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	if err := runtimeSliceProofDuplicateError(nil, objectiveID, evidenceRevision, reportDigest); err != nil {
+		t.Fatalf("precheck before concurrent proof = %v", err)
+	}
+	proofs := []SliceProof{{ObjectiveID: objectiveID, EvidenceRevision: evidenceRevision, ReportDigest: reportDigest}}
+	if err := runtimeSliceProofDuplicateError(proofs, objectiveID, evidenceRevision, reportDigest); !errors.Is(err, errRuntimeSliceProofAlreadyRecorded) {
+		t.Fatalf("identical proof in mutation state = %v, want exact-match sentinel", err)
+	}
+	if err := runtimeSliceProofDuplicateError([]SliceProof{{ObjectiveID: objectiveID, EvidenceRevision: evidenceRevision, ReportDigest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}}, objectiveID, evidenceRevision, reportDigest); err == nil || errors.Is(err, errRuntimeSliceProofAlreadyRecorded) {
+		t.Fatalf("conflicting proof in mutation state = %v, want conflict", err)
+	}
+}
+
+func TestRuntimeScopedRescopePreservesScopeAcrossReplay(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "scoped-rescope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := &RuntimeScope{Tasks: []string{"1.1"}, Requirements: []string{"REQ-A"}, Scenarios: []string{"scenario-a"}}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "scoped-rescope-begin", WorkUnit: "oversized-slice", EvidenceGoal: "prove scoped rescope", MaxAttempts: 2, MaxChangedLines: 40, Scope: scope,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "scoped-rescope-finish", Outcome: AttemptInterrupted, EvidenceRevision: runtimeTestHash('a'),
+		Diagnosis: "slice needs a narrower changed-line budget", HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup complete", ProcessEvidence: "processes stopped",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: interrupted.Revision, RequestID: "scoped-rescope", WorkUnit: "narrowed-slice", EvidenceGoal: "prove narrowed scoped rescope", MaxAttempts: 2, MaxChangedLines: 20,
+		Reason: "narrow the completed slice budget", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rescoped.Objective == nil {
+		t.Fatalf("rescoped scoped objective = %#v", rescoped.Objective)
+	}
+	wantID := runtimeObjectiveID(store.Change, "narrowed-slice", "prove narrowed scoped rescope", rescoped.Objective.InitialCandidateIdentity, rescoped.Objective.Generation, scope)
+	if rescoped.Objective.ID != wantID || !runtimeScopeEqual(rescoped.Objective.Scope, scope) {
+		t.Fatalf("rescoped scoped objective = %#v, want identity %s and scope %#v", rescoped.Objective, wantID, scope)
+	}
+	replay, err := store.load()
+	if err != nil || replay.Status.Objective == nil || replay.Status.Objective.ID != wantID || !runtimeScopeEqual(replay.Status.Objective.Scope, scope) || len(replay.Scopes) != 1 {
+		t.Fatalf("replayed scoped rescope = %#v scopes=%#v err=%v", replay.Status.Objective, replay.Scopes, err)
+	}
+	if _, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: rescoped.Revision, RequestID: "scoped-rescope-successor-begin", WorkUnit: "narrowed-slice", EvidenceGoal: "prove narrowed scoped rescope", MaxAttempts: 2, MaxChangedLines: 20, Scope: scope,
+	}); err != nil {
+		t.Fatalf("next permitted scoped begin after rescope = %v", err)
+	}
+}
+
+func TestRuntimeLegacyScopedRescopeWithoutScopeReplaysPredecessorAssignment(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "legacy-scoped-rescope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := &RuntimeScope{Tasks: []string{"1.1"}, Requirements: []string{"REQ-A"}, Scenarios: []string{"scenario-a"}}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "legacy-scoped-rescope-begin", WorkUnit: "original-slice", EvidenceGoal: "prove legacy replay", MaxAttempts: 2, MaxChangedLines: 40, Scope: scope,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "legacy-scoped-rescope-finish", Outcome: AttemptInterrupted, EvidenceRevision: runtimeTestHash('a'),
+		Diagnosis: "slice needs a narrower changed-line budget", HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup complete", ProcessEvidence: "processes stopped",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := interrupted.Attempts[len(interrupted.Attempts)-1]
+	request := RescopeObjectiveRequest{
+		ExpectedRevision: interrupted.Revision, RequestID: "legacy-scoped-rescope", WorkUnit: "narrowed-slice", EvidenceGoal: "prove legacy narrowed replay", MaxAttempts: 2, MaxChangedLines: 20,
+		Reason: "narrow the legacy slice budget", Actor: "maintainer",
+	}
+	generation := interrupted.ObjectiveGeneration + 1
+	record := runtimeRecord{
+		Schema: runtimeRecordSchema, Change: store.Change, PreviousRevision: interrupted.Revision, Operation: runtimeOperationRescope,
+		RequestID: request.RequestID, RequestDigest: runtimeValueHash("gentle-ai.sdd-runtime-rescope-request/v1", request),
+		Rescope: &runtimeRescopeEvent{
+			PreviousObjectiveID: interrupted.Objective.ID, PreviousGeneration: interrupted.Objective.Generation,
+			PreviousMaxAttempts: interrupted.Objective.MaxAttempts, PreviousMaxChangedLines: interrupted.Objective.MaxChangedLines,
+			RescopeCandidateIdentity: interrupted.Objective.InitialCandidateIdentity, RescopeCandidateTree: last.FinishCandidateTree,
+			ObjectiveID: runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, interrupted.Objective.InitialCandidateIdentity, generation, nil), ObjectiveGeneration: generation,
+			WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal, MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines, Reason: request.Reason, Actor: request.Actor,
+		},
+	}
+	revision, payload, err := runtimeRecordRevision(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishRecord(revision, payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishHead(revision); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := store.Status()
+	if err != nil || replayed.Objective == nil || !runtimeScopeEqual(replayed.Objective.Scope, scope) {
+		t.Fatalf("legacy scoped rescope replay = %#v err=%v", replayed.Objective, err)
+	}
+}
+
+func TestRuntimeObjectiveIDExplicitScopePreservesHashes(t *testing.T) {
+	const change, workUnit, evidenceGoal, candidate = "slice-change", "slice-work", "prove slice", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const generation = 3
+	scope := &RuntimeScope{Tasks: []string{"1.1"}, Requirements: []string{"REQ-A"}, Scenarios: []string{"scenario-a"}}
+
+	unscopedWant := runtimeValueHash(runtimeObjectiveSchemaV2, struct {
+		Change            string `json:"change"`
+		WorkUnit          string `json:"work_unit"`
+		EvidenceGoal      string `json:"evidence_goal"`
+		CandidateIdentity string `json:"candidate_identity"`
+		Generation        int    `json:"generation"`
+	}{change, workUnit, evidenceGoal, candidate, generation})
+	if got := runtimeObjectiveID(change, workUnit, evidenceGoal, candidate, generation, nil); got != unscopedWant {
+		t.Fatalf("unscoped objective ID = %s, want existing hash %s", got, unscopedWant)
+	}
+
+	scopedWant := runtimeValueHash(runtimeObjectiveSchemaV2, struct {
+		Change            string        `json:"change"`
+		WorkUnit          string        `json:"work_unit"`
+		EvidenceGoal      string        `json:"evidence_goal"`
+		CandidateIdentity string        `json:"candidate_identity"`
+		Generation        int           `json:"generation"`
+		Scope             *RuntimeScope `json:"scope"`
+	}{change, workUnit, evidenceGoal, candidate, generation, scope})
+	if got := runtimeObjectiveID(change, workUnit, evidenceGoal, candidate, generation, scope); got != scopedWant {
+		t.Fatalf("scoped objective ID = %s, want existing hash %s", got, scopedWant)
 	}
 }

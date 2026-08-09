@@ -133,6 +133,42 @@ func TestRunSDDVerifyValidateScopedProofPersistsAndRefusesInvalidReport(t *testi
 	}
 }
 
+func TestRunSDDVerifyValidatePassWithWarningsPersistsOneScopedProof(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	change := "scoped-proof-warnings"
+	store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), sddstatus.BeginAttemptRequest{
+		RequestID: "scoped-proof-warnings-begin", WorkUnit: "slice-warnings", EvidenceGoal: "prove warning admission", MaxAttempts: 1, MaxChangedLines: 20,
+		Scope: &sddstatus.RuntimeScope{Tasks: []string{"1.1"}, Requirements: []string{"REQ-A"}, Scenarios: []string{"scenario-a"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "scoped-proof-warnings.txt"), []byte("proof\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := store.Finish(context.Background(), sddstatus.FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "scoped-proof-warnings-finish", Outcome: sddstatus.AttemptPassed, EvidenceRevision: cliAttemptHash('a'),
+		Diagnosis: "scoped warning proof passed", HarnessDisposition: sddstatus.HarnessReused, CleanupEvidence: "cleanup complete", ProcessEvidence: "processes stopped",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := strings.Replace(cliScopedVerifyReport(completed.Objective.ID), "verdict: pass", "verdict: pass_with_warnings", 1)
+	args := []string{"--input", "-", "--cwd", repo, "--change", change, "--scope", "slice", "--slice-id", completed.Objective.ID}
+	var output bytes.Buffer
+	if err := runSDDVerifyValidate(args, strings.NewReader(report), &output); err != nil {
+		t.Fatalf("warning scoped validation = %v", err)
+	}
+	status, err := store.Status()
+	if err != nil || len(status.SliceProofs) != 1 || status.SliceProofs[0].ObjectiveID != completed.Objective.ID || !strings.Contains(output.String(), `"verdict": "pass_with_warnings"`) {
+		t.Fatalf("warning scoped proof = %#v output=%s err=%v", status.SliceProofs, output.String(), err)
+	}
+}
+
 func TestRunSDDVerifyValidateHelpIsSuccessfulAndInputFree(t *testing.T) {
 	stdin := &sddVerifyValidateReadSpy{}
 	var output bytes.Buffer
