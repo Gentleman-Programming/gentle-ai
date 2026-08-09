@@ -78,6 +78,7 @@ type ReviewTransitionSubmissionValue struct {
 	Maximum              int      `json:"maximum,omitempty"`
 	AllowedValues        []string `json:"allowed_values,omitempty"`
 	SubstitutionLocation int      `json:"substitution_location"`
+	Repeated             bool     `json:"repeated,omitempty"`
 }
 
 type reviewCaptureContext struct {

@@ -694,6 +694,16 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
 			return errors.New("verification evidence submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its authority
 		}
+	case "intended_untracked_selection_required":
+		if len(transition.Collect.Inputs) != 1 {
+			return errors.New("intended-untracked submission transition is incomplete") // refusal:by-design world-action: only provider code can restore the required single submission
+		}
+		input := transition.Collect.Inputs[0]
+		arguments, err := reviewTransitionArgumentMap(input.Arguments)
+		want := reviewIntendedUntrackedSubmission(result.Contract, arguments["expected_untracked_inventory"])
+		if err != nil || input.CaptureOperation != "external.select_intended_untracked" || input.Submission == nil || want == nil || !reflect.DeepEqual(*input.Submission, *want) {
+			return errors.New("intended-untracked submission descriptor is not provider-bound") // refusal:by-design world-action: only provider code can bind selection to its inventory
+		}
 	default:
 		for _, input := range transition.Collect.Inputs {
 			if input.Submission != nil {
@@ -801,7 +811,7 @@ func (result ReviewTargetStatusResult) validateIntendedUntrackedSelectionTransit
 	}
 	input := result.NextTransition.Collect.Inputs[0]
 	if input.Name != "intended_untracked_selection" || input.Schema != reviewIntendedUntrackedSelectionSchema ||
-		input.CaptureOperation != "external.select_intended_untracked" || input.Submission != nil || len(input.Arguments) != 6 {
+		input.CaptureOperation != "external.select_intended_untracked" || input.Submission == nil || len(input.Arguments) != 6 {
 		return errors.New("fresh target lacks an intended-untracked selection transition; rerun `gentle-ai review status --next-transition`")
 	}
 	if !reflect.DeepEqual(input.Arguments[:4], reviewTargetArguments(result)) || input.Arguments[4].Name != "eligible_paths_json" ||
@@ -1067,7 +1077,7 @@ func (transition ReviewNextTransition) Validate() error {
 			if err != nil {
 				return err
 			}
-			submissionAllowed := input.CaptureOperation == "external.plan_correction" || input.CaptureOperation == "external.run_targeted_validation" || input.CaptureOperation == "review.capture-evidence"
+			submissionAllowed := input.CaptureOperation == "external.plan_correction" || input.CaptureOperation == "external.run_targeted_validation" || input.CaptureOperation == "review.capture-evidence" || input.CaptureOperation == "external.select_intended_untracked"
 			if input.Submission != nil && !submissionAllowed {
 				return errors.New("collection transition submission placement is invalid") // refusal:by-design world-action: only a provider code fix can place a descriptor on a supported input
 			}
@@ -1183,6 +1193,9 @@ func (submission ReviewTransitionSubmission) Validate() error {
 	if submission.Value != nil {
 		return submission.validateFinalize()
 	}
+	if submission.OperationToken == "status" {
+		return submission.validateIntendedUntrackedSelection()
+	}
 	if submission.OperationToken != "capture-evidence" || len(submission.Values) != 2 {
 		return errors.New("submission descriptor identity is incomplete") // refusal:by-design world-action: only a provider code fix can restore descriptor identity
 	}
@@ -1211,6 +1224,29 @@ func (submission ReviewTransitionSubmission) Validate() error {
 	}) || input.Slot != "input" || input.Domain != "artifact_path_or_stdin" || input.Schema != reviewVerificationEvidenceSchemaID ||
 		input.Minimum != 0 || input.Maximum != 0 || len(input.AllowedValues) != 0 || input.SubstitutionLocation != 5 {
 		return errors.New("verification evidence submission descriptor values are invalid") // refusal:by-design world-action: only a provider code fix can restore the capture value domains
+	}
+	return nil
+}
+
+func (submission ReviewTransitionSubmission) validateIntendedUntrackedSelection() error {
+	if len(submission.ArgumentTokens) != 6 || len(submission.Values) != 3 {
+		return errors.New("intended-untracked submission descriptor identity is incomplete") // refusal:by-design world-action: only provider code can restore descriptor identity
+	}
+	for _, token := range submission.ArgumentTokens {
+		if strings.TrimSpace(token) == "" || !strings.HasPrefix(token, "--") || strings.ContainsAny(token, " \t\r\n") {
+			return errors.New("submission descriptor contains an unsafe argument token") // refusal:by-design world-action: only provider code can emit safe argv tokens
+		}
+	}
+	if submission.ArgumentTokens[0] != "--contract="+ReviewIntegrationContractV2 || submission.ArgumentTokens[1] != "--next-transition=true" ||
+		submission.ArgumentTokens[2] != "--cwd={{cwd}}" || submission.ArgumentTokens[3] != "--untracked-scope={{untracked_scope}}" ||
+		!validReviewCapabilitySHA256(strings.TrimPrefix(submission.ArgumentTokens[4], "--expected-untracked-inventory=")) || submission.ArgumentTokens[5] != "--intended-untracked={{intended_untracked}}" {
+		return errors.New("intended-untracked submission descriptor bindings are invalid") // refusal:by-design world-action: only provider code can restore inventory-bound arguments
+	}
+	cwd, scope, paths := submission.Values[0], submission.Values[1], submission.Values[2]
+	if cwd.Slot != "cwd" || cwd.Domain != "repository_path" || cwd.SubstitutionLocation != 2 || cwd.Repeated ||
+		scope.Slot != "untracked_scope" || scope.Domain != "enum" || scope.SubstitutionLocation != 3 || scope.Repeated || !reflect.DeepEqual(scope.AllowedValues, []string{"select", "exclude"}) ||
+		paths.Slot != "intended_untracked" || paths.Domain != "repo_relative_path" || paths.Schema != reviewIntendedUntrackedSelectionSchema || paths.SubstitutionLocation != 5 || !paths.Repeated {
+		return errors.New("intended-untracked submission descriptor values are invalid") // refusal:by-design world-action: only provider code can restore declared substitution slots
 	}
 	return nil
 }

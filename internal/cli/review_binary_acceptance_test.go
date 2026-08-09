@@ -302,6 +302,30 @@ func TestMainBinaryExecutesSubmissionDescriptorsFromArbitraryCWD(t *testing.T) {
 	}
 }
 
+func TestMainBinaryExecutesIntendedUntrackedSubmissionFromArbitraryCWD(t *testing.T) {
+	binary := os.Getenv("GENTLE_AI_TEST_BINARY")
+	if binary == "" {
+		t.Skip("requires GENTLE_AI_TEST_BINARY built from the branch under test")
+	}
+	repo := initReviewCLIRepo(t)
+	outside := t.TempDir()
+	writeReviewStartCandidate(t, repo, "tracked.txt", "tracked\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+	var initial ReviewTargetStatusResult
+	decodeBinaryJSON(t, runReviewBinaryAt(t, binary, outside, true,
+		"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", repo), &initial)
+	descriptor := initial.NextTransition.Collect.Inputs[0].Submission
+	if descriptor == nil {
+		t.Fatal("initial STATUS omitted intended-untracked submission")
+	}
+	var selected ReviewTargetStatusResult
+	decodeBinaryJSON(t, runReviewBinaryAt(t, binary, outside, true,
+		intendedUntrackedSubmissionArguments(t, *descriptor, repo, "select", "candidate.txt")...), &selected)
+	if selected.TargetIdentity == initial.TargetIdentity || selected.NextTransition == nil || selected.NextTransition.Execute == nil || selected.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("selected binary STATUS = %#v", selected)
+	}
+}
+
 func binarySubmissionDescriptorStatus(t *testing.T, binary, outside, repo, lineage string) ReviewTargetStatusResult {
 	t.Helper()
 	var status ReviewTargetStatusResult

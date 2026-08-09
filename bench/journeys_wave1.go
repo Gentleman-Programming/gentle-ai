@@ -84,6 +84,7 @@ type waveCorrectionStatus struct {
 		} `json:"collect"`
 		Execute *struct {
 			Operation string `json:"operation"`
+			Command   string `json:"command"`
 		} `json:"execute"`
 	} `json:"next_transition"`
 }
@@ -101,6 +102,7 @@ type waveSubmissionValue struct {
 	Schema               string   `json:"schema,omitempty"`
 	AllowedValues        []string `json:"allowed_values,omitempty"`
 	SubstitutionLocation int      `json:"substitution_location"`
+	Repeated             bool     `json:"repeated,omitempty"`
 }
 
 type waveRetryStatus struct {

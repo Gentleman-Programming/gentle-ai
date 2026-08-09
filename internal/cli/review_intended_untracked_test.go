@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -49,6 +50,54 @@ func assertNoUntrackedSelectionAuthority(t *testing.T, repo string) {
 	if stores, err := reviewtransaction.DiscoverCompactStores(context.Background(), repo); err != nil || len(stores) != 0 {
 		t.Fatalf("incomplete untracked intent created authority: err=%v stores=%#v", err, stores)
 	}
+}
+
+func TestIntendedUntrackedCollectionCarriesExecutableStatusSubmission(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+
+	status := intendedUntrackedStatus(t, repo)
+	input := status.NextTransition.Collect.Inputs[0]
+	if input.Submission == nil || input.Submission.OperationToken != "status" {
+		t.Fatalf("selection submission = %#v, want provider-owned STATUS", input.Submission)
+	}
+	if err := input.Submission.Validate(); err != nil {
+		t.Fatalf("selection submission validation: %v", err)
+	}
+	assertSubmissionTransitionSchema(t, status)
+}
+
+func executeIntendedUntrackedSubmission(t *testing.T, descriptor ReviewTransitionSubmission, repo, scope string, paths ...string) (ReviewTargetStatusResult, error) {
+	t.Helper()
+	arguments := intendedUntrackedSubmissionArguments(t, descriptor, repo, scope, paths...)
+	var output bytes.Buffer
+	err := RunReview(arguments, &output)
+	if err != nil {
+		return ReviewTargetStatusResult{}, fmt.Errorf("%w: %s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	return status, nil
+}
+
+func intendedUntrackedSubmissionArguments(t *testing.T, descriptor ReviewTransitionSubmission, repo, scope string, paths ...string) []string {
+	t.Helper()
+	arguments := append([]string{descriptor.OperationToken}, descriptor.ArgumentTokens...)
+	values := map[string][]string{"cwd": {repo}, "untracked_scope": {scope}, "intended_untracked": paths}
+	for _, slot := range descriptor.Values {
+		index := slot.SubstitutionLocation + 1
+		placeholder := "{{" + slot.Slot + "}}"
+		if slot.Repeated {
+			replacements := make([]string, len(values[slot.Slot]))
+			for valueIndex, value := range values[slot.Slot] {
+				replacements[valueIndex] = strings.Replace(arguments[index], placeholder, value, 1)
+			}
+			arguments = append(arguments[:index], append(replacements, arguments[index+1:]...)...)
+			continue
+		}
+		arguments[index] = strings.Replace(arguments[index], placeholder, values[slot.Slot][0], 1)
+	}
+	return arguments
 }
 
 func intendedUntrackedSelectArgs(digest string, paths ...string) []string {
@@ -115,7 +164,11 @@ func TestIntendedUntrackedSelectionUsesCanonicalPathsAndPrintedStart(t *testing.
 	}
 
 	selectedPaths := []string{"docs/chosen, file.md", "docs/second file,with comma.md"}
-	selected := intendedUntrackedStatus(t, repo, intendedUntrackedSelectArgs(digest, selectedPaths...)...)
+	initial := intendedUntrackedStatus(t, repo)
+	selected, err := executeIntendedUntrackedSubmission(t, *initial.NextTransition.Collect.Inputs[0].Submission, repo, "select", selectedPaths...)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(selected.Projection.Paths, []string{"docs/chosen, file.md", "docs/second file,with comma.md", "docs/tracked.md"}) {
 		t.Fatalf("selected projection paths = %v", selected.Projection.Paths)
 	}
@@ -125,6 +178,39 @@ func TestIntendedUntrackedSelectionUsesCanonicalPathsAndPrintedStart(t *testing.
 	started := decodeNegotiatedReviewStart(t, executePrintedReview(t, repo, selected.NextTransition.Execute.Command))
 	if negotiatedStartTarget(started) != selected.TargetIdentity {
 		t.Fatalf("printed START target = %s, negotiated target = %s", negotiatedStartTarget(started), selected.TargetIdentity)
+	}
+	if initial.TargetIdentity == selected.TargetIdentity {
+		t.Fatal("selected STATUS reused the pre-selection target identity")
+	}
+	staleCommand := strings.Replace(selected.NextTransition.Execute.Command, selected.TargetIdentity, initial.TargetIdentity, 1)
+	words, err := SplitPrintedCommandWords(staleCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReview(words[2:], &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "stale_target_identity") {
+		t.Fatalf("pre-selection START target = %v, want stale_target_identity", err)
+	}
+}
+
+func TestIntendedUntrackedSelectAndExcludeSubmissionsReturnExecutableStart(t *testing.T) {
+	for _, scope := range []string{"select", "exclude"} {
+		t.Run(scope, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			writeReviewStartCandidate(t, repo, "tracked.txt", "tracked\n", 0o644)
+			writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+			initial := intendedUntrackedStatus(t, repo)
+			paths := []string(nil)
+			if scope == "select" {
+				paths = []string{"candidate.txt"}
+			}
+			selected, err := executeIntendedUntrackedSubmission(t, *initial.NextTransition.Collect.Inputs[0].Submission, repo, scope, paths...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if selected.NextTransition == nil || selected.NextTransition.Kind != reviewNextTransitionExecute || selected.NextTransition.Execute.Operation != "review.start" {
+				t.Fatalf("selected STATUS transition = %#v", selected.NextTransition)
+			}
+		})
 	}
 }
 
@@ -136,7 +222,7 @@ func TestIntendedUntrackedInventoryChangesFailClosedBeforeAuthority(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
-			digest, _ := intendedUntrackedSelection(t, intendedUntrackedStatus(t, repo))
+			initial := intendedUntrackedStatus(t, repo)
 			if test.remove {
 				if err := os.Remove(filepath.Join(repo, "candidate.txt")); err != nil {
 					t.Fatal(err)
@@ -144,7 +230,7 @@ func TestIntendedUntrackedInventoryChangesFailClosedBeforeAuthority(t *testing.T
 			} else {
 				writeUndeclaredWorkspaceFile(t, repo, "added-after-status.txt", "added\n", 0o644)
 			}
-			err := RunReviewFacadeStart(append([]string{"--cwd", repo, "--lineage", "stale-inventory-" + test.name}, intendedUntrackedSelectArgs(digest, "candidate.txt")...), &bytes.Buffer{})
+			_, err := executeIntendedUntrackedSubmission(t, *initial.NextTransition.Collect.Inputs[0].Submission, repo, "select", "candidate.txt")
 			if err == nil || !strings.Contains(err.Error(), "untracked inventory changed") {
 				t.Fatalf("stale inventory START = %v", err)
 			}

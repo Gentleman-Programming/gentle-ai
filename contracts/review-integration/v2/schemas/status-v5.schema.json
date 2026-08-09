@@ -58,7 +58,8 @@
         {"if": {"properties": {"reason_code": {"enum": ["correction_plan_required", "corrected_candidate_unavailable"]}}, "required": ["reason_code"]}, "then": {"required": ["correction_request"]}, "else": {"not": {"required": ["correction_request"]}}},
         {"if": {"properties": {"reason_code": {"const": "correction_plan_required"}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "external.plan_correction"}}, "required": ["capture_operation", "submission"]}}}}}}},
         {"if": {"properties": {"reason_code": {"const": "targeted_validation_required"}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "external.run_targeted_validation"}}, "required": ["capture_operation", "submission"]}}}}}}},
-        {"if": {"properties": {"reason_code": {"enum": ["verification_evidence_required", "correction_repository_verification_required"]}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "review.capture-evidence"}}, "required": ["capture_operation", "submission"]}}}}}}}
+        {"if": {"properties": {"reason_code": {"enum": ["verification_evidence_required", "correction_repository_verification_required"]}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "review.capture-evidence"}}, "required": ["capture_operation", "submission"]}}}}}}},
+        {"if": {"properties": {"reason_code": {"const": "intended_untracked_selection_required"}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "external.select_intended_untracked"}}, "required": ["capture_operation", "submission"]}}}}}}}
       ]
     },
     "transition_collection": {
@@ -73,7 +74,7 @@
         "schema": {"type": "string", "minLength": 1},
         "capture_operation": {"type": "string", "minLength": 1},
         "arguments": {"type": "array", "minItems": 1, "items": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_argument"}},
-        "submission": {"oneOf": [{"$ref": "#/$defs/submission_descriptor"}, {"$ref": "#/$defs/capture_evidence_submission_descriptor"}]},
+        "submission": {"oneOf": [{"$ref": "#/$defs/submission_descriptor"}, {"$ref": "#/$defs/capture_evidence_submission_descriptor"}, {"$ref": "#/$defs/intended_untracked_submission_descriptor"}]},
         "artifact_subject": {"$ref": "artifact-subject.schema.json"},
         "base_tree": {"$ref": "#/$defs/git_tree"},
         "candidate_tree": {"$ref": "#/$defs/git_tree"},
@@ -84,7 +85,8 @@
         {"if": {"properties": {"capture_operation": {"const": "external.run_targeted_validation"}}, "required": ["capture_operation"]}, "then": {"required": ["validation_request", "submission"], "properties": {"schema": {"const": "gentle-ai.review-targeted-validation-request/v1"}}}, "else": {"not": {"required": ["validation_request"]}}},
         {"if": {"properties": {"capture_operation": {"const": "external.plan_correction"}}, "required": ["capture_operation"]}, "then": {"required": ["submission"], "properties": {"schema": {"const": "gentle-ai.review-correction-plan/v1"}}}},
         {"if": {"properties": {"capture_operation": {"const": "review.capture-evidence"}}, "required": ["capture_operation"]}, "then": {"required": ["submission"], "properties": {"schema": {"const": "https://gentle-ai.dev/schema/review/verification-evidence/v1"}, "submission": {"$ref": "#/$defs/capture_evidence_submission_descriptor"}}}},
-        {"if": {"properties": {"capture_operation": {"not": {"enum": ["external.plan_correction", "external.run_targeted_validation", "review.capture-evidence"]}}}, "required": ["capture_operation"]}, "then": {"not": {"required": ["submission"]}}},
+        {"if": {"properties": {"capture_operation": {"const": "external.select_intended_untracked"}}, "required": ["capture_operation"]}, "then": {"required": ["submission"], "properties": {"schema": {"const": "gentle-ai.review-intended-untracked-selection/v1"}, "submission": {"$ref": "#/$defs/intended_untracked_submission_descriptor"}}}},
+        {"if": {"properties": {"capture_operation": {"not": {"enum": ["external.plan_correction", "external.run_targeted_validation", "review.capture-evidence", "external.select_intended_untracked"]}}}, "required": ["capture_operation"]}, "then": {"not": {"required": ["submission"]}}},
         {"if": {"properties": {"capture_operation": {"const": "review.capture-result"}}, "required": ["capture_operation"]}, "then": {"required": ["artifact_subject", "base_tree", "candidate_tree", "changed_path_manifest"], "properties": {"schema": {"const": "https://gentle-ai.dev/schema/review/reviewer/v1"}}}, "else": {"allOf": [{"not": {"required": ["artifact_subject"]}}, {"not": {"required": ["base_tree"]}}, {"not": {"required": ["candidate_tree"]}}, {"not": {"required": ["changed_path_manifest"]}}]}}
       ]
     },
@@ -145,6 +147,27 @@
         "schema": {"const": "https://gentle-ai.dev/schema/review/verification-evidence/v1"},
         "substitution_location": {"const": 5}
       }
+    },
+    "intended_untracked_submission_descriptor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation_token", "argument_tokens", "values"],
+      "properties": {
+        "operation_token": {"const": "status"},
+        "argument_tokens": {"type": "array", "minItems": 6, "maxItems": 6, "prefixItems": [{"const": "--contract=gentle-ai.review-integration/v2"}, {"const": "--next-transition=true"}, {"const": "--cwd={{cwd}}"}, {"const": "--untracked-scope={{untracked_scope}}"}, {"pattern": "^--expected-untracked-inventory=sha256:[0-9a-f]{64}$"}, {"const": "--intended-untracked={{intended_untracked}}"}], "items": false},
+        "values": {"type": "array", "minItems": 3, "maxItems": 3, "prefixItems": [{"$ref": "#/$defs/intended_untracked_cwd_value"}, {"$ref": "#/$defs/intended_untracked_scope_value"}, {"$ref": "#/$defs/intended_untracked_paths_value"}], "items": false}
+      }
+    },
+    "intended_untracked_cwd_value": {
+      "type": "object", "additionalProperties": false, "required": ["slot", "domain", "substitution_location"],
+      "properties": {"slot": {"const": "cwd"}, "domain": {"const": "repository_path"}, "substitution_location": {"const": 2}}
+    },
+    "intended_untracked_scope_value": {
+      "type": "object", "additionalProperties": false, "required": ["slot", "domain", "allowed_values", "substitution_location"],
+      "properties": {"slot": {"const": "untracked_scope"}, "domain": {"const": "enum"}, "allowed_values": {"const": ["select", "exclude"]}, "substitution_location": {"const": 3}}
+    },
+    "intended_untracked_paths_value": {
+      "type": "object", "additionalProperties": false, "required": ["slot", "domain", "schema", "substitution_location", "repeated"],
+      "properties": {"slot": {"const": "intended_untracked"}, "domain": {"const": "repo_relative_path"}, "schema": {"const": "gentle-ai.review-intended-untracked-selection/v1"}, "substitution_location": {"const": 5}, "repeated": {"const": true}}
     },
     "git_tree": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}
   },

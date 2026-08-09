@@ -92,7 +92,30 @@ func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope re
 		Arguments: append(reviewTargetArguments(status),
 			ReviewTransitionArgument{Name: "eligible_paths_json", Value: string(paths)},
 			ReviewTransitionArgument{Name: "expected_untracked_inventory", Value: scope.Digest}),
+		Submission: reviewIntendedUntrackedSubmission(status.Contract, scope.Digest),
 	})
+}
+
+func reviewIntendedUntrackedSubmission(contract, digest string) *ReviewTransitionSubmission {
+	if contract != ReviewIntegrationContractV2 {
+		return nil
+	}
+	return &ReviewTransitionSubmission{
+		OperationToken: "status",
+		ArgumentTokens: []string{
+			"--contract=" + contract,
+			"--next-transition=true",
+			"--cwd={{cwd}}",
+			"--untracked-scope={{untracked_scope}}",
+			"--expected-untracked-inventory=" + digest,
+			"--intended-untracked={{intended_untracked}}",
+		},
+		Values: []ReviewTransitionSubmissionValue{
+			{Slot: "cwd", Domain: "repository_path", SubstitutionLocation: 2},
+			{Slot: "untracked_scope", Domain: "enum", AllowedValues: []string{"select", "exclude"}, SubstitutionLocation: 3},
+			{Slot: "intended_untracked", Domain: "repo_relative_path", Schema: reviewIntendedUntrackedSelectionSchema, SubstitutionLocation: 5, Repeated: true},
+		},
+	}
 }
 
 func reviewStartIntendedUntrackedArguments(scope reviewIntendedUntrackedScope) []ReviewTransitionArgument {
