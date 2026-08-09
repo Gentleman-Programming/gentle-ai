@@ -19,7 +19,7 @@ func EnsureSupportedOS(goos string) error {
 		return nil
 	}
 
-	return fmt.Errorf("%w: only macOS, Linux, and Windows are supported (detected %s)", ErrUnsupportedOS, goos)
+	return fmt.Errorf("%w: only macOS, Linux, Windows, and Android are supported (detected %s)", ErrUnsupportedOS, goos)
 }
 
 func EnsureSupportedPlatform(profile PlatformProfile) error {
@@ -27,7 +27,7 @@ func EnsureSupportedPlatform(profile PlatformProfile) error {
 		return err
 	}
 
-	if profile.OS == "linux" && !profile.Supported {
+	if (profile.OS == "linux" || profile.OS == "android") && !profile.Supported {
 		distro := strings.TrimSpace(profile.LinuxDistro)
 		if distro == "" {
 			distro = LinuxDistroUnknown
