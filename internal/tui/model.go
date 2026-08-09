@@ -1248,6 +1248,17 @@ func (m Model) View() string {
 func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	keyStr := key.String()
 
+	// Guidance toggle (i or ?) — works on the phase list of both the main
+	// model picker and the profile-create picker reuse. Has no effect in
+	// the provider / model / effort sub-modes where role guidance does
+	// not apply.
+	if m.Screen == ScreenModelPicker ||
+		(m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 1) {
+		if screens.ToggleModelPickerGuidance(&m.ModelPicker, keyStr) {
+			return m, nil
+		}
+	}
+
 	// When the model picker is in a sub-mode, delegate navigation there first.
 	if m.Screen == ScreenModelPicker && m.ModelPicker.Mode != screens.ModePhaseList {
 		handled, updated := screens.HandleModelPickerNav(keyStr, &m.ModelPicker, m.Selection.ModelAssignments)

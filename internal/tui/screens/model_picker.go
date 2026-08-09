@@ -106,6 +106,12 @@ type ModelPickerState struct {
 	// keeps the cursor and scroll offsets inside the new window.
 	Height int
 
+	// GuidanceExpanded toggles the expanded contextual-role-guidance panel
+	// for the currently selected assignment row. Off by default — only a
+	// compact one-line purpose hint is rendered below the help line.
+	// ToggleModelPickerGuidance flips this flag on the "i" or "?" keys.
+	GuidanceExpanded bool
+
 	lmStudioURL       string
 	lmStudioConfig    opencode.ConfigProvider
 	lmStudioCatalog   opencode.Provider
@@ -999,8 +1005,37 @@ func renderPhaseList(
 		help = "j/k: navigate • enter: change model / confirm • backspace: clear • esc: back"
 	}
 	b.WriteString(styles.HelpStyle.Render(help))
+	b.WriteString("\n")
+
+	// Contextual role guidance for the currently selected row.
+	if role := selectedPhaseRow(state, cursor); role != "" {
+		if state.GuidanceExpanded {
+			b.WriteString(renderExpandedGuidance(role))
+		} else {
+			b.WriteString(renderCompactGuidance(role))
+		}
+	}
 
 	return b.String()
+}
+
+// selectedPhaseRow returns the agent role name for the cursor's row, or
+// the empty string for non-agent rows (the orchestrator row, the "Set all
+// phases" row, and the separator rows). Used to drive the contextual
+// guidance panel — only configurable agents carry guidance.
+func selectedPhaseRow(state ModelPickerState, cursor int) string {
+	rows := ModelPickerRows()
+	if state.ForProfile {
+		rows = ModelPickerRowsForProfile()
+	}
+	if cursor < 0 || cursor >= len(rows) {
+		return ""
+	}
+	row := rows[cursor]
+	if cursor <= 1 || IsModelPickerSeparatorRow(row) {
+		return ""
+	}
+	return row
 }
 
 func renderProviderSelect(state ModelPickerState) string {

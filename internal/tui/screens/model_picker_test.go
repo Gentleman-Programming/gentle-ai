@@ -1608,3 +1608,168 @@ func TestModelPickerRowsForProfile(t *testing.T) {
 		}
 	}
 }
+
+// ─── Issue #2301: contextual role guidance for the phase list ───────────────
+
+// pickableAssignmentState returns a ModelPickerState populated with one
+// provider and one SDD-capable model so renderPhaseList can reach the row
+// rendering path. The state height is fixed so the chrome-aware budget
+// stays predictable across assertions.
+func pickableAssignmentState(t *testing.T, height int) ModelPickerState {
+	t.Helper()
+	return ModelPickerState{
+		Height:         height,
+		AvailableIDs:   []string{"openai"},
+		Providers:      map[string]opencode.Provider{"openai": {ID: "openai", Name: "OpenAI"}},
+		SDDModels:      map[string][]opencode.Model{"openai": {{ID: "gpt-5", Name: "GPT-5"}}},
+		lmStudioURL:    "http://127.0.0.1:1234/v1",
+		lmStudioConfig: opencode.ConfigProvider{URL: "http://127.0.0.1:1234/v1"},
+	}
+}
+
+// rowIndexFor returns the index of role in ModelPickerRows(), or -1 if the
+// role is not present.
+func rowIndexFor(role string) int {
+	rows := ModelPickerRows()
+	for i, row := range rows {
+		if row == role {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestRenderPhaseList_CompactGuidanceForKnownRole verifies that selecting an
+// SDD agent row renders the compact guidance line — the agent purpose plus
+// the "i or ?: show full guidance" hint.
+//
+// Issue #2301 — contextual role guidance, compact presentation.
+func TestRenderPhaseList_CompactGuidanceForKnownRole(t *testing.T) {
+	state := pickableAssignmentState(t, 40)
+	cursor := rowIndexFor("sdd-apply")
+	if cursor < 0 {
+		t.Fatal("sdd-apply row missing from ModelPickerRows()")
+	}
+
+	output := RenderModelPicker(nil, state, cursor)
+	if !strings.Contains(output, "Role: sdd-apply") {
+		t.Errorf("compact guidance should name the role; got:\n%s", output)
+	}
+	if !strings.Contains(output, "i or ?: show full guidance") {
+		t.Errorf("compact guidance should hint at the toggle key; got:\n%s", output)
+	}
+	if !strings.Contains(output, "Implements approved tasks") {
+		t.Errorf("compact guidance should show the role purpose; got:\n%s", output)
+	}
+}
+
+// TestRenderPhaseList_ExpandedGuidanceForKnownRole verifies that toggling
+// GuidanceExpanded renders the multi-line capability panel for the selected
+// agent, including the Fast-mode note for roles where it applies.
+//
+// Issue #2301 — contextual role guidance, expanded presentation.
+func TestRenderPhaseList_ExpandedGuidanceForKnownRole(t *testing.T) {
+	state := pickableAssignmentState(t, 60)
+	state.GuidanceExpanded = true
+	cursor := rowIndexFor("sdd-apply")
+	if cursor < 0 {
+		t.Fatal("sdd-apply row missing from ModelPickerRows()")
+	}
+
+	output := RenderModelPicker(nil, state, cursor)
+	for _, want := range []string{
+		"Role: sdd-apply",
+		"Implements approved tasks",
+		"Consider:",
+		"Strong coding and tool-use reliability",
+		"Reasoning:",
+		"Fast mode:",
+		"It does not replace the selected reasoning effort",
+		"Tradeoffs:",
+		"i or ?: hide guidance",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("expanded guidance missing %q; got:\n%s", want, output)
+		}
+	}
+}
+
+// TestRenderPhaseList_GuidanceForJDAndReviewRoles verifies that the guidance
+// renderers reach into the JD and review agent maps, not just the SDD ones.
+//
+// Issue #2301 — coverage across every configurable agent family.
+func TestRenderPhaseList_GuidanceForJDAndReviewRoles(t *testing.T) {
+	state := pickableAssignmentState(t, 60)
+	state.GuidanceExpanded = true
+
+	for _, role := range []string{"jd-judge-a", "review-refuter"} {
+		cursor := rowIndexFor(role)
+		if cursor < 0 {
+			t.Fatalf("%s row missing from ModelPickerRows()", role)
+		}
+		output := RenderModelPicker(nil, state, cursor)
+		if !strings.Contains(output, "Role: "+role) {
+			t.Errorf("%s: guidance header missing; got:\n%s", role, output)
+		}
+		if !strings.Contains(output, "Consider:") {
+			t.Errorf("%s: capability bullets missing; got:\n%s", role, output)
+		}
+	}
+}
+
+// TestRenderPhaseList_NoGuidanceForNonAgentRows verifies that the "Set all
+// phases", orchestrator, and separator rows stay clean of guidance text —
+// those rows do not correspond to a single configurable agent role.
+//
+// Issue #2301 — guidance only applies to configurable agent rows.
+func TestRenderPhaseList_NoGuidanceForNonAgentRows(t *testing.T) {
+	state := pickableAssignmentState(t, 60)
+	for cursor, label := range map[int]string{0: "orchestrator", 1: "set-all", SeparatorRowIdx(): "separator"} {
+		output := RenderModelPicker(nil, state, cursor)
+		if strings.Contains(output, "Role: ") {
+			t.Errorf("%s row should not render role guidance; got:\n%s", label, output)
+		}
+	}
+}
+
+// TestToggleModelPickerGuidance_FlipsFlagOnIAndQuestionMark verifies the
+// toggle contract — i and ? both flip GuidanceExpanded, and any other key
+// returns false so the caller falls through to normal navigation.
+//
+// Issue #2301 — guidance expansion toggle.
+func TestToggleModelPickerGuidance_FlipsFlagOnIAndQuestionMark(t *testing.T) {
+	for _, key := range []string{"i", "?"} {
+		state := &ModelPickerState{}
+		if !ToggleModelPickerGuidance(state, key) {
+			t.Errorf("toggle should handle %q", key)
+		}
+		if !state.GuidanceExpanded {
+			t.Errorf("toggle %q should set GuidanceExpanded = true", key)
+		}
+		if !ToggleModelPickerGuidance(state, key) {
+			t.Errorf("toggle should still handle %q on second press", key)
+		}
+		if state.GuidanceExpanded {
+			t.Errorf("toggle %q should flip GuidanceExpanded back to false", key)
+		}
+	}
+
+	state := &ModelPickerState{}
+	if ToggleModelPickerGuidance(state, "enter") {
+		t.Error("toggle should NOT handle 'enter'")
+	}
+	if ToggleModelPickerGuidance(state, "j") {
+		t.Error("toggle should NOT handle 'j'")
+	}
+	if state.GuidanceExpanded {
+		t.Error("non-toggle keys must leave GuidanceExpanded = false")
+	}
+}
+
+// TestToggleModelPickerGuidance_NilStateReturnsFalse ensures the helper
+// never panics if a caller forgets to guard the state pointer.
+func TestToggleModelPickerGuidance_NilStateReturnsFalse(t *testing.T) {
+	if ToggleModelPickerGuidance(nil, "i") {
+		t.Error("toggle should return false when state is nil")
+	}
+}
