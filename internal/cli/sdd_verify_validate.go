@@ -53,7 +53,7 @@ func runSDDVerifyValidate(args []string, stdin io.Reader, stdout io.Writer) erro
 		return errors.New("sdd-verify-validate requires --input")
 	}
 	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*change) == "" {
-		return errors.New("sdd-verify-validate requires --cwd and --change")
+		return errors.New("sdd-verify-validate requires --cwd and --change") // refusal:by-design operator-knowledge: only the caller can select the repository and authoritative change to validate
 	}
 	reader := stdin
 	if *input != "-" {

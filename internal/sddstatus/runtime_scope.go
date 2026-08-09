@@ -31,16 +31,16 @@ func normalizeRuntimeScope(scope *RuntimeScope) (*RuntimeScope, error) {
 		Scenarios:    append([]string(nil), scope.Scenarios...),
 	}
 	if len(normalized.Tasks) == 0 {
-		return nil, errors.New("scoped objective requires at least one assigned task")
+		return nil, errors.New("scoped objective requires at least one assigned task") // refusal:by-design world-action: provider-owned scope construction must assign a task before it can create authority
 	}
 	for _, assignments := range [][]string{normalized.Tasks, normalized.Requirements, normalized.Scenarios} {
 		seen := make(map[string]struct{}, len(assignments))
 		for _, assignment := range assignments {
 			if err := validateRuntimeText(assignment, 160); err != nil {
-				return nil, errors.New("invalid scoped objective assignment")
+				return nil, errors.New("invalid scoped objective assignment") // refusal:by-design world-action: the authority constructor must supply canonical assignment text
 			}
 			if _, duplicate := seen[assignment]; duplicate {
-				return nil, errors.New("duplicate scoped objective assignment")
+				return nil, errors.New("duplicate scoped objective assignment") // refusal:by-design world-action: the authority constructor must make every scoped assignment unique
 			}
 			seen[assignment] = struct{}{}
 		}
@@ -86,7 +86,7 @@ func ResolveVerifyReportAuthority(ctx context.Context, cwd, change, scope, slice
 	switch scope {
 	case "whole":
 		if sliceID != "" {
-			return SpecCounts{}, nil, errors.New("whole verification does not accept a slice_id")
+			return SpecCounts{}, nil, errors.New("whole verification does not accept a slice_id") // refusal:by-design operator-knowledge: only the caller can choose whole verification rather than a provider-owned slice
 		}
 		root := filepath.Join(cwd, "openspec", "changes", change, "specs")
 		contents := []string{}
@@ -105,12 +105,12 @@ func ResolveVerifyReportAuthority(ctx context.Context, cwd, change, scope, slice
 			return nil
 		})
 		if err != nil || len(contents) == 0 {
-			return SpecCounts{}, nil, errors.New("whole verification cannot read authoritative change specifications")
+			return SpecCounts{}, nil, errors.New("whole verification cannot read authoritative change specifications") // refusal:by-design world-action: authoritative specifications must exist and be readable before their totals can be derived
 		}
 		return countSpecRequirementsAndScenarios(contents), nil, nil
 	case "slice":
 		if sliceID == "" {
-			return SpecCounts{}, nil, errors.New("slice verification requires a slice_id")
+			return SpecCounts{}, nil, errors.New("slice verification requires a slice_id") // refusal:by-design operator-knowledge: only the caller can name the provider-owned slice it intends to verify
 		}
 		store, err := OpenRuntimeStore(ctx, cwd, change)
 		if err != nil {
@@ -121,11 +121,11 @@ func ResolveVerifyReportAuthority(ctx context.Context, cwd, change, scope, slice
 			return SpecCounts{}, nil, err
 		}
 		if status.Objective == nil || status.Objective.Scope == nil || status.Objective.ID != sliceID {
-			return SpecCounts{}, nil, errors.New("slice verification does not match the provider-owned runtime objective")
+			return SpecCounts{}, nil, errors.New("slice verification does not match the provider-owned runtime objective") // refusal:by-design operator-knowledge: only the caller can select the intended current provider-owned slice
 		}
 		objective := *status.Objective
 		return objective.Scope.counts(), &objective, nil
 	default:
-		return SpecCounts{}, nil, errors.New("verification scope must be whole or slice")
+		return SpecCounts{}, nil, errors.New("verification scope must be whole or slice") // refusal:by-design operator-knowledge: only the caller can choose whether its report verifies a whole change or one slice
 	}
 }
