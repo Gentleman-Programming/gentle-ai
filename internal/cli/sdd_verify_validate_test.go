@@ -13,38 +13,42 @@ import (
 )
 
 func TestRunSDDVerifyValidate(t *testing.T) {
-	root := t.TempDir()
-	specDir := filepath.Join(root, "openspec", "changes", "thin", "specs")
-	if err := os.MkdirAll(specDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(specDir, "spec.md"), []byte("### Requirement: One\n#### Scenario: One\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	report := "```yaml\nschema: gentle-ai.verify-result/v1\nevidence_revision: sha256:" + strings.Repeat("a", 64) + "\nverdict: fail\nblockers: 1\ncritical_findings: 0\nrequirements: 1/1\nscenarios: 1/1\ntest_command: go test ./...\ntest_exit_code: 0\ntest_output_hash: sha256:" + strings.Repeat("b", 64) + "\nbuild_command: go vet ./...\nbuild_exit_code: 0\nbuild_output_hash: sha256:" + strings.Repeat("c", 64) + "\n```"
-	baseArgs := []string{"--input", "-", "--cwd", root, "--change", "thin"}
-	argsWith := func(extra ...string) []string {
-		args := append([]string(nil), baseArgs...)
-		return append(args, extra...)
-	}
+	baseArgs := []string{"--input", "-", "--requirements", "1", "--scenarios", "1"}
 	var output bytes.Buffer
-	if err := runSDDVerifyValidate(argsWith(), strings.NewReader(report), &output); err != nil {
+	if err := runSDDVerifyValidate(baseArgs, strings.NewReader(report), &output); err != nil {
 		t.Fatalf("valid failure: %v", err)
 	}
 	if got := output.String(); !strings.Contains(got, `"valid": true`) || !strings.Contains(got, `"verdict": "fail"`) {
 		t.Fatalf("output = %s", got)
 	}
+	path := filepath.Join(t.TempDir(), "report.md")
+	if err := os.WriteFile(path, []byte(report), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runSDDVerifyValidate([]string{"--input", path, "--requirements", "1", "--scenarios", "1"}, strings.NewReader("unused"), &bytes.Buffer{}); err != nil {
+		t.Fatalf("file input: %v", err)
+	}
 	for _, tt := range []struct {
-		name string
-		args []string
-		want string
+		name  string
+		args  []string
+		input string
+		want  string
 	}{
-		{"missing authority", []string{"--input", "-", "--cwd", root}, "requires --cwd and --change"},
-		{"unknown retired total", argsWith("--requirements", "1"), "not defined"},
-		{"slice requires id", argsWith("--scope", "slice"), "requires a slice_id"},
+		{"front matter", baseArgs, "---\n" + report, "front matter"},
+		{"missing requirements", []string{"--input", "-"}, report, "requires --requirements"},
+		{"missing scenarios", []string{"--input", "-", "--requirements", "1"}, report, "requires --scenarios"},
+		{"negative count", []string{"--input", "-", "--requirements", "-1", "--scenarios", "1"}, report, "nonnegative"},
+		{"count mismatch", []string{"--input", "-", "--requirements", "2", "--scenarios", "1"}, report, "actual requirement count 2"},
+		{"whole slice ID", append(baseArgs, "--slice-id", "slice-a"), report, "whole verification does not accept a slice_id"},
+		{"whole slice metadata", baseArgs, strings.Replace(report, "\n```", "\nscope: slice\nslice_id: slice-a\n```", 1), "invalid slice scope extension"},
+		{"slice missing authority", []string{"--input", "-", "--scope", "slice", "--slice-id", "slice-a"}, report, "requires --cwd and --change"},
+		{"slice missing ID", []string{"--input", "-", "--cwd", t.TempDir(), "--change", "thin", "--scope", "slice"}, report, "requires --slice-id"},
+		{"slice caller requirements", []string{"--input", "-", "--cwd", t.TempDir(), "--change", "thin", "--scope", "slice", "--slice-id", "slice-a", "--requirements", "1"}, report, "does not accept --requirements"},
+		{"slice caller scenarios", []string{"--input", "-", "--cwd", t.TempDir(), "--change", "thin", "--scope", "slice", "--slice-id", "slice-a", "--scenarios", "1"}, report, "does not accept --requirements or --scenarios"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			err := runSDDVerifyValidate(tt.args, strings.NewReader(report), &bytes.Buffer{})
+			err := runSDDVerifyValidate(tt.args, strings.NewReader(tt.input), &bytes.Buffer{})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want %q", err, tt.want)
 			}
@@ -86,6 +90,14 @@ func TestRunSDDVerifyValidateScopedProofPersistsAndRefusesInvalidReport(t *testi
 	}
 	if !strings.Contains(output.String(), `"valid": true`) {
 		t.Fatalf("scoped validation output = %s", output.String())
+	}
+	for _, args := range [][]string{
+		append(append([]string(nil), sliceArgs...), "--requirements", "1"),
+		append(append([]string(nil), sliceArgs...), "--scenarios", "1"),
+	} {
+		if err := runSDDVerifyValidate(args, strings.NewReader(report), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "slice verification does not accept --requirements or --scenarios") {
+			t.Fatalf("slice caller total error = %v", err)
+		}
 	}
 	accepted, err := store.Status()
 	if err != nil || len(accepted.SliceProofs) != 1 {
@@ -178,13 +190,10 @@ func TestRunSDDVerifyValidateHelpIsSuccessfulAndInputFree(t *testing.T) {
 	if stdin.reads != 0 {
 		t.Fatalf("help read stdin %d times", stdin.reads)
 	}
-	for _, want := range []string{"--input <path|->", "--cwd <repo>", "--change <name>", "--scope <whole|slice>", "--slice-id <id>", "scope, slice_id"} {
+	for _, want := range []string{"--input <path|->", "--requirements <n>", "--scenarios <n>", "--cwd <repo>", "--change <name>", "--scope <whole|slice>", "--slice-id <id>", "scope, slice_id", "whole mode requires caller-supplied", "slice mode forbids caller totals"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("help missing %q:\n%s", want, output.String())
 		}
-	}
-	if strings.Contains(output.String(), "--requirements") || strings.Contains(output.String(), "--scenarios") {
-		t.Fatalf("help retained caller totals:\n%s", output.String())
 	}
 }
 
@@ -194,7 +203,8 @@ func TestRunSDDVerifyValidateRequiredFlagsRemainRequired(t *testing.T) {
 		want string
 	}{
 		{nil, "requires --input"},
-		{[]string{"--input", "-"}, "requires --cwd and --change"},
+		{[]string{"--input", "-"}, "requires --requirements"},
+		{[]string{"--input", "-", "--requirements", "1"}, "requires --scenarios"},
 	} {
 		err := runSDDVerifyValidate(tt.args, strings.NewReader(""), &bytes.Buffer{})
 		if err == nil || !strings.Contains(err.Error(), tt.want) {

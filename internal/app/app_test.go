@@ -294,7 +294,7 @@ func TestRunArgsSDDStatusIsDispatchedBeforePlatformValidation(t *testing.T) {
 }
 
 func TestRunArgsSDDVerifyValidateIsDispatchedBeforePlatformValidation(t *testing.T) {
-	err := RunArgs([]string{"sdd-verify-validate", "--input", filepath.Join(t.TempDir(), "missing"), "--cwd", t.TempDir(), "--change", "thin"}, io.Discard)
+	err := RunArgs([]string{"sdd-verify-validate", "--input", filepath.Join(t.TempDir(), "missing"), "--requirements", "0", "--scenarios", "0"}, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "read verify report") {
 		t.Fatalf("RunArgs(sdd-verify-validate) error = %v", err)
 	}
@@ -303,7 +303,7 @@ func TestRunArgsSDDVerifyValidateIsDispatchedBeforePlatformValidation(t *testing
 func TestRunArgsSDDVerifyValidateHelpIsInputFree(t *testing.T) {
 	var output bytes.Buffer
 	err := RunArgs([]string{
-		"sdd-verify-validate", "--input", filepath.Join(t.TempDir(), "missing"), "--cwd", t.TempDir(), "--help", "--change", "thin",
+		"sdd-verify-validate", "--input", filepath.Join(t.TempDir(), "missing"), "--requirements", "0", "--help", "--scenarios", "0",
 	}, &output)
 	if err != nil {
 		t.Fatalf("RunArgs(sdd-verify-validate --help): %v", err)
@@ -319,11 +319,26 @@ func TestRunArgsSDDVerifyValidateHelpTokensCanBeInputValues(t *testing.T) {
 	for _, input := range []string{"--help", "-h"} {
 		t.Run(input, func(t *testing.T) {
 			var output bytes.Buffer
-			err := RunArgs([]string{"sdd-verify-validate", "--input", input, "--cwd", t.TempDir(), "--change", "thin"}, &output)
+			err := RunArgs([]string{"sdd-verify-validate", "--input", input, "--requirements", "0", "--scenarios", "0"}, &output)
 			if err == nil || !strings.Contains(err.Error(), "read verify report") || output.Len() != 0 {
 				t.Fatalf("RunArgs(input=%q) = output %q, err %v", input, output.String(), err)
 			}
 		})
+	}
+}
+
+func TestHelpListsBothSDDVerifyValidationForms(t *testing.T) {
+	var output bytes.Buffer
+	if err := RunArgs([]string{"help"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>",
+		"sdd-verify-validate --input <path|-> --cwd <repo> --change <name> --scope slice --slice-id <id>",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("help missing %q:\n%s", want, output.String())
+		}
 	}
 }
 
