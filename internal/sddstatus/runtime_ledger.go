@@ -121,10 +121,11 @@ var (
 	// under would diff a pinned base tree against an unrelated working tree —
 	// changed_lines: 0 when real work happened, or a wildly inflated delta —
 	// so this refuses before any candidate capture, not after.
-	ErrRuntimeWorktreeMismatch        = errors.New("SDD runtime attempt began in a different linked worktree than this finish is running from")
-	ErrRuntimeHandoffSource           = errors.New("SDD runtime handoff source does not equal the active attempt's effective worktree")      // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
-	ErrRuntimeHandoffDestination      = errors.New("SDD runtime handoff destination is not a registered linked worktree of this repository") // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
-	ErrRuntimeHandoffAlreadyPerformed = errors.New("SDD runtime attempt has already been handed off")                                        // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
+	ErrRuntimeWorktreeMismatch          = errors.New("SDD runtime attempt began in a different linked worktree than this finish is running from")
+	ErrRuntimeHandoffSource             = errors.New("SDD runtime handoff source does not equal the active attempt's effective worktree")      // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
+	ErrRuntimeHandoffDestination        = errors.New("SDD runtime handoff destination is not a registered linked worktree of this repository") // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
+	ErrRuntimeHandoffAlreadyPerformed   = errors.New("SDD runtime attempt has already been handed off")                                        // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
+	errRuntimeSliceProofAlreadyRecorded = errors.New("runtime slice proof already recorded")
 
 	runtimeRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	runtimeRevisionPattern  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -597,20 +598,21 @@ type runtimeResetEvent struct {
 // narrow, because replay recomputes the previous ceiling from the actual
 // replayed objective, never from the record's own claim.
 type runtimeRescopeEvent struct {
-	PreviousObjectiveID      string `json:"previous_objective_id"`
-	PreviousGeneration       int    `json:"previous_generation"`
-	PreviousMaxAttempts      int    `json:"previous_max_attempts"`
-	PreviousMaxChangedLines  int    `json:"previous_max_changed_lines"`
-	RescopeCandidateIdentity string `json:"rescope_candidate_identity"`
-	RescopeCandidateTree     string `json:"rescope_candidate_tree"`
-	ObjectiveID              string `json:"objective_id"`
-	ObjectiveGeneration      int    `json:"objective_generation"`
-	WorkUnit                 string `json:"work_unit"`
-	EvidenceGoal             string `json:"evidence_goal"`
-	MaxAttempts              int    `json:"max_attempts"`
-	MaxChangedLines          int    `json:"max_changed_lines"`
-	Reason                   string `json:"reason"`
-	Actor                    string `json:"actor"`
+	PreviousObjectiveID      string        `json:"previous_objective_id"`
+	PreviousGeneration       int           `json:"previous_generation"`
+	PreviousMaxAttempts      int           `json:"previous_max_attempts"`
+	PreviousMaxChangedLines  int           `json:"previous_max_changed_lines"`
+	RescopeCandidateIdentity string        `json:"rescope_candidate_identity"`
+	RescopeCandidateTree     string        `json:"rescope_candidate_tree"`
+	ObjectiveID              string        `json:"objective_id"`
+	ObjectiveGeneration      int           `json:"objective_generation"`
+	WorkUnit                 string        `json:"work_unit"`
+	EvidenceGoal             string        `json:"evidence_goal"`
+	MaxAttempts              int           `json:"max_attempts"`
+	MaxChangedLines          int           `json:"max_changed_lines"`
+	Scope                    *RuntimeScope `json:"scope,omitempty"`
+	Reason                   string        `json:"reason"`
+	Actor                    string        `json:"actor"`
 }
 
 type runtimeRepairEvent struct {
@@ -1361,6 +1363,19 @@ func runtimeHasSliceProof(proofs []SliceProof, objectiveID string) bool {
 	return false
 }
 
+func runtimeSliceProofDuplicateError(proofs []SliceProof, objectiveID, evidenceRevision, reportDigest string) error {
+	for _, proof := range proofs {
+		if proof.ObjectiveID != objectiveID {
+			continue
+		}
+		if proof.ReportDigest == reportDigest && proof.EvidenceRevision == evidenceRevision {
+			return errRuntimeSliceProofAlreadyRecorded
+		}
+		return errors.New("slice proof conflicts with the completed runtime objective") // refusal:by-design world-action: immutable authority permits one exact proof for the completed objective
+	}
+	return nil
+}
+
 // AdmitSliceProof records an admitted scoped report after verifying that the
 // current completed objective is the provider authority the report names.
 func (store RuntimeStore) AdmitSliceProof(ctx context.Context, report, scope, sliceID string) (VerifyReportAdmission, error) {
@@ -1395,16 +1410,13 @@ func (store RuntimeStore) AdmitSliceProof(ctx context.Context, report, scope, sl
 		return VerifyReportAdmission{}, errors.New("slice proof evidence revision does not match the completed runtime objective") // refusal:by-design world-action: the report must be regenerated from the objective's current recorded evidence
 	}
 	reportDigest := runtimeValueHash("gentle-ai.sdd-runtime-slice-proof-report/v1", report)
-	for _, proof := range replay.Status.SliceProofs {
-		if proof.ObjectiveID != objective.ID {
-			continue
-		}
-		if proof.EvidenceRevision == admitted.EvidenceRevision && proof.ReportDigest == reportDigest {
+	if err := runtimeSliceProofDuplicateError(replay.Status.SliceProofs, objective.ID, admitted.EvidenceRevision, reportDigest); err != nil {
+		if errors.Is(err, errRuntimeSliceProofAlreadyRecorded) {
 			return admitted, nil
 		}
-		return VerifyReportAdmission{}, errors.New("slice proof conflicts with the completed runtime objective") // refusal:by-design world-action: immutable authority permits one exact proof for the completed objective
+		return VerifyReportAdmission{}, err
 	}
-	_, err = store.mutate(ctx, replay.Status.Revision, requestID, requestDigest, func(replay runtimeReplay) (runtimeRecord, error) {
+	build := func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
 		objective := status.Objective
 		if objective == nil || objective.Scope == nil || !status.Complete || status.ActiveAttempt != nil {
@@ -1420,13 +1432,20 @@ func (store RuntimeStore) AdmitSliceProof(ctx context.Context, report, scope, sl
 		if currentAdmission.EvidenceRevision != status.EvidenceRevision {
 			return runtimeRecord{}, errors.New("slice proof evidence revision does not match the completed runtime objective") // refusal:by-design world-action: the report must be regenerated from the objective's current recorded evidence
 		}
-		if runtimeHasSliceProof(status.SliceProofs, objective.ID) {
-			return runtimeRecord{}, errors.New("slice proof conflicts with the completed runtime objective") // refusal:by-design world-action: immutable authority permits one exact proof for the completed objective
+		if sliceID != objective.ID {
+			return runtimeRecord{}, errors.New("slice proof does not match the completed scoped runtime objective") // refusal:by-design operator-knowledge: the caller must name the provider-owned completed objective it is proving
+		}
+		if err := runtimeSliceProofDuplicateError(status.SliceProofs, objective.ID, currentAdmission.EvidenceRevision, reportDigest); err != nil {
+			return runtimeRecord{}, err
 		}
 		return runtimeRecord{Operation: runtimeOperationSliceProof, SliceProof: &runtimeSliceProofEvent{
 			ObjectiveID: objective.ID, SliceID: sliceID, EvidenceRevision: currentAdmission.EvidenceRevision, Report: report,
 		}}, nil
-	})
+	}
+	_, err = store.mutate(ctx, replay.Status.Revision, requestID, requestDigest, build)
+	if errors.Is(err, errRuntimeSliceProofAlreadyRecorded) {
+		return admitted, nil
+	}
 	return admitted, err
 }
 
@@ -1602,7 +1621,7 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
 		}
 		generation := status.ObjectiveGeneration + 1
-		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, fresh.Identity, generation)
+		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, fresh.Identity, generation, objective.Scope)
 		return runtimeRecord{Operation: runtimeOperationRescope, Rescope: &runtimeRescopeEvent{
 			PreviousObjectiveID: objective.ID, PreviousGeneration: objective.Generation,
 			PreviousMaxAttempts: objective.MaxAttempts, PreviousMaxChangedLines: objective.MaxChangedLines,
@@ -1610,6 +1629,7 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation,
 			WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
+			Scope:  objective.Scope,
 			Reason: request.Reason, Actor: request.Actor,
 		}}, nil
 	})
@@ -2226,14 +2246,26 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 		return errors.New("objective rescope candidate does not match the terminal zero-drift finish") // refusal:by-design world-action: the zero-drift candidate was verified before publication, so a mismatch is a mutated record and the exit is restoring the store
 	}
 	generation := event.ObjectiveGeneration
-	expectedObjectiveID := runtimeObjectiveID(record.Change, event.WorkUnit, event.EvidenceGoal, event.RescopeCandidateIdentity, generation)
+	if normalized, err := normalizeRuntimeScope(event.Scope); err != nil || !runtimeScopeEqual(normalized, event.Scope) {
+		return errors.New("objective rescope scope is invalid") // refusal:by-design world-action: an invalid persisted scope is an immutable-record violation and requires store restoration
+	}
+	if event.Scope != nil && !runtimeScopeEqual(event.Scope, objective.Scope) {
+		return errors.New("objective rescope scope does not match the terminal objective") // refusal:by-design world-action: rescope preserves the provider-owned assignment rather than accepting a new one
+	}
+	expectedObjectiveID := runtimeObjectiveID(record.Change, event.WorkUnit, event.EvidenceGoal, event.RescopeCandidateIdentity, generation, event.Scope)
 	if generation != replay.Status.ObjectiveGeneration+1 || event.ObjectiveID != expectedObjectiveID {
 		return errors.New("objective rescope identity is invalid") // refusal:by-design world-action: the successor identity is derived deterministically at publication, so a mismatch is a mutated record and the exit is restoring the store
+	}
+	scope := event.Scope
+	if scope == nil {
+		// Pre-scope records derived their identity without Scope. Their predecessor
+		// remains the only historical assignment authority, so retain it on replay.
+		scope = objective.Scope
 	}
 	replay.Status.Objective = &RuntimeObjective{
 		ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 		InitialCandidateIdentity: event.RescopeCandidateIdentity, InitialCandidateTree: event.RescopeCandidateTree,
-		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines, Scope: scope,
 	}
 	replay.Status.ObjectiveGeneration = generation
 	replay.Status.EvidenceRevision = ""
@@ -2277,7 +2309,7 @@ func validateConsecutiveRescopeRepairCandidate(replay runtimeReplay, poisoned ru
 		last.FinishCandidateTree != event.RescopeCandidateTree {
 		return errors.New("record does not match the historical writer preconditions") // refusal:by-design world-action: mismatched immutable evidence is not the released writer defect
 	}
-	expectedObjectiveID := runtimeObjectiveID(poisoned.Change, event.WorkUnit, event.EvidenceGoal, event.RescopeCandidateIdentity, event.ObjectiveGeneration)
+	expectedObjectiveID := runtimeObjectiveID(poisoned.Change, event.WorkUnit, event.EvidenceGoal, event.RescopeCandidateIdentity, event.ObjectiveGeneration, event.Scope)
 	if event.ObjectiveGeneration != replay.Status.ObjectiveGeneration+1 || event.ObjectiveID != expectedObjectiveID {
 		return errors.New("record has an invalid successor objective identity") // refusal:by-design world-action: a repair cannot reconstruct a forged successor identity
 	}
@@ -2649,6 +2681,9 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			event.MaxAttempts > event.PreviousMaxAttempts || event.MaxChangedLines > event.PreviousMaxChangedLines ||
 			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
 			return errors.New("invalid SDD runtime rescope event") // refusal:by-design world-action: this shape (including narrowing) is enforced before publication, so a violation is a mutated record and the exit is restoring the store
+		}
+		if normalized, err := normalizeRuntimeScope(event.Scope); err != nil || !runtimeScopeEqual(normalized, event.Scope) {
+			return errors.New("invalid SDD runtime rescope scope") // refusal:by-design world-action: an invalid persisted scope is an immutable-record violation and requires store restoration
 		}
 		request := RescopeObjectiveRequest{
 			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID,
@@ -3318,11 +3353,7 @@ func runtimeEvidenceOnlyRetryAuthorized(reset *RuntimeReset, rescope *RuntimeRes
 		rescope.RescopeCandidateTree == candidateTree
 }
 
-func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int, scopes ...*RuntimeScope) string {
-	var scope *RuntimeScope
-	if len(scopes) != 0 {
-		scope = scopes[0]
-	}
+func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int, scope *RuntimeScope) string {
 	if scope != nil {
 		return runtimeValueHash(runtimeObjectiveSchemaV2, struct {
 			Change            string        `json:"change"`
