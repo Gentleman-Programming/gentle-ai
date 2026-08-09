@@ -75,7 +75,7 @@ The orchestrator persists DAG state after each phase transition to enable SDD re
 
 ### Verify-report admission
 
-Build a complete `verify-report` in memory as exact candidate bytes. Count authoritative requirements and scenarios, then run `gentle-ai sdd-verify-validate` on those bytes before any OpenSpec or Engram write.
+Build a complete `verify-report` in memory as exact candidate bytes. Run `gentle-ai sdd-verify-validate --input <path|-> --cwd <repo> --change <name>` before any OpenSpec or Engram write. For a provider-owned slice, also pass `--scope slice --slice-id <runtime-objective-id>` and declare matching `scope`/`slice_id` fields. Totals are derived from authority; caller totals are not accepted.
 
 If admission fails or the validator is unavailable, STOP with zero persistence calls. Do not create, truncate, delete, or overwrite any prior `verify-report`. On success, persist the same candidate bytes for the selected mode; hybrid preflights once before both writes. A valid `fail` report must be persisted because validity and archive readiness are separate decisions.
 

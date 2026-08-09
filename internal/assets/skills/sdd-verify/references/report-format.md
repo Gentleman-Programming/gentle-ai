@@ -80,9 +80,16 @@ build_output_hash: sha256:{exact-output-digest}
 {one-line reason}
 ~~~
 
-The YAML envelope MUST be the first non-empty content and contains every field exactly once. Counts come from the actual retrieved specs. Admission rejects malformed, unknown, missing, contradictory, or count-mismatched evidence. A canonical failure with blocker, critical, command-exit, or incomplete evidence is valid and persistable but not archive-ready. Human prose after the envelope never controls routing. Model/provider/profile/effort selection remains user-owned.
+The YAML envelope MUST be the first non-empty content and contains every field exactly once. Omit both `scope` and `slice_id` for the default whole-change report. A slice report MUST set `scope: slice` and the exact provider-owned runtime objective ID in `slice_id`; its requirement and scenario totals are derived from that objective's immutable assignments. Admission rejects malformed, unknown, partial, mismatched, duplicate, overlapping, contradictory, or count-mismatched evidence. A canonical failure with blocker, critical, command-exit, or incomplete evidence is valid and persistable but not archive-ready. Human prose after the envelope never controls routing. Model/provider/profile/effort selection remains user-owned.
 
-Before persistence, hold the complete report as exact candidate bytes and run `gentle-ai sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>` before any OpenSpec or Engram write. If the validator is unavailable or denies admission, make zero writes and preserve the prior report; otherwise persist the same bytes, including a valid `fail`.
+For a scoped slice, add these fields inside the same YAML envelope:
+
+```yaml
+scope: slice
+slice_id: sha256:{provider-owned-runtime-objective-id}
+```
+
+Hold the complete report as exact candidate bytes and run `gentle-ai sdd-verify-validate --input <path|-> --cwd <repo> --change <name>` for whole-change verification before any OpenSpec or Engram write. For a slice, run `gentle-ai sdd-verify-validate --input <path|-> --cwd <repo> --change <name> --scope slice --slice-id <provider-owned-runtime-objective-id>`. The command derives totals from authority; never provide caller-authored totals. If the validator is unavailable or denies admission, make zero writes and preserve the prior report; otherwise persist the same bytes, including a valid `fail`.
 
 ## Authority-Only Preflight Denial
 
