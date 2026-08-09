@@ -50,7 +50,7 @@ func (store CompactStore) resolveAdmittedReviewerResult(ctx context.Context, exp
 	}
 	state := record.State
 	if record.HistoricalCompat {
-		return LensResult{}, false, NewLegacyReadOnlyError("review/capture-result", state.LineageID)
+		return LensResult{}, false, errors.Join(ErrHistoricalCompatReadOnly, NewLegacyReadOnlyError("review/capture-result", state.LineageID))
 	}
 	if record.Revision != expectedRevision || state.State != StateReviewing || state.InitialSnapshot.Identity != targetIdentity ||
 		subject.SelectedOrder < 0 || subject.SelectedOrder >= len(state.SelectedLenses) || state.SelectedLenses[subject.SelectedOrder] != subject.Lens {

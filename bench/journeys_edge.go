@@ -876,6 +876,59 @@ var finalizeFailedCapability = &Capability{Verb: []string{"review", "finalize"},
 var finalizeCorrectionCapability = &Capability{Verb: []string{"review", "finalize"}, Flags: []string{"--cwd", "--correction-lines"}}
 var statusOnlyCapability = &Capability{Verb: []string{"review", "status"}, Flags: []string{"--cwd"}}
 
+// #2743: authentic pre-2.3 compact-v2 authority is readable history, never fresh authority.
+func legacySnapshotAuthority(s *Sandbox) error {
+	for index, lineage := range []string{"j84-legacy-approved", "j84-legacy-reviewing"} {
+		approve := index == 0
+		if _, err := fixtureCommand(s, "review", "start", "--cwd", s.Repo, "--lineage", lineage); err != nil {
+			return err
+		}
+		if approve {
+			if _, err := fixtureCommand(s, "review", "finalize", "--cwd", s.Repo, "--lineage", lineage); err != nil {
+				return err
+			}
+		}
+		path, _ := storeStatePath(s, lineage)
+		record, err := loadStoreRecord(path)
+		if err != nil {
+			return err
+		}
+		for _, key := range []string{"initial_snapshot", "current_snapshot"} {
+			snapshot, ok := orderedMember(record.state, key)
+			if !ok || !setOrderedMember(snapshot, "identity", legacyWorkspaceSnapshotIdentity(snapshot)) {
+				return fmt.Errorf("retrofit legacy %s", key)
+			}
+		}
+		revision, err := record.save()
+		if err != nil {
+			return err
+		}
+		if !approve {
+			s.Revision = revision
+		} else if err := stageProse("", "legacy-reviewing")(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func exerciseLegacySnapshotAuthority(r *journeyRun) error {
+	inspection := r.run(productArgsFor(r, "review", "inspect-authority"), false)
+	var report storeInspection
+	if inspection.ExitCode != 0 || json.Unmarshal([]byte(inspection.Stdout), &report) != nil || !report.Complete || !report.Valid || report.Totals.LoadedEntries != 2 || report.Totals.EntryDiagnostics != 0 {
+		return fmt.Errorf("legacy authority inspection = exit %d stdout %q stderr %q", inspection.ExitCode, inspection.Stdout, inspection.Stderr)
+	}
+	mutation := r.run(productArgsFor(r, "review", "invalidate", "--lineage", "j84-legacy-reviewing", "--expected-revision", r.sandbox.Revision, "--reason", "historical invalidation"), false)
+	if mutation.ExitCode == 0 || !strings.Contains(strings.ToLower(mutation.Stdout+mutation.Stderr), "identity does not match") {
+		return fmt.Errorf("legacy mutation = exit %d stdout %q stderr %q", mutation.ExitCode, mutation.Stdout, mutation.Stderr)
+	}
+	gate := r.run(productArgsFor(r, "review", "validate", "--gate", "pre-commit", "--lineage", "j84-legacy-approved"), false)
+	if gate.ExitCode == 0 || !strings.Contains(strings.ToLower(gate.Stdout+gate.Stderr), "historical compatibility") {
+		return errors.New("legacy authority authorized the pre-commit gate")
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Corpus
 // ---------------------------------------------------------------------------
@@ -889,6 +942,10 @@ var statusOnlyCapability = &Capability{Verb: []string{"review", "status"}, Flags
 // a loop is worse than no journey: it gets blamed on whatever changed last.
 func edgeJourneys() []Journey {
 	return []Journey{
+		{
+			ID: "j84-legacy-compact-snapshot-identity-is-read-only", Title: "Pre-2.3 compact snapshot authority remains readable but cannot mutate or authorize delivery", Source: "issue #2743",
+			Steps: []Step{{Name: "fixture: repo", Fixture: baseRepo}, {Name: "fixture: stage docs", Fixture: stageProse("", "legacy-snapshot")}, {Name: "fixture: authentic pre-2.3 authority", Fixture: legacySnapshotAuthority}, {Name: "inspect then refuse mutation and gate", Requires: inspectAuthorityCapability, Composite: exerciseLegacySnapshotAuthority}},
+		},
 		// -------------------------------------------------------------- shape
 		{
 			ID:     "j15-linked-worktree",

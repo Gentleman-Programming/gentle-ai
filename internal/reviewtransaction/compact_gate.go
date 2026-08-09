@@ -198,6 +198,10 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if err != nil {
 		return invalid("compact review authority cannot be loaded: "+err.Error(), err)
 	}
+	// guard:population historical-compat-delivery too-loose: legitimate delivery authorities use current snapshot identities; HistoricalCompat records remain readable but are excluded
+	if record.HistoricalCompat {
+		return invalid("historical compatibility authority cannot authorize a delivery gate", ErrHistoricalCompatReadOnly)
+	}
 	// Scoped to the receipt's own lineage: the gate is authorizing exactly
 	// this candidate through exactly this authority chain, so a defect on a
 	// branch that chain never inherits from is not evidence about it. Asking

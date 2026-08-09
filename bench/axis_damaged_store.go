@@ -269,6 +269,16 @@ type storeRecord struct {
 	state any
 }
 
+func legacyWorkspaceSnapshotIdentity(snapshot any) string {
+	hash := sha256.New()
+	hash.Write([]byte("gentle-ai.review-snapshot/v1\x00"))
+	for _, key := range []string{"kind", "base_tree", "candidate_tree", "paths_digest", "intended_untracked_proof"} {
+		value, _ := orderedString(snapshot, key)
+		fmt.Fprintf(hash, "%d%c%s%c", len(value), byte(0), value, byte(0))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
 // loadStoreRecord reads one record AND proves this file can still reproduce the
 // exact bytes the product hashed.
 //

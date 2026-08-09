@@ -1964,10 +1964,10 @@ func (store CompactStore) captureReviewerResult(expectedRevision, target, lens s
 		return err
 	}
 	if record.HistoricalCompat {
-		return NewLegacyReadOnlyError(
+		return errors.Join(ErrHistoricalCompatReadOnly, NewLegacyReadOnlyError(
 			"review/capture-result",
 			record.State.LineageID,
-		)
+		))
 	}
 	state := record.State
 	if record.Revision != expectedRevision || state.State != StateReviewing || state.InitialSnapshot.Identity != target || order < 0 || order >= len(state.SelectedLenses) || state.SelectedLenses[order] != lens {
@@ -2244,8 +2244,19 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 		return CompactRecord{}, errors.New("invalid compact review state record")
 	}
 	if err := record.State.Validate(); err != nil {
-		return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error(),
-			OutdatedIdentity: errors.Is(err, errCompactSnapshotIdentityMismatch)}
+		if !errors.Is(err, errCompactSnapshotIdentityMismatch) {
+			return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error()}
+		}
+		if !record.HistoricalCompat {
+			want, _, checksumErr := makeCompactRecord(record.State)
+			if checksumErr != nil || want.Revision != record.Revision {
+				return CompactRecord{}, errors.New("compact review state checksum mismatch")
+			}
+		}
+		if legacyErr := validateLegacyCompactState(record.State); legacyErr != nil {
+			return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: legacyErr.Error()}
+		}
+		record.HistoricalCompat = true
 	}
 	if lineageID != "" && record.State.LineageID != lineageID {
 		return CompactRecord{}, errors.New("compact state lineage does not match its directory")
@@ -2257,6 +2268,53 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 		}
 	}
 	return record, nil
+}
+
+func validateLegacyCompactState(state CompactState) error {
+	legacyMetadata := func(snapshot Snapshot) error {
+		return validateCompactSnapshotMetadataWithIdentity(snapshot, legacyCompactSnapshotIdentity)
+	}
+	snapshots := []*Snapshot{&state.InitialSnapshot, &state.CurrentSnapshot}
+	for index := range state.CorrectionAttempts {
+		snapshots = append(snapshots, &state.CorrectionAttempts[index].Snapshot)
+	}
+	if state.CorrectionVerificationTarget != nil {
+		snapshots = append(snapshots, state.CorrectionVerificationTarget)
+	}
+	if state.Recovery != nil && state.Recovery.Evidence != nil {
+		snapshots = append(snapshots, &state.Recovery.Evidence.SourceCorrectionAttempt.Snapshot)
+	}
+	for _, snapshot := range snapshots {
+		if err := validateCompactSnapshot(*snapshot); err != nil {
+			return err
+		}
+		if err := legacyMetadata(*snapshot); err != nil {
+			return err
+		}
+	}
+	return state.validate(legacyMetadata)
+}
+
+func legacyCompactSnapshotIdentity(snapshot Snapshot) string {
+	hash := sha256.New()
+	if snapshot.Kind == TargetBaseWorkspaceOverlay {
+		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v1\x00"))
+	} else if snapshot.Projection == ProjectionStaged {
+		hash.Write([]byte("gentle-ai.review-snapshot/v2\x00"))
+	} else {
+		hash.Write([]byte("gentle-ai.review-snapshot/v1\x00"))
+	}
+	values := []string{string(snapshot.Kind), snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof}
+	if snapshot.Projection == ProjectionStaged {
+		values = []string{string(snapshot.Kind), string(snapshot.Projection), snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof}
+	}
+	for _, value := range values {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	for _, value := range append(append([]string{}, snapshot.IntendedUntracked...), snapshot.LedgerIDs...) {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 // retiredCompactFieldError reports whether a strict decode failure names a

@@ -1,7 +1,6 @@
 package reviewtransaction
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -58,44 +57,32 @@ func retiredSnapshotIdentity(snapshot Snapshot) string {
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }
 
-// outdateCompactSnapshotIdentity rewrites an already-persisted, checksum-valid
-// compact state on disk so that its frozen snapshot identities carry the
-// RETIRED pre-rc.2 formula's value — exactly what a record written by a 2.2.x
-// release looks like to the current reader (#2743). Because Validate() runs
-// before the checksum comparison in parseCompactRecord, the load failure is
-// the same typed *CompactSemanticStateError the released binaries produce for
-// historical authority.
+// outdateCompactSnapshotIdentity keeps the retired derivation visible while
+// using an impossible identity for tests that require an unreadable record.
+// The enclosing revision is recomputed so the failure stays semantic.
 func outdateCompactSnapshotIdentity(t *testing.T, store CompactStore) {
 	t.Helper()
 	record := mustLoadCompactRecord(t, store)
-	payload, err := os.ReadFile(store.StatePath())
+	for _, snapshot := range []*Snapshot{&record.State.InitialSnapshot, &record.State.CurrentSnapshot} {
+		snapshot.Identity = "sha256:" + strings.Repeat("0", 64)
+	}
+	_, outdated, err := makeCompactRecord(record.State)
 	if err != nil {
 		t.Fatal(err)
-	}
-	outdated := payload
-	for _, snapshot := range []Snapshot{record.State.InitialSnapshot, record.State.CurrentSnapshot} {
-		retired := retiredSnapshotIdentity(snapshot)
-		if retired == snapshot.Identity {
-			t.Fatalf("retired identity formula reproduced the current identity %q; the fixture would prove nothing", snapshot.Identity)
-		}
-		outdated = bytes.ReplaceAll(outdated, []byte(`"identity": "`+snapshot.Identity+`"`), []byte(`"identity": "`+retired+`"`))
-	}
-	if bytes.Equal(outdated, payload) {
-		t.Fatal("fixture did not contain the expected snapshot identity markers")
 	}
 	if err := os.WriteFile(store.StatePath(), outdated, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, loadErr := store.Load()
 	var semanticErr *CompactSemanticStateError
-	if loadErr == nil || !errors.As(loadErr, &semanticErr) || !semanticErr.OutdatedIdentity ||
+	if loadErr == nil || !errors.As(loadErr, &semanticErr) || semanticErr.OutdatedIdentity ||
 		!strings.Contains(semanticErr.Problem, "identity does not match its metadata") {
-		t.Fatalf("retired-identity fixture load error = %v, want an outdated snapshot identity mismatch", loadErr)
+		t.Fatalf("damaged-identity fixture load error = %v, want an inauthentic snapshot identity mismatch", loadErr)
 	}
 }
 
-// outdatedForeignLineage plants one unrelated historical-style lineage whose
-// record no longer loads, removing its worktree residue so the fixture never
+// outdatedForeignLineage plants one unrelated malformed lineage whose record
+// no longer loads, removing its worktree residue so the fixture never
 // changes what any other lineage's live snapshot sees.
 func outdatedForeignLineage(t *testing.T, repo, lineage string) {
 	t.Helper()
@@ -288,12 +275,9 @@ func TestCompactLineageSupersededUnderMaintenanceIgnoresUnreadableForeignLineage
 	}
 }
 
-// TestInspectAuthorityClassifiesOutdatedIdentityAsOutdated pins the honest
-// diagnostics half of #2743: a record whose only load failure is the retired
-// snapshot-identity formula is OUTDATED — gate-invalid, preserved for
-// forensics — not malformed, and the damage narration must stop describing it
-// as the residue of an interrupted write.
-func TestInspectAuthorityClassifiesOutdatedIdentityAsOutdated(t *testing.T) {
+// TestInspectAuthorityClassifiesImpossibleIdentityAsMalformed pins the
+// fail-closed diagnostic for an identity matching neither supported formula.
+func TestInspectAuthorityClassifiesImpossibleIdentityAsMalformed(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	lineage := quarantineFixtureHealthyLineage(t, repo, "inspect-outdated-identity", "outdated candidate\n")
 	store, err := CompactAuthoritativeStore(context.Background(), repo, lineage)
@@ -307,7 +291,7 @@ func TestInspectAuthorityClassifiesOutdatedIdentityAsOutdated(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(report.EntryDiagnostics) != 1 || report.EntryDiagnostics[0].LineageID != lineage ||
-		report.EntryDiagnostics[0].Problem != "outdated_compact_state" {
+		report.EntryDiagnostics[0].Problem != "malformed_compact_state" {
 		t.Fatalf("entry diagnostics = %#v", report.EntryDiagnostics)
 	}
 
@@ -315,11 +299,8 @@ func TestInspectAuthorityClassifiesOutdatedIdentityAsOutdated(t *testing.T) {
 	if len(kinds) != 1 {
 		t.Fatalf("damage kinds = %#v", kinds)
 	}
-	if strings.Contains(kinds[0], "interrupted write") || strings.Contains(kinds[0], "does not parse") {
-		t.Fatalf("outdated record still narrated as damage: %q", kinds[0])
-	}
-	if !strings.Contains(kinds[0], "outdated_compact_state") || !strings.Contains(kinds[0], "earlier release") {
-		t.Fatalf("outdated record narration is not honest about its class: %q", kinds[0])
+	if !strings.Contains(kinds[0], "malformed_compact_state") {
+		t.Fatalf("impossible identity narration is not honest about its class: %q", kinds[0])
 	}
 }
 

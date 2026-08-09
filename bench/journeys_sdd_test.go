@@ -36,7 +36,7 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 			want[journey.ID] = true
 		}
 	}
-	// 84 since j76-claude-advisory-result-reaches-delivery (#2692, #2566),
+	// 85 since j76-claude-advisory-result-reaches-delivery (#2692, #2566),
 	// j77-capture-result-input-preflight-is-read-only (#2630 D2),
 	// j78-lens-finding-id-prefix-discovery (#1844), j79-consecutive-rescope-
 	// refuses-before-publication (#2830), and j80-rescope-authorized-evidence-
@@ -47,10 +47,11 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// monotonic subset without reopening review.
 	// j83 proves #2127's pre-PR path binds its candidate to the unique merge-base
 	// while the advertised main ref remains a moving publication boundary.
+	// j84 proves #2743's pre-2.3 compact snapshot authority stays read-only.
 	// Bump this deliberately when a journey is added, and name it here: the
 	// count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 84 {
-		t.Errorf("core journey count = %d, want 84", got)
+	if got := len(seen); got != 85 {
+		t.Errorf("core journey count = %d, want 85", got)
 	}
 	for id, found := range want {
 		if !found {

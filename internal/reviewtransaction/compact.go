@@ -390,6 +390,10 @@ func CompactExpectedBudget(originalChangedLines int, policy string) (int, error)
 }
 
 func (state CompactState) Validate() error {
+	return state.validate(validateCompactSnapshotMetadata)
+}
+
+func (state CompactState) validate(snapshotMetadata func(Snapshot) error) error {
 	if state.Schema != CompactStateSchema {
 		return errors.New("unsupported compact review state schema")
 	}
@@ -456,7 +460,7 @@ func (state CompactState) Validate() error {
 		approved := state
 		approved.State, approved.InvalidationReason, approved.InvalidationEvidence = StateApproved, "", nil
 		approvedRecord, _, recordErr := makeCompactRecord(approved)
-		if approved.Validate() == nil && recordErr == nil && evidence.Context.StoreRevision == approvedRecord.Revision {
+		if approved.validate(snapshotMetadata) == nil && recordErr == nil && evidence.Context.StoreRevision == approvedRecord.Revision {
 			return nil
 		}
 		return errors.New("approved compact invalidation evidence does not bind its predecessor revision")
@@ -467,10 +471,10 @@ func (state CompactState) Validate() error {
 	if err := validateCompactSnapshot(state.CurrentSnapshot); err != nil {
 		return fmt.Errorf("current snapshot: %w", err)
 	}
-	if err := validateCompactSnapshotMetadata(state.InitialSnapshot); err != nil {
+	if err := snapshotMetadata(state.InitialSnapshot); err != nil {
 		return fmt.Errorf("initial snapshot: %w", err)
 	}
-	if err := validateCompactSnapshotMetadata(state.CurrentSnapshot); err != nil {
+	if err := snapshotMetadata(state.CurrentSnapshot); err != nil {
 		return fmt.Errorf("current snapshot: %w", err)
 	}
 	if state.CurrentSnapshot.Projection != state.InitialSnapshot.Projection {
@@ -525,7 +529,7 @@ func (state CompactState) Validate() error {
 	if state.ActualCorrectionLines != nil && (*state.ActualCorrectionLines < 0 || *state.ActualCorrectionLines > state.CorrectionBudget && state.State != StateEscalated) {
 		return errors.New("compact actual correction lines must be within the frozen budget")
 	}
-	if err := validateCompactCorrection(state); err != nil {
+	if err := validateCompactCorrection(state, snapshotMetadata); err != nil {
 		return err
 	}
 	if err := validateCompactVerificationEvidence(state); err != nil {
@@ -619,6 +623,12 @@ func (state CompactState) LedgerHash() string {
 }
 
 func validateCompactSnapshotMetadata(snapshot Snapshot) error {
+	return validateCompactSnapshotMetadataWithIdentity(snapshot, func(snapshot Snapshot) string {
+		return snapshotIdentityForProjection(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
+	})
+}
+
+func validateCompactSnapshotMetadataWithIdentity(snapshot Snapshot, identity func(Snapshot) string) error {
 	paths, err := canonicalPaths(snapshot.Paths)
 	if err != nil || !equalStrings(paths, snapshot.Paths) || snapshot.PathsDigest != digestPaths(paths) {
 		return errors.New("compact snapshot paths and digest are inconsistent")
@@ -631,8 +641,7 @@ func validateCompactSnapshotMetadata(snapshot Snapshot) error {
 	if err != nil || !equalStrings(ledgerIDs, snapshot.LedgerIDs) {
 		return errors.New("compact snapshot ledger IDs are not canonical")
 	}
-	wantIdentity := snapshotIdentityForProjection(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
-	if snapshot.Identity != wantIdentity {
+	if snapshot.Identity != identity(snapshot) {
 		return errCompactSnapshotIdentityMismatch
 	}
 	return nil
@@ -781,9 +790,9 @@ func compactSevereFindingCount(findings []Finding) int {
 	return count
 }
 
-func validateCompactCorrection(state CompactState) error {
+func validateCompactCorrection(state CompactState, snapshotMetadata func(Snapshot) error) error {
 	if state.Recovery != nil && state.Recovery.Evidence != nil {
-		return validateCompactRecoveredCorrection(state, *state.Recovery.Evidence)
+		return validateCompactRecoveredCorrection(state, *state.Recovery.Evidence, snapshotMetadata)
 	}
 	if len(state.CorrectionAttempts) == 0 && state.CumulativeCorrectionLines != 0 {
 		return errors.New("compact cumulative correction lines require persisted attempts")
@@ -793,7 +802,7 @@ func validateCompactCorrection(state CompactState) error {
 		for _, attempt := range state.CorrectionAttempts {
 			if attempt.ProposedLines <= 0 || attempt.ActualLines < 0 || attempt.Snapshot.Kind != TargetFixDiff || attempt.Snapshot.Projection != state.InitialSnapshot.Projection || attempt.Snapshot.BaseTree != base ||
 				!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(attempt.Snapshot.Paths, state.GenesisPaths) != nil ||
-				validateCompactSnapshot(attempt.Snapshot) != nil || validateCompactSnapshotMetadata(attempt.Snapshot) != nil ||
+				validateCompactSnapshot(attempt.Snapshot) != nil || snapshotMetadata(attempt.Snapshot) != nil ||
 				attempt.FixDeltaHash != FixDeltaHashForSnapshot(attempt.Snapshot) {
 				return errors.New("compact correction attempt is outside frozen scope")
 			}
@@ -919,7 +928,7 @@ func validateCompactCorrectedCandidate(state CompactState, correction Snapshot) 
 	return nil
 }
 
-func validateCompactRecoveredCorrection(state CompactState, evidence CompactRecoveredEvidence) error {
+func validateCompactRecoveredCorrection(state CompactState, evidence CompactRecoveredEvidence, snapshotMetadata func(Snapshot) error) error {
 	if evidence.Schema != CompactRecoveredEvidenceSchema ||
 		evidence.Relation != string(compactTargetChangedScope) || evidence.PathRelation != string(compactPathsSame) ||
 		evidence.SuccessorTargetIdentity != state.InitialSnapshot.Identity || !validSHA256(evidence.ReviewEvidenceHash) ||
@@ -949,7 +958,7 @@ func validateCompactRecoveredCorrection(state CompactState, evidence CompactReco
 	if err := validateCompactSnapshot(attempt.Snapshot); err != nil {
 		return fmt.Errorf("recovered correction snapshot: %w", err)
 	}
-	if err := validateCompactSnapshotMetadata(attempt.Snapshot); err != nil {
+	if err := snapshotMetadata(attempt.Snapshot); err != nil {
 		return fmt.Errorf("recovered correction snapshot: %w", err)
 	}
 	validation := ScopedValidationResult{
