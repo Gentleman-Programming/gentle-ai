@@ -104,6 +104,13 @@ var osRemoveFn = os.Remove
 var execCommandFn = exec.Command
 var communityToolInstallFn = communitytool.Install
 var communityToolStatusFn = communitytool.DetectStatus
+var agentBuilderInstallFn = agentbuilder.Install
+var agentBuilderMkdirAllFn = os.MkdirAll
+var agentBuilderLoadRegistryFn = agentbuilder.LoadRegistry
+var agentBuilderSaveRegistryFn = agentbuilder.SaveRegistry
+var agentBuilderInjectSDDReferenceFn = agentbuilder.InjectSDDReference
+var agentBuilderHomeDirFn = homeDir
+var agentBuilderRestoreSystemPromptsFn = restoreAgentBuilderSystemPrompts
 
 // readCurrentAssignmentsFn is a package-level variable so tests can override
 // how current model assignments are read from opencode.json. It wraps
@@ -4863,15 +4870,27 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 			installAgent = &copy
 		}
 
-		results, err := agentbuilder.Install(installAgent, adapters, "")
-		if err != nil {
-			return AgentBuilderInstallDoneMsg{Results: results, Err: err}
-		}
+		results, err := agentBuilderInstallFn(installAgent, adapters, func(results []agentbuilder.InstallResult) error {
+			var promptBefore []agentBuilderSystemPromptBeforeImage
+			if installAgent.SDDConfig != nil && installAgent.SDDConfig.Mode != agentbuilder.SDDStandalone {
+				var err error
+				promptBefore, err = captureAgentBuilderSystemPrompts(adapters)
+				if err != nil {
+					return fmt.Errorf("snapshot system prompts: %w", err)
+				}
+			}
 
-		// Persist entry to registry.
-		registryPath := filepath.Join(homeDir(), ".config", "gentle-ai", "custom-agents.json")
-		_ = os.MkdirAll(filepath.Dir(registryPath), 0755)
-		if reg, loadErr := agentbuilder.LoadRegistry(registryPath); loadErr == nil {
+			// Persist entry to registry.
+			registryPath := filepath.Join(agentBuilderHomeDirFn(), ".config", "gentle-ai", "custom-agents.json")
+			if err := agentBuilderMkdirAllFn(filepath.Dir(registryPath), 0755); err != nil {
+				return fmt.Errorf("create custom-agent registry directory: %w", err)
+			}
+			reg, err := agentBuilderLoadRegistryFn(registryPath)
+			if err != nil {
+				return fmt.Errorf("load custom-agent registry: %w", err)
+			}
+			registryBefore := *reg
+			registryBefore.Agents = append([]agentbuilder.RegistryEntry(nil), reg.Agents...)
 			// Collect IDs of agents that were successfully installed.
 			var installedIDs []model.AgentID
 			for _, r := range results {
@@ -4899,18 +4918,30 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 			} else {
 				reg.Add(entry)
 			}
-			// Best-effort save — ignore save errors.
-			_ = agentbuilder.SaveRegistry(registryPath, reg)
-		}
+			if err := agentBuilderSaveRegistryFn(registryPath, reg); err != nil {
+				return fmt.Errorf("save custom-agent registry: %w", err)
+			}
 
-		// Wire SDD injection: append custom-agent reference blocks to system prompts.
-		// Best-effort — don't fail the whole install if SDD injection fails.
-		if installAgent.SDDConfig != nil && installAgent.SDDConfig.Mode != agentbuilder.SDDStandalone {
-			for _, adapter := range adapters {
-				if systemPromptPath, ok := agentBuilderSystemPromptPath(adapter.AgentID); ok {
-					_ = agentbuilder.InjectSDDReference(installAgent, systemPromptPath)
+			// Wire SDD injection: append custom-agent reference blocks to system prompts.
+			if installAgent.SDDConfig != nil && installAgent.SDDConfig.Mode != agentbuilder.SDDStandalone {
+				for _, adapter := range adapters {
+					if systemPromptPath, ok := agentBuilderSystemPromptPath(adapter.AgentID); ok {
+						if err := agentBuilderInjectSDDReferenceFn(installAgent, systemPromptPath); err != nil {
+							wireErr := fmt.Errorf("wire SDD reference for %s: %w", adapter.AgentID, err)
+							promptRestoreErr := agentBuilderRestoreSystemPromptsFn(promptBefore)
+							var registryRestoreErr error
+							if restoreErr := agentBuilderSaveRegistryFn(registryPath, &registryBefore); restoreErr != nil {
+								registryRestoreErr = fmt.Errorf("restore custom-agent registry: %w", restoreErr)
+							}
+							return errors.Join(wireErr, promptRestoreErr, registryRestoreErr)
+						}
+					}
 				}
 			}
+			return nil
+		})
+		if err != nil {
+			return AgentBuilderInstallDoneMsg{Results: results, Err: err}
 		}
 
 		return AgentBuilderInstallDoneMsg{Results: results, Err: nil}
@@ -4919,7 +4950,7 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 
 // agentBuilderSystemPromptPath returns the system prompt file path for the given agent.
 func agentBuilderSystemPromptPath(agentID model.AgentID) (string, bool) {
-	home := homeDir()
+	home := agentBuilderHomeDirFn()
 	switch agentID {
 	case model.AgentClaudeCode:
 		return filepath.Join(home, ".claude", "CLAUDE.md"), true
@@ -4932,4 +4963,61 @@ func agentBuilderSystemPromptPath(agentID model.AgentID) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+type agentBuilderSystemPromptBeforeImage struct {
+	path    string
+	content []byte
+	mode    os.FileMode
+	exists  bool
+}
+
+func captureAgentBuilderSystemPrompts(adapters []agentbuilder.AdapterInfo) ([]agentBuilderSystemPromptBeforeImage, error) {
+	before := make([]agentBuilderSystemPromptBeforeImage, 0, len(adapters))
+	for _, adapter := range adapters {
+		path, ok := agentBuilderSystemPromptPath(adapter.AgentID)
+		if !ok {
+			continue
+		}
+		info, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			before = append(before, agentBuilderSystemPromptBeforeImage{path: path})
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("stat %s: %w", path, err)
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		before = append(before, agentBuilderSystemPromptBeforeImage{
+			path:    path,
+			content: content,
+			mode:    info.Mode(),
+			exists:  true,
+		})
+	}
+	return before, nil
+}
+
+func restoreAgentBuilderSystemPrompts(before []agentBuilderSystemPromptBeforeImage) error {
+	var restoreErrors []error
+	for i := len(before) - 1; i >= 0; i-- {
+		snapshot := before[i]
+		if !snapshot.exists {
+			if err := os.Remove(snapshot.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				restoreErrors = append(restoreErrors, fmt.Errorf("remove system prompt %s: %w", snapshot.path, err))
+			}
+			continue
+		}
+		if err := os.WriteFile(snapshot.path, snapshot.content, snapshot.mode); err != nil {
+			restoreErrors = append(restoreErrors, fmt.Errorf("restore system prompt %s: %w", snapshot.path, err))
+			continue
+		}
+		if err := os.Chmod(snapshot.path, snapshot.mode); err != nil {
+			restoreErrors = append(restoreErrors, fmt.Errorf("restore system prompt mode %s: %w", snapshot.path, err))
+		}
+	}
+	return errors.Join(restoreErrors...)
 }
