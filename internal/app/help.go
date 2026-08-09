@@ -24,8 +24,10 @@ COMMANDS
                Print native SDD dispatcher routing output
   sdd-attempt <acquire|settle> --cwd <repo> --change <change>
                Run bounded normal orchestration without exposing runtime history
-  sdd-verify-validate --input <path|-> --cwd <repo> --change <name> [--scope <whole|slice> --slice-id <id>]
-                Validate whole-change or provider-owned slice verification evidence
+  sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>
+               Validate whole-change verification evidence without persistence
+  sdd-verify-validate --input <path|-> --cwd <repo> --change <name> --scope slice --slice-id <id>
+               Validate provider-owned slice verification evidence without persistence
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>]
   review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>
                Admit one reviewer result; every selected lens needs one

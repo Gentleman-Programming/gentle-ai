@@ -3,8 +3,6 @@ package sddstatus
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"reflect"
 )
 
@@ -76,56 +74,23 @@ func runtimeScopeOverlaps(existing []RuntimeScope, proposed *RuntimeScope) bool 
 	return false
 }
 
-// ResolveVerifyReportAuthority derives report totals from the provider-owned
-// objective or from the change's actual specifications. Callers never supply
-// totals for either path.
-func ResolveVerifyReportAuthority(ctx context.Context, cwd, change, scope, sliceID string) (SpecCounts, *RuntimeObjective, error) {
-	if scope == "" {
-		scope = "whole"
+// ResolveVerifyReportAuthority derives slice report totals from the
+// provider-owned runtime objective. Whole-change totals remain CLI input.
+func ResolveVerifyReportAuthority(ctx context.Context, cwd, change, sliceID string) (SpecCounts, *RuntimeObjective, error) {
+	if sliceID == "" {
+		return SpecCounts{}, nil, errors.New("slice verification requires a slice_id") // refusal:by-design operator-knowledge: only the caller can name the provider-owned slice it intends to verify
 	}
-	switch scope {
-	case "whole":
-		if sliceID != "" {
-			return SpecCounts{}, nil, errors.New("whole verification does not accept a slice_id") // refusal:by-design operator-knowledge: only the caller can choose whole verification rather than a provider-owned slice
-		}
-		root := filepath.Join(cwd, "openspec", "changes", change, "specs")
-		contents := []string{}
-		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if entry.IsDir() || filepath.Ext(path) != ".md" {
-				return nil
-			}
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			contents = append(contents, string(content))
-			return nil
-		})
-		if err != nil || len(contents) == 0 {
-			return SpecCounts{}, nil, errors.New("whole verification cannot read authoritative change specifications") // refusal:by-design world-action: authoritative specifications must exist and be readable before their totals can be derived
-		}
-		return countSpecRequirementsAndScenarios(contents), nil, nil
-	case "slice":
-		if sliceID == "" {
-			return SpecCounts{}, nil, errors.New("slice verification requires a slice_id") // refusal:by-design operator-knowledge: only the caller can name the provider-owned slice it intends to verify
-		}
-		store, err := OpenRuntimeStore(ctx, cwd, change)
-		if err != nil {
-			return SpecCounts{}, nil, err
-		}
-		status, err := store.Status()
-		if err != nil {
-			return SpecCounts{}, nil, err
-		}
-		if status.Objective == nil || status.Objective.Scope == nil || status.Objective.ID != sliceID {
-			return SpecCounts{}, nil, errors.New("slice verification does not match the provider-owned runtime objective") // refusal:by-design operator-knowledge: only the caller can select the intended current provider-owned slice
-		}
-		objective := *status.Objective
-		return objective.Scope.counts(), &objective, nil
-	default:
-		return SpecCounts{}, nil, errors.New("verification scope must be whole or slice") // refusal:by-design operator-knowledge: only the caller can choose whether its report verifies a whole change or one slice
+	store, err := OpenRuntimeStore(ctx, cwd, change)
+	if err != nil {
+		return SpecCounts{}, nil, err
 	}
+	status, err := store.Status()
+	if err != nil {
+		return SpecCounts{}, nil, err
+	}
+	if status.Objective == nil || status.Objective.Scope == nil || status.Objective.ID != sliceID {
+		return SpecCounts{}, nil, errors.New("slice verification does not match the provider-owned runtime objective") // refusal:by-design operator-knowledge: only the caller can select the intended current provider-owned slice
+	}
+	objective := *status.Objective
+	return objective.Scope.counts(), &objective, nil
 }
