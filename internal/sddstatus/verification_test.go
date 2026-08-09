@@ -122,6 +122,37 @@ func TestScopedPassedSliceIsAdmittedWithoutGlobalCredit(t *testing.T) {
 	}
 }
 
+func TestValidateVerifyReportAdmissionRequiresMatchingScopedMetadata(t *testing.T) {
+	objective := RuntimeObjective{
+		ID: "sha256:" + strings.Repeat("d", 64), Scope: &RuntimeScope{
+			Tasks: []string{"1.1"}, Requirements: []string{"REQ-A"}, Scenarios: []string{"scenario-a"},
+		},
+	}
+	whole := testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0)
+	scoped := strings.TrimSuffix(whole, "```") + "scope: slice\nslice_id: " + objective.ID + "\n```"
+	tests := []struct {
+		name       string
+		report     string
+		objectives []RuntimeObjective
+		valid      bool
+	}{
+		{"matching metadata", scoped, []RuntimeObjective{objective}, true},
+		{"missing metadata", whole, []RuntimeObjective{objective}, false},
+		{"partial metadata", strings.TrimSuffix(whole, "```") + "scope: slice\n```", []RuntimeObjective{objective}, false},
+		{"mismatched slice ID", strings.Replace(scoped, objective.ID, "sha256:"+strings.Repeat("e", 64), 1), []RuntimeObjective{objective}, false},
+		{"unscoped admission rejects slice metadata", scoped, nil, false},
+		{"multiple scoped objectives", scoped, []RuntimeObjective{objective, objective}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			admission := ValidateVerifyReportAdmission(tt.report, SpecCounts{Requirements: 2, Scenarios: 2}, tt.objectives...)
+			if admission.Valid != tt.valid {
+				t.Fatalf("admission = %#v, want valid=%v", admission, tt.valid)
+			}
+		})
+	}
+}
+
 func TestVerifyReportAuthorityOnlyFieldCountUsesContract(t *testing.T) {
 	partial := strings.TrimSuffix(testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0), "```") + "authority_only_failure: true\n```"
 	admission := ValidateVerifyReportAdmission(partial, SpecCounts{Requirements: 2, Scenarios: 3})

@@ -42,6 +42,45 @@ func TestRuntimeSliceProofPersistsBeforeAdvancingDistinctWorkUnit(t *testing.T) 
 	if err != nil || len(reloaded.SliceProofs) != 1 || reloaded.SliceProofs[0].ObjectiveID != passed.Objective.ID {
 		t.Fatalf("reloaded proof = %#v err=%v", reloaded.SliceProofs, err)
 	}
+	idempotent, err := store.AdmitSliceProof(context.Background(), report, "slice", passed.Objective.ID)
+	if err != nil || !idempotent.Valid {
+		t.Fatalf("identical slice A proof retry = %#v err=%v", idempotent, err)
+	}
+	afterRetry, err := store.Status()
+	if err != nil || afterRetry.Revision != reloaded.Revision || len(afterRetry.SliceProofs) != 1 {
+		t.Fatalf("identical retry mutated proof state = %#v err=%v", afterRetry, err)
+	}
+	for _, tt := range []struct {
+		name      string
+		report    string
+		sliceID   string
+		wantErr   string
+		wantValid bool
+	}{
+		{"missing scope metadata", testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0), passed.Objective.ID, "", false},
+		{"partial scope metadata", strings.TrimSuffix(report, "slice_id: "+passed.Objective.ID+"\n```") + "```", passed.Objective.ID, "", false},
+		{"mismatched scope metadata", strings.Replace(report, passed.Objective.ID, runtimeTestHash('b'), 1), passed.Objective.ID, "", false},
+		{"mismatched requested slice", report, runtimeTestHash('b'), "completed scoped runtime objective", false},
+		{"conflicting proof", strings.Replace(report, "go test ./internal/example", "go test ./internal/other", 1), passed.Objective.ID, "conflicts", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			admission, err := store.AdmitSliceProof(context.Background(), tt.report, "slice", tt.sliceID)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("admit slice proof error = %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("admit slice proof error = %v, want %q", err, tt.wantErr)
+			}
+			if admission.Valid != tt.wantValid {
+				t.Fatalf("admission = %#v, want valid=%v", admission, tt.wantValid)
+			}
+			status, err := store.Status()
+			if err != nil || status.Revision != reloaded.Revision || len(status.SliceProofs) != 1 {
+				t.Fatalf("refused proof changed accepted state = %#v err=%v", status, err)
+			}
+		})
+	}
 	overlap := advance
 	overlap.RequestID = "slice-overlap"
 	overlap.ExpectedRevision = reloaded.Revision
