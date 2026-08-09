@@ -827,7 +827,7 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 	if !ok {
 		return overlayBytes, nil
 	}
-	expandOpenCodeBoundedReviewAgents(agentsMap)
+	expandOpenCodeBoundedReviewAgents(agentsMap, agent)
 
 	// Inline the orchestrator prompt (always inlined, not a file reference),
 	// unless an external strategy requested preserving the existing prompt.
@@ -967,26 +967,26 @@ func extractManagedSection(content, sectionID string) string {
 	return strings.Trim(content[start+len(open):end], "\n")
 }
 
-// expandOpenCodeBoundedReviewAgents renders the OpenCode-shaped review-lens
-// sub-agents shared by the OpenCode and Kilocode overlays. Both identities
-// get the identical shell-less, read-less shape: the OpenCode plugin
-// (review-result-artifacts.ts) asks `review lens-context` for all immutable
-// candidate evidence through its provider-owned native channel and injects it
-// into each reviewer task's prompt before the reviewer ever launches, so the lens
-// itself needs no bash and no read tool — this provider-injected block is
-// its only byte source. Kilocode is not RDD-eligible and never receives the
-// capturing plugin, so review never starts there; it gets the identical
-// denied shape rather than a permissive one that a fresh Kilocode-specific
-// entry point could someday reach.
-func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
+// expandOpenCodeBoundedReviewAgents renders the shell-less, read-less review
+// roles. OpenCode gets only the plugin-defined indexed inspection tool; native
+// inspection resolves the frozen v2 binding and manifest. Kilocode remains
+// ineligible and receives no such capability.
+func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any, agentID model.AgentID) {
 	for _, name := range opencode.ReviewLensPhases() {
 		agent, ok := agentsMap[name].(map[string]any)
 		if !ok {
 			continue
 		}
 		prompt, _ := openCodeProviderInjectedReviewerPrompt(name)
+		if agentID == model.AgentOpenCode {
+			prompt, _ = openCodeIndexedReviewerPrompt(name)
+		}
 		agent["prompt"] = prompt
-		agent["tools"] = map[string]any{"*": false, "read": false, "write": false, "edit": false, "bash": false, "task": false}
+		tools := map[string]any{"*": false, "read": false, "write": false, "edit": false, "bash": false, "task": false}
+		if agentID == model.AgentOpenCode {
+			tools["gentle_ai_review_inspect"] = true
+		}
+		agent["tools"] = tools
 		agent["permission"] = map[string]any{"edit": "deny", "bash": "deny"}
 	}
 

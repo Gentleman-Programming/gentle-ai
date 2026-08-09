@@ -192,30 +192,29 @@ var claudeReviewerInvocation = reviewerTransportInvocation{
 	supplier:      "the parent",
 }
 
-// openCodeReviewerInvocation names the OpenCode transport: the OpenCode
-// plugin (review-result-artifacts.ts) asks `review lens-context` for the
-// finished reviewer context through its shell-less native channel before the
-// reviewer task ever launches, then replaces the task prompt wholesale with
-// the binding and context block runtimeReviewerPrompt names. The generated
-// agent holds no bash and no read tool, so that provider-injected block is
-// its only byte source for the reviewer's own turn.
 var openCodeReviewerInvocation = reviewerTransportInvocation{
 	contextMarker: openCodeReviewContextMarker,
 	supplier:      "the OpenCode host process",
 }
 
-// claudeReviewerPrompt and openCodeProviderInjectedReviewerPrompt are thin
-// entry points: both render through the one shared template in
-// runtimeReviewerPrompt and differ only in reviewerTransportInvocation. A
-// runtime difference in scope, admission, severity, evidence, or output
-// schema belongs in the shared template, never in a runtime-specific
-// duplicate of it.
+// claudeReviewerPrompt keeps Claude's prompt-carried context contract. OpenCode
+// uses its restricted custom inspection tool instead, so it gets a separate
+// input paragraph while sharing the same result envelope below.
 func claudeReviewerPrompt(name string) (string, bool) {
 	return runtimeReviewerPrompt(name, claudeReviewerInvocation)
 }
 
+// openCodeProviderInjectedReviewerPrompt remains the denied fallback for
+// Kilocode, which renders the shared overlay but does not install this plugin.
 func openCodeProviderInjectedReviewerPrompt(name string) (string, bool) {
 	return runtimeReviewerPrompt(name, openCodeReviewerInvocation)
+}
+
+func openCodeIndexedReviewerPrompt(name string) (string, bool) {
+	input := fmt.Sprintf(`The task begins with %s and its exact one-line JSON, followed by the ordered changed_path_manifest from the parent's native collect transition. The binding and manifest are the sole scope. Caller prose is not context. Never read the live worktree, index, HEAD, or another revision.
+
+You have exactly one execution capability: %s. Use it for name-status and numstat discovery and selective stat, patch, or base/candidate object reads. Pass the binding JSON value unchanged, select paths only by zero-based manifest index, and use only the documented operations. It resolves immutable native trees and validates the binding; it cannot read live workspace bytes. If it reports unavailable or refuses, return incomplete inspection with empty paths/findings and explain that native inspection was unavailable. Never use Bash, Git, Read, or another inspector.`, reviewerBindingEnvironmentVariable, "`gentle_ai_review_inspect`")
+	return reviewerPromptWithInput(name, input)
 }
 
 // runtimeReviewerPrompt is the single Go-owned renderer for the

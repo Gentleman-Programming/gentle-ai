@@ -468,14 +468,9 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	}
 }
 
-// TestReviewResultArtifactsPluginContract pins the reduced transport-only
-// contract (rdd-advisory-transport SKILL.md): the plugin's only job is to
-// detect a reviewer task launch carrying the opaque binding, fetch the
-// finished provider context via `gentle-ai review lens-context`, inject that
-// block as the task prompt, and hand the model's raw final text back
-// unmodified. It never parses a binding field beyond the one it needs to
-// route the call, never rebuilds a prompt, never applies a local budget,
-// never captures or preserves a result, and never decides admission.
+// TestReviewResultArtifactsPluginContract pins OpenCode's v2 bounded-review
+// bridge: a custom tool can inspect only one binding-bound frozen candidate
+// view, while the parent captures the final reviewer stdout on stdin.
 func TestReviewResultArtifactsPluginContract(t *testing.T) {
 	source, err := Read("opencode/plugins/review-result-artifacts.ts")
 	if err != nil {
@@ -483,31 +478,18 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 	}
 	for _, want := range []string{
 		`spawn("gentle-ai"`,
-		`"review", "lens-context",`,
-		`"--repository-context", repositoryContext`,
-		// `--delivery runtime_interception` is not cosmetic: it is the
-		// mechanism the provider records on the receipt beside the captured
-		// results, and it is what distinguishes a block a runtime adapter
-		// substituted for whatever the caller produced from one a caller
-		// merely relayed. Declaring the relayed level from here would
-		// permanently record a weaker claim than what actually happened.
-		`const LENS_CONTEXT_DELIVERY = "runtime_interception"`,
-		`"--delivery", LENS_CONTEXT_DELIVERY`,
-		`GENTLE_AI_REVIEW_CONTEXT_END`,
-		`partial provider context is never injected`,
-		`Split this candidate into smaller reviewable commits`,
-		`function bindingRepositoryContext(`,
-		`output.args.prompt = await injectReviewerContext(`,
+		`[REVIEW_INSPECTION_TOOL]: tool({`,
+		`"review", "inspect-candidate",`,
+		`"review", "capture-result",`,
+		`"--input", "-",`,
+		`function inspectionArgs(`,
+		`function captureArgs(`,
+		`function reviewBinding(`,
 		`"tool.execute.before"`,
 		`output.args.background === true`,
 		`!BINDING.test(input.args.prompt)`,
-		// The lens routed to the native call is always the launched
-		// subagent_type, never a field parsed out of the binding: the binding
-		// is opaque provider data the plugin passes through, never
-		// interprets (#2442's resolution under the shared contract).
-		`async function injectReviewerContext(prompt: string, lens: string, cwd: string)`,
-		"output.args.prompt,\n      subagent,",
-		`output.output = reviewerResult(output.output)`,
+		`const rawResult = reviewerResult(output.output)`,
+		`output.output = await runNative(captureCwd(worktree, directory), captureArgs(binding), rawResult)`,
 		`function taskResult(output: unknown, subject: string, classification?: string)`,
 		"function reviewerResult(output: unknown): string {\n  return taskResult(output, \"reviewer\")\n}",
 		"`${subject} task result is empty`",
@@ -525,23 +507,20 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 			t.Fatalf("review-result-artifacts.ts missing %q", want)
 		}
 	}
-	// The obsolete isolation/session claim, the field-by-field binding
-	// parser, and native result capture/preservation/retry are gone, not
-	// merely unused: an ordinary already-running OpenCode session is
-	// sufficient under the advisory boundary (SKILL.md), the binding is
-	// opaque provider data the plugin never interprets, and raw text goes
-	// back to Go, which owns validation and capture policy.
+	// Full-patch injection, generic execution, and reviewer-side artifact
+	// handling must stay absent. The only native subprocess forms are the two
+	// closed commands asserted above.
 	for _, superseded := range []string{
 		"REQUIRED_ISOLATION_ENVIRONMENT", "missingIsolationEnvironment", "OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS",
 		"remoteInstructionsEntries", "client.config.get",
-		"type ReviewBinding", "function parseBinding(", "function bindingRefusal(", "function verifiedLensContext(",
-		"function captureResult(", "function preserveResult(", "function repositoryBindingArgs(",
+		"lens-context", "GENTLE_AI_REVIEW_CONTEXT_END", "candidate_diff",
+		"function preserveResult(", "function repositoryBindingArgs(",
 		"admissionRecoveries", "AdmissionRecoveryStore", "claimAdmissionRecovery", "clearAdmissionRecovery",
 		"MAX_ADMISSION_RECOVERY_SESSIONS", "MAX_ADMISSION_RECOVERIES_PER_SESSION",
 		"function sessionErrorMessage(", "admissionRejection(", "ADMISSION_DIAGNOSTIC",
 		"function preservedCaptureFailure(", "function preservedReference(", "PRESERVE_EMBED_LIMIT",
-		"GENTLE_AI_REVIEW_CWD", "GENTLE_AI_FROZEN_CANDIDATE_CONTEXT", "candidate_diff",
-		"inspect-candidate", "materializeReviewEvidence", "inspectionArgs",
+		"GENTLE_AI_REVIEW_CWD", "GENTLE_AI_FROZEN_CANDIDATE_CONTEXT",
+		"materializeReviewEvidence",
 		"REVIEW_CONTEXT_BYTE_BUDGET", "preflightCapture", "validManifest", "--preflight",
 	} {
 		if strings.Contains(source, superseded) {

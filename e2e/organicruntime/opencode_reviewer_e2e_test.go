@@ -63,7 +63,7 @@ func setupOpenCodePoisonedReview(t *testing.T, lineage string) openCodePoisonedR
 	// candidate this test is about to poison must instead be a genuinely
 	// immutable committed blob the poison can never reach.
 	harness.writeFiles(map[string]string{
-		candidatePath: "package mechanical\n\nfunc Compute(value int) int {\n\tif value < 0 {\n\t\treturn -value\n\t}\n\treturn value * 2\n}\n",
+		candidatePath: "package mechanical\n\n" + strings.Repeat("// oversized immutable candidate evidence\n", 4096) + "func Compute(value int) int {\n\tif value < 0 {\n\t\treturn -value\n\t}\n\treturn value * 2\n}\n",
 	})
 	harness.git("add", "--", candidatePath)
 	harness.git("commit", "-q", "-m", "test: seed the reviewed candidate")
@@ -196,28 +196,11 @@ func runOpenCodeReview(t *testing.T, setup openCodePoisonedReviewSetup, environm
 	return stdout.String()
 }
 
-// TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutput
-// is the ordinary-session adapter conformance proof (rdd-advisory-transport
-// SKILL.md, replacing issue #2417's isolation-gated proof): a genuinely
-// launched review-risk lens -- holding no bash and no read tool, running in
-// an ordinary already-running OpenCode session with no
-// OPENCODE_DISABLE_PROJECT_CONFIG or OPENCODE_DISABLE_EXTERNAL_SKILLS set --
-// still only ever sees the frozen candidate the OpenCode plugin
-// (review-result-artifacts.ts) injected into its prompt before it launched:
-// not the reviewed file's live content, not a brand-new secret-shaped file,
-// not AGENTS.md, and not the caller-authored prose the driver's task call
-// carried before provider injection replaced it.
-//
-// It also proves the reduced plugin's second half: the completed reviewer
-// task's own output is the model's raw final text, not a native capture
-// manifest the plugin built itself (the plugin no longer calls
-// `review capture-result` or `review preserve-result` at all). Native
-// admission is exercised exactly as a real driver would: this test extracts
-// that raw text from the OpenCode transcript and routes it through the
-// exact native capture operation the negotiated collect step named, then
-// finalizes -- proving raw output reaches native admission and creates
-// review authority.
-func TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutput(t *testing.T) {
+// TestRealOpenCodeReviewerUsesIndexedFrozenInspectionAndStdinCapture proves a
+// large frozen candidate does not enter the reviewer prompt. The role has no
+// bash/read tools, asks only the custom indexed native tool for evidence, and
+// the parent plugin captures the final JSON on stdin without a reviewer file.
+func TestRealOpenCodeReviewerUsesIndexedFrozenInspectionAndStdinCapture(t *testing.T) {
 	requireOpenCodeImmutableReviewExecutor(t)
 	setup := setupOpenCodePoisonedReview(t, "opencode-poisoned-worktree-ordinary-session")
 
@@ -236,11 +219,8 @@ func TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutp
 	if launches != 1 || strings.TrimSpace(rawOutput) == "" {
 		t.Fatalf("expected exactly one completed reviewer task launch with raw output, got launches=%d output=%q:\n%s", launches, rawOutput, transcript)
 	}
-	// The reduced plugin hands back the model's raw final text: no native
-	// capture manifest field can appear in a task's own output, because the
-	// plugin never calls `review capture-result` itself anymore.
-	if strings.Contains(rawOutput, "admission_decision") {
-		t.Fatalf("task output still carries a native capture manifest; the plugin must hand back raw text: %s", rawOutput)
+	if !strings.Contains(rawOutput, "admission_decision") {
+		t.Fatalf("task output did not carry the parent-side native capture manifest: %s", rawOutput)
 	}
 
 	fixture.mu.Lock()
@@ -252,33 +232,8 @@ func TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutp
 	if strings.Contains(received, openCodePoisonMarker) {
 		t.Fatalf("poison marker (worktree file, secret file, or AGENTS.md) reached the reviewer's own model call:\n%s", received)
 	}
-	if strings.Contains(received, "caller prose that provider injection must discard") {
-		t.Fatalf("the driver's caller-authored prose survived provider injection into the reviewer's own model call:\n%s", received)
-	}
-	if !strings.Contains(received, "GENTLE_AI_REVIEW_CONTEXT") || !strings.Contains(received, setup.candidatePath) {
-		t.Fatalf("reviewer did not receive the provider-injected context block:\n%s", received)
-	}
-
-	// Raw-output-to-native-admission: route the exact raw text the plugin
-	// handed back through the exact capture operation the negotiated collect
-	// step named for this binding, precisely as the launching session -- not
-	// the plugin -- is now responsible for doing.
-	resultPath := filepath.Join(t.TempDir(), "reviewer-result.json")
-	if err := os.WriteFile(resultPath, []byte(rawOutput), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := setup.harness.gentleAllowFailure(
-		"review", "capture-result",
-		"--repository-context", setup.binding["repository-context"],
-		"--expected-revision", setup.binding["expected-revision"],
-		"--lineage", setup.binding["lineage"],
-		"--target", setup.binding["target"],
-		"--lens", setup.binding["lens"],
-		"--order", setup.binding["order"],
-		"--subject-hash", setup.binding["subject-hash"],
-		"--input", resultPath,
-	); err != nil {
-		t.Fatalf("native admission refused the plugin's raw output: %v", err)
+	if !strings.Contains(received, "GENTLE_AI_REVIEW_BINDING") || !strings.Contains(received, "changed_path_manifest") {
+		t.Fatalf("reviewer did not receive the v2 binding and manifest:\n%s", received)
 	}
 
 	// The receipt materializes: finalize succeeds against the exact captured
@@ -414,6 +369,7 @@ type openCodeReviewerFixture struct {
 	binding         map[string]string
 	manifestPaths   []string
 	driverCalls     int
+	reviewerCalls   int
 	receivedContext string
 }
 
@@ -434,28 +390,37 @@ func (fixture *openCodeReviewerFixture) serveHTTP(writer http.ResponseWriter, re
 		http.Error(writer, "decode", http.StatusInternalServerError)
 		return
 	}
-	if len(input.Messages) > 0 {
-		last := input.Messages[len(input.Messages)-1]
-		text := messageText(last.Content)
-		if strings.Contains(text, "GENTLE_AI_REVIEW_CONTEXT") {
-			// This is the reviewer's own model call: the plugin already
-			// replaced the driver's short prompt with the full
-			// provider-injected block. Record exactly what arrived and
-			// answer with a genuine completed result -- the plugin hands
-			// this raw text straight back to the driver, unmodified.
-			fixture.mu.Lock()
-			fixture.receivedContext = text
-			fixture.mu.Unlock()
-			result := map[string]any{
-				"subject_hash": fixture.binding["subject-hash"],
-				"inspection":   map[string]any{"status": "completed", "paths": fixture.manifestPaths},
-				"findings":     []any{},
-				"evidence":     []string{"inspected the provider-injected immutable evidence for " + fixture.binding["lens"]},
-			}
-			payload, _ := json.Marshal(result)
-			fixture.writeText(writer, string(payload), "stop")
+	text := ""
+	for _, message := range input.Messages {
+		text += messageText(message.Content)
+	}
+	if strings.Contains(text, "GENTLE_AI_REVIEW_BINDING") {
+		fixture.mu.Lock()
+		fixture.receivedContext = text
+		fixture.reviewerCalls++
+		call := fixture.reviewerCalls
+		fixture.mu.Unlock()
+		if call == 1 {
+			binding, _ := json.Marshal(map[string]any{
+				"lineage": fixture.binding["lineage"], "target": fixture.binding["target"],
+				"lens": fixture.binding["lens"], "order": 0, "revision": fixture.binding["expected-revision"],
+				"repository_context": fixture.binding["repository-context"], "subject_hash": fixture.binding["subject-hash"],
+			})
+			fixture.writeTool(writer, "immutable-inspection", "gentle_ai_review_inspect", map[string]any{
+				"binding":   string(binding),
+				"operation": "patch", "path_index": "0",
+			})
 			return
 		}
+		result := map[string]any{
+			"subject_hash": fixture.binding["subject-hash"],
+			"inspection":   map[string]any{"status": "completed", "paths": fixture.manifestPaths},
+			"findings":     []any{},
+			"evidence":     []string{"inspected provider-bound immutable evidence for " + fixture.binding["lens"]},
+		}
+		payload, _ := json.Marshal(result)
+		fixture.writeText(writer, string(payload), "stop")
+		return
 	}
 	if len(input.Tools) == 0 {
 		fixture.writeText(writer, "done", "stop")
@@ -480,11 +445,10 @@ func (fixture *openCodeReviewerFixture) serveHTTP(writer http.ResponseWriter, re
 		"revision": fixture.binding["expected-revision"], "repository_context": fixture.binding["repository-context"],
 		"subject_hash": fixture.binding["subject-hash"],
 	})
-	// The caller-authored prose below must never survive provider injection:
-	// this test's transcript assertions implicitly cover this, since the
-	// reviewer's completed result contains no trace of it.
+	// The binding and canonical manifest are the complete v2 reviewer scope;
+	// the reviewer receives no candidate diff in its task prompt.
 	prompt := "GENTLE_AI_REVIEW_BINDING " + string(bindingPayload) + "\n" +
-		"caller prose that provider injection must discard: read the live worktree directly"
+		"changed_path_manifest: [{\"path\":\"" + fixture.manifestPaths[0] + "\",\"status\":\"M\"}]"
 	fixture.writeTool(writer, "reviewer-launch", "task", map[string]any{
 		"description":   "Delegate the immutable review inspection",
 		"subagent_type": fixture.binding["lens"],

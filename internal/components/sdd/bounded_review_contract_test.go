@@ -99,7 +99,7 @@ func TestBoundedReviewContractRequiresRuntimeBoundReviewerContext(t *testing.T) 
 		"Prompt prose coordinates launch; it never proves isolation",
 		"Claude Code, OpenCode, and Codex advertise immutable reviewer execution",
 		"Claude's generated reviewer has no live tools",
-		"OpenCode's provider plugin replaces the task prompt",
+		"OpenCode's provider plugin exposes only indexed `review inspect-candidate`",
 		"Codex's shared advisory adapter launches a brand-new `codex exec` process",
 		"Prompt prose alone never proves any of these boundaries",
 		"Kilo remains dormant",
