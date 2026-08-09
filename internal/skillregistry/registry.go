@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -145,11 +146,13 @@ func Regenerate(cwd, home string, force bool) (Result, error) {
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Join(cwd, ".atl"), 0o755); err != nil {
-		return Result{}, fmt.Errorf("create .atl directory: %w", err)
+	if err := os.MkdirAll(filepath.Join(cwd, ".atl"), os.ModePerm); err != nil {
+		if !os.IsPermission(err) {
+			return Result{}, fmt.Errorf("create .atl directory: %w", err)
+		}
 	}
 	md := RenderRegistry(cwd, sources, entries)
-	if _, err := filemerge.WriteFileAtomic(registryPath, []byte(md), 0o644); err != nil {
+	if _, err := writeFileIgnoreChmod(registryPath, []byte(md), 0o644); err != nil {
 		return Result{}, fmt.Errorf("write registry: %w", err)
 	}
 	cacheBytes, err := json.MarshalIndent(cacheFile{Fingerprint: fp}, "", "  ")
@@ -157,7 +160,7 @@ func Regenerate(cwd, home string, force bool) (Result, error) {
 		return Result{}, err
 	}
 	cacheBytes = append(cacheBytes, '\n')
-	if _, err := filemerge.WriteFileAtomic(cachePath, cacheBytes, 0o644); err != nil {
+	if _, err := writeFileIgnoreChmod(cachePath, cacheBytes, 0o644); err != nil {
 		return Result{}, fmt.Errorf("write registry cache: %w", err)
 	}
 
@@ -211,7 +214,7 @@ func EnsureATLIgnored(cwd string) error {
 	}
 	// Atomic write guards against concurrent startup hooks (Codex + OpenCode +
 	// Claude) racing on .gitignore, matching how the registry file is written.
-	if _, err := filemerge.WriteFileAtomic(gitignorePath, []byte(existing+prefix+header+atlIgnoreEntry+"\n"), 0o644); err != nil {
+	if _, err := writeFileIgnoreChmod(gitignorePath, []byte(existing+prefix+header+atlIgnoreEntry+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write .gitignore: %w", err)
 	}
 	return nil
@@ -447,4 +450,20 @@ func fileExists(path string) bool {
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+// writeFileIgnoreChmod writes path atomically, tolerating permission errors.
+// On Android/Termux external storage (e.g. FAT32/exFAT), setting strict file
+// permissions via chmod fails with EACCES; the write itself succeeds, so the
+// error is ignored and the file is reported as written.
+func writeFileIgnoreChmod(path string, data []byte, perm os.FileMode) (bool, error) {
+	res, err := filemerge.WriteFileAtomic(path, data, perm)
+	if err != nil {
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) && errors.Is(pathErr.Err, os.ErrPermission) {
+			return true, nil
+		}
+		return res.Changed, err
+	}
+	return res.Changed, nil
 }
