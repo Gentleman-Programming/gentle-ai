@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +12,6 @@ import (
 const (
 	correctedDeliveryLineage   = "wave-one-corrected-delivery"
 	retrySourceLineage         = "wave-one-final-verification-source"
-	retrySuccessorLineage      = "wave-one-final-verification-successor"
 	stagedRecoveryLineage      = "wave-one-staged-recovery-source"
 	stagedSuccessorLineage     = "wave-one-staged-recovery-successor"
 	fullScopeLineage           = "wave-one-full-scope-source"
@@ -34,7 +31,7 @@ var finalizeValidationCapability = &Capability{Verb: []string{"review", "finaliz
 var finalizeProceduralFailureCapability = &Capability{Verb: []string{"review", "finalize"},
 	Flags: []string{"--cwd", "--lineage", "--captured-evidence", "--failed"}}
 var retryFinalVerificationCapability = &Capability{Verb: []string{"review", "retry-final-verification"},
-	Flags: []string{"--cwd", "--contract", "--predecessor-lineage", "--expected-predecessor-revision", "--successor-lineage", "--incident", "--actor", "--reason", "--maintainer-authorization"}}
+	Flags: []string{"--repository-context", "--consent"}}
 
 type waveOperationResult struct {
 	Operation            string `json:"operation"`
@@ -104,42 +101,26 @@ type waveSubmissionValue struct {
 }
 
 type waveRetryStatus struct {
-	Authority *struct {
+	Contract       string `json:"contract"`
+	Action         string `json:"action"`
+	TargetIdentity string `json:"target_identity"`
+	Authority      *struct {
 		LineageID string `json:"lineage_id"`
 		State     string `json:"state"`
 		Revision  string `json:"revision"`
 	} `json:"authority"`
-	Action                 string `json:"action"`
-	ActionDisposition      string `json:"action_disposition"`
-	FinalVerificationRetry *struct {
-		IncidentSchema        string `json:"incident_schema"`
-		IncidentClass         string `json:"incident_class"`
-		ValidatingRevision    string `json:"validating_revision"`
-		TargetIdentity        string `json:"target_identity"`
-		FailedEvidenceHash    string `json:"failed_evidence_hash"`
-		FinalizeRequestDigest string `json:"finalize_request_digest"`
-	} `json:"final_verification_retry"`
 	NextTransition *struct {
 		Kind       string `json:"kind"`
 		ReasonCode string `json:"reason_code"`
 		Collect    *struct {
-			Inputs []struct {
+			Consent *waveConsentResult `json:"consent"`
+			Inputs  []struct {
 				Name             string `json:"name"`
+				Schema           string `json:"schema"`
 				CaptureOperation string `json:"capture_operation"`
 			} `json:"inputs"`
 		} `json:"collect"`
 	} `json:"next_transition"`
-}
-
-type waveFinalVerificationIncident struct {
-	Schema                string `json:"schema"`
-	Class                 string `json:"class"`
-	LineageID             string `json:"lineage_id"`
-	TerminalRevision      string `json:"terminal_revision"`
-	ValidatingRevision    string `json:"validating_revision"`
-	TargetIdentity        string `json:"target_identity"`
-	FailedEvidenceHash    string `json:"failed_evidence_hash"`
-	FinalizeRequestDigest string `json:"finalize_request_digest"`
 }
 
 type waveGateResult struct {
@@ -182,12 +163,23 @@ type waveInventory struct {
 }
 
 type waveConsentResult struct {
+	Schema         string `json:"schema"`
 	Action         string `json:"action"`
+	Blocking       bool   `json:"blocking"`
 	TargetIdentity string `json:"target_identity"`
 	Choices        []struct {
+		Label      string `json:"label"`
 		Answer     string `json:"answer"`
+		Effect     string `json:"effect"`
 		Invocation string `json:"invocation"`
 	} `json:"choices"`
+}
+
+type waveRetryConsentOutcome struct {
+	Operation            string `json:"operation"`
+	Disposition          string `json:"disposition"`
+	PredecessorLineageID string `json:"predecessor_lineage_id"`
+	TargetIdentity       string `json:"target_identity"`
 }
 
 type waveDeclinedStart struct {
@@ -906,76 +898,132 @@ func requireReviewState(state, lineage string) func(*Sandbox, Observation) error
 }
 
 func retryFinalVerification(r *journeyRun) error {
-	statusObservation := r.run(productArgsFor(r, "review", "status", "--contract", reviewContract,
-		"--action-eligibility", "--next-transition", "--lineage", retrySourceLineage), false)
-	var status waveRetryStatus
-	if err := decodeWaveObservation(statusObservation, &status, "failed final-verification status"); err != nil {
-		return err
-	}
-	retry := status.FinalVerificationRetry
-	if status.Authority == nil || status.Authority.State != "escalated" || status.Action != "retry_final_verification" ||
-		status.ActionDisposition != "final_verification_retry" || retry == nil || status.NextTransition == nil ||
-		status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "final_verification_retry_authorization_required" ||
-		status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 ||
-		status.NextTransition.Collect.Inputs[0].CaptureOperation != "external.authorize_final_verification_retry" {
-		return fmt.Errorf("status did not publish the provider retry boundary: %+v", status)
-	}
-	incident := waveFinalVerificationIncident{
-		Schema: retry.IncidentSchema, Class: retry.IncidentClass,
-		LineageID: status.Authority.LineageID, TerminalRevision: status.Authority.Revision,
-		ValidatingRevision: retry.ValidatingRevision, TargetIdentity: retry.TargetIdentity,
-		FailedEvidenceHash: retry.FailedEvidenceHash, FinalizeRequestDigest: retry.FinalizeRequestDigest,
-	}
-	payload, err := json.Marshal(incident)
+	status, err := readFinalVerificationRetryConsent(r)
 	if err != nil {
 		return err
 	}
-	payload = append(payload, '\n')
-	incidentPath, err := writeScratch(r.sandbox, "final-verification-incident.json", payload)
+	declinedInvocation, err := retryConsentInvocation(status.NextTransition.Collect.Consent, "declined")
 	if err != nil {
 		return err
 	}
-	digest := sha256.Sum256(payload)
-	const actor = "bench-maintainer"
-	const reason = "retry after provider tooling failure"
-	authorization := strings.Join([]string{
-		"gentle-ai.review-final-verification-retry-authorization/v1",
-		"predecessor_lineage=" + status.Authority.LineageID,
-		"predecessor_revision=" + status.Authority.Revision,
-		"successor_lineage=" + retrySuccessorLineage,
-		"validating_revision=" + retry.ValidatingRevision,
-		"target_identity=" + retry.TargetIdentity,
-		"failed_evidence_hash=" + retry.FailedEvidenceHash,
-		"finalize_request_digest=" + retry.FinalizeRequestDigest,
-		"incident_class=" + retry.IncidentClass,
-		"incident_digest=sha256:" + hex.EncodeToString(digest[:]),
-		"actor=" + actor,
-		"reason=" + reason,
-	}, "\n")
-	observation := r.run(productArgsFor(r, "review", "retry-final-verification", "--contract", reviewContract,
-		"--predecessor-lineage", status.Authority.LineageID, "--expected-predecessor-revision", status.Authority.Revision,
-		"--successor-lineage", retrySuccessorLineage, "--incident", incidentPath,
-		"--actor", actor, "--reason", reason, "--maintainer-authorization", authorization), false)
-	result, err := decodeWaveOperation(observation, "retry final verification")
+	declinedArgs, err := waveReviewInvocationArgs(declinedInvocation)
 	if err != nil {
 		return err
 	}
-	if result.Operation != "review.retry_final_verification" || result.LineageID != retrySuccessorLineage ||
-		result.PredecessorLineageID != retrySourceLineage || result.State != "validating" || result.TargetIdentity != retry.TargetIdentity {
+	declined, err := decodeWaveRetryConsentOutcome(r.run(declinedArgs, false), "final-verification retry decline")
+	if err != nil {
+		return err
+	}
+	if declined.Operation != "review.retry_final_verification" || declined.Disposition != "declined" ||
+		declined.PredecessorLineageID != retrySourceLineage || declined.TargetIdentity != status.TargetIdentity {
+		return fmt.Errorf("retry decline changed or lost its provider binding: %+v", declined)
+	}
+	var inventory waveInventory
+	if err := decodeWaveObservation(r.run(productArgsFor(r, "review", "status"), false), &inventory, "post-decline retry inventory"); err != nil {
+		return err
+	}
+	if !inventory.Complete || !inventory.Authoritative || len(inventory.Entries) != 1 ||
+		inventory.Entries[0].LineageID != retrySourceLineage || inventory.Entries[0].State != "escalated" {
+		return fmt.Errorf("retry decline mutated authority: %+v", inventory)
+	}
+
+	status, err = readFinalVerificationRetryConsent(r)
+	if err != nil {
+		return err
+	}
+	grantedInvocation, err := retryConsentInvocation(status.NextTransition.Collect.Consent, "granted")
+	if err != nil {
+		return err
+	}
+	grantedArgs, err := waveReviewInvocationArgs(grantedInvocation)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(grantedInvocation, "--contract") || strings.Contains(grantedInvocation, "--incident") || strings.Contains(grantedInvocation, "--maintainer-authorization") {
+		return fmt.Errorf("opaque retry grant reconstructed caller authority: %q", grantedInvocation)
+	}
+	result, err := decodeWaveOperation(r.run(grantedArgs, false), "retry final verification")
+	if err != nil {
+		return err
+	}
+	if result.Operation != "review.retry_final_verification" || result.LineageID == "" || result.LineageID == retrySourceLineage ||
+		result.PredecessorLineageID != retrySourceLineage || result.State != "validating" || result.TargetIdentity != status.TargetIdentity {
 		return fmt.Errorf("provider-derived retry result = %+v", result)
 	}
-	r.sandbox.Scratch["retry-target"] = retry.TargetIdentity
+	r.sandbox.Scratch["retry-successor"] = result.LineageID
+	r.sandbox.Scratch["retry-target"] = result.TargetIdentity
 	return nil
 }
 
+func readFinalVerificationRetryConsent(r *journeyRun) (waveRetryStatus, error) {
+	observation := r.run(productArgsFor(r, "review", "status", "--contract", reviewContractV2,
+		"--agent", "opencode", "--next-transition", "--lineage", retrySourceLineage), false)
+	var status waveRetryStatus
+	if err := decodeWaveObservation(observation, &status, "failed final-verification status"); err != nil {
+		return status, err
+	}
+	if status.Contract != reviewContractV2 || status.Authority == nil || status.Authority.State != "escalated" ||
+		status.Action != "retry_final_verification" || status.NextTransition == nil ||
+		status.NextTransition.Kind != "collect" || status.NextTransition.ReasonCode != "final_verification_retry_consent_required" ||
+		status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 ||
+		status.NextTransition.Collect.Inputs[0].Name != "final_verification_retry_consent" ||
+		status.NextTransition.Collect.Inputs[0].Schema != "gentle-ai.review-final-verification-retry-consent/v1" ||
+		status.NextTransition.Collect.Inputs[0].CaptureOperation != "external.relay_final_verification_retry_consent" ||
+		status.NextTransition.Collect.Consent == nil {
+		return status, fmt.Errorf("status did not publish the opaque retry consent boundary: %+v", status)
+	}
+	consent := status.NextTransition.Collect.Consent
+	if consent.Schema != "gentle-ai.review-final-verification-retry-consent/v1" || consent.Action != "consent_required" || !consent.Blocking || len(consent.Choices) != 2 {
+		return status, fmt.Errorf("status consent envelope is incomplete: %+v", consent)
+	}
+	return status, nil
+}
+
+func retryConsentInvocation(consent *waveConsentResult, answer string) (string, error) {
+	if consent == nil {
+		return "", errors.New("retry consent is missing")
+	}
+	for _, choice := range consent.Choices {
+		if choice.Answer == answer && choice.Label != "" && choice.Effect != "" && choice.Invocation != "" {
+			return choice.Invocation, nil
+		}
+	}
+	return "", fmt.Errorf("retry consent has no complete %q choice", answer)
+}
+
+func decodeWaveRetryConsentOutcome(observation Observation, label string) (waveRetryConsentOutcome, error) {
+	if observation.ExitCode != 0 {
+		return waveRetryConsentOutcome{}, fmt.Errorf("%s exited %d: %s", label, observation.ExitCode, firstLine(observation.Stderr))
+	}
+	payload := json.RawMessage(strings.TrimSpace(observation.Stdout))
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return waveRetryConsentOutcome{}, fmt.Errorf("parse %s: %w", label, err)
+	}
+	if len(envelope.Result) > 0 && envelope.Result[0] == '{' {
+		payload = envelope.Result
+	}
+	var result waveRetryConsentOutcome
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return result, fmt.Errorf("parse %s result: %w", label, err)
+	}
+	return result, nil
+}
+
 func captureSuccessfulRetryEvidence(r *journeyRun) error {
+	lineage := r.sandbox.Scratch["retry-successor"]
+	if lineage == "" {
+		return errors.New("retry successor was not returned by opaque grant")
+	}
 	observation := r.run(productArgsFor(r, "review", "status", "--contract", reviewContract,
-		"--next-transition", "--lineage", retrySuccessorLineage), false)
+		"--next-transition", "--lineage", lineage), false)
 	var envelope statusEnvelope
 	if err := decodeWaveObservation(observation, &envelope, "retry successor status"); err != nil {
 		return err
 	}
-	if envelope.Authority.LineageID != retrySuccessorLineage || envelope.Authority.State != "validating" ||
+	if envelope.Authority.LineageID != lineage || envelope.Authority.State != "validating" ||
 		envelope.argument("target") != r.sandbox.Scratch["retry-target"] {
 		return fmt.Errorf("retry successor changed the provider target: %+v", envelope)
 	}
@@ -984,7 +1032,7 @@ func captureSuccessfulRetryEvidence(r *journeyRun) error {
 		return err
 	}
 	captured := r.run(productArgsFor(r, "review", "capture-evidence",
-		"--lineage", retrySuccessorLineage, "--target", envelope.argument("target"),
+		"--lineage", lineage, "--target", envelope.argument("target"),
 		"--expected-revision", envelope.argument("expected-revision"), "--outcome", "passed", "--input", path), false)
 	if captured.ExitCode != 0 {
 		return fmt.Errorf("capture retry evidence: %s", firstLine(captured.Stderr))
@@ -992,7 +1040,22 @@ func captureSuccessfulRetryEvidence(r *journeyRun) error {
 	return nil
 }
 
-func proveCompletedRetryInventory(_ *Sandbox, observation Observation) error {
+func completeSuccessfulRetry(r *journeyRun) error {
+	lineage := r.sandbox.Scratch["retry-successor"]
+	if lineage == "" {
+		return errors.New("retry successor was not returned by opaque grant")
+	}
+	result, err := decodeWaveOperation(r.run(productArgsFor(r, "review", "finalize", "--lineage", lineage, "--captured-evidence=true"), false), "complete retry successor")
+	if err != nil {
+		return err
+	}
+	if result.LineageID != lineage || result.State != "approved" {
+		return fmt.Errorf("retry successor finalization = %+v", result)
+	}
+	return nil
+}
+
+func proveCompletedRetryInventory(sandbox *Sandbox, observation Observation) error {
 	var inventory waveInventory
 	if err := decodeWaveObservation(observation, &inventory, "completed retry inventory"); err != nil {
 		return err
@@ -1006,8 +1069,9 @@ func proveCompletedRetryInventory(_ *Sandbox, observation Observation) error {
 		statuses[entry.LineageID] = entry.Status
 		states[entry.LineageID] = entry.State
 	}
-	if statuses[retrySourceLineage] != "superseded" || states[retrySourceLineage] != "escalated" ||
-		statuses[retrySuccessorLineage] != "recovered" || states[retrySuccessorLineage] != "approved" {
+	successor := sandbox.Scratch["retry-successor"]
+	if successor == "" || statuses[retrySourceLineage] != "superseded" || states[retrySourceLineage] != "escalated" ||
+		statuses[successor] != "recovered" || states[successor] != "approved" {
 		return fmt.Errorf("completed retry inventory statuses = %+v, states = %+v", statuses, states)
 	}
 	return nil
@@ -1287,17 +1351,15 @@ func waveOneJourneys() []Journey {
 				{Name: "complete failed final verification", Requires: finalizeProceduralFailureCapability,
 					Args:  productArgs("review", "finalize", "--lineage", retrySourceLineage, "--captured-evidence=true", "--failed=true"),
 					After: requireReviewState("escalated", retrySourceLineage)},
-				{Name: "derive provider retry binding and create its validating successor", Requires: retryFinalVerificationCapability, Composite: retryFinalVerification},
+				{Name: "relay opaque retry consent, decline without mutation, then grant the returned invocation", Requires: retryFinalVerificationCapability, Composite: retryFinalVerification},
 				{Name: "capture successful evidence against the frozen retry target", Requires: captureOutcomeEvidenceCapability, Composite: captureSuccessfulRetryEvidence},
-				{Name: "complete the retry successor", Requires: finalizeValidationCapability,
-					Args:  productArgs("review", "finalize", "--lineage", retrySuccessorLineage, "--captured-evidence=true"),
-					After: requireReviewState("approved", retrySuccessorLineage)},
+				{Name: "complete the provider-derived retry successor", Requires: finalizeValidationCapability, Composite: completeSuccessfulRetry},
 				{Name: "whole inventory remains complete and authoritative", Requires: statusOnlyCapability,
 					Args: productArgs("review", "status"), After: proveCompletedRetryInventory},
 				{Name: "selector-free post-apply remains owned by the completed retry successor", Requires: validateCapability,
 					Args: productArgs("review", "validate", "--gate", "post-apply"),
-					After: func(_ *Sandbox, observation Observation) error {
-						return requireGateForLineage(observation, retrySuccessorLineage, false)
+					After: func(sandbox *Sandbox, observation Observation) error {
+						return requireGateForLineage(observation, sandbox.Scratch["retry-successor"], false)
 					}},
 			},
 		},

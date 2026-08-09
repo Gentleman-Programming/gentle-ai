@@ -604,7 +604,7 @@ and every native authority state is reached through the measured binary.
 | ID | Flow | Shape |
 |---|---|---|
 | `j44-corrected-current-changes-delivery` | corrected current-changes receipt in a proven linked worktree, exact one-commit delivery, selector-free pre-push discovery | issue #1819 + 3 |
-| `j45-completed-final-verification-retry` | procedural final-verification failure, status-derived retry successor, successful completion, authoritative inventory and selector-free post-apply | issue #1915 + 3 |
+| `j45-completed-final-verification-retry` | procedural final-verification failure, opaque STATUS consent relay, decline no-mutation control, one-shot grant completion, authoritative inventory and selector-free post-apply | issue #1915 + #1897 |
 | `j46-correction-required-staged-recovery` | correction-required base-diff authority, negotiated staged-overlay recovery, fresh successor review, exact pre-commit/pre-push/pre-PR delivery | issue #1921 |
 | `j47-disabled-mode-archives-discovered-invalidated-receipt` | enabled discovered invalidation, disabled/unmanaged archive without allow, explicit invalid receipt control, and re-enabled enforcement | issue #2128 |
 | `j48-recovered-workspace-preserves-full-candidate-scope` | two-path workspace candidate, strict-subset correction, complete terminal and recovered scope, immediate pre-commit allow, byte/path drift controls | issue #2090 |
@@ -615,10 +615,12 @@ and every native authority state is reached through the measured binary.
 `j44` proves the linked checkout/common-dir topology and remote baseline before
 review starts, then proves the staged delivery tree equals the corrected receipt
 and `HEAD` is exactly one clean commit above upstream before pre-push runs.
-`j45` constructs the canonical incident and exact maintainer authorization only
-from negotiated status fields, then requires the global inventory to report the
-predecessor as `superseded`, the approved successor as `recovered`, and the
-inventory as complete and authoritative before selector-free post-apply runs.
+`j45` relays the complete provider-returned opaque consent envelope, runs its
+exact decline invocation to prove no authority mutation, then re-queries STATUS
+and runs its exact grant invocation. It requires the global inventory to report
+the predecessor as `superseded`, the approved provider-derived successor as
+`recovered`, and the inventory as complete and authoritative before selector-free
+post-apply runs.
 `j46` proves the staged overlay is the exact authorized recovery target and
 delivers only through its fresh approved successor. `j47` preserves one native
 authority revision while review mode is toggled, proving that only discovered

@@ -2135,6 +2135,50 @@ func TestLegacyV1LineageRemainsReadableButRejectsAppend(t *testing.T) {
 	}
 }
 
+func TestLegacyHashOnlyStatusNamesFreshReviewAndCloneDisableWithoutRetry(t *testing.T) {
+	fixture := newLegacyReviewingCLIFixture(t, "legacy-hash-only-stop")
+	before, err := fixture.store.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousNarration := reviewNarrationOutput
+	var narration, output bytes.Buffer
+	reviewNarrationOutput = &narration
+	t.Cleanup(func() { reviewNarrationOutput = previousNarration })
+
+	err = RunReview([]string{"status", "--cwd", fixture.repo, "--lineage", fixture.lineage,
+		"--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition"}, &output)
+	if err != nil {
+		t.Fatalf("legacy STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.Authority == nil || status.Authority.Version != reviewtransaction.AuthorityVersionLegacy ||
+		status.Authority.State != reviewtransaction.StateReviewing || status.Action != reviewtransaction.TargetStatusActionStop ||
+		status.FinalVerificationRetry != nil || status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionStop || status.NextTransition.ReasonCode != "legacy_hash_only_authority" {
+		t.Fatalf("legacy hash-only STATUS routed outside terminal refusal: %#v", status)
+	}
+	for _, command := range []string{
+		"gentle-ai review start --cwd <repo>",
+		"gentle-ai review mode disable --scope clone --cwd <repo>",
+	} {
+		if !strings.Contains(narration.String(), command) {
+			t.Fatalf("legacy terminal narration omits runnable exit %q:\n%s", command, narration.String())
+		}
+	}
+	if strings.Contains(narration.String(), "retry-final-verification") || strings.Contains(output.String(), "retry_final_verification") {
+		t.Fatalf("legacy terminal status advertised retry eligibility:\nstdout=%s\nstderr=%s", output.String(), narration.String())
+	}
+	after, err := fixture.store.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("legacy STATUS mutated authority")
+	}
+}
+
 func TestCompactTransportCommandsRoundTripWithoutEventReconstruction(t *testing.T) {
 	t.Parallel()
 
