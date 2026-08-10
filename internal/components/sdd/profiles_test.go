@@ -562,6 +562,21 @@ func TestGenerateProfileOverlay_JDAssignmentsGenerateSuffixedAgents(t *testing.T
 		if gotModel, _ := agent["model"].(string); gotModel != wantModel {
 			t.Errorf("%s model = %q, want %q", key, gotModel, wantModel)
 		}
+		if strings.HasPrefix(key, "jd-judge-") {
+			tools, ok := agent["tools"].(map[string]any)
+			if !ok {
+				t.Fatalf("%s tools missing or not an object", key)
+			}
+			for _, tool := range []string{"read", "write", "edit", "bash", "task"} {
+				if got, _ := tools[tool].(bool); got {
+					t.Errorf("%s tool %q = true, want false for frozen adjudication", key, tool)
+				}
+			}
+			prompt, _ := agent["prompt"].(string)
+			if !strings.Contains(prompt, "Provider-materialized frozen evidence supplied in the task is your only input") || !strings.Contains(prompt, "live worktree, index, HEAD, filesystem, command, or tool reads are forbidden") {
+				t.Errorf("%s prompt does not forbid live-state adjudication: %s", key, prompt)
+			}
+		}
 	}
 
 	judgeA := agentMap["jd-judge-a-cheap"].(map[string]any)

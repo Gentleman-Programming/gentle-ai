@@ -163,6 +163,9 @@ func injectCodeGraphToolGrantIntoPrompt(prompt string, agentID model.AgentID, gu
 		if !strings.HasPrefix(line, "tools:") {
 			continue
 		}
+		if strings.TrimSpace(line) == "tools: []" {
+			return prompt
+		}
 		if strings.Contains(line, grant) {
 			return prompt
 		}
@@ -176,6 +179,19 @@ func injectCodeGraphToolGrantIntoPrompt(prompt string, agentID model.AgentID, gu
 		return strings.Join(lines, "\n") + prompt[frontmatterEnd:]
 	}
 	return prompt
+}
+
+func hasNoToolFrontmatter(prompt string) bool {
+	frontmatterEnd := strings.Index(prompt, "\n---\n")
+	if frontmatterEnd < 0 {
+		return false
+	}
+	for _, line := range strings.Split(prompt[:frontmatterEnd], "\n") {
+		if strings.TrimSpace(line) == "tools: []" {
+			return true
+		}
+	}
+	return false
 }
 
 func isMarkdownSubAgentPromptFile(fileName string) bool {

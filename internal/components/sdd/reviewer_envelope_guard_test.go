@@ -264,6 +264,11 @@ func TestJudgmentDayPromptsDoNotClaimTheLensEnvelope(t *testing.T) {
 
 	for _, path := range judgePaths {
 		prompt := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
+		for _, want := range []string{"Provider-materialized frozen evidence supplied in the task is your only input", "live worktree, index, HEAD, filesystem, command, or tool reads are forbidden", "fail closed"} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("%s does not pin frozen-evidence-only adjudication clause %q", path, want)
+			}
+		}
 		// Match the JSON key forms, not the English words: a judge prompt may
 		// legitimately talk about inspecting a target.
 		if strings.Contains(prompt, `"subject_hash"`) || strings.Contains(prompt, `"inspection"`) {

@@ -506,10 +506,13 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"mode":        "subagent",
 			"hidden":      true,
 			"description": "Adversarial code reviewer — blind judge A for judgment-day protocol",
-			"prompt":      "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
+			"prompt":      "You are a judgment-day adversarial reviewer. Provider-materialized frozen evidence supplied in the task is your only input; live worktree, index, HEAD, filesystem, command, or tool reads are forbidden. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems. If frozen evidence is missing, malformed, or partial, fail closed instead of reading live state.",
 			"tools": map[string]any{
-				"read": true,
-				"bash": true,
+				"read":  false,
+				"write": false,
+				"edit":  false,
+				"bash":  false,
+				"task":  false,
 			},
 		}
 	case "jd-judge-b":
@@ -517,10 +520,13 @@ func jdProfileAgentEntry(jd string) map[string]any {
 			"mode":        "subagent",
 			"hidden":      true,
 			"description": "Adversarial code reviewer — blind judge B for judgment-day protocol",
-			"prompt":      "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
+			"prompt":      "You are a judgment-day adversarial reviewer. Provider-materialized frozen evidence supplied in the task is your only input; live worktree, index, HEAD, filesystem, command, or tool reads are forbidden. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems. If frozen evidence is missing, malformed, or partial, fail closed instead of reading live state.",
 			"tools": map[string]any{
-				"read": true,
-				"bash": true,
+				"read":  false,
+				"write": false,
+				"edit":  false,
+				"bash":  false,
+				"task":  false,
 			},
 		}
 	case "jd-fix-agent":
