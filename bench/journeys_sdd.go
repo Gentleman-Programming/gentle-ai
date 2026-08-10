@@ -82,6 +82,10 @@ type sddRuntimeStatus struct {
 	} `json:"active_attempt"`
 	Attempts []struct {
 		Ordinal                    int    `json:"ordinal"`
+		ObjectiveID                string `json:"objective_id"`
+		ObjectiveGeneration        int    `json:"objective_generation"`
+		BeginCandidateTree         string `json:"begin_candidate_tree"`
+		FinishCandidateTree        string `json:"finish_candidate_tree"`
 		Outcome                    string `json:"outcome"`
 		EvidenceRevision           string `json:"evidence_revision"`
 		RemediatesEvidenceRevision string `json:"remediates_evidence_revision"`
@@ -92,6 +96,13 @@ type sddRuntimeStatus struct {
 		Change  string `json:"change"`
 		Lineage string `json:"lineage"`
 	} `json:"binding"`
+	LastRescope *struct {
+		PreviousObjectiveID  string `json:"previous_objective_id"`
+		PreviousGeneration   int    `json:"previous_generation"`
+		RescopeCandidateTree string `json:"rescope_candidate_tree"`
+		Reason               string `json:"reason"`
+		Actor                string `json:"actor"`
+	} `json:"last_rescope"`
 	NextAction string `json:"next_action"`
 	Complete   bool   `json:"complete"`
 }

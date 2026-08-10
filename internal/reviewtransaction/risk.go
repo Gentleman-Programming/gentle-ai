@@ -231,6 +231,24 @@ func CorrectionBudget(originalChangedLines int) (int, error) {
 	return min(MaxCorrectionChangedLines, originalChangedLines/2+originalChangedLines%2), nil
 }
 
+// CompactCorrectionBudget freezes the correction budget for a compact review
+// state using the floor-two policy. Every positive budget permits one atomic
+// line replacement (one Git addition plus one Git deletion = two changed
+// lines), so the budget never falls below two while the original candidate
+// has at least one changed line. A zero-line candidate retains a zero budget.
+// The legacy CorrectionBudget formula is preserved for historical states and
+// non-compact authority (issue #2247).
+func CompactCorrectionBudget(originalChangedLines int) (int, error) {
+	if originalChangedLines < 0 {
+		return 0, errors.New("original changed lines cannot be negative")
+	}
+	legacy, _ := CorrectionBudget(originalChangedLines)
+	if originalChangedLines > 0 && legacy < 2 {
+		return 2, nil
+	}
+	return legacy, nil
+}
+
 // ClassifySnapshotRisk derives both risk and changed lines from one immutable
 // repository tree boundary and the canonical CountChangedLines contract.
 func (builder SnapshotBuilder) ClassifySnapshotRisk(ctx context.Context, snapshot Snapshot) (RiskLevel, int, error) {

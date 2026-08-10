@@ -245,6 +245,7 @@ type Status struct {
 	// answer, not part of the SDD v1 wire document, and the ratified contract
 	// keeps full runtime payload off that document.
 	runtimeAttemptTokens map[int]string
+	verifyRefreshReason  string
 }
 
 // ReviewOfferBlock carries what an orchestrator needs to present the
@@ -690,6 +691,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 		applyNativeRuntimeRouting(&status)
 	}
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
+	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
+		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
+	}
 	if options.IncludeInstructions {
 		instructions := renderPhaseInstructions(status)
 		status.PhaseInstructions = &instructions
@@ -1068,6 +1072,9 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		applyNativeRuntimeRouting(&status)
 	}
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
+	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
+		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
+	}
 	if includeInstructions {
 		instructions := renderPhaseInstructions(status)
 		status.PhaseInstructions = &instructions
@@ -1900,6 +1907,8 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, ve
 	return "resolve-blockers"
 }
 
+const runtimeRemediationVerifyRefreshInstruction = "A passing native remediation settlement completed after the persisted verification report; run fresh verification and persist a report bound after that settlement before archive."
+
 func renderPhaseInstructions(status Status) PhaseInstructions {
 	change := "<unresolved>"
 	if status.ChangeName != nil {
@@ -1917,6 +1926,9 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 		fmt.Sprintf("State: %s", status.Dependencies.Verify),
 		"Verify implementation against proposal, specs, design, and task completion.",
 		"Run final verification only after every task is complete; apply-progress never makes final verification ready.",
+	}
+	if status.verifyRefreshReason != "" {
+		verifyInstructions = append(verifyInstructions, status.verifyRefreshReason)
 	}
 	remediateInstructions := []string{
 		fmt.Sprintf("Change: %s", change),

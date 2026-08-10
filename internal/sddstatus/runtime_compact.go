@@ -185,12 +185,12 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 
 	replay, err := store.load()
 	if err != nil {
-		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+		return compactBlockedByUnreadableAuthority(err), nil
 	}
 	if receipt, exists := replay.Requests[begin.RequestID]; exists {
 		record, loadErr := store.loadRecord(receipt.Revision)
 		if loadErr != nil {
-			return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+			return compactBlockedByUnreadableAuthority(loadErr), nil
 		}
 		begin.ExpectedRevision = record.PreviousRevision
 		if !compactAcquireMatches(record, begin) {
@@ -201,7 +201,7 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		}
 		current, loadErr := store.load()
 		if loadErr != nil {
-			return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+			return compactBlockedByUnreadableAuthority(loadErr), nil
 		}
 		return compactAcquireResult(current, begin, receipt.Revision), nil
 	}
@@ -244,12 +244,12 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 	}
 	replay, err := store.load()
 	if err != nil {
-		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+		return compactBlockedByUnreadableAuthority(err), nil
 	}
 	if receipt, exists := replay.Requests[request.RequestID]; exists {
 		record, loadErr := store.loadRecord(receipt.Revision)
 		if loadErr != nil {
-			return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+			return compactBlockedByUnreadableAuthority(loadErr), nil
 		}
 		finish, ok := compactSettleReplayRequest(replay, record, request)
 		if !ok {
@@ -409,7 +409,7 @@ func compactAcquireResult(replay runtimeReplay, request BeginAttemptRequest, own
 func (store RuntimeStore) compactSettleResult(expected ...string) (CompactAttemptResult, error) {
 	replay, err := store.load()
 	if err != nil {
-		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+		return compactBlockedByUnreadableAuthority(err), nil
 	}
 	if len(expected) == 1 && replay.Status.Revision != expected[0] {
 		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
@@ -431,7 +431,7 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 		}
 		replay, loadErr := store.load()
 		if loadErr != nil {
-			return compactBlocked(CompactBlockCorruptAuthority, "")
+			return compactBlockedByUnreadableAuthority(loadErr)
 		}
 		return compactAcquireResult(replay, begin, publication.Revision)
 	}
@@ -536,6 +536,33 @@ func compactBlockedExitText(reason CompactBlockReason, token string) string {
 	default:
 		return ""
 	}
+}
+
+// compactBlockedByUnreadableAuthority is compactBlocked for the one reason
+// whose typed cause was being discarded at every site.
+//
+// #2829 / root 8's shape on a surface root 8 did not cover: seven call sites
+// wrote `compactBlocked(CompactBlockCorruptAuthority, "")`, throwing away the
+// error `store.load()` had just returned. The operator, and anyone triaging
+// their report, then saw "the attempt ledger cannot be read as valid
+// authority" with no way to tell an invalid HEAD encoding from a broken chain
+// link from a permissions refusal. Those need different repairs and looked
+// identical.
+//
+// Exit text is unchanged: this appends the cause to Detail only, so the
+// runnable continuation a caller routes on keeps its exact bytes.
+func compactBlockedByUnreadableAuthority(cause error) CompactAttemptResult {
+	result := compactBlocked(CompactBlockCorruptAuthority, "")
+	var repair *runtimeConsecutiveRescopeRepairRequiredError
+	if errors.As(cause, &repair) {
+		result.Exit = repair.Error()
+		result.Detail = repair.Error()
+		return result
+	}
+	if cause != nil {
+		result.Detail = result.Detail + " (cause: " + cause.Error() + ")"
+	}
+	return result
 }
 
 func compactBlocked(reason CompactBlockReason, token string) CompactAttemptResult {

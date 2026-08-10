@@ -202,9 +202,11 @@ func (err *reviewModeUnsafePathError) repairCommand() string {
 	}
 	securityType := "FileSecurity"
 	inheritance := "'None'"
+	setAccessControl := "[System.IO.File]::SetAccessControl($p, $acl)"
 	if err.Directory {
 		securityType = "DirectorySecurity"
 		inheritance = "'ContainerInherit, ObjectInherit'"
+		setAccessControl = "[System.IO.Directory]::SetAccessControl($p, $acl)"
 	}
 	return strings.Join([]string{
 		"$p = " + quotePowerShellLiteral(err.Path),
@@ -214,7 +216,7 @@ func (err *reviewModeUnsafePathError) repairCommand() string {
 		"$acl.SetAccessRuleProtection($true, $false)",
 		"$rule = New-Object -TypeName System.Security.AccessControl.FileSystemAccessRule -ArgumentList @($sid, 'FullControl', " + inheritance + ", 'None', 'Allow')",
 		"$acl.SetAccessRule($rule)",
-		"Set-Acl -LiteralPath $p -AclObject $acl",
+		setAccessControl,
 	}, "; ")
 }
 

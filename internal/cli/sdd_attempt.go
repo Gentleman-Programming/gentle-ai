@@ -148,6 +148,10 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, Reason: *reason, Actor: *actor,
 		})
+	case "repair":
+		result, err = store.RepairConsecutiveRescope(ctx, sddstatus.RepairConsecutiveRescopeRequest{
+			ExpectedRevision: *expected, RequestID: *requestID, Reason: *reason, Actor: *actor,
+		})
 	case "acquire":
 		result, err = store.Acquire(ctx, sddstatus.CompactAcquireRequest{
 			BeginAttemptRequest: sddstatus.BeginAttemptRequest{
@@ -272,6 +276,13 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, required: true, usage: "required; explicit limit 1..1000000, cannot exceed current objective"},
 		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
+	}},
+	{name: "repair", purpose: "Repair the historical consecutive-rescope publication defect", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "expected-revision", required: true, usage: "required; exact unreadable sha256:<64 lowercase hex> runtime HEAD"},
+		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
+		{name: "reason", required: true, usage: "required; trimmed single-line audit reason, at most 500 bytes"},
+		{name: "actor", required: true, usage: "required; trimmed single-line audit actor, at most 128 bytes"},
 	}},
 	{name: "acquire", purpose: "Claim a bounded attempt and return its token", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,

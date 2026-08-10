@@ -42,3 +42,24 @@ func TestQuote(t *testing.T) {
 		})
 	}
 }
+
+func TestShellWord(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "safe value stays unquoted", value: "sha256:abc-123", want: "sha256:abc-123"},
+		{name: "spaces are quoted", value: "two words", want: "'two words'"},
+		{name: "single quotes use POSIX splice", value: "o'brien", want: "'o'\\''brien'"},
+		{name: "command substitution is quoted", value: "$(touch marker)", want: "'$(touch marker)'"},
+		{name: "empty value is quoted", value: "", want: "''"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ShellWord(tt.value); got != tt.want {
+				t.Fatalf("ShellWord(%q) = %q, want %q", tt.value, got, tt.want)
+			}
+		})
+	}
+}

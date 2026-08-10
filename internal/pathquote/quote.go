@@ -7,10 +7,8 @@
 // who copies the suggested command gets a path the filesystem does not know,
 // and strings.Contains(message, path) is false for the real path.
 //
-// Quote preserves the path's bytes exactly, so the printed invocation is the
-// invocation that runs. Non-path values (lineage names, revisions, closure
-// members) are Go-string territory and keep using %q; this package is for
-// paths only.
+// Quote preserves a path's bytes exactly, while ShellWord safely renders any
+// dynamic value in an executable POSIX-shell continuation.
 package pathquote
 
 import "strings"
@@ -24,4 +22,21 @@ import "strings"
 // paths are always byte-identical inside the quotes.
 func Quote(path string) string {
 	return `"` + strings.ReplaceAll(path, `"`, `\"`) + `"`
+}
+
+// ShellWord renders one value as a POSIX shell word. It quotes by allowlist so
+// values copied from a status message cannot split, expand, or execute.
+func ShellWord(value string) string {
+	if value != "" && !strings.ContainsFunc(value, shellWordUnsafe) {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func shellWordUnsafe(char rune) bool {
+	switch {
+	case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9':
+		return false
+	}
+	return !strings.ContainsRune("-_=./:,+@", char)
 }

@@ -867,15 +867,26 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 		}
 		target.IntendedUntracked = intendedScope.Intended
+		var prePR *reviewtransaction.PrePRRequest
+		prePRRepresentable := true
+		if reviewtransaction.GateKind(*gate) == reviewtransaction.GatePrePR {
+			prePRTarget := target
+			target, prePR, err = reviewtransaction.BuildPrePRTarget(ctx, root, selectedBaseRef, "", intendedScope.Intended)
+			if err != nil {
+				var resolutionErr *reviewtransaction.GateTargetResolutionError
+				if !errors.As(err, &resolutionErr) {
+					return fmt.Errorf("resolve negotiated pre-PR target: %w", err)
+				}
+				target = prePRTarget
+				prePRRepresentable = false
+			}
+		}
 		selector := &reviewTransitionSelector{
 			Kind: target.Kind, Projection: selectedProjection, BaseRef: selectedBaseRef,
-			BaseTree: selectedBaseTree, WorkspaceOverlay: *workspaceOverlay, PrePRRepresentable: true,
-		}
-		if reviewtransaction.GateKind(*gate) == reviewtransaction.GatePrePR {
-			selector.PrePRRepresentable = reviewtransaction.ValidatePrePRBoundarySelector(ctx, root, selectedBaseRef) == nil
+			BaseTree: selectedBaseTree, WorkspaceOverlay: *workspaceOverlay, PrePRRepresentable: prePRRepresentable,
 		}
 		native, liveSnapshot, err := reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{
-			Target: target, LineageID: *lineage,
+			Target: target, LineageID: *lineage, PrePR: prePR,
 		})
 		if err != nil {
 			return fmt.Errorf("assess negotiated review target: %w", err)
@@ -911,6 +922,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if *actionEligibility {
 			result.Eligibility = newReviewActionEligibility(result)
 		}
+		var compactAuthority *reviewStatusCompactAuthority
 		if *nextTransition {
 			artifacts := []ReviewTransitionArtifact{}
 			var capturedEvidence *reviewtransaction.VerificationEvidenceRecord
@@ -930,6 +942,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					if loadErr != nil {
 						artifactErr = loadErr
 					} else {
+						compactAuthority = &reviewStatusCompactAuthority{
+							OriginalChangedLines:   record.State.OriginalChangedLines,
+							CorrectionBudget:       record.State.CorrectionBudget,
+							CorrectionBudgetPolicy: record.State.CorrectionBudgetPolicy,
+						}
 						correctionForecasted = record.State.State == reviewtransaction.StateCorrectionRequired && record.State.ProposedCorrectionLines != nil
 						if record.State.State == reviewtransaction.StateCorrectionRequired && !record.State.CorrectionAttemptConsumed() {
 							request, requestErr := reviewtransaction.BuildCorrectionPlanRequest(record.State, record.Revision)
@@ -1045,8 +1062,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			result.Forecast = &forecast
 			reviewNarrateForecast(forecast)
 		}
-		if err := result.Validate(); err != nil {
-			return fmt.Errorf("validate negotiated review status: %w", err)
+		var validationErr error
+		if compactAuthority != nil {
+			validationErr = result.validateWithCompactAuthority(compactAuthority)
+		} else {
+			validationErr = result.Validate()
+		}
+		if validationErr != nil {
+			return fmt.Errorf("validate negotiated review status: %w", validationErr)
 		}
 		return encodeReviewJSON(stdout, result)
 	}
@@ -2226,13 +2249,14 @@ func reviewFacadeStartDeclinedResult(snapshot reviewtransaction.Snapshot, assess
 }
 
 func reviewFacadeStartResultFor(action reviewtransaction.CompactStartAction, lensesRequired bool, authority reviewtransaction.CompactState) ReviewFacadeStartResult {
+	legacyBudget, _ := reviewtransaction.CorrectionBudget(authority.OriginalChangedLines)
 	result := ReviewFacadeStartResult{
 		Operation: "review/start", Action: string(action), LensesRequired: lensesRequired,
 		LineageID: authority.LineageID, State: authority.State, RiskLevel: authority.RiskLevel,
 		SelectedLenses: append([]string{}, authority.SelectedLenses...), LensBindings: facadeLensBindings(authority.SelectedLenses),
 		Projection:   facadeProjection(authority.InitialSnapshot.Projection),
 		ChangedFiles: len(authority.InitialSnapshot.Paths), TargetIdentity: authority.InitialSnapshot.Identity,
-		ChangedLines: authority.OriginalChangedLines, CorrectionBudget: authority.CorrectionBudget,
+		ChangedLines: authority.OriginalChangedLines, CorrectionBudget: legacyBudget,
 	}
 	if authority.InitialSnapshot.Kind == reviewtransaction.TargetBaseWorkspaceOverlay {
 		result.TargetMode = authority.InitialSnapshot.Kind

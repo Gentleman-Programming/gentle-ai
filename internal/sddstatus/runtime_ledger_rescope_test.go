@@ -134,6 +134,112 @@ func TestRuntimeLedgerRescopeRecoversZeroDriftDeadlock(t *testing.T) {
 	}
 }
 
+// TestRuntimeLedgerRescopeRefusesConsecutiveRescopeWithoutOwnAttempt proves
+// #2830's ratified boundary: a rescope successor needs its own terminal
+// attempt before it can itself be rescoped. Its predecessor's terminal attempt
+// remains immutable provenance, not authority for another successor.
+func TestRuntimeLedgerRescopeRefusesConsecutiveRescopeWithoutOwnAttempt(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "rescope-2830")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "2830-begin-a", WorkUnit: "objective-a",
+		EvidenceGoal: "prove the original bounded objective", MaxAttempts: 3, MaxChangedLines: 90,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "2830-finish-a", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('a'), Diagnosis: "objective A failed with the workspace unchanged",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "workspace remained unchanged",
+		ProcessEvidence: "post-verification process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.CumulativeChangedLines != 0 || failed.DecisionRequired || failed.Complete || failed.NextAction != RuntimeActionBegin {
+		t.Fatalf("failed objective A status = %#v", failed)
+	}
+
+	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "2830-rescope-a-to-b",
+		WorkUnit: "objective-b", EvidenceGoal: "prove the narrower successor objective",
+		MaxAttempts: 3, MaxChangedLines: 60,
+		Reason: "maintainer narrowed objective A into successor B", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatalf("first rescope was refused: %v", err)
+	}
+	if rescoped.Objective == nil || rescoped.Objective.WorkUnit != "objective-b" || rescoped.Objective.MaxAttempts != 3 ||
+		rescoped.Objective.MaxChangedLines != 60 || rescoped.NextAction != RuntimeActionBegin || rescoped.ActiveAttempt != nil {
+		t.Fatalf("rescoped objective B status = %#v", rescoped)
+	}
+	if len(rescoped.Attempts) != 1 || rescoped.Attempts[0].ObjectiveID == rescoped.Objective.ID {
+		t.Fatalf("successor B must have no attempt of its own yet: %#v", rescoped)
+	}
+
+	beforeRevision := rescoped.Revision
+	beforeRecords := countRuntimeRecords(t, store.Dir)
+	_, err = store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: beforeRevision, RequestID: "2830-rescope-b-to-c-before-attempt",
+		WorkUnit: "objective-c", EvidenceGoal: "prove the still narrower successor objective",
+		MaxAttempts: 3, MaxChangedLines: 30,
+		Reason: "maintainer attempted to rescope B before B has an attempt", Actor: "maintainer",
+	})
+	if !errors.Is(err, ErrRuntimeRescopeNotAllowed) {
+		t.Errorf("consecutive rescope error = %v, want ErrRuntimeRescopeNotAllowed", err)
+	}
+	if records := countRuntimeRecords(t, store.Dir); records != beforeRecords {
+		t.Errorf("refused consecutive rescope published a record: records=%d, want %d", records, beforeRecords)
+	}
+	status, statusErr := store.Status()
+	if statusErr != nil {
+		t.Errorf("status after refused consecutive rescope = %v", statusErr)
+	} else if status.Revision != beforeRevision || status.Objective == nil || status.Objective.ID != rescoped.Objective.ID ||
+		len(status.Attempts) != 1 || status.ActiveAttempt != nil || status.NextAction != RuntimeActionBegin {
+		t.Errorf("refused consecutive rescope changed authoritative status: %#v", status)
+	}
+	if statusErr != nil {
+		return
+	}
+
+	// Negative control: the same narrowing transition is admitted once objective
+	// B owns a terminal attempt, so the refusal above cannot be a generic rescope
+	// failure unrelated to objective ownership.
+	startedB, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: status.Revision, RequestID: "2830-begin-b", WorkUnit: "objective-b",
+		EvidenceGoal: "prove the narrower successor objective", MaxAttempts: 3, MaxChangedLines: 60,
+	})
+	if err != nil {
+		t.Fatalf("begin objective B for negative control: %v", err)
+	}
+	failedB, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: startedB.Revision, RequestID: "2830-finish-b", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('b'), Diagnosis: "objective B failed with the workspace unchanged",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "workspace remained unchanged",
+		ProcessEvidence: "post-verification process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatalf("finish objective B for negative control: %v", err)
+	}
+	accepted, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: failedB.Revision, RequestID: "2830-rescope-b-to-c-after-attempt",
+		WorkUnit: "objective-c", EvidenceGoal: "prove the still narrower successor objective",
+		MaxAttempts: 3, MaxChangedLines: 30,
+		Reason: "maintainer narrowed B only after B recorded its own attempt", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatalf("rescope after objective B's terminal attempt was refused: %v", err)
+	}
+	if accepted.Objective == nil || accepted.Objective.WorkUnit != "objective-c" || accepted.NextAction != RuntimeActionBegin {
+		t.Fatalf("accepted post-attempt rescope status = %#v", accepted)
+	}
+}
+
 // TestRuntimeLedgerRescopeNarrowsFailedVerificationToTestOnlyRemediation is
 // #2296 part 2's distinct scenario reusing the exact same rescope mechanism:
 // after an admitted failed independent verification (zero drift once

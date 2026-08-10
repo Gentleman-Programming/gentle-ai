@@ -108,11 +108,11 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "missing operation", args: nil, want: "requires status, begin, finish, handoff, reset, rescope, acquire, settle, or grant"},
+		{name: "missing operation", args: nil, want: "requires status, begin, finish, handoff, reset, rescope, repair, acquire, settle, or grant"},
 		// The no-args refusal already enumerates every valid operation; the
 		// unknown-operation refusal must do the same instead of naming only
 		// the bad value with no route to the valid set.
-		{name: "unknown operation", args: []string{"begn"}, want: `unknown sdd-attempt operation "begn"; want one of status, begin, finish, handoff, reset, rescope, acquire, settle, or grant`},
+		{name: "unknown operation", args: []string{"begn"}, want: `unknown sdd-attempt operation "begn"; want one of status, begin, finish, handoff, reset, rescope, repair, acquire, settle, or grant`},
 		{name: "missing change", args: []string{"status", "--cwd", repo}, want: "--change"},
 		{name: "unknown flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--mystery"}, want: "flag provided but not defined"},
 		{name: "irrelevant flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--outcome", "failed"}, want: "flag provided but not defined"},
@@ -145,7 +145,7 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 // all four). Mirrors the reviewIntegrationGatesInOrder /
 // reviewIntegrationGateNames pattern in review_operation_contract.go.
 func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T) {
-	want := []string{"status", "begin", "finish", "handoff", "reset", "rescope", "acquire", "settle", "grant"}
+	want := []string{"status", "begin", "finish", "handoff", "reset", "rescope", "repair", "acquire", "settle", "grant"}
 	if got := sddAttemptOperationNames(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("sddAttemptOperationNames() = %v, want %v", got, want)
 	}
@@ -157,8 +157,8 @@ func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T)
 	if validSDDAttemptOperation("begn") {
 		t.Fatal(`validSDDAttemptOperation("begn") = true, want false`)
 	}
-	if got := joinSDDAttemptOperations(); got != "status, begin, finish, handoff, reset, rescope, acquire, settle, or grant" {
-		t.Fatalf("joinSDDAttemptOperations() = %q, want %q", got, "status, begin, finish, handoff, reset, rescope, acquire, settle, or grant")
+	if got := joinSDDAttemptOperations(); got != "status, begin, finish, handoff, reset, rescope, repair, acquire, settle, or grant" {
+		t.Fatalf("joinSDDAttemptOperations() = %q, want %q", got, "status, begin, finish, handoff, reset, rescope, repair, acquire, settle, or grant")
 	}
 }
 
@@ -251,6 +251,7 @@ func TestRunSDDAttemptHelpContractsCoverEveryOperation(t *testing.T) {
 		{"handoff", []string{"cwd", "change", "expected-revision", "request-id", "destination-worktree"}, []string{"registered linked worktree", "Git common directory"}},
 		{"reset", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"500 bytes", "128 bytes"}},
 		{"rescope", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"}, []string{"explicit limit", "cannot exceed current objective"}},
+		{"repair", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"unreadable sha256", "500 bytes", "128 bytes"}},
 		{"acquire", []string{"cwd", "change", "token", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "remediates-evidence-revision"}, []string{"default 2", "default 200", "unmanaged remediation"}},
 		{"settle", []string{"cwd", "change", "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "successor-lineage", "remediates-evidence-revision"}, []string{"opaque token returned by acquire", "never none"}},
 		{"grant", []string{"cwd", "change", "expected-revision", "root", "change-instance", "request-id", "actor", "reason"}, []string{"repeatable", "1..32", "4096 bytes"}},

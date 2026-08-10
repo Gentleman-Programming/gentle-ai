@@ -12,6 +12,8 @@ var portableSDDFailClosedAuthorityJourneyIDs = []string{
 	"j55-sdd-mismatched-authority-receipt-fails-closed",
 	"j56-sdd-non-allow-post-apply-gate-fails-closed",
 	"j58-sdd-foreign-openspec-path-fails-closed",
+	"j80-rescope-authorized-evidence-only-retry",
+	"j81-rc1-consecutive-rescope-repair-executes-printed-command",
 }
 
 func portableSDDFailClosedAuthorityJourneySet(found bool) map[string]bool {
@@ -34,13 +36,21 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 			want[journey.ID] = true
 		}
 	}
-	// 79 since j76-claude-advisory-result-reaches-delivery (#2692, #2566),
-	// j77-capture-result-input-preflight-is-read-only (#2630 D2) and
-	// j78-lens-finding-id-prefix-discovery (#1844).
+	// 84 since j76-claude-advisory-result-reaches-delivery (#2692, #2566),
+	// j77-capture-result-input-preflight-is-read-only (#2630 D2),
+	// j78-lens-finding-id-prefix-discovery (#1844), j79-consecutive-rescope-
+	// refuses-before-publication (#2830), and j80-rescope-authorized-evidence-
+	// only-retry (#2621).
+	// j81's RC-created repair fixture (#2839) follows the independently-owned
+	// #2621 journey.
+	// j82 proves #2127's reviewed full candidate can publish an unpublished
+	// monotonic subset without reopening review.
+	// j83 proves #2127's pre-PR path binds its candidate to the unique merge-base
+	// while the advertised main ref remains a moving publication boundary.
 	// Bump this deliberately when a journey is added, and name it here: the
 	// count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 79 {
-		t.Errorf("core journey count = %d, want 79", got)
+	if got := len(seen); got != 84 {
+		t.Errorf("core journey count = %d, want 84", got)
 	}
 	for id, found := range want {
 		if !found {

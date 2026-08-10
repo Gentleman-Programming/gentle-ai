@@ -86,7 +86,7 @@ An issue **without** that label is usually waiting on information (`status:needs
 
 ### Prerequisites
 
-- Go 1.24+
+- Go 1.25.10+
 - Docker (for E2E tests)
 - Git
 

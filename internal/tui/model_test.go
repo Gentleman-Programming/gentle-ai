@@ -24,8 +24,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
+	"github.com/muesli/termenv"
 )
 
 func TestNavigationWelcomeToDetection(t *testing.T) {
@@ -5751,6 +5753,120 @@ func TestWelcomeAdvisory_ResizeAndContentChangesClampScroll(t *testing.T) {
 	updated, _ = state.Update(AdvisoryMsg{Advisory: update.Advisory{Message: "Short notice."}})
 	if got := updated.(Model).AdvisoryScroll; got != 0 {
 		t.Fatalf("scroll after advisory content change = %d, want 0", got)
+	}
+}
+
+func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
+	cases := []struct {
+		name         string
+		width        int
+		height       int
+		withOptional bool
+		minimum      bool
+		wantPrimary  string
+		wantControl  string
+	}{
+		{name: "startup viewport", width: 120, height: 30},
+		{name: "narrow resize", width: 80, height: 24},
+		{name: "short viewport", width: 120, height: 19},
+		{name: "below compact height", width: 120, height: 2, minimum: true},
+		{name: "below compact width", width: 18, height: 20, minimum: true},
+		{name: "below frame border width", width: 2, height: 20, minimum: true, wantPrimary: "Go"},
+		{name: "tiny viewport uses atomic labels", width: 2, height: 2, minimum: true, wantPrimary: "Go", wantControl: "q"},
+		{name: "single column tiny viewport uses atomic labels", width: 1, height: 2, minimum: true, wantPrimary: ">", wantControl: "q"},
+		{name: "compact viewport with optional content", width: 120, height: 17, withOptional: true},
+		{name: "wide resize", width: 160, height: 50},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			if tc.withOptional {
+				m.UpdateCheckDone = true
+				m.UpdateResults = []update.UpdateResult{{
+					Tool:             update.ToolInfo{Name: "engram"},
+					InstalledVersion: "1.0.0",
+					LatestVersion:    "1.1.0",
+					Status:           update.UpdateAvailable,
+				}}
+				m.AdvisoryMessage = "Optional advisory content"
+			}
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: tc.width, Height: tc.height})
+			state := updated.(Model)
+			view := state.View()
+
+			if state.Width != tc.width || state.Height != tc.height {
+				t.Fatalf("window size = %dx%d, want %dx%d", state.Width, state.Height, tc.width, tc.height)
+			}
+			if got := lipgloss.Width(view); got > tc.width {
+				t.Fatalf("welcome width = %d, want <= %d\nview:\n%s", got, tc.width, view)
+			}
+			if got := lipgloss.Height(view); got > tc.height {
+				t.Fatalf("welcome height = %d, want <= %d\nview:\n%s", got, tc.height, view)
+			}
+			content := view
+			if tc.minimum {
+				content = strings.ReplaceAll(view, "\n", "")
+			}
+			primary := tc.wantPrimary
+			if primary == "" {
+				primary = "Start installation"
+			}
+			if !strings.Contains(content, primary) {
+				t.Fatalf("welcome lost primary action %q after resize\nview:\n%s", primary, view)
+			}
+			if tc.minimum {
+				control := tc.wantControl
+				if control == "" {
+					control = "j/k"
+				}
+				for _, want := range []string{primary, control} {
+					if !strings.Contains(content, want) {
+						t.Fatalf("minimum welcome state lost %q\nview:\n%s", want, view)
+					}
+				}
+			} else {
+				for _, want := range []string{"Quit", "j/k: navigate • enter: select • q: quit"} {
+					if !strings.Contains(view, want) {
+						t.Fatalf("welcome lost %q after resize\nview:\n%s", want, view)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestWelcomeView_MinimumResizePreservesNonzeroCursor(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+
+	const (
+		cursor = 1
+		width  = 18
+		height = 20
+	)
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Cursor = cursor
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	state := updated.(Model)
+	view := state.View()
+
+	if state.Cursor != cursor {
+		t.Fatalf("cursor after resize = %d, want %d", state.Cursor, cursor)
+	}
+	if got := lipgloss.Width(view); got > width {
+		t.Fatalf("welcome width = %d, want <= %d\nview:\n%s", got, width, view)
+	}
+	if got := lipgloss.Height(view); got > height {
+		t.Fatalf("welcome height = %d, want <= %d\nview:\n%s", got, height, view)
+	}
+	if !strings.Contains(view, styles.UnselectedStyle.Render("Start installation")) {
+		t.Fatalf("minimum welcome state did not preserve the non-selected style\nview:\n%s", view)
+	}
+	if strings.Contains(view, styles.SelectedStyle.Render("Start installation")) {
+		t.Fatalf("minimum welcome state marked Start installation selected for cursor %d\nview:\n%s", cursor, view)
 	}
 }
 

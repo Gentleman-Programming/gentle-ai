@@ -85,6 +85,56 @@ func TestStatusValidateTransitionPreservesCustomPublicationBase(t *testing.T) {
 	assertReviewGateResult(t, executeSelectorTransition(t, repo, status), reviewtransaction.GateAllow)
 }
 
+func TestStatusAndValidateShareMergeBaseBoundPrePRTarget(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	remote := filepath.Join(t.TempDir(), "origin.git")
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, remote, "init", "--bare", "-q")
+	runReviewCLIGit(t, repo, "branch", "-M", "main")
+	runReviewCLIGit(t, repo, "remote", "add", "origin", remote)
+	runReviewCLIGit(t, repo, "push", "-qu", "origin", "main")
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	baseTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", base+"^{tree}"))
+	runReviewCLIGit(t, repo, "checkout", "-qb", "feature")
+	writeReviewStartCandidate(t, repo, "docs/feature.md", "# Feature\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "docs/feature.md")
+	runReviewCLIGit(t, repo, "commit", "-qm", "docs: feature")
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "moving-base", "--base-ref", base, "--committed-only"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", "moving-base"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+
+	side := filepath.Join(t.TempDir(), "main-advance")
+	runReviewCLIGit(t, repo, "clone", "-q", "--no-checkout", remote, side)
+	runReviewCLIGit(t, side, "checkout", "-q", "-B", "main", "origin/main")
+	runReviewCLIGit(t, side, "config", "user.email", "side@example.test")
+	runReviewCLIGit(t, side, "config", "user.name", "Side")
+	writeReviewStartCandidate(t, side, "docs/base.md", "# Base\n", 0o644)
+	runReviewCLIGit(t, side, "add", "docs/base.md")
+	runReviewCLIGit(t, side, "commit", "-qm", "docs: advance main")
+	runReviewCLIGit(t, side, "push", "-q", "origin", "main")
+	if err := RunReview([]string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--gate", "pre-pr", "--base-ref", "origin/main"}, &bytes.Buffer{}); err == nil {
+		t.Fatalf("unfetched advertised base STATUS error = %v", err)
+	}
+	runReviewCLIGit(t, repo, "fetch", "-q", "origin", "main")
+
+	status := selectorTransitionStatus(t, repo, "--gate", "pre-pr", "--base-ref", "origin/main")
+	if status.Action != reviewtransaction.TargetStatusActionValidate || status.Projection.BaseTree != baseTree ||
+		status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.validate" {
+		t.Fatalf("merge-base-bound pre-PR status = %#v", status)
+	}
+	assertReviewGateResult(t, executeSelectorTransition(t, repo, status), reviewtransaction.GateAllow)
+	var direct bytes.Buffer
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-pr", "--base-ref", "origin/main"}, &direct); err != nil {
+		t.Fatal(err)
+	}
+	assertReviewGateResult(t, direct.Bytes(), reviewtransaction.GateAllow)
+}
+
 func TestStatusRecoverTransitionExecutesExactBaseDiffSelectors(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))

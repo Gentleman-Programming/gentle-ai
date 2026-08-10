@@ -51,6 +51,7 @@ const (
 type TargetStatusRequest struct {
 	Target    Target
 	LineageID string
+	PrePR     *PrePRRequest
 }
 
 type TargetProjectionStatus struct {
@@ -81,6 +82,7 @@ type TargetStatusResult struct {
 	OriginalChangedLines    int                                `json:"original_changed_lines,omitempty"`
 	Tier                    RiskLevel                          `json:"tier,omitempty"`
 	CorrectionBudget        int                                `json:"correction_budget,omitempty"`
+	CorrectionBudgetPolicy  string                             `json:"correction_budget_policy,omitempty"`
 	SelectedLenses          []string                           `json:"selected_lenses,omitempty"`
 	TargetIdentity          string                             `json:"target_identity"`
 	AuthorityTargetIdentity string                             `json:"authority_target_identity,omitempty"`
@@ -301,6 +303,9 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				continue
 			}
 		} else if compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
+			if !compactPrePRContentCompatible(ctx, repo, state, live, request.PrePR) {
+				continue
+			}
 			candidates = append(candidates, candidate)
 			continue
 		}
@@ -388,6 +393,26 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 	}
 }
 
+func compactPrePRContentCompatible(ctx context.Context, repo string, state CompactState, snapshot Snapshot, prePR *PrePRRequest) bool {
+	if prePR == nil || prePR.Boundary == nil || prePR.Boundary.Commit == prePR.Boundary.MergeBase {
+		return true
+	}
+	receipt, err := state.Receipt()
+	if err != nil {
+		return false
+	}
+	head, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		return false
+	}
+	_, err = deriveBaseAdvanceCompatibility(ctx, repo, Receipt{
+		BaseTree: receipt.BaseTree, FinalCandidateTree: receipt.FinalCandidateTree, PathsDigest: receipt.PathsDigest,
+	}, GateRequest{Gate: GatePrePR, PrePR: prePR}, snapshot, &resolvedPrePRRefs{
+		Selection: *prePR.Boundary, HeadCommit: head,
+	}, gateArtifactPreimages{}, false)
+	return err == nil
+}
+
 func corruptedTargetStatus(result TargetStatusResult) TargetStatusResult {
 	result.Applicability = TargetApplicabilityCorrupted
 	result.Action = TargetStatusActionRepairAuthority
@@ -404,7 +429,7 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 		state := record.State
 		result.State, result.Generation, result.Revision = state.State, state.Generation, record.Revision
 		result.AuthorityTargetIdentity = state.CurrentSnapshot.Identity
-		result.OriginalChangedLines, result.Tier, result.CorrectionBudget = state.OriginalChangedLines, state.RiskLevel, state.CorrectionBudget
+		result.OriginalChangedLines, result.Tier, result.CorrectionBudget, result.CorrectionBudgetPolicy = state.OriginalChangedLines, state.RiskLevel, state.CorrectionBudget, state.CorrectionBudgetPolicy
 		result.SelectedLenses = append([]string{}, state.SelectedLenses...)
 		result.Projection = targetProjectionFromCompact(state, result.Projection)
 		result.ReceiptIdentity = candidate.receiptIdentity
