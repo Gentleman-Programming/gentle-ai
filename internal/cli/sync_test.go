@@ -25,6 +25,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
 
@@ -1690,6 +1691,10 @@ func TestCodeGraphGuidanceSyncStepDoesNotInjectWhenNotConfigured(t *testing.T) {
 }
 
 func TestSyncRuntimeAddsCodeGraphStepsOnlyWhenSelected(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	home := t.TempDir()
 	mustWriteFile(t, filepath.Join(home, ".config", "opencode", "opencode.json"), []byte(`{}`))
 	mustWriteFile(t, filepath.Join(home, ".config", "opencode", "AGENTS.md"), []byte("<!-- gentle-ai:codegraph-guidance -->\nold\n<!-- /gentle-ai:codegraph-guidance -->\n"))
@@ -1801,6 +1806,9 @@ func TestRestorePersistedCommunityToolsDoesNotAdoptExternalWiring(t *testing.T) 
 }
 
 func TestRunSyncMigratesLegacyManagedCodeGraphSelection(t *testing.T) {
+	if !system.CodeGraphPlatformSupported() || os.Getenv("ANDROID_ROOT") != "" {
+		t.Skip("CodeGraph not supported on this platform")
+	}
 	home := t.TempDir()
 	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral"}); err != nil {
 		t.Fatal(err)
@@ -1809,8 +1817,13 @@ func TestRunSyncMigratesLegacyManagedCodeGraphSelection(t *testing.T) {
 	mustWriteFile(t, filepath.Join(home, ".config", "opencode", "AGENTS.md"), []byte("<!-- gentle-ai:codegraph-guidance -->\nmanaged\n<!-- /gentle-ai:codegraph-guidance -->\n"))
 
 	restoreLookPath := cmdLookPath
-	t.Cleanup(func() { cmdLookPath = restoreLookPath })
+	restoreRunCommand := runCommand
+	t.Cleanup(func() {
+		cmdLookPath = restoreLookPath
+		runCommand = restoreRunCommand
+	})
 	cmdLookPath = func(string) (string, error) { return "/bin/codegraph", nil }
+	runCommand = func(name string, args ...string) error { return nil }
 
 	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
 	if err != nil {
@@ -1829,6 +1842,9 @@ func TestRunSyncMigratesLegacyManagedCodeGraphSelection(t *testing.T) {
 }
 
 func TestRunSyncMigratesLegacyManagedPiCodeGraphSelection(t *testing.T) {
+	if !system.CodeGraphPlatformSupported() || os.Getenv("ANDROID_ROOT") != "" {
+		t.Skip("CodeGraph not supported on this platform")
+	}
 	home := t.TempDir()
 	if err := state.Write(home, state.InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral"}); err != nil {
 		t.Fatal(err)
@@ -1836,12 +1852,17 @@ func TestRunSyncMigratesLegacyManagedPiCodeGraphSelection(t *testing.T) {
 	writeManagedPiCodeGraphManifest(t, home)
 
 	previousRefresh := refreshPiCodeGraphIfConfigured
+	restoreRunCommand := runCommand
 	refreshed := false
 	refreshPiCodeGraphIfConfigured = func(string, string) (communitytool.PiCodeGraphResult, bool, error) {
 		refreshed = true
 		return communitytool.PiCodeGraphResult{}, true, nil
 	}
-	t.Cleanup(func() { refreshPiCodeGraphIfConfigured = previousRefresh })
+	runCommand = func(name string, args ...string) error { return nil }
+	t.Cleanup(func() {
+		refreshPiCodeGraphIfConfigured = previousRefresh
+		runCommand = restoreRunCommand
+	})
 
 	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
 	if err != nil {
@@ -1860,6 +1881,9 @@ func TestRunSyncMigratesLegacyManagedPiCodeGraphSelection(t *testing.T) {
 }
 
 func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) {
+	if !system.CodeGraphPlatformSupported() || os.Getenv("ANDROID_ROOT") != "" {
+		t.Skip("CodeGraph not supported on this platform")
+	}
 	home := t.TempDir()
 	original := state.InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral"}
 	if err := state.Write(home, original); err != nil {
@@ -1876,10 +1900,15 @@ func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) 
 	writeManagedPiCodeGraphManifest(t, home)
 
 	previousRefresh := refreshPiCodeGraphIfConfigured
+	restoreRunCommand := runCommand
 	refreshPiCodeGraphIfConfigured = func(string, string) (communitytool.PiCodeGraphResult, bool, error) {
 		return communitytool.PiCodeGraphResult{}, true, nil
 	}
-	t.Cleanup(func() { refreshPiCodeGraphIfConfigured = previousRefresh })
+	runCommand = func(name string, args ...string) error { return nil }
+	t.Cleanup(func() {
+		refreshPiCodeGraphIfConfigured = previousRefresh
+		runCommand = restoreRunCommand
+	})
 
 	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
 	if err == nil || !strings.Contains(err.Error(), "persist managed asset provenance") {

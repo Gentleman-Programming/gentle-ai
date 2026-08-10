@@ -674,6 +674,14 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	for _, tool := range r.selection.CommunityTools {
+		if tool == model.CommunityToolCodeGraph && !system.CodeGraphPlatformSupported() {
+			// Skip CodeGraph on platforms without native binaries (e.g., Termux/Android).
+			// The npm package @colbymchenry/codegraph requires platform-specific native
+			// binaries that are not published for Android/Termux. Users on these platforms
+			// can still use CodeGraph by installing it manually with a compatible Node.js
+			// setup, but gentle-ai cannot automate the installation.
+			continue
+		}
 		apply = append(apply, communityToolInstallStep{id: "community-tool:" + string(tool), tool: tool, workspaceDir: r.workspaceDir, homeDir: r.homeDir, state: r.state})
 	}
 
@@ -723,7 +731,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		})
 	}
 	if containsAgent(r.resolved.Agents, model.AgentPi) {
-		selected := r.selection.HasCommunityTool(model.CommunityToolCodeGraph)
+		selected := r.selection.HasCommunityTool(model.CommunityToolCodeGraph) && system.CodeGraphPlatformSupported()
 		stepID := "community-tool:pi-codegraph-reconcile"
 		if !selected {
 			stepID = "community-tool:pi-codegraph-deselect"

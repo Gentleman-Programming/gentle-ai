@@ -20,6 +20,10 @@ import (
 )
 
 func TestInstallRuntimeStagePlanAddsCommunityToolStepsInSelectionOrder(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	runtime := &installRuntime{
 		homeDir:      t.TempDir(),
 		workspaceDir: "/work/project",
@@ -43,6 +47,10 @@ func TestInstallRuntimeStagePlanAddsCommunityToolStepsInSelectionOrder(t *testin
 }
 
 func TestInstallRuntimeStagePlanKeepsPiReconcileIndependentFromOpenCode(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	runtime := &installRuntime{
 		homeDir:      t.TempDir(),
 		workspaceDir: "/work/project",

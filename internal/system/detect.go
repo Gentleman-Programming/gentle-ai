@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+var (
+	// codeGraphPlatformSupportedOverride allows tests to override the platform
+	// support check for CodeGraph. When set, it takes precedence over the
+	// automatic detection.
+	codeGraphPlatformSupportedOverride *bool
+)
+
 type SystemInfo struct {
 	OS        string
 	Arch      string
@@ -215,4 +222,35 @@ func osReleaseID(linuxOSRelease string) string {
 	}
 
 	return LinuxDistroUnknown
+}
+
+// IsAndroid returns true if the current environment appears to be Android.
+// This includes Termux (TERMUX_VERSION set) and other Android environments
+// (ANDROID_ROOT set). Node.js on Android may report "android" as the platform
+// instead of "linux", causing the npm-shim to look for non-existent
+// "android-<arch>" bundles.
+func IsAndroid() bool {
+	return os.Getenv("TERMUX_VERSION") != "" || os.Getenv("ANDROID_ROOT") != ""
+}
+
+// CodeGraphPlatformSupported returns true if the current platform has prebuilt
+// CodeGraph native binaries available. CodeGraph publishes optionalDependencies
+// for: darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-arm64, win32-x64.
+// Android (linux-arm64 with TERMUX_VERSION or ANDROID_ROOT set) is not
+// supported because Node.js on Android may report "android" as the platform,
+// causing the npm-shim to look for a non-existent "android-arm64" bundle.
+func CodeGraphPlatformSupported() bool {
+	if codeGraphPlatformSupportedOverride != nil {
+		return *codeGraphPlatformSupportedOverride
+	}
+	if IsAndroid() {
+		return false
+	}
+	return runtime.GOOS == "darwin" || runtime.GOOS == "linux" || runtime.GOOS == "windows"
+}
+
+// SetCodeGraphPlatformSupportedForTest allows tests to override the platform
+// support check for CodeGraph. Pass nil to reset to automatic detection.
+func SetCodeGraphPlatformSupportedForTest(v *bool) {
+	codeGraphPlatformSupportedOverride = v
 }

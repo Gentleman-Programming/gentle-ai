@@ -553,7 +553,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		})
 	}
 
-	if r.selection.HasCommunityTool(model.CommunityToolCodeGraph) {
+	if r.selection.HasCommunityTool(model.CommunityToolCodeGraph) && system.CodeGraphPlatformSupported() {
 		apply = append(apply, &codeGraphGuidanceSyncStep{
 			id:           "sync:community-tool:codegraph-guidance",
 			homeDir:      r.homeDir,
@@ -636,13 +636,15 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 			}
 		}
 	}
-	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
+	if selection.HasCommunityTool(model.CommunityToolCodeGraph) && system.CodeGraphPlatformSupported() {
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
 			paths[path] = struct{}{}
 		}
 	}
-	for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
-		paths[path] = struct{}{}
+	if selection.HasCommunityTool(model.CommunityToolCodeGraph) && system.CodeGraphPlatformSupported() {
+		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
+			paths[path] = struct{}{}
+		}
 	}
 
 	targets := make([]string, 0, len(paths))
