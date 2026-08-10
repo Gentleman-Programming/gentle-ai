@@ -380,77 +380,278 @@ type remediationRollbackEvidence struct {
 	Evidence string `json:"evidence"`
 }
 
+// remediationClaim is one identity assertion found while scanning cumulative
+// apply-progress: a strict remediation result envelope, optionally completed by
+// an adjacent JSON evidence fence. Complete pairs carry EndLine set to the end
+// of their evidence fence so the terminal pair is unambiguous.
+type remediationClaim struct {
+	Revision   string
+	LineageID  string
+	Generation int
+	FixBatch   int
+	Complete   bool
+	EndLine    int
+}
+
+// remediationResultFields is the scalar field vocabulary shared by the
+// remediation result claim and pair validators.
+var remediationResultFields = map[string]bool{
+	"schema": true, "status": true, "failed_evidence_revision": true,
+	"focused_tests": true, "runtime_harness": true, "rollback_boundary": true,
+	"lineage_id": true, "generation": true, "fix_batch": true,
+}
+
 func parseRemediationResult(text, expectedRevision string, bindings ...RemediationBinding) remediationResultEvaluation {
-	lines, end, reason := parseLeadingEnvelope(text)
-	if reason != "" {
+	if len(bindings) > 1 {
 		return remediationResultEvaluation{}
 	}
-	allowed := map[string]bool{
-		"schema": true, "status": true, "failed_evidence_revision": true,
-		"focused_tests": true, "runtime_harness": true, "rollback_boundary": true,
-		"lineage_id": true, "generation": true, "fix_batch": true,
+	var binding *RemediationBinding
+	if len(bindings) == 1 {
+		binding = &bindings[0]
 	}
-	fields, reason := parseScalarFields(lines[1:end], allowed, "remediation result")
-	if reason != "" {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	claims := scanRemediationClaims(strings.Split(text, "\n"), expectedRevision, binding)
+	var terminal *remediationClaim
+	for index := range claims {
+		if terminal == nil || claims[index].EndLine > terminal.EndLine {
+			terminal = &claims[index]
+		}
+	}
+	var matched *remediationClaim
+	matches := 0
+	for index := range claims {
+		if remediationClaimMatches(claims[index], expectedRevision, binding) {
+			matches++
+			matched = &claims[index]
+		}
+	}
+	if matches != 1 || matched == nil || !matched.Complete || terminal == nil || matched.EndLine != terminal.EndLine {
 		return remediationResultEvaluation{}
+	}
+	return remediationResultEvaluation{Complete: true, EvidenceRevision: expectedRevision}
+}
+
+func remediationClaimMatches(claim remediationClaim, expectedRevision string, binding *RemediationBinding) bool {
+	if claim.Revision != expectedRevision {
+		return false
+	}
+	if binding != nil && (claim.LineageID != binding.LineageID || claim.Generation != binding.Generation || claim.FixBatch != binding.FixBatch) {
+		return false
+	}
+	return true
+}
+
+// scanRemediationClaims walks a cumulative apply-progress document and returns
+// every remediation identity claim it can locate, in document order. Earlier
+// remediation history with a different identity is kept as a claim so a later
+// duplicate of the current identity is recognized as ambiguous. Unrelated
+// closed fences, plain prose, and inline fence markers are skipped.
+func scanRemediationClaims(lines []string, expectedRevision string, binding *RemediationBinding) []remediationClaim {
+	var claims []remediationClaim
+	for index := 0; index < len(lines); index++ {
+		marker := stripBlockquote(lines[index])
+		switch {
+		case marker == "```yaml":
+			end, ok := fenceEnd(lines, index+1)
+			if !ok {
+				return claims
+			}
+			body := stripBlockquoteLines(lines[index+1 : end])
+			claim, ok := parseRemediationResultClaim(body)
+			if !ok {
+				index = end
+				continue
+			}
+			claim.EndLine = end
+			evidenceStart := end + 1
+			for evidenceStart < len(lines) && strings.TrimSpace(lines[evidenceStart]) == "" {
+				evidenceStart++
+			}
+			if evidenceStart < len(lines) && stripBlockquote(lines[evidenceStart]) == "```json" {
+				if evidenceEnd, ok := fenceEnd(lines, evidenceStart+1); ok {
+					evaluation, valid := validateRemediationPair(body, stripBlockquoteLines(lines[evidenceStart:evidenceEnd+1]), expectedRevision, binding)
+					claim.Complete = valid && evaluation.Complete
+					if claim.Complete {
+						claim.EndLine = evidenceEnd
+						index = evidenceEnd
+						claims = append(claims, claim)
+						continue
+					}
+				}
+			}
+			claims = append(claims, claim)
+			index = end
+		case marker == "```json":
+			end, ok := fenceEnd(lines, index+1)
+			if !ok {
+				return claims
+			}
+			if claim, ok := parseLegacyRemediationResultClaim(stripBlockquoteLines(lines[index+1 : end])); ok {
+				claim.EndLine = end
+				claims = append(claims, claim)
+			}
+			index = end
+		case strings.HasPrefix(marker, "```"):
+			// Unrelated closed fence: skip it so its content is never scanned
+			// as remediation claims.
+			if end, ok := fenceEnd(lines, index+1); !ok {
+				return claims
+			} else {
+				index = end
+			}
+		}
+	}
+	return claims
+}
+
+func fenceEnd(lines []string, start int) (int, bool) {
+	for index := start; index < len(lines); index++ {
+		if stripBlockquote(lines[index]) == "```" {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+func stripBlockquote(line string) string {
+	trimmed := strings.TrimSpace(line)
+	for strings.HasPrefix(trimmed, ">") {
+		rest := strings.TrimSpace(strings.TrimPrefix(trimmed, ">"))
+		if rest == trimmed {
+			break
+		}
+		trimmed = rest
+	}
+	return trimmed
+}
+
+func stripBlockquoteLines(lines []string) []string {
+	stripped := make([]string, len(lines))
+	for index, line := range lines {
+		stripped[index] = stripBlockquote(line)
+	}
+	return stripped
+}
+
+// parseRemediationResultClaim extracts only the identity an envelope asserts.
+// Full semantic validation stays in validateRemediationPair.
+func parseRemediationResultClaim(lines []string) (remediationClaim, bool) {
+	fields, reason := parseScalarFields(lines, remediationResultFields, "remediation result")
+	if reason != "" || fields["schema"] != RemediationResultSchema || fields["status"] != "complete" {
+		return remediationClaim{}, false
+	}
+	claim := remediationClaim{Revision: fields["failed_evidence_revision"]}
+	claim.LineageID = fields["lineage_id"]
+	if generation, ok := parseNonnegativeInt(fields["generation"]); ok {
+		claim.Generation = generation
+	}
+	if fixBatch, ok := parseNonnegativeInt(fields["fix_batch"]); ok {
+		claim.FixBatch = fixBatch
+	}
+	return claim, true
+}
+
+// parseLegacyRemediationResultClaim recognizes an older JSON-encoded
+// remediation result envelope. It only asserts identity; like parseRemediationResultClaim,
+// it exists so a same-identity claim in that historical form is rejected as an
+// ambiguous duplicate instead of being silently ignored.
+func parseLegacyRemediationResultClaim(lines []string) (remediationClaim, bool) {
+	text := strings.TrimSpace(strings.Join(lines, "\n"))
+	var fields map[string]any
+	if !strings.HasPrefix(text, "{") || json.Unmarshal([]byte(text), &fields) != nil {
+		return remediationClaim{}, false
+	}
+	if fields["schema"] != RemediationResultSchema || fields["status"] != "complete" {
+		return remediationClaim{}, false
+	}
+	claim := remediationClaim{Revision: jsonString(fields["failed_evidence_revision"])}
+	claim.LineageID = jsonString(fields["lineage_id"])
+	if generation, ok := jsonInt(fields["generation"]); ok {
+		claim.Generation = generation
+	}
+	if fixBatch, ok := jsonInt(fields["fix_batch"]); ok {
+		claim.FixBatch = fixBatch
+	}
+	return claim, true
+}
+
+func jsonString(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
+}
+
+func jsonInt(value any) (int, bool) {
+	switch number := value.(type) {
+	case float64:
+		return int(number), true
+	case int:
+		return number, true
+	}
+	return 0, false
+}
+
+// validateRemediationPair runs the strict remediation result and evidence
+// semantic validation over one extracted envelope pair. It is the unchanged
+// authoritative validator: the scanner only isolates the exact slices.
+func validateRemediationPair(resultBody, evidenceBody []string, expectedRevision string, binding *RemediationBinding) (remediationResultEvaluation, bool) {
+	fields, reason := parseScalarFields(resultBody, remediationResultFields, "remediation result")
+	if reason != "" {
+		return remediationResultEvaluation{}, false
 	}
 	revision := fields["failed_evidence_revision"]
 	evaluation := remediationResultEvaluation{EvidenceRevision: revision}
 	if fields["schema"] != RemediationResultSchema || fields["status"] != "complete" || revision != expectedRevision {
-		return evaluation
+		return evaluation, false
 	}
-	if len(bindings) > 1 {
-		return evaluation
-	}
-	if len(bindings) == 1 {
-		binding := bindings[0]
+	if binding != nil {
 		generation, generationOK := parseNonnegativeInt(fields["generation"])
 		fixBatch, fixBatchOK := parseNonnegativeInt(fields["fix_batch"])
 		if fields["lineage_id"] != binding.LineageID || !generationOK || generation != binding.Generation || !fixBatchOK || fixBatch != binding.FixBatch {
-			return evaluation
+			return evaluation, false
 		}
 	}
 	if fields["focused_tests"] != "passed" || fields["rollback_boundary"] != "recorded" {
-		return evaluation
+		return evaluation, false
 	}
 	if fields["runtime_harness"] != "passed" && fields["runtime_harness"] != "not_applicable" {
-		return evaluation
+		return evaluation, false
 	}
-	evidence, ok := parseRemediationEvidence(lines[end+1:])
+	evidence, ok := parseRemediationEvidence(evidenceBody)
 	if !ok || evidence.FailedEvidenceRevision != expectedRevision || len(evidence.Commands) == 0 {
-		return evaluation
+		return evaluation, false
 	}
-	if len(bindings) == 1 {
-		binding := bindings[0]
+	if binding != nil {
 		if evidence.LineageID != binding.LineageID || evidence.Generation != binding.Generation || evidence.FixBatch != binding.FixBatch {
-			return evaluation
+			return evaluation, false
 		}
 	}
 	for _, command := range evidence.Commands {
 		if command.ExitCode != 0 || !isConcreteEvidence(command.Command) || !isConcreteEvidence(command.Result) {
-			return evaluation
+			return evaluation, false
 		}
 	}
 	if evidence.RuntimeHarness.Status != fields["runtime_harness"] {
-		return evaluation
+		return evaluation, false
 	}
 	switch evidence.RuntimeHarness.Status {
 	case "passed":
 		if !isConcreteEvidence(evidence.RuntimeHarness.Command) || !isConcreteEvidence(evidence.RuntimeHarness.Result) || strings.TrimSpace(evidence.RuntimeHarness.NAReason) != "" {
-			return evaluation
+			return evaluation, false
 		}
 	case "not_applicable":
 		if evidence.RuntimeHarness.Command != "" || evidence.RuntimeHarness.Result != "" || !isConcreteNAReason(evidence.RuntimeHarness.NAReason) {
-			return evaluation
+			return evaluation, false
 		}
 	default:
-		return evaluation
+		return evaluation, false
 	}
 	if !isConcreteEvidence(evidence.Rollback.Boundary) || !isConcreteEvidence(evidence.Rollback.Evidence) {
-		return evaluation
+		return evaluation, false
 	}
 	evaluation.Complete = true
-	return evaluation
+	return evaluation, true
 }
 
 func parseRemediationEvidence(lines []string) (remediationEvidence, bool) {

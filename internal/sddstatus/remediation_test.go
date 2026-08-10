@@ -35,6 +35,112 @@ func TestParseRemediationResultRequiresExactTransactionBinding(t *testing.T) {
 	}
 }
 
+func TestParseRemediationResultCompletesFromCumulativeApplyProgress(t *testing.T) {
+	revision := "sha256:" + strings.Repeat("d", 64)
+	binding := RemediationBinding{LineageID: "lineage-1", Generation: 2, FixBatch: 2}
+	prior := RemediationBinding{LineageID: "lineage-1", Generation: 2, FixBatch: 1}
+	artifact := strings.Join([]string{
+		"# Apply Progress",
+		"",
+		"- [x] design",
+		"- [x] spec",
+		"",
+		remediationResultEvidenceWithBinding("sha256:"+strings.Repeat("c", 64), prior),
+		"",
+		"## Remediation fix batch 2",
+		"",
+		"```sh",
+		"go test ./internal/sddstatus",
+		"```",
+		"",
+		remediationResultEvidenceWithBinding(revision, binding),
+		"",
+	}, "\n")
+	if got := parseRemediationResult(artifact, revision, binding); !got.Complete {
+		t.Fatal("terminal remediation pair appended to cumulative apply-progress must complete remediation")
+	}
+}
+
+func TestParseRemediationResultRejectsSameIdentityDuplicateInCumulativeProgress(t *testing.T) {
+	revision := "sha256:" + strings.Repeat("d", 64)
+	binding := RemediationBinding{LineageID: "lineage-1", Generation: 2, FixBatch: 2}
+	pair := remediationResultEvidenceWithBinding(revision, binding)
+	artifact := strings.Join([]string{"# Apply Progress", "", pair, "", "## retry", "", pair, ""}, "\n")
+	if got := parseRemediationResult(artifact, revision, binding); got.Complete {
+		t.Fatal("duplicate same-identity remediation pair must be rejected as ambiguous")
+	}
+}
+
+func TestParseRemediationResultRequiresTerminalPairToCarryRequestedIdentity(t *testing.T) {
+	revision := "sha256:" + strings.Repeat("d", 64)
+	binding := RemediationBinding{LineageID: "lineage-1", Generation: 2, FixBatch: 2}
+	newer := RemediationBinding{LineageID: "lineage-1", Generation: 2, FixBatch: 3}
+	artifact := strings.Join([]string{
+		"# Apply Progress",
+		"",
+		remediationResultEvidenceWithBinding(revision, binding),
+		"",
+		"## Newer remediation fix batch 3",
+		"",
+		remediationResultEvidenceWithBinding("sha256:"+strings.Repeat("e", 64), newer),
+		"",
+	}, "\n")
+	if got := parseRemediationResult(artifact, revision, binding); got.Complete {
+		t.Fatal("a matching pair that is not terminal must not complete remediation")
+	}
+}
+
+func TestParseRemediationResultRejectsBlockquotedSameIdentityDuplicate(t *testing.T) {
+	revision := "sha256:" + strings.Repeat("d", 64)
+	binding := RemediationBinding{LineageID: "lineage-1", Generation: 2, FixBatch: 2}
+	pair := remediationResultEvidenceWithBinding(revision, binding)
+	artifact := strings.Join([]string{
+		"# Apply Progress",
+		"",
+		quoteAsBlockquote(pair),
+		"",
+		remediationResultEvidenceWithBinding(revision, binding),
+		"",
+	}, "\n")
+	if got := parseRemediationResult(artifact, revision, binding); got.Complete {
+		t.Fatal("blockquoted duplicate remediation claim matching the current identity must be rejected")
+	}
+}
+
+func TestParseRemediationResultRejectsLegacyJSONResultSameIdentityDuplicate(t *testing.T) {
+	revision := "sha256:" + strings.Repeat("d", 64)
+	binding := RemediationBinding{LineageID: "lineage-1", Generation: 2, FixBatch: 2}
+	legacy := map[string]any{
+		"schema":                   "gentle-ai.remediation-result/v1",
+		"status":                   "complete",
+		"failed_evidence_revision": revision,
+		"lineage_id":               binding.LineageID,
+		"generation":               binding.Generation,
+		"fix_batch":                binding.FixBatch,
+	}
+	raw, _ := json.Marshal(legacy)
+	legacyEnvelope := "```json\n" + string(raw) + "\n```"
+	artifact := strings.Join([]string{
+		"# Apply Progress",
+		"",
+		legacyEnvelope,
+		"",
+		remediationResultEvidenceWithBinding(revision, binding),
+		"",
+	}, "\n")
+	if got := parseRemediationResult(artifact, revision, binding); got.Complete {
+		t.Fatal("legacy JSON-result duplicate claim matching the current identity must be rejected")
+	}
+}
+
+func quoteAsBlockquote(text string) string {
+	lines := strings.Split(text, "\n")
+	for index, line := range lines {
+		lines[index] = "> " + line
+	}
+	return strings.Join(lines, "\n")
+}
+
 func remediationEnvelope(revision string) string {
 	return strings.Join([]string{
 		"```yaml",
