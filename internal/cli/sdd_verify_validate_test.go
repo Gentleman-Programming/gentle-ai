@@ -111,9 +111,18 @@ func TestRunSDDVerifyValidateScopedProofPersistsAndRefusesInvalidReport(t *testi
 	if err != nil || afterInvalid.Revision != accepted.Revision || len(afterInvalid.SliceProofs) != 1 {
 		t.Fatalf("invalid scoped validation changed accepted state = %#v err=%v", afterInvalid, err)
 	}
-	startedFailure, err := store.Begin(context.Background(), sddstatus.BeginAttemptRequest{
-		ExpectedRevision: afterInvalid.Revision, RequestID: "scoped-proof-fail-begin", WorkUnit: "slice-b", EvidenceGoal: "prove failed scoped validation", MaxAttempts: 1, MaxChangedLines: 20,
-		Scope: &sddstatus.RuntimeScope{Tasks: []string{"1.2"}, Requirements: []string{"REQ-B"}, Scenarios: []string{"scenario-b"}},
+}
+
+func TestRunSDDVerifyValidateScopedFailAdmitsWithoutProofOrAdvancing(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	change := "scoped-proof-fail"
+	store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), sddstatus.BeginAttemptRequest{
+		RequestID: "scoped-proof-fail-begin", WorkUnit: "slice-fail", EvidenceGoal: "prove failed scoped validation", MaxAttempts: 1, MaxChangedLines: 20,
+		Scope: &sddstatus.RuntimeScope{Tasks: []string{"1.1"}, Requirements: []string{"REQ-A"}, Scenarios: []string{"scenario-a"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,27 +130,32 @@ func TestRunSDDVerifyValidateScopedProofPersistsAndRefusesInvalidReport(t *testi
 	if err := os.WriteFile(filepath.Join(repo, "scoped-proof-fail.txt"), []byte("failed proof\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	completedFailure, err := store.Finish(context.Background(), sddstatus.FinishAttemptRequest{
-		ExpectedRevision: startedFailure.Revision, RequestID: "scoped-proof-fail-finish", Outcome: sddstatus.AttemptPassed, EvidenceRevision: cliAttemptHash('a'),
+	completed, err := store.Finish(context.Background(), sddstatus.FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "scoped-proof-fail-finish", Outcome: sddstatus.AttemptPassed, EvidenceRevision: cliAttemptHash('a'),
 		Diagnosis: "scoped validation completed", HarnessDisposition: sddstatus.HarnessReused, CleanupEvidence: "cleanup complete", ProcessEvidence: "processes stopped",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	failingReport := strings.Replace(cliScopedVerifyReport(completedFailure.Objective.ID), "verdict: pass", "verdict: fail", 1)
-	failingReport = strings.Replace(failingReport, "blockers: 0", "blockers: 1", 1)
-	if admission := sddstatus.ValidateVerifyReportAdmission(failingReport, sddstatus.SpecCounts{}, *completedFailure.Objective); !admission.Valid || admission.Verdict != "fail" {
-		t.Fatalf("valid failing scoped report = %#v", admission)
+	report := strings.Replace(cliScopedVerifyReport(completed.Objective.ID), "verdict: pass", "verdict: fail", 1)
+	report = strings.Replace(report, "blockers: 0", "blockers: 1", 1)
+	var output bytes.Buffer
+	args := []string{"--input", "-", "--cwd", repo, "--change", change, "--scope", "slice", "--slice-id", completed.Objective.ID}
+	if err := runSDDVerifyValidate(args, strings.NewReader(report), &output); err != nil {
+		t.Fatalf("failing scoped validation = %v", err)
 	}
-	failingArgs := append([]string(nil), baseArgs...)
-	failingArgs = append(failingArgs, "--scope", "slice", "--slice-id", completedFailure.Objective.ID)
-	err = runSDDVerifyValidate(failingArgs, strings.NewReader(failingReport), &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "verify report admission denied: slice proof requires a complete passing report") {
-		t.Fatalf("failing scoped validation error = %v", err)
+	if !strings.Contains(output.String(), `"valid": true`) || !strings.Contains(output.String(), `"verdict": "fail"`) {
+		t.Fatalf("failing scoped validation output = %s", output.String())
 	}
-	afterFailure, err := store.Status()
-	if err != nil || afterFailure.Revision != completedFailure.Revision || len(afterFailure.SliceProofs) != 1 || afterFailure.SliceProofs[0].ObjectiveID == completedFailure.Objective.ID {
-		t.Fatalf("failing scoped validation mutated state = %#v err=%v", afterFailure, err)
+	status, err := store.Status()
+	if err != nil || status.Revision != completed.Revision || len(status.SliceProofs) != 0 {
+		t.Fatalf("failing scoped validation mutated state = %#v err=%v", status, err)
+	}
+	if _, err := store.Begin(context.Background(), sddstatus.BeginAttemptRequest{
+		ExpectedRevision: status.Revision, RequestID: "scoped-proof-fail-successor", WorkUnit: "slice-successor", EvidenceGoal: "prove successor remains blocked", MaxAttempts: 1, MaxChangedLines: 20,
+		Scope: &sddstatus.RuntimeScope{Tasks: []string{"1.2"}, Requirements: []string{"REQ-B"}, Scenarios: []string{"scenario-b"}},
+	}); !errors.Is(err, sddstatus.ErrRuntimeObjectiveDone) {
+		t.Fatalf("advance after failing scoped validation = %v, want ErrRuntimeObjectiveDone", err)
 	}
 }
 

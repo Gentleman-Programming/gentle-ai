@@ -301,6 +301,12 @@ func validVerifyReportVerdict(verdict string) bool {
 	return false
 }
 
+// IsPassingVerifyReportVerdict reports whether an admitted report can become
+// advancement authority. A valid failure remains persistable evidence.
+func IsPassingVerifyReportVerdict(verdict string) bool {
+	return verdict == "pass" || verdict == "pass_with_warnings"
+}
+
 func parseLeadingEnvelope(text string) ([]string, int, string) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	lines := strings.Split(strings.TrimSpace(text), "\n")

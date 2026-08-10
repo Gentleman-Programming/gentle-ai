@@ -1401,7 +1401,7 @@ func (store RuntimeStore) AdmitSliceProof(ctx context.Context, report, scope, sl
 	if !admitted.Valid {
 		return admitted, nil
 	}
-	if admitted.Verdict != "pass" && admitted.Verdict != "pass_with_warnings" {
+	if !IsPassingVerifyReportVerdict(admitted.Verdict) {
 		admitted.Valid = false
 		admitted.Reason = "slice proof requires a complete passing report"
 		return admitted, nil
@@ -1426,7 +1426,7 @@ func (store RuntimeStore) AdmitSliceProof(ctx context.Context, report, scope, sl
 		if !currentAdmission.Valid {
 			return runtimeRecord{}, errors.New(currentAdmission.Reason)
 		}
-		if currentAdmission.Verdict != "pass" && currentAdmission.Verdict != "pass_with_warnings" {
+		if !IsPassingVerifyReportVerdict(currentAdmission.Verdict) {
 			return runtimeRecord{}, errors.New("slice proof requires a complete passing report") // refusal:by-design world-action: only a successful completed verification report can become advancement authority
 		}
 		if currentAdmission.EvidenceRevision != status.EvidenceRevision {
@@ -2449,6 +2449,9 @@ func applyRuntimeSliceProofEvent(replay *runtimeReplay, event *runtimeSliceProof
 	if !admission.Valid || admission.EvidenceRevision != event.EvidenceRevision || event.EvidenceRevision != replay.Status.EvidenceRevision {
 		return errors.New("slice proof report is not admitted current objective evidence") // refusal:by-design world-action: a replayed proof must retain the current provider-admitted evidence
 	}
+	if !IsPassingVerifyReportVerdict(admission.Verdict) {
+		return errors.New("slice proof report is not a passing advancement proof") // refusal:by-design world-action: a valid failure report is evidence, not advancement authority, so a forged proof requires store restoration
+	}
 	replay.Status.SliceProofs = append(replay.Status.SliceProofs, SliceProof{
 		ObjectiveID: event.ObjectiveID, SliceID: event.SliceID, EvidenceRevision: event.EvidenceRevision,
 		ReportDigest: runtimeValueHash("gentle-ai.sdd-runtime-slice-proof-report/v1", event.Report),
@@ -2808,7 +2811,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("invalid SDD runtime slice proof event") // refusal:by-design world-action: malformed persisted proof fields are an immutable-record violation and require store restoration
 		}
 		report, reason := parseVerifyReport(event.Report)
-		if reason != "" || report.Scope != "slice" || report.SliceID != event.SliceID || report.EvidenceRevision != event.EvidenceRevision {
+		if reason != "" || !IsPassingVerifyReportVerdict(report.Verdict) || report.Scope != "slice" || report.SliceID != event.SliceID || report.EvidenceRevision != event.EvidenceRevision {
 			return errors.New("invalid SDD runtime slice proof report") // refusal:by-design world-action: a persisted proof must retain the provider-admitted report it recorded
 		}
 		requestDigest := runtimeValueHash("gentle-ai.sdd-runtime-slice-proof-request/v1", struct {
