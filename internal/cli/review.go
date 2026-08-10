@@ -76,10 +76,10 @@ func parseReviewFlags(flags *flag.FlagSet, args []string) error {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
-		return err
+		return reviewPreflightError(err)
 	}
 	if hint := reviewBooleanFlagSpacedValueHint(flags, args); hint != "" {
-		return errors.New(hint)
+		return reviewPreflightError(errors.New(hint))
 	}
 	return nil
 }
