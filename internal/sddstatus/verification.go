@@ -36,6 +36,11 @@ var verifyReportAuthorityOnlyFields = []string{
 	"command_failed", "observed_authority_revision",
 }
 
+// verifyReportSliceFields are optional slice-scope metadata fields. They
+// extend the allowed envelope when present; absence is back-compat for
+// whole-change reports that never declared a scope.
+var verifyReportSliceFields = []string{"scope", "slice_id"}
+
 var verifyReportVerdicts = []string{"pass", "pass_with_warnings", "fail"}
 
 func VerifyReportValidationContract() VerifyReportContract {
@@ -82,6 +87,11 @@ type verifyReport struct {
 	Blockers, Critical, TestExit, BuildExit int
 	Requirements, Scenarios                 verifyCompletion
 	AuthorityOnly                           bool
+	// Scope and SliceID are optional slice-scope metadata. When the report
+	// declares scope=slice, SliceID carries the slice identity and the
+	// validator requires --slice-id CLI authority to match.
+	Scope   string
+	SliceID string
 }
 
 var sha256IdentityPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -151,11 +161,40 @@ func parseVerifyResult(text string, expected SpecCounts) verifyResultEvaluation 
 // ValidateVerifyReportAdmission validates exact report bytes before persistence.
 func ValidateVerifyReportAdmission(text string, expected SpecCounts) VerifyReportAdmission {
 	report, reason := parseVerifyReport(text)
-	result := VerifyReportAdmission{Reason: reason}
 	if reason != "" {
-		return result
+		return VerifyReportAdmission{Reason: reason}
 	}
-	result.Verdict, result.EvidenceRevision = report.Verdict, report.EvidenceRevision
+	return admitVerifyReport(report, expected)
+}
+
+// ValidateSliceVerifyReportAdmission validates a slice-scope report. The
+// report envelope must declare scope=slice and a non-empty slice_id that
+// matches the sliceID authority passed on the CLI. --requirements and
+// --scenarios on the CLI are interpreted as slice totals (not whole-change
+// counts). Slice admission is a pure validity check; callers must not
+// use the returned Valid=true to mark whole-change archive as complete.
+func ValidateSliceVerifyReportAdmission(text string, expected SpecCounts, sliceID string) VerifyReportAdmission {
+	report, reason := parseVerifyReport(text)
+	if reason != "" {
+		return VerifyReportAdmission{Reason: reason}
+	}
+	if report.Scope != "slice" {
+		return VerifyReportAdmission{Reason: "slice admission requires scope: slice in verify result envelope"}
+	}
+	if report.SliceID == "" {
+		return VerifyReportAdmission{Reason: "missing slice_id in verify result envelope"}
+	}
+	if report.SliceID != sliceID {
+		return VerifyReportAdmission{Reason: "slice_id in verify result envelope does not match the slice authority"}
+	}
+	return admitVerifyReport(report, expected)
+}
+
+// admitVerifyReport applies the per-verdict and totals rules to an already-
+// parsed report. Both whole-change and slice admission share this logic;
+// the difference between them lives in the metadata validation above.
+func admitVerifyReport(report verifyReport, expected SpecCounts) VerifyReportAdmission {
+	result := VerifyReportAdmission{Verdict: report.Verdict, EvidenceRevision: report.EvidenceRevision}
 	if expected.Requirements < 0 || expected.Scenarios < 0 {
 		result.Reason = "expected requirement and scenario counts must be nonnegative"
 		return result
@@ -193,12 +232,12 @@ func parseVerifyReport(text string) (verifyReport, string) {
 	if reason != "" {
 		return verifyReport{}, reason
 	}
-	allowed := make(map[string]bool, len(verifyReportRequiredFields)+len(verifyReportAuthorityOnlyFields))
-	for _, field := range append(append([]string{}, verifyReportRequiredFields...), verifyReportAuthorityOnlyFields...) {
+	allowed := make(map[string]bool, len(verifyReportRequiredFields)+len(verifyReportAuthorityOnlyFields)+len(verifyReportSliceFields))
+	for _, field := range append(append(append([]string{}, verifyReportRequiredFields...), verifyReportAuthorityOnlyFields...), verifyReportSliceFields...) {
 		allowed[field] = true
 	}
 	fields, reason := parseScalarFields(lines[1:end], allowed, "verify result")
-	report := verifyReport{Fields: fields}
+	report := verifyReport{Fields: fields, Scope: fields["scope"], SliceID: fields["slice_id"]}
 	if fields["schema"] == VerifyResultSchema && sha256IdentityPattern.MatchString(fields["evidence_revision"]) {
 		report.EvidenceRevision = fields["evidence_revision"]
 	}

@@ -98,6 +98,53 @@ func TestValidateVerifyReportAdmission(t *testing.T) {
 	}
 }
 
+func TestValidateSliceVerifyReportAdmission(t *testing.T) {
+	validWhole := testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0)
+	sliceEnvelope := func(scope, sliceID string) string {
+		header := ""
+		if scope != "" {
+			header += "scope: " + scope + "\n"
+		}
+		if sliceID != "" {
+			header += "slice_id: " + sliceID + "\n"
+		}
+		if header == "" {
+			return validWhole
+		}
+		return strings.Replace(validWhole, "verdict: pass", "verdict: pass\n"+strings.TrimRight(header, "\n"), 1)
+	}
+	failingFailEnvelope := strings.Replace(testVerifyEnvelope("fail", 1, 0, "2/2", "3/3", 0, 0), "verdict: fail", "verdict: fail\nscope: slice\nslice_id: PR8b1-a", 1)
+	tests := []struct {
+		name, report, reason string
+		sliceID              string
+		valid                bool
+	}{
+		{"slice pass with matching id", sliceEnvelope("slice", "PR8b1-a"), "", "PR8b1-a", true},
+		{"slice fail with matching id", failingFailEnvelope, "", "PR8b1-a", true},
+		{"slice warning with matching id", strings.Replace(sliceEnvelope("slice", "PR8b1-a"), "verdict: pass", "verdict: pass_with_warnings", 1), "", "PR8b1-a", true},
+		{"missing scope", sliceEnvelope("", "PR8b1-a"), "scope: slice", "PR8b1-a", false},
+		{"whole scope under slice admission", sliceEnvelope("whole", "PR8b1-a"), "scope: slice", "PR8b1-a", false},
+		{"unknown scope value", sliceEnvelope("weird", "PR8b1-a"), "scope: slice", "PR8b1-a", false},
+		{"missing slice_id", sliceEnvelope("slice", ""), "missing slice_id", "PR8b1-a", false},
+		{"slice_id mismatch", sliceEnvelope("slice", "PR9z9-x"), "does not match", "PR8b1-a", false},
+		{"slice admission rejects count mismatch", sliceEnvelope("slice", "PR8b1-a"), "actual requirement count", "PR8b1-a", false},
+		{"slice admission rejects incomplete totals", strings.Replace(sliceEnvelope("slice", "PR8b1-a"), "requirements: 2/2", "requirements: 1/2", 1), "contradicts", "PR8b1-a", false},
+		{"slice admission admits incomplete fail", failingFailEnvelope, "", "PR8b1-a", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			specs := SpecCounts{Requirements: 2, Scenarios: 3}
+			if tt.name == "slice admission rejects count mismatch" {
+				specs.Requirements = 3
+			}
+			got := ValidateSliceVerifyReportAdmission(tt.report, specs, tt.sliceID)
+			if got.Valid != tt.valid || (tt.reason != "" && !strings.Contains(got.Reason, tt.reason)) {
+				t.Fatalf("admission = %#v, want valid=%v reason containing %q", got, tt.valid, tt.reason)
+			}
+		})
+	}
+}
+
 func TestVerifyReportAuthorityOnlyFieldCountUsesContract(t *testing.T) {
 	partial := strings.TrimSuffix(testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0), "```") + "authority_only_failure: true\n```"
 	admission := ValidateVerifyReportAdmission(partial, SpecCounts{Requirements: 2, Scenarios: 3})

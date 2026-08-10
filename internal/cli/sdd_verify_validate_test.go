@@ -136,6 +136,82 @@ func TestRunSDDVerifyValidateRequiredFlagsRemainRequired(t *testing.T) {
 	}
 }
 
+func TestRunSDDVerifyValidateSliceScopeFlags(t *testing.T) {
+	sliceReport := strings.Replace(testSDDVerifyValidateTestReport(), "verdict: pass", "verdict: pass\nscope: slice\nslice_id: PR8b1-a", 1)
+	tests := []struct {
+		name      string
+		args      []string
+		input     string
+		wantErr   string
+		wantValid bool
+	}{
+		{
+			name:      "slice admission happy path",
+			args:      []string{"--input", "-", "--scope", "slice", "--slice-id", "PR8b1-a", "--requirements", "1", "--scenarios", "1"},
+			input:     sliceReport,
+			wantValid: true,
+		},
+		{
+			name:    "slice requires --slice-id",
+			args:    []string{"--input", "-", "--scope", "slice", "--requirements", "1", "--scenarios", "1"},
+			input:   sliceReport,
+			wantErr: "requires --slice-id",
+		},
+		{
+			name:    "slice-id without --scope=slice",
+			args:    []string{"--input", "-", "--slice-id", "PR8b1-a", "--requirements", "1", "--scenarios", "1"},
+			input:   sliceReport,
+			wantErr: "only valid with --scope=slice",
+		},
+		{
+			name:    "invalid scope value",
+			args:    []string{"--input", "-", "--scope", "weird", "--requirements", "1", "--scenarios", "1"},
+			input:   sliceReport,
+			wantErr: "--scope must be one of",
+		},
+		{
+			name:    "slice admission rejects mismatched slice_id",
+			args:    []string{"--input", "-", "--scope", "slice", "--slice-id", "PR9z9-x", "--requirements", "1", "--scenarios", "1"},
+			input:   sliceReport,
+			wantErr: "does not match",
+		},
+		{
+			name:    "slice admission rejects whole-change report",
+			args:    []string{"--input", "-", "--scope", "slice", "--slice-id", "PR8b1-a", "--requirements", "1", "--scenarios", "1"},
+			input:   testSDDVerifyValidateTestReport(),
+			wantErr: "scope: slice",
+		},
+		{
+			name:    "slice admission rejects slice with totals mismatch",
+			args:    []string{"--input", "-", "--scope", "slice", "--slice-id", "PR8b1-a", "--requirements", "2", "--scenarios", "3"},
+			input:   sliceReport,
+			wantErr: "actual requirement count",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			err := runSDDVerifyValidate(tt.args, strings.NewReader(tt.input), &output)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			if !strings.Contains(output.String(), `"valid": true`) {
+				t.Fatalf("output = %s", output.String())
+			}
+		})
+	}
+}
+
+func testSDDVerifyValidateTestReport() string {
+	return "```yaml\nschema: gentle-ai.verify-result/v1\nevidence_revision: sha256:" + strings.Repeat("a", 64) + "\nverdict: pass\nblockers: 0\ncritical_findings: 0\nrequirements: 1/1\nscenarios: 1/1\ntest_command: go test ./...\ntest_exit_code: 0\ntest_output_hash: sha256:" + strings.Repeat("b", 64) + "\nbuild_command: go vet ./...\nbuild_exit_code: 0\nbuild_output_hash: sha256:" + strings.Repeat("c", 64) + "\n```"
+}
+
 type sddVerifyValidateReadSpy struct{ reads int }
 
 func (spy *sddVerifyValidateReadSpy) Read([]byte) (int, error) {

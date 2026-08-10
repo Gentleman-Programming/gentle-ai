@@ -28,6 +28,8 @@ type sddVerifyValidateFlagDefinition struct {
 
 var sddVerifyValidateFlagDefinitions = []sddVerifyValidateFlagDefinition{
 	{name: "input", value: "<path|->", usage: "Verify report path; use - to read stdin", kind: sddVerifyValidateStringFlag},
+	{name: "scope", value: "<whole|slice>", usage: "Verification scope: whole (default) binds to change totals; slice requires --slice-id and a slice-scope envelope", kind: sddVerifyValidateStringFlag},
+	{name: "slice-id", value: "<id>", usage: "Slice identifier when --scope=slice; must match slice_id in the verify result envelope", kind: sddVerifyValidateStringFlag},
 	{name: "requirements", value: "<n>", usage: "Authoritative nonnegative requirement total", kind: sddVerifyValidateIntFlag},
 	{name: "scenarios", value: "<n>", usage: "Authoritative nonnegative scenario total", kind: sddVerifyValidateIntFlag},
 }
@@ -44,6 +46,8 @@ func runSDDVerifyValidate(args []string, stdin io.Reader, stdout io.Writer) erro
 	flags := flag.NewFlagSet("sdd-verify-validate", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	input := registerSDDVerifyValidateStringFlag(flags, "input", "")
+	scope := registerSDDVerifyValidateStringFlag(flags, "scope", "whole")
+	sliceID := registerSDDVerifyValidateStringFlag(flags, "slice-id", "")
 	requirements := registerSDDVerifyValidateIntFlag(flags, "requirements", -2)
 	scenarios := registerSDDVerifyValidateIntFlag(flags, "scenarios", -2)
 	if err := flags.Parse(args); err != nil {
@@ -54,6 +58,18 @@ func runSDDVerifyValidate(args []string, stdin io.Reader, stdout io.Writer) erro
 	}
 	if strings.TrimSpace(*input) == "" {
 		return errors.New("sdd-verify-validate requires --input")
+	}
+	switch *scope {
+	case "whole":
+		if strings.TrimSpace(*sliceID) != "" {
+			return errors.New("--slice-id is only valid with --scope=slice")
+		}
+	case "slice":
+		if strings.TrimSpace(*sliceID) == "" {
+			return errors.New("--scope=slice requires --slice-id")
+		}
+	default:
+		return fmt.Errorf("--scope must be one of: whole, slice (got %q)", *scope)
 	}
 	if *requirements == -2 {
 		return errors.New("sdd-verify-validate requires --requirements")
@@ -80,7 +96,13 @@ func runSDDVerifyValidate(args []string, stdin io.Reader, stdout io.Writer) erro
 	if len(payload) > maxVerifyReportBytes {
 		return fmt.Errorf("verify report exceeds %d-byte limit", maxVerifyReportBytes)
 	}
-	admission := sddstatus.ValidateVerifyReportAdmission(string(payload), sddstatus.SpecCounts{Requirements: *requirements, Scenarios: *scenarios})
+	specs := sddstatus.SpecCounts{Requirements: *requirements, Scenarios: *scenarios}
+	var admission sddstatus.VerifyReportAdmission
+	if *scope == "slice" {
+		admission = sddstatus.ValidateSliceVerifyReportAdmission(string(payload), specs, *sliceID)
+	} else {
+		admission = sddstatus.ValidateVerifyReportAdmission(string(payload), specs)
+	}
 	if !admission.Valid {
 		return fmt.Errorf("verify report admission denied: %s", admission.Reason)
 	}
