@@ -455,7 +455,7 @@ func scanRemediationClaims(lines []string, expectedRevision string, binding *Rem
 		marker := stripBlockquote(lines[index])
 		switch {
 		case marker == "```yaml":
-			end, ok := fenceEnd(lines, index+1)
+			end, ok := fenceEnd(lines, index+1, 3)
 			if !ok {
 				return claims
 			}
@@ -471,7 +471,7 @@ func scanRemediationClaims(lines []string, expectedRevision string, binding *Rem
 				evidenceStart++
 			}
 			if evidenceStart < len(lines) && stripBlockquote(lines[evidenceStart]) == "```json" {
-				if evidenceEnd, ok := fenceEnd(lines, evidenceStart+1); ok {
+				if evidenceEnd, ok := fenceEnd(lines, evidenceStart+1, 3); ok {
 					evaluation, valid := validateRemediationPair(body, stripBlockquoteLines(lines[evidenceStart:evidenceEnd+1]), expectedRevision, binding)
 					claim.Complete = valid && evaluation.Complete
 					if claim.Complete {
@@ -485,7 +485,7 @@ func scanRemediationClaims(lines []string, expectedRevision string, binding *Rem
 			claims = append(claims, claim)
 			index = end
 		case marker == "```json":
-			end, ok := fenceEnd(lines, index+1)
+			end, ok := fenceEnd(lines, index+1, 3)
 			if !ok {
 				return claims
 			}
@@ -496,8 +496,11 @@ func scanRemediationClaims(lines []string, expectedRevision string, binding *Rem
 			index = end
 		case isFenceOpener(marker):
 			// Unrelated closed fence: skip it so its content is never scanned
-			// as remediation claims.
-			end, ok := fenceEnd(lines, index+1)
+			// as remediation claims. The closer must match the opener length,
+			// so a longer backtick fence never parses its nested triple-backtick
+			// pairs as claims.
+			runLength, _ := fenceRunLength(marker)
+			end, ok := fenceEnd(lines, index+1, runLength)
 			if !ok {
 				return claims
 			}
@@ -507,26 +510,39 @@ func scanRemediationClaims(lines []string, expectedRevision string, binding *Rem
 	return claims
 }
 
-func fenceEnd(lines []string, start int) (int, bool) {
+// fenceEnd locates the bare closing fence whose backtick run length equals
+// closeLen, starting at line start. A longer or shorter run never closes the
+// block, so four-backtick fences do not consume triple-backtick remediation
+// pairs inside them and vice versa.
+func fenceEnd(lines []string, start int, closeLen int) (int, bool) {
 	for index := start; index < len(lines); index++ {
-		if stripBlockquote(lines[index]) == "```" {
+		marker := stripBlockquote(lines[index])
+		if run, rest := fenceRunLength(marker); run == closeLen && rest == "" {
 			return index, true
 		}
 	}
 	return 0, false
 }
 
-// isFenceOpener reports whether a stripped line opens a fenced block rather
-// than carrying an inline code span. Only a bare opener (a fence marker
-// followed at most by a language token) consumes a block; prose that merely
-// starts with a fence marker must be scanned line by line so the terminal
-// remediation pair inside it is never skipped.
-func isFenceOpener(marker string) bool {
-	if !strings.HasPrefix(marker, "```") {
-		return false
+// fenceRunLength reports the length of the leading backtick run on a stripped
+// line and the remainder after that run.
+func fenceRunLength(marker string) (int, string) {
+	run := 0
+	for run < len(marker) && marker[run] == '`' {
+		run++
 	}
-	rest := strings.TrimPrefix(marker, "```")
-	return !strings.ContainsAny(rest, "` ")
+	return run, marker[run:]
+}
+
+// isFenceOpener reports whether a stripped line opens a fenced block rather
+// than carrying an inline code span. Any fence run of three or more backticks
+// followed at most by a language token consumes a block, so longer backtick
+// fences hide their contents; prose that merely starts with a fence marker
+// must be scanned line by line so the terminal remediation pair inside it is
+// never skipped.
+func isFenceOpener(marker string) bool {
+	run, rest := fenceRunLength(marker)
+	return run >= 3 && !strings.ContainsAny(rest, "` ")
 }
 
 func stripBlockquote(line string) string {

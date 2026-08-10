@@ -149,6 +149,60 @@ func TestParseRemediationResultSkipsInlineFenceProse(t *testing.T) {
 	}
 }
 
+func TestParseRemediationResultSkipsLongerBacktickFences(t *testing.T) {
+	revision := "sha256:" + strings.Repeat("d", 64)
+	binding := RemediationBinding{LineageID: "lineage-1", Generation: 2, FixBatch: 2}
+	pair := remediationResultEvidenceWithBinding(revision, binding)
+	artifact := strings.Join([]string{
+		"# Apply Progress",
+		"",
+		"````example",
+		pair,
+		"````",
+		"",
+		remediationResultEvidenceWithBinding(revision, binding),
+		"",
+	}, "\n")
+	if got := parseRemediationResult(artifact, revision, binding); !got.Complete {
+		t.Fatal("a longer-backtick fence must hide its example contents from the remediation scan")
+	}
+}
+
+func TestParseRemediationResultSkipsUnclosedLongerBacktickFence(t *testing.T) {
+	revision := "sha256:" + strings.Repeat("d", 64)
+	binding := RemediationBinding{LineageID: "lineage-1", Generation: 2, FixBatch: 2}
+	pair := remediationResultEvidenceWithBinding(revision, binding)
+	artifact := strings.Join([]string{
+		"# Apply Progress",
+		"",
+		"````example",
+		pair,
+		// no closing fence: a malformed document must fail closed, never
+		// fabricate a remediation claim from fence contents.
+		"",
+	}, "\n")
+	if got := parseRemediationResult(artifact, revision, binding); got.Complete {
+		t.Fatal("an unclosed longer-backtick fence must fail closed instead of parsing its contents")
+	}
+}
+
+func TestParseRemediationResultRejectsNestedBlockquotedSameIdentityDuplicate(t *testing.T) {
+	revision := "sha256:" + strings.Repeat("d", 64)
+	binding := RemediationBinding{LineageID: "lineage-1", Generation: 2, FixBatch: 2}
+	pair := remediationResultEvidenceWithBinding(revision, binding)
+	artifact := strings.Join([]string{
+		"# Apply Progress",
+		"",
+		quoteAsBlockquote(quoteAsBlockquote(pair)),
+		"",
+		remediationResultEvidenceWithBinding(revision, binding),
+		"",
+	}, "\n")
+	if got := parseRemediationResult(artifact, revision, binding); got.Complete {
+		t.Fatal("nested-blockquoted duplicate remediation claim matching the current identity must be rejected")
+	}
+}
+
 func quoteAsBlockquote(text string) string {
 	lines := strings.Split(text, "\n")
 	for index, line := range lines {
