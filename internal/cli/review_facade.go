@@ -1161,7 +1161,14 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	baseDiff := predecessorRecord.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff
 	overlay := predecessorRecord.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseWorkspaceOverlay
 	explicitOverlayBase := overlay && base != "" && !*committedOnly
-	ordinaryScopeOverlay := *workspaceOverlay && overlay && base != "" && !*committedOnly && strings.TrimSpace(*projectionFlag) == string(reviewtransaction.ProjectionWorkspace)
+	projection := facadeProjection(predecessorRecord.State.InitialSnapshot.Projection)
+	if selected := strings.TrimSpace(*projectionFlag); selected != "" {
+		projection = reviewtransaction.Projection(selected)
+		if projection != reviewtransaction.ProjectionWorkspace && projection != reviewtransaction.ProjectionStaged {
+			return fmt.Errorf("unsupported review recovery projection %q", selected)
+		}
+	}
+	ordinaryScopeOverlay := *workspaceOverlay && overlay && base != "" && !*committedOnly && projection == reviewtransaction.ProjectionWorkspace
 	stagedScopeOverlay := *workspaceOverlay && !ordinaryScopeOverlay
 	if *releaseScope && (base != "" || *committedOnly || *workspaceOverlay) {
 		return errors.New("--release-scope cannot be combined with --base-ref, --committed-only, or --workspace-overlay")
@@ -1172,19 +1179,12 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	if *releaseScope && predecessorRecord.State.InitialSnapshot.Kind != reviewtransaction.TargetCurrentChanges {
 		return errors.New("--release-scope requires a current-changes predecessor")
 	}
-	if stagedScopeOverlay && (!(baseDiff || overlay && predecessorRecord.State.State == reviewtransaction.StateInvalidated && predecessorRecord.State.InitialSnapshot.Projection == reviewtransaction.ProjectionStaged) || base == "" || *committedOnly || strings.TrimSpace(*projectionFlag) != string(reviewtransaction.ProjectionStaged)) {
+	if stagedScopeOverlay && (!(baseDiff || overlay && predecessorRecord.State.State == reviewtransaction.StateInvalidated && predecessorRecord.State.InitialSnapshot.Projection == reviewtransaction.ProjectionStaged) || base == "" || *committedOnly || projection != reviewtransaction.ProjectionStaged) {
 		return errors.New("--workspace-overlay recovery requires a base-diff predecessor, --base-ref, and --projection staged without --committed-only")
 	}
 	if !*releaseScope && !stagedScopeOverlay &&
 		(*committedOnly != (base != "")) && !explicitOverlayBase {
 		return errors.New("base-diff recovery requires matching --base-ref and --committed-only")
-	}
-	projection := predecessorRecord.State.InitialSnapshot.Projection
-	if selected := strings.TrimSpace(*projectionFlag); selected != "" {
-		projection = reviewtransaction.Projection(selected)
-		if projection != reviewtransaction.ProjectionWorkspace && projection != reviewtransaction.ProjectionStaged {
-			return fmt.Errorf("unsupported review recovery projection %q", selected)
-		}
 	}
 	// Issue #2394: a recovery successor declares scope exactly the way a fresh
 	// START does, so it never re-sweeps the worktree either.

@@ -361,8 +361,11 @@ func TestReviewRecoverAdoptsExplicitWorkspaceOverlayBase(t *testing.T) {
 	declaredBase := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	declaredBaseTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", declaredBase+"^{tree}"))
 	args := []string{"--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID, "--expected-predecessor-revision", predecessor.Revision,
-		"--successor-lineage", "overlay-explicit-base-successor", "--disposition", "scope_changed", "--reason", "base advanced", "--actor", "maintainer", "--base-ref", declaredBase}
+		"--successor-lineage", "overlay-explicit-base-successor", "--disposition", "scope_changed", "--reason", "base advanced", "--actor", "maintainer", "--base-ref", declaredBase, "--workspace-overlay"}
 
+	if err := RunReviewRecover(append(args, "--projection", "staged"), io.Discard); err == nil {
+		t.Fatal("ordinary workspace-overlay predecessor accepted staged projection")
+	}
 	if err := RunReviewRecover(args, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +378,7 @@ func TestReviewRecoverAdoptsExplicitWorkspaceOverlayBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := successor.State.InitialSnapshot
-	if snapshot.Kind != reviewtransaction.TargetBaseWorkspaceOverlay || snapshot.BaseTree != declaredBaseTree || snapshot.BaseTree == predecessor.State.InitialSnapshot.BaseTree || snapshot.Identity == predecessor.State.InitialSnapshot.Identity {
+	if snapshot.Kind != reviewtransaction.TargetBaseWorkspaceOverlay || facadeProjection(snapshot.Projection) != reviewtransaction.ProjectionWorkspace || snapshot.BaseTree != declaredBaseTree || snapshot.BaseTree == predecessor.State.InitialSnapshot.BaseTree || snapshot.Identity == predecessor.State.InitialSnapshot.Identity {
 		t.Fatalf("recovered overlay snapshot = %#v", snapshot)
 	}
 	assessment, err := reviewtransaction.AssessCompactGateTarget(context.Background(), repo, successor.State, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply})

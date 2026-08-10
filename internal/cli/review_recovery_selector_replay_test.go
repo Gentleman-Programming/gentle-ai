@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -85,20 +84,6 @@ func TestStatusAcceptsNormalizedOrdinaryWorkspaceOverlaySelectors(t *testing.T) 
 	status := selectorTransitionStatus(t, repo, "--base-ref", base, "--projection", "workspace", "--workspace-overlay")
 	if status.Projection.Kind != reviewtransaction.TargetBaseWorkspaceOverlay || status.Projection.Projection != reviewtransaction.ProjectionWorkspace {
 		t.Fatalf("normalized ordinary overlay selectors resolved %#v", status.Projection)
-	}
-}
-
-func TestReviewRecoverAcceptsNormalizedOrdinaryWorkspaceOverlaySelectors(t *testing.T) {
-	repo, predecessor := approvedWorkspaceOverlayRecoveryPredecessor(t, "selector-replay-recover-source")
-	writeReviewStartCandidate(t, repo, "new.txt", "expanded overlay\n", 0o644)
-	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD^"))
-	err := RunReviewRecover([]string{
-		"--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,
-		"--expected-predecessor-revision", predecessor.Revision, "--successor-lineage", "selector-replay-recover-successor",
-		"--disposition", "scope_changed", "--base-ref", base, "--projection", "workspace", "--workspace-overlay",
-	}, io.Discard)
-	if err != nil {
-		t.Fatalf("normalized ordinary overlay RECOVER: %v", err)
 	}
 }
 
