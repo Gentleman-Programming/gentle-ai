@@ -103,6 +103,48 @@ func TestMergeJSONFileDoesNotApplyOpenCodeMigration(t *testing.T) {
 	}
 }
 
+func TestKilocodeNamedProfileUsesToolsSchema(t *testing.T) {
+	home := t.TempDir()
+	profile := model.Profile{Name: "fast"}
+	if _, err := Inject(home, kilocodeAdapter(), model.SDDModeMulti, InjectOptions{Profiles: []model.Profile{profile}}); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settings, err := os.ReadFile(filepath.Join(home, ".config", "kilo", "opencode.json"))
+	must(t, err)
+	var root map[string]any
+	must(t, json.Unmarshal(settings, &root))
+	agents := root["agent"].(map[string]any)
+
+	orchestrator := agents["sdd-orchestrator-fast"].(map[string]any)
+	wantOrchestratorTools := map[string]any{"read": true, "write": true, "edit": true, "bash": true, "question": true, "task": true}
+	if !reflect.DeepEqual(orchestrator["tools"], wantOrchestratorTools) {
+		t.Fatalf("named Kilocode orchestrator tools = %#v, want %#v", orchestrator["tools"], wantOrchestratorTools)
+	}
+	permission := orchestrator["permission"].(map[string]any)
+	for _, denied := range []string{"edit", "write", "bash"} {
+		if _, exists := permission[denied]; exists {
+			t.Errorf("named Kilocode orchestrator retained OpenCode permission.%s", denied)
+		}
+	}
+	tasks := permission["task"].(map[string]any)
+	if tasks["sdd-apply-fast"] != "allow" {
+		t.Errorf("named Kilocode orchestrator task delegation = %#v, want sdd-apply-fast allow", tasks)
+	}
+	if _, exists := tasks["sdd-apply"]; exists {
+		t.Errorf("named Kilocode orchestrator delegated to unsuffixed phase: %#v", tasks)
+	}
+
+	phase := agents["sdd-apply-fast"].(map[string]any)
+	wantPhaseTools := map[string]any{"read": true, "write": true, "edit": true, "bash": true}
+	if !reflect.DeepEqual(phase["tools"], wantPhaseTools) {
+		t.Errorf("named Kilocode phase tools = %#v, want %#v", phase["tools"], wantPhaseTools)
+	}
+	if _, exists := phase["permission"]; exists {
+		t.Errorf("named Kilocode phase retained OpenCode permission: %#v", phase["permission"])
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

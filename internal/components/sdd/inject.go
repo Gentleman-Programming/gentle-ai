@@ -553,6 +553,12 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				if profileErr != nil {
 					return InjectionResult{}, fmt.Errorf("generate profile overlay %q: %w", profile.Name, profileErr)
 				}
+				if adapter.Agent() == model.AgentKilocode {
+					profileOverlay, profileErr = restoreKilocodeManagedAgentToolsInOverlay(profileOverlay)
+					if profileErr != nil {
+						return InjectionResult{}, fmt.Errorf("restore Kilocode profile tools %q: %w", profile.Name, profileErr)
+					}
+				}
 				profileResult, profileErr := mergeSettings(settingsPath, profileOverlay)
 				if profileErr != nil {
 					return InjectionResult{}, fmt.Errorf("merge profile overlay %q: %w", profile.Name, profileErr)
@@ -980,30 +986,58 @@ func extractManagedSection(content, sectionID string) string {
 // schema. Permission migration is owned by OpenCode and must not change this
 // compatible provider's output.
 func restoreKilocodeManagedAgentTools(agentsMap map[string]any) {
-	if orchestrator, ok := agentsMap["gentle-orchestrator"].(map[string]any); ok {
-		orchestrator["tools"] = map[string]any{"__replace__": map[string]any{"read": true, "write": true, "edit": true, "bash": true, "question": true, "task": true}}
-		if permission, ok := orchestrator["permission"].(map[string]any); ok {
-			delete(permission, "edit")
-			delete(permission, "write")
-			delete(permission, "bash")
+	for name, raw := range agentsMap {
+		agent, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		switch {
+		case name == "gentle-orchestrator" || strings.HasPrefix(name, "sdd-orchestrator-"):
+			agent["tools"] = map[string]any{"__replace__": map[string]any{"read": true, "write": true, "edit": true, "bash": true, "question": true, "task": true}}
+			if permission, ok := agent["permission"].(map[string]any); ok {
+				delete(permission, "edit")
+				delete(permission, "write")
+				delete(permission, "bash")
+			}
+		case isKilocodeProfilePhase(name):
+			agent["tools"] = map[string]any{"read": true, "write": true, "edit": true, "bash": true}
+			delete(agent, "permission")
+		case name == "jd-judge-a" || name == "jd-judge-b" || strings.HasPrefix(name, "jd-judge-a-") || strings.HasPrefix(name, "jd-judge-b-"):
+			agent["tools"] = map[string]any{"read": true, "bash": true}
+			delete(agent, "permission")
+		case name == "jd-fix-agent" || strings.HasPrefix(name, "jd-fix-agent-"):
+			agent["tools"] = map[string]any{"read": true, "write": true, "edit": true, "bash": true}
+			delete(agent, "permission")
 		}
 	}
-	for _, name := range subAgentPhaseOrder {
-		if phase, ok := agentsMap[name].(map[string]any); ok {
-			phase["tools"] = map[string]any{"read": true, "write": true, "edit": true, "bash": true}
-			delete(phase, "permission")
+}
+
+func restoreKilocodeManagedAgentToolsInOverlay(overlayBytes []byte) ([]byte, error) {
+	var overlay map[string]any
+	if err := json.Unmarshal(overlayBytes, &overlay); err != nil {
+		return nil, fmt.Errorf("unmarshal Kilocode profile overlay: %w", err)
+	}
+	agentsMap, ok := overlay["agent"].(map[string]any)
+	if !ok {
+		return overlayBytes, nil
+	}
+	restoreKilocodeManagedAgentTools(agentsMap)
+
+	result, err := json.MarshalIndent(overlay, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal Kilocode profile overlay: %w", err)
+	}
+	return append(result, '\n'), nil
+}
+
+func isKilocodeProfilePhase(name string) bool {
+	for _, phase := range subAgentPhaseOrder {
+		if name == phase || strings.HasPrefix(name, phase+"-") {
+			return true
 		}
 	}
-	for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
-		if judge, ok := agentsMap[name].(map[string]any); ok {
-			judge["tools"] = map[string]any{"read": true, "bash": true}
-			delete(judge, "permission")
-		}
-	}
-	if fixer, ok := agentsMap["jd-fix-agent"].(map[string]any); ok {
-		fixer["tools"] = map[string]any{"read": true, "write": true, "edit": true, "bash": true}
-		delete(fixer, "permission")
-	}
+	return false
 }
 
 func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any, usePermissions bool) {
