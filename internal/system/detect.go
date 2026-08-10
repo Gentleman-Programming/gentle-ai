@@ -249,7 +249,7 @@ func CodeGraphPlatformSupported() bool {
 	if IsAndroid() {
 		return false
 	}
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+	if !IsSupportedOS(runtime.GOOS) {
 		return false
 	}
 	// Only amd64 and arm64 have prebuilt binaries published.
