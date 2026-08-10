@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -78,7 +79,7 @@ func captureNewLineageLensResults(t *testing.T, repo, lineage string, lenses []s
 		}
 
 		inputPath := filepath.Join(t.TempDir(), lens+".json")
-		payload := `{"subject_hash":"` + preflight.SubjectHash + `","findings":[],"evidence":["reviewed"]}`
+		payload := `{"subject_hash":"` + preflight.SubjectHash + `","inspection":{"status":"completed","paths":["lib/` + lineage + `.go"]},"findings":[],"evidence":["reviewed"]}`
 		if err := os.WriteFile(inputPath, []byte(payload), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +119,7 @@ func TestReviewFacadeCaptureResultNewLineage_InputPreflightDoesNotCapture(t *tes
 	}
 	gitBefore := runReviewCLIGit(t, repo, "status", "--porcelain=v1")
 	input := filepath.Join(t.TempDir(), "result.json")
-	if err := os.WriteFile(input, []byte(`{"subject_hash":"`+wantSubject+`","findings":[],"evidence":["reviewed"]}`), 0o600); err != nil {
+	if err := os.WriteFile(input, []byte(`{"subject_hash":"`+wantSubject+`","inspection":{"status":"completed","paths":["lib/`+lineage+`.go"]},"findings":[],"evidence":["reviewed"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	args := []string{
@@ -156,6 +157,38 @@ func TestReviewFacadeCaptureResultNewLineage_InputPreflightDoesNotCapture(t *tes
 	after, found, err := reviewtransaction.DiscoverNewLineage(t.Context(), repo, lineage)
 	if err != nil || !found || len(after.Authority.CapturedResults) != 1 {
 		t.Fatalf("real capture did not persist normally: %#v, %t, %v", after, found, err)
+	}
+}
+
+func TestReviewFacadeCaptureResultNewLineage_InputPreflightRejectsForeignSubjectHash(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	const lineage = "new-lineage-foreign-subject-preflight"
+	started := startMediumTierNewLineage(t, repo, lineage)
+	lens := started.SelectedLenses[0]
+	before, found, err := reviewtransaction.DiscoverNewLineage(t.Context(), repo, lineage)
+	if err != nil || !found {
+		t.Fatalf("discover new-lineage authority: %#v, %t, %v", before, found, err)
+	}
+	wantSubject := reviewtransaction.NewLineageArtifactSubjectHash(before.Authority, lens, 0)
+	foreignSubject := "sha256:" + strings.Repeat("0", 64)
+	input := filepath.Join(t.TempDir(), "foreign-subject.json")
+	if err := os.WriteFile(input, []byte(`{"subject_hash":"`+foreignSubject+`","inspection":{"status":"completed","paths":["lib/`+lineage+`.go"]},"findings":[],"evidence":["reviewed"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	err = RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", lineage, "--target", "unused-for-new-lineage",
+		"--lens", lens, "--order", "0", "--input", input, "--preflight",
+	}, &output)
+	if err == nil || !strings.Contains(err.Error(), "subject hash") {
+		t.Fatalf("foreign subject hash preflight error = %v, want subject-hash binding refusal", err)
+	}
+	if got := output.Len(); got != 0 {
+		t.Fatalf("foreign subject hash preflight emitted %d bytes, want none", got)
+	}
+	if wantSubject == foreignSubject {
+		t.Fatal("test fixture accidentally used the provider-owned subject hash")
 	}
 }
 
@@ -228,13 +261,9 @@ func TestReviewFacadeCaptureResultNewLineage_MediumTierFinalizeAllowsAllFiveGate
 // reviewer-reported, deterministic, candidate-introduced BLOCKER never
 // reached AdmitCandidateCausalFindings, and finalize --captured-results
 // issued `approved` where the identical input escalates on the
-// --admission-findings channel. This test submits the identical BLOCKER
-// shape the verify report used (severity BLOCKER, evidence_class
-// deterministic, causal_disposition introduced) through the real capture
-// CLI and asserts finalize now escalates with the finding admitted -- the
-// SAME outcome (blocks) the v2/compact path reaches as correction_required
-// and the v3 --admission-findings channel already reached as escalated.
-func TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates(t *testing.T) {
+// --admission-findings channel. S1 stops at capture: it must persist the
+// provider-derived carrier, while replay/finalize projection remains S2.
+func TestReviewFacadeCaptureResultNewLineage_PersistsCandidateCausalCarrier(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "candidate-causal-blocker-lineage"
@@ -254,17 +283,18 @@ func TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates(t *
 	inputPath := filepath.Join(t.TempDir(), "blocker.json")
 	payload := `{
 		"subject_hash": "` + preflight.SubjectHash + `",
+		"inspection": {"status": "completed", "paths": ["lib/candidate-causal-blocker-lineage.go"]},
 		"findings": [{
 			"id": "R3-boom-div-zero",
 			"lens": "` + lens + `",
-			"location": "lib/boom.go:1",
+		"location": "lib/candidate-causal-blocker-lineage.go:1",
 			"severity": "BLOCKER",
 			"claim": "candidate introduces a division by zero",
-			"proof_refs": ["lib/boom.go:1"],
+			"proof_refs": ["lib/candidate-causal-blocker-lineage.go:1"],
 			"evidence_class": "deterministic",
 			"causal_disposition": "introduced"
 		}],
-		"evidence": ["reviewed lib/boom.go and confirmed the divide-by-zero"]
+		"evidence": ["reviewed lib/candidate-causal-blocker-lineage.go and confirmed the divide-by-zero"]
 	}`
 	if err := os.WriteFile(inputPath, []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
@@ -277,17 +307,20 @@ func TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates(t *
 		t.Fatalf("capture-result with a candidate-causal BLOCKER: %v\n%s", err, captureOut.String())
 	}
 
-	var finalizeOut bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--captured-results=true"}, &finalizeOut); err != nil {
-		t.Fatalf("finalize after capturing a candidate-causal BLOCKER: %v\n%s", err, finalizeOut.String())
+	store, err := reviewtransaction.NewLineageAuthorityStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatalf("open captured authority: %v", err)
 	}
-	var finalized ReviewFacadeFinalizeNewLineageResult
-	decodeStrictReviewJSON(t, finalizeOut.Bytes(), &finalized)
-	if finalized.State != reviewtransaction.NewLineageStateEscalated {
-		t.Fatalf("finalize after a captured candidate-causal BLOCKER = %q, want escalated (CRITICAL-E: a captured BLOCKER must not silently approve)", finalized.State)
+	record, err := store.Load()
+	if err != nil {
+		t.Fatalf("load captured authority: %v", err)
 	}
-	if len(finalized.AdmittedFindingIDs) != 1 || finalized.AdmittedFindingIDs[0] != "R3-boom-div-zero" {
-		t.Fatalf("admitted_finding_ids = %v, want exactly [R3-boom-div-zero]", finalized.AdmittedFindingIDs)
+	if len(record.Authority.CapturedResults) != 1 {
+		t.Fatalf("captured results = %d, want 1", len(record.Authority.CapturedResults))
+	}
+	findings := record.Authority.CapturedResults[0].Provider.Findings
+	if len(findings) != 1 || findings[0].FindingID != "R3-boom-div-zero" || findings[0].Classification != reviewtransaction.ProviderCandidateCausal {
+		t.Fatalf("persisted provider findings = %#v, want one candidate-causal finding", findings)
 	}
 }
 
@@ -317,17 +350,18 @@ func TestReviewFacadeCaptureResultNewLineage_NonCausalFindingDoesNotBlock(t *tes
 	inputPath := filepath.Join(t.TempDir(), "pre-existing.json")
 	payload := `{
 		"subject_hash": "` + preflight.SubjectHash + `",
+		"inspection": {"status": "completed", "paths": ["lib/non-causal-finding-lineage.go"]},
 		"findings": [{
 			"id": "pre-existing-finding",
 			"lens": "` + lens + `",
-			"location": "lib/legacy.go:1",
+		"location": "lib/non-causal-finding-lineage.go:1",
 			"severity": "WARNING",
 			"claim": "pre-existing issue, not introduced by this candidate",
-			"proof_refs": ["lib/legacy.go:1"],
+			"proof_refs": ["lib/non-causal-finding-lineage.go:1"],
 			"evidence_class": "deterministic",
 			"causal_disposition": "pre_existing"
 		}],
-		"evidence": ["reviewed lib/legacy.go"]
+		"evidence": ["reviewed lib/non-causal-finding-lineage.go"]
 	}`
 	if err := os.WriteFile(inputPath, []byte(payload), 0o644); err != nil {
 		t.Fatal(err)

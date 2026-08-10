@@ -119,10 +119,11 @@ type NewLineageAuthority struct {
 // no reopen) -- only the findings themselves, fed into the existing
 // AdmitCandidateCausalFindings at finalize time.
 type NewLineageCapturedResult struct {
-	Lens        string            `json:"lens"`
-	Order       int               `json:"order"`
-	SubjectHash string            `json:"subject_hash"`
-	Findings    []FindingEvidence `json:"findings,omitempty"`
+	Lens        string                `json:"lens"`
+	Order       int                   `json:"order"`
+	SubjectHash string                `json:"subject_hash"`
+	Findings    []FindingEvidence     `json:"findings,omitempty"`
+	Provider    ProviderCausalCarrier `json:"provider,omitempty"`
 }
 
 // CapturedLensNames returns the plain lens-name list
@@ -222,6 +223,17 @@ func (authority NewLineageAuthority) Validate() error {
 		for _, finding := range captured.Findings {
 			if strings.TrimSpace(finding.FindingID) == "" {
 				return errors.New("new-lineage authority captured findings must carry a non-empty finding id") // refusal:by-design world-action: captured findings are only ever written by AuthorityStore.CaptureLensResult from an already-decoded reviewer result; a malformed entry here means in-process corruption, not something an operator command repairs
+			}
+		}
+		if captured.Provider.SubjectHash != "" {
+			if err := captured.Provider.Validate(); err != nil {
+				return fmt.Errorf("captured provider carrier: %w", err)
+			}
+			if captured.Provider.SubjectHash != captured.SubjectHash || captured.Provider.CandidateIdentity != authority.CandidateIdentity {
+				return errors.New("captured provider carrier subject does not match result") // refusal:by-design operator-knowledge: persisted carrier binding is contradictory
+			}
+			if err := captured.Provider.ArtifactBinding.Validate(authority, captured.Lens, captured.Order, captured.SubjectHash); err != nil {
+				return fmt.Errorf("captured provider artifact binding: %w", err)
 			}
 		}
 	}

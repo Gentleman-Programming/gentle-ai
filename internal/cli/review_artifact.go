@@ -969,10 +969,8 @@ func reviewArtifactModeSafeForOS(mode os.FileMode, directory bool, goos string) 
 // FrozenCandidateContext/reopen machinery, not rebuilt for v3 per the
 // coordinator's minimal-capture-primitive decision -- just enough to
 // confirm which lens/order was captured and under what subject hash. The
-// reviewer's own findings ARE captured and persisted (C-E, fix cycle 3,
-// newLineageCapturedFindings below) even though this response does not echo
-// them back; the response shape reports the CAPTURE binding, not the
-// admission consequence, which is decided at finalize.
+// the provider carrier is captured and persisted even though this response
+// does not echo it back; the response shape reports the capture binding.
 type ReviewFacadeCaptureResultNewLineageResult struct {
 	Operation     string `json:"operation"`
 	LineageID     string `json:"lineage_id"`
@@ -982,21 +980,13 @@ type ReviewFacadeCaptureResultNewLineageResult struct {
 	Preflight     bool   `json:"preflight,omitempty"`
 }
 
-// newLineageCapturedFindings converts the reviewer-contract wire shape
-// (facadeFinding, the SAME shape v2's own reviewer results use) into the
-// reviewtransaction admission shape (FindingEvidence, the SAME shape
-// --admission-findings already reads from a caller-supplied file) -- C-E,
-// Wave 5 fix cycle 3: capture-result validates and persists findings, and
-// finalize feeds them into the EXISTING AdmitCandidateCausalFindings, reused
-// rather than duplicated. ProofRefs (a list) joins into Proof (a single
-// string) with "; ", matching the single free-text Proof field
-// FindingEvidence has always carried for the --admission-findings channel.
-func newLineageCapturedFindings(findings []facadeFinding) []reviewtransaction.FindingEvidence {
-	converted := make([]reviewtransaction.FindingEvidence, len(findings))
+// newLineageProviderClaims converts reviewer findings into claims. The
+// provider derives classification from the frozen Git trees.
+func newLineageProviderClaims(findings []facadeFinding) []reviewtransaction.ProviderCausalEvidence {
+	converted := make([]reviewtransaction.ProviderCausalEvidence, len(findings))
 	for index, finding := range findings {
-		converted[index] = reviewtransaction.FindingEvidence{
-			FindingID: finding.ID, Severity: finding.Severity, Class: finding.EvidenceClass, Causality: finding.CausalDisposition,
-			Proof: strings.Join(finding.ProofRefs, "; "),
+		converted[index] = reviewtransaction.ProviderCausalEvidence{
+			FindingID: finding.ID, Location: finding.Location, ProofRefs: append([]string(nil), finding.ProofRefs...),
 		}
 	}
 	return converted
@@ -1053,7 +1043,11 @@ func runReviewFacadeCaptureResultNewLineage(
 	if result.Findings == nil || result.Evidence == nil {
 		return reviewPreflightError(errors.New("reviewer result requires explicit findings and evidence arrays"))
 	}
-	if err := reviewtransaction.ValidateNewLineageLensResult(authority, lens, order, result.SubjectHash, newLineageCapturedFindings(result.Findings)); err != nil {
+	if result.SubjectHash != wantSubject {
+		return reviewPreflightError(fmt.Errorf("reviewer result subject hash does not match the provider-owned authority; refresh the binding with `gentle-ai review capture-result --cwd <repo> --lineage %s --target <target> --lens %s --order %d --preflight`", lineage, lens, order))
+	}
+	claims := newLineageProviderClaims(result.Findings)
+	if _, err := reviewtransaction.DeriveProviderCausalCarrier(ctx, root, result.SubjectHash, authority.CandidateIdentity, claims); err != nil {
 		return reviewPreflightError(err)
 	}
 	if preflight {
@@ -1066,7 +1060,7 @@ func runReviewFacadeCaptureResultNewLineage(
 	if err != nil {
 		return err
 	}
-	if _, err := store.CaptureLensResult(ctx, record.Revision, lens, order, result.SubjectHash, newLineageCapturedFindings(result.Findings)); err != nil {
+	if _, err := store.CaptureLensResultWithProviderEvidenceAndInspection(ctx, record.Revision, lens, order, result.SubjectHash, result.Inspection, claims); err != nil {
 		return reviewPreflightError(err)
 	}
 	return encodeReviewJSON(stdout, ReviewFacadeCaptureResultNewLineageResult{

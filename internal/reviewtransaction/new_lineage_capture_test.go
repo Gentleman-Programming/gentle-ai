@@ -289,3 +289,73 @@ func TestCaptureLensResult_RefusesSevereFindingMissingEvidenceOrCausality(t *tes
 		}
 	})
 }
+
+func TestCaptureLensResult_DerivesAndBindsProviderCarrier(t *testing.T) {
+	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
+	subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
+	claims := []ProviderCausalEvidence{{
+		FindingID: "R3-002", Location: "tracked.txt:1",
+		ProofRefs: []string{"tracked.txt:1", " tracked.txt:1 "},
+	}, {
+		FindingID: "R3-001", Location: "tracked.txt:1",
+		ProofRefs: []string{"tracked.txt:1"},
+	}}
+	inspection := ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: []string{}}
+
+	updated, err := store.CaptureLensResultWithProviderEvidenceAndInspection(
+		context.Background(), record.Revision, "review-reliability", 0, subject, inspection, claims,
+	)
+	if err != nil {
+		t.Fatalf("provider capture: %v", err)
+	}
+	if len(updated.Authority.CapturedResults) != 1 {
+		t.Fatalf("captured results = %#v", updated.Authority.CapturedResults)
+	}
+	carrier := updated.Authority.CapturedResults[0].Provider
+	if carrier.SubjectHash != subject || carrier.ArtifactBinding.Subject.SubjectHash != subject {
+		t.Fatalf("carrier binding = %#v, want subject %q", carrier, subject)
+	}
+	if len(carrier.Findings) != 2 || carrier.Findings[0].FindingID != "R3-001" || carrier.Findings[1].FindingID != "R3-002" {
+		t.Fatalf("carrier findings = %#v, want canonical finding order", carrier.Findings)
+	}
+	if carrier.Findings[0].Classification != ProviderUnknown || carrier.Findings[1].Classification != ProviderUnknown {
+		t.Fatalf("carrier classifications = %#v, want frozen-tree derived unknown", carrier.Findings)
+	}
+	if carrier.Findings[1].ProofRefs[0] != "tracked.txt:1" || carrier.Findings[1].EvidenceDigest == "" || carrier.AggregateDigest == "" {
+		t.Fatalf("carrier canonical evidence = %#v", carrier)
+	}
+	if err := carrier.Validate(); err != nil {
+		t.Fatalf("persisted carrier failed validation: %v", err)
+	}
+}
+
+func TestNewLineageArtifactBinding_InspectionExactlyCoversFrozenManifest(t *testing.T) {
+	_, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
+	binding := NewLineageArtifactBinding{
+		Subject: NewLineageArtifactSubject{
+			Schema: "gentle-ai.new-lineage-artifact-subject/v1", SubjectHash: NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0),
+			LineageID: record.Authority.LineageID, BaseTree: record.Authority.CandidateIdentity.BaseTree, CandidateTree: record.Authority.CandidateIdentity.CandidateTree,
+			Lens: "review-reliability", SelectedOrder: 0,
+		},
+		FrozenPathManifest: []ChangedPathManifestEntry{{Path: "tracked.txt", Status: CandidatePathModified, OldMode: "100644", NewMode: "100644"}},
+	}
+
+	t.Run("accepted coverage is canonical and complete", func(t *testing.T) {
+		binding.Inspection = ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: []string{"tracked.txt"}}
+		if err := binding.Validate(record.Authority, "review-reliability", 0, binding.Subject.SubjectHash); err != nil {
+			t.Fatalf("complete inspection was refused: %v", err)
+		}
+	})
+	t.Run("incomplete coverage is refused", func(t *testing.T) {
+		binding.Inspection = ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: nil}
+		if err := binding.Validate(record.Authority, "review-reliability", 0, binding.Subject.SubjectHash); err == nil {
+			t.Fatal("completed inspection with a missing frozen path was accepted")
+		}
+	})
+	t.Run("foreign coverage is refused", func(t *testing.T) {
+		binding.Inspection = ArtifactInspection{Status: ArtifactInspectionCompleted, Paths: []string{"other.txt"}}
+		if err := binding.Validate(record.Authority, "review-reliability", 0, binding.Subject.SubjectHash); err == nil {
+			t.Fatal("completed inspection with a foreign path was accepted")
+		}
+	})
+}
