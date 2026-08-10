@@ -709,12 +709,12 @@ func rddModeStatus(
 	gate RDDDeliveryGate,
 ) RDDModeStatus {
 	status := RDDModeStatus{
-		Schema:     RDDModeStatusSchema,
-		Global:     globalMode,
-		CloneLocal: RDDModeUnset,
-		Effective:  RDDModeOff,
-		Source:     RDDModeSourceDefault,
-		Controller: controller,
+		Schema:       RDDModeStatusSchema,
+		Global:       globalMode,
+		CloneLocal:   RDDModeUnset,
+		Effective:    RDDModeOff,
+		Source:       RDDModeSourceDefault,
+		Controller:   controller,
 		DeliveryGate: gate,
 	}
 	if present {
