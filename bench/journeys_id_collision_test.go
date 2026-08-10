@@ -36,6 +36,7 @@ func journeySources() []journeySource {
 		{"journeys_zero_delta.go", zeroDeltaJourneys()},
 		{"journeys_local_gate_advance.go", localGateBaseAdvanceJourneys()},
 		{"journeys_intended_untracked.go", intendedUntrackedJourneys()},
+		{"journeys_staged_delivery_status.go", stagedDeliveryStatusJourneys()},
 		{"journeys_capture_result_dry_run.go", captureResultDryRunJourneys()},
 		{"journeys_finding_id_prefix.go", findingIDPrefixJourneys()},
 		{"journeys_rescope_write_guard.go", rescopeWriteGuardJourneys()},

@@ -76,6 +76,70 @@ func TestValidatingEvidenceCollectionUnblocksFinalizeAndPreCommit(t *testing.T) 
 	}
 }
 
+func TestApprovedWorkspaceReceiptRequiresStagedStatusBeforePreCommitValidate(t *testing.T) {
+	repo, started, store, record, _ := capturedArtifact(t)
+	finalize := []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID, "--captured-results"}
+	var waiting bytes.Buffer
+	if err := RunReviewFacadeFinalize(finalize, &waiting); err != nil {
+		t.Fatal(err)
+	}
+	var validating ReviewIntegrationFinalizeResult
+	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, waiting.Bytes()).Result, &validating)
+	if validating.State != reviewtransaction.StateValidating || validating.NextTransition == nil || validating.NextTransition.Kind != reviewNextTransitionCollect {
+		t.Fatalf("captured-results finalize = %#v", validating.NextTransition)
+	}
+	evidence := filepath.Join(t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(evidence, []byte("verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReview([]string{"capture-evidence", "--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--expected-revision", validating.StoreRevision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidence}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	var approvedOutput bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID, "--captured-evidence"}, &approvedOutput); err != nil {
+		t.Fatal(err)
+	}
+	var approved ReviewIntegrationFinalizeResult
+	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, approvedOutput.Bytes()).Result, &approved)
+	if approved.State != reviewtransaction.StateApproved {
+		t.Fatalf("captured-evidence finalize state = %q, want approved", approved.State)
+	}
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var workspaceStatus bytes.Buffer
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID}, &workspaceStatus); err != nil {
+		t.Fatal(err)
+	}
+	var workspace ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, workspaceStatus.Bytes(), &workspace)
+	if workspace.Projection.Projection != reviewtransaction.ProjectionWorkspace || workspace.NextTransition == nil || workspace.NextTransition.Kind != reviewNextTransitionStop || workspace.NextTransition.ReasonCode != "staged_delivery_candidate_required" || workspace.NextTransition.Execute != nil || workspace.NextTransition.Collect != nil {
+		t.Fatalf("workspace STATUS transition = %#v", workspace.NextTransition)
+	}
+	if workspace.ValidationRequest != nil {
+		t.Fatalf("workspace STATUS exposed validation request: %#v", workspace.ValidationRequest)
+	}
+	if after, err := os.ReadFile(store.StatePath()); err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("workspace STATUS mutated authority: %v", err)
+	}
+
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	var stagedStatus bytes.Buffer
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID, "--projection", string(reviewtransaction.ProjectionStaged)}, &stagedStatus); err != nil {
+		t.Fatal(err)
+	}
+	var staged ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, stagedStatus.Bytes(), &staged)
+	if staged.Projection.Projection != reviewtransaction.ProjectionStaged || staged.NextTransition == nil || staged.NextTransition.Kind != reviewNextTransitionExecute || staged.NextTransition.Execute == nil || staged.NextTransition.Execute.Operation != "review.validate" {
+		t.Fatalf("staged STATUS transition = %#v", staged.NextTransition)
+	}
+	if err := RunReview([]string{"validate", "--cwd", repo, "--lineage", started.LineageID, "--gate", string(reviewtransaction.GatePreCommit)}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("pre-commit after exact staged STATUS: %v", err)
+	}
+}
+
 func TestFinalizeNextTransitionBindsCorrectedCurrentSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -400,7 +464,12 @@ func TestReviewNextTransitionStateTable(t *testing.T) {
 		{"unchanged corrected authority", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateCorrectionRequired, reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityManualActionRequired), nil, nil, reviewNextTransitionStop, ""},
 		{"validating", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateValidating, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionCollect, ""},
 		{"pending finalize journal", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionReconcileFinalize, reviewtransaction.ReplayabilityStatusRequired), nil, nil, reviewNextTransitionStop, ""},
-		{"approved", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateApproved, reviewtransaction.TargetStatusActionValidate, reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionExecute, "review.validate"},
+		{"approved workspace pre-commit requires staged delivery", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateApproved, reviewtransaction.TargetStatusActionValidate, reviewtransaction.ReplayabilityNotReplayable), nil, nil, reviewNextTransitionStop, ""},
+		{"approved staged", func() ReviewTargetStatusResult {
+			s := status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateApproved, reviewtransaction.TargetStatusActionValidate, reviewtransaction.ReplayabilityNotReplayable)
+			s.Projection.Projection = reviewtransaction.ProjectionStaged
+			return s
+		}(), nil, nil, reviewNextTransitionExecute, "review.validate"},
 		{"invalidated", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateInvalidated, reviewtransaction.TargetStatusActionRecover, reviewtransaction.ReplayabilityManualActionRequired), nil, nil, reviewNextTransitionExecute, "review.recover"},
 		{"escalated unchanged", status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateEscalated, reviewtransaction.TargetStatusActionStop, reviewtransaction.ReplayabilityManualActionRequired), nil, nil, reviewNextTransitionStop, ""},
 		{"ambiguous", status(reviewtransaction.TargetApplicabilityAmbiguous, "", reviewtransaction.TargetStatusActionSelectLineage, reviewtransaction.ReplayabilityStatusRequired), nil, nil, reviewNextTransitionCollect, ""},
@@ -465,8 +534,12 @@ func TestReviewTransitionArgumentToken(t *testing.T) {
 			wantTokens: map[string]string{"lineage": "--lineage=review-token", "captured_results": "--captured-results=true"},
 		},
 		{
-			name:       "approved receipt gate token",
-			status:     status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateApproved, reviewtransaction.TargetStatusActionValidate, reviewtransaction.ReplayabilityNotReplayable),
+			name: "approved receipt gate token",
+			status: func() ReviewTargetStatusResult {
+				s := status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateApproved, reviewtransaction.TargetStatusActionValidate, reviewtransaction.ReplayabilityNotReplayable)
+				s.Projection.Projection = reviewtransaction.ProjectionStaged
+				return s
+			}(),
 			wantTokens: map[string]string{"lineage": "--lineage=review-token", "gate": "--gate=pre-commit"},
 		},
 		{

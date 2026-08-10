@@ -619,6 +619,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, zeroDeltaJourneys()...)
 	journeys = append(journeys, localGateBaseAdvanceJourneys()...)
 	journeys = append(journeys, intendedUntrackedJourneys()...)
+	journeys = append(journeys, stagedDeliveryStatusJourneys()...)
 	journeys = append(journeys, captureResultDryRunJourneys()...)
 	journeys = append(journeys, findingIDPrefixJourneys()...)
 	journeys = append(journeys, rescopeWriteGuardJourneys()...)

@@ -284,6 +284,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			return reviewRecoveryCollection(status, binding, input)
 		}
 		if status.Receipt.Status == ReviewReceiptPresent {
+			if input.gate() == reviewtransaction.GatePreCommit && status.Projection.Projection != reviewtransaction.ProjectionStaged {
+				return reviewStopTransition("staged_delivery_candidate_required")
+			}
 			if input.Selector != nil && input.gate() == reviewtransaction.GatePrePR && !input.Selector.PrePRRepresentable {
 				// Root 7 (#2471): the caller supplied a raw commit SHA where
 				// pre-PR needs a symbolic ref. That is a missing input, not a
@@ -1013,6 +1016,8 @@ func reviewReasonDescription(reason string) string {
 		return "Verification evidence required prior to finalization"
 	case "delivery_gate_required":
 		return "Delivery gate selection required before validation"
+	case "staged_delivery_candidate_required":
+		return "Stage the exact reviewed paths and rerun status with staged projection before pre-commit validation"
 	case "staged_workspace_overlay_recovery_unavailable":
 		return "Staged workspace overlay recovery is unavailable"
 	case "corrupted_or_unverifiable_authority":
