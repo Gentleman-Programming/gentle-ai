@@ -46,6 +46,30 @@ func TestInstallRuntimeStagePlanAddsCommunityToolStepsInSelectionOrder(t *testin
 	}
 }
 
+func TestInstallRuntimeStagePlanSkipsCodeGraphOnUnsupportedPlatform(t *testing.T) {
+	supported := false
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
+	runtime := &installRuntime{
+		homeDir:      t.TempDir(),
+		workspaceDir: "/work/project",
+		selection: model.Selection{
+			CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
+		},
+		resolved: planner.ResolvedPlan{},
+		profile:  system.PlatformProfile{},
+		state:    &runtimeState{},
+	}
+
+	plan := runtime.stagePlan()
+	for _, step := range plan.Apply {
+		if step.ID() == "community-tool:codegraph" {
+			t.Fatal("install plan on unsupported platform must not include CodeGraph community tool step")
+		}
+	}
+}
+
 func TestInstallRuntimeStagePlanKeepsPiReconcileIndependentFromOpenCode(t *testing.T) {
 	supported := true
 	system.SetCodeGraphPlatformSupportedForTest(&supported)
@@ -71,6 +95,10 @@ func TestInstallRuntimeStagePlanKeepsPiReconcileIndependentFromOpenCode(t *testi
 }
 
 func TestInstallRuntimeStagePlanDeselectionCleansOwnedPiIntegration(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	home := t.TempDir()
 	writePiInstallFixture(t, home)
 	if _, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{
@@ -192,6 +220,10 @@ func TestBackupTargetsIncludeSelectedOpenCodePluginPaths(t *testing.T) {
 }
 
 func TestCodeGraphFailureDoesNotLeaveEarlierOpenCodePluginRegistration(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
 		t.Fatal(err)
@@ -754,6 +786,10 @@ func TestPiCodeGraphMCPRuntimeClassification(t *testing.T) {
 }
 
 func TestSyncPlanIncludesPiCodeGraphReconciliationAfterComponentsWhenSelected(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	home := t.TempDir()
 	runtime, err := newSyncRuntime(home, model.Selection{
 		Agents:         []model.AgentID{model.AgentPi},

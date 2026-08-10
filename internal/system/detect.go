@@ -6,12 +6,11 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 var (
-	// codeGraphPlatformSupportedOverride allows tests to override the platform
-	// support check for CodeGraph. When set, it takes precedence over the
-	// automatic detection.
+	overrideMu                    sync.Mutex
 	codeGraphPlatformSupportedOverride *bool
 )
 
@@ -240,17 +239,27 @@ func IsAndroid() bool {
 // supported because Node.js on Android may report "android" as the platform,
 // causing the npm-shim to look for a non-existent "android-arm64" bundle.
 func CodeGraphPlatformSupported() bool {
+	overrideMu.Lock()
 	if codeGraphPlatformSupportedOverride != nil {
-		return *codeGraphPlatformSupportedOverride
+		v := *codeGraphPlatformSupportedOverride
+		overrideMu.Unlock()
+		return v
 	}
+	overrideMu.Unlock()
 	if IsAndroid() {
 		return false
 	}
-	return runtime.GOOS == "darwin" || runtime.GOOS == "linux" || runtime.GOOS == "windows"
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		return false
+	}
+	// Only amd64 and arm64 have prebuilt binaries published.
+	return runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64"
 }
 
 // SetCodeGraphPlatformSupportedForTest allows tests to override the platform
 // support check for CodeGraph. Pass nil to reset to automatic detection.
 func SetCodeGraphPlatformSupportedForTest(v *bool) {
+	overrideMu.Lock()
 	codeGraphPlatformSupportedOverride = v
+	overrideMu.Unlock()
 }

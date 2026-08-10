@@ -1748,6 +1748,31 @@ func TestSyncRuntimeAddsCodeGraphStepsOnlyWhenSelected(t *testing.T) {
 	t.Fatalf("sync backup targets should include CodeGraph guidance path when refresh step is planned; got %#v", paths)
 }
 
+func TestSyncRuntimeSkipsCodeGraphStepsOnUnsupportedPlatform(t *testing.T) {
+	supported := false
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
+	home := t.TempDir()
+	mustWriteFile(t, filepath.Join(home, ".config", "opencode", "opencode.json"), []byte(`{}`))
+
+	selected := model.Selection{
+		Agents:         []model.AgentID{model.AgentOpenCode},
+		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
+	}
+	rt, err := newSyncRuntime(home, selected)
+	if err != nil {
+		t.Fatalf("newSyncRuntime() error = %v", err)
+	}
+	plan := rt.stagePlan()
+	if hasStepID(plan.Apply, "sync:community-tool:codegraph-guidance") {
+		t.Fatal("sync plan on unsupported platform must not include CodeGraph guidance step")
+	}
+	if hasStepID(plan.Apply, "sync:community-tool:pi-codegraph") {
+		t.Fatal("sync plan on unsupported platform must not include Pi CodeGraph step")
+	}
+}
+
 func TestComponentSyncStepInjectsCodeGraphGuidanceWhenCodeGraphSelected(t *testing.T) {
 	home := t.TempDir()
 	step := componentSyncStep{
