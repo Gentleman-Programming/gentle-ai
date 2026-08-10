@@ -330,13 +330,13 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// the runtime supports is no longer overridden. Kilocode renders that shared
 	// orchestrator contract, so the hash moved again. Deliberate, not drift.
 	//
-	// The canonical artifact language contract is appended to all eight agent
-	// prompts (+458 characters each); no key is added, removed, or otherwise
-	// changed. The hash is recomputed from the rebased tree. Deliberate, not
-	// drift.
+	// The canonical reviewer proof-path contract is appended to all eight agent
+	// prompts; no key is added, removed, or otherwise changed. The hash is
+	// recomputed from the merged tree. Deliberate, not drift.
+	//
 	// The provider-defect handoff now has three candidate-scoped outcomes;
 	// Kilocode embeds it in the orchestrator prompt, so the hash moved.
-	const want = "15e21d3b3a38028f6f0607313aa11dde02ff89a7721935133cd4f961a4f672ce"
+	const want = "3f48f25f109844af0546b15e1845c2a415d9191fb444ab6bf7095914fbc8dedf"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -565,8 +565,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// because the machine now routes them as collect transitions, so the
 		// rendered protocol got 372 characters cheaper. The pins move DOWN,
 		// which is the direction this table exists to protect.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_701, maxCharacters: 24_300},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 33_046, maxCharacters: 38_500},
+		// Canonical proof-path requirements add 281 characters per rendered lens.
+		// The standard ceiling retains its margin; full-4R moves only to restore it.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_982, maxCharacters: 24_300},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_170, maxCharacters: 39_300},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

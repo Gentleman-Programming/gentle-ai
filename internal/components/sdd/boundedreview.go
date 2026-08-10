@@ -269,7 +269,7 @@ Report real user-impacting defects only. BLOCKER/CRITICAL need changed-hunk, cre
 
 ## Evidence
 
-Each finding needs path:line or contiguous path:start-end, neutral claim, evidence class, causal disposition, and concrete proof. Never invent evidence or placeholders.
+Each finding needs path:line or contiguous path:start-end, neutral claim, evidence class, causal disposition, and concrete proof. Copy the exact literal path from changed_path_manifest into finding.location. Each path-like token in proof_refs or evidence must use its own exact canonical repository-relative full path. Never use bare basenames, suffix-only or partial paths, absolute paths, or ./ or ../ forms. Never invent evidence or placeholders.
 
 ## Output
 
