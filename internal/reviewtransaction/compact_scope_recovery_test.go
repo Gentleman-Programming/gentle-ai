@@ -1001,3 +1001,87 @@ func correctionRequiredAuthorityFixture(t *testing.T, repo, lineage string) (Com
 	}
 	return state, store, record
 }
+
+// TestStartCompactAuthorityFailsClosedOnExplicitLineageForeignCorrectionRecovery pins
+// the regression class of issue #1987: when a caller supplies --lineage=<requested>
+// for an absent lineage while a foreign correction-required predecessor exists, START
+// must fail closed with errExplicitLineageForeignRecovery naming both ids, instead of
+// silently returning CompactStartRecover for the foreign predecessor. Unqualified
+// discovery (ExplicitLineage=false) must still recover the foreign predecessor so the
+// existing workflow contracts are preserved.
+func TestStartCompactAuthorityFailsClosedOnExplicitLineageForeignCorrectionRecovery(t *testing.T) {
+	repo, _, store, _ := correctionContractionRecoveryFixture(t, "compact-1987-foreign-predecessor")
+	stateBefore, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatalf("read predecessor state: %v", err)
+	}
+	recordBefore, err := store.Load()
+	if err != nil {
+		t.Fatalf("load predecessor record: %v", err)
+	}
+
+	// Explicit --lineage selector names an absent lineage id.
+	requested := newCompactTestState(t, repo, "compact-1987-foreign-probe")
+	if requested.LineageID == "compact-1987-foreign-predecessor" {
+		t.Fatal("fixture is not a foreign selector: requested lineage collides with predecessor")
+	}
+	started, startErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{
+		State: requested, ExplicitLineage: true,
+	})
+
+	// Primary assertion: fail closed with the typed error naming both ids.
+	if startErr == nil {
+		t.Fatalf("explicit START returned %#v with nil error; want errExplicitLineageForeignRecovery", started)
+	}
+	if !errors.Is(startErr, errExplicitLineageForeignRecovery) {
+		t.Fatalf("error = %v, want errors.Is(_, errExplicitLineageForeignRecovery)", startErr)
+	}
+	if !strings.Contains(startErr.Error(), "compact-1987-foreign-probe") ||
+		!strings.Contains(startErr.Error(), "compact-1987-foreign-predecessor") {
+		t.Fatalf("error message = %q, must name both requested and recovered lineage ids", startErr.Error())
+	}
+	if started.Action != "" || started.Record.State.LineageID != "" {
+		t.Fatalf("partial result returned on failure: %#v", started)
+	}
+
+	// Predecessor must remain untouched: bytes, revision, and state.
+	stateAfter, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatalf("read predecessor state after: %v", err)
+	}
+	if !bytes.Equal(stateBefore, stateAfter) {
+		t.Fatal("explicit-lineage failure changed predecessor state bytes")
+	}
+	recordAfter, err := store.Load()
+	if err != nil {
+		t.Fatalf("load predecessor record after: %v", err)
+	}
+	if recordBefore.Revision != recordAfter.Revision {
+		t.Fatalf("predecessor revision moved: before=%s after=%s", recordBefore.Revision, recordAfter.Revision)
+	}
+	if recordAfter.State.State != StateCorrectionRequired {
+		t.Fatalf("predecessor state moved: %s", recordAfter.State.State)
+	}
+
+	// Negative control: same store with ExplicitLineage=false must still operate on
+	// the foreign predecessor (preserves unqualified discovery). The specific action
+	// (CompactStartRecover vs CompactStartResumed) depends on whether the requested
+	// snapshot differs from the predecessor's; this is the existing documented
+	// behavior and the regression class must not change it.
+	unqualified, unqErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{
+		State: newCompactTestState(t, repo, "compact-1987-unqualified-probe"),
+	})
+	if unqErr != nil {
+		t.Fatalf("unqualified START error = %v, want a Recover/Resumed action against the foreign predecessor", unqErr)
+	}
+	if unqualified.Record.State.LineageID != "compact-1987-foreign-predecessor" {
+		t.Fatalf("unqualified = %#v, want operation against compact-1987-foreign-predecessor", unqualified)
+	}
+	if unqualified.Action != CompactStartRecover && unqualified.Action != CompactStartResumed {
+		t.Fatalf("unqualified action = %q, want Recover or Resumed against the foreign predecessor", unqualified.Action)
+	}
+	if errors.Is(unqErr, errExplicitLineageForeignRecovery) {
+		// Defensive: the typed error must NOT leak into the unqualified path.
+		t.Fatalf("unqualified path leaked errExplicitLineageForeignRecovery: %v", unqErr)
+	}
+}

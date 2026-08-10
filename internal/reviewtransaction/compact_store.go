@@ -70,6 +70,16 @@ var errCompactApprovedRecoveryScopeUnchanged = errors.New("approved predecessor 
 
 var errCompactRecoveryPredecessorNotInvalidated = errors.New("recovery requires an invalidated predecessor")
 
+// errExplicitLineageForeignRecovery identifies the fail-closed case where an
+// explicit --lineage selector names an absent lineage while a foreign
+// correction-required predecessor exists. START must not silently recover the
+// foreign predecessor on behalf of the named lineage; it must fail closed and
+// name both ids so the operator can issue `gentle-ai review recover
+// --predecessor-lineage=<recovered> --successor-lineage=<requested>` to bind
+// the named lineage as a successor of the existing one. Regression class for
+// issue #1987.
+var errExplicitLineageForeignRecovery = errors.New("explicit --lineage selector recovered a foreign correction-required lineage; the requested lineage remains absent — run `gentle-ai review recover --predecessor-lineage=<recovered> --successor-lineage=<requested>` to bind it")
+
 // ApprovedRecoveryScopeUnchanged reports whether err is the refusal of a
 // scope-changed recovery whose approved predecessor already approved exactly
 // the candidate the successor would freeze.
@@ -1312,7 +1322,21 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 	}
 	if len(recoveryCandidates) > 0 {
 		if len(recoveryCandidates) == 1 && len(claimants) == 0 {
-			return CompactStartResult{Record: records[recoveryCandidates[0].lineageID], Action: CompactStartRecover}, nil
+			// Fail-closed when an explicit --lineage selector names an absent
+			// lineage and global discovery recovered a foreign correction-required
+			// lineage: the named lineage must remain absent, and the caller must
+			// run review recover with --lineage=<requested> to bind it explicitly.
+			// Scoped to StateCorrectionRequired because approved-scope-changed and
+			// escalated-target-changed recovery is the documented existing
+			// contract (see TestStartCompactAuthorityRequiresRecoveryForApprovedSameScopeChangedCandidate).
+			// Regression class for issue #1987.
+			recovered := records[recoveryCandidates[0].lineageID]
+			if request.ExplicitLineage && recovered.State.State == StateCorrectionRequired &&
+				recoveryCandidates[0].lineageID != request.State.LineageID {
+				return CompactStartResult{}, fmt.Errorf("%w: requested=%q recovered=%q",
+					errExplicitLineageForeignRecovery, request.State.LineageID, recoveryCandidates[0].lineageID)
+			}
+			return CompactStartResult{Record: recovered, Action: CompactStartRecover}, nil
 		}
 		return CompactStartResult{Record: records[recoveryCandidates[0].lineageID], Action: CompactStartBlocked}, nil
 	}
@@ -1359,6 +1383,21 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 			return CompactStartResult{Record: record, Action: CompactStartReuseReceipt}, nil
 		default:
 			return CompactStartResult{Record: record, Action: CompactStartBlocked}, nil
+		}
+		// Fail-closed on the Resumed path when an explicit --lineage selector
+		// named an absent lineage and the global claimant is a foreign
+		// correction-required predecessor. The named lineage must remain
+		// absent; the caller must run `gentle-ai review recover
+		// --lineage=<requested>` to bind it. Scoped to StateCorrectionRequired
+		// to preserve documented reviewing/approved/validating resume behavior
+		// (the existing CLI tests at review_facade_test.go:526 and :602 exercise
+		// this code path with reviewing-state predecessors and expect a resume).
+		// Mirrors the guard on the CompactStartRecover path earlier in this
+		// function. Regression class for issue #1987.
+		if request.ExplicitLineage && record.State.State == StateCorrectionRequired &&
+			record.State.LineageID != request.State.LineageID {
+			return CompactStartResult{}, fmt.Errorf("%w: requested=%q recovered=%q",
+				errExplicitLineageForeignRecovery, request.State.LineageID, record.State.LineageID)
 		}
 		return CompactStartResult{Record: record, Action: CompactStartResumed,
 			LensesRequired: len(record.State.LensResults) < len(record.State.SelectedLenses)}, nil
