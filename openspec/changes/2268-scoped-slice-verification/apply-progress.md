@@ -198,8 +198,8 @@ in the deliverable risks.
 - [x] T2.6 — assignment flag round-trip (covered by runtime_ledger_assignment_test.go from PR1 + Commit 3 wiring)
 - [x] T2.7 — `--assigned-requirement-ids`/`--assigned-scenario-ids` on begin/acquire/rescope (Commit 3)
 - [x] T2.8 — `TestResolveSlicePassDoesNotUnlockArchive` (Commit 3) — archive isolation proven
-- [x] T2.9 — `TestResolveApplyVerifyArchiveGates` extension (whole-path remains the gate)
-- [x] T2.10 — `TestResolveFinalVerifyWaitsForAllTasks` slice variant (Commit 3)
+- [x] T2.9 — covered by existing `TestResolveApplyVerifyArchiveGates` unchanged (Commit 3) — whole-path remains the gate; no status_test.go changes needed (verified via `git diff ec5c5336..HEAD -- internal/sddstatus/status_test.go` empty)
+- [x] T2.10 — covered by new `TestResolveSlicePassDoesNotUnlockArchive` beside `TestResolveFinalVerifyWaitsForAllTasks` (Commit 3) — proves slice PASS does NOT unlock archive; archive gating stays under `resolveDependencies` only
 - [x] T2.11 — `bench/journeys_sdd_slice_verify.go` with j82 (Commit 4) — declaration only, driven-mode follow-up
 - [x] T2.12 — corpus registration in journeySources + Journeys() (Commit 4)
 - [x] T2.13 — `go build ./...`, `go vet ./...`, `gofmtcheck`, `go test ./...` (both commits green)
