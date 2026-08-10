@@ -891,6 +891,7 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 		return errors.New("RECOVER transition target kind is unsupported")
 	}
 	if result.Projection.Kind != reviewtransaction.TargetCurrentChanges && base == "" ||
+		result.Projection.Kind == reviewtransaction.TargetCurrentChanges && selectorsPresent && !hasProjection ||
 		hasProjection && projection != string(result.Projection.Projection) {
 		return errors.New("RECOVER transition selectors do not match the selected target")
 	}

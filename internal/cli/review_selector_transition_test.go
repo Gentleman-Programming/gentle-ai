@@ -692,6 +692,12 @@ func TestCurrentChangesRecoverSelectorPresenceSurvivesJSONRoundTrip(t *testing.T
 	if err := decoded.Validate(); err != nil {
 		t.Fatalf("round-tripped status validation: %v", err)
 	}
+	assertSelectorTransitionMutationRejected(t, decoded, func(arguments []ReviewTransitionArgument) []ReviewTransitionArgument {
+		return removeSelectorTransitionArgument(arguments, "projection")
+	}, true)
+	assertSelectorTransitionMutationRejected(t, decoded, func(arguments []ReviewTransitionArgument) []ReviewTransitionArgument {
+		return setSelectorTransitionArgument(arguments, "projection", "staged")
+	}, true)
 	before, _ := os.ReadFile(store.StatePath())
 	recoveredPayload := executeSelectorTransition(t, repo, decoded)
 	var recovered ReviewRecoverResult
@@ -865,14 +871,18 @@ func selectorTransitionCommandArguments(repo string, status ReviewTargetStatusRe
 	return args
 }
 
-func assertSelectorTransitionMutationRejected(t *testing.T, status ReviewTargetStatusResult, mutate func([]ReviewTransitionArgument) []ReviewTransitionArgument) {
+func assertSelectorTransitionMutationRejected(t *testing.T, status ReviewTargetStatusResult, mutate func([]ReviewTransitionArgument) []ReviewTransitionArgument, normalized ...bool) {
 	t.Helper()
 	invalid := status
 	transition := *status.NextTransition
 	execution := *status.NextTransition.Execute
 	execution.Arguments = mutate(append([]ReviewTransitionArgument(nil), execution.Arguments...))
+	if len(normalized) != 0 && execution.SelectorArguments != nil {
+		selectors := mutate(append([]ReviewTransitionArgument(nil), (*execution.SelectorArguments)...))
+		execution.SelectorArguments = &selectors
+	}
 	transition.Execute, invalid.NextTransition = &execution, &transition
-	if err := invalid.Validate(); err == nil {
+	if err := invalid.validateSelectorNextTransition(); len(normalized) != 0 && err == nil || len(normalized) == 0 && invalid.Validate() == nil {
 		t.Fatalf("status accepted invalid transition arguments: %#v", execution.Arguments)
 	}
 }

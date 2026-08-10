@@ -9,7 +9,6 @@ import (
 )
 
 func TestRecoveryAuthorizationCollectionPreservesNormalizedSelectors(t *testing.T) {
-	t.Parallel()
 	tests := []struct {
 		name     string
 		recovery reviewtransaction.Target
@@ -35,7 +34,8 @@ func TestRecoveryAuthorizationCollectionPreservesNormalizedSelectors(t *testing.
 			status := recoverySelectorReplayStatus(t, test.recovery)
 			input := reviewNextTransitionInput{Selector: &reviewTransitionSelector{Projection: reviewtransaction.ProjectionStaged, Recovery: &test.recovery}}
 			collectedTransition := newReviewNextTransition(status, nil, nil, nil, nil, input)
-			collected := decodeRecoverySelectorReplayTransition(t, collectedTransition)
+			var collected ReviewNextTransition
+			decodeStrictReviewJSON(t, []byte(mustReviewJSON(t, collectedTransition)), &collected)
 			if collected.Kind != reviewNextTransitionCollect || collected.Collect == nil || len(collected.Collect.Inputs) != 1 || collected.Collect.Inputs[0].SelectorArguments == nil || !reflect.DeepEqual(*collected.Collect.Inputs[0].SelectorArguments, test.want) {
 				t.Fatalf("recovery authorization transition = %#v, want selectors %#v", collected, test.want)
 			}
@@ -57,7 +57,8 @@ func TestRecoveryAuthorizationCollectionPreservesNormalizedSelectors(t *testing.
 			input.Successor, input.Actor, input.Reason = successor, actor, reason
 			input.Authorization = reviewTransitionRecoveryAuthorization(binding, successor, actor, reason)
 			authorizedTransition := newReviewNextTransition(status, nil, nil, nil, nil, input)
-			authorized := decodeRecoverySelectorReplayTransition(t, authorizedTransition)
+			var authorized ReviewNextTransition
+			decodeStrictReviewJSON(t, []byte(mustReviewJSON(t, authorizedTransition)), &authorized)
 			if authorized.Kind != reviewNextTransitionExecute || authorized.Execute == nil || authorized.Execute.SelectorArguments == nil || !reflect.DeepEqual(*authorized.Execute.SelectorArguments, test.want) {
 				t.Fatalf("authorized recovery transition = %#v, want execute selectors %#v", authorized, test.want)
 			}
@@ -75,9 +76,8 @@ func TestRecoveryAuthorizationCollectionPreservesNormalizedSelectors(t *testing.
 
 func TestStatusAcceptsNormalizedOrdinaryWorkspaceOverlaySelectors(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	writeReviewStartCandidate(t, repo, "tracked.txt", "overlay\n", 0o644)
-	status := selectorTransitionStatus(t, repo, "--base-ref", base, "--projection", "workspace", "--workspace-overlay")
+	status := selectorTransitionStatus(t, repo, "--base-ref", strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD")), "--projection", "workspace", "--workspace-overlay")
 	if status.Projection.Kind != reviewtransaction.TargetBaseWorkspaceOverlay || status.Projection.Projection != reviewtransaction.ProjectionWorkspace {
 		t.Fatalf("normalized ordinary overlay selectors resolved %#v", status.Projection)
 	}
@@ -86,10 +86,6 @@ func TestStatusAcceptsNormalizedOrdinaryWorkspaceOverlaySelectors(t *testing.T) 
 func recoverySelectorReplayStatus(t *testing.T, recovery reviewtransaction.Target) ReviewTargetStatusResult {
 	t.Helper()
 	const changedLines = 20
-	budget, err := reviewtransaction.CorrectionBudget(changedLines)
-	if err != nil {
-		t.Fatal(err)
-	}
 	authorityTarget := "sha256:" + strings.Repeat("0", 64)
 	target := "sha256:" + strings.Repeat("1", 64)
 	return ReviewTargetStatusResult{
@@ -102,7 +98,7 @@ func recoverySelectorReplayStatus(t *testing.T, recovery reviewtransaction.Targe
 			Revision: "sha256:" + strings.Repeat("2", 64), State: reviewtransaction.StateInvalidated,
 		},
 		Receipt: ReviewTargetStatusReceipt{Status: ReviewReceiptExpectedMissing},
-		Frozen:  &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium, OriginalChangedLines: changedLines, CorrectionBudget: budget},
+		Frozen:  &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium, OriginalChangedLines: changedLines, CorrectionBudget: changedLines / 2},
 		Repair:  reviewtransaction.UnsupportedAuthorityRepairAssessment(),
 		Projection: ReviewTargetStatusProjection{
 			Schema: ReviewIntegrationProjectionSchema, Kind: recovery.Kind, Projection: recovery.Projection,
@@ -135,11 +131,4 @@ func validateRecoverySelectorReplaySchemas(t *testing.T, transition ReviewNextTr
 			validateAgainstPublishedStatusNextTransitionSchema(t, schema.version, schema.file, tokenized, true)
 		})
 	}
-}
-
-func decodeRecoverySelectorReplayTransition(t *testing.T, transition ReviewNextTransition) ReviewNextTransition {
-	t.Helper()
-	var decoded ReviewNextTransition
-	decodeStrictReviewJSON(t, []byte(mustReviewJSON(t, transition)), &decoded)
-	return decoded
 }
