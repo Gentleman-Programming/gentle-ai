@@ -133,6 +133,22 @@ func TestParseRemediationResultRejectsLegacyJSONResultSameIdentityDuplicate(t *t
 	}
 }
 
+func TestParseRemediationResultSkipsInlineFenceProse(t *testing.T) {
+	revision := "sha256:" + strings.Repeat("d", 64)
+	binding := RemediationBinding{LineageID: "lineage-1", Generation: 2, FixBatch: 2}
+	artifact := strings.Join([]string{
+		"# Apply Progress",
+		"",
+		"```yaml is inline fence prose, not a block opener",
+		"",
+		remediationResultEvidenceWithBinding(revision, binding),
+		"",
+	}, "\n")
+	if got := parseRemediationResult(artifact, revision, binding); !got.Complete {
+		t.Fatal("inline fence prose at line start must not swallow the terminal remediation pair")
+	}
+}
+
 func quoteAsBlockquote(text string) string {
 	lines := strings.Split(text, "\n")
 	for index, line := range lines {

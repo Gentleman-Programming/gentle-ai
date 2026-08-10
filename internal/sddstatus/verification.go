@@ -381,9 +381,12 @@ type remediationRollbackEvidence struct {
 }
 
 // remediationClaim is one identity assertion found while scanning cumulative
-// apply-progress: a strict remediation result envelope, optionally completed by
-// an adjacent JSON evidence fence. Complete pairs carry EndLine set to the end
-// of their evidence fence so the terminal pair is unambiguous.
+// apply-progress: a strict remediation result envelope optionally completed by
+// an adjacent JSON evidence fence. Complete reports that the pair fully
+// validated against the requested revision and binding. Complete pairs carry
+// EndLine set to the end of their evidence fence so the terminal pair is
+// unambiguous, while claim-only and rejected pairs keep the EndLine of their
+// result envelope so a later assertion always outranks an earlier one.
 type remediationClaim struct {
 	Revision   string
 	LineageID  string
@@ -491,14 +494,14 @@ func scanRemediationClaims(lines []string, expectedRevision string, binding *Rem
 				claims = append(claims, claim)
 			}
 			index = end
-		case strings.HasPrefix(marker, "```"):
+		case isFenceOpener(marker):
 			// Unrelated closed fence: skip it so its content is never scanned
 			// as remediation claims.
-			if end, ok := fenceEnd(lines, index+1); !ok {
+			end, ok := fenceEnd(lines, index+1)
+			if !ok {
 				return claims
-			} else {
-				index = end
 			}
+			index = end
 		}
 	}
 	return claims
@@ -511,6 +514,19 @@ func fenceEnd(lines []string, start int) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// isFenceOpener reports whether a stripped line opens a fenced block rather
+// than carrying an inline code span. Only a bare opener (a fence marker
+// followed at most by a language token) consumes a block; prose that merely
+// starts with a fence marker must be scanned line by line so the terminal
+// remediation pair inside it is never skipped.
+func isFenceOpener(marker string) bool {
+	if !strings.HasPrefix(marker, "```") {
+		return false
+	}
+	rest := strings.TrimPrefix(marker, "```")
+	return !strings.ContainsAny(rest, "` ")
 }
 
 func stripBlockquote(line string) string {
