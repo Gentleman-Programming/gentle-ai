@@ -47,10 +47,11 @@ package cli
 //
 // Known false negatives, by construction: propagation sites (fmt.Errorf with
 // %w) are exempt as plumbing, so a wrap that is itself the operator's
-// terminal framing of a foreign error (os, git) escapes; refusals emitted
-// through custom error-struct fields or printed directly to a stream are not
-// error-constructor calls and are not seen; the handful of constructor calls
-// whose message is a runtime value are counted and logged, never analyzed.
+// terminal framing of a foreign error (os, git) escapes; keyed Reason string
+// fields in struct literals are seen, but other custom refusal fields and
+// refusals printed directly to a stream are not; the handful of constructor
+// calls or Reason fields whose message is a runtime value are counted and
+// logged, never analyzed.
 // Known false positives: an origin site that is genuinely internal plumbing
 // still counts and must be annotated -- the honest shape for a programmer
 // invariant is world-action ("the exit is an action, not a command: edit the
@@ -99,7 +100,7 @@ var refusalRatchetNamedContinuationRegexp = regexp.MustCompile(`gentle-ai [a-z][
 type refusalRatchetSite struct {
 	file        string // slash path relative to the repository root
 	line        int
-	constructor string // "errors.New" or "fmt.Errorf"
+	constructor string // "errors.New", "fmt.Errorf", or "Reason field"
 	message     string
 }
 
@@ -313,6 +314,48 @@ func TestRefusalRatchetClassifiesSyntheticSites(t *testing.T) {
 			t.Fatalf("want the sentinel to be a violation, got %+v", analysis)
 		}
 	})
+
+	t.Run("bare Reason field is a violation naming its exact site", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"type result struct { Reason string }\nfunc f() result {\n\treturn result{Reason: \"blocked with no exit named\"}\n}\n")
+		if len(analysis.problems) != 0 {
+			t.Fatalf("unexpected problems: %v", analysis.problems)
+		}
+		if len(analysis.violations) != 1 {
+			t.Fatalf("want 1 Reason field violation, got %+v", analysis)
+		}
+		got := analysis.violations[0]
+		if got.constructor != "Reason field" || got.message != "blocked with no exit named" || got.line == 0 {
+			t.Fatalf("Reason field violation does not name its site: %+v", got)
+		}
+	})
+
+	t.Run("Reason field naming a gentle-ai continuation satisfies", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"type result struct { Reason string }\nfunc f() result {\n\treturn result{Reason: \"blocked: run gentle-ai review status\"}\n}\n")
+		if len(analysis.violations) != 0 || analysis.satisfiedNamed != 1 {
+			t.Fatalf("want 1 named Reason field satisfaction and no violations, got %+v", analysis)
+		}
+	})
+
+	t.Run("Reason field by-design marker satisfies", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"type result struct { Reason string }\nfunc f() result {\n\t// refusal:by-design human-authority: maintainer approval is required\n\treturn result{Reason: \"maintainer approval is required\"}\n}\n")
+		if len(analysis.problems) != 0 {
+			t.Fatalf("unexpected problems: %v", analysis.problems)
+		}
+		if len(analysis.violations) != 0 || analysis.satisfiedAnnotated != 1 {
+			t.Fatalf("want 1 annotated Reason field satisfaction and no violations, got %+v", analysis)
+		}
+	})
+
+	t.Run("dynamic Reason field is counted unanalyzable", func(t *testing.T) {
+		analysis := refusalRatchetMustAnalyze(t, header+
+			"type result struct { Reason string }\nfunc f(reason string) result {\n\treturn result{Reason: reason}\n}\n")
+		if len(analysis.violations) != 0 || len(analysis.unanalyzable) != 1 {
+			t.Fatalf("want 1 unanalyzable Reason field and no violations, got %+v", analysis)
+		}
+	})
 }
 
 // TestEveryProductionRefusalNamesResolutionOrDeclaresByDesign is the ratchet.
@@ -502,18 +545,8 @@ func refusalRatchetAnalyzeSource(fileLabel, source string) (refusalRatchetAnalys
 		}
 	}
 
-	ast.Inspect(file, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		constructor := refusalRatchetConstructorName(call)
-		if constructor == "" || len(call.Args) == 0 {
-			return true
-		}
-		line := fset.Position(call.Pos()).Line
-		site := refusalRatchetSite{file: fileLabel, line: line, constructor: constructor}
-
+	classifySite := func(site refusalRatchetSite, expr ast.Expr) {
+		line := site.line
 		marker := markers[line]
 		if marker == nil {
 			marker = markers[line-1]
@@ -522,7 +555,7 @@ func refusalRatchetAnalyzeSource(fileLabel, source string) (refusalRatchetAnalys
 			marker.consumed = true
 		}
 
-		message, literal := refusalRatchetLiteralString(call.Args[0])
+		message, literal := refusalRatchetLiteralString(expr)
 		if !literal {
 			if marker != nil && marker.malformed == "" {
 				// A marker cannot vouch for bytes nobody can read statically.
@@ -530,11 +563,11 @@ func refusalRatchetAnalyzeSource(fileLabel, source string) (refusalRatchetAnalys
 					"%s:%d carries a refusal:by-design marker on a runtime-built message; the marker exempts nothing it cannot see", fileLabel, line))
 			}
 			analysis.unanalyzable = append(analysis.unanalyzable, site)
-			return true
+			return
 		}
 		site.message = message
 
-		if constructor == "fmt.Errorf" && strings.Contains(message, "%w") {
+		if site.constructor == "fmt.Errorf" && strings.Contains(message, "%w") {
 			if marker != nil {
 				problem := marker.malformed
 				if problem == "" {
@@ -543,7 +576,7 @@ func refusalRatchetAnalyzeSource(fileLabel, source string) (refusalRatchetAnalys
 				analysis.problems = append(analysis.problems, problem)
 			}
 			analysis.exemptWraps++
-			return true
+			return
 		}
 
 		named := refusalRatchetNamedContinuationRegexp.MatchString(message)
@@ -564,6 +597,25 @@ func refusalRatchetAnalyzeSource(fileLabel, source string) (refusalRatchetAnalys
 			analysis.satisfiedNamed++
 		default:
 			analysis.violations = append(analysis.violations, site)
+		}
+	}
+
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch typed := node.(type) {
+		case *ast.CallExpr:
+			constructor := refusalRatchetConstructorName(typed)
+			if constructor == "" || len(typed.Args) == 0 {
+				return true
+			}
+			line := fset.Position(typed.Pos()).Line
+			classifySite(refusalRatchetSite{file: fileLabel, line: line, constructor: constructor}, typed.Args[0])
+		case *ast.KeyValueExpr:
+			key, ok := typed.Key.(*ast.Ident)
+			if !ok || key.Name != "Reason" {
+				return true
+			}
+			line := fset.Position(typed.Pos()).Line
+			classifySite(refusalRatchetSite{file: fileLabel, line: line, constructor: "Reason field"}, typed.Value)
 		}
 		return true
 	})
