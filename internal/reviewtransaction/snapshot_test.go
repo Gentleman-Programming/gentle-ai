@@ -1498,6 +1498,13 @@ func TestSnapshotBuilderRealGitFailuresAreNotTreatedAsUnborn(t *testing.T) {
 
 func TestSnapshotRepoTemplateContracts(t *testing.T) {
 	requireSnapshotGit(t)
+	template, err := snapshotRepoTemplate()
+	if err != nil {
+		t.Fatalf("snapshot repo template: %v", err)
+	}
+	if got := strings.TrimSpace(gitSnapshot(t, template, "config", "--local", "--get", "maintenance.auto")); got != "false" {
+		t.Fatalf("template maintenance.auto = %q, want false", got)
+	}
 	first := initSnapshotRepo(t)
 	second := initSnapshotRepo(t)
 	base := strings.TrimSpace(gitSnapshot(t, first, "rev-parse", "HEAD"))
@@ -1778,7 +1785,7 @@ func snapshotRepoTemplate() (string, error) {
 			snapshotRepoTemplateErr = fmt.Errorf("create template directory: %w", err)
 			return
 		}
-		for _, args := range [][]string{{"init"}, {"config", "user.email", "snapshot@example.com"}, {"config", "user.name", "Snapshot Test"}, {"config", "core.autocrlf", "false"}} {
+		for _, args := range [][]string{{"init"}, {"config", "--local", "maintenance.auto", "false"}, {"config", "user.email", "snapshot@example.com"}, {"config", "user.name", "Snapshot Test"}, {"config", "core.autocrlf", "false"}} {
 			if snapshotRepoTemplateErr = runSnapshotGit(template, args...); snapshotRepoTemplateErr != nil {
 				_ = os.RemoveAll(template)
 				return

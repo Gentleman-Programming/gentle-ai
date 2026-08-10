@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -927,34 +928,10 @@ func reviewTransitionCommandLine(operation string, arguments []ReviewTransitionA
 	return strings.Join(parts, " ")
 }
 
-// reviewTransitionShellWord renders one already-assembled --flag=value token
-// as a single POSIX shell word. Most tokens (hashes, lineages, enum values,
-// booleans) are already shell-safe and are emitted verbatim, so the common
-// command reads exactly like the token list. Operator-supplied free text --
-// review.repair carries --reason and --actor straight from `review status
-// --repair-reason` / `--repair-actor` -- can contain spaces and quotes; joined
-// raw, the shell would split those into stray positional arguments that every
-// review verb refuses with "unexpected review <verb> argument". Quoting keeps
-// the promise that the printed command runs exactly as printed, and the quotes
-// are shell syntax only: the argv entry the shell delivers stays byte-
-// identical to the payload's own Token.
+// reviewTransitionShellWord retains the review command assembly seam while the
+// shared renderer owns POSIX shell-word policy for every printed continuation.
 func reviewTransitionShellWord(token string) string {
-	if token != "" && !strings.ContainsFunc(token, reviewTransitionShellUnsafe) {
-		return token
-	}
-	return "'" + strings.ReplaceAll(token, "'", `'\''`) + "'"
-}
-
-// reviewTransitionShellUnsafe reports whether a rune needs quoting. It is an
-// allowlist on purpose: anything not proven inert to every POSIX shell (word
-// splitting, globbing, expansion, tilde, history) is quoted rather than
-// guessed at.
-func reviewTransitionShellUnsafe(char rune) bool {
-	switch {
-	case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9':
-		return false
-	}
-	return !strings.ContainsRune("-_=./:,+@", char)
+	return pathquote.ShellWord(token)
 }
 
 // reviewTransitionArgumentToken renders the literal, executable argv token

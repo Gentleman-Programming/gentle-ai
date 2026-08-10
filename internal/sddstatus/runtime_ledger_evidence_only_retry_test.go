@@ -140,3 +140,153 @@ func TestRuntimeUnchangedRetryWithoutAuditedResetStaysRefused(t *testing.T) {
 		t.Fatalf("unauthorized refusal mutated runtime: status=%#v err=%v records=%d", status, statusErr, countRuntimeRecords(t, store.Dir))
 	}
 }
+
+func TestRuntimeEvidenceOnlyRetrySettlesOnAuditedRescopeAuthority(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "rescope-evidence-only-retry")
+	store.ReviewDisabled = true
+
+	first, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "rescope-retry-begin-a", WorkUnit: "verify-objective-a",
+		EvidenceGoal: "independent verification of objective A", MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedEvidence := runtimeTestHash('c')
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: first.Revision, RequestID: "rescope-retry-finish-a", Outcome: AttemptFailed,
+		EvidenceRevision: failedEvidence, Diagnosis: "objective A verification failed with the candidate unchanged",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification cleanup completed",
+		ProcessEvidence: "verification process scan completed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.DecisionRequired || failed.NextAction != RuntimeActionBegin || failed.CumulativeAttempts != 1 {
+		t.Fatalf("failed objective A did not retain unused capacity: %#v", failed)
+	}
+	failedObjective := *failed.Objective
+	failedCandidateTree := failed.Attempts[0].FinishCandidateTree
+
+	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "rescope-retry-a-to-b",
+		WorkUnit: "runtime-proof-objective-b", EvidenceGoal: "rerun evidence for objective A",
+		MaxAttempts: 2, MaxChangedLines: 10,
+		Reason: "maintainer authorized a narrower runtime proof for the unchanged candidate", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rescoped.LastRescope == nil || rescoped.LastRescope.PreviousObjectiveID != failedObjective.ID ||
+		rescoped.LastRescope.PreviousGeneration != failedObjective.Generation ||
+		rescoped.LastRescope.RescopeCandidateTree != failedCandidateTree {
+		t.Fatalf("audited A-to-B rescope did not preserve the failed authority facts: %#v", rescoped.LastRescope)
+	}
+
+	active, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: rescoped.Revision, RequestID: "rescope-retry-begin-b", WorkUnit: "runtime-proof-objective-b",
+		EvidenceGoal: "rerun evidence for objective A", MaxAttempts: 2, MaxChangedLines: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: active.Revision, RequestID: "rescope-retry-finish-b", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('d'), Diagnosis: "fresh runtime proof passed with the candidate unchanged",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "runtime proof cleanup completed",
+		ProcessEvidence: "runtime proof process scan completed", RemediatesEvidenceRevision: failedEvidence,
+	})
+	if err != nil {
+		t.Fatalf("rescope-authorized evidence-only retry was refused: %v", err)
+	}
+	if !completed.Complete || completed.ActiveAttempt != nil || completed.Binding != nil {
+		t.Fatalf("rescope-authorized evidence-only retry = %#v", completed)
+	}
+	last := completed.Attempts[len(completed.Attempts)-1]
+	if last.RemediatesEvidenceRevision != failedEvidence || last.BeginCandidateTree != failedCandidateTree ||
+		last.FinishCandidateTree != failedCandidateTree {
+		t.Fatalf("rescope-authorized retry did not preserve the evidence link and candidate tree: %#v", last)
+	}
+
+	reopened := mustRuntimeStore(t, repo, "rescope-evidence-only-retry")
+	replayed, err := reopened.Status()
+	if err != nil || replayed.Revision != completed.Revision || !replayed.Complete || replayed.LastRescope == nil {
+		t.Fatalf("full-chain replay of the rescope-authorized retry = %#v err=%v", replayed, err)
+	}
+}
+
+func TestRuntimeRescopeBeforeObjectiveBFailureDoesNotAuthorizeEvidenceOnlyRetry(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "rescope-precedes-failure")
+	store.ReviewDisabled = true
+
+	first, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "precedes-begin-a", WorkUnit: "verify-objective-a",
+		EvidenceGoal: "independent verification of objective A", MaxAttempts: 3, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: first.Revision, RequestID: "precedes-finish-a", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('e'), Diagnosis: "objective A verification failed with the candidate unchanged",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification cleanup completed",
+		ProcessEvidence: "verification process scan completed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedA, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: failedA.Revision, RequestID: "precedes-a-to-b",
+		WorkUnit: "verify-objective-b", EvidenceGoal: "independent verification of objective B",
+		MaxAttempts: 3, MaxChangedLines: 10,
+		Reason: "maintainer narrowed the objective after objective A", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: rescoped.Revision, RequestID: "precedes-begin-b-failure", WorkUnit: "verify-objective-b",
+		EvidenceGoal: "independent verification of objective B", MaxAttempts: 3, MaxChangedLines: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedBEvidence := runtimeTestHash('f')
+	failedB, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: second.Revision, RequestID: "precedes-finish-b-failure", Outcome: AttemptFailed,
+		EvidenceRevision: failedBEvidence, Diagnosis: "objective B verification failed with the candidate unchanged",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification cleanup completed",
+		ProcessEvidence: "verification process scan completed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: failedB.Revision, RequestID: "precedes-begin-b-retry", WorkUnit: "verify-objective-b",
+		EvidenceGoal: "independent verification of objective B", MaxAttempts: 3, MaxChangedLines: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := countRuntimeRecords(t, store.Dir)
+	_, err = store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: retry.Revision, RequestID: "precedes-finish-b-retry", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('a'), Diagnosis: "unchanged objective B retry claims a correction from the older rescope",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "retry cleanup completed",
+		ProcessEvidence: "retry process scan completed", RemediatesEvidenceRevision: failedBEvidence,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unmanaged remediation requires a changed correction candidate") {
+		t.Fatalf("older rescope authorized objective B retry = %v, want the changed-candidate refusal", err)
+	}
+	status, statusErr := store.Status()
+	if statusErr != nil || status.Revision != retry.Revision || status.ActiveAttempt == nil ||
+		countRuntimeRecords(t, store.Dir) != before {
+		t.Fatalf("older-rescope refusal mutated or damaged runtime state: status=%#v err=%v records=%d", status, statusErr, countRuntimeRecords(t, store.Dir))
+	}
+}

@@ -330,11 +330,13 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// the runtime supports is no longer overridden. Kilocode renders that shared
 	// orchestrator contract, so the hash moved again. Deliberate, not drift.
 	//
-	// The canonical artifact language contract is appended to all eight agent
-	// prompts; no key is added, removed, or otherwise
-	// changed. The hash is recomputed from the rebased tree. Deliberate, not
-	// drift.
-	const want = "de8170827f886831a555be14779920dc9b3a09d604faa837557102cbe0d93476"
+	// The canonical reviewer proof-path contract is appended to all eight agent
+	// prompts; no key is added, removed, or otherwise changed. The hash is
+	// recomputed from the merged tree. Deliberate, not drift.
+	//
+	// The provider-defect handoff now has three candidate-scoped outcomes;
+	// Kilocode embeds it in the orchestrator prompt, so the hash moved.
+	const want = "3f48f25f109844af0546b15e1845c2a415d9191fb444ab6bf7095914fbc8dedf"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

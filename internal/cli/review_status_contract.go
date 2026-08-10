@@ -247,8 +247,9 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 		Generation: native.Generation, Revision: native.Revision,
 	}
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact {
+		correctionBudget, _ := reviewtransaction.CorrectionBudget(native.OriginalChangedLines)
 		result.Frozen = &ReviewTargetStatusFrozen{
-			Tier: native.Tier, OriginalChangedLines: native.OriginalChangedLines, CorrectionBudget: native.CorrectionBudget,
+			Tier: native.Tier, OriginalChangedLines: native.OriginalChangedLines, CorrectionBudget: correctionBudget,
 		}
 	}
 	if native.ReceiptIdentity != "" {
@@ -348,7 +349,17 @@ func reviewStopEligibility(reason string, requiredInputs []string) *ReviewAction
 	}
 }
 
+type reviewStatusCompactAuthority struct {
+	OriginalChangedLines   int
+	CorrectionBudget       int
+	CorrectionBudgetPolicy string
+}
+
 func (result ReviewTargetStatusResult) Validate() error {
+	return result.validateWithCompactAuthority(nil)
+}
+
+func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *reviewStatusCompactAuthority) error {
 	legacyTransport := result.Schema == ReviewIntegrationStatusSchemaV2 && result.Contract == ReviewIntegrationContractV1
 	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5) && result.Contract == ReviewIntegrationContractV2
 	if (!legacyTransport && !nativeGitTransport) || result.Operation != "review.status" {
@@ -409,10 +420,21 @@ func (result ReviewTargetStatusResult) Validate() error {
 			return errors.New("negotiated status validation request copies differ")
 		}
 		if request := result.NextTransition.CorrectionRequest; request != nil {
+			expectedBudget := 0
+			if result.Frozen != nil {
+				expectedBudget = result.Frozen.CorrectionBudget
+			}
+			if authority != nil {
+				budget, budgetErr := reviewtransaction.CompactExpectedBudget(authority.OriginalChangedLines, authority.CorrectionBudgetPolicy)
+				if budgetErr != nil || budget != authority.CorrectionBudget {
+					return errors.New("native compact status budget is invalid") // refusal:by-design world-action: provider-generated status and persisted compact authority budget require a code fix when they disagree
+				}
+				expectedBudget = authority.CorrectionBudget
+			}
 			if result.Authority == nil || result.Frozen == nil || result.Authority.Version != reviewtransaction.AuthorityVersionCompact ||
 				result.Authority.State != reviewtransaction.StateCorrectionRequired || request.LineageID != result.Authority.LineageID ||
 				request.ExpectedRevision != result.Authority.Revision || request.TargetIdentity != reviewAuthorityTargetIdentity(result) ||
-				request.CorrectionBudget != result.Frozen.CorrectionBudget {
+				request.CorrectionBudget != expectedBudget {
 				return errors.New("negotiated status correction request binding is invalid") // refusal:by-design world-action: provider-generated status and request bindings require a code fix when they disagree
 			}
 		}
@@ -472,8 +494,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 			if result.Frozen.Tier != reviewtransaction.RiskLow && result.Frozen.Tier != reviewtransaction.RiskMedium && result.Frozen.Tier != reviewtransaction.RiskHigh {
 				return errors.New("current-target frozen tier is invalid")
 			}
-			budget, err := reviewtransaction.CorrectionBudget(result.Frozen.OriginalChangedLines)
-			if err != nil || budget != result.Frozen.CorrectionBudget {
+			if !reviewContractCorrectionBudgetValid(result.Frozen.OriginalChangedLines, result.Frozen.CorrectionBudget) {
 				return errors.New("current-target frozen budget is invalid")
 			}
 		case reviewtransaction.AuthorityVersionLegacy:

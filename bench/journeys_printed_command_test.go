@@ -40,6 +40,16 @@ func TestPrintedCommandArguments(t *testing.T) {
 			want:    []string{"review", "repair", "--reason=it's broken"},
 		},
 		{
+			name:    "double quoted escapes follow POSIX rules",
+			command: `gentle-ai review repair "--reason=literal\q \$HOME \"quoted\" \\slash"`,
+			want:    []string{"review", "repair", `--reason=literal\q $HOME "quoted" \slash`},
+		},
+		{
+			name:    "double quoted escaped newline is a line continuation",
+			command: "gentle-ai review repair \"--reason=first\\\nsecond\"",
+			want:    []string{"review", "repair", "--reason=firstsecond"},
+		},
+		{
 			name:    "surrounding whitespace is not an argument",
 			command: "  gentle-ai   review status  ",
 			want:    []string{"review", "status"},

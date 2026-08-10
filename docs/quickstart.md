@@ -32,7 +32,7 @@
 
 ### All platforms
 
-- Go 1.24+ (for building from source).
+- Go 1.25.10+ (for building from source).
 - Node.js 18+ and npm: `gentle-ai install` checks these as required prerequisites on every platform and prints a warning with a distro-specific install hint (see above) if either is missing — regardless of which agents/components you select. It does not install them for you, and it does not install agent runtimes either: if a selected agent isn't detected, `gentle-ai install` refuses and prints the exact `npm install -g` (or equivalent) command for you to run yourself. Node.js/npm are strictly required if you select the CodeGraph community tool, which gentle-ai does install via `npm install -g`.
 - Pi installed and available as `pi` on `PATH` if you select the Pi agent.
 
@@ -49,50 +49,37 @@
   [restoration gate](release-signing.md#windows-distribution-restoration-gate).
 
 ```powershell
-# Latest released RDD build (v2 line)
+# Stable channel (`@latest`, currently v2.3.0)
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 
-# Stable, pre-RDD pin (v1 line)
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
+# Opt-in prerelease (v2.4.0-rc.1)
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.1
 ```
 
-The two commands use different import paths on purpose. Go requires the `/vN`
-suffix in the module path for major version 2 and above, so every `v2.x` release
-is installed as `.../gentle-ai/v2/cmd/gentle-ai`. The `v1.46.0` pin predates that
-rule and must keep the unsuffixed path; adding `/v2` to it would make Go refuse
-the tag.
+Both commands use the `/v2` module path. Go requires that suffix for major
+version 2 and above.
 
 ## Version Policy
 
-Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, when the first bounded native review transactions were added. Every release from `v1.47.0` onward is part of the unstable RDD development line. New releases will continue improving RDD until the project declares the line stable. The stable version for normal use without RDD is the immediately preceding release, `v1.46.0`.
+Receipt-Driven Development (RDD) began in `v1.47.0` on 2026-07-10, and `v2.2.0` made it the supported stable path. Those are historical milestones. The negotiated public review contract was published in `v2.1.6`.
 
-Use `@latest` to install the latest released RDD build for testing. The negotiated public review contract was published in `v2.1.6`. Builds from `main` may contain changes after the latest release and are intended for unreleased RDD development testing.
+The current stable release is [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0). `@latest` explicitly tracks this stable channel. The current opt-in prerelease is [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1). `@main` installs unreleased development changes.
 
-### Import paths differ between the v1 and v2 lines
-
-Go requires the module path of a major version 2 or higher to end in `/vN`.
-Every `v2.x` install therefore uses `github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai`,
-and the pre-RDD `v1.46.0` pin keeps the unsuffixed
-`github.com/gentleman-programming/gentle-ai/cmd/gentle-ai`. Each path resolves
-only its own major line; swapping them makes Go refuse the version.
-
-### Install the stable version
-
-Use an exact Go module version to keep the baseline reproducible on macOS, Linux, or Windows:
-
-```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
-gentle-ai version
-```
-
-### Install the latest released RDD build for testing
+### Install the stable channel
 
 ```bash
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
-### Install unreleased RDD changes
+### Install the opt-in prerelease
+
+```bash
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.1
+gentle-ai version
+```
+
+### Install unreleased development changes
 
 Only use `main` when testing changes that are not part of a release yet:
 
@@ -101,7 +88,7 @@ go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 gentle-ai version
 ```
 
-The managed install scripts select the latest released version for the chosen channel and do not accept arbitrary release pins. Because every release from `v1.47.0` onward is currently unstable RDD, use the exact `go install ...@v1.46.0` command above when you need the stable version.
+The managed install scripts select the latest version for their chosen channel and do not accept arbitrary release pins. Use `go install` with an exact tag when you need a reproducible prerelease or stable version.
 
 ## Run
 

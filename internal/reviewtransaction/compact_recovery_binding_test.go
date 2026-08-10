@@ -435,7 +435,7 @@ func TestCompactChainedRecoveryRebindRejectsAdvancedBoundary(t *testing.T) {
 	}
 }
 
-func TestCompactPrePRRecoveryChainAllowsOnlyAttestedCompatibleBaseAdvance(t *testing.T) {
+func TestCompactPrePRRecoveryChainRejectsMovingAdvertisedBoundary(t *testing.T) {
 	fixture := newAttestedRecoveryAdvanceFixture(t)
 	unattested := fixture.input
 	unattested.PrePRCIAttestation = ""
@@ -444,8 +444,7 @@ func TestCompactPrePRRecoveryChainAllowsOnlyAttestedCompatibleBaseAdvance(t *tes
 	}
 
 	got := EvaluateCompactGate(context.Background(), fixture.recovery.repo, fixture.receipt, fixture.input)
-	if got.Result != GateAllow || got.Context.BaseAdvance == nil ||
-		got.Context.BaseAdvance.Status != baseAdvanceCompatibleStatus || !got.Context.BaseRelationshipValid {
+	if got.Result == GateAllow {
 		t.Fatalf("attested recovery-chain base advance = %#v", got)
 	}
 }
@@ -467,28 +466,33 @@ func TestCompactPrePRRecoveryAdvanceAttestationCannotRescueInvalidFullChain(t *t
 	}
 }
 
-func TestCompactPrePRRecoveryAdvanceRevalidatesArtifactsAtFinalAuthorization(t *testing.T) {
+func TestCompactPrePRNormalAdvanceRevalidatesArtifactsAtFinalAuthorization(t *testing.T) {
 	for _, tt := range []struct {
 		name string
-		path func(*attestedRecoveryAdvanceFixture) string
+		path func(*compatiblePrePRFixture) string
 	}{
-		{name: "policy", path: func(fixture *attestedRecoveryAdvanceFixture) string { return fixture.input.PolicyArtifact }},
-		{name: "attestation", path: func(fixture *attestedRecoveryAdvanceFixture) string { return fixture.input.PrePRCIAttestation }},
+		{name: "policy", path: func(fixture *compatiblePrePRFixture) string { return fixture.policyPath }},
+		{name: "attestation", path: func(fixture *compatiblePrePRFixture) string { return fixture.attestationPath }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			fixture := newAttestedRecoveryAdvanceFixture(t)
+			fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
+			state, receipt := approvedCompactPrePRFixture(t, fixture)
+			hookRan := false
 			originalHook := finalGateAuthorizationHook
 			finalGateAuthorizationHook = func() {
 				finalGateAuthorizationHook = originalHook
+				hookRan = true
 				if err := os.Remove(tt.path(fixture)); err != nil {
 					t.Fatal(err)
 				}
 			}
 			t.Cleanup(func() { finalGateAuthorizationHook = originalHook })
 
-			got := EvaluateCompactGate(context.Background(), fixture.recovery.repo, fixture.receipt, fixture.input)
-			if got.Result != GateInvalidated {
-				t.Fatalf("recovery %s mutation during final authorization = %#v", tt.name, got)
+			got := EvaluateCompactGate(context.Background(), fixture.repo, receipt, NativeGateRequestInput{
+				Gate: GatePrePR, LineageID: state.LineageID, BaseRef: "main", PolicyArtifact: fixture.policyPath, PrePRCIAttestation: fixture.attestationPath,
+			})
+			if !hookRan || got.Result != GateInvalidated {
+				t.Fatalf("%s mutation during final authorization = %#v", tt.name, got)
 			}
 		})
 	}

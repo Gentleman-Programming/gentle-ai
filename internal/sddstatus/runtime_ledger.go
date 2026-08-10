@@ -21,31 +21,32 @@ import (
 )
 
 const (
-	RuntimeStatusSchema               = "gentle-ai.sdd-runtime-status/v1"
-	runtimeRecordSchema               = "gentle-ai.sdd-runtime-record/v1"
-	runtimeObjectiveSchema            = "gentle-ai.sdd-runtime-objective/v1"
-	runtimeObjectiveSchemaV2          = "gentle-ai.sdd-runtime-objective/v2"
-	DefaultRuntimeAttemptLimit        = 2
-	DefaultRuntimeChangedLines        = 200
-	maximumRuntimeAttemptLimit        = 100
-	maximumRuntimeChangedLines        = 1_000_000
-	maximumRuntimeRecordBytes         = 1 << 20
-	maximumRuntimeChainRecords        = 10_000
-	RuntimeActionBegin                = "begin"
-	RuntimeActionFinish               = "finish"
-	RuntimeActionReset                = "reset"
-	RuntimeActionComplete             = "complete"
-	runtimeOperationBegin             = "attempt/begin"
-	runtimeOperationFinish            = "attempt/finish"
-	runtimeOperationFinishRemediation = "attempt/finish-remediation"
-	runtimeOperationReset             = "objective/reset"
-	runtimeOperationRescope           = "objective/rescope"
-	runtimeOperationAdvance           = "objective/advance"
-	runtimeOperationHandoff           = "attempt/handoff"
-	runtimeOperationBind              = "binding/set"
-	runtimeOperationGrant             = "authority/grant"
-	maximumRuntimeGrantRoots          = 32
-	runtimeLockAcquireAttempts        = 3
+	RuntimeStatusSchema                      = "gentle-ai.sdd-runtime-status/v1"
+	runtimeRecordSchema                      = "gentle-ai.sdd-runtime-record/v1"
+	runtimeObjectiveSchema                   = "gentle-ai.sdd-runtime-objective/v1"
+	runtimeObjectiveSchemaV2                 = "gentle-ai.sdd-runtime-objective/v2"
+	DefaultRuntimeAttemptLimit               = 2
+	DefaultRuntimeChangedLines               = 200
+	maximumRuntimeAttemptLimit               = 100
+	maximumRuntimeChangedLines               = 1_000_000
+	maximumRuntimeRecordBytes                = 1 << 20
+	maximumRuntimeChainRecords               = 10_000
+	RuntimeActionBegin                       = "begin"
+	RuntimeActionFinish                      = "finish"
+	RuntimeActionReset                       = "reset"
+	RuntimeActionComplete                    = "complete"
+	runtimeOperationBegin                    = "attempt/begin"
+	runtimeOperationFinish                   = "attempt/finish"
+	runtimeOperationFinishRemediation        = "attempt/finish-remediation"
+	runtimeOperationReset                    = "objective/reset"
+	runtimeOperationRescope                  = "objective/rescope"
+	runtimeOperationRepairConsecutiveRescope = "objective/repair-consecutive-rescope"
+	runtimeOperationAdvance                  = "objective/advance"
+	runtimeOperationHandoff                  = "attempt/handoff"
+	runtimeOperationBind                     = "binding/set"
+	runtimeOperationGrant                    = "authority/grant"
+	maximumRuntimeGrantRoots                 = 32
+	runtimeLockAcquireAttempts               = 3
 
 	// runtimeLedgerStatusPointer suffixes every ledger refusal an ordinary
 	// caller can hit (budget exhausted, active attempt, no active attempt,
@@ -292,6 +293,14 @@ type RuntimeRescope struct {
 	Actor                    string `json:"actor"`
 }
 
+type RuntimeRepair struct {
+	Revision         string `json:"revision"`
+	ReplacedRevision string `json:"replaced_revision"`
+	RestoredRevision string `json:"restored_revision"`
+	Reason           string `json:"reason"`
+	Actor            string `json:"actor"`
+}
+
 type RuntimeStatus struct {
 	Schema                 string            `json:"schema"`
 	Change                 string            `json:"change"`
@@ -312,6 +321,7 @@ type RuntimeStatus struct {
 	LastReset              *RuntimeReset     `json:"last_reset,omitempty"`
 	LastAdvance            *RuntimeAdvance   `json:"last_advance,omitempty"`
 	LastRescope            *RuntimeRescope   `json:"last_rescope,omitempty"`
+	LastRepair             *RuntimeRepair    `json:"last_repair,omitempty"`
 	// GrantedRoots is the per-change edit-authority projection (#2540 S2):
 	// canonical absolute symlink-evaluated roots accumulated from grant
 	// records in chain order. AllowedEditRoots consumption is a later slice.
@@ -356,6 +366,15 @@ type HandoffAttemptRequest struct {
 }
 
 type ResetObjectiveRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	Reason           string `json:"reason"`
+	Actor            string `json:"actor"`
+}
+
+// RepairConsecutiveRescopeRequest is limited to the released consecutive-
+// rescope writer defect; it is not a generic corruption recovery mechanism.
+type RepairConsecutiveRescopeRequest struct {
 	ExpectedRevision string `json:"expected_revision"`
 	RequestID        string `json:"request_id"`
 	Reason           string `json:"reason"`
@@ -474,6 +493,7 @@ type runtimeRecord struct {
 	Finish           *runtimeFinishEvent  `json:"finish,omitempty"`
 	Reset            *runtimeResetEvent   `json:"reset,omitempty"`
 	Rescope          *runtimeRescopeEvent `json:"rescope,omitempty"`
+	Repair           *runtimeRepairEvent  `json:"repair,omitempty"`
 	Advance          *runtimeAdvanceEvent `json:"advance,omitempty"`
 	Handoff          *RuntimeHandoff      `json:"handoff,omitempty"`
 	Binding          *runtimeBindingEvent `json:"binding,omitempty"`
@@ -569,6 +589,13 @@ type runtimeRescopeEvent struct {
 	MaxChangedLines          int    `json:"max_changed_lines"`
 	Reason                   string `json:"reason"`
 	Actor                    string `json:"actor"`
+}
+
+type runtimeRepairEvent struct {
+	ReplacedRevision string `json:"replaced_revision"`
+	RestoredRevision string `json:"restored_revision"`
+	Reason           string `json:"reason"`
+	Actor            string `json:"actor"`
 }
 
 type runtimeFinishEvent struct {
@@ -895,9 +922,9 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			return runtimeRecord{}, fmt.Errorf("disabled failed verification requires --remediates-evidence-revision %q on the correction settle; rerun `gentle-ai sdd-attempt settle` with that flag", chainFailedEvidence)
 		}
 		if unmanagedRemediation {
-			evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(status.LastReset, chainFailedAttempt, snapshot.CandidateTree)
+			evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(status.LastReset, status.LastRescope, chainFailedAttempt, snapshot.CandidateTree)
 			if !evidenceOnly && (snapshot.Identity == active.BeginCandidateIdentity || snapshot.CandidateTree == active.BeginCandidateTree) {
-				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed by the active correction attempt, or an audited reset authorizing this exact unchanged candidate.
+				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed by the active correction attempt, or an audited reset or rescope authorizing this exact unchanged candidate.
 				return runtimeRecord{}, errors.New("unmanaged remediation requires a changed correction candidate")
 			}
 			if request.EvidenceRevision == request.RemediatesEvidenceRevision {
@@ -1388,14 +1415,15 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 // replaying one from the immutable chain (applyRuntimeRecord), so a
 // committed rescope always replays deterministically.
 func runtimeObjectiveRescopeStructurallyPermitted(status RuntimeStatus) bool {
-	if status.DecisionRequired || status.Complete {
+	if status.Objective == nil || status.DecisionRequired || status.Complete {
 		return false
 	}
 	if len(status.Attempts) == 0 {
 		return false
 	}
 	last := status.Attempts[len(status.Attempts)-1]
-	return last.Outcome == AttemptFailed || last.Outcome == AttemptInterrupted
+	return last.ObjectiveID == status.Objective.ID &&
+		(last.Outcome == AttemptFailed || last.Outcome == AttemptInterrupted)
 }
 
 // Rescope implements AUDITED NARROWING RESCOPE (#2298, #2296 part 2): the
@@ -1478,6 +1506,87 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			Reason: request.Reason, Actor: request.Actor,
 		}}, nil
 	})
+}
+
+// RepairConsecutiveRescope replaces only the poisoned HEAD reference from the
+// v2.4.0-rc.1 writer defect. The invalid record stays present and invalid.
+func (store RuntimeStore) RepairConsecutiveRescope(ctx context.Context, request RepairConsecutiveRescopeRequest) (RuntimeStatus, error) {
+	request, err := normalizeRepairConsecutiveRescopeRequest(request)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return RuntimeStatus{}, err
+	}
+	digest := runtimeValueHash("gentle-ai.sdd-runtime-repair-consecutive-rescope-request/v1", request)
+	lock, err := store.acquireLock()
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	defer lock.Release()
+
+	head, exists, err := readRuntimeHead(filepath.Join(store.Dir, "HEAD"))
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	if !exists {
+		return RuntimeStatus{}, &RuntimeRevisionConflictError{Expected: request.ExpectedRevision, Current: ""}
+	}
+	if head != request.ExpectedRevision {
+		replay, replayErr := store.load()
+		if replayErr == nil {
+			if receipt, ok := replay.Requests[request.RequestID]; ok {
+				if receipt.Digest != digest {
+					return RuntimeStatus{}, ErrRuntimeRequestConflict
+				}
+				record, recordErr := store.loadRecord(receipt.Revision)
+				if recordErr == nil && record.Operation == runtimeOperationRepairConsecutiveRescope &&
+					record.Repair.ReplacedRevision == request.ExpectedRevision {
+					if err := store.syncReplay(); err != nil {
+						return RuntimeStatus{}, &RuntimePublicationError{Revision: receipt.Revision, Committed: true, Cause: err}
+					}
+					return replay.Status, nil
+				}
+			}
+		}
+		return RuntimeStatus{}, &RuntimeRevisionConflictError{Expected: request.ExpectedRevision, Current: head}
+	}
+
+	poisoned, err := store.loadRecord(head)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	prefix, err := store.loadRevision(poisoned.PreviousRevision)
+	if err != nil {
+		return RuntimeStatus{}, fmt.Errorf("replay SDD runtime repair predecessor: %w", err)
+	}
+	if receipt, ok := prefix.Requests[request.RequestID]; ok {
+		if receipt.Digest != digest {
+			return RuntimeStatus{}, ErrRuntimeRequestConflict
+		}
+		return RuntimeStatus{}, errors.New("SDD runtime repair request identifier is already owned by the valid predecessor") // refusal:by-design world-action: the immutable repair must bind its own request identifier
+	}
+	if err := validateConsecutiveRescopeRepairCandidate(prefix, poisoned); err != nil {
+		return RuntimeStatus{}, fmt.Errorf("SDD runtime repair refuses non-exact consecutive-rescope authority: %w", err)
+	}
+
+	runtimeRepairBeforePublishHook()
+	current, currentExists, currentErr := readRuntimeHead(filepath.Join(store.Dir, "HEAD"))
+	if currentErr != nil {
+		return RuntimeStatus{}, currentErr
+	}
+	if !currentExists || current != request.ExpectedRevision {
+		return RuntimeStatus{}, &RuntimeRevisionConflictError{Expected: request.ExpectedRevision, Current: current}
+	}
+	record := runtimeRecord{
+		Schema: runtimeRecordSchema, Change: store.Change, PreviousRevision: prefix.Status.Revision,
+		Operation: runtimeOperationRepairConsecutiveRescope, RequestID: request.RequestID, RequestDigest: digest,
+		Repair: &runtimeRepairEvent{ReplacedRevision: head, RestoredRevision: prefix.Status.Revision, Reason: request.Reason, Actor: request.Actor},
+	}
+	if err := validateRuntimeRecordShape(record); err != nil {
+		return RuntimeStatus{}, err
+	}
+	return store.commitRecordLocked(record)
 }
 
 // bindPreparedReview imports a legacy binding at most once and replaces the
@@ -1701,6 +1810,17 @@ func (store RuntimeStore) commitRecordLocked(record runtimeRecord) (RuntimeStatu
 }
 
 func (store RuntimeStore) load() (runtimeReplay, error) {
+	head, exists, err := readRuntimeHead(filepath.Join(store.Dir, "HEAD"))
+	if err != nil {
+		return runtimeReplay{}, err
+	}
+	if !exists {
+		return store.loadRevision("")
+	}
+	return store.loadRevision(head)
+}
+
+func (store RuntimeStore) loadRevision(head string) (runtimeReplay, error) {
 	replay := runtimeReplay{
 		Status: RuntimeStatus{
 			Schema: RuntimeStatusSchema, Change: store.Change, Attempts: []RuntimeAttempt{},
@@ -1710,11 +1830,6 @@ func (store RuntimeStore) load() (runtimeReplay, error) {
 		AttemptTokens: map[int]string{},
 		Instance:      store.instance,
 	}
-	head, exists, err := readRuntimeHead(filepath.Join(store.Dir, "HEAD"))
-	if err != nil || !exists {
-		return replay, err
-	}
-
 	type revisionRecord struct {
 		revision string
 		record   runtimeRecord
@@ -1738,17 +1853,20 @@ func (store RuntimeStore) load() (runtimeReplay, error) {
 	}
 	for index := len(reverse) - 1; index >= 0; index-- {
 		entry := reverse[index]
-		if err := applyRuntimeRecord(&replay, entry.revision, entry.record); err != nil {
+		if err := applyRuntimeRecord(store, &replay, entry.revision, entry.record); err != nil {
+			if entry.revision == head && validateConsecutiveRescopeRepairCandidate(replay, entry.record) == nil {
+				return runtimeReplay{}, &runtimeConsecutiveRescopeRepairRequiredError{Revision: head, Continuation: store.consecutiveRescopeRepairContinuation(head)}
+			}
 			return runtimeReplay{}, fmt.Errorf("replay SDD runtime revision %s: %w", entry.revision, err)
 		}
 	}
-	if replay.Status.Revision != head {
+	if head != "" && replay.Status.Revision != head {
 		return runtimeReplay{}, errors.New("SDD runtime HEAD does not equal replayed revision")
 	}
 	return replay, nil
 }
 
-func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRecord) error {
+func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision string, record runtimeRecord) error {
 	if record.PreviousRevision != replay.Status.Revision {
 		return errors.New("record predecessor does not equal replay state")
 	}
@@ -1832,6 +1950,10 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 
 	case runtimeOperationRescope:
 		if err := applyRuntimeRescopeEvent(replay, revision, record); err != nil {
+			return err
+		}
+	case runtimeOperationRepairConsecutiveRescope:
+		if err := applyRuntimeConsecutiveRescopeRepairEvent(store, replay, revision, record); err != nil {
 			return err
 		}
 
@@ -1982,7 +2104,7 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 	// is comparable across them. RescopeCandidateIdentity is NOT compared
 	// here for the same reason; it is still shape-validated and reused
 	// verbatim to derive ObjectiveID below.
-	if last.ObjectiveID != objective.ID || (last.Outcome != AttemptFailed && last.Outcome != AttemptInterrupted) ||
+	if (last.Outcome != AttemptFailed && last.Outcome != AttemptInterrupted) ||
 		last.FinishCandidateTree != event.RescopeCandidateTree {
 		return errors.New("objective rescope candidate does not match the terminal zero-drift finish") // refusal:by-design world-action: the zero-drift candidate was verified before publication, so a mismatch is a mutated record and the exit is restoring the store
 	}
@@ -2015,6 +2137,57 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 	// ratified decision's core requirement) -- the one difference from
 	// runtimeOperationReset, which zeroes CumulativeAttempts/
 	// CumulativeChangedLines above.
+	return nil
+}
+
+func validateConsecutiveRescopeRepairCandidate(replay runtimeReplay, poisoned runtimeRecord) error {
+	if poisoned.Operation != runtimeOperationRescope || poisoned.Rescope == nil || poisoned.PreviousRevision != replay.Status.Revision {
+		return errors.New("record is not a rescope directly following the valid prefix") // refusal:by-design world-action: a repair cannot safely bypass a different immutable chain edge
+	}
+	objective := replay.Status.Objective
+	if replay.Status.ActiveAttempt != nil || objective == nil || replay.Status.DecisionRequired || replay.Status.Complete || len(replay.Status.Attempts) == 0 {
+		return errors.New("record does not meet the historical writer preconditions") // refusal:by-design world-action: a non-exact damaged record has no safe self-service repair
+	}
+	last := replay.Status.Attempts[len(replay.Status.Attempts)-1]
+	if last.ObjectiveID == objective.ID || (last.Outcome != AttemptFailed && last.Outcome != AttemptInterrupted) {
+		return errors.New("record is not missing only current-objective attempt ownership") // refusal:by-design world-action: normal replay remains authoritative for every other rescope shape
+	}
+	event := poisoned.Rescope
+	if event.MaxAttempts > objective.MaxAttempts || event.MaxChangedLines > objective.MaxChangedLines ||
+		event.PreviousObjectiveID != objective.ID || event.PreviousGeneration != objective.Generation ||
+		event.PreviousGeneration != replay.Status.ObjectiveGeneration ||
+		event.PreviousMaxAttempts != objective.MaxAttempts || event.PreviousMaxChangedLines != objective.MaxChangedLines ||
+		last.FinishCandidateTree != event.RescopeCandidateTree {
+		return errors.New("record does not match the historical writer preconditions") // refusal:by-design world-action: mismatched immutable evidence is not the released writer defect
+	}
+	expectedObjectiveID := runtimeObjectiveID(poisoned.Change, event.WorkUnit, event.EvidenceGoal, event.RescopeCandidateIdentity, event.ObjectiveGeneration)
+	if event.ObjectiveGeneration != replay.Status.ObjectiveGeneration+1 || event.ObjectiveID != expectedObjectiveID {
+		return errors.New("record has an invalid successor objective identity") // refusal:by-design world-action: a repair cannot reconstruct a forged successor identity
+	}
+	return nil
+}
+
+func applyRuntimeConsecutiveRescopeRepairEvent(store RuntimeStore, replay *runtimeReplay, revision string, record runtimeRecord) error {
+	event := record.Repair
+	if record.PreviousRevision != event.RestoredRevision || replay.Status.Revision != event.RestoredRevision {
+		return errors.New("consecutive-rescope repair does not restore its recorded predecessor") // refusal:by-design world-action: the repair record must chain directly from the valid predecessor it names
+	}
+	poisoned, err := store.loadRecord(event.ReplacedRevision)
+	if err != nil {
+		return fmt.Errorf("reopen preserved consecutive-rescope record: %w", err)
+	}
+	if err := validateConsecutiveRescopeRepairCandidate(*replay, poisoned); err != nil {
+		return fmt.Errorf("preserved consecutive-rescope record is not the historical publication defect: %w", err)
+	}
+	replay.Status.LastRepair = &RuntimeRepair{
+		Revision: revision, ReplacedRevision: event.ReplacedRevision, RestoredRevision: event.RestoredRevision,
+		Reason: event.Reason, Actor: event.Actor,
+	}
+	if replay.Status.CumulativeAttempts >= replay.Status.Objective.MaxAttempts ||
+		replay.Status.CumulativeChangedLines >= replay.Status.Objective.MaxChangedLines {
+		replay.Status.DecisionRequired = true
+		replay.Status.NextAction = RuntimeActionReset
+	}
 	return nil
 }
 
@@ -2074,10 +2247,10 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		// audited reset stay valid. The chain walk requires a settled failed
 		// predecessor, which subsumes the former len(Attempts) < 2 conjunct.
 		chainFailedAttempt, chainHasFailedEvidence := runtimeChainFailedAttempt(replay.Status.Attempts)
-		// #2621 lockstep twin: an audited reset that terminated the failing
-		// objective against these exact bytes authorizes one evidence-only
+		// #2621 lockstep twin: an audited reset or rescope that terminated the
+		// failing objective against these exact bytes authorizes one evidence-only
 		// retry, so a replayed correction may leave the candidate unchanged.
-		evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(replay.Status.LastReset, chainFailedAttempt, event.FinishCandidateTree)
+		evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(replay.Status.LastReset, replay.Status.LastRescope, chainFailedAttempt, event.FinishCandidateTree)
 		unchangedCandidate := event.FinishCandidateIdentity == active.BeginCandidateIdentity ||
 			event.FinishCandidateTree == active.BeginCandidateTree
 		if replay.Status.Binding != nil || event.Outcome != AttemptPassed ||
@@ -2195,6 +2368,9 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		(record.PreviousRevision != "" && !runtimeRevisionPattern.MatchString(record.PreviousRevision)) ||
 		!runtimeRequestIDPattern.MatchString(record.RequestID) || !runtimeRevisionPattern.MatchString(record.RequestDigest) {
 		return errors.New("invalid SDD runtime record identity")
+	}
+	if record.Operation != runtimeOperationRepairConsecutiveRescope && record.Repair != nil {
+		return errors.New("unexpected SDD runtime repair event") // refusal:by-design world-action: an immutable record may carry only the event its operation names
 	}
 	switch record.Operation {
 	case runtimeOperationBegin:
@@ -2342,6 +2518,19 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-rescope-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime rescope request digest does not match record") // refusal:by-design world-action: the digest is computed from the same request at write time, so a mismatch is a mutated record and the exit is restoring the store
+		}
+	case runtimeOperationRepairConsecutiveRescope:
+		if record.Repair == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+			return errors.New("invalid SDD runtime consecutive-rescope repair record shape") // refusal:by-design world-action: repair has one immutable event and cannot carry a parallel authority mutation
+		}
+		event := record.Repair
+		if !runtimeRevisionPattern.MatchString(event.ReplacedRevision) || !runtimeRevisionPattern.MatchString(event.RestoredRevision) ||
+			event.RestoredRevision != record.PreviousRevision || validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
+			return errors.New("invalid SDD runtime consecutive-rescope repair event") // refusal:by-design world-action: repair binds exact revisions and audited actor and reason
+		}
+		request := RepairConsecutiveRescopeRequest{ExpectedRevision: event.ReplacedRevision, RequestID: record.RequestID, Reason: event.Reason, Actor: event.Actor}
+		if runtimeValueHash("gentle-ai.sdd-runtime-repair-consecutive-rescope-request/v1", request) != record.RequestDigest {
+			return errors.New("SDD runtime consecutive-rescope repair request digest does not match record") // refusal:by-design world-action: altered repair authority must fail replay rather than be reinterpreted
 		}
 	case runtimeOperationBind:
 		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Receipt != nil || record.Grant != nil {
@@ -2598,6 +2787,22 @@ func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjecti
 	}
 	if err := validateRuntimeText(request.Actor, 128); err != nil {
 		return ResetObjectiveRequest{}, fmt.Errorf("invalid reset actor: %w", err)
+	}
+	return request, nil
+}
+
+func normalizeRepairConsecutiveRescopeRequest(request RepairConsecutiveRescopeRequest) (RepairConsecutiveRescopeRequest, error) {
+	if request.ExpectedRevision == "" || !runtimeRevisionPattern.MatchString(request.ExpectedRevision) {
+		return RepairConsecutiveRescopeRequest{}, errors.New("repair requires an exact expected runtime revision") // refusal:by-design operator-knowledge: the unreadable HEAD names the only revision this repair may replace
+	}
+	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
+		return RepairConsecutiveRescopeRequest{}, errors.New("request_id must be a canonical lowercase identifier")
+	}
+	if err := validateRuntimeText(request.Reason, 500); err != nil {
+		return RepairConsecutiveRescopeRequest{}, fmt.Errorf("invalid repair reason: %w", err)
+	}
+	if err := validateRuntimeText(request.Actor, 128); err != nil {
+		return RepairConsecutiveRescopeRequest{}, fmt.Errorf("invalid repair actor: %w", err)
 	}
 	return request, nil
 }
@@ -2912,8 +3117,8 @@ func runtimeChainFailedAttempt(attempts []RuntimeAttempt) (RuntimeAttempt, bool)
 	return RuntimeAttempt{}, false
 }
 
-// runtimeEvidenceOnlyRetryAuthorized reports whether an audited reset already
-// authorized one evidence-only correction of this exact candidate (#2621).
+// runtimeEvidenceOnlyRetryAuthorized reports whether an audited reset or rescope
+// already authorized one evidence-only correction of this exact candidate (#2621).
 //
 // A verification failure is not always candidate-caused: when the authoritative
 // suite fails on a transient defect the candidate never introduced, the honest
@@ -2923,9 +3128,11 @@ func runtimeChainFailedAttempt(attempts []RuntimeAttempt) (RuntimeAttempt, bool)
 // weakened for candidates nobody vouched for. So the waiver rests entirely on
 // authority the ledger ALREADY records rather than on a new operator claim:
 //
-//   - The reset names a maintainer and a reason. It is an audited human act.
+//   - The reset or rescope names a maintainer and a reason. It is an audited
+//     human act.
 //   - It terminated the exact objective+generation the failure was recorded
-//     under, so a reset taken before that failure can never authorize it.
+//     under, so an authority transition taken before that failure can never
+//     authorize it.
 //   - Its candidate tree is these bytes, so the maintainer authorized the
 //     retry while looking at precisely the content that is about to pass.
 //
@@ -2933,14 +3140,18 @@ func runtimeChainFailedAttempt(attempts []RuntimeAttempt) (RuntimeAttempt, bool)
 // be disabled with no binding, the chain must still hold the failed evidence
 // being repaired, and the corrected evidence must be fresh and distinct. No
 // approval is fabricated -- one that a human already gave is honored.
-func runtimeEvidenceOnlyRetryAuthorized(reset *RuntimeReset, failed RuntimeAttempt, candidateTree string) bool {
-	if reset == nil || reset.Actor == "" || reset.Reason == "" || candidateTree == "" {
+func runtimeEvidenceOnlyRetryAuthorized(reset *RuntimeReset, rescope *RuntimeRescope, failed RuntimeAttempt, candidateTree string) bool {
+	if candidateTree == "" {
 		return false
 	}
-	if reset.PreviousObjectiveID != failed.ObjectiveID || reset.PreviousGeneration != failed.ObjectiveGeneration {
-		return false
+	if reset != nil && reset.Actor != "" && reset.Reason != "" &&
+		reset.PreviousObjectiveID == failed.ObjectiveID && reset.PreviousGeneration == failed.ObjectiveGeneration &&
+		reset.ResetCandidateTree == candidateTree {
+		return true
 	}
-	return reset.ResetCandidateTree == candidateTree
+	return rescope != nil && rescope.Actor != "" && rescope.Reason != "" &&
+		rescope.PreviousObjectiveID == failed.ObjectiveID && rescope.PreviousGeneration == failed.ObjectiveGeneration &&
+		rescope.RescopeCandidateTree == candidateTree
 }
 
 func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int) string {
@@ -2984,6 +3195,31 @@ func runtimeRecordRevision(record runtimeRecord) (string, []byte, error) {
 	sum := sha256.Sum256(payload)
 	return "sha256:" + hex.EncodeToString(sum[:]), payload, nil
 }
+
+type runtimeConsecutiveRescopeRepairRequiredError struct {
+	Revision     string
+	Continuation string
+}
+
+func (err *runtimeConsecutiveRescopeRepairRequiredError) Error() string {
+	return fmt.Sprintf("published consecutive-rescope record %s is unreadable under normal replay; run this repair command:\n%s", err.Revision, err.Continuation)
+}
+
+func (store RuntimeStore) consecutiveRescopeRepairContinuation(revision string) string {
+	requestID := "repair-" + strings.TrimPrefix(revision, "sha256:")[:16]
+	reason := "repair historical consecutive-rescope publication " + revision
+	return strings.Join([]string{
+		"gentle-ai", "sdd-attempt", "repair",
+		"--cwd", pathquote.ShellWord(store.Workspace),
+		"--change", pathquote.ShellWord(store.Change),
+		"--expected-revision", pathquote.ShellWord(revision),
+		"--request-id", pathquote.ShellWord(requestID),
+		"--actor", pathquote.ShellWord("sdd-runtime-repair"),
+		"--reason", pathquote.ShellWord(reason),
+	}, " ")
+}
+
+var runtimeRepairBeforePublishHook = func() {}
 
 func (store RuntimeStore) ensureDirectories() error {
 	if filepath.Clean(store.commonDir) == "." || !filepath.IsAbs(store.commonDir) {

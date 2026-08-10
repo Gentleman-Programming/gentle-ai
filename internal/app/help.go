@@ -61,7 +61,7 @@ COMPATIBILITY COMMANDS
   review-validate --cwd <repo> --receipt <path> (--request <path> | --lineage <id> --gate <gate>)
                Validate legacy v1 authority; native mode needs lineage/gate and derives authority
                Bundle, policy, ledger, fix-delta, evidence, CI, and release flags are optional compatibility or exceptional inputs
-  sdd-attempt <status|begin|finish|reset> --cwd <repo> --change <change>
+  sdd-attempt <status|begin|finish|reset|repair> --cwd <repo> --change <change>
                Diagnose or explicitly recover the full native runtime-attempt ledger
   update       Check for available updates
   upgrade      Apply updates to managed tools

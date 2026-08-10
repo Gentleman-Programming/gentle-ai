@@ -92,8 +92,8 @@ func TestPrePRBoundarySelectionRejectsCommandLikeSelectorsBeforeGit(t *testing.T
 		"env GIT_SSH_COMMAND=id refs/heads/main", "refs/heads/main@{1}",
 		"refs/heads/../../etc", "refs/heads/$(id)",
 	} {
-		if err := ValidatePrePRBoundarySelector(context.Background(), repo, ref); !errors.Is(err, errCommandLikeBoundaryRef) {
-			t.Fatalf("ValidatePrePRBoundarySelector(%q) error = %v, want errCommandLikeBoundaryRef", ref, err)
+		if _, err := selectPrePRBoundary(context.Background(), repo, ref); !errors.Is(err, errCommandLikeBoundaryRef) {
+			t.Fatalf("selectPrePRBoundary(%q) error = %v, want errCommandLikeBoundaryRef", ref, err)
 		}
 	}
 }

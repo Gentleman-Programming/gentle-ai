@@ -169,6 +169,103 @@ func TestResolveRoutesAtomicRuntimeRemediationSuccessorToFreshVerify(t *testing.
 	}
 }
 
+func TestResolveExplainsFreshVerificationAfterEvidenceOnlyRuntimeRemediation(t *testing.T) {
+	for _, storeKind := range []string{"openspec", "engram"} {
+		t.Run(storeKind, func(t *testing.T) {
+			fixture := newEvidenceOnlyRuntimeRemediationFixture(t, "post-remediation-"+storeKind)
+			if storeKind == "openspec" {
+				changeRoot := seedReadyChange(t, fixture.repo, fixture.change, "- [x] 1.1 Work\n")
+				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(fixture.failedEvidence, "pass"))
+			} else {
+				if err := os.MkdirAll(filepath.Join(fixture.repo, ".engram"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				runRuntimeLedgerGit(t, fixture.repo, "remote", "add", "origin", "git@github.com:Gentleman-Programming/gentle-ai.git")
+				restore := stubEngramExport(t, []engramObservation{
+					{Title: "sdd/" + fixture.change + "/proposal", Content: "## Proposal\n", Project: "gentle-ai", Scope: "project"},
+					{Title: "sdd/" + fixture.change + "/spec", Content: "### Requirement: Runtime\n#### Scenario: Fresh evidence\n", Project: "gentle-ai", Scope: "project"},
+					{Title: "sdd/" + fixture.change + "/design", Content: "## Design\n", Project: "gentle-ai", Scope: "project"},
+					{Title: "sdd/" + fixture.change + "/tasks", Content: "- [x] 1.1 Work\n", Project: "gentle-ai", Scope: "project"},
+					{Title: "sdd/" + fixture.change + "/verify-report", Content: boundedVerifyEnvelope(fixture.failedEvidence, "pass"), Project: "gentle-ai", Scope: "project"},
+				})
+				t.Cleanup(restore)
+			}
+
+			completed := fixture.settle(t)
+			last := completed.Attempts[len(completed.Attempts)-1]
+			if last.FinishCandidateTree != last.BeginCandidateTree {
+				t.Fatalf("remediation changed the candidate: %#v", last)
+			}
+
+			status, err := Resolve(ResolveOptions{CWD: fixture.repo, ChangeName: fixture.change, ReviewDisabled: true, IncludeInstructions: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status.Dependencies.Verify != DependencyReady || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "verify" {
+				t.Fatalf("post-remediation routing: verify=%q archive=%q next=%q", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+			}
+			if len(status.BlockedReasons) != 0 {
+				t.Fatalf("BlockedReasons = %v, want empty for healthy sequencing", status.BlockedReasons)
+			}
+			if status.PhaseInstructions == nil {
+				t.Fatal("PhaseInstructions is nil")
+			}
+			const want = "A passing native remediation settlement completed after the persisted verification report; run fresh verification and persist a report bound after that settlement before archive."
+			if instructions := strings.Join(status.PhaseInstructions.Verify, "\n"); !strings.Contains(instructions, want) {
+				t.Fatalf("verify instructions omit the post-remediation fresh-report obligation:\n%s", instructions)
+			}
+		})
+	}
+}
+
+func TestResolveVerifyInstructionsDoNotMislabelOtherRoutes(t *testing.T) {
+	const postRemediationInstruction = "A passing native remediation settlement completed after the persisted verification report"
+
+	t.Run("ordinary first verification", func(t *testing.T) {
+		repo := t.TempDir()
+		seedReadyChange(t, repo, "first-verify", "- [x] 1.1 Work\n")
+
+		status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "first-verify", ReviewDisabled: true, IncludeInstructions: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.Dependencies.Verify != DependencyReady || status.PhaseInstructions == nil {
+			t.Fatalf("ordinary first verification status = %#v", status)
+		}
+		if strings.Contains(strings.Join(status.PhaseInstructions.Verify, "\n"), postRemediationInstruction) {
+			t.Fatalf("ordinary first verification claimed remediation: %v", status.PhaseInstructions.Verify)
+		}
+	})
+
+	t.Run("fresh all done pass with warnings", func(t *testing.T) {
+		repo := t.TempDir()
+		changeRoot := seedReadyChange(t, repo, "fresh-verify", "- [x] 1.1 Work\n")
+		write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("f"), "pass_with_warnings"))
+
+		status, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "fresh-verify", ReviewDisabled: true, IncludeInstructions: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.Dependencies.Verify != DependencyAllDone || status.Dependencies.Archive != DependencyReady || status.NextRecommended != "archive" {
+			t.Fatalf("fresh passing report status = %#v", status)
+		}
+		if strings.Contains(strings.Join(status.PhaseInstructions.Verify, "\n"), postRemediationInstruction) {
+			t.Fatalf("fresh passing report claimed remediation: %v", status.PhaseInstructions.Verify)
+		}
+	})
+
+	t.Run("targeted correction reverify reason", func(t *testing.T) {
+		block, emitted := classifyTargetedReVerify(
+			correctionEvidence{applied: true, derivable: true, paths: []string{"unrelated.go"}},
+			[]string{"spec-scoped.go"},
+		)
+		const want = "the correction's changed paths do not intersect the verify evidence scope; re-running the objective's evidence goal against the unaffected scope"
+		if !emitted || block.Reason != want {
+			t.Fatalf("targeted ReVerify = %#v, emitted=%v, want reason %q", block, emitted, want)
+		}
+	})
+}
+
 func TestResolveRoutesPureEngramRuntimeRemediationSuccessorToFreshVerify(t *testing.T) {
 	fixture := newRuntimeEngramRemediationFixture(t)
 	completed, err := fixture.store.Finish(context.Background(), fixture.finishRequest("finish-engram-remediation-for-status"))
@@ -318,4 +415,65 @@ func assertRuntimeContinuationBlocked(t *testing.T, status Status, command strin
 	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), command) {
 		t.Fatalf("blocked reasons = %v, want executable %s guidance", status.BlockedReasons, command)
 	}
+}
+
+type evidenceOnlyRuntimeRemediationFixture struct {
+	repo           string
+	change         string
+	store          RuntimeStore
+	failedEvidence string
+	active         RuntimeStatus
+}
+
+func newEvidenceOnlyRuntimeRemediationFixture(t *testing.T, change string) evidenceOnlyRuntimeRemediationFixture {
+	t.Helper()
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, change)
+	store.ReviewDisabled = true
+	first, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: change + "-begin-failed-verification", WorkUnit: "verify",
+		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedEvidence := runtimeTestHash('a')
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: first.Revision, RequestID: change + "-finish-failed-verification", Outcome: AttemptFailed,
+		EvidenceRevision: failedEvidence, Diagnosis: "transient verification failure unrelated to the candidate",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification cleanup completed",
+		ProcessEvidence: "verification process scan completed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset, err := store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: change + "-reset", Actor: "maintainer",
+		Reason: "authorize one evidence-only verification retry",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: reset.Revision, RequestID: change + "-begin-remediation", WorkUnit: "verify",
+		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evidenceOnlyRuntimeRemediationFixture{repo: repo, change: change, store: store, failedEvidence: failedEvidence, active: active}
+}
+
+func (fixture evidenceOnlyRuntimeRemediationFixture) settle(t *testing.T) RuntimeStatus {
+	t.Helper()
+	completed, err := fixture.store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: fixture.active.Revision, RequestID: fixture.change + "-settle-remediation", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('b'), Diagnosis: "verification passed against the unchanged candidate",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "retry cleanup completed",
+		ProcessEvidence: "retry process scan completed", RemediatesEvidenceRevision: fixture.failedEvidence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return completed
 }

@@ -1,6 +1,7 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -49,15 +50,7 @@ type prePRCITrust struct {
 
 const (
 	baseAdvanceCompatibleStatus = "base-advanced-compatible"
-	// baseAdvanceCompatibleLocalStatus is the D2 (#2471 option a) local-gate
-	// counterpart of baseAdvanceCompatibleStatus (#2388): the exact same five
-	// content checks deriveBaseAdvanceCompatibility already enforces for
-	// pre-PR, reused verbatim at pre-commit/pre-push, minus the trusted CI
-	// attestation pre-PR alone can obtain. It is issued only by
-	// deriveBaseAdvanceCompatibility(requireAttestation=false) and is never
-	// accepted at GatePrePR (receipt.go's baseAdvanceStatusAllowedForGate) --
-	// that byte-strict split is the whole point of a second status constant
-	// instead of relaxing baseAdvanceCompatibleStatus's own validity rule.
+	// baseAdvanceCompatibleLocalStatus records native content proof without CI attestation.
 	baseAdvanceCompatibleLocalStatus       = "base-advanced-compatible-local"
 	currentChangesBoundaryCompatibleStatus = "current-changes-boundary-compatible"
 	currentChangesBoundaryCIStatus         = "not-required"
@@ -80,20 +73,15 @@ func (proof BaseAdvanceCompatibility) valid() bool {
 	}
 }
 
-// deriveBaseAdvanceCompatibility runs the five content checks D2 (#2471
-// option a, filed against #2388) designates as the complete, gate-agnostic
-// compatible-base-advance contract: merge-base tree preservation, delivered
-// path identity, delivered patch identity, base-advance/delivered path
-// disjointness, and a conflict-free `merge-tree --write-tree`. requireAttestation
-// is the ONLY axis that varies by gate: true reproduces the exact pre-PR
-// behavior this function always had (a trusted CI attestation over the merged
-// result is mandatory, and the returned proof carries baseAdvanceCompatibleStatus);
-// false skips the attestation lookup/verification entirely and returns
-// baseAdvanceCompatibleLocalStatus instead, so a caller can never launder a
-// locally-derived proof into the CI-attested shape pre-PR's byte-strict
-// validation (receipt.go's baseAdvanceStatusAllowedForGate) requires. The five
-// content checks themselves are not duplicated, weakened, or parameterized --
-// same code, same order, same failure strings, for every caller.
+func prePRBoundaryAdvanced(refs *resolvedPrePRRefs) bool {
+	return refs != nil && refs.Selection.Commit != refs.Selection.MergeBase
+}
+
+func prePRAttestationRequested(request GateRequest) bool {
+	return request.PrePR != nil && strings.TrimSpace(request.PrePR.CIAttestationArtifact) != ""
+}
+
+// deriveBaseAdvanceCompatibility verifies the shared content and merge proof.
 func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Receipt, request GateRequest, snapshot Snapshot, refs *resolvedPrePRRefs, preimages gateArtifactPreimages, requireAttestation bool) (BaseAdvanceCompatibility, error) {
 	if refs == nil {
 		return BaseAdvanceCompatibility{}, errors.New("resolved pre-PR refs are missing")
@@ -104,13 +92,13 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 	if requireAttestation && (request.PrePR == nil || strings.TrimSpace(request.PrePR.CIAttestationArtifact) == "") {
 		return BaseAdvanceCompatibility{}, errors.New("trusted CI attestation is required")
 	}
-	mergeBase, err := runGit(ctx, repo, nil, nil, "merge-base", refs.Selection.Commit, refs.HeadCommit)
-	if err != nil {
-		return BaseAdvanceCompatibility{}, fmt.Errorf("derive original merge-base: %w", err)
-	}
-	mergeBaseTree, err := (SnapshotBuilder{Repo: repo}).resolveTree(ctx, strings.TrimSpace(string(mergeBase)))
-	if err != nil || mergeBaseTree != receipt.BaseTree {
+	mergeBaseTree, err := (SnapshotBuilder{Repo: repo}).resolveTree(ctx, refs.Selection.MergeBase)
+	if err != nil || mergeBaseTree != receipt.BaseTree || snapshot.BaseTree != mergeBaseTree {
 		return BaseAdvanceCompatibility{}, errors.New("original reviewed merge-base tree is not preserved")
+	}
+	advertisedBaseTree, err := (SnapshotBuilder{Repo: repo}).resolveTree(ctx, refs.Selection.Commit)
+	if err != nil {
+		return BaseAdvanceCompatibility{}, errors.New("advertised pre-PR base tree cannot be derived") // refusal:by-design world-action: only Git object recovery can restore a missing advertised base tree
 	}
 
 	builder := SnapshotBuilder{Repo: repo}
@@ -133,7 +121,7 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 	if err != nil || originalPatch != currentPatch {
 		return BaseAdvanceCompatibility{}, errors.New("delivered patch identity changed")
 	}
-	basePaths, err := builder.changedPaths(ctx, receipt.BaseTree, snapshot.BaseTree)
+	basePaths, err := builder.changedPaths(ctx, receipt.BaseTree, advertisedBaseTree)
 	if err != nil {
 		return BaseAdvanceCompatibility{}, err
 	}
@@ -147,6 +135,21 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 	mergedFields := strings.Fields(string(mergedOutput))
 	if len(mergedFields) == 0 || !validGitTree(mergedFields[0]) {
 		return BaseAdvanceCompatibility{}, errors.New("merged result tree cannot be derived")
+	}
+	approvedEntries, err := listTreeEntries(ctx, repo, receipt.FinalCandidateTree)
+	if err != nil {
+		return BaseAdvanceCompatibility{}, err
+	}
+	mergedEntries, err := listTreeEntries(ctx, repo, mergedFields[0])
+	if err != nil {
+		return BaseAdvanceCompatibility{}, err
+	}
+	for _, path := range originalPaths {
+		approved, approvedPresent := approvedEntries[path]
+		merged, mergedPresent := mergedEntries[path]
+		if approvedPresent != mergedPresent || !bytes.Equal(approved, merged) {
+			return BaseAdvanceCompatibility{}, errors.New("merge result changed reviewed projection") // refusal:by-design world-action: only changing the merge result and reviewing the new candidate can restore this projection
+		}
 	}
 	var attestationHash, issuer string
 	if requireAttestation {
@@ -172,7 +175,7 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 		status, ciStatus = baseAdvanceCompatibleStatus, "success"
 	}
 	proof := BaseAdvanceCompatibility{
-		Status: status, Compatible: true, OriginalMergeBaseTree: receipt.BaseTree, NewBaseTree: snapshot.BaseTree,
+		Status: status, Compatible: true, OriginalMergeBaseTree: receipt.BaseTree, NewBaseTree: advertisedBaseTree,
 		OriginalPatchIdentity: originalPatch, DeliveredPatchIdentity: currentPatch,
 		DeliveredPathsDigest: receipt.PathsDigest, BaseAdvancePathsDigest: digestPaths(basePaths), PathsDisjoint: true,
 		MergedResultTree: mergedFields[0], CIAttestationArtifactHash: attestationHash,
