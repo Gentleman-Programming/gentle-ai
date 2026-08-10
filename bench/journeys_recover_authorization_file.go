@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -25,11 +26,21 @@ func recoverThroughAuthorizationFile(r *journeyRun) error {
 	if err != nil {
 		return err
 	}
-	invalidated, err := decodeWaveOperation(r.run(productArgsFor(r,
-		"review", "invalidate",
+	status := r.run(productArgsFor(r, "review", "status"), false)
+	var head authorityHead
+	if err := json.Unmarshal([]byte(strings.TrimSpace(status.Stdout)), &head); err != nil {
+		return fmt.Errorf("parse authorization-file predecessor status: %w (stderr: %s)", err, firstLine(status.Stderr))
+	}
+	predecessor, ok := head.entry(recoverAuthorizationFilePredecessor)
+	if !ok {
+		return fmt.Errorf("authorization-file predecessor status listed no authority")
+	}
+	invalidated, err := decodeWaveOperation(r.run([]string{
+		"review", "invalidate", "--cwd", r.sandbox.Repo,
 		"--lineage", recoverAuthorizationFilePredecessor,
-		"--expected-revision", started.StoreRevision,
-		"--reason", "operator abandoned"), false), "authorization-file predecessor invalidation")
+		"--expected-revision", predecessor.Revision,
+		"--reason", "operator abandoned",
+	}, false), "authorization-file predecessor invalidation")
 	if err != nil {
 		return err
 	}
