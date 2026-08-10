@@ -284,6 +284,9 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 	}
 	explicitSuccessor := request.SuccessorLineageID != ""
 	failedEvidence, _ := runtimeChainFailedEvidence(status.Attempts)
+	if failedEvidence == "" {
+		failedEvidence = request.RemediatesEvidenceRevision
+	}
 	if request.RemediatesEvidenceRevision != "" && failedEvidence != request.RemediatesEvidenceRevision {
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}

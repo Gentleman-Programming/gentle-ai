@@ -177,6 +177,105 @@ func TestCompactAcquireForeignTokenStaysBlockedWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestCompactSettleUsesChainFailedEvidenceAfterResetAndInterruptedAudit(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "compact-chain-remediation")
+	store.ReviewDisabled = true
+	first, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "compact-chain-begin-verification", WorkUnit: "verify",
+		EvidenceGoal: "independent verification", MaxAttempts: 1, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedEvidence := runtimeTestHash('a')
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: first.Revision, RequestID: "compact-chain-finish-verification", Outcome: AttemptFailed,
+		EvidenceRevision: failedEvidence, Diagnosis: "independent verification found a correctable defect",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "verification cleanup completed",
+		ProcessEvidence: "verification process scan completed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset, err := store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "compact-chain-audited-reset",
+		Reason: "maintainer decision: remediate under a fresh objective", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reset.EvidenceRevision != "" {
+		t.Fatalf("audited reset kept the live evidence pointer: %#v", reset)
+	}
+	stalled, err := store.Acquire(context.Background(), CompactAcquireRequest{
+		BeginAttemptRequest: BeginAttemptRequest{
+			RequestID: "compact-chain-begin-stalled", WorkUnit: "remediate",
+			EvidenceGoal: "repair admitted verification failure", MaxAttempts: 3, MaxChangedLines: 40,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stalled.State != CompactStateProceed || stalled.Token == "" {
+		t.Fatalf("stalled remediation acquire = %#v", stalled)
+	}
+	staleEvidence := runtimeTestHash('c')
+	stalledSettle, err := store.Settle(context.Background(), CompactSettleRequest{
+		Token: stalled.Token, RequestID: "compact-chain-finish-stalled", Outcome: AttemptInterrupted,
+		EvidenceRevision: staleEvidence, Diagnosis: "transport ended before the correction settled",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "stalled process group cleanup completed",
+		ProcessEvidence: "stalled process scan found no surviving descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stalledSettle.State != CompactStateProceed {
+		t.Fatalf("stalled remediation settle = %#v", stalledSettle)
+	}
+	status, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.EvidenceRevision != staleEvidence {
+		t.Fatalf("interrupted audit did not leave stale live evidence: %#v", status)
+	}
+	active, err := store.Acquire(context.Background(), CompactAcquireRequest{
+		BeginAttemptRequest: BeginAttemptRequest{
+			RequestID: "compact-chain-begin-correction", WorkUnit: "remediate",
+			EvidenceGoal: "repair admitted verification failure", MaxAttempts: 3, MaxChangedLines: 40,
+		},
+		RemediatesEvidenceRevision: failedEvidence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.State != CompactStateProceed || active.Token == "" {
+		t.Fatalf("active remediation acquire = %#v", active)
+	}
+	appendRuntimeLedgerFile(t, repo, "bounded compact correction across reset and interrupted audit\n")
+
+	completed, err := store.Settle(context.Background(), CompactSettleRequest{
+		Token: active.Token, RequestID: "compact-chain-finish-correction", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('b'), Diagnosis: "bounded correction passed focused checks",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "correction cleanup completed",
+		ProcessEvidence: "correction process scan completed", RemediatesEvidenceRevision: failedEvidence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.State != CompactStateComplete || completed.Reason != "" {
+		t.Fatalf("active remediation settle = %#v", completed)
+	}
+	final, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !final.Complete || final.ActiveAttempt != nil || len(final.Attempts) != 3 || final.Attempts[2].RemediatesEvidenceRevision != failedEvidence {
+		t.Fatalf("completed chain-derived compact remediation = %#v", final)
+	}
+}
+
 func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
 	fixture := newRuntimeRemediationFixture(t, true)
 	failNextCompactStoreSync(t, fixture.store)
