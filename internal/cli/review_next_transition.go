@@ -793,9 +793,10 @@ func (selector reviewTransitionSelector) recoveryArguments() ([]ReviewTransition
 	arguments := []ReviewTransitionArgument{}
 	switch target.Kind {
 	case reviewtransaction.TargetCurrentChanges:
-		if target.Projection == reviewtransaction.ProjectionStaged {
-			arguments = append(arguments, ReviewTransitionArgument{Name: "projection", Value: string(target.Projection)})
+		if target.Projection != reviewtransaction.ProjectionWorkspace && target.Projection != reviewtransaction.ProjectionStaged {
+			return nil, false
 		}
+		arguments = append(arguments, ReviewTransitionArgument{Name: "projection", Value: string(target.Projection)})
 	case reviewtransaction.TargetBaseDiff:
 		if target.BaseRef == "" || target.Projection != reviewtransaction.ProjectionWorkspace {
 			return nil, false

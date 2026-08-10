@@ -525,7 +525,7 @@ func TestReviewRecoverTransitionEmitsACommandThatRuns(t *testing.T) {
 		" --disposition=" + string(probe.ActionDisposition) +
 		" '--reason=" + reason + "'" +
 		" --actor=" + actor +
-		" '--maintainer-authorization=" + authorization + "'"
+		" '--maintainer-authorization=" + authorization + "' --projection=workspace"
 	if status.NextTransition.Execute.Command != want {
 		t.Fatalf("recover command = %q\nwant %q", status.NextTransition.Execute.Command, want)
 	}

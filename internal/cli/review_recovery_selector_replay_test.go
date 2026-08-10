@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,13 +10,14 @@ import (
 
 func TestRecoveryAuthorizationCollectionPreservesNormalizedSelectors(t *testing.T) {
 	t.Parallel()
-
 	tests := []struct {
 		name     string
 		recovery reviewtransaction.Target
 		want     []ReviewTransitionArgument
 	}{
-		{name: "current changes", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace}, want: []ReviewTransitionArgument{}},
+		{name: "current workspace over staged predecessor", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace}, want: []ReviewTransitionArgument{{Name: "projection", Value: "workspace"}}},
+		{name: "current changes without projection", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges}},
+		{name: "current changes with invalid projection", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: "future"}},
 		{name: "staged projection", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionStaged}, want: []ReviewTransitionArgument{{Name: "projection", Value: "staged"}}},
 		{name: "base diff", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetBaseDiff, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "main"}, want: []ReviewTransitionArgument{{Name: "base-ref", Value: "main"}, {Name: "committed-only", Value: "true"}}},
 		{name: "workspace overlay", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "main"}, want: []ReviewTransitionArgument{{Name: "base-ref", Value: "main"}, {Name: "projection", Value: "workspace"}, {Name: "workspace-overlay", Value: "true"}}},
@@ -26,16 +26,18 @@ func TestRecoveryAuthorizationCollectionPreservesNormalizedSelectors(t *testing.
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			if test.want == nil {
+				if _, representable := (reviewTransitionSelector{Recovery: &test.recovery}).recoveryArguments(); representable {
+					t.Fatalf("invalid recovery projection %q was representable", test.recovery.Projection)
+				}
+				return
+			}
 			status := recoverySelectorReplayStatus(t, test.recovery)
-			input := reviewNextTransitionInput{Selector: &reviewTransitionSelector{Recovery: &test.recovery}}
+			input := reviewNextTransitionInput{Selector: &reviewTransitionSelector{Projection: reviewtransaction.ProjectionStaged, Recovery: &test.recovery}}
 			collectedTransition := newReviewNextTransition(status, nil, nil, nil, nil, input)
 			collected := decodeRecoverySelectorReplayTransition(t, collectedTransition)
-			if collected.Kind != reviewNextTransitionCollect || collected.Collect == nil || len(collected.Collect.Inputs) != 1 {
-				t.Fatalf("recovery authorization transition = %#v, want one collect input", collected)
-			}
-			selectors := collected.Collect.Inputs[0].SelectorArguments
-			if selectors == nil || !reflect.DeepEqual(*selectors, test.want) {
-				t.Fatalf("recovery authorization selectors = %#v, want %#v", selectors, test.want)
+			if collected.Kind != reviewNextTransitionCollect || collected.Collect == nil || len(collected.Collect.Inputs) != 1 || collected.Collect.Inputs[0].SelectorArguments == nil || !reflect.DeepEqual(*collected.Collect.Inputs[0].SelectorArguments, test.want) {
+				t.Fatalf("recovery authorization transition = %#v, want selectors %#v", collected, test.want)
 			}
 			if test.name == "staged workspace overlay" {
 				validateRecoverySelectorReplaySchemas(t, collectedTransition)
@@ -56,18 +58,12 @@ func TestRecoveryAuthorizationCollectionPreservesNormalizedSelectors(t *testing.
 			input.Authorization = reviewTransitionRecoveryAuthorization(binding, successor, actor, reason)
 			authorizedTransition := newReviewNextTransition(status, nil, nil, nil, nil, input)
 			authorized := decodeRecoverySelectorReplayTransition(t, authorizedTransition)
-			if authorized.Kind != reviewNextTransitionExecute || authorized.Execute == nil {
-				t.Fatalf("authorized recovery transition = %#v, want execute", authorized)
-			}
-			if authorized.Execute.SelectorArguments == nil || !reflect.DeepEqual(*authorized.Execute.SelectorArguments, test.want) {
-				t.Fatalf("authorized recovery selectors = %#v, want %#v", authorized.Execute.SelectorArguments, test.want)
+			if authorized.Kind != reviewNextTransitionExecute || authorized.Execute == nil || authorized.Execute.SelectorArguments == nil || !reflect.DeepEqual(*authorized.Execute.SelectorArguments, test.want) {
+				t.Fatalf("authorized recovery transition = %#v, want execute selectors %#v", authorized, test.want)
 			}
 			arguments, err := reviewTransitionArgumentMap(authorized.Execute.Arguments)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if arguments["maintainer-authorization"] != input.Authorization {
-				t.Fatal("selector replay changed the canonical recovery authorization bytes")
+			if err != nil || arguments["maintainer-authorization"] != input.Authorization {
+				t.Fatalf("selector replay changed the canonical recovery authorization bytes: %v", err)
 			}
 			status.NextTransition = &authorizedTransition
 			if err := status.Validate(); err != nil {
@@ -119,19 +115,12 @@ func recoverySelectorReplayStatus(t *testing.T, recovery reviewtransaction.Targe
 
 func validateRecoverySelectorReplaySchemas(t *testing.T, transition ReviewNextTransition) {
 	t.Helper()
-	marshal := func(transition ReviewNextTransition) []byte {
-		payload, err := json.Marshal(transition)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return payload
-	}
-	payload := marshal(transition)
+	payload := []byte(mustReviewJSON(t, transition))
 	selector := &(*transition.Collect.Inputs[0].SelectorArguments)[0]
 	selector.Token = "--base-ref=main"
-	tokenized := marshal(transition)
+	tokenized := []byte(mustReviewJSON(t, transition))
 	selector.Token = ""
-	if string(marshal(transition)) != string(payload) {
+	if mustReviewJSON(t, transition) != string(payload) {
 		t.Fatal("tokenized fixture changed more than one selector argument")
 	}
 	for _, schema := range []struct{ version, file string }{
@@ -150,13 +139,7 @@ func validateRecoverySelectorReplaySchemas(t *testing.T, transition ReviewNextTr
 
 func decodeRecoverySelectorReplayTransition(t *testing.T, transition ReviewNextTransition) ReviewNextTransition {
 	t.Helper()
-	payload, err := json.Marshal(transition)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var decoded ReviewNextTransition
-	if err := json.Unmarshal(payload, &decoded); err != nil {
-		t.Fatal(err)
-	}
+	decodeStrictReviewJSON(t, []byte(mustReviewJSON(t, transition)), &decoded)
 	return decoded
 }

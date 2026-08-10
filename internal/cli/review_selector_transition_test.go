@@ -673,15 +673,12 @@ func TestCurrentChangesRecoverSelectorPresenceSurvivesJSONRoundTrip(t *testing.T
 		t.Fatalf("current-changes recovery transition = %#v", status.NextTransition)
 	}
 	selectors := status.NextTransition.Execute.SelectorArguments
-	if selectors == nil || len(*selectors) != 0 {
-		t.Fatalf("current-changes selectors = %#v, want explicit empty selector contract", selectors)
+	if selectors == nil || len(*selectors) != 1 || (*selectors)[0].Name != "projection" || (*selectors)[0].Value != "workspace" {
+		t.Fatalf("current-changes selectors = %#v, want explicit workspace projection", selectors)
 	}
 	payload, err := json.Marshal(status)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !bytes.Contains(payload, []byte(`"selector_arguments":[]`)) {
-		t.Fatalf("status JSON omitted explicit empty selectors: %s", payload)
 	}
 	var decoded ReviewTargetStatusResult
 	if err := json.Unmarshal(payload, &decoded); err != nil {
@@ -689,7 +686,7 @@ func TestCurrentChangesRecoverSelectorPresenceSurvivesJSONRoundTrip(t *testing.T
 	}
 	if decoded.NextTransition == nil || decoded.NextTransition.Execute == nil ||
 		decoded.NextTransition.Execute.SelectorArguments == nil ||
-		len(*decoded.NextTransition.Execute.SelectorArguments) != 0 {
+		!reflect.DeepEqual(*decoded.NextTransition.Execute.SelectorArguments, *selectors) {
 		t.Fatalf("round-tripped selectors = %#v", decoded.NextTransition)
 	}
 	if err := decoded.Validate(); err != nil {
