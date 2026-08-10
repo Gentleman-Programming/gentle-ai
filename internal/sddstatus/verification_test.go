@@ -98,6 +98,40 @@ func TestValidateVerifyReportAdmission(t *testing.T) {
 	}
 }
 
+func TestValidateSliceVerifyReportAdmission(t *testing.T) {
+	assignment := SliceAssignment{SliceID: "slice-a", RequirementIDs: []string{"REQ-1", "REQ-2"}, ScenarioIDs: []string{"S-1", "S-2", "S-3"}}
+	report := strings.Replace(testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0), "verdict: pass", "scope: slice\nslice_id: slice-a\nrequirement_ids: REQ-1,REQ-2\nscenario_ids: S-1,S-2,S-3\nverdict: pass", 1)
+	tests := []struct {
+		name, report, sliceID, reason string
+		expected                      SpecCounts
+		assigned                      SliceAssignment
+		known                         []SliceAssignment
+		valid                         bool
+	}{
+		{name: "complete pass", report: report, sliceID: "slice-a", expected: SpecCounts{2, 3}, assigned: assignment, known: []SliceAssignment{assignment}, valid: true},
+		{name: "slice id mismatch", report: report, sliceID: "slice-b", expected: SpecCounts{2, 3}, assigned: assignment, reason: "slice_id"},
+		{name: "partial metadata", report: strings.Replace(report, "scenario_ids: S-1,S-2,S-3\n", "", 1), sliceID: "slice-a", expected: SpecCounts{2, 3}, assigned: assignment, reason: "missing requirement_ids/scenario_ids"},
+		{name: "altered assignment", report: report, sliceID: "slice-a", expected: SpecCounts{2, 3}, assigned: assignment, known: []SliceAssignment{{SliceID: "slice-a", RequirementIDs: []string{"REQ-1"}, ScenarioIDs: assignment.ScenarioIDs}}, reason: "altered"},
+		{name: "overlap", report: report, sliceID: "slice-a", expected: SpecCounts{2, 3}, assigned: assignment, known: []SliceAssignment{assignment, {SliceID: "slice-b", RequirementIDs: []string{"REQ-2"}}}, reason: "overlaps"},
+		{name: "incomplete pass", report: strings.Replace(report, "requirements: 2/2", "requirements: 1/2", 1), sliceID: "slice-a", expected: SpecCounts{2, 3}, assigned: assignment, reason: "contradicts"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ValidateSliceVerifyReportAdmission(tt.report, tt.expected, tt.sliceID, tt.assigned, tt.known)
+			if got.Valid != tt.valid || (tt.reason != "" && !strings.Contains(got.Reason, tt.reason)) {
+				t.Fatalf("admission = %#v, want valid=%v reason containing %q", got, tt.valid, tt.reason)
+			}
+		})
+	}
+}
+
+func TestWholePathAdmitsSliceFieldsInReport(t *testing.T) {
+	report := strings.Replace(testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0), "verdict: pass", "scope: slice\nslice_id: slice-a\nrequirement_ids: REQ-1\nscenario_ids: S-1\nverdict: pass", 1)
+	if got := ValidateVerifyReportAdmission(report, SpecCounts{Requirements: 3, Scenarios: 3}); got.Valid || !strings.Contains(got.Reason, "actual requirement count") {
+		t.Fatalf("whole-path admission = %#v, want inert slice fields followed by totals rejection", got)
+	}
+}
+
 func TestVerifyReportAuthorityOnlyFieldCountUsesContract(t *testing.T) {
 	partial := strings.TrimSuffix(testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0), "```") + "authority_only_failure: true\n```"
 	admission := ValidateVerifyReportAdmission(partial, SpecCounts{Requirements: 2, Scenarios: 3})

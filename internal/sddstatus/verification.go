@@ -20,6 +20,7 @@ type VerifyReportContract struct {
 	Schema              string
 	MaxBytes            int
 	RequiredFields      []string
+	SliceFields         []string
 	Verdicts            []string
 	AuthorityOnlyFields []string
 	EmptyOutputHash     string
@@ -30,6 +31,8 @@ var verifyReportRequiredFields = []string{
 	"requirements", "scenarios", "test_command", "test_exit_code", "test_output_hash",
 	"build_command", "build_exit_code", "build_output_hash",
 }
+
+var verifyReportSliceFields = []string{"scope", "slice_id", "requirement_ids", "scenario_ids"}
 
 var verifyReportAuthorityOnlyFields = []string{
 	"authority_only_failure", "missing_review_authority", "substantive_failure",
@@ -43,6 +46,7 @@ func VerifyReportValidationContract() VerifyReportContract {
 		Schema:              VerifyResultSchema,
 		MaxBytes:            MaxVerifyReportBytes,
 		RequiredFields:      append([]string(nil), verifyReportRequiredFields...),
+		SliceFields:         append([]string(nil), verifyReportSliceFields...),
 		Verdicts:            append([]string(nil), verifyReportVerdicts...),
 		AuthorityOnlyFields: append([]string(nil), verifyReportAuthorityOnlyFields...),
 		EmptyOutputHash:     VerifyEmptyOutputHash,
@@ -188,13 +192,151 @@ func ValidateVerifyReportAdmission(text string, expected SpecCounts) VerifyRepor
 	return result
 }
 
+func ValidateSliceVerifyReportAdmission(text string, expected SpecCounts, sliceID string, assigned SliceAssignment, known []SliceAssignment) VerifyReportAdmission {
+	report, reason := parseVerifyReport(text)
+	result := VerifyReportAdmission{Reason: reason}
+	if reason != "" {
+		return result
+	}
+	result.Verdict, result.EvidenceRevision = report.Verdict, report.EvidenceRevision
+	fields := report.Fields
+	if _, ok := fields["scope"]; !ok {
+		result.Reason = "missing scope in verify result envelope"
+	} else if fields["scope"] != "slice" {
+		result.Reason = "slice admission requires scope: slice"
+	} else if fields["slice_id"] == "" {
+		result.Reason = "missing slice_id in verify result envelope"
+	} else if fields["slice_id"] != sliceID {
+		result.Reason = "slice_id does not match the slice authority"
+	} else if assigned.SliceID != sliceID {
+		result.Reason = "slice identity is unknown to the bound assignment"
+	} else if _, ok := fields["requirement_ids"]; !ok {
+		result.Reason = "missing requirement_ids/scenario_ids in verify result envelope"
+	} else if _, ok := fields["scenario_ids"]; !ok {
+		result.Reason = "missing requirement_ids/scenario_ids in verify result envelope"
+	} else {
+		requirementIDs, valid := parseSliceIDList(fields["requirement_ids"])
+		if !valid {
+			result.Reason = "invalid requirement_ids in verify result envelope"
+			return result
+		}
+		scenarioIDs, valid := parseSliceIDList(fields["scenario_ids"])
+		if !valid {
+			result.Reason = "invalid scenario_ids in verify result envelope"
+			return result
+		}
+		if !sameIDSet(requirementIDs, assigned.RequirementIDs) || !sameIDSet(scenarioIDs, assigned.ScenarioIDs) {
+			result.Reason = "report IDs do not match the bound assignment"
+			return result
+		}
+		seen := false
+		for _, other := range known {
+			if other.SliceID == sliceID {
+				if seen {
+					result.Reason = "duplicate slice identity in known assignments"
+					return result
+				}
+				seen = true
+				if !sameIDSet(other.RequirementIDs, assigned.RequirementIDs) || !sameIDSet(other.ScenarioIDs, assigned.ScenarioIDs) {
+					result.Reason = "bound assignment was altered after binding"
+					return result
+				}
+			} else if overlapsIDs(other.RequirementIDs, assigned.RequirementIDs) || overlapsIDs(other.ScenarioIDs, assigned.ScenarioIDs) {
+				result.Reason = "assignment overlaps work unit " + other.SliceID
+				return result
+			}
+		}
+		if expected.Requirements != len(assigned.RequirementIDs) || expected.Scenarios != len(assigned.ScenarioIDs) {
+			result.Reason = "CLI totals do not match the bound assignment"
+			return result
+		}
+		return validateParsedVerifyReport(report, expected)
+	}
+	return result
+}
+
+func validateParsedVerifyReport(report verifyReport, expected SpecCounts) VerifyReportAdmission {
+	result := VerifyReportAdmission{Verdict: report.Verdict, EvidenceRevision: report.EvidenceRevision}
+	if report.Requirements.Total != expected.Requirements {
+		result.Reason = fmt.Sprintf("verify result total %d does not match actual requirement count %d", report.Requirements.Total, expected.Requirements)
+		return result
+	}
+	if report.Scenarios.Total != expected.Scenarios {
+		result.Reason = fmt.Sprintf("verify result total %d does not match actual scenario count %d", report.Scenarios.Total, expected.Scenarios)
+		return result
+	}
+	complete := report.Requirements.Completed == report.Requirements.Total && report.Scenarios.Completed == report.Scenarios.Total
+	if report.Verdict != "fail" {
+		if report.TestExit != 0 || report.BuildExit != 0 || report.Blockers != 0 || report.Critical != 0 || !complete {
+			result.Reason = "passing verdict contradicts failing or incomplete evidence"
+			return result
+		}
+	} else if !report.AuthorityOnly {
+		if report.TestExit == 125 || report.BuildExit == 125 {
+			result.Reason = "exit code 125 requires the exact authority-only extension"
+			return result
+		}
+		if report.TestExit == 0 && report.BuildExit == 0 && report.Blockers == 0 && report.Critical == 0 && complete {
+			result.Reason = "fail verdict is contradictory with all-green evidence"
+			return result
+		}
+	}
+	result.Valid = true
+	return result
+}
+
+func parseSliceIDList(value string) ([]string, bool) {
+	if value == "none" {
+		return []string{}, true
+	}
+	parts := strings.Split(value, ",")
+	seen := make(map[string]bool, len(parts))
+	for index := range parts {
+		parts[index] = strings.TrimSpace(parts[index])
+		if parts[index] == "" || seen[parts[index]] {
+			return nil, false
+		}
+		seen[parts[index]] = true
+	}
+	return parts, true
+}
+
+func sameIDSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	set := make(map[string]bool, len(left))
+	for _, id := range left {
+		set[id] = true
+	}
+	for _, id := range right {
+		if !set[id] {
+			return false
+		}
+	}
+	return true
+}
+
+func overlapsIDs(left, right []string) bool {
+	set := make(map[string]bool, len(left))
+	for _, id := range left {
+		set[id] = true
+	}
+	for _, id := range right {
+		if set[id] {
+			return true
+		}
+	}
+	return false
+}
+
 func parseVerifyReport(text string) (verifyReport, string) {
 	lines, end, reason := parseLeadingEnvelope(text)
 	if reason != "" {
 		return verifyReport{}, reason
 	}
-	allowed := make(map[string]bool, len(verifyReportRequiredFields)+len(verifyReportAuthorityOnlyFields))
-	for _, field := range append(append([]string{}, verifyReportRequiredFields...), verifyReportAuthorityOnlyFields...) {
+	allowed := make(map[string]bool, len(verifyReportRequiredFields)+len(verifyReportAuthorityOnlyFields)+len(verifyReportSliceFields))
+	for _, field := range append(append(append([]string{}, verifyReportRequiredFields...), verifyReportAuthorityOnlyFields...), verifyReportSliceFields...) {
 		allowed[field] = true
 	}
 	fields, reason := parseScalarFields(lines[1:end], allowed, "verify result")

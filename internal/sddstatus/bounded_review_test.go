@@ -579,6 +579,37 @@ func TestResolveFinalVerifyWaitsForAllTasks(t *testing.T) {
 	}
 }
 
+// TestResolveSlicePassDoesNotUnlockArchive pins the archive isolation proof
+// (design D7/Requirement: Slice PASS Never Implies Whole-Change Completion).
+// A passing slice report (2/2 reqs, 3/3 scens) is admitted by the slice
+// validator but the whole-change resolver still compares against the spec
+// totals (here 1/1), so Verify never reaches DependencyAllDone and Archive
+// stays blocked regardless of slice evidence on disk.
+func TestResolveSlicePassDoesNotUnlockArchive(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n- [ ] 1.2 Pending\n")
+	slice := strings.Replace(boundedVerifyEnvelope(shaID("1"), "pass"), "verdict: pass", "scope: slice\nslice_id: slice-a\nrequirement_ids: REQ-1,REQ-2\nscenario_ids: S-1,S-2,S-3\nverdict: pass", 1)
+	slice = strings.Replace(slice, "requirements: 1/1", "requirements: 2/2", 1)
+	slice = strings.Replace(slice, "scenarios: 1/1", "scenarios: 3/3", 1)
+	admission := ValidateSliceVerifyReportAdmission(slice, SpecCounts{Requirements: 2, Scenarios: 3}, "slice-a",
+		SliceAssignment{SliceID: "slice-a", RequirementIDs: []string{"REQ-1", "REQ-2"}, ScenarioIDs: []string{"S-1", "S-2", "S-3"}},
+		[]SliceAssignment{{SliceID: "slice-a", RequirementIDs: []string{"REQ-1", "REQ-2"}, ScenarioIDs: []string{"S-1", "S-2", "S-3"}}})
+	if !admission.Valid {
+		t.Fatalf("slice admission = %#v, want valid", admission)
+	}
+	write(t, filepath.Join(changeRoot, "verify-report.md"), slice)
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.Dependencies.Verify == DependencyAllDone {
+		t.Fatalf("verify=%q, slice PASS must not satisfy whole-change verify", status.Dependencies.Verify)
+	}
+	if status.Dependencies.Archive != DependencyBlocked {
+		t.Fatalf("archive=%q, slice PASS must not unlock archive", status.Dependencies.Archive)
+	}
+}
+
 // TestResolveMakesVerifyReadyWithNoPreVerifyReviewSupervision is Wave 4 S3's
 // characterization of the new sequence (design.md decision 3, proposal.md's
 // #1 success criterion, maintainer directive Engram #10123): apply -> verify

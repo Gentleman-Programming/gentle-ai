@@ -60,6 +60,8 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	var roots sddAttemptRootList
 	registerSDDAttemptRootFlag(flags, operation, &roots)
 	changeInstance := registerSDDAttemptStringFlag(flags, operation, "change-instance")
+	assignedRequirementIDs := registerSDDAttemptStringFlag(flags, operation, "assigned-requirement-ids")
+	assignedScenarioIDs := registerSDDAttemptStringFlag(flags, operation, "assigned-scenario-ids")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -83,6 +85,17 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	if strings.TrimSpace(*change) == "" {
 		return errors.New("sdd-attempt requires --change")
+	}
+	assignmentFlags := presentSDDAttemptFlags(args[1:], "assigned-requirement-ids", "assigned-scenario-ids")
+	if assignmentFlags == 1 {
+		return errors.New("assignment flags require --assigned-requirement-ids and --assigned-scenario-ids together") // refusal:by-design operator-knowledge: the operator must decide whether to bind the obligation assignment as a pair and may either drop both flags or supply both
+	}
+	assignmentExplicit := assignmentFlags == 2
+	parseAssignmentIDs := func(value string) []string {
+		if strings.TrimSpace(value) == "" {
+			return []string{}
+		}
+		return strings.Split(value, ",")
 	}
 
 	reviewDisabled, err := reviewDrivenDevelopmentDisabled(ctx, *cwd)
@@ -118,6 +131,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		result, err = store.Begin(ctx, sddstatus.BeginAttemptRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
+			ObligationAssignmentExplicit: assignmentExplicit, AssignedRequirementIDs: parseAssignmentIDs(*assignedRequirementIDs), AssignedScenarioIDs: parseAssignmentIDs(*assignedScenarioIDs),
 		})
 	case "finish":
 		remediationFlags := presentSDDAttemptFlags(args[1:], "expected-binding-revision", "successor-lineage", "remediates-evidence-revision")
@@ -147,6 +161,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		result, err = store.Rescope(ctx, sddstatus.RescopeObjectiveRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, Reason: *reason, Actor: *actor,
+			ObligationAssignmentExplicit: assignmentExplicit, AssignedRequirementIDs: parseAssignmentIDs(*assignedRequirementIDs), AssignedScenarioIDs: parseAssignmentIDs(*assignedScenarioIDs),
 		})
 	case "repair":
 		result, err = store.RepairConsecutiveRescope(ctx, sddstatus.RepairConsecutiveRescopeRequest{
@@ -157,6 +172,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			BeginAttemptRequest: sddstatus.BeginAttemptRequest{
 				RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
+				ObligationAssignmentExplicit: assignmentExplicit, AssignedRequirementIDs: parseAssignmentIDs(*assignedRequirementIDs), AssignedScenarioIDs: parseAssignmentIDs(*assignedScenarioIDs),
 			},
 			Token:                      *token,
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
@@ -238,6 +254,8 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "evidence-goal", required: true, usage: "required; single-line objective, at most 240 bytes"},
 		{name: "max-attempts", kind: sddAttemptIntFlag, usage: "optional; default 2, limit 1..100"},
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "optional; default 200, limit 1..1000000"},
+		{name: "assigned-requirement-ids", usage: "optional with assigned-scenario-ids; comma-separated exact IDs"},
+		{name: "assigned-scenario-ids", usage: "optional with assigned-requirement-ids; comma-separated exact IDs"},
 	}},
 	{name: "finish", purpose: "Complete the active runtime attempt", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -276,6 +294,8 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, required: true, usage: "required; explicit limit 1..1000000, cannot exceed current objective"},
 		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
+		{name: "assigned-requirement-ids", usage: "optional with assigned-scenario-ids; comma-separated exact IDs"},
+		{name: "assigned-scenario-ids", usage: "optional with assigned-requirement-ids; comma-separated exact IDs"},
 	}},
 	{name: "repair", purpose: "Repair the historical consecutive-rescope publication defect", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -292,6 +312,8 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "evidence-goal", required: true, usage: "required; single-line objective, at most 240 bytes"},
 		{name: "max-attempts", kind: sddAttemptIntFlag, usage: "optional; default 2, limit 1..100"},
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "optional; default 200, limit 1..1000000"},
+		{name: "assigned-requirement-ids", usage: "optional with assigned-scenario-ids; comma-separated exact IDs"},
+		{name: "assigned-scenario-ids", usage: "optional with assigned-requirement-ids; comma-separated exact IDs"},
 		{name: "remediates-evidence-revision", usage: "optional; sha256:<64 lowercase hex> failed evidence for unmanaged remediation"},
 	}},
 	{name: "settle", purpose: "Complete the attempt selected by its token", flags: []sddAttemptFlagDefinition{

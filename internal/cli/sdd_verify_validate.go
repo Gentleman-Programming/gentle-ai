@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -30,6 +31,10 @@ var sddVerifyValidateFlagDefinitions = []sddVerifyValidateFlagDefinition{
 	{name: "input", value: "<path|->", usage: "Verify report path; use - to read stdin", kind: sddVerifyValidateStringFlag},
 	{name: "requirements", value: "<n>", usage: "Authoritative nonnegative requirement total", kind: sddVerifyValidateIntFlag},
 	{name: "scenarios", value: "<n>", usage: "Authoritative nonnegative scenario total", kind: sddVerifyValidateIntFlag},
+	{name: "scope", value: "<whole|slice>", usage: "Validation scope (default whole)", kind: sddVerifyValidateStringFlag},
+	{name: "slice-id", value: "<id>", usage: "Provider-owned slice identity", kind: sddVerifyValidateStringFlag},
+	{name: "cwd", value: "<path>", usage: "Repository working directory for slice authority", kind: sddVerifyValidateStringFlag},
+	{name: "change", value: "<name>", usage: "SDD change identifier for slice authority", kind: sddVerifyValidateStringFlag},
 }
 
 // RunSDDVerifyValidate validates a complete report without touching an artifact store.
@@ -46,6 +51,10 @@ func runSDDVerifyValidate(args []string, stdin io.Reader, stdout io.Writer) erro
 	input := registerSDDVerifyValidateStringFlag(flags, "input", "")
 	requirements := registerSDDVerifyValidateIntFlag(flags, "requirements", -2)
 	scenarios := registerSDDVerifyValidateIntFlag(flags, "scenarios", -2)
+	scope := registerSDDVerifyValidateStringFlag(flags, "scope", "whole")
+	sliceID := registerSDDVerifyValidateStringFlag(flags, "slice-id", "")
+	cwd := registerSDDVerifyValidateStringFlag(flags, "cwd", "")
+	change := registerSDDVerifyValidateStringFlag(flags, "change", "")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -64,6 +73,16 @@ func runSDDVerifyValidate(args []string, stdin io.Reader, stdout io.Writer) erro
 	if *requirements < 0 || *scenarios < 0 {
 		return errors.New("requirement and scenario counts must be nonnegative")
 	}
+	*scope, *sliceID = strings.TrimSpace(*scope), strings.TrimSpace(*sliceID)
+	if *scope != "whole" && *scope != "slice" {
+		return errors.New("sdd-verify-validate --scope must be whole or slice") // refusal:by-design operator-knowledge: only the operator can choose between whole-change and slice-scoped admission; the CLI accepts exactly one of these two values
+	}
+	if *scope == "whole" && (*sliceID != "" || strings.TrimSpace(*cwd) != "" || strings.TrimSpace(*change) != "") {
+		return errors.New("slice-only flags require --scope slice") // refusal:by-design operator-knowledge: the operator must move slice-only flags under an explicit --scope slice invocation, or remove them to keep whole-change admission
+	}
+	if *scope == "slice" && (*sliceID == "" || strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*change) == "") {
+		return errors.New("slice scope requires --slice-id, --cwd, and --change") // refusal:by-design operator-knowledge: the operator must supply the provider-owned slice identity plus the repository context the runtime store needs to look up its bound assignment
+	}
 	reader := stdin
 	if *input != "-" {
 		file, err := os.Open(*input)
@@ -80,7 +99,26 @@ func runSDDVerifyValidate(args []string, stdin io.Reader, stdout io.Writer) erro
 	if len(payload) > maxVerifyReportBytes {
 		return fmt.Errorf("verify report exceeds %d-byte limit", maxVerifyReportBytes)
 	}
-	admission := sddstatus.ValidateVerifyReportAdmission(string(payload), sddstatus.SpecCounts{Requirements: *requirements, Scenarios: *scenarios})
+	expected := sddstatus.SpecCounts{Requirements: *requirements, Scenarios: *scenarios}
+	admission := sddstatus.ValidateVerifyReportAdmission(string(payload), expected)
+	if *scope == "slice" {
+		store, openErr := sddstatus.OpenRuntimeStore(context.Background(), *cwd, *change)
+		if openErr != nil {
+			return fmt.Errorf("open native SDD runtime authority: %w", openErr)
+		}
+		assignments, loadErr := store.SliceAssignments()
+		if loadErr != nil {
+			return fmt.Errorf("read slice assignments: %w", loadErr)
+		}
+		var assigned sddstatus.SliceAssignment
+		for _, candidate := range assignments {
+			if candidate.SliceID == *sliceID {
+				assigned = candidate
+				break
+			}
+		}
+		admission = sddstatus.ValidateSliceVerifyReportAdmission(string(payload), expected, *sliceID, assigned, assignments)
+	}
 	if !admission.Valid {
 		return fmt.Errorf("verify report admission denied: %s", admission.Reason)
 	}
