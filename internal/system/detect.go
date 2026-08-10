@@ -229,7 +229,7 @@ func osReleaseID(linuxOSRelease string) string {
 // instead of "linux", causing the npm-shim to look for non-existent
 // "android-<arch>" bundles.
 func IsAndroid() bool {
-	return os.Getenv("TERMUX_VERSION") != "" || os.Getenv("ANDROID_ROOT") != ""
+	return runtime.GOOS == "android" || os.Getenv("TERMUX_VERSION") != "" || os.Getenv("ANDROID_ROOT") != ""
 }
 
 // CodeGraphPlatformSupported returns true if the current platform has prebuilt

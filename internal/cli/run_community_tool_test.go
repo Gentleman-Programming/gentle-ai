@@ -55,9 +55,10 @@ func TestInstallRuntimeStagePlanSkipsCodeGraphOnUnsupportedPlatform(t *testing.T
 		homeDir:      t.TempDir(),
 		workspaceDir: "/work/project",
 		selection: model.Selection{
+			Agents:         []model.AgentID{model.AgentPi},
 			CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
 		},
-		resolved: planner.ResolvedPlan{},
+		resolved: planner.ResolvedPlan{Agents: []model.AgentID{model.AgentPi}},
 		profile:  system.PlatformProfile{},
 		state:    &runtimeState{},
 	}
@@ -66,6 +67,9 @@ func TestInstallRuntimeStagePlanSkipsCodeGraphOnUnsupportedPlatform(t *testing.T
 	for _, step := range plan.Apply {
 		if step.ID() == "community-tool:codegraph" {
 			t.Fatal("install plan on unsupported platform must not include CodeGraph community tool step")
+		}
+		if step.ID() == "community-tool:pi-codegraph-reconcile" || step.ID() == "community-tool:pi-codegraph-deselect" {
+			t.Fatal("install plan on unsupported platform must not include Pi CodeGraph step")
 		}
 	}
 }

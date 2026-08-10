@@ -1757,7 +1757,7 @@ func TestSyncRuntimeSkipsCodeGraphStepsOnUnsupportedPlatform(t *testing.T) {
 	mustWriteFile(t, filepath.Join(home, ".config", "opencode", "opencode.json"), []byte(`{}`))
 
 	selected := model.Selection{
-		Agents:         []model.AgentID{model.AgentOpenCode},
+		Agents:         []model.AgentID{model.AgentOpenCode, model.AgentPi},
 		CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph},
 	}
 	rt, err := newSyncRuntime(home, selected)

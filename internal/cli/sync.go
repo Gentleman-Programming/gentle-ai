@@ -640,8 +640,6 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
 			paths[path] = struct{}{}
 		}
-	}
-	if selection.HasCommunityTool(model.CommunityToolCodeGraph) && system.CodeGraphPlatformSupported() {
 		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
 			paths[path] = struct{}{}
 		}
