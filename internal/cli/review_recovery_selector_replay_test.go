@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"reflect"
@@ -152,6 +153,7 @@ func validateRecoverySelectorReplaySchemas(t *testing.T, transition ReviewNextTr
 	if err != nil {
 		t.Fatal(err)
 	}
+	tokenized := bytes.Replace(payload, []byte(`"value":"main"`), []byte(`"value":"main","token":"--base-ref=main"`), 1)
 	for _, schema := range []struct{ version, file string }{
 		{version: "v1", file: "status.schema.json"},
 		{version: "v1", file: "status-v2.schema.json"},
@@ -159,7 +161,10 @@ func validateRecoverySelectorReplaySchemas(t *testing.T, transition ReviewNextTr
 		{version: "v2", file: "status-v4.schema.json"},
 		{version: "v2", file: "status-v5.schema.json"},
 	} {
-		validateAgainstPublishedStatusNextTransitionSchema(t, schema.version, schema.file, payload)
+		t.Run(schema.version+"/"+schema.file, func(t *testing.T) {
+			validateAgainstPublishedStatusNextTransitionSchema(t, schema.version, schema.file, payload)
+			validateAgainstPublishedStatusNextTransitionSchema(t, schema.version, schema.file, tokenized, true)
+		})
 	}
 }
 

@@ -799,7 +799,7 @@ func validateAgainstPublishedNextTransitionSchemaV5(t *testing.T, payload []byte
 // deliberately excluding the top-level schema's "projection" property so
 // compiling never touches projection.schema.json's RE2-incompatible
 // negative-lookahead regex (see the comment above the v1 wrapper).
-func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, schemaFile string, payload []byte) {
+func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, schemaFile string, payload []byte, reject ...bool) {
 	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration"))
 	if err != nil {
@@ -870,8 +870,15 @@ func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, version, s
 	if err := json.Unmarshal(payload, &document); err != nil {
 		t.Fatal(err)
 	}
-	if err := schema.Validate(document); err != nil {
-		t.Fatalf("published next_transition schema (%s) rejected the emitted transition: %v", schemaFile, err)
+	validationErr := schema.Validate(document)
+	if len(reject) != 0 {
+		if validationErr == nil {
+			t.Fatalf("published next_transition schema (%s) accepted a tokenized selector", schemaFile)
+		}
+		return
+	}
+	if validationErr != nil {
+		t.Fatalf("published next_transition schema (%s) rejected the emitted transition: %v", schemaFile, validationErr)
 	}
 }
 
