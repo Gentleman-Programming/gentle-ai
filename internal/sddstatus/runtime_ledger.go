@@ -2723,6 +2723,12 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 	return nil
 }
 
+// runtimeAssignmentFieldsEqual compares the obligation assignment 3-field
+// block (presence marker + requirement IDs + scenario IDs) between two
+// runtime records. The presence marker is checked first because it alone
+// disambiguates nil vs explicit-empty under encoding/json omitempty.
+// slices.Equal is required for the []string comparisons; Go == does not
+// compile on a struct that contains []string fields (D10 landmine).
 func runtimeAssignmentFieldsEqual(explicitA bool, requirementsA, scenariosA []string, explicitB bool, requirementsB, scenariosB []string) bool {
 	return explicitA == explicitB && slices.Equal(requirementsA, requirementsB) && slices.Equal(scenariosA, scenariosB)
 }
@@ -2818,6 +2824,15 @@ func (store RuntimeStore) SliceAssignments() ([]SliceAssignment, error) {
 	return out, nil
 }
 
+// normalizeRuntimeAssignmentFields validates the obligation assignment
+// 3-field block (presence marker + requirement IDs + scenario IDs) per
+// the bind-time contract. The presence marker must be true whenever
+// either ID list is non-empty (fail-closed). IDs are validated for:
+// maximum length (validateRuntimeText, 240 bytes), no commas (the wire
+// format splits on ','), no duplicates, no literal 'none' sentinel
+// (reserved for explicit-empty serialization on the wire), and an
+// overall maximumRuntimeAssignmentIDs (4096) cap per list. Returns the
+// copied, normalized slices — the input is never mutated.
 func normalizeRuntimeAssignmentFields(explicit bool, requirements, scenarios []string) ([]string, []string, error) {
 	if !explicit && (len(requirements) != 0 || len(scenarios) != 0) {
 		return nil, nil, errors.New("obligation assignment IDs require obligation_assignment_explicit")

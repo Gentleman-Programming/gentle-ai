@@ -192,6 +192,16 @@ func ValidateVerifyReportAdmission(text string, expected SpecCounts) VerifyRepor
 	return result
 }
 
+// ValidateSliceVerifyReportAdmission parses a verify result envelope and
+// admits it under the slice scope. The envelope must declare
+// scope=slice and a slice_id matching the bound assignment; the assigned
+// requirement / scenario IDs in the report must match the bound assignment
+// exactly; the bound assignment must not overlap another bound slice
+// (overlap is refused); no duplicate slice identities are allowed in
+// known; and the totals (expected.Requirements, expected.Scenarios) must
+// match the bound assignment. After these slice-specific guards, the
+// report is handed to validateParsedVerifyReport for the per-verdict
+// rules shared with whole-path admission.
 func ValidateSliceVerifyReportAdmission(text string, expected SpecCounts, sliceID string, assigned SliceAssignment, known []SliceAssignment) VerifyReportAdmission {
 	report, reason := parseVerifyReport(text)
 	result := VerifyReportAdmission{Reason: reason}
@@ -255,6 +265,12 @@ func ValidateSliceVerifyReportAdmission(text string, expected SpecCounts, sliceI
 	return result
 }
 
+// validateParsedVerifyReport applies the per-verdict rules shared with
+// whole-path admission: total requirements/scenarios must match the
+// expected spec counts; a passing verdict requires zero failures and
+// full completion; a failing verdict forbids the all-green
+// contradiction; exit code 125 (authority-only) requires the exact
+// authority-only extension.
 func validateParsedVerifyReport(report verifyReport, expected SpecCounts) VerifyReportAdmission {
 	result := VerifyReportAdmission{Verdict: report.Verdict, EvidenceRevision: report.EvidenceRevision}
 	if report.Requirements.Total != expected.Requirements {
@@ -285,6 +301,10 @@ func validateParsedVerifyReport(report verifyReport, expected SpecCounts) Verify
 	return result
 }
 
+// parseSliceIDList splits the wire-format slice ID list. The literal
+// "none" is the explicit-empty sentinel and yields an empty (non-nil)
+// slice. Empty entries (",,") and duplicates are rejected to keep the
+// downstream sameIDSet / overlapsIDs comparisons unambiguous.
 func parseSliceIDList(value string) ([]string, bool) {
 	if value == "none" {
 		return []string{}, true
@@ -301,6 +321,9 @@ func parseSliceIDList(value string) ([]string, bool) {
 	return parts, true
 }
 
+// sameIDSet reports whether two ID lists contain exactly the same
+// elements (order-independent). Used to verify that a slice report's
+// requirement/scenario IDs match the bound assignment exactly.
 func sameIDSet(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
@@ -317,6 +340,9 @@ func sameIDSet(left, right []string) bool {
 	return true
 }
 
+// overlapsIDs reports whether two ID lists share at least one element.
+// Used to refuse slice assignments whose requirement/scenario IDs
+// collide with another bound slice — a slice must own its work units.
 func overlapsIDs(left, right []string) bool {
 	set := make(map[string]bool, len(left))
 	for _, id := range left {
