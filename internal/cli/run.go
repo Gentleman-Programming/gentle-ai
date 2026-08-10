@@ -730,8 +730,8 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			anchored:    usesAnchoredCompatibilityTransaction(),
 		})
 	}
-	if containsAgent(r.resolved.Agents, model.AgentPi) && system.CodeGraphPlatformSupported() {
-		selected := r.selection.HasCommunityTool(model.CommunityToolCodeGraph)
+	if containsAgent(r.resolved.Agents, model.AgentPi) {
+		selected := r.selection.HasCommunityTool(model.CommunityToolCodeGraph) && system.CodeGraphPlatformSupported()
 		stepID := "community-tool:pi-codegraph-reconcile"
 		if !selected {
 			stepID = "community-tool:pi-codegraph-deselect"

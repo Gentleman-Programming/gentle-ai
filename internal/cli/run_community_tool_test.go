@@ -68,9 +68,16 @@ func TestInstallRuntimeStagePlanSkipsCodeGraphOnUnsupportedPlatform(t *testing.T
 		if step.ID() == "community-tool:codegraph" {
 			t.Fatal("install plan on unsupported platform must not include CodeGraph community tool step")
 		}
-		if step.ID() == "community-tool:pi-codegraph-reconcile" || step.ID() == "community-tool:pi-codegraph-deselect" {
-			t.Fatal("install plan on unsupported platform must not include Pi CodeGraph step")
+		if step.ID() == "community-tool:pi-codegraph-reconcile" {
+			t.Fatal("install plan on unsupported platform must not reconcile Pi CodeGraph (should deselect instead)")
 		}
+	}
+	// On unsupported platform with Pi agent, the deselect step should appear
+	// to clean up any previously installed Pi CodeGraph artifacts.
+	if !slices.ContainsFunc(plan.Apply, func(step pipeline.Step) bool {
+		return step.ID() == "community-tool:pi-codegraph-deselect"
+	}) {
+		t.Fatal("install plan on unsupported platform with Pi agent must include deselect step for cleanup")
 	}
 }
 
