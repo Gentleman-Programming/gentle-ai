@@ -52,6 +52,7 @@ type ReviewTransitionInput struct {
 	Schema              string                                        `json:"schema"`
 	CaptureOperation    string                                        `json:"capture_operation"`
 	Arguments           []ReviewTransitionArgument                    `json:"arguments"`
+	SelectorArguments   *[]ReviewTransitionArgument                   `json:"selector_arguments,omitempty"`
 	Submission          *ReviewTransitionSubmission                   `json:"submission,omitempty"`
 	ArtifactSubject     *reviewtransaction.ArtifactSubject            `json:"artifact_subject,omitempty"`
 	CandidateDiff       *reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff,omitempty"`
@@ -743,6 +744,7 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 		disposition = reviewtransaction.RecoveryInvalidated
 	}
 	var selectorArguments []ReviewTransitionArgument
+	var selectorReplay *[]ReviewTransitionArgument
 	// The core has already narrowed this to the evidence-bound,
 	// accounting-only edge. It is the only selector-free recovery.
 	if input.Selector != nil && !input.Selector.SelectorFreeAccountingOnlyRecovery {
@@ -766,18 +768,17 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 				CaptureOperation: "external.select_recovery_target", Arguments: reviewTargetArguments(status),
 			})
 		}
+		selectorReplay = reviewTransitionSelectorArguments(selectorArguments)
 	}
 	if input.recoveryAuthorized(binding) {
 		arguments := []ReviewTransitionArgument{{Name: "predecessor-lineage", Value: binding.LineageID}, {Name: "expected-predecessor-revision", Value: binding.Revision}, {Name: "successor-lineage", Value: input.Successor}, {Name: "disposition", Value: string(disposition)}, {Name: "reason", Value: input.Reason}, {Name: "actor", Value: input.Actor}, {Name: "maintainer-authorization", Value: input.Authorization}}
 		transition := reviewExecuteTransition("recovery_authorized", "review.recover", append(arguments, selectorArguments...), []ReviewTransitionArgument{{Name: "state", Value: string(status.Authority.State)}, {Name: "recovery_authorization", Value: "provided"}}, binding, nil)
-		if input.Selector != nil && !input.Selector.SelectorFreeAccountingOnlyRecovery {
-			transition.Execute.SelectorArguments = reviewTransitionSelectorArguments(selectorArguments)
-		}
+		transition.Execute.SelectorArguments = selectorReplay
 		return transition
 	}
 	return reviewCollectTransition("recovery_authorization_required", ReviewTransitionInput{
 		Name: "recovery_authorization", Schema: "gentle-ai.review-recovery-authorization/v1", CaptureOperation: "external.authorize_recovery",
-		Arguments: append(reviewBindingArguments(binding), ReviewTransitionArgument{Name: "disposition", Value: string(disposition)}),
+		Arguments: append(reviewBindingArguments(binding), ReviewTransitionArgument{Name: "disposition", Value: string(disposition)}), SelectorArguments: selectorReplay,
 	})
 }
 
@@ -805,14 +806,20 @@ func (selector reviewTransitionSelector) recoveryArguments() ([]ReviewTransition
 			return nil, false
 		}
 		arguments = append(arguments, ReviewTransitionArgument{Name: "base-ref", Value: target.BaseRef})
-		if target.Projection == reviewtransaction.ProjectionStaged {
+		switch target.Projection {
+		case reviewtransaction.ProjectionStaged:
 			arguments = append(arguments,
 				ReviewTransitionArgument{Name: "projection", Value: string(reviewtransaction.ProjectionStaged)},
 				ReviewTransitionArgument{Name: "workspace-overlay", Value: "true"},
 			)
-			return arguments, true
+		case reviewtransaction.ProjectionWorkspace:
+			arguments = append(arguments,
+				ReviewTransitionArgument{Name: "projection", Value: string(reviewtransaction.ProjectionWorkspace)},
+				ReviewTransitionArgument{Name: "workspace-overlay", Value: "true"},
+			)
+		default:
+			return nil, false
 		}
-		arguments = append(arguments, ReviewTransitionArgument{Name: "workspace-overlay", Value: "true"})
 	default:
 		return nil, false
 	}

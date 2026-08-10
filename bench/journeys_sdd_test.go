@@ -36,7 +36,7 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 			want[journey.ID] = true
 		}
 	}
-	// 85 since j76-claude-advisory-result-reaches-delivery (#2692, #2566),
+	// 88 since j76-claude-advisory-result-reaches-delivery (#2692, #2566),
 	// j77-capture-result-input-preflight-is-read-only (#2630 D2),
 	// j78-lens-finding-id-prefix-discovery (#1844), j79-consecutive-rescope-
 	// refuses-before-publication (#2830), and j80-rescope-authorized-evidence-
@@ -46,8 +46,9 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// j82 proves #2127's reviewed full candidate can publish an unpublished
 	// monotonic subset without reopening review.
 	// j83 proves #2127's pre-PR path binds its candidate to the unique merge-base
-	// while the advertised main ref remains a moving publication boundary. j87
-	// proves #2871's correction binds the immutable failure across a later interrupt;
+	// while the advertised main ref remains a moving publication boundary. j86
+	// proves #1972's recovery authorization collect preserves selectors through execute;
+	// j87 proves #2871's correction binds the immutable failure across a later interrupt;
 	// j88 proves #2843's unborn STATUS collects explicit untracked intent first;
 	// j89 proves #2758 never offers a workspace receipt for a different index;
 	// j93 proves #2822 classifies stale managed assets before START can persist.
@@ -60,8 +61,8 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	//
 	// Bump this deliberately when a journey is added OR removed, and name it
 	// here: the count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 87 {
-		t.Errorf("core journey count = %d, want 87", got)
+	if got := len(seen); got != 88 {
+		t.Errorf("core journey count = %d, want 88", got)
 	}
 	for id, found := range want {
 		if !found {

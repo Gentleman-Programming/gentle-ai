@@ -13,6 +13,12 @@ import (
 // needs before it will emit next_transition.
 const reviewContract = "gentle-ai.review-integration/v1"
 
+type negotiatedArgument struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Token string `json:"token"`
+}
+
 // statusEnvelope is the subset of `review status --next-transition` this
 // benchmark reads. Unknown fields are ignored so older and newer envelopes
 // both parse.
@@ -34,14 +40,11 @@ type statusEnvelope struct {
 		ReasonCode string `json:"reason_code"`
 		Collect    struct {
 			Inputs []struct {
-				Name             string `json:"name"`
-				CaptureOperation string `json:"capture_operation"`
-				Arguments        []struct {
-					Name  string `json:"name"`
-					Value string `json:"value"`
-					Token string `json:"token"`
-				} `json:"arguments"`
-				ArtifactSubject struct {
+				Name              string               `json:"name"`
+				CaptureOperation  string               `json:"capture_operation"`
+				Arguments         []negotiatedArgument `json:"arguments"`
+				SelectorArguments []negotiatedArgument `json:"selector_arguments"`
+				ArtifactSubject   struct {
 					SubjectHash string `json:"subject_hash"`
 				} `json:"artifact_subject"`
 				ChangedPathManifest []struct {
@@ -50,13 +53,10 @@ type statusEnvelope struct {
 			} `json:"inputs"`
 		} `json:"collect"`
 		Execute struct {
-			Operation string `json:"operation"`
-			Command   string `json:"command"`
-			Arguments []struct {
-				Name  string `json:"name"`
-				Value string `json:"value"`
-				Token string `json:"token"`
-			} `json:"arguments"`
+			Operation         string               `json:"operation"`
+			Command           string               `json:"command"`
+			Arguments         []negotiatedArgument `json:"arguments"`
+			SelectorArguments []negotiatedArgument `json:"selector_arguments"`
 		} `json:"execute"`
 	} `json:"next_transition"`
 }
@@ -627,6 +627,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, reviewedSupersetJourneys()...)
 	journeys = append(journeys, stagedDeliveryJourneys()...)
 	journeys = append(journeys, managedAssetJourneys()...)
+	journeys = append(journeys, recoverySelectorReplayJourneys()...)
 	return append(journeys, handoffJourneys()...)
 }
 

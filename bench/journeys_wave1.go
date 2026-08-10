@@ -77,9 +77,10 @@ type waveCorrectionStatus struct {
 		ReasonCode string `json:"reason_code"`
 		Collect    *struct {
 			Inputs []struct {
-				Name             string                    `json:"name"`
-				CaptureOperation string                    `json:"capture_operation"`
-				Submission       *waveSubmissionDescriptor `json:"submission"`
+				Name              string                    `json:"name"`
+				CaptureOperation  string                    `json:"capture_operation"`
+				SelectorArguments []negotiatedArgument      `json:"selector_arguments"`
+				Submission        *waveSubmissionDescriptor `json:"submission"`
 			} `json:"inputs"`
 		} `json:"collect"`
 		Execute *struct {
@@ -391,18 +392,32 @@ func recoverStagedCorrection(r *journeyRun) error {
 	if err := decodeWaveObservation(probeObservation, &probe, "staged recovery probe"); err != nil {
 		return err
 	}
-	if probe.Authority == nil || probe.Action != "recover" || probe.ActionDisposition != "scope_changed" || probe.NextTransition == nil || probe.NextTransition.Kind != "collect" {
+	if probe.Authority == nil || probe.Action != "recover" || probe.ActionDisposition != "scope_changed" || probe.NextTransition == nil || probe.NextTransition.Kind != "collect" || probe.NextTransition.Collect == nil || len(probe.NextTransition.Collect.Inputs) != 1 {
 		return fmt.Errorf("staged recovery was not negotiated: %+v", probe)
+	}
+	wantSelectors := "base-ref=" + r.sandbox.Scratch["staged-recovery-base"] + "\nprojection=staged\nworkspace-overlay=true"
+	if err := requireRecoverySelectorReplay("authorization collect", probe.NextTransition.Collect.Inputs[0].SelectorArguments, wantSelectors); err != nil {
+		return err
 	}
 	const actor, reason = "bench-maintainer", "authorize staged correction scope expansion"
 	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + stagedRecoveryLineage +
 		"\npredecessor_revision=" + probe.Authority.Revision + "\ntarget_identity=" + probe.TargetIdentity +
 		"\nsuccessor_lineage=" + stagedSuccessorLineage + "\nactor=" + actor + "\nreason=" + reason
-	authorized := append(selectors, "--recovery-successor-lineage", stagedSuccessorLineage, "--recovery-reason", reason,
+	authorized := []string{"--lineage", stagedRecoveryLineage}
+	for _, selector := range probe.NextTransition.Collect.Inputs[0].SelectorArguments {
+		if selector.Token != "" {
+			return fmt.Errorf("authorization collect tokenized selector %q", selector.Name)
+		}
+		authorized = append(authorized, "--"+selector.Name+"="+selector.Value)
+	}
+	authorized = append(authorized, "--recovery-successor-lineage", stagedSuccessorLineage, "--recovery-reason", reason,
 		"--recovery-actor", actor, "--recovery-authorization", authorization)
 	envelope, err := readStatusFor(r, authorized...)
 	if err != nil || envelope.NextTransition.Kind != "execute" || envelope.NextTransition.Execute.Operation != "review.recover" {
 		return fmt.Errorf("authorized staged recovery is not executable: %+v, %v", envelope.NextTransition, err)
+	}
+	if err := requireRecoverySelectorReplay("authorized execute", envelope.NextTransition.Execute.SelectorArguments, wantSelectors); err != nil {
+		return err
 	}
 	recovered, err := runPrintedTransition(r, envelope)
 	if err != nil {
@@ -416,6 +431,20 @@ func recoverStagedCorrection(r *journeyRun) error {
 	if err != nil || fresh.Authority.LineageID != stagedSuccessorLineage || fresh.Authority.State != "reviewing" ||
 		fresh.NextTransition.Kind != "collect" || strings.Join(fresh.paths(), "\x00") != "candidate.go\x00migration.sql" {
 		return fmt.Errorf("successor did not start a fresh exact-overlay review: %+v, %v", fresh, err)
+	}
+	return nil
+}
+
+func requireRecoverySelectorReplay(stage string, arguments []negotiatedArgument, want string) error {
+	values := make([]string, len(arguments))
+	for index, argument := range arguments {
+		if argument.Token != "" {
+			return fmt.Errorf("%s tokenized selector %q", stage, argument.Name)
+		}
+		values[index] = argument.Name + "=" + argument.Value
+	}
+	if got := strings.Join(values, "\n"); got != want {
+		return fmt.Errorf("%s selectors = %q, want %q", stage, got, want)
 	}
 	return nil
 }
@@ -1315,23 +1344,7 @@ func waveOneJourneys() []Journey {
 				// derived lineage name into the printed execute transition,
 				// so stagedRecoveryLineage still names the review every
 				// later step in this journey references.
-				{Name: "start workspace-projected base-diff review", Requires: statusCapability, Composite: func(r *journeyRun) error {
-					envelope, err := readStatusFor(r, "--lineage", stagedRecoveryLineage, "--base-ref", r.sandbox.Scratch["staged-recovery-base"])
-					if err != nil {
-						return err
-					}
-					if envelope.NextTransition.Kind != "execute" {
-						return fmt.Errorf("expected an execute review.start transition for the staged recovery base-diff candidate, got %q", envelope.NextTransition.Kind)
-					}
-					started, err := runPrintedTransition(r, envelope)
-					if err != nil {
-						return err
-					}
-					if started.ExitCode != 0 {
-						return fmt.Errorf("negotiated staged base-diff start failed: exit=%d stderr=%s", started.ExitCode, started.Stderr)
-					}
-					return nil
-				}},
+				{Name: "start workspace-projected base-diff review", Requires: statusCapability, Composite: startStagedRecoveryReview},
 				{Name: "capture blocker on predecessor", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
 					return captureCorrectableFindingFor(r, stagedPredecessorSelectors(r.sandbox)...)
 				}},

@@ -63,6 +63,7 @@
           "type": "array", "minItems": 1,
           "items": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_argument"}
         },
+        "selector_arguments": {"type": "array", "items": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_argument"}},
         "artifact_subject": {"$ref": "artifact-subject.schema.json"},
         "base_tree": {"$ref": "#/$defs/git_tree"},
         "candidate_tree": {"$ref": "#/$defs/git_tree"},

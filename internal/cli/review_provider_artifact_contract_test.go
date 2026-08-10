@@ -33,8 +33,8 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"schemas/result-artifact.schema.json":    "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
 		"schemas/start.schema.json":              "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
 		"schemas/start-v2.schema.json":           "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
-		"schemas/status.schema.json":             "250d2c646b8822b38eaefafd2bfdefa1134cc23a00e553a7201f33257573149a",
-		"schemas/status-v2.schema.json":          "dd9914b647a1d9edc4ecdcbed4f0c800b39ec290912d5c2a4cc6ba3098d5f21e",
+		"schemas/status.schema.json":             "c7eb1137a1b1e0bd400de807b8d3c12c46774227a20d4659347b2b05524926e3",
+		"schemas/status-v2.schema.json":          "08559976579b7f55ef5e2901cf6cb2411a82f9ac5675a04c203436dc7f467498",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -56,7 +56,7 @@ func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 		"fixtures/status.fixture.json":       "d5438578f2969f17635fecea94c7ef46d14c78fa668e50df48c4254254d5e935",
 		"schemas/capabilities.schema.json":   "7ab061ed27bd3b929d6033cc20f56097e851f4454ca14a815255748b50191248",
 		"schemas/consent.schema.json":        "b2b4465338497f11927de91cb2e5da12b6cb4a1039afe05aebe1abbf53b21858",
-		"schemas/status.schema.json":         "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
+		"schemas/status.schema.json":         "662648111761b7ed8f9ce1bb1b3150ebfe60427032df956fd87872b472a67b06",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -80,7 +80,7 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 		"fixtures/consent-v3.fixture.json":      "feb1dc7705f7da6490698ef48021bb7730de154ae23ec73d033d8d96fa996a21",
 		"schemas/capabilities-v2.1.schema.json": "9ede8ebbe3e169cf6ca4f4a6882c9c4e588a6d1073d8e22a155649cd41d38cd0",
 		"schemas/consent-v3.schema.json":        "80915f5f4f43a494826253d1e7251fc463989f41d2cf163a6a52a8b4328c023c",
-		"schemas/status.schema.json":            "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
+		"schemas/status.schema.json":            "662648111761b7ed8f9ce1bb1b3150ebfe60427032df956fd87872b472a67b06",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -98,7 +98,7 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/status-v5.fixture.json": "1a6d002c9691c87e50687f8d5f3e59013e9229d93004028f746bfcda7947d5fc",
-		"schemas/status-v5.schema.json":   "32dd99042d11c06cc4dbc1f9f8396b5e32ea9ded7f2177a97b90398923d282b3",
+		"schemas/status-v5.schema.json":   "4df135f239ae495ac14656ff51622976d35d2cd2b0f49f1e0f2985e12fae177b",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))

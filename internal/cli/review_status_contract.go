@@ -883,8 +883,9 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 			(!hasProjection || projection != string(reviewtransaction.ProjectionStaged) || !hasWorkspaceOverlay) {
 			return errors.New("staged workspace-overlay RECOVER transition lacks exact target selectors")
 		}
-		if result.Projection.Projection != reviewtransaction.ProjectionStaged && hasWorkspaceOverlay {
-			return errors.New("workspace-overlay RECOVER transition invented a staged selector")
+		if result.Projection.Projection == reviewtransaction.ProjectionWorkspace &&
+			(!hasProjection || projection != string(reviewtransaction.ProjectionWorkspace) || !hasWorkspaceOverlay) {
+			return errors.New("workspace-overlay RECOVER transition lacks exact target selectors") // refusal:by-design world-action: provider-generated recovery selectors require a code fix when they do not reproduce the selected target
 		}
 	default:
 		return errors.New("RECOVER transition target kind is unsupported")
@@ -1367,7 +1368,7 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 			hasProjection && projection != string(reviewtransaction.ProjectionWorkspace) &&
 				projection != string(reviewtransaction.ProjectionStaged) ||
 			hasWorkspaceOverlay && (!hasBase || hasCommitted || !hasProjection ||
-				projection != string(reviewtransaction.ProjectionStaged) || workspaceOverlay != "true") {
+				projection != string(reviewtransaction.ProjectionStaged) && projection != string(reviewtransaction.ProjectionWorkspace) || workspaceOverlay != "true") {
 			return errors.New("review recover transition selectors are invalid")
 		}
 	}

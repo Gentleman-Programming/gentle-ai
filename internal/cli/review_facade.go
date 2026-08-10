@@ -1120,7 +1120,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	focus := flags.String("focus", "reliability", "dominant standard-risk focus; large pure documentation always uses readability")
 	baseRef := flags.String("base-ref", "", "optional base revision for immutable base-to-HEAD review")
 	committedOnly := flags.Bool("committed-only", false, "acknowledge that --base-ref excludes dirty tracked changes")
-	workspaceOverlay := flags.Bool("workspace-overlay", false, "recover an approved base-diff into the exact staged index over --base-ref")
+	workspaceOverlay := flags.Bool("workspace-overlay", false, "replay the exact workspace-overlay recovery target over --base-ref")
 	releaseScope := flags.Bool("release-scope", false, "recover an approved current-changes review into the immutable HEAD first-parent release scope")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
@@ -1161,8 +1161,9 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	baseDiff := predecessorRecord.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff
 	overlay := predecessorRecord.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseWorkspaceOverlay
 	explicitOverlayBase := overlay && base != "" && !*committedOnly
-	stagedScopeOverlay := *workspaceOverlay
-	if *releaseScope && (base != "" || *committedOnly || stagedScopeOverlay) {
+	ordinaryScopeOverlay := *workspaceOverlay && overlay && base != "" && !*committedOnly && strings.TrimSpace(*projectionFlag) == string(reviewtransaction.ProjectionWorkspace)
+	stagedScopeOverlay := *workspaceOverlay && !ordinaryScopeOverlay
+	if *releaseScope && (base != "" || *committedOnly || *workspaceOverlay) {
 		return errors.New("--release-scope cannot be combined with --base-ref, --committed-only, or --workspace-overlay")
 	}
 	if *releaseScope && reviewtransaction.RecoveryDisposition(*disposition) != reviewtransaction.RecoveryScopeChanged {
