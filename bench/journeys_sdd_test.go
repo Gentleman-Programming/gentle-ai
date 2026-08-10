@@ -49,8 +49,15 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// while the advertised main ref remains a moving publication boundary.
 	// Bump this deliberately when a journey is added, and name it here: the
 	// count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 85 {
-		t.Errorf("core journey count = %d, want 85", got)
+	// 83 since j82-scope-slice-verify (#2268 chained slice lifecycle):
+	// slice PASS admitted under dual authority while a sibling slice remains
+	// pending; whole-path admission untouched because slice envelope fields
+	// are allowed but inert (design D7, Requirement: Whole-Change Backward
+	// Compatibility / Requirement: Slice PASS Never Implies Whole-Change
+	// Completion). Bumped from 82 once j80/j81 landed.
+	if got := len(seen); got != 83 {
+		t.Errorf("core journey count = %d, want 83", got)
+	}
 	}
 	for id, found := range want {
 		if !found {
