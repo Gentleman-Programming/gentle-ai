@@ -184,13 +184,16 @@ const (
 // clone-local compare-and-set token. The projection carries no time cutoff: it
 // answers "may review start now", never "which bytes are approved".
 type RDDModeStatus struct {
-	Schema     string        `json:"schema"`
-	Global     RDDMode       `json:"global"`
-	CloneLocal RDDMode       `json:"clone_local"`
-	Effective  RDDMode       `json:"effective"`
-	Source     RDDModeSource `json:"source"`
-	Revision   string        `json:"revision,omitempty"`
-	Reach      RDDModeReach  `json:"reach,omitempty"`
+	Schema       string           `json:"schema"`
+	Global       RDDMode          `json:"global"`
+	CloneLocal   RDDMode          `json:"clone_local"`
+	Effective    RDDMode          `json:"effective"`
+	Source       RDDModeSource    `json:"source"`
+	Revision     string           `json:"revision,omitempty"`
+	Reach        RDDModeReach     `json:"reach,omitempty"`
+	Controller   RDDController    `json:"controller"`
+	DeliveryGate RDDDeliveryGate  `json:"delivery_gate"`
+	Enforcement  Enforcement      `json:"enforcement"`
 }
 
 // Enabled reports whether new receipt-driven development may start.
@@ -310,7 +313,8 @@ func ResolveRDDMode(ctx context.Context, repo string, global RDDGlobalMode) (RDD
 	if overrideErr != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), overrideErr
 	}
-	return rddModeStatus(globalMode, override, present), nil
+	controller, gate := probeEnforcementDimensions(ctx, repo)
+	return rddModeStatus(globalMode, override, present, controller, gate), nil
 }
 
 // SetCloneLocalRDDMode records this clone's off-only override under the Git
@@ -464,17 +468,21 @@ func SetCloneLocalRDDMode(
 	if err := publishPrivateRARImmutable(filepath.Join(dir, rddModeGenerationName(record.Generation)), payload); err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
 	}
+controller, gate := probeEnforcementDimensions(ctx, repo)
+	status := rddModeStatus(globalMode, record, true, controller, gate)
 	if !mirror.available {
-		return rddModeWriteStatus(globalMode, record, true, RDDModeReachThisBuild), nil
+		status.Reach = RDDModeReachThisBuild
+		return status, nil
 	}
 	// The same exact bytes at the same slot: a pre-relocation gentle-ai parses,
 	// digests, and canonicalises this record identically, so the two locations
 	// hold one decision rather than two that have to be reconciled.
 	if err := publishPrivateRARImmutable(filepath.Join(mirror.dir, rddModeGenerationName(record.Generation)), payload); err != nil {
-		return rddModeWriteStatus(globalMode, record, true, RDDModeReachThisBuild),
-			&RDDModePartialApplyError{Mode: mode, Cause: err}
+		status.Reach = RDDModeReachThisBuild
+		return status, &RDDModePartialApplyError{Mode: mode, Cause: err}
 	}
-	return rddModeWriteStatus(globalMode, record, true, RDDModeReachMachine), nil
+	status.Reach = RDDModeReachMachine
+	return status, nil
 }
 
 // cloneLocalRDDModeMirror is the pre-relocation copy of this clone's override,
@@ -697,6 +705,8 @@ func rddModeStatus(
 	globalMode RDDMode,
 	override rddModeOverrideRecord,
 	present bool,
+	controller RDDController,
+	gate RDDDeliveryGate,
 ) RDDModeStatus {
 	status := RDDModeStatus{
 		Schema:     RDDModeStatusSchema,
@@ -704,6 +714,8 @@ func rddModeStatus(
 		CloneLocal: RDDModeUnset,
 		Effective:  RDDModeOff,
 		Source:     RDDModeSourceDefault,
+		Controller: controller,
+		DeliveryGate: gate,
 	}
 	if present {
 		status.Revision = override.Revision
@@ -725,6 +737,7 @@ func rddModeStatus(
 		// case above reads back untouched across an upgrade.
 		status.Effective, status.Source = RDDModeOff, RDDModeSourceDefault
 	}
+	status.Enforcement = DeriveEnforcement(status.Effective, status.Controller.State, status.DeliveryGate.State)
 	return status
 }
 
@@ -736,19 +749,24 @@ func rddModeWriteStatus(
 	present bool,
 	reach RDDModeReach,
 ) RDDModeStatus {
-	status := rddModeStatus(globalMode, override, present)
+	controller, gate := RDDController{}, RDDDeliveryGate{}
+	status := rddModeStatus(globalMode, override, present, controller, gate)
 	status.Reach = reach
 	return status
 }
 
 func failedClosedRDDModeStatus(source RDDModeSource) RDDModeStatus {
-	return RDDModeStatus{
-		Schema:     RDDModeStatusSchema,
-		Global:     RDDModeUnset,
-		CloneLocal: RDDModeUnset,
-		Effective:  RDDModeOff,
-		Source:     source,
+	status := RDDModeStatus{
+		Schema:       RDDModeStatusSchema,
+		Global:       RDDModeUnset,
+		CloneLocal:   RDDModeUnset,
+		Effective:    RDDModeOff,
+		Source:       source,
+		Controller:   RDDController{State: ControllerStateInconclusive, Reason: "status built under fail-closed defaults"},
+		DeliveryGate: RDDDeliveryGate{State: DeliveryGateStateInconclusive, Reason: "status built under fail-closed defaults"},
 	}
+	status.Enforcement = DeriveEnforcement(status.Effective, status.Controller.State, status.DeliveryGate.State)
+	return status
 }
 
 func normalizeRDDMode(value string) (RDDMode, error) {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/storage"
 )
@@ -93,6 +94,10 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve current working directory: %w", err)
+	}
 
 	installedAgents, _ := readDoctorInstalledAgents(homeDir)
 	// A state read failure (missing/malformed file) is surfaced separately by
@@ -102,7 +107,7 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 
 	pathDirs := pathDirsFn()
 	requiredTools := requiredDoctorTools(installedAgents)
-	checks := make([]doctor.Check, 0, len(requiredTools)+3)
+	checks := make([]doctor.Check, 0, len(requiredTools)+6)
 	for _, tool := range requiredTools {
 		tool := tool
 		checks = append(checks, doctor.Check{ID: doctor.ToolCheckID(tool), Run: func(context.Context) doctor.Result {
@@ -114,6 +119,9 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		doctor.Check{ID: doctor.CheckInstalledAssetVersion, Run: func(context.Context) doctor.Result { return checkInstalledAssetVersion(homeDir) }},
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx, homeDir, installedAgents) }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
+		doctor.Check{ID: doctor.CheckControllerReachable, Run: func(ctx context.Context) doctor.Result { return checkControllerReachable(ctx, cwd) }},
+		doctor.Check{ID: doctor.CheckRoutingSyncRequired, Run: func(ctx context.Context) doctor.Result { return checkRoutingSyncRequired(ctx, cwd) }},
+		doctor.Check{ID: doctor.CheckEnforcementState, Run: func(ctx context.Context) doctor.Result { return checkEnforcementState(ctx, cwd) }},
 	)
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
 
@@ -587,6 +595,85 @@ func checkDiskSpace(homeDir string) CheckResult {
 			Status: CheckStatusPass,
 			Detail: fmt.Sprintf("%d MB free on %s filesystem", freeMB, dir),
 		}
+	}
+}
+
+// checkControllerReachable reports whether the canonical review-ledger
+// controller contract is on disk for the active install. It delegates to
+// reviewtransaction.ProbeRDDController so the doctor can never disagree
+// with the controller field the review status projection surfaces.
+//
+// Slice 1 of #1842 reports only Written / Absent; the Inconclusive
+// state is the fail-closed signal that "zero applicable probes is
+// never success" — a Warn, never a Pass, when the probe cannot
+// inspect the install footprint.
+func checkControllerReachable(ctx context.Context, repo string) CheckResult {
+	const id = doctor.CheckControllerReachable
+	ctrl, _ := reviewtransaction.ProbeRDDController(ctx, repo)
+	switch ctrl.State {
+	case reviewtransaction.ControllerStateWritten:
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusPass,
+			Detail: "review-ledger controller contract is installed on disk",
+		}
+	case reviewtransaction.ControllerStateAbsent:
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: "review-ledger controller contract is not installed; review status reports enforcement=available",
+			Remedy: doctor.NewRemedy(doctor.RemedyInstall, "Re-run the installer to materialise the review-ledger contract"),
+		}
+	case reviewtransaction.ControllerStateInconclusive:
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("controller probe inconclusive: %s", ctrl.Reason),
+		}
+	default:
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("controller probe returned %s: %s", ctrl.State, ctrl.Reason),
+		}
+	}
+}
+
+// checkRoutingSyncRequired reports whether the active install has the
+// routing guidance materialised on disk. Slice 1 of #1842 reports only
+// file presence; slice 2 will add a digest comparison against the
+// install footprint (#1884 managed-resource identity).
+func checkRoutingSyncRequired(ctx context.Context, repo string) CheckResult {
+	const id = doctor.CheckRoutingSyncRequired
+	_ = ctx
+	_ = repo
+	return CheckResult{
+		Name:   id,
+		Status: CheckStatusWarn,
+		Detail: "routing digest comparison is not implemented in slice 1; slice 2 will bind the install SHA",
+	}
+}
+
+// checkEnforcementState reports the current public enforcement label
+// derived from the controller probe, the delivery gate probe, and the
+// effective review mode. It is a state report, not a pass / fail
+// check — slice 1 surfaces the value so callers can observe it
+// without having to parse the review status JSON.
+func checkEnforcementState(ctx context.Context, repo string) CheckResult {
+	const id = doctor.CheckEnforcementState
+	global, _ := readGlobalRDDMode()
+	status, err := reviewtransaction.ResolveRDDMode(ctx, repo, global)
+	if err != nil {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("enforcement derivation failed: %v", err),
+		}
+	}
+	return CheckResult{
+		Name:   id,
+		Status: CheckStatusPass,
+		Detail: fmt.Sprintf("enforcement=%s controller=%s delivery_gate=%s mode=%s", status.Enforcement, status.Controller.State, status.DeliveryGate.State, status.Effective),
 	}
 }
 

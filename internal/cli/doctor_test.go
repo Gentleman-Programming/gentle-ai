@@ -782,9 +782,13 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [ok]  installed:asset_version        no installed binary version recorded in state file — check skipped
   [ok]  engram:reachable               engram MCP (stdio) answered the initialize handshake for persisted configuration: %s
   [ok]  disk:space                     1024 MB free on %s filesystem
+  [!!]  controller:reachable           review-ledger controller contract is not installed; review status reports enforcement=available
+       Remedy: Re-run the installer to materialise the review-ledger contract
+  [!!]  routing:sync-required          routing digest comparison is not implemented in slice 1; slice 2 will bind the install SHA
+  [ok]  enforcement:state              enforcement=off controller=absent delivery_gate=absent mode=off
 
-Summary: 8 passed, 0 failed, 0 warnings
-Status:  healthy
+Summary: 9 passed, 0 failed, 2 warnings
+Status:  degraded
 `, configPath, filepath.Join(homeDir, ".gentle-ai"))
 	if got := buf.String(); got != want {
 		t.Fatalf("RunDoctor output mismatch\ngot:\n%s\nwant:\n%s", got, want)
@@ -1066,8 +1070,8 @@ func TestRunDoctor_OnlySelectedAgentsAreRequired(t *testing.T) {
 	if !strings.Contains(output, "tool:pi") {
 		t.Errorf("expected tool:pi in the rendered report; got:\n%s", output)
 	}
-	if !strings.Contains(output, "Status:  healthy") {
-		t.Errorf("expected healthy status for pi-only install with all binaries present; got:\n%s", output)
+	if !strings.Contains(output, "Status:  degraded") {
+		t.Errorf("expected degraded status for pi-only install (controller contract absent + routing sync deferred); got:\n%s", output)
 	}
 }
 
