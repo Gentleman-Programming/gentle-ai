@@ -159,7 +159,7 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 				prompt := agent["prompt"].(string)
 				assertTextContainsClauses(t, path+" "+name, prompt, []string{"## Scope", "## Candidate-Causal Admission", "## Severity", "## Evidence", "## Output"})
 				assertNoReviewerLifecycleInstructions(t, path+" "+name, prompt)
-				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any), false, false)
+				assertOpenCodeReadOnlyPermission(t, path+" "+name, agent)
 				assertOpenCodeProviderInjectedReviewer(t, path+" "+name, agent)
 			}
 			for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
@@ -169,7 +169,7 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 					t.Errorf("%s %s does not use the native role-only judgment contract", path, name)
 				}
 				assertNoReviewerLifecycleInstructions(t, path+" "+name, prompt)
-				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any), true, false)
+				assertOpenCodeReadOnlyPermission(t, path+" "+name, agent)
 			}
 			refuter := agentsMap[opencode.ReviewRefuterAgent].(map[string]any)
 			refuterPrompt := refuter["prompt"].(string)
@@ -177,7 +177,7 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 				t.Errorf("%s refuter prompt is not bounded: %s", path, refuterPrompt)
 			}
 			assertNoReviewerLifecycleInstructions(t, path+" refuter", refuterPrompt)
-			assertOpenCodeReadOnlyTools(t, path+" refuter", refuter["tools"].(map[string]any), true, false)
+			assertOpenCodeReadOnlyPermission(t, path+" refuter", refuter)
 		})
 	}
 }
@@ -198,8 +198,8 @@ func assertOpenCodeProviderInjectedReviewer(t *testing.T, label string, agent ma
 		t.Fatalf("%s prompt does not name the provider-injected context block: %s", label, prompt)
 	}
 	permission, ok := agent["permission"].(map[string]any)
-	if !ok || permission["bash"] != "deny" || permission["edit"] != "deny" || len(permission) != 2 {
-		t.Fatalf("%s permission = %#v, want bash/edit deny only", label, agent["permission"])
+	if !ok || permission["read"] != "deny" || permission["bash"] != "deny" || permission["edit"] != "deny" || permission["write"] != "deny" || permission["task"] != "deny" || len(permission) != 5 {
+		t.Fatalf("%s permission = %#v, want read, mutation, shell, and delegation deny", label, agent["permission"])
 	}
 }
 
@@ -336,7 +336,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// drift.
 	// The provider-defect handoff now has three candidate-scoped outcomes;
 	// Kilocode embeds it in the orchestrator prompt, so the hash moved.
-	const want = "f259d91524ee1b893e3ec06fbfc8391d3c629add488c11a7bf5103668e0c7146"
+	const want = "ed0ede31b705d347191283012e4c23ff3533f2ae8bcd2d121d5a69cadb538694"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -608,15 +608,15 @@ func markdownFrontmatter(t *testing.T, path string) string {
 	return parts[1]
 }
 
-func assertOpenCodeReadOnlyTools(t *testing.T, label string, tools map[string]any, read, bash bool) {
+func assertOpenCodeReadOnlyPermission(t *testing.T, label string, agent map[string]any) {
 	t.Helper()
-	want := map[string]bool{"*": false, "read": read, "write": false, "edit": false, "bash": bash, "task": false}
-	if len(tools) != len(want) {
-		t.Fatalf("%s tools = %#v", label, tools)
+	if _, exists := agent["tools"]; exists {
+		t.Fatalf("%s retained deprecated tools", label)
 	}
-	for name, expected := range want {
-		if got, ok := tools[name].(bool); !ok || got != expected {
-			t.Errorf("%s tool %s = %v, want %v", label, name, tools[name], expected)
+	permission, _ := agent["permission"].(map[string]any)
+	for _, name := range []string{"edit", "write", "bash", "task"} {
+		if permission[name] != "deny" {
+			t.Errorf("%s permission %s = %v, want deny", label, name, permission[name])
 		}
 	}
 }
@@ -657,9 +657,4 @@ func readGentleOrchestratorPrompt(t *testing.T, settingsPath string) string {
 	agentsMap := root["agent"].(map[string]any)
 	orchestrator := agentsMap["gentle-orchestrator"].(map[string]any)
 	return orchestrator["prompt"].(string)
-}
-
-func assertOpenCodeRefuterToolsReadOnly(t *testing.T, label string, tools map[string]any) {
-	t.Helper()
-	assertOpenCodeReadOnlyTools(t, label, tools, true, false)
 }

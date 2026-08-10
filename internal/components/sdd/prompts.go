@@ -197,6 +197,10 @@ func injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap map[string]any,
 		if mode, _ := agent["mode"].(string); mode == "primary" {
 			continue
 		}
+		permission, _ := agent["permission"].(map[string]any)
+		if permission["bash"] == "deny" {
+			continue
+		}
 		tools, _ := agent["tools"].(map[string]any)
 		if bash, explicitlySet := tools["bash"].(bool); explicitlySet && !bash {
 			continue

@@ -2224,14 +2224,13 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	if !ok {
 		t.Fatalf("gentle-orchestrator has unexpected type: %T", orchestratorRaw)
 	}
-	toolsRaw, ok := orchestratorAgent["tools"].(map[string]any)
-	if !ok {
-		t.Fatalf("gentle-orchestrator tools has unexpected type: %T", orchestratorAgent["tools"])
+	if _, exists := orchestratorAgent["tools"]; exists {
+		t.Fatal("gentle-orchestrator retained deprecated tools")
 	}
-	for _, toolName := range []string{"task"} {
-		value, ok := toolsRaw[toolName].(bool)
-		if !ok || !value {
-			t.Fatalf("gentle-orchestrator missing multi-mode tool %q", toolName)
+	permission := orchestratorAgent["permission"].(map[string]any)
+	for _, capability := range []string{"edit", "write", "bash"} {
+		if permission[capability] != "deny" {
+			t.Fatalf("gentle-orchestrator permission[%s] = %v, want deny", capability, permission[capability])
 		}
 	}
 
@@ -2354,15 +2353,8 @@ func TestInjectOpenCodeMultiModeRemovesLegacyDelegateTools(t *testing.T) {
 	}
 	agentMap := root["agent"].(map[string]any)
 	orchestrator := agentMap["gentle-orchestrator"].(map[string]any)
-	tools := orchestrator["tools"].(map[string]any)
-
-	for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-		if _, exists := tools[legacyTool]; exists {
-			t.Fatalf("legacy OpenCode tool %q survived sync: %#v", legacyTool, tools)
-		}
-	}
-	if task, _ := tools["task"].(bool); !task {
-		t.Fatalf("native task tool missing after sync: %#v", tools)
+	if _, exists := orchestrator["tools"]; exists {
+		t.Fatalf("deprecated OpenCode tools survived sync: %#v", orchestrator["tools"])
 	}
 }
 
@@ -2408,15 +2400,8 @@ func TestInjectOpenCodeSingleModeRemovesLegacyDelegateTools(t *testing.T) {
 	}
 	agentMap := root["agent"].(map[string]any)
 	orchestrator := agentMap["gentle-orchestrator"].(map[string]any)
-	tools := orchestrator["tools"].(map[string]any)
-
-	for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-		if _, exists := tools[legacyTool]; exists {
-			t.Fatalf("legacy OpenCode tool %q survived sync: %#v", legacyTool, tools)
-		}
-	}
-	if task, _ := tools["task"].(bool); !task {
-		t.Fatalf("native task tool missing after sync: %#v", tools)
+	if _, exists := orchestrator["tools"]; exists {
+		t.Fatalf("deprecated OpenCode tools survived sync: %#v", orchestrator["tools"])
 	}
 }
 
@@ -2653,8 +2638,7 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 			t.Fatalf("gentle-orchestrator permission.task[%s] = %v, want allow", builtIn, got)
 		}
 	}
-	refuterTools := agentMap["review-refuter"].(map[string]any)["tools"].(map[string]any)
-	assertOpenCodeRefuterToolsReadOnly(t, "rendered single-mode OpenCode config", refuterTools)
+	assertOpenCodeReadOnlyPermission(t, "rendered single-mode OpenCode config", agentMap["review-refuter"].(map[string]any))
 }
 
 func TestInjectClaudeIgnoresSDDMode(t *testing.T) {

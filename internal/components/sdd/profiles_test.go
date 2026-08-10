@@ -633,7 +633,7 @@ func TestGenerateProfileOverlay_NoJDAssignmentsUsesGlobalJDAgents(t *testing.T) 
 	}
 }
 
-func TestGenerateProfileOverlay_ToolsUseReplaceSentinel(t *testing.T) {
+func TestGenerateProfileOverlayUsesNarrowPermissions(t *testing.T) {
 	home := t.TempDir()
 
 	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home, openCodeSettingsPathForTest(home), nil, "")
@@ -648,23 +648,13 @@ func TestGenerateProfileOverlay_ToolsUseReplaceSentinel(t *testing.T) {
 
 	agentMap := root["agent"].(map[string]any)
 	orch := agentMap["sdd-orchestrator-cheap"].(map[string]any)
-	toolsWrapper, ok := orch["tools"].(map[string]any)
-	if !ok {
-		t.Fatal("sdd-orchestrator-cheap tools is not an object")
+	if _, exists := orch["tools"]; exists {
+		t.Fatal("profile orchestrator retained deprecated tools")
 	}
-	tools, hasSentinel := toolsWrapper["__replace__"].(map[string]any)
-	if !hasSentinel {
-		t.Fatal("tools block must use __replace__ sentinel to discard legacy delegate tools on sync")
-	}
-
-	for _, required := range []string{"read", "write", "edit", "bash", "task"} {
-		if enabled, _ := tools[required].(bool); !enabled {
-			t.Fatalf("required tool %q missing or disabled: %#v", required, tools)
-		}
-	}
-	for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-		if _, exists := tools[legacyTool]; exists {
-			t.Fatalf("legacy OpenCode tool %q must not be present: %#v", legacyTool, tools)
+	permission := orch["permission"].(map[string]any)
+	for _, capability := range []string{"edit", "write", "bash"} {
+		if permission[capability] != "deny" {
+			t.Fatalf("profile orchestrator permission[%s] = %v, want deny", capability, permission[capability])
 		}
 	}
 }
@@ -701,7 +691,7 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 	}
 }
 
-func TestDefaultOverlayToolsUseReplaceSentinel(t *testing.T) {
+func TestDefaultOverlayUsesNarrowPermissions(t *testing.T) {
 	for _, assetPath := range []string{
 		"opencode/sdd-overlay-single.json",
 		"opencode/sdd-overlay-multi.json",
@@ -714,20 +704,13 @@ func TestDefaultOverlayToolsUseReplaceSentinel(t *testing.T) {
 
 			agentMap := root["agent"].(map[string]any)
 			orch := agentMap["gentle-orchestrator"].(map[string]any)
-			toolsWrapper := orch["tools"].(map[string]any)
-			tools, hasSentinel := toolsWrapper["__replace__"].(map[string]any)
-			if !hasSentinel {
-				t.Fatal("tools block must use __replace__ sentinel to discard legacy delegate tools on sync")
+			if _, exists := orch["tools"]; exists {
+				t.Fatal("default orchestrator retained deprecated tools")
 			}
-
-			for _, required := range []string{"read", "write", "edit", "bash", "task"} {
-				if enabled, _ := tools[required].(bool); !enabled {
-					t.Fatalf("required tool %q missing or disabled: %#v", required, tools)
-				}
-			}
-			for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
-				if _, exists := tools[legacyTool]; exists {
-					t.Fatalf("legacy OpenCode tool %q must not be present: %#v", legacyTool, tools)
+			permission := orch["permission"].(map[string]any)
+			for _, capability := range []string{"edit", "write", "bash"} {
+				if permission[capability] != "deny" {
+					t.Fatalf("default orchestrator permission[%s] = %v, want deny", capability, permission[capability])
 				}
 			}
 		})

@@ -154,26 +154,19 @@ func sddShellDisabledSubAgentsForCodeGraphTest() []string {
 	return []string{"jd-judge-a", "jd-judge-b", "review-refuter"}
 }
 
-func assertOpenCodeSubAgentReadOnlyTools(t *testing.T, agentsMap map[string]any, agentName string) {
+func assertOpenCodeSubAgentReadOnlyPermissions(t *testing.T, agentsMap map[string]any, agentName string) {
 	t.Helper()
 	agent, ok := agentsMap[agentName].(map[string]any)
 	if !ok {
 		t.Fatalf("agent %q missing or not an object", agentName)
 	}
-	tools, ok := agent["tools"].(map[string]any)
-	if !ok {
-		t.Fatalf("agent %q tools have type %T, want object", agentName, agent["tools"])
+	if _, exists := agent["tools"]; exists {
+		t.Fatalf("agent %q retained deprecated tools", agentName)
 	}
-	for tool, want := range map[string]bool{
-		"read":  true,
-		"write": false,
-		"edit":  false,
-		"bash":  false,
-		"task":  false,
-	} {
-		got, ok := tools[tool].(bool)
-		if !ok || got != want {
-			t.Fatalf("agent %q tool %q = %v, want %t", agentName, tool, tools[tool], want)
+	permission := agent["permission"].(map[string]any)
+	for _, name := range []string{"edit", "write", "bash", "task"} {
+		if permission[name] != "deny" {
+			t.Fatalf("agent %q permission %q = %v, want deny", agentName, name, permission[name])
 		}
 	}
 }
@@ -561,7 +554,7 @@ func TestInjectOpenCodeSingleModeSubagentPromptsRespectBashCapabilityWhenCodeGra
 		if strings.Contains(prompt, "<!-- gentle-ai:codegraph-guidance -->") || strings.Contains(prompt, "gentle-ai codegraph init --cwd <project-root>") {
 			t.Fatalf("%s contains shell-based CodeGraph guidance with bash disabled", agentName)
 		}
-		assertOpenCodeSubAgentReadOnlyTools(t, agentsMap, agentName)
+		assertOpenCodeSubAgentReadOnlyPermissions(t, agentsMap, agentName)
 	}
 }
 
@@ -595,7 +588,7 @@ func TestInjectOpenCodeMultiModeSubagentPromptFilesIncludeCodeGraphGuidanceWhenE
 		if strings.Contains(prompt, "<!-- gentle-ai:codegraph-guidance -->") || strings.Contains(prompt, "gentle-ai codegraph init --cwd <project-root>") {
 			t.Fatalf("%s contains shell-based CodeGraph guidance with bash disabled", agentName)
 		}
-		assertOpenCodeSubAgentReadOnlyTools(t, agentsMap, agentName)
+		assertOpenCodeSubAgentReadOnlyPermissions(t, agentsMap, agentName)
 	}
 }
 

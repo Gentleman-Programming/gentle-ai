@@ -988,8 +988,7 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 		}
 		prompt, _ := openCodeProviderInjectedReviewerPrompt(name)
 		agent["prompt"] = prompt
-		agent["tools"] = map[string]any{"*": false, "read": false, "write": false, "edit": false, "bash": false, "task": false}
-		agent["permission"] = map[string]any{"edit": "deny", "bash": "deny"}
+		agent["permission"] = map[string]any{"read": "deny", "edit": "deny", "write": "deny", "bash": "deny", "task": "deny"}
 	}
 
 	for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
@@ -998,12 +997,12 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 			continue
 		}
 		agent["prompt"] = judgmentDayReviewerContract()
-		agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+		agent["permission"] = map[string]any{"edit": "deny", "write": "deny", "bash": "deny", "task": "deny"}
 	}
 
 	if refuter, ok := agentsMap[opencode.ReviewRefuterAgent].(map[string]any); ok {
 		refuter["prompt"] = "You are the detached read-only refuter for exactly ONE transaction-wide inferential batch. Receive every inferential severe neutral claim and proof reference, return one corroborated | refuted | inconclusive result per finding, add no findings, modify nothing, return one complete result, and terminate. Missing or malformed entries are inconclusive."
-		refuter["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+		refuter["permission"] = map[string]any{"edit": "deny", "write": "deny", "bash": "deny", "task": "deny"}
 	}
 }
 
@@ -1827,6 +1826,10 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 	if err != nil {
 		return mergeJSONResult{}, fmt.Errorf("migrate opencode command prompt field: %w", err)
 	}
+	baseJSON, err = removeManagedOpenCodeAgentTools(baseJSON, overlay)
+	if err != nil {
+		return mergeJSONResult{}, fmt.Errorf("remove managed opencode agent tools: %w", err)
+	}
 
 	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
 	if err != nil {
@@ -1839,6 +1842,49 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 	}
 
 	return mergeJSONResult{writeResult: writeResult, merged: merged}, nil
+}
+
+func removeManagedOpenCodeAgentTools(baseJSON, overlay []byte) ([]byte, error) {
+	root, err := filemerge.UnmarshalJSONObject(baseJSON)
+	if err != nil {
+		return baseJSON, nil
+	}
+	agents, ok := root["agent"].(map[string]any)
+	if !ok {
+		return baseJSON, nil
+	}
+	keys := append([]string{"gentle-orchestrator"}, ProfilePhaseOrder()...)
+	keys = append(keys, opencode.JDPhases()...)
+	keys = append(keys, opencode.ReviewPhases()...)
+	for key := range agents {
+		if strings.HasPrefix(key, "sdd-orchestrator-") {
+			keys = append(keys, ProfileAgentKeys(strings.TrimPrefix(key, "sdd-orchestrator-"))...)
+		}
+	}
+	if overlayRoot, err := filemerge.UnmarshalJSONObject(overlay); err == nil {
+		if overlayAgents, ok := overlayRoot["agent"].(map[string]any); ok {
+			for key := range overlayAgents {
+				keys = append(keys, key)
+			}
+		}
+	}
+	changed := false
+	for _, key := range keys {
+		if agent, ok := agents[key].(map[string]any); ok {
+			if _, exists := agent["tools"]; exists {
+				delete(agent, "tools")
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return baseJSON, nil
+	}
+	encoded, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(encoded, '\n'), nil
 }
 
 // defaultOpenCodeShareDisabled adds a defensive OpenCode default for SDD
