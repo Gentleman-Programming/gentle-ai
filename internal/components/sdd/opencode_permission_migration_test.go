@@ -37,7 +37,7 @@ func TestOpenCodeManagedAgentPermissionMigration(t *testing.T) {
 			}}, home, path, nil, "")
 			must(t, err)
 			for _, content := range [][]byte{[]byte(overlay), profile} {
-				_, err := mergeJSONFile(path, content)
+				_, err := mergeOpenCodeJSONFile(path, content)
 				must(t, err)
 			}
 			first, err := os.ReadFile(path)
@@ -73,7 +73,7 @@ func TestOpenCodeManagedAgentPermissionMigration(t *testing.T) {
 				}
 			}
 			for _, content := range [][]byte{[]byte(overlay), profile} {
-				_, err := mergeJSONFile(path, content)
+				_, err := mergeOpenCodeJSONFile(path, content)
 				must(t, err)
 			}
 			second, err := os.ReadFile(path)
@@ -82,6 +82,24 @@ func TestOpenCodeManagedAgentPermissionMigration(t *testing.T) {
 				t.Fatal("merge is not idempotent")
 			}
 		})
+	}
+}
+
+func TestMergeJSONFileDoesNotApplyOpenCodeMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	base := []byte(`{"agent":{"gentle-orchestrator":{"tools":{"read":true}}}}`)
+	must(t, os.WriteFile(path, base, 0o644))
+
+	_, err := mergeJSONFile(path, []byte(`{}`))
+	must(t, err)
+
+	settings, err := os.ReadFile(path)
+	must(t, err)
+	config := map[string]any{}
+	must(t, json.Unmarshal(settings, &config))
+	tools := config["agent"].(map[string]any)["gentle-orchestrator"].(map[string]any)["tools"]
+	if !reflect.DeepEqual(tools, map[string]any{"read": true}) {
+		t.Fatalf("generic JSON merge changed managed OpenCode tools: %#v", tools)
 	}
 }
 

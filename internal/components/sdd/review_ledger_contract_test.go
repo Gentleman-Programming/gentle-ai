@@ -153,7 +153,7 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 				t.Fatal(err)
 			}
 			agentsMap := root["agent"].(map[string]any)
-			expandOpenCodeBoundedReviewAgents(agentsMap)
+			expandOpenCodeBoundedReviewAgents(agentsMap, true)
 			for _, name := range []string{"review-risk", "review-readability", "review-reliability", "review-resilience"} {
 				agent := agentsMap[name].(map[string]any)
 				prompt := agent["prompt"].(string)
@@ -251,6 +251,18 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256(settings))
+	var config struct {
+		Agent map[string]map[string]any `json:"agent"`
+	}
+	if err := json.Unmarshal(settings, &config); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range opencode.ReviewLensPhases() {
+		permission, _ := config.Agent[name]["permission"].(map[string]any)
+		if len(permission) != 2 || permission["edit"] != "deny" || permission["bash"] != "deny" {
+			t.Fatalf("Kilocode reviewer %q permission = %#v, want current-main edit/bash denial", name, permission)
+		}
+	}
 	// Corrective verify cycle 5, CRITICAL-D: review-ledger-contract.md's
 	// Delivery section archive-gate sentence was corrected (see
 	// TestOpenCodeRenderedReviewProtocolCost's changelog comment above for
@@ -336,7 +348,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// drift.
 	// The provider-defect handoff now has three candidate-scoped outcomes;
 	// Kilocode embeds it in the orchestrator prompt, so the hash moved.
-	const want = "ed0ede31b705d347191283012e4c23ff3533f2ae8bcd2d121d5a69cadb538694"
+	const want = "f259d91524ee1b893e3ec06fbfc8391d3c629add488c11a7bf5103668e0c7146"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

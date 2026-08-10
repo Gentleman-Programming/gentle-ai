@@ -448,6 +448,10 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
+			mergeSettings := mergeJSONFile
+			if adapter.Agent() == model.AgentOpenCode {
+				mergeSettings = mergeOpenCodeJSONFile
+			}
 			overlayContent, err := assets.Read(overlayAssetPath(sddMode))
 			if err != nil {
 				return InjectionResult{}, fmt.Errorf("read SDD overlay asset: %w", err)
@@ -516,7 +520,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				return InjectionResult{}, fmt.Errorf("default OpenCode share mode: %w", err)
 			}
 
-			agentResult, err := mergeJSONFile(settingsPath, overlayBytes)
+			agentResult, err := mergeSettings(settingsPath, overlayBytes)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -549,7 +553,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				if profileErr != nil {
 					return InjectionResult{}, fmt.Errorf("generate profile overlay %q: %w", profile.Name, profileErr)
 				}
-				profileResult, profileErr := mergeJSONFile(settingsPath, profileOverlay)
+				profileResult, profileErr := mergeSettings(settingsPath, profileOverlay)
 				if profileErr != nil {
 					return InjectionResult{}, fmt.Errorf("merge profile overlay %q: %w", profile.Name, profileErr)
 				}
@@ -828,7 +832,10 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 	if !ok {
 		return overlayBytes, nil
 	}
-	expandOpenCodeBoundedReviewAgents(agentsMap)
+	if agent == model.AgentKilocode {
+		restoreKilocodeManagedAgentTools(agentsMap)
+	}
+	expandOpenCodeBoundedReviewAgents(agentsMap, agent == model.AgentOpenCode)
 
 	// Inline the orchestrator prompt (always inlined, not a file reference),
 	// unless an external strategy requested preserving the existing prompt.
@@ -969,18 +976,37 @@ func extractManagedSection(content, sectionID string) string {
 	return strings.Trim(content[start+len(open):end], "\n")
 }
 
-// expandOpenCodeBoundedReviewAgents renders the OpenCode-shaped review-lens
-// sub-agents shared by the OpenCode and Kilocode overlays. Both identities
-// get the identical shell-less, read-less shape: the OpenCode plugin
-// (review-result-artifacts.ts) asks `review lens-context` for all immutable
-// candidate evidence through its provider-owned native channel and injects it
-// into each reviewer task's prompt before the reviewer ever launches, so the lens
-// itself needs no bash and no read tool — this provider-injected block is
-// its only byte source. Kilocode is not RDD-eligible and never receives the
-// capturing plugin, so review never starts there; it gets the identical
-// denied shape rather than a permissive one that a fresh Kilocode-specific
-// entry point could someday reach.
-func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
+// restoreKilocodeManagedAgentTools keeps Kilocode on its established settings
+// schema. Permission migration is owned by OpenCode and must not change this
+// compatible provider's output.
+func restoreKilocodeManagedAgentTools(agentsMap map[string]any) {
+	if orchestrator, ok := agentsMap["gentle-orchestrator"].(map[string]any); ok {
+		orchestrator["tools"] = map[string]any{"__replace__": map[string]any{"read": true, "write": true, "edit": true, "bash": true, "question": true, "task": true}}
+		if permission, ok := orchestrator["permission"].(map[string]any); ok {
+			delete(permission, "edit")
+			delete(permission, "write")
+			delete(permission, "bash")
+		}
+	}
+	for _, name := range subAgentPhaseOrder {
+		if phase, ok := agentsMap[name].(map[string]any); ok {
+			phase["tools"] = map[string]any{"read": true, "write": true, "edit": true, "bash": true}
+			delete(phase, "permission")
+		}
+	}
+	for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
+		if judge, ok := agentsMap[name].(map[string]any); ok {
+			judge["tools"] = map[string]any{"read": true, "bash": true}
+			delete(judge, "permission")
+		}
+	}
+	if fixer, ok := agentsMap["jd-fix-agent"].(map[string]any); ok {
+		fixer["tools"] = map[string]any{"read": true, "write": true, "edit": true, "bash": true}
+		delete(fixer, "permission")
+	}
+}
+
+func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any, usePermissions bool) {
 	for _, name := range opencode.ReviewLensPhases() {
 		agent, ok := agentsMap[name].(map[string]any)
 		if !ok {
@@ -988,7 +1014,12 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 		}
 		prompt, _ := openCodeProviderInjectedReviewerPrompt(name)
 		agent["prompt"] = prompt
-		agent["permission"] = map[string]any{"read": "deny", "edit": "deny", "write": "deny", "bash": "deny", "task": "deny"}
+		if usePermissions {
+			agent["permission"] = map[string]any{"read": "deny", "edit": "deny", "write": "deny", "bash": "deny", "task": "deny"}
+		} else {
+			agent["permission"] = map[string]any{"edit": "deny", "bash": "deny"}
+			agent["tools"] = map[string]any{"*": false, "read": false, "write": false, "edit": false, "bash": false, "task": false}
+		}
 	}
 
 	for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
@@ -997,12 +1028,22 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 			continue
 		}
 		agent["prompt"] = judgmentDayReviewerContract()
-		agent["permission"] = map[string]any{"edit": "deny", "write": "deny", "bash": "deny", "task": "deny"}
+		if usePermissions {
+			agent["permission"] = map[string]any{"edit": "deny", "write": "deny", "bash": "deny", "task": "deny"}
+		} else {
+			delete(agent, "permission")
+			agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+		}
 	}
 
 	if refuter, ok := agentsMap[opencode.ReviewRefuterAgent].(map[string]any); ok {
 		refuter["prompt"] = "You are the detached read-only refuter for exactly ONE transaction-wide inferential batch. Receive every inferential severe neutral claim and proof reference, return one corroborated | refuted | inconclusive result per finding, add no findings, modify nothing, return one complete result, and terminate. Missing or malformed entries are inconclusive."
-		refuter["permission"] = map[string]any{"edit": "deny", "write": "deny", "bash": "deny", "task": "deny"}
+		if usePermissions {
+			refuter["permission"] = map[string]any{"edit": "deny", "write": "deny", "bash": "deny", "task": "deny"}
+		} else {
+			delete(refuter, "permission")
+			refuter["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+		}
 	}
 }
 
@@ -1813,6 +1854,20 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 		}
 		baseJSON = nil
 	}
+	return mergeJSONFileContents(path, baseJSON, overlay)
+}
+
+// mergeOpenCodeJSONFile applies migrations owned by managed OpenCode settings
+// before merging. Other JSON consumers, including Kilocode, must not receive
+// these OpenCode-specific mutations.
+func mergeOpenCodeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
+	baseJSON, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return mergeJSONResult{}, fmt.Errorf("read json file %q: %w", path, err)
+		}
+		baseJSON = nil
+	}
 
 	baseJSON, err = migrateLegacyOpenCodeAgentsKey(baseJSON)
 	if err != nil {
@@ -1830,7 +1885,10 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 	if err != nil {
 		return mergeJSONResult{}, fmt.Errorf("remove managed opencode agent tools: %w", err)
 	}
+	return mergeJSONFileContents(path, baseJSON, overlay)
+}
 
+func mergeJSONFileContents(path string, baseJSON, overlay []byte) (mergeJSONResult, error) {
 	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
 	if err != nil {
 		return mergeJSONResult{}, err
