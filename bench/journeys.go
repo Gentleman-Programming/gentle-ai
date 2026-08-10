@@ -625,7 +625,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, rescopeEvidenceOnlyRetryJourneys()...)
 	journeys = append(journeys, consecutiveRescopeRepairJourneys()...)
 	journeys = append(journeys, reviewedSupersetJourneys()...)
-	journeys = append(journeys, j82ScopeSliceVerifyJourneys()...)
+	journeys = append(journeys, j87ScopeSliceVerifyJourneys()...)
 	return append(journeys, handoffJourneys()...)
 }
 
