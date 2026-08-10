@@ -215,6 +215,83 @@ func overlayAssetPath(sddMode model.SDDModeID) string {
 	return "opencode/sdd-overlay-single.json"
 }
 
+var compatibilitySDDSkillIDs = []model.SkillID{
+	"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
+	"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
+	"sdd-onboard", "judgment-day",
+}
+
+// SkillDirectoryPaths returns every file that InjectSkillDirectory may write.
+func SkillDirectoryPaths(skillDir, capability string) ([]string, error) {
+	sharedFiles, err := assets.SharedSkillFileNames()
+	if err != nil {
+		return nil, fmt.Errorf("resolve SDD shared files: %w", err)
+	}
+	if len(sharedFiles) == 0 {
+		return nil, fmt.Errorf("resolve SDD shared files: embedded %s listing is empty", assets.SharedSkillDir)
+	}
+	paths := make([]string, 0, len(sharedFiles))
+	for _, fileName := range sharedFiles {
+		paths = append(paths, filepath.Join(skillDir, "_shared", fileName))
+	}
+	if capability == "" {
+		capability = "capable"
+	}
+	skillPaths, err := skills.DirectoryPaths(skillDir, compatibilitySDDSkillIDs, capability)
+	if err != nil {
+		return nil, fmt.Errorf("enumerate SDD skills: %w", err)
+	}
+	return append(paths, skillPaths...), nil
+}
+
+// InjectSkillDirectory refreshes the SDD skills and their shared references in
+// an already-selected skills directory. It is separate from adapter injection
+// so compatibility paths can be refreshed once per operation.
+func InjectSkillDirectory(skillDir, capability string) (InjectionResult, error) {
+	return InjectSkillDirectoryWithWriter(skillDir, capability, filemerge.WriteFileAtomic)
+}
+
+// InjectSkillDirectoryWithWriter refreshes SDD skills with a caller-selected writer.
+func InjectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
+	sharedFiles, err := assets.SharedSkillFileNames()
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("resolve SDD shared files: %w", err)
+	}
+	if len(sharedFiles) == 0 {
+		return InjectionResult{}, fmt.Errorf("resolve SDD shared files: embedded %s listing is empty", assets.SharedSkillDir)
+	}
+	result := InjectionResult{}
+	for _, fileName := range sharedFiles {
+		assetPath := assets.SharedSkillDir + "/" + fileName
+		content, err := assets.Read(assetPath)
+		if err != nil {
+			return InjectionResult{}, fmt.Errorf("required SDD shared file %q: embedded asset not found: %w", fileName, err)
+		}
+		if len(content) == 0 {
+			return InjectionResult{}, fmt.Errorf("required SDD shared file %q: embedded asset is empty", fileName)
+		}
+
+		path := filepath.Join(skillDir, "_shared", fileName)
+		writeResult, err := writeFile(path, []byte(content), 0o644)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		result.Changed = result.Changed || writeResult.Changed
+		result.Files = append(result.Files, path)
+	}
+
+	if capability == "" {
+		capability = "capable"
+	}
+	sddResult, err := skills.InjectDirectoryWithCapabilityWithWriter(skillDir, compatibilitySDDSkillIDs, capability, writeFile)
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("inject SDD skills: %w", err)
+	}
+	result.Changed = result.Changed || sddResult.Changed
+	result.Files = append(result.Files, sddResult.Files...)
+	return result, nil
+}
+
 func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, options ...InjectOptions) (InjectionResult, error) {
 	if !adapter.SupportsSystemPrompt() {
 		return InjectionResult{}, nil
@@ -345,7 +422,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					continue
 				}
 
-				content := renderBoundedReviewAsset(commandsAssetDir + "/" + entry.Name())
+				content := renderBoundedReviewAsset(adapter.Agent(), commandsAssetDir+"/"+entry.Name())
 				path := filepath.Join(commandsDir, entry.Name())
 				writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
 				if err != nil {
@@ -494,57 +571,12 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.SupportsSkills() {
 		skillDir := adapter.SkillsDir(homeDir)
 		if skillDir != "" {
-			sharedFiles := []string{
-				"SKILL.md",
-				"persistence-contract.md",
-				"engram-convention.md",
-				"openspec-convention.md",
-				"sdd-phase-common.md",
-				"sdd-status-contract.md",
-				"skill-resolver.md",
+			skillResult, skillErr := InjectSkillDirectory(skillDir, opts.Capability)
+			if skillErr != nil {
+				return InjectionResult{}, skillErr
 			}
-			sddSkillIDs := []model.SkillID{
-				"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
-				"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
-				"sdd-onboard", "judgment-day",
-			}
-
-			// Write shared skill files (not SDD-specific, but needed by SDD).
-			// These are written directly, not via skills.Inject, since they are
-			// not part of the skills component's injection scope.
-			for _, fileName := range sharedFiles {
-				assetPath := "skills/_shared/" + fileName
-				content, readErr := assets.Read(assetPath)
-				if readErr != nil {
-					return InjectionResult{}, fmt.Errorf("required SDD shared file %q: embedded asset not found: %w", fileName, readErr)
-				}
-				if len(content) == 0 {
-					return InjectionResult{}, fmt.Errorf("required SDD shared file %q: embedded asset is empty", fileName)
-				}
-
-				path := filepath.Join(skillDir, "_shared", fileName)
-				writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
-				if err != nil {
-					return InjectionResult{}, err
-				}
-
-				changed = changed || writeResult.Changed
-				files = append(files, path)
-			}
-
-			// Write SDD skill files using skills.InjectWithCapability, which
-			// extracts the appropriate model section from each skill file based on capability.
-			// Default to "capable" when no specific capability is set.
-			capability := opts.Capability
-			if capability == "" {
-				capability = "capable"
-			}
-			sddResult, sddErr := skills.InjectWithCapability(homeDir, adapter, sddSkillIDs, capability)
-			if sddErr != nil {
-				return InjectionResult{}, fmt.Errorf("inject SDD skills: %w", sddErr)
-			}
-			changed = changed || sddResult.Changed
-			files = append(files, sddResult.Files...)
+			changed = changed || skillResult.Changed
+			files = append(files, skillResult.Files...)
 		}
 	}
 
@@ -615,7 +647,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				continue
 			}
 			// Copy all files (not just .md) to support Kimi's YAML-based agents
-			contentStr := renderBoundedReviewAsset(embeddedDir + "/" + entry.Name())
+			contentStr := renderBoundedReviewAsset(adapter.Agent(), embeddedDir+"/"+entry.Name())
 
 			// Resolve {{KIRO_MODEL}} placeholder for adapters that support it (e.g. Kiro).
 			// Non-Kiro adapters (Cursor, etc.) don't implement kiroModelResolver and are unaffected.
@@ -651,6 +683,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			if isMarkdownSubAgentPromptFile(entry.Name()) {
 				contentStr = injectCodeGraphToolGrantIntoPrompt(contentStr, adapter.Agent(), opts.CodeGraphGuidanceMarkdown)
 				contentStr = injectCodeGraphGuidanceIntoPrompt(contentStr, opts.CodeGraphGuidanceMarkdown)
+				contentStr = injectLanguageContractIntoPrompt(contentStr)
 			}
 			outPath := filepath.Join(agentsDir, entry.Name())
 			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
@@ -875,6 +908,7 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 	// needs the same search-order rule the orchestrator gets; task artifact
 	// references alone are not enough.
 	injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentsMap, codeGraphGuidance)
+	injectLanguageContractIntoOpenCodeSubagentPrompts(agentsMap)
 
 	result, err := json.MarshalIndent(overlay, "", "  ")
 	if err != nil {
@@ -935,16 +969,27 @@ func extractManagedSection(content, sectionID string) string {
 	return strings.Trim(content[start+len(open):end], "\n")
 }
 
+// expandOpenCodeBoundedReviewAgents renders the OpenCode-shaped review-lens
+// sub-agents shared by the OpenCode and Kilocode overlays. Both identities
+// get the identical shell-less, read-less shape: the OpenCode plugin
+// (review-result-artifacts.ts) asks `review lens-context` for all immutable
+// candidate evidence through its provider-owned native channel and injects it
+// into each reviewer task's prompt before the reviewer ever launches, so the lens
+// itself needs no bash and no read tool — this provider-injected block is
+// its only byte source. Kilocode is not RDD-eligible and never receives the
+// capturing plugin, so review never starts there; it gets the identical
+// denied shape rather than a permissive one that a fresh Kilocode-specific
+// entry point could someday reach.
 func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 	for _, name := range opencode.ReviewLensPhases() {
 		agent, ok := agentsMap[name].(map[string]any)
 		if !ok {
 			continue
 		}
-		prompt, _ := reviewerPrompt(name)
+		prompt, _ := openCodeProviderInjectedReviewerPrompt(name)
 		agent["prompt"] = prompt
-		agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": true, "task": false}
-		agent["permission"] = openCodeReviewerPermission()
+		agent["tools"] = map[string]any{"*": false, "read": false, "write": false, "edit": false, "bash": false, "task": false}
+		agent["permission"] = map[string]any{"edit": "deny", "bash": "deny"}
 	}
 
 	for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
@@ -1602,12 +1647,23 @@ func claudeHookListContains(hookEntries []any, command string) bool {
 	return false
 }
 
-// ManagedOpenCodePluginNames lists the OpenCode plugin files gentle-ai manages
-// as versioned runtime artifacts. Their content is tied to the installed binary
+// ManagedOpenCodePluginNames lists every OpenCode plugin gentle-ai manages as
+// versioned runtime artifacts. Their content is tied to the installed binary
 // version: install writes them and sync must keep already-installed copies
 // byte-equal to the embedded assets (issue #1440).
 func ManagedOpenCodePluginNames() []string {
-	return []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"}
+	return managedOpenCodePluginNames(model.AgentOpenCode)
+}
+
+func managedOpenCodePluginNames(agent model.AgentID) []string {
+	switch agent {
+	case model.AgentOpenCode:
+		return []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"}
+	case model.AgentKilocode:
+		return []string{"model-variants.ts", "skill-registry.ts"}
+	default:
+		return nil
+	}
 }
 
 // AgentReceivesManagedOpenCodePlugins reports whether the SDD injector
@@ -1629,8 +1685,18 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 
 	var files []string
 	var changed bool
+	if adapter.Agent() == model.AgentKilocode {
+		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		if removed {
+			changed = true
+			files = append(files, path)
+		}
+	}
 
-	for _, name := range ManagedOpenCodePluginNames() {
+	for _, name := range managedOpenCodePluginNames(adapter.Agent()) {
 		pluginPath := filepath.Join(pluginsDir, name)
 		info, err := os.Lstat(pluginPath)
 		if err != nil {
@@ -1655,6 +1721,24 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+func removeOpenCodeOnlyReviewPlugin(pluginsDir string) (string, bool, error) {
+	path := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return path, false, nil
+		}
+		return path, false, fmt.Errorf("stat OpenCode-only review plugin %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return path, false, nil
+	}
+	if err := os.Remove(path); err != nil {
+		return path, false, fmt.Errorf("remove OpenCode-only review plugin %s: %w", path, err)
+	}
+	return path, true, nil
 }
 
 // installOpenCodePlugins copies the OpenCode-compatible plugins that gentle-ai
@@ -1683,7 +1767,18 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 		}
 	}
 
-	for _, name := range ManagedOpenCodePluginNames() {
+	if adapter.Agent() == model.AgentKilocode {
+		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		if removed {
+			changed = true
+			files = append(files, path)
+		}
+	}
+
+	for _, name := range managedOpenCodePluginNames(adapter.Agent()) {
 		content := assets.MustRead("opencode/plugins/" + name)
 		pluginPath := filepath.Join(pluginsDir, name)
 

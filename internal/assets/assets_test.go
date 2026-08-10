@@ -346,6 +346,9 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/skill-improver/SKILL.md",
 		"skills/skill-improver/references/skill-style-guide.md",
 		"skills/chained-pr/references/chaining-details.md",
+		"skills/rdd-defect-workflow/SKILL.md",
+		"skills/systemic-issue-triage/SKILL.md",
+		"skills/gentle-ai-bench/SKILL.md",
 	}
 
 	for _, path := range expectedFiles {
@@ -465,6 +468,14 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	}
 }
 
+// TestReviewResultArtifactsPluginContract pins the reduced transport-only
+// contract (rdd-advisory-transport SKILL.md): the plugin's only job is to
+// detect a reviewer task launch carrying the opaque binding, fetch the
+// finished provider context via `gentle-ai review lens-context`, inject that
+// block as the task prompt, and hand the model's raw final text back
+// unmodified. It never parses a binding field beyond the one it needs to
+// route the call, never rebuilds a prompt, never applies a local budget,
+// never captures or preserves a result, and never decides admission.
 func TestReviewResultArtifactsPluginContract(t *testing.T) {
 	source, err := Read("opencode/plugins/review-result-artifacts.ts")
 	if err != nil {
@@ -472,73 +483,81 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 	}
 	for _, want := range []string{
 		`spawn("gentle-ai"`,
-		`"review", "capture-result"`,
-		`"review", "preserve-result"`,
-		`"--repository-context", binding.repository_context`,
-		`"--expected-revision", binding.revision`,
-		`return ["--cwd", cwd]`,
-		`const current = fields === "lens,lineage,order,repository_context,revision,subject_hash,target"`,
-		`typeof subject.subject_hash !== "string"`,
-		`subject.subject_hash !== binding.subject_hash`,
-		`artifact_subject`,
-		`GENTLE_AI_REVIEW_CONTEXT`,
-		`validManifest(manifest)`,
+		`"review", "lens-context",`,
+		`"--repository-context", repositoryContext`,
+		// `--delivery runtime_interception` is not cosmetic: it is the
+		// mechanism the provider records on the receipt beside the captured
+		// results, and it is what distinguishes a block a runtime adapter
+		// substituted for whatever the caller produced from one a caller
+		// merely relayed. Declaring the relayed level from here would
+		// permanently record a weaker claim than what actually happened.
+		`const LENS_CONTEXT_DELIVERY = "runtime_interception"`,
+		`"--delivery", LENS_CONTEXT_DELIVERY`,
+		`GENTLE_AI_REVIEW_CONTEXT_END`,
+		`partial provider context is never injected`,
+		`Split this candidate into smaller reviewable commits`,
+		`function bindingRepositoryContext(`,
 		`output.args.prompt = await injectReviewerContext(`,
-		`"--lineage", binding.lineage`,
-		`"--target", binding.target`,
-		`"--lens", binding.lens`,
-		`"--order", String(binding.order)`,
-		`"--input", "-"`,
-		`"--preflight"`,
-		`GENTLE_AI_REVIEW_CWD`,
 		`"tool.execute.before"`,
 		`output.args.background === true`,
 		`!BINDING.test(input.args.prompt)`,
-		`const lens = input.args.subagent_type`,
-		`const binding = parseBinding(input.args.prompt, lens)`,
-		`const cwd = captureCwd(worktree, directory)`,
-		// The replayable payload is extracted exactly once before capture, so a
-		// capture failure preserves the extracted strict JSON, never the task
-		// envelope that `review capture-result --input` would reject on replay.
-		`result = reviewerResult(output.output)`,
-		`output.output = await captureResult(cwd, binding, result)`,
-		`throw await preservedCaptureFailure(cwd, binding, result, cause)`,
-		// Envelope extraction itself can fail; only then is the raw envelope
-		// preserved, under a distinct extraction-failure cause.
-		`throw await preservedCaptureFailure(cwd, binding, output.output, cause)`,
-		`function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string): string`,
-		`sessionErrorMessage(binding, cause, "repository_context_preflight_failed")`,
-		`parsed.reference`,
-		`raw reviewer result preserved for recovery`,
-		`raw reviewer result could not be preserved`,
-		// The previously conflated empty/nested-envelope branch must throw two
-		// distinct, machine-readable classified errors instead of one free-text
-		// message, and the plugin must thread that class into --class.
-		`"reviewer task result is empty"`,
-		`"reviewer task result contains a nested task envelope"`,
-		`reviewClass`,
-		`extractionClass(cause)`,
-		`"--class"`,
-		// Double failure (capture and preserve both failed) must embed the
-		// bounded raw payload in the thrown error so the transcript retains it.
-		`raw reviewer result follows for manual recovery`,
-		`PRESERVE_EMBED_LIMIT`,
-		// Missing native preflight support must fail closed before a bound
-		// reviewer launches without provider-owned frozen context.
-		`The reviewer was not launched`,
+		// The lens routed to the native call is always the launched
+		// subagent_type, never a field parsed out of the binding: the binding
+		// is opaque provider data the plugin passes through, never
+		// interprets (#2442's resolution under the shared contract).
+		`async function injectReviewerContext(prompt: string, lens: string, cwd: string)`,
+		"output.args.prompt,\n      subagent,",
+		`output.output = reviewerResult(output.output)`,
+		`function taskResult(output: unknown, subject: string, classification?: string)`,
+		"function reviewerResult(output: unknown): string {\n  return taskResult(output, \"reviewer\")\n}",
+		"`${subject} task result is empty`",
+		"`${subject} task result contains a nested task envelope`",
+		`const SDD_PHASES`,
+		`const SDD_TASK_FAILURE_PREFIX`,
+		`"gentle-ai.sdd-task-result-failure/v1"`,
+		`"sdd_task_result_empty"`,
+		`"sdd_task_result_malformed"`,
+		`failedSDDSessions`,
+		`extractionClass(cause, "sddClass")`,
+		// #2677: an empty result means the child produced no output at all
+		// (for example a provider rejection before generation), and the
+		// handoff must say so and carry the one causal fact the hook
+		// receives -- the child's provider/model route -- after validation.
+		`function taskRouteModel(`,
+		`produced no task output at all`,
+		`provider rejected the request before generation (authentication, region, or model access)`,
+		`taskRouteModel(metadata)`,
 		`export default ReviewResultArtifactsPlugin`,
 	} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("review-result-artifacts.ts missing %q", want)
 		}
 	}
+	// The obsolete isolation/session claim, the field-by-field binding
+	// parser, and native result capture/preservation/retry are gone, not
+	// merely unused: an ordinary already-running OpenCode session is
+	// sufficient under the advisory boundary (SKILL.md), the binding is
+	// opaque provider data the plugin never interprets, and raw text goes
+	// back to Go, which owns validation and capture policy.
+	for _, superseded := range []string{
+		"REQUIRED_ISOLATION_ENVIRONMENT", "missingIsolationEnvironment", "OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+		"remoteInstructionsEntries", "client.config.get",
+		"type ReviewBinding", "function parseBinding(", "function bindingRefusal(", "function verifiedLensContext(",
+		"function captureResult(", "function preserveResult(", "function repositoryBindingArgs(",
+		"admissionRecoveries", "AdmissionRecoveryStore", "claimAdmissionRecovery", "clearAdmissionRecovery",
+		"MAX_ADMISSION_RECOVERY_SESSIONS", "MAX_ADMISSION_RECOVERIES_PER_SESSION",
+		"function sessionErrorMessage(", "admissionRejection(", "ADMISSION_DIAGNOSTIC",
+		"function preservedCaptureFailure(", "function preservedReference(", "PRESERVE_EMBED_LIMIT",
+		"GENTLE_AI_REVIEW_CWD", "GENTLE_AI_FROZEN_CANDIDATE_CONTEXT", "candidate_diff",
+		"inspect-candidate", "materializeReviewEvidence", "inspectionArgs",
+		"REVIEW_CONTEXT_BYTE_BUDGET", "preflightCapture", "validManifest", "--preflight",
+	} {
+		if strings.Contains(source, superseded) {
+			t.Fatalf("review-result-artifacts.ts still carries the superseded mechanism %q", superseded)
+		}
+	}
 	if strings.Contains(source, `.slice("review-".length)`) {
 		t.Fatal("review-result-artifacts.ts must preserve the exact full selected lens; found review- prefix stripping")
-	}
-	for _, forbidden := range []string{"GENTLE_AI_FROZEN_CANDIDATE_CONTEXT", "candidate_diff"} {
-		if strings.Contains(source, forbidden) {
-			t.Fatalf("review-result-artifacts.ts still transports obsolete candidate context %q", forbidden)
-		}
 	}
 	// Pin the split: the previously conflated empty/nested-envelope message
 	// must never regress back into one indistinguishable free-text throw.
@@ -842,6 +861,35 @@ func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 		if !strings.Contains(content, required) {
 			t.Fatalf("opencode/sdd-orchestrator.md missing required preflight wording %q", required)
 		}
+	}
+}
+
+func TestOpenCodeSDDOrchestratorDelegationVisibility(t *testing.T) {
+	content := MustRead("opencode/sdd-orchestrator.md")
+
+	for _, required := range []string{
+		"<!-- gentle-ai:opencode-desktop-delegation-progress -->",
+		"#### Delegation Visibility (OpenCode Desktop)",
+		"`delegate` or `task`",
+		"assistant-visible status line immediately before the call",
+		"When the call returns",
+		"⏳ Delegating {phase} to {agent}...",
+		"✅ {agent} completed — {status}",
+		"⚠️ {agent} returned {status} — {short reason}",
+		"15 tokens or fewer",
+		"25 tokens or fewer",
+		"executor prompts",
+		"<!-- /gentle-ai:opencode-desktop-delegation-progress -->",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("opencode/sdd-orchestrator.md missing delegation visibility wording %q", required)
+		}
+	}
+
+	visibilityIndex := strings.Index(content, "#### Delegation Visibility (OpenCode Desktop)")
+	workflowIndex := strings.Index(content, "## SDD Workflow")
+	if visibilityIndex < 0 || workflowIndex < 0 || visibilityIndex > workflowIndex {
+		t.Fatal("delegation visibility must appear before the SDD workflow")
 	}
 }
 
@@ -1596,9 +1644,9 @@ func TestEmbeddedAssetCount(t *testing.T) {
 		}
 	}
 
-	// We expect 23 skill directories (10 SDD + judgment-day + 6 foundation + 4 sustainable-review + hermes-ephemeral-delegation + _shared).
-	if skillDirs != 23 {
-		t.Fatalf("expected 23 skill directories, got %d", skillDirs)
+	// We expect 26 skill directories (10 SDD + judgment-day + 13 foundation/review + hermes-ephemeral-delegation + _shared).
+	if skillDirs != 26 {
+		t.Fatalf("expected 26 skill directories, got %d", skillDirs)
 	}
 
 	// Verify each skill directory has a SKILL.md.
@@ -2218,4 +2266,107 @@ func TestSDDArchiveFinalStateAuthorityContract(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestSDDArchiveStoreSpecificFilesystemContract(t *testing.T) {
+	command := MustRead("opencode/commands/sdd-archive.md")
+	for _, required := range []string{
+		"For `openspec` or `hybrid` stores only",
+		"For `engram`, do not perform filesystem synchronization or archive moves",
+		"persist the final archive report to `sdd/{change-name}/archive-report`",
+		"For `none`, do not perform filesystem operations or Engram persistence",
+	} {
+		if !strings.Contains(command, required) {
+			t.Fatalf("opencode/commands/sdd-archive.md missing store-specific archive wording %q", required)
+		}
+	}
+
+	skill := MustRead("skills/sdd-archive/SKILL.md")
+	for _, required := range []string{
+		"target_dir=\"openspec/specs/{domain}\"",
+		"target_path=\"$target_dir/spec.md\"",
+		"mkdir -p \"$target_dir\"",
+		"temp_path=\"$(mktemp \"$target_dir/.spec.md.XXXXXX\")\"",
+		"cleanup_temp()",
+		"rm -f \"$temp_path\" || :",
+		"trap cleanup_temp EXIT",
+		"if cp \"openspec/changes/{change-name}/specs/{domain}/spec.md\" \"$temp_path\"; then",
+		"copy_status=$?",
+		"if diff -r \"openspec/changes/{change-name}/specs/{domain}/spec.md\" \"$temp_path\"; then",
+		"diff_status=0",
+		"diff_status=$?",
+		"if [ \"$diff_status\" -ne 0 ]; then",
+		"exit \"$diff_status\"",
+		"if mv \"$temp_path\" \"$target_path\"; then",
+		"move_status=$?",
+		"exit \"$move_status\"",
+		"snapshot_root=\"$(mktemp -d \"${TMPDIR:-/tmp}/sdd-archive.XXXXXX\")\"",
+		"trap 'rm -rf -- \"$snapshot_root\"' EXIT",
+		"cp -R \"openspec/changes/{change-name}\" \"$snapshot_root/source\"",
+		"if mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then",
+		"if [ -e \"openspec/changes/{change-name}\" ] || [ -L \"openspec/changes/{change-name}\" ]; then",
+		"diff -r \"$snapshot_root/source\" \"openspec/changes/archive/YYYY-MM-DD-{change-name}\"",
+		"if diff -r \"$snapshot_root/source\" \"openspec/changes/archive/YYYY-MM-DD-{change-name}\"; then",
+		"only empty diff output passes",
+		"verbatim `diff -r` output from Steps 2 and 3 MUST appear in the phase result",
+		"A failed or skipped `diff -r` FAILS the phase",
+		"The `snapshot_root` is removed safely by the EXIT trap",
+	} {
+		if !strings.Contains(skill, required) {
+			t.Fatalf("skills/sdd-archive/SKILL.md missing pre-move snapshot wording %q", required)
+		}
+	}
+
+	assertOrdered := func(name, block string, fragments ...string) {
+		t.Helper()
+		position := 0
+		for _, fragment := range fragments {
+			offset := strings.Index(block[position:], fragment)
+			if offset < 0 {
+				t.Fatalf("%s missing ordered fragment %q after byte %d", name, fragment, position)
+			}
+			position += offset + len(fragment)
+		}
+	}
+
+	copyStart := strings.Index(skill, "#### If Main Spec Does NOT Exist")
+	if copyStart < 0 {
+		t.Fatal("full-spec copy block boundaries are missing")
+	}
+	copyEnd := strings.Index(skill[copyStart:], "### Step 3: Move to Archive")
+	if copyEnd < 0 {
+		t.Fatal("full-spec copy block end is missing")
+	}
+	copyBlock := skill[copyStart : copyStart+copyEnd]
+	assertOrdered("full-spec copy", copyBlock,
+		"temp_path=\"$(mktemp \"$target_dir/.spec.md.XXXXXX\")\"",
+		"if cp \"openspec/changes/{change-name}/specs/{domain}/spec.md\" \"$temp_path\"; then",
+		"else\n  copy_status=$?\n  exit \"$copy_status\"",
+		"if diff -r \"openspec/changes/{change-name}/specs/{domain}/spec.md\" \"$temp_path\"; then",
+		"else\n  diff_status=$?",
+		"if [ \"$diff_status\" -ne 0 ]; then\n  exit \"$diff_status\"",
+		"if mv \"$temp_path\" \"$target_path\"; then",
+		"else\n  move_status=$?\n  exit \"$move_status\"",
+	)
+
+	moveStart := strings.Index(skill, "### Step 3: Move to Archive")
+	if moveStart < 0 {
+		t.Fatal("archive move block boundaries are missing")
+	}
+	moveEnd := strings.Index(skill[moveStart:], "### Step 4: Verify Archive")
+	if moveEnd < 0 {
+		t.Fatal("archive move block end is missing")
+	}
+	moveBlock := skill[moveStart : moveStart+moveEnd]
+	assertOrdered("archive move", moveBlock,
+		"snapshot_root=\"$(mktemp -d \"${TMPDIR:-/tmp}/sdd-archive.XXXXXX\")\"",
+		"cp -R \"openspec/changes/{change-name}\" \"$snapshot_root/source\"",
+		"if git mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then",
+		"if mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then",
+		"else\n    move_status=$?\n    exit \"$move_status\"",
+		"if [ -e \"openspec/changes/{change-name}\" ] || [ -L \"openspec/changes/{change-name}\" ]; then",
+		"if diff -r \"$snapshot_root/source\" \"openspec/changes/archive/YYYY-MM-DD-{change-name}\"; then",
+		"else\n  diff_status=$?",
+		"if [ \"$diff_status\" -ne 0 ]; then\n  exit \"$diff_status\"",
+	)
 }

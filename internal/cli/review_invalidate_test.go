@@ -68,6 +68,13 @@ func TestLegacyOrdinaryMutationRoutesShareTypedReadOnlyErrorWithoutMutation(t *t
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
+			// The "start collision" case drives a real `review start`, which
+			// issue #2586's unified empty-candidate guard would otherwise
+			// refuse first on a clean worktree, masking the legacy-collision
+			// refusal this test exists to pin. A staged, low-risk change
+			// gives every subtest a non-empty candidate; the other subtests
+			// never build a fresh candidate at all, so it is inert for them.
+			writeReviewStartCandidate(t, repo, "docs/pending.md", "# pending\n\nplain prose, no executable content.\n", 0o644)
 			lineage := "legacy-route-" + strings.ReplaceAll(tt.name, " ", "-")
 			store := addPristineLegacyAuthority(t, repo, lineage)
 			chain, err := store.LoadChain()
@@ -151,7 +158,14 @@ func TestReviewInvalidateFailsClosedForCompetingAuthorities(t *testing.T) {
 	}
 }
 
-func TestReviewInvalidateRefusesHealthyApprovedLineage(t *testing.T) {
+// TestReviewInvalidateRefusesApprovedLineageUnconditionally supersedes
+// TestReviewInvalidateRefusesHealthyApprovedLineage (Wave 5 Slice 7, design
+// decision 2): `review invalidate` no longer re-derives a gate result to
+// decide whether an approved lineage may be invalidated at all -- it
+// refuses UNCONDITIONALLY for any approved (or already-invalidated-with-evidence)
+// compact lineage, naming `review validate --gate <gate>` as the runnable
+// alternative, and never touches authority bytes either way.
+func TestReviewInvalidateRefusesApprovedLineageUnconditionally(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	started, store := approveDiscoveryMarkdown(t, repo, "invalidate-approved-healthy-cli", "approved.md", "approved\n")
 	runReviewCLIGit(t, repo, "add", "approved.md")
@@ -166,24 +180,28 @@ func TestReviewInvalidateRefusesHealthyApprovedLineage(t *testing.T) {
 		"invalidate", "--cwd", repo, "--lineage", started.LineageID,
 		"--expected-revision", record.Revision, "--gate", string(reviewtransaction.GatePreCommit),
 	}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "healthy approved authority") {
-		t.Fatalf("healthy approved CLI invalidation error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no longer performs gate-derived invalidation") ||
+		!strings.Contains(err.Error(), "review validate") {
+		t.Fatalf("approved CLI invalidation error = %v", err)
 	}
 	afterState, _ := os.ReadFile(store.StatePath())
 	afterReceipt, _ := os.ReadFile(store.ReceiptPath())
 	if !bytes.Equal(afterState, beforeState) || !bytes.Equal(afterReceipt, beforeReceipt) {
-		t.Fatal("healthy approved CLI invalidation changed authority bytes")
+		t.Fatal("approved CLI invalidation changed authority bytes")
 	}
 }
 
-func TestReviewInvalidateReplaysCompletedApprovedInvalidation(t *testing.T) {
+// TestReviewInvalidateRefusalIsIdempotentForApprovedLineage supersedes
+// TestReviewInvalidateReplaysCompletedApprovedInvalidation: the refusal is a
+// pure function of the request (no write, no derivation), so calling it
+// twice in a row for the identical approved lineage still produces
+// byte-identical output -- the replay-stability claim survives even though
+// there is no longer a completed write to replay against.
+func TestReviewInvalidateRefusalIsIdempotentForApprovedLineage(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	started, store := approveDiscoveryMarkdown(t, repo, "invalidate-approved-replay", "approved.md", "approved\n")
 	record, err := store.Load()
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, "outside.txt"), []byte("outside frozen scope\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	args := []string{
@@ -192,12 +210,11 @@ func TestReviewInvalidateReplaysCompletedApprovedInvalidation(t *testing.T) {
 	}
 
 	var first bytes.Buffer
-	if err := RunReview(args, &first); err != nil {
-		t.Fatalf("first approved invalidation: %v", err)
-	}
+	firstErr := RunReview(args, &first)
 	var second bytes.Buffer
-	if err := RunReview(args, &second); err != nil {
-		t.Fatalf("replay approved invalidation: %v", err)
+	secondErr := RunReview(args, &second)
+	if firstErr == nil || secondErr == nil || firstErr.Error() != secondErr.Error() {
+		t.Fatalf("CLI refusal replay changed: first=%v second=%v", firstErr, secondErr)
 	}
 	if first.String() != second.String() {
 		t.Fatalf("CLI replay output changed:\nfirst: %s\nsecond: %s", first.String(), second.String())

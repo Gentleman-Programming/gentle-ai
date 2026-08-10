@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/consentenvelope"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -12,6 +14,8 @@ const ReviewIntegrationConsentSchema = "gentle-ai.review-integration.consent/v1"
 const ReviewIntegrationConsentSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/consent.schema.json"
 const ReviewIntegrationConsentSchemaV2 = "gentle-ai.review-integration.consent/v2"
 const ReviewIntegrationConsentSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/consent.schema.json"
+const ReviewIntegrationConsentSchemaV3 = "gentle-ai.review-integration.consent/v3"
+const ReviewIntegrationConsentSchemaIDV3 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/consent-v3.schema.json"
 
 // ReviewIntegrationConsentResult is the typed per-candidate consent question a
 // relay-declared negotiated START answers with instead of proceeding. It is a
@@ -28,6 +32,7 @@ type ReviewIntegrationConsentResult struct {
 	Contract  string `json:"contract"`
 	Operation string `json:"operation"`
 	Action    string `json:"action"`
+	Agent     string `json:"agent,omitempty"`
 	// Blocking marks this envelope as a decision the caller must relay before
 	// any review work starts; nothing has been persisted.
 	Blocking       bool                             `json:"blocking"`
@@ -50,20 +55,16 @@ type ReviewIntegrationConsentResult struct {
 
 // ReviewIntegrationConsentChoice is one allowed answer: its token, the human
 // label the interactive prompt uses, what choosing it does, and the exact
-// runnable follow-up invocation scoped to this candidate.
-type ReviewIntegrationConsentChoice struct {
-	Answer     string `json:"answer"`
-	Label      string `json:"label"`
-	Effect     string `json:"effect"`
-	Invocation string `json:"invocation"`
-}
+// runnable follow-up invocation scoped to this candidate. It is an alias of
+// the shared consent-envelope core's Choice (#2554): the JSON field names are
+// shipped contract bytes, pinned byte-for-byte by
+// TestReviewConsentEnvelopeSerializedBytesUnchanged.
+type ReviewIntegrationConsentChoice = consentenvelope.Choice
 
 // ReviewIntegrationConsentOffPath names the documented permanent-disable
-// command that is deliberately not part of the choice set.
-type ReviewIntegrationConsentOffPath struct {
-	Note    string `json:"note"`
-	Command string `json:"command"`
-}
+// command that is deliberately not part of the choice set. Alias of the
+// shared core's OffPath under the same byte pin.
+type ReviewIntegrationConsentOffPath = consentenvelope.OffPath
 
 const reviewConsentActionRequired = "consent_required"
 
@@ -221,11 +222,21 @@ func reviewConsentSpanishSignalSubject(signal reviewtransaction.RiskSignal) stri
 // assessment, and the caller's own invocation into the typed consent question.
 // Every phrase comes from the same wording sources the interactive prompt
 // uses, so the relayed question and the terminal question cannot drift.
+//
+// runtimeAgent is the exact generated runtime identity the caller's own
+// negotiated START already validated (review_facade.go's
+// reviewRuntimeWithImmutableTransport gate runs before this constructor is
+// ever reached whenever a runtime is declared at all), never a re-parse of
+// followUpBase: parsing a rendered command back into structured data is
+// exactly the class of bug this repo refuses. An undeclared runtime (the
+// manual/non-agent compatibility path -- see review_facade.go's own comment
+// on that path being "not gated") keeps today's compatibility default.
 func newReviewIntegrationConsentResult(
 	snapshot reviewtransaction.Snapshot,
 	assessment reviewtransaction.RiskAssessment,
 	followUpBase string,
 	contract string,
+	runtimeAgent string,
 	locale reviewConsentLocale,
 ) (ReviewIntegrationConsentResult, error) {
 	// The evidence phrases may legitimately be empty (a large change with no
@@ -270,18 +281,57 @@ func newReviewIntegrationConsentResult(
 		},
 	}
 	if contract == ReviewIntegrationContractV2 {
-		result.Schema, result.Contract = ReviewIntegrationConsentSchemaV2, ReviewIntegrationContractV2
+		// Issue #2676: this literal used to be unconditional, so a negotiated
+		// START explicitly bound to another runtime (OpenCode, Codex) still
+		// reported "claude-code" here while its own follow-up invocations
+		// below were already rendered from the real binding. Bind the same
+		// declared identity the caller proved eligible; only the undeclared
+		// compatibility path (no runtime named at all) keeps the historical
+		// default, matching every existing manual-caller test and fixture.
+		agent := strings.TrimSpace(runtimeAgent)
+		if agent == "" {
+			agent = "claude-code"
+		}
+		result.Schema, result.Contract, result.Agent = ReviewIntegrationConsentSchemaV3, ReviewIntegrationContractV2, agent
 	}
 	if err := result.Validate(); err != nil {
 		return ReviewIntegrationConsentResult{}, fmt.Errorf("validate consent question: %w", err)
 	}
+	if err := validateReviewConsentInvocations(result, followUpBase); err != nil {
+		return ReviewIntegrationConsentResult{}, fmt.Errorf("validate consent invocations: %w", err)
+	}
 	return result, nil
+}
+
+// validateReviewConsentInvocations compares provider-owned command bytes with
+// the same renderer that created the consent request. It never parses a command
+// supplied by a caller, so duplicate or substituted runtime flags cannot pass.
+func validateReviewConsentInvocations(result ReviewIntegrationConsentResult, followUpBase string) error {
+	for _, choice := range result.Choices {
+		expected := followUpBase + " --consent " + choice.Answer
+		if choice.Invocation != expected {
+			return fmt.Errorf("consent choice %q invocation does not match the provider-owned request", choice.Answer) // refusal:by-design world-action: provider-owned bytes are an internal invariant; the exit is a code fix, not a command
+		}
+	}
+	return nil
 }
 
 func (result ReviewIntegrationConsentResult) Validate() error {
 	legacyContract := result.Schema == ReviewIntegrationConsentSchema && result.Contract == ReviewIntegrationContractV1
-	nativeGitContract := result.Schema == ReviewIntegrationConsentSchemaV2 && result.Contract == ReviewIntegrationContractV2
-	if (!legacyContract && !nativeGitContract) ||
+	historicalNativeGitContract := result.Schema == ReviewIntegrationConsentSchemaV2 && result.Contract == ReviewIntegrationContractV2 && result.Agent == ""
+	// The v3 shape must name a runtime that can actually carry immutable
+	// receipt-review transport -- the exact same authority
+	// reviewRuntimeWithImmutableTransport gates negotiated START on (Wave 4
+	// S4's fixed RDD policy) -- rather than a fresh allowlist that could drift
+	// from it. This accepts every declared runtime proven eligible at START
+	// (claude-code, opencode, codex today), and fail-closed rejects an empty
+	// identity, an unknown string, and a runtime that is eligible under the
+	// RDD policy but still dormant for this contract (e.g. Kilocode has no
+	// proven fresh-reviewer boundary yet), because none of those can ever
+	// legitimately reach this envelope.
+	currentNativeGitContract := result.Schema == ReviewIntegrationConsentSchemaV3 && result.Contract == ReviewIntegrationContractV2 &&
+		reviewImmutableRuntimeCapability(model.AgentID(result.Agent)).supportsImmutableReceiptReview()
+	if (!legacyContract && !historicalNativeGitContract && !currentNativeGitContract) ||
 		result.Operation != "review.start" || result.Action != reviewConsentActionRequired || !result.Blocking {
 		return errors.New("invalid consent question identity") // refusal:by-design world-action: this envelope is built and validated by the same file; the exit is a code fix, not a command
 	}
@@ -297,18 +347,18 @@ func (result ReviewIntegrationConsentResult) Validate() error {
 	if result.ChangedFiles < 0 || result.ChangedLines < 0 {
 		return errors.New("consent question change counts cannot be negative") // refusal:by-design world-action: this envelope is built and validated by the same file; the exit is a code fix, not a command
 	}
-	if result.Headline == "" || result.Reason == "" || result.Value == "" || result.RiskEvidence == nil {
-		return errors.New("consent question must state why input is required") // refusal:by-design world-action: this envelope is built and validated by the same file; the exit is a code fix, not a command
+	// The completeness half (non-empty triple, evidence non-nil, exactly the
+	// two token choices with label, effect, and a runnable invocation, off
+	// path documented) is the shared core's contract (#2554); everything
+	// around it in this method is review identity and stays here.
+	core := consentenvelope.Core{
+		Headline: result.Headline, Reason: result.Reason, Value: result.Value,
+		Evidence: result.RiskEvidence, Choices: result.Choices, OffPath: result.OffPath,
 	}
-	if len(result.Choices) != 2 ||
-		result.Choices[0].Answer != string(reviewConsentModeGranted) ||
-		result.Choices[1].Answer != string(reviewConsentModeDeclined) {
-		return errors.New("consent question requires exactly the granted and declined choices") // refusal:by-design world-action: this envelope is built and validated by the same file; the exit is a code fix, not a command
+	if err := core.ValidateCompleteness(string(reviewConsentModeGranted), string(reviewConsentModeDeclined)); err != nil {
+		return err
 	}
 	for _, choice := range result.Choices {
-		if choice.Label == "" || choice.Effect == "" {
-			return fmt.Errorf("consent choice %q is incomplete", choice.Answer) // refusal:by-design world-action: this envelope is built and validated by the same file; the exit is a code fix, not a command
-		}
 		if !strings.HasPrefix(choice.Invocation, "gentle-ai review start ") ||
 			!strings.Contains(choice.Invocation, " --target "+result.TargetIdentity) ||
 			!strings.Contains(choice.Invocation, " --consent "+choice.Answer) {

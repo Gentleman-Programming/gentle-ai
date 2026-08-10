@@ -66,11 +66,22 @@ func TestRuntimeSelfRemediationFinishBindsCorrectedApprovedAuthority(t *testing.
 	}
 }
 
-// TestRuntimeSelfRemediationTriangleGuardRailsHold pins the other two legs of
-// the reported triangle as CORRECT refusals: recovery still cannot mint a
-// successor from a healthy approved authority whose scope did not change, and
-// invalidation still refuses healthy approved authority. The self-successor
-// finish is the only legal exit.
+// TestRuntimeSelfRemediationTriangleGuardRailsHold pins the recovery legs of
+// the reported triangle as CORRECT refusals: recovery cannot mint a
+// successor from a healthy approved authority whose scope did not change,
+// nor from a same-lineage successor, nor without an actually-invalidated
+// predecessor. The self-successor finish is the only legal exit.
+//
+// A third leg -- "invalidate still refuses healthy approved authority" --
+// was pinned here through InvalidateApprovedCompactAuthority before Wave 5
+// (Gate Cutover) Slice 7 deleted it (design decision 2: invalidated is now
+// a derived verdict, never a write this verb performs, so there is no
+// write path left to refuse). The equivalent invariant -- a healthy
+// approved candidate never reads as invalidated -- is exactly what
+// TestReceiptFilePersistsAfterDerivedInvalidation_AllFiveGates (internal/cli)
+// and the exact-candidate "allow" cells of the gate-boundary matrix
+// (internal/reviewtransaction) already prove for every gate; nothing about
+// self-remediation is specific to it.
 func TestRuntimeSelfRemediationTriangleGuardRailsHold(t *testing.T) {
 	fixture := newRuntimeSelfRemediationFixture(t)
 	ctx := context.Background()
@@ -116,16 +127,6 @@ func TestRuntimeSelfRemediationTriangleGuardRailsHold(t *testing.T) {
 		})
 		if err == nil || !strings.Contains(err.Error(), "recovery requires an invalidated predecessor") {
 			t.Fatalf("invalidated disposition recover error = %v", err)
-		}
-	})
-
-	t.Run("invalidate still refuses healthy approved authority", func(t *testing.T) {
-		_, _, err := reviewtransaction.InvalidateApprovedCompactAuthority(ctx, fixture.repo, reviewtransaction.CompactApprovedInvalidationRequest{
-			LineageID: fixture.lineage, ExpectedRevision: predecessor.Revision,
-			Gate: reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: fixture.lineage},
-		})
-		if err == nil || !strings.Contains(err.Error(), "healthy approved authority cannot be invalidated") {
-			t.Fatalf("healthy invalidation error = %v", err)
 		}
 	})
 }

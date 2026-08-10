@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -511,7 +513,7 @@ func TestStartCompactAuthorityRunsBeforeCreateGuardOnlyAtNewAuthorityBoundary(t 
 	}
 }
 
-func TestStartCompactAuthorityKeepsStagedAndWorkspaceAuthoritiesDistinct(t *testing.T) {
+func TestStartCompactAuthorityReusesContentEquivalentStagedAndWorkspaceAuthority(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 	gitSnapshot(t, repo, "add", "--", "tracked.txt")
@@ -523,9 +525,9 @@ func TestStartCompactAuthorityKeepsStagedAndWorkspaceAuthoritiesDistinct(t *test
 	}
 	storeCompactStartAuthority(t, repo, staged)
 
-	created, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: workspace})
-	if err != nil || created.Action != CompactStartCreated || created.Record.State.LineageID != workspace.LineageID {
-		t.Fatalf("workspace start against staged authority = %#v, %v", created, err)
+	reused, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: workspace})
+	if err != nil || reused.Action != CompactStartResumed || reused.Record.State.LineageID != staged.LineageID {
+		t.Fatalf("workspace start against staged authority = %#v, %v", reused, err)
 	}
 	replayed, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: staged})
 	if err != nil || replayed.Action != CompactStartResumed || replayed.Record.State.LineageID != staged.LineageID {
@@ -533,7 +535,7 @@ func TestStartCompactAuthorityKeepsStagedAndWorkspaceAuthoritiesDistinct(t *test
 	}
 }
 
-func TestStartCompactAuthoritySelectsProjectionSpecificBaseDiffAuthorityAfterCommit(t *testing.T) {
+func TestStartCompactAuthorityRejectsAmbiguousProjectionCompatibleBaseDiffAuthorityAfterCommit(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -551,16 +553,15 @@ func TestStartCompactAuthoritySelectsProjectionSpecificBaseDiffAuthorityAfterCom
 	for _, tt := range []struct {
 		name       string
 		projection Projection
-		want       string
 	}{
-		{name: "staged", projection: ProjectionStaged, want: staged.LineageID},
-		{name: "workspace", projection: ProjectionWorkspace, want: workspace.LineageID},
+		{name: "staged", projection: ProjectionStaged},
+		{name: "workspace", projection: ProjectionWorkspace},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			requested := newCompactStartStateForTarget(t, repo, "compact-start-"+tt.name+"-base-request", Target{Kind: TargetBaseDiff, Projection: tt.projection, BaseRef: base, IntendedUntracked: []string{}})
 			result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
-			if err != nil || result.Action != CompactStartResumed || result.Record.State.LineageID != tt.want {
-				t.Fatalf("%s base-diff authority selection = %#v, %v", tt.name, result, err)
+			if err != nil || result.Action != CompactStartBlocked {
+				t.Fatalf("%s ambiguous base-diff authority = %#v, %v", tt.name, result, err)
 			}
 		})
 	}
@@ -1140,6 +1141,9 @@ func TestStartCompactAuthorityBlocksInvalidReceiptAndCorruptUnrelatedStore(t *te
 			t.Fatalf("invalid receipt start = %#v, %v", result, err)
 		}
 	})
+	// A corrupt UNRELATED entry is not a reason to refuse new work. It is
+	// still a reason to refuse itself, and both halves are asserted here so
+	// the relaxation cannot quietly become permissiveness.
 	t.Run("corrupt unrelated store", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "tracked.txt", "historical candidate\n")
@@ -1148,8 +1152,14 @@ func TestStartCompactAuthorityBlocksInvalidReceiptAndCorruptUnrelatedStore(t *te
 			t.Fatal(err)
 		}
 		writeSnapshotFile(t, repo, "tracked.txt", "new candidate\n")
-		if _, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: newCompactTestState(t, repo, "compact-start-corrupt-request")}); err == nil {
-			t.Fatal("corrupt unrelated store allowed a fresh authority")
+		if _, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: newCompactTestState(t, repo, "compact-start-corrupt-request")}); err != nil {
+			t.Fatalf("a corrupt unrelated entry refused a fresh authority: %v", err)
+		}
+		if err := CompactAuthorityLineageBlocked(context.Background(), repo, "compact-start-corrupt-history"); err == nil {
+			t.Fatal("the corrupt entry reports no block of its own")
+		}
+		if _, err := store.Load(); err == nil {
+			t.Fatal("the corrupt entry became loadable")
 		}
 	})
 }
@@ -1950,21 +1960,60 @@ func TestCompactDiscoveryIgnoresOnlyUnpublishedCrashResidue(t *testing.T) {
 	if err != nil || len(leaves) != 1 || leaves[0].lineageID != state.LineageID {
 		t.Fatalf("leaves with crash residue = %#v, %v", leaves, err)
 	}
+	// Neither of the two shapes below may be silently treated as authority,
+	// and neither may take the published lineage down with it. "Hidden" means
+	// enumerated as authority or absent from the inventory -- not "did not
+	// abort the whole enumeration", which is what a shared review store can
+	// never afford to do over one directory.
 	unexpected := filepath.Join(residue.Dir, "unexpected-residue")
 	if err := os.WriteFile(unexpected, []byte("not a temporary publication"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CompactAuthorityLeaves(context.Background(), repo); err == nil {
-		t.Fatal("unexpected state-less lineage entry was hidden as crash residue")
-	}
+	requireResidueNeverAuthority(t, repo, residue.lineageID, state.LineageID)
 	if err := os.Remove(unexpected); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(residue.StatePath(), []byte("corrupt published authority"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CompactAuthorityLeaves(context.Background(), repo); err == nil {
-		t.Fatal("corrupt published authority was hidden as residue")
+	requireResidueNeverAuthority(t, repo, residue.lineageID, state.LineageID)
+	if err := CompactAuthorityLineageBlocked(context.Background(), repo, residue.lineageID); err == nil {
+		t.Fatal("corrupt published authority reports no block of its own")
+	}
+}
+
+// requireResidueNeverAuthority holds both halves at once: the residue lineage
+// is never a leaf, the published lineage still is, and the inventory names the
+// residue rather than dropping it.
+func requireResidueNeverAuthority(t *testing.T, repo, residue, published string) {
+	t.Helper()
+	leaves, err := CompactAuthorityLeaves(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("residue poisoned enumeration: %v", err)
+	}
+	names := map[string]bool{}
+	for _, leaf := range leaves {
+		names[leaf.lineageID] = true
+	}
+	if names[residue] {
+		t.Fatalf("residue lineage %q was enumerated as authority: %#v", residue, names)
+	}
+	if !names[published] {
+		t.Fatalf("published lineage %q was excluded by residue: %#v", published, names)
+	}
+	report, err := InventoryAuthority(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := false
+	for _, entry := range report.Entries {
+		named = named || entry.LineageID == residue
+	}
+	for _, diagnostic := range report.Diagnostics {
+		named = named || strings.Contains(diagnostic.Path, residue)
+	}
+	if !named {
+		t.Fatalf("residue lineage %q vanished from the inventory: %#v", residue, report)
 	}
 }
 
@@ -2143,6 +2192,34 @@ func TestCompactStateRejectsChecksumValidImpossibleSemantics(t *testing.T) {
 				t.Fatalf("checksum-valid impossible import error = %v", err)
 			}
 		})
+	}
+}
+
+// TestCompactStoresShareRepositoryWriteLock re-homed from
+// compact_chain_test.go (Wave 5 Slice 5, pre-PR chain composition deletion):
+// the invariant itself — every compact store in one repository shares ONE
+// physical write lock file, regardless of lineage — is general-purpose, not
+// composition-specific; only the deleted file's elaborate multi-segment
+// pre-PR chain fixture was. Rebuilt here with the minimal fixture this
+// invariant actually needs: two independent lineages' own
+// CompactAuthoritativeStore values in the same repository.
+func TestCompactStoresShareRepositoryWriteLock(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	first, err := CompactAuthoritativeStore(context.Background(), repo, "shared-lock-first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := CompactAuthoritativeStore(context.Background(), repo, "shared-lock-second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := acquireStoreLock(first.lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.release()
+	if _, err := acquireStoreLock(second.lockPath); !errors.Is(err, ErrConcurrentUpdate) {
+		t.Fatalf("second compact store lock error = %v, want concurrent update", err)
 	}
 }
 
@@ -2613,7 +2690,7 @@ func TestSnapshotCandidateLocationSupportsStructuredCausality(t *testing.T) {
 	gitSnapshot(t, repo, "add", "tracked.txt")
 	gitSnapshot(t, repo, "commit", "-m", "line evidence base")
 	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
-	writeSnapshotFile(t, repo, "tracked.txt", "same\nnew\nkeep\nstable\nadded\n")
+	writeSnapshotFile(t, repo, "tracked.txt", "same\nnew\nchanged\nstable\nadded\n")
 	if err := os.Remove(filepath.Join(repo, "deleted.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -2628,11 +2705,99 @@ func TestSnapshotCandidateLocationSupportsStructuredCausality(t *testing.T) {
 		location  string
 		causality CausalDisposition
 		want      bool
-	}{{"introduced replacement", "tracked.txt:2", CausalIntroduced, true}, {"introduced addition", "tracked.txt:5", CausalIntroduced, true}, {"introduced deletion", "deleted.txt:1", CausalIntroduced, false}, {"old-side deletion collision", "tracked.txt:4", CausalIntroduced, false}, {"introduced unchanged", "tracked.txt:1", CausalIntroduced, false}, {"worsened changed", "tracked.txt:2", CausalWorsened, true}, {"worsened unchanged", "tracked.txt:1", CausalWorsened, false}, {"activated unchanged", "tracked.txt:1", CausalBehaviorActivated, true}, {"activated deletion", "deleted.txt:1", CausalBehaviorActivated, false}, {"activated out of range", "tracked.txt:99", CausalBehaviorActivated, false}, {"outside genesis", "other.txt:1", CausalBehaviorActivated, false}, {"zero", "tracked.txt:0", CausalIntroduced, false}, {"malformed", "tracked.txt", CausalWorsened, false}} {
+		wantError FindingLocationErrorReason
+	}{{"introduced replacement", "tracked.txt:2", CausalIntroduced, true, ""}, {"introduced addition", "tracked.txt:5", CausalIntroduced, true, ""}, {"introduced contiguous range", "tracked.txt:2-3", CausalIntroduced, true, ""}, {"introduced range crosses unchanged", "tracked.txt:1-2", CausalIntroduced, false, ""}, {"introduced deletion", "deleted.txt:1", CausalIntroduced, false, ""}, {"old-side deletion collision", "tracked.txt:4", CausalIntroduced, false, ""}, {"introduced unchanged", "tracked.txt:1", CausalIntroduced, false, ""}, {"worsened changed", "tracked.txt:2", CausalWorsened, true, ""}, {"worsened unchanged", "tracked.txt:1", CausalWorsened, false, ""}, {"activated contiguous range", "tracked.txt:1-5", CausalBehaviorActivated, true, ""}, {"activated deletion", "deleted.txt:1", CausalBehaviorActivated, false, ""}, {"activated out of range", "tracked.txt:2-6", CausalBehaviorActivated, false, ""}, {"outside genesis", "other.txt:1", CausalBehaviorActivated, false, ""}, {"descending range", "tracked.txt:3-2", CausalIntroduced, false, FindingLocationErrorReason("range_must_be_ascending")}, {"multiple ranges", "tracked.txt:1-2-3", CausalIntroduced, false, "line_suffix_not_integer"}, {"comma list", "tracked.txt:1-2,4", CausalIntroduced, false, "line_suffix_not_integer"}, {"non-numeric", "tracked.txt:one", CausalIntroduced, false, "line_suffix_not_integer"}, {"overflow", "tracked.txt:" + strings.Repeat("9", 64), CausalIntroduced, false, FindingLocationErrorReason("line_overflows_integer")}, {"leading plus", "tracked.txt:+1", CausalIntroduced, false, "line_suffix_not_integer"}, {"zero", "tracked.txt:0", CausalIntroduced, false, "line_must_be_positive"}, {"zero range", "tracked.txt:0-1", CausalIntroduced, false, "line_must_be_positive"}, {"negative", "tracked.txt:-1", CausalIntroduced, false, "line_must_be_positive"}, {"colon traversal", "internal:../tracked.txt:1", CausalIntroduced, false, "path_must_be_canonical"}, {"missing suffix", "tracked.txt:", CausalWorsened, false, "expected_path_and_line"}, {"malformed", "tracked.txt", CausalWorsened, false, "expected_path_and_line"}} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := (SnapshotBuilder{Repo: repo}).CandidateLocationSupportsCausality(context.Background(), snapshot, tt.location, tt.causality)
-			if err != nil || got != tt.want {
+			if tt.wantError == "" && (err != nil || got != tt.want) {
 				t.Fatalf("CandidateLocationSupportsCausality(%q, %q) = %t, %v", tt.location, tt.causality, got, err)
+			}
+			if tt.wantError != "" {
+				var locationErr *FindingLocationError
+				if got || !errors.Is(err, ErrInvalidFindingLocation) || !errors.As(err, &locationErr) || locationErr.Reason != tt.wantError {
+					t.Fatalf("CandidateLocationSupportsCausality(%q) = %t, %v; want typed %q", tt.location, got, err, tt.wantError)
+				}
+			}
+		})
+	}
+	// A non-positive line can no longer be expressed as a location string, so
+	// these rows enter at the level the causality comparisons consume. They pin
+	// the defense-in-depth lower bound against the real snapshot: without it a
+	// negative EndLine satisfies the behavior-activated `EndLine <= lines` test
+	// for every tracked file, fabricating causality on a line that cannot exist.
+	for _, tt := range []struct {
+		name      string
+		finding   findingLocation
+		causality CausalDisposition
+		want      bool
+	}{
+		{"activated wrapped min int", findingLocation{Path: "tracked.txt", StartLine: math.MinInt64, EndLine: math.MinInt64}, CausalBehaviorActivated, false},
+		{"activated negative range", findingLocation{Path: "tracked.txt", StartLine: -5, EndLine: -1}, CausalBehaviorActivated, false},
+		{"activated negative end", findingLocation{Path: "tracked.txt", StartLine: 1, EndLine: -1}, CausalBehaviorActivated, false},
+		{"activated zero", findingLocation{Path: "tracked.txt", StartLine: 0, EndLine: 0}, CausalBehaviorActivated, false},
+		{"introduced negative range", findingLocation{Path: "tracked.txt", StartLine: -5, EndLine: -1}, CausalIntroduced, false},
+		{"worsened negative range", findingLocation{Path: "tracked.txt", StartLine: -5, EndLine: -1}, CausalWorsened, false},
+		{"activated positive range still causal", findingLocation{Path: "tracked.txt", StartLine: 1, EndLine: 5}, CausalBehaviorActivated, true},
+		{"introduced positive line still causal", findingLocation{Path: "tracked.txt", StartLine: 2, EndLine: 2}, CausalIntroduced, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := (SnapshotBuilder{Repo: repo}).candidateFindingSupportsCausality(context.Background(), snapshot, tt.finding, tt.causality)
+			if err != nil || got != tt.want {
+				t.Fatalf("candidateFindingSupportsCausality(%#v, %q) = %t, %v; want %t", tt.finding, tt.causality, got, err, tt.want)
+			}
+		})
+	}
+}
+
+// TestParseFindingLocationLineRejectsPositiveIntOverflowBand pins the boundary
+// that hid the integer-wraparound defect: a value in [2^63, 2^64-1] once parsed
+// without error under a 64-bit unsigned parse and then wrapped to a negative
+// line via int() conversion. The largest legal line (MaxInt64) must still be
+// admitted, while the whole overflow band must refuse with the overflow reason.
+func TestParseFindingLocationLineRejectsPositiveIntOverflowBand(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		value  string
+		want   int
+		reason FindingLocationErrorReason
+	}{
+		{"max int64 admits", strconv.Itoa(math.MaxInt64), math.MaxInt64, ""},
+		{"two to the sixty-three overflows", "9223372036854775808", 0, FindingLocationLineOverflowsInteger},
+		{"max uint64 overflows", "18446744073709551615", 0, FindingLocationLineOverflowsInteger},
+		{"max int64 with trailing zero overflows", strconv.Itoa(math.MaxInt64) + "0", 0, FindingLocationLineOverflowsInteger},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, reason := parseFindingLocationLine(tt.value)
+			if got != tt.want || reason != tt.reason {
+				t.Fatalf("parseFindingLocationLine(%q) = %d, %q; want %d, %q", tt.value, got, reason, tt.want, tt.reason)
+			}
+			if got < 0 {
+				t.Fatalf("parseFindingLocationLine(%q) returned negative line %d", tt.value, got)
+			}
+		})
+	}
+}
+
+// TestFindingLocationHasPositiveLinesRejectsNonPositive proves the causality
+// lower bound independently of the parser: a synthesized finding whose line is
+// non-positive (as an out-of-band parse or a future regression could yield) is
+// never treated as candidate-causal, even if the parser guard were reverted.
+func TestFindingLocationHasPositiveLinesRejectsNonPositive(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		finding findingLocation
+		want    bool
+	}{
+		{"wrapped min int", findingLocation{Path: "internal/a.go", StartLine: math.MinInt64, EndLine: math.MinInt64}, false},
+		{"negative both", findingLocation{Path: "internal/a.go", StartLine: -1, EndLine: -1}, false},
+		{"negative end only", findingLocation{Path: "internal/a.go", StartLine: 1, EndLine: -1}, false},
+		{"zero end", findingLocation{Path: "internal/a.go", StartLine: 1, EndLine: 0}, false},
+		{"zero start", findingLocation{Path: "internal/a.go", StartLine: 0, EndLine: 5}, false},
+		{"positive range", findingLocation{Path: "internal/a.go", StartLine: 1, EndLine: 5}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := findingLocationHasPositiveLines(tt.finding); got != tt.want {
+				t.Fatalf("findingLocationHasPositiveLines(%#v) = %t; want %t", tt.finding, got, tt.want)
 			}
 		})
 	}
@@ -2659,6 +2824,39 @@ func newCompactStartStateForTarget(t *testing.T, repo, lineage string, target Ta
 		t.Fatal(err)
 	}
 	return state
+}
+
+func TestCompactCorrectionRemainingBudget(t *testing.T) {
+	tests := []struct {
+		name       string
+		budget     int
+		cumulative int
+		want       int
+		wantErr    bool
+	}{
+		{name: "unspent", budget: 2, want: 2},
+		{name: "partially spent", budget: 5, cumulative: 2, want: 3},
+		{name: "exhausted", budget: 2, cumulative: 2},
+		{name: "cumulative exceeds budget", budget: 2, cumulative: 3, wantErr: true},
+		{name: "negative cumulative", budget: 2, cumulative: -1, wantErr: true},
+		{name: "negative budget", budget: -1, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			remaining, err := compactCorrectionRemainingBudget(CompactState{
+				CorrectionBudget: test.budget, CumulativeCorrectionLines: test.cumulative,
+			})
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("remaining budget accepted invalid accounting")
+				}
+				return
+			}
+			if err != nil || remaining != test.want {
+				t.Fatalf("remaining budget = %d, %v; want %d, nil", remaining, err, test.want)
+			}
+		})
+	}
 }
 
 func newCompactTestState(t *testing.T, repo, lineage string) CompactState {

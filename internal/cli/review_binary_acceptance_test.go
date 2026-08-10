@@ -230,6 +230,186 @@ func TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree(t *testing.T) {
 	}
 }
 
+func TestMainBinaryExecutesSubmissionDescriptorsFromArbitraryCWD(t *testing.T) {
+	binary := os.Getenv("GENTLE_AI_TEST_BINARY")
+	if binary == "" {
+		t.Skip("requires GENTLE_AI_TEST_BINARY built from the branch under test")
+	}
+	if _, err := os.Stat(binary); err != nil {
+		t.Fatalf("GENTLE_AI_TEST_BINARY: %v", err)
+	}
+	repo := initReviewCLIRepo(t)
+	outside := t.TempDir()
+	writeBinaryCandidate(t, repo, "wrong")
+	var started ReviewFacadeStartResult
+	decodeBinaryJSON(t, runReviewBinaryAt(t, binary, outside, true, "start", "--cwd", repo, "--lineage", "binary-submission-descriptor"), &started)
+	captureBinaryBlockingReviewerResult(t, binary, outside, repo, started.LineageID)
+	runReviewBinaryAt(t, binary, outside, true, "finalize", "--cwd", repo, "--lineage", started.LineageID, "--captured-results=true")
+	status := binarySubmissionDescriptorStatus(t, binary, outside, repo, started.LineageID)
+	correction := submissionDescriptorInput(t, status).Submission
+	assertBinarySubmissionDescriptor(t, *correction, repo, outside)
+	runReviewBinaryAt(t, binary, outside, true, submissionDescriptorArguments(t, *correction, "1")...)
+
+	writeBinaryCandidate(t, repo, "fixed")
+	evidence := filepath.Join(t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(evidence, []byte("repository verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waiting := binarySubmissionDescriptorStatus(t, binary, outside, repo, started.LineageID)
+	capture := captureEvidenceSubmissionInput(t, waiting)
+	assertBinaryCaptureEvidenceRefusal(t, binary, outside, repo, started.LineageID, waiting,
+		replaceBinaryDescriptorToken(t, binaryCaptureEvidenceSubmissionArguments(t, *capture.Submission, "passed", evidence), "--repository-context=", "--repository-context=rctx1_"+strings.Repeat("0", 64)))
+	assertBinaryCaptureEvidenceRefusal(t, binary, outside, repo, started.LineageID, waiting,
+		replaceBinaryDescriptorToken(t, binaryCaptureEvidenceSubmissionArguments(t, *capture.Submission, "passed", evidence), "--expected-revision=", "--expected-revision=sha256:"+strings.Repeat("0", 64)))
+	assertBinaryCaptureEvidenceRefusal(t, binary, outside, repo, started.LineageID, waiting,
+		replaceBinaryDescriptorToken(t, binaryCaptureEvidenceSubmissionArguments(t, *capture.Submission, "passed", evidence), "--target=", "--target=sha256:"+strings.Repeat("0", 64)))
+	assertBinaryCaptureEvidenceRefusal(t, binary, outside, repo, started.LineageID, waiting,
+		binaryCaptureEvidenceSubmissionArguments(t, *capture.Submission, "invalid", evidence))
+	assertBinaryCaptureEvidenceRefusal(t, binary, outside, repo, started.LineageID, waiting,
+		replaceBinaryDescriptorToken(t, binaryCaptureEvidenceSubmissionArguments(t, *capture.Submission, "passed", evidence), "--outcome=", "--outcome={{outcome}}"))
+	assertBinaryCaptureEvidenceRefusal(t, binary, outside, repo, started.LineageID, waiting,
+		withoutBinaryDescriptorToken(t, binaryCaptureEvidenceSubmissionArguments(t, *capture.Submission, "passed", evidence), "--input="))
+	assertBinaryCaptureEvidenceRefusal(t, binary, outside, repo, started.LineageID, waiting,
+		append(binaryCaptureEvidenceSubmissionArguments(t, *capture.Submission, "passed", evidence), "--unexpected-slot=extra"))
+	emptyEvidence := filepath.Join(t.TempDir(), "empty-evidence.txt")
+	if err := os.WriteFile(emptyEvidence, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertBinaryCaptureEvidenceRefusal(t, binary, outside, repo, started.LineageID, waiting,
+		binaryCaptureEvidenceSubmissionArguments(t, *capture.Submission, "passed", emptyEvidence))
+	runReviewBinaryAt(t, binary, outside, true, binaryCaptureEvidenceSubmissionArguments(t, *capture.Submission, "passed", evidence)...)
+
+	ready := binarySubmissionDescriptorStatus(t, binary, outside, repo, started.LineageID)
+	validation := submissionDescriptorInput(t, ready).Submission
+	assertBinarySubmissionDescriptor(t, *validation, repo, outside)
+	validationPath := filepath.Join(t.TempDir(), "validation.json")
+	writeReviewCLIJSON(t, validationPath, facadeValidationResult{
+		TargetedValidationRequestHash: ready.ValidationRequest.RequestHash,
+		CorrectionTargetIdentity:      ready.ValidationRequest.CorrectionTargetIdentity,
+		OriginalCriteria:              facadeValidationCheck{Passed: true, Evidence: []string{"acceptance passed"}},
+		CorrectionRegression:          facadeValidationCheck{Passed: true, Evidence: []string{"regression passed"}},
+		FollowUps:                     []reviewtransaction.FollowUp{},
+	})
+	var operation ReviewIntegrationOperationResult
+	decodeBinaryJSON(t, runReviewBinaryAt(t, binary, outside, true, submissionDescriptorArguments(t, *validation, validationPath)...), &operation)
+	if err := operation.Validate(); err != nil {
+		t.Fatalf("validate negotiated binary submission result: %v", err)
+	}
+	var finalized ReviewIntegrationFinalizeResult
+	decodeBinaryJSON(t, operation.Result, &finalized)
+	if finalized.State != reviewtransaction.StateApproved {
+		t.Fatalf("binary validation descriptor finalized as %#v", finalized)
+	}
+}
+
+func binarySubmissionDescriptorStatus(t *testing.T, binary, outside, repo, lineage string) ReviewTargetStatusResult {
+	t.Helper()
+	var status ReviewTargetStatusResult
+	decodeBinaryJSON(t, runReviewBinaryAt(t, binary, outside, true,
+		"status", "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition", "--cwd", repo, "--lineage", lineage), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return status
+}
+
+func assertBinarySubmissionDescriptor(t *testing.T, descriptor ReviewTransitionSubmission, paths ...string) {
+	t.Helper()
+	if descriptor.OperationToken != "finalize" || descriptor.Value.SubstitutionLocation != 6 {
+		t.Fatalf("binary submission descriptor = %#v", descriptor)
+	}
+	for _, token := range descriptor.ArgumentTokens {
+		if strings.HasPrefix(token, "--cwd=") {
+			t.Fatalf("binary descriptor contains cwd token %q", token)
+		}
+		for _, path := range paths {
+			if strings.Contains(token, path) {
+				t.Fatalf("binary descriptor leaks path %q in %q", path, token)
+			}
+		}
+	}
+}
+
+func captureBinaryBlockingReviewerResult(t *testing.T, binary, outside, repo, lineage string) {
+	t.Helper()
+	status := binarySubmissionDescriptorStatus(t, binary, outside, repo, lineage)
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.Collect == nil ||
+		len(status.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("binary reviewer capture transition = %#v", status.NextTransition)
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	if input.CaptureOperation != "review.capture-result" || input.ArtifactSubject == nil || len(status.Projection.Paths) == 0 {
+		t.Fatalf("binary reviewer capture input = %#v", input)
+	}
+	paths := status.Projection.Paths
+	reviewer := filepath.Join(t.TempDir(), "reviewer.json")
+	writeReviewCLIJSON(t, reviewer, map[string]any{
+		"subject_hash": input.ArtifactSubject.SubjectHash,
+		"inspection":   map[string]any{"status": "completed", "paths": paths},
+		"findings": []map[string]any{{
+			"location": "tracked.txt:5", "severity": "CRITICAL", "claim": "candidate returns the wrong terminal value",
+			"proof_refs": []string{"tracked.txt:5 changed hunk"}, "evidence_class": "deterministic", "causal_disposition": "introduced",
+		}},
+		"evidence": []string{"focused differential test failed"},
+	})
+	arguments := []string{"capture-result"}
+	for _, argument := range input.Arguments {
+		arguments = append(arguments, argument.Token)
+	}
+	runReviewBinaryAt(t, binary, outside, true, append(arguments, "--input", reviewer)...)
+}
+
+func binaryCaptureEvidenceSubmissionArguments(t *testing.T, descriptor ReviewTransitionSubmission, outcome, input string) []string {
+	t.Helper()
+	arguments := append([]string{"capture-evidence"}, descriptor.ArgumentTokens...)
+	for _, slot := range descriptor.Values {
+		value := map[string]string{"outcome": outcome, "input": input}[slot.Slot]
+		if value == "" {
+			t.Fatalf("unexpected capture-evidence descriptor slot %q", slot.Slot)
+		}
+		index := slot.SubstitutionLocation + 1
+		arguments[index] = strings.Replace(arguments[index], "{{"+slot.Slot+"}}", value, 1)
+	}
+	return arguments
+}
+
+func assertBinaryCaptureEvidenceRefusal(t *testing.T, binary, outside, repo, lineage string, before ReviewTargetStatusResult, args []string) {
+	t.Helper()
+	runReviewBinaryAt(t, binary, outside, false, args...)
+	after := binarySubmissionDescriptorStatus(t, binary, outside, repo, lineage)
+	if before.Authority == nil || after.Authority == nil || after.Authority.LineageID != before.Authority.LineageID ||
+		after.Authority.Revision != before.Authority.Revision || after.TargetIdentity != before.TargetIdentity {
+		t.Fatalf("rejected capture-evidence mutated authority: before=%#v after=%#v", before.Authority, after.Authority)
+	}
+	if got := captureEvidenceSubmissionInput(t, after).Submission; strings.Join(got.ArgumentTokens, "\x00") !=
+		strings.Join(captureEvidenceSubmissionInput(t, before).Submission.ArgumentTokens, "\x00") {
+		t.Fatalf("rejected capture-evidence changed its pending descriptor: %#v", after.NextTransition)
+	}
+}
+
+func replaceBinaryDescriptorToken(t *testing.T, args []string, prefix, replacement string) []string {
+	t.Helper()
+	for index, argument := range args {
+		if strings.HasPrefix(argument, prefix) {
+			args[index] = replacement
+			return args
+		}
+	}
+	t.Fatalf("descriptor did not contain %q: %v", prefix, args)
+	return nil
+}
+
+func withoutBinaryDescriptorToken(t *testing.T, args []string, prefix string) []string {
+	t.Helper()
+	for index, argument := range args {
+		if strings.HasPrefix(argument, prefix) {
+			return append(args[:index], args[index+1:]...)
+		}
+	}
+	t.Fatalf("descriptor did not contain %q: %v", prefix, args)
+	return nil
+}
+
 func prepareBinaryCorrection(t *testing.T, binary string) (string, string, ReviewFacadeStartResult) {
 	t.Helper()
 	repo := initReviewCLIRepo(t)
@@ -293,6 +473,20 @@ func runReviewBinary(t *testing.T, binary string, wantSuccess bool, args ...stri
 	t.Helper()
 	stdout, _ := runReviewBinaryStreams(t, binary, wantSuccess, args...)
 	return stdout
+}
+
+func runReviewBinaryAt(t *testing.T, binary, dir string, wantSuccess bool, args ...string) []byte {
+	t.Helper()
+	command := exec.Command(binary, append([]string{"review"}, args...)...)
+	command.Dir = dir
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	if (err == nil) != wantSuccess {
+		t.Fatalf("gentle-ai review from %s %v: %v\nstdout:\n%s\nstderr:\n%s", dir, args, err, stdout.String(), stderr.String())
+	}
+	return stdout.Bytes()
 }
 
 // runReviewBinaryStreams captures stdout and stderr separately. Stdout carries

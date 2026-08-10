@@ -75,14 +75,19 @@ func TestSDDAttemptBeginNamesTheResetThatClearsDrift(t *testing.T) {
 	}
 }
 
-// TestSDDAttemptBeginNamesTheObjectiveItAlreadyHolds pins the other half of the
-// same refusal. When the objective parameters change while the candidate has
-// NOT drifted, `reset` is refused one layer deeper — an elective early reset
-// would launder the per-objective budget — so naming it there would be exactly
-// the defect this file exists to kill. The runnable continuation is the begin
-// the ledger already accepts, with the parameters it already holds, and the
-// refusal has to print those.
-func TestSDDAttemptBeginNamesTheObjectiveItAlreadyHolds(t *testing.T) {
+// TestSDDAttemptBeginNamesTheRescopeWhenCandidateHasNotDrifted pins the other
+// half of the same refusal, updated for AUDITED NARROWING RESCOPE (#2298,
+// #2296 part 2). When the objective parameters change while the candidate
+// has NOT drifted, `reset` is refused one layer deeper — an elective early
+// reset would launder the per-objective budget — so naming it there would be
+// exactly the defect this file exists to kill. Before rescope existed, the
+// only remaining exit was "begin against the scope the ledger holds", which
+// for THIS exact state (a terminal, non-decision, non-complete, zero-drift
+// objective) was itself the dead end #2298 / #2296 part 2 reported: begin
+// only ever re-offers the identical objective. The refusal now names
+// `rescope` instead, and running it with a narrower successor scope has to
+// actually clear the block.
+func TestSDDAttemptBeginNamesTheRescopeWhenCandidateHasNotDrifted(t *testing.T) {
 	fixture := newUndriftedObjectiveFixture(t, "cli-changed-objective")
 
 	changed := []string{
@@ -92,15 +97,23 @@ func TestSDDAttemptBeginNamesTheObjectiveItAlreadyHolds(t *testing.T) {
 	message := driftedBeginRefusal(t, fixture, "changed-begin-2", changed)
 
 	arguments := namedRunnableGentleCommand(t, message)
-	if len(arguments) < 3 || arguments[0] != "gentle-ai" || arguments[1] != "sdd-attempt" || arguments[2] != "begin" {
-		t.Fatalf("refusal names %v, not the begin the ledger already accepts:\n%s", arguments, message)
+	if len(arguments) < 3 || arguments[0] != "gentle-ai" || arguments[1] != "sdd-attempt" || arguments[2] != "rescope" {
+		t.Fatalf("refusal names %v, not the rescope that actually clears this state:\n%s", arguments, message)
 	}
 	if strings.Contains(message, "gentle-ai sdd-attempt reset") {
 		t.Fatalf("refusal names a reset that is refused one layer deeper:\n%s", message)
 	}
 	arguments = arguments[2:]
 
-	want := map[string]string{"<unique-request-id>": "changed-begin-3"}
+	want := map[string]string{
+		"<unique-request-id>":              "changed-rescope-1",
+		"<narrower-work-unit>":             "a narrower work unit",
+		"<narrower-evidence-goal>":         "a narrower evidence goal",
+		"<n, at most 3>":                   "2",
+		"<n, at most 40>":                  "20",
+		"<why-the-objective-is-narrowing>": "maintainer narrowed the objective after the params changed",
+		"<actor>":                          "cli-reset-exit-test",
+	}
 	for _, placeholder := range namedCommandPlaceholders(arguments) {
 		value, known := want[placeholder]
 		if !known {
@@ -108,15 +121,26 @@ func TestSDDAttemptBeginNamesTheObjectiveItAlreadyHolds(t *testing.T) {
 		}
 		arguments = fillNamedCommandPlaceholder(arguments, placeholder, value)
 	}
-	var began bytes.Buffer
-	if beginErr := RunSDDAttempt(arguments, &began); beginErr != nil {
+	var rescoped bytes.Buffer
+	if rescopeErr := RunSDDAttempt(arguments, &rescoped); rescopeErr != nil {
 		t.Fatalf("the exit the refusal named does not work: sdd-attempt %v: %v\nrefusal:\n%s\noutput:\n%s",
-			arguments, beginErr, message, began.String())
+			arguments, rescopeErr, message, rescoped.String())
 	}
 	var status sddstatus.RuntimeStatus
-	decodeStrictReviewJSON(t, began.Bytes(), &status)
-	if status.ActiveAttempt == nil || status.ActiveAttempt.Outcome != sddstatus.AttemptRunning {
-		t.Fatalf("the exit the refusal named did not clear the block: %#v", status)
+	decodeStrictReviewJSON(t, rescoped.Bytes(), &status)
+	if status.Objective == nil || status.Objective.WorkUnit != "a narrower work unit" ||
+		status.Objective.MaxAttempts != 2 || status.Objective.MaxChangedLines != 20 || status.ActiveAttempt != nil {
+		t.Fatalf("the exit the refusal named did not clear the block: %#v", status.Objective)
+	}
+
+	began := runSDDAttemptStatus(t, []string{
+		"begin", "--cwd", fixture.repo, "--change", fixture.change,
+		"--expected-revision", status.Revision, "--request-id", "changed-begin-3",
+		"--work-unit", "a narrower work unit", "--evidence-goal", "a narrower evidence goal",
+		"--max-attempts", "2", "--max-changed-lines", "20",
+	})
+	if began.ActiveAttempt == nil || began.ActiveAttempt.Outcome != sddstatus.AttemptRunning {
+		t.Fatalf("begin under the rescoped objective is still blocked: %#v", began)
 	}
 }
 

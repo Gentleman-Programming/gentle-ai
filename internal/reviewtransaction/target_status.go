@@ -51,6 +51,7 @@ const (
 type TargetStatusRequest struct {
 	Target    Target
 	LineageID string
+	PrePR     *PrePRRequest
 }
 
 type TargetProjectionStatus struct {
@@ -67,26 +68,43 @@ type TargetProjectionStatus struct {
 	CurrentSnapshotIdentity string     `json:"current_snapshot_identity"`
 }
 
+// TargetStatusDecision is the core-owned executable projection of one status
+// classification. Adapters render Selector and RecoverySelector; they do not
+// reclassify the target relationship or reconstruct recovery representability.
+type TargetStatusDecision struct {
+	CandidateRelation                  TargetApplicability
+	SemanticTransition                 TargetStatusAction
+	TargetIdentity                     string
+	Selector                           Target
+	RecoverySelector                   *Target
+	SelectorFreeAccountingOnlyRecovery bool
+}
+
 type TargetStatusResult struct {
-	Applicability           TargetApplicability                `json:"applicability"`
-	AuthorityVersion        AuthorityVersion                   `json:"authority_version,omitempty"`
-	LineageID               string                             `json:"lineage_id,omitempty"`
-	State                   State                              `json:"state,omitempty"`
-	Generation              int                                `json:"generation,omitempty"`
-	Revision                string                             `json:"revision,omitempty"`
-	ReceiptIdentity         string                             `json:"receipt_identity,omitempty"`
-	Action                  TargetStatusAction                 `json:"action"`
-	ActionDisposition       RecoveryDisposition                `json:"action_disposition,omitempty"`
-	Replayability           Replayability                      `json:"replayability"`
-	OriginalChangedLines    int                                `json:"original_changed_lines,omitempty"`
-	Tier                    RiskLevel                          `json:"tier,omitempty"`
-	CorrectionBudget        int                                `json:"correction_budget,omitempty"`
-	SelectedLenses          []string                           `json:"selected_lenses,omitempty"`
-	TargetIdentity          string                             `json:"target_identity"`
-	AuthorityTargetIdentity string                             `json:"authority_target_identity,omitempty"`
-	Projection              TargetProjectionStatus             `json:"projection"`
-	CandidateLineageIDs     []string                           `json:"candidate_lineage_ids"`
-	FinalVerificationRetry  *FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
+	Applicability                      TargetApplicability                `json:"applicability"`
+	AuthorityVersion                   AuthorityVersion                   `json:"authority_version,omitempty"`
+	LineageID                          string                             `json:"lineage_id,omitempty"`
+	State                              State                              `json:"state,omitempty"`
+	Generation                         int                                `json:"generation,omitempty"`
+	Revision                           string                             `json:"revision,omitempty"`
+	ReceiptIdentity                    string                             `json:"receipt_identity,omitempty"`
+	Action                             TargetStatusAction                 `json:"action"`
+	ActionDisposition                  RecoveryDisposition                `json:"action_disposition,omitempty"`
+	Replayability                      Replayability                      `json:"replayability"`
+	OriginalChangedLines               int                                `json:"original_changed_lines,omitempty"`
+	Tier                               RiskLevel                          `json:"tier,omitempty"`
+	CorrectionBudget                   int                                `json:"correction_budget,omitempty"`
+	CorrectionBudgetPolicy             string                             `json:"correction_budget_policy,omitempty"`
+	SelectedLenses                     []string                           `json:"selected_lenses,omitempty"`
+	TargetIdentity                     string                             `json:"target_identity"`
+	AuthorityTargetIdentity            string                             `json:"authority_target_identity,omitempty"`
+	Projection                         TargetProjectionStatus             `json:"projection"`
+	CandidateLineageIDs                []string                           `json:"candidate_lineage_ids"`
+	FinalVerificationRetry             *FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
+	Decision                           TargetStatusDecision               `json:"-"`
+	authorityTargetKind                TargetKind
+	authorityProjection                Projection
+	selectorFreeAccountingOnlyRecovery bool
 }
 
 type targetStatusCandidate struct {
@@ -101,6 +119,9 @@ type targetStatusCandidate struct {
 	receiptReplayable  bool
 	pendingFinalize    bool
 	correctionRecovery bool
+	// selectorFreeAccountingOnlyRecovery is carried from the eligibility
+	// predicate so projection never guesses it from snapshot identity domains.
+	selectorFreeAccountingOnlyRecovery bool
 	// recoveryDisposition names the `review recover --disposition` value the
 	// recovery rules accept for this candidate. It is only set when the
 	// recommended action is recovery; guidance never invents a disposition.
@@ -129,8 +150,65 @@ func AssessTargetStatusWithSnapshot(ctx context.Context, repo string, request Ta
 	if err != nil {
 		return TargetStatusResult{}, Snapshot{}, err
 	}
+	if request.LineageID == "" && request.Target.Kind == TargetCurrentChanges && request.Target.Projection == ProjectionWorkspace {
+		candidates, recoveryErr := selectorlessCommittedBaseDiffCorrections(ctx, repo)
+		if recoveryErr != nil {
+			return TargetStatusResult{}, Snapshot{}, recoveryErr
+		}
+		switch len(candidates) {
+		case 0:
+		case 1:
+			live, request.LineageID = candidates[0].snapshot, candidates[0].lineage
+		default:
+			lineages := make([]string, len(candidates))
+			for index, candidate := range candidates {
+				lineages[index] = candidate.lineage
+			}
+			return projectTargetStatusDecision(TargetStatusResult{
+				Applicability: TargetApplicabilityAmbiguous, Action: TargetStatusActionSelectLineage,
+				Replayability: ReplayabilityStatusRequired, TargetIdentity: live.Identity,
+				Projection: targetProjectionFromSnapshot(live), CandidateLineageIDs: lineages,
+			}), live, nil
+		}
+	}
 	result, err := assessTargetStatusSnapshot(ctx, repo, request, live)
+	if err == nil {
+		result = projectTargetStatusDecision(result)
+		result = bindTargetStatusDecisionBaseRef(result, request.Target, request.PrePR)
+	}
 	return result, live, err
+}
+
+type selectorlessCommittedBaseDiffCorrection struct {
+	lineage  string
+	snapshot Snapshot
+}
+
+func selectorlessCommittedBaseDiffCorrections(ctx context.Context, repo string) ([]selectorlessCommittedBaseDiffCorrection, error) {
+	stores, err := DiscoverCompactStores(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	candidates := []selectorlessCommittedBaseDiffCorrection{}
+	for _, store := range stores {
+		record, loadErr := store.LoadContext(ctx)
+		if loadErr != nil {
+			if IsCompactAuthorityOperationalFailure(loadErr) {
+				return nil, loadErr
+			}
+			continue
+		}
+		live, rebuildErr := RebuildCommittedBaseDiffCorrectionCandidate(ctx, repo, record.State)
+		if rebuildErr != nil {
+			if IsCompactAuthorityOperationalFailure(rebuildErr) || IsCorrectionBudgetExceeded(rebuildErr) {
+				return nil, rebuildErr
+			}
+			continue
+		}
+		candidates = append(candidates, selectorlessCommittedBaseDiffCorrection{lineage: record.State.LineageID, snapshot: live})
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].lineage < candidates[j].lineage })
+	return candidates, nil
 }
 
 func assessTargetStatusSnapshot(ctx context.Context, repo string, request TargetStatusRequest, live Snapshot) (TargetStatusResult, error) {
@@ -174,6 +252,17 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				continue
 			}
 		}
+		if state.State == StateCorrectionRequired {
+			_, eligible, eligibilityErr := compactCorrectionRequiredStagedScopeRecovery(ctx, repo, state, live)
+			if eligibilityErr != nil {
+				return targetStatusFailure(base, eligibilityErr)
+			}
+			if eligible {
+				candidate.correctionRecovery, candidate.recoveryDisposition = true, RecoveryScopeChanged
+				candidates = append(candidates, candidate)
+				continue
+			}
+		}
 		// The same predicates START uses to refuse a fresh lineage against an
 		// approved predecessor: either the frozen delivery scope has a changed
 		// candidate, or a disjoint base advance preserves the exact feature patch.
@@ -213,6 +302,7 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 					// edge instead of dead-ending the operator at Stop.
 					candidate.correctionRecovery = true
 					candidate.recoveryDisposition = RecoveryEscalated
+					candidate.selectorFreeAccountingOnlyRecovery = true
 				} else if eligibility, ok, inspectErr := InspectCompactFinalVerificationRetrySource(ctx, repo, state.LineageID, candidate.compact.Revision); inspectErr != nil {
 					return targetStatusFailure(base, inspectErr)
 				} else if ok {
@@ -236,7 +326,15 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				candidates = append(candidates, candidate)
 				continue
 			}
+		} else if proof := compactLocalBaseAdvanceCompatibility(ctx, repo, state, request.Target, live); proof != nil &&
+			classifyCompactTargetRelation(state.CurrentSnapshot, live, state.GenesisPaths,
+				compactTargetRelationEvidence{CompatibleAdvance: proof}).Kind == compactTargetCompatibleAdvance {
+			candidates = append(candidates, candidate)
+			continue
 		} else if compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
+			if !compactPrePRContentCompatible(ctx, repo, state, live, request.PrePR) {
+				continue
+			}
 			candidates = append(candidates, candidate)
 			continue
 		}
@@ -324,6 +422,43 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 	}
 }
 
+func compactLocalBaseAdvanceCompatibility(ctx context.Context, repo string, state CompactState, target Target, live Snapshot) *BaseAdvanceCompatibility {
+	if state.CurrentSnapshot.Kind != TargetBaseDiff || state.Recovery != nil || target.Kind != TargetBaseDiff || strings.TrimSpace(target.BaseRef) == "" {
+		return nil
+	}
+	receipt, err := state.Receipt()
+	if err != nil {
+		return nil
+	}
+	proof, err := deriveExplicitBaseAdvanceCompatibility(ctx, repo, Receipt{
+		BaseTree: receipt.BaseTree, FinalCandidateTree: receipt.FinalCandidateTree, PathsDigest: receipt.PathsDigest,
+	}, GateRequest{Gate: GatePrePush, Target: target}, live, gateArtifactPreimages{})
+	if err != nil {
+		return nil
+	}
+	return &proof
+}
+
+func compactPrePRContentCompatible(ctx context.Context, repo string, state CompactState, snapshot Snapshot, prePR *PrePRRequest) bool {
+	if prePR == nil || prePR.Boundary == nil || prePR.Boundary.Commit == prePR.Boundary.MergeBase {
+		return true
+	}
+	receipt, err := state.Receipt()
+	if err != nil {
+		return false
+	}
+	head, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		return false
+	}
+	_, err = deriveBaseAdvanceCompatibility(ctx, repo, Receipt{
+		BaseTree: receipt.BaseTree, FinalCandidateTree: receipt.FinalCandidateTree, PathsDigest: receipt.PathsDigest,
+	}, GateRequest{Gate: GatePrePR, PrePR: prePR}, snapshot, &resolvedPrePRRefs{
+		Selection: *prePR.Boundary, HeadCommit: head,
+	}, gateArtifactPreimages{}, false)
+	return err == nil
+}
+
 func corruptedTargetStatus(result TargetStatusResult) TargetStatusResult {
 	result.Applicability = TargetApplicabilityCorrupted
 	result.Action = TargetStatusActionRepairAuthority
@@ -340,7 +475,8 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 		state := record.State
 		result.State, result.Generation, result.Revision = state.State, state.Generation, record.Revision
 		result.AuthorityTargetIdentity = state.CurrentSnapshot.Identity
-		result.OriginalChangedLines, result.Tier, result.CorrectionBudget = state.OriginalChangedLines, state.RiskLevel, state.CorrectionBudget
+		result.authorityTargetKind, result.authorityProjection = state.InitialSnapshot.Kind, state.InitialSnapshot.Projection
+		result.OriginalChangedLines, result.Tier, result.CorrectionBudget, result.CorrectionBudgetPolicy = state.OriginalChangedLines, state.RiskLevel, state.CorrectionBudget, state.CorrectionBudgetPolicy
 		result.SelectedLenses = append([]string{}, state.SelectedLenses...)
 		result.Projection = targetProjectionFromCompact(state, result.Projection)
 		result.ReceiptIdentity = candidate.receiptIdentity
@@ -358,6 +494,7 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 		if candidate.correctionRecovery {
 			result.Action, result.Replayability = TargetStatusActionRecover, ReplayabilityManualActionRequired
 			result.ActionDisposition = candidate.recoveryDisposition
+			result.selectorFreeAccountingOnlyRecovery = candidate.selectorFreeAccountingOnlyRecovery
 			return result
 		}
 		if state.State == StateEscalated || state.State == StateCorrectionRequired && state.CorrectionAttemptConsumed() {
@@ -381,12 +518,94 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 		result.CorrectionBudget = *transaction.CorrectionBudget
 	}
 	result.Tier = transaction.RiskLevel
+	result.authorityTargetKind, result.authorityProjection = transaction.Snapshot.Kind, transaction.Snapshot.Projection
 	result.Projection = targetProjectionFromLegacy(transaction, result.Projection)
 	result.ReceiptIdentity = candidate.receiptIdentity
 	if transaction.State == StateApproved {
 		result.Action, result.Replayability = TargetStatusActionValidate, ReplayabilityNotReplayable
 	} else {
 		result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+	}
+	return result
+}
+
+func projectTargetStatusDecision(result TargetStatusResult) TargetStatusResult {
+	selector := Target{
+		Kind: result.Projection.Kind, Projection: result.Projection.Projection,
+		IntendedUntracked: append([]string{}, result.Projection.IntendedUntracked...),
+	}
+	if selector.Projection == "" {
+		selector.Projection = ProjectionWorkspace
+	}
+	if selector.Kind == TargetBaseDiff || selector.Kind == TargetBaseWorkspaceOverlay {
+		selector.BaseRef = result.Projection.BaseTree
+	}
+	decision := TargetStatusDecision{
+		CandidateRelation: result.Applicability, SemanticTransition: result.Action,
+		TargetIdentity: result.TargetIdentity, Selector: selector,
+	}
+	if result.Action != TargetStatusActionRecover {
+		result.Decision = decision
+		return result
+	}
+	if result.selectorFreeAccountingOnlyRecovery {
+		// This is the one evidence-bound recovery that intentionally reuses an
+		// unchanged target. Its absence of a selector is an explicit core
+		// decision, never an adapter inference from a nil pointer.
+		decision.SelectorFreeAccountingOnlyRecovery = true
+		result.Decision = decision
+		return result
+	}
+
+	authorityKind, authorityProjection := result.authorityTargetKind, result.authorityProjection
+	if authorityKind == "" {
+		authorityKind = TargetCurrentChanges
+	}
+	if authorityProjection == "" {
+		authorityProjection = ProjectionWorkspace
+	}
+	representable := authorityKind == selector.Kind
+	stagedScopeRecovery := result.ActionDisposition == RecoveryScopeChanged &&
+		(result.State == StateApproved || result.State == StateCorrectionRequired) &&
+		authorityKind == TargetBaseDiff && selector.Kind == TargetBaseWorkspaceOverlay &&
+		selector.Projection == ProjectionStaged
+	approvedRebasedRecovery := result.ActionDisposition == RecoveryScopeChanged && result.State == StateApproved && selector.Kind == TargetBaseDiff
+	representable = representable || stagedScopeRecovery || approvedRebasedRecovery
+	if !representable {
+		result.Decision = decision
+		return result
+	}
+	recovery := selector
+	if stagedScopeRecovery || result.ActionDisposition == RecoveryInvalidated && selector.Kind == TargetBaseWorkspaceOverlay && selector.Projection == ProjectionStaged {
+		recovery.Projection = ProjectionStaged
+	} else if authorityProjection != selector.Projection {
+		if !approvedRebasedRecovery && result.ActionDisposition != RecoveryEscalated {
+			result.Decision = decision
+			return result
+		}
+		recovery.Projection = selector.Projection
+	}
+	decision.RecoverySelector = &recovery
+	result.Decision = decision
+	return result
+}
+
+func bindTargetStatusDecisionBaseRef(result TargetStatusResult, requested Target, prePR *PrePRRequest) TargetStatusResult {
+	baseRef := strings.TrimSpace(requested.BaseRef)
+	if prePR != nil && prePR.Boundary != nil {
+		// The merge-base binds identity; the advertised boundary is the exact
+		// selector a Pre-PR follow-up must replay.
+		baseRef = strings.TrimSpace(prePR.Boundary.Selector)
+	}
+	if baseRef == "" {
+		return result
+	}
+	if result.Decision.Selector.Kind == TargetBaseDiff || result.Decision.Selector.Kind == TargetBaseWorkspaceOverlay {
+		result.Decision.Selector.BaseRef = baseRef
+	}
+	if result.Decision.RecoverySelector != nil &&
+		(result.Decision.RecoverySelector.Kind == TargetBaseDiff || result.Decision.RecoverySelector.Kind == TargetBaseWorkspaceOverlay) {
+		result.Decision.RecoverySelector.BaseRef = baseRef
 	}
 	return result
 }
@@ -404,12 +623,7 @@ func inspectLegacyTargetReceipt(store Store, transaction Transaction) (string, e
 	if err != nil {
 		return "", fmt.Errorf("derive terminal legacy receipt: %w", err)
 	}
-	canonical, err := json.MarshalIndent(expected, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("canonicalize legacy target receipt: %w", err)
-	}
-	canonical = append(canonical, '\n')
-	if !reflect.DeepEqual(existing, expected) || !bytes.Equal(payload, canonical) {
+	if !reflect.DeepEqual(existing, expected) {
 		return "", errors.New("legacy target receipt does not equal the canonical derived receipt")
 	}
 	sum := sha256.Sum256(payload)

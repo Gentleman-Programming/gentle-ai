@@ -11,7 +11,17 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-func TestRelayedCandidateDeclineAllowsOnlyExactPreCommitDelivery(t *testing.T) {
+// TestRelayedCandidateDeclineNeverAuthorizesLaterGateDelivery supersedes
+// TestRelayedCandidateDeclineAllowsOnlyExactPreCommitDelivery (Wave 5 Slice
+// 6, design decision 6): a relayed decline still reports `declined` for the
+// one `review start` call itself and still creates no review lineage or
+// receipt, but the identical candidate now denies (receipt_missing) at
+// pre-commit instead of reaching a decline-specific unmanaged delivery —
+// there is no ResolveCandidateDeclineForGate left to resolve it, and
+// nothing was ever recorded (RecordCandidateDecline is deleted) for a
+// later gate call to find. A drifted candidate still denies too, exactly
+// as before, for the identical structural reason (no receipt governs it).
+func TestRelayedCandidateDeclineNeverAuthorizesLaterGateDelivery(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
@@ -37,17 +47,18 @@ func TestRelayedCandidateDeclineAllowsOnlyExactPreCommitDelivery(t *testing.T) {
 	}
 
 	runReviewCLIGit(t, repo, "add", "scripts/deploy.sh")
-	var allowed bytes.Buffer
-	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &allowed); err != nil {
-		t.Fatalf("candidate-declined exact pre-commit delivery blocked: %v\n%s", err, allowed.String())
+	var output bytes.Buffer
+	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output)
+	if err == nil {
+		t.Fatalf("candidate-declined pre-commit delivery unexpectedly allowed:\n%s", output.String())
 	}
 	var result ReviewValidateResult
-	decodeStrictReviewJSON(t, allowed.Bytes(), &result)
-	if result.Delivery != reviewtransaction.RDDDeliveryCandidateDeclinedUnmanaged || result.Allowed || result.Result == reviewtransaction.GateAllow {
-		t.Fatalf("candidate-declined delivery = %#v", result)
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Allowed || result.Result == reviewtransaction.GateAllow || result.Delivery != "" {
+		t.Fatalf("candidate-declined delivery = %#v, want a plain denial", result)
 	}
-	if result.Context.Denial == nil || result.Context.Denial.Stage != "candidate-decline" {
-		t.Fatalf("candidate-declined delivery did not expose its unmanaged choice: %#v", result.Context)
+	if result.Context.Denial == nil || result.Context.Denial.Stage != "receipt-discovery" || result.Context.Denial.Code != "receipt_missing" {
+		t.Fatalf("candidate-declined delivery context = %#v, want the generic receipt-discovery/receipt_missing denial", result.Context)
 	}
 
 	if err := os.WriteFile(filepath.Join(repo, "scripts", "deploy.sh"), []byte("echo drift\n"), 0o644); err != nil {

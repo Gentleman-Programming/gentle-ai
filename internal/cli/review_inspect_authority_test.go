@@ -174,14 +174,33 @@ func TestReviewInspectAuthorityReportsMixedCorruptionDeterministicallyWithoutMut
 		result.EntryDiagnostics[0].Problem != "malformed_compact_state" {
 		t.Fatalf("inspect-authority entry diagnostics = %#v", result.EntryDiagnostics)
 	}
-	// Every invalid edge names the operation that would accept it, and only
-	// invalid edges do; both of these are reconcilable anomaly classes.
-	wantExits := []reviewtransaction.CompactRecoverySanctionedExit{
-		{SuccessorLineageID: "b-unchanged-successor", Operation: reviewtransaction.CompactRecoveryEdgeExitReconcile},
-		{SuccessorLineageID: "c-malformed-successor", Operation: reviewtransaction.CompactRecoveryEdgeExitReconcile},
+	// Wave 7 S3a retired `review reconcile-authority`, so an edge in one of
+	// reconciliation's two anomaly classes (unchanged_target,
+	// malformed_recovery_authorization) no longer takes that verb: it falls
+	// through to the SAME eligibility checks every other invalid edge does.
+	//
+	// Both successors here ARE pristine reviewing authorities that merely
+	// carry recovery provenance, so abandon's own read-only prediction
+	// accepts them and the exit names `review abandon` — a command that
+	// will actually run, which is the only rule this surface has to keep.
+	//
+	// This row previously asserted Blocked, and an earlier revision of this
+	// comment explained it as "neither successor is pristine". That reading
+	// was wrong: the Blocked answer came from the unrelated `broken-entry`
+	// above poisoning InspectCompactPristineAbandonment's repository-wide
+	// walk (#2743/#2741). One unreadable entry silently locked the abandon
+	// escape valve for every lineage in the store, which is the defect the
+	// scoped walks fixed; reviewtransaction's
+	// TestPristineAbandonmentIgnoresUnreadableForeignLineage proves the
+	// advertised abandonment really executes with such an entry present.
+	if len(result.SanctionedExits) != 2 {
+		t.Fatalf("inspect-authority sanctioned exits = %#v, want 2 entries", result.SanctionedExits)
 	}
-	if !reflect.DeepEqual(result.SanctionedExits, wantExits) {
-		t.Fatalf("inspect-authority sanctioned exits = %#v, want %#v", result.SanctionedExits, wantExits)
+	for index, wantSuccessor := range []string{"b-unchanged-successor", "c-malformed-successor"} {
+		exit := result.SanctionedExits[index]
+		if exit.SuccessorLineageID != wantSuccessor || exit.Operation != "review abandon" || exit.Blocked != "" {
+			t.Fatalf("sanctioned exit[%d] = %#v, want SuccessorLineageID %q advertising `review abandon` with no Blocked reason", index, exit, wantSuccessor)
+		}
 	}
 }
 

@@ -8,7 +8,15 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-func TestCandidateDeclineAllowsExactPrePushAndPrePRButNotLaterCandidate(t *testing.T) {
+// TestCandidateDeclineNeverAuthorizesPrePushOrPrePRDelivery supersedes
+// TestCandidateDeclineAllowsExactPrePushAndPrePRButNotLaterCandidate (Wave
+// 5 Slice 6, design decision 6): a decline no longer resolves at pre-push
+// or pre-pr either — the identical delivered candidate now denies
+// receipt_missing at both gates, the same generic denial any
+// never-reviewed commit reaches. The later-candidate assertion (decline
+// never authorizes an unrelated subsequent candidate) stays: it was never
+// specific to decline resolving anything, it proves nothing does.
+func TestCandidateDeclineNeverAuthorizesPrePushOrPrePRDelivery(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
@@ -27,15 +35,19 @@ func TestCandidateDeclineAllowsExactPrePushAndPrePRButNotLaterCandidate(t *testi
 	for _, gate := range []reviewtransaction.GateKind{reviewtransaction.GatePrePush, reviewtransaction.GatePrePR} {
 		t.Run(string(gate), func(t *testing.T) {
 			var output bytes.Buffer
-			if err := RunReviewFacadeValidate([]string{
+			err := RunReviewFacadeValidate([]string{
 				"--cwd", repo, "--gate", string(gate), "--base-ref", "origin/" + branch,
-			}, &output); err != nil {
-				t.Fatalf("candidate-declined %s delivery blocked: %v\n%s", gate, err, output.String())
+			}, &output)
+			if err == nil {
+				t.Fatalf("candidate-declined %s delivery unexpectedly allowed:\n%s", gate, output.String())
 			}
 			var result ReviewValidateResult
 			decodeStrictReviewJSON(t, output.Bytes(), &result)
-			if result.Delivery != reviewtransaction.RDDDeliveryCandidateDeclinedUnmanaged || result.Allowed {
-				t.Fatalf("candidate-declined %s result = %#v", gate, result)
+			if result.Allowed || result.Delivery != "" {
+				t.Fatalf("candidate-declined %s result = %#v, want a plain denial", gate, result)
+			}
+			if result.Context.Denial == nil || result.Context.Denial.Stage != "receipt-discovery" || result.Context.Denial.Code != "receipt_missing" {
+				t.Fatalf("candidate-declined %s context = %#v, want the generic receipt-discovery/receipt_missing denial", gate, result.Context)
 			}
 		})
 	}

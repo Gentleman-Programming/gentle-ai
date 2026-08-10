@@ -79,6 +79,7 @@ type PrePRBoundarySelection struct {
 	Source         PrePRBoundarySource `json:"source"`
 	Selector       string              `json:"selector"`
 	Commit         string              `json:"commit"`
+	MergeBase      string              `json:"merge_base"`
 	Remote         string              `json:"remote,omitempty"`
 	RemoteRef      string              `json:"remote_ref,omitempty"`
 	RemoteIdentity string              `json:"remote_identity,omitempty"`
@@ -120,6 +121,43 @@ type NativeGateEvaluation struct {
 	// not been taught about contention degrades to the previous behavior
 	// rather than to an unpublished enum value.
 	Contended bool `json:"-"`
+	// Relation and Next are Wave 5 (Gate Cutover) Slice 3's additive fields
+	// (design decision 3, gate.go composite literals stay keyed and compile
+	// untouched). Relation is the CandidateRelation gateVerdict classified
+	// this evaluation's denial as; Next is gateVerdict's own executable
+	// continuation. Both are populated only where Slice 3's wiring
+	// (attachGateVerdictRelation, compact_gate.go) can prove the
+	// classification through the real evaluation path today — the
+	// "changed" relation denials (candidate-or-paths-mismatch,
+	// base-mismatch). Every other outcome leaves these at their zero value
+	// this slice: gateVerdict is total and already defines an answer for
+	// every (gate, relation) pair (TestGateVerdict_TotalFunction_35Cells),
+	// but classifying every OTHER live outcome into a relation requires the
+	// legacy-through-algebra projection Slice 4 delivers and the
+	// composition/decline removals Slices 5-6 deliver; wiring more now
+	// would mean guessing at a classification this slice cannot yet prove
+	// correct through production code, which is exactly what the matrix
+	// harness's "never a fabricated pass" rule (Slice 1) forbids.
+	Relation CandidateRelation `json:"relation,omitempty"`
+	Next     *GateNextStep     `json:"next,omitempty"`
+}
+
+// GateNextStep is a denial's executable continuation (design's Interfaces /
+// Contracts sketch): either a named Transition the caller can run next, or —
+// when no single operation resolves the denial (ambiguous authority, an
+// unresolvable target) — Transition stays empty and ReasonCode alone
+// explains why, which is still "never a bare denial" (task 4.1) because a
+// caller always has SOMETHING to read, never nothing. Transition names a
+// real top-level `review` operation (see runReviewCommand's dispatch table,
+// internal/cli/review_facade.go) rather than a fully-rendered command line
+// with dynamic flag values (lineage, revision, etc.) baked in — exactly the
+// Wave 4 CRITICAL-A livelock lesson: a printed command whose flags were
+// wrong or incomplete was worse than none, so this field names an operation
+// the caller is proven able to invoke (verified against the CLI's own flag
+// validation in the deny-golden tests), never a guessed invocation string.
+type GateNextStep struct {
+	Transition string `json:"transition,omitempty"`
+	ReasonCode string `json:"reason_code"`
 }
 
 var finalGateAuthorizationHook = func() {}
@@ -293,10 +331,13 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 		boundary := resolvedPrePR.Selection
 		gateContext.PrePRBoundary = &boundary
 	}
-	if request.Gate == GatePrePR && snapshot.BaseTree != receipt.BaseTree {
-		if compatibility, compatibilityErr := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, resolvedPrePR, preimages); compatibilityErr == nil {
-			gateContext.BaseAdvance = &compatibility
+	if request.Gate == GatePrePR && request.ExternalEvidence == ExternalEvidenceNone && prePRBoundaryAdvanced(resolvedPrePR) && snapshot.CandidateTree == receipt.FinalCandidateTree && snapshot.PathsDigest == receipt.PathsDigest {
+		compatibility, compatibilityErr := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, resolvedPrePR, preimages, prePRAttestationRequested(request))
+		if compatibilityErr != nil {
+			gateContext.Denial = &GateDenial{Stage: "base-advance", Code: "unproven"}
+			return NativeGateEvaluation{Result: GateInvalidated, Reason: "compatible pre-PR base advance cannot be proven: " + compatibilityErr.Error(), Context: gateContext}
 		}
+		gateContext.BaseAdvance = &compatibility
 	}
 	if request.Gate == GateRelease {
 		release, err := deriveReleaseEvidence(ctx, repo, request.Release, preimages)
@@ -382,7 +423,7 @@ func buildLifecycleSnapshot(ctx context.Context, repo string, request GateReques
 		return Snapshot{}, nil, err
 	}
 	snapshot, err = (SnapshotBuilder{Repo: repo}).Build(ctx, Target{
-		Kind: TargetBaseDiff, BaseRef: selection.Commit, IntendedUntracked: target.IntendedUntracked,
+		Kind: TargetBaseDiff, BaseRef: selection.MergeBase, IntendedUntracked: target.IntendedUntracked,
 	})
 	if err != nil {
 		return Snapshot{}, nil, err
@@ -513,12 +554,8 @@ func selectPrePRBoundary(ctx context.Context, repo, selector string) (PrePRBound
 		}
 		return PrePRBoundarySelection{}, baseRefTargetResolutionError(message)
 	}
+	selection.MergeBase = strings.TrimSpace(string(bases))
 	return selection, nil
-}
-
-func ValidatePrePRBoundarySelector(ctx context.Context, repo, selector string) error {
-	_, err := selectPrePRBoundary(ctx, repo, selector)
-	return err
 }
 
 func buildPrePRTarget(ctx context.Context, repo, selector, ciAttestation string, intendedUntracked []string) (Target, *PrePRRequest, error) {
@@ -531,8 +568,13 @@ func buildPrePRTarget(ctx context.Context, repo, selector, ciAttestation string,
 	if err != nil {
 		return Target{}, nil, err
 	}
-	return Target{Kind: TargetBaseDiff, BaseRef: selection.Commit, IntendedUntracked: append([]string(nil), intendedUntracked...)},
+	return Target{Kind: TargetBaseDiff, BaseRef: selection.MergeBase, IntendedUntracked: append([]string(nil), intendedUntracked...)},
 		&PrePRRequest{CIAttestationArtifact: ciAttestation, Boundary: &selection, PushRemote: pushRemote, PushRemoteIdentity: pushIdentity}, nil
+}
+
+// BuildPrePRTarget binds an advertised publication boundary to its unique merge-base.
+func BuildPrePRTarget(ctx context.Context, repo, selector, ciAttestation string, intendedUntracked []string) (Target, *PrePRRequest, error) {
+	return buildPrePRTarget(ctx, repo, selector, ciAttestation, intendedUntracked)
 }
 
 func publicationRemoteConfigured(ctx context.Context, repo string) (bool, error) {
@@ -626,6 +668,9 @@ func resolveTrackingUpstreamBase(ctx context.Context, repo string) (string, stri
 }
 
 func resolveAdvertisedSelector(ctx context.Context, repo, selector string, source PrePRBoundarySource) (PrePRBoundarySelection, error) {
+	if validGitTree(selector) {
+		return PrePRBoundarySelection{}, baseRefTargetResolutionError(fmt.Sprintf("explicit pre-PR base %q must name an advertised remote branch; pass --base-ref <remote>/<branch>", selector))
+	}
 	output, err := runGit(ctx, repo, nil, nil, "remote")
 	if err != nil {
 		return PrePRBoundarySelection{}, err
@@ -643,9 +688,7 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 		} else if strings.Contains(selector, "/") {
 			continue
 		}
-		if validGitTree(selector) {
-			branch = ""
-		} else if _, err := runGit(ctx, repo, nil, nil, "check-ref-format", "--branch", branch); err != nil {
+		if _, err := runGit(ctx, repo, nil, nil, "check-ref-format", "--branch", branch); err != nil {
 			continue
 		}
 		remoteOutput, queryErr := runGit(ctx, repo, nil, nil, "ls-remote", "--heads", remote, branch)
@@ -654,8 +697,7 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 		}
 		for _, line := range strings.Split(string(remoteOutput), "\n") {
 			fields := strings.Fields(line)
-			if len(fields) == 2 && strings.HasPrefix(fields[1], "refs/heads/") &&
-				(validGitTree(selector) && fields[0] == selector || !validGitTree(selector) && fields[1] == "refs/heads/"+branch) {
+			if len(fields) == 2 && strings.HasPrefix(fields[1], "refs/heads/") && fields[1] == "refs/heads/"+branch {
 				matches = append(matches, PrePRBoundarySelection{Source: source, Selector: selector, Commit: fields[0], Remote: remote, RemoteRef: fields[1], RemoteIdentity: identity})
 			}
 		}
@@ -915,6 +957,9 @@ func buildPushTarget(ctx context.Context, repo, selector, deliveryBaseTree, revi
 
 func selectPrePushBoundary(ctx context.Context, repo, selector string) (PrePRBoundarySelection, error) {
 	if strings.TrimSpace(selector) != "" {
+		if validGitTree(selector) {
+			return resolveExplicitPrePushCommitBoundary(ctx, repo, selector)
+		}
 		return selectPrePRBoundary(ctx, repo, selector)
 	}
 	ref, remote, commit, err := resolveTrackingUpstreamBase(ctx, repo)
@@ -926,6 +971,24 @@ func selectPrePushBoundary(ctx context.Context, repo, selector string) (PrePRBou
 	}
 	identity, err := remoteRepositoryIdentity(ctx, repo, remote)
 	return PrePRBoundarySelection{Source: PrePRBoundaryPublicationDefault, Selector: ref, Commit: commit, Remote: remote, RemoteRef: ref, RemoteIdentity: identity}, err
+}
+
+func resolveExplicitPrePushCommitBoundary(ctx context.Context, repo, selector string) (PrePRBoundarySelection, error) {
+	remoteRef, remote, commit, err := resolveTrackingUpstreamBase(ctx, repo)
+	if err != nil {
+		return PrePRBoundarySelection{}, err
+	}
+	if commit != selector {
+		return PrePRBoundarySelection{}, baseRefTargetResolutionError(fmt.Sprintf("explicit pre-push base %q must match the advertised tracking branch; pass --base-ref <remote>/<branch>", selector))
+	}
+	identity, err := remoteRepositoryIdentity(ctx, repo, remote)
+	if err != nil {
+		return PrePRBoundarySelection{}, err
+	}
+	return PrePRBoundarySelection{
+		Source: PrePRBoundaryExplicit, Selector: selector, Commit: commit, Remote: remote,
+		RemoteRef: "refs/heads/" + strings.TrimPrefix(remoteRef, remote+"/"), RemoteIdentity: identity,
+	}, nil
 }
 
 func resolvePrePushTrackingBoundary(ctx context.Context, repo string, selected PrePRBoundarySelection) (PrePRBoundarySelection, bool, error) {
@@ -1659,5 +1722,65 @@ func nativeGateReason(result GateResult) string {
 		return "transaction or external evidence is terminally escalated"
 	default:
 		return "content-bound policy, ledger, fix delta, verify evidence, base, or release evidence does not match"
+	}
+}
+
+// gateVerdict is Wave 5 (Gate Cutover) Slice 3's total function over the
+// 5 gates x 7 CandidateRelation values (task 4.4; design's Interfaces /
+// Contracts sketch, extended with a GateContext parameter to carry the
+// absorbed N2 per-gate preconditions -- design.md's literal two-argument
+// signature cannot express a per-gate boundary precondition at all, so this
+// is a disclosed, documented extension of it, not a silent deviation).
+//
+// Every one of the 35 (gate, relation) pairings resolves (task 4.1,
+// TestGateVerdict_TotalFunction_35Cells); an unrecognized relation value
+// (impossible from the closed CandidateRelation vocabulary, but the
+// function must still be total) fails closed to invalidated rather than
+// panicking or falling through to allow -- default deny.
+//
+// Absorbed N2 (W3 verify, PR0 task 4.7): the per-gate preconditions
+// reproduce validateDerivedGate's own contract (receipt.go:279-321) instead
+// of newLineageGateEvaluation's uniform continue->allow for every gate
+// (review_governing_authority.go:240-261, the exact gap N2 identified) --
+// BaseRelationshipValid is gated to pre-pr/release only (receipt.go:304),
+// with the identical compatible_base_advance exemption; release evidence is
+// gated to release only (receipt.go:307-314).
+func gateVerdict(gate GateKind, relation CandidateRelation, context GateContext) (GateResult, GateNextStep) {
+	// W-3 (Wave 5 fix cycle 1, verify-report #10186): the compatible_base_advance
+	// exemption is scoped to pre-PR only, matching validateDerivedGate's own
+	// `context.Gate == GatePrePR && ...` scoping (receipt.go:289) exactly --
+	// release is never exempted. Testing `gate == GatePrePR` inside the
+	// exemption clause itself (rather than broadening the OR above) keeps the
+	// precondition's own gate scope (pre-pr AND release) unchanged; only the
+	// exemption narrows.
+	compatibleBaseAdvanceAtPrePR := gate == GatePrePR && relation == ShadowRelationCompatibleBaseAdvance
+	if (gate == GatePrePR || gate == GateRelease) && !context.BaseRelationshipValid && !compatibleBaseAdvanceAtPrePR {
+		return GateInvalidated, GateNextStep{ReasonCode: "base_relationship_invalid"}
+	}
+	if gate == GateRelease && context.Release == nil {
+		return GateInvalidated, GateNextStep{ReasonCode: "release_evidence_missing"}
+	}
+	switch relation {
+	case ShadowRelationExact, ShadowRelationCompatibleBaseAdvance:
+		return GateAllow, GateNextStep{ReasonCode: "allow"}
+	case ShadowRelationProvableContraction:
+		return GateInvalidated, GateNextStep{Transition: "review start", ReasonCode: "scope_contracted"}
+	case ShadowRelationChanged:
+		return GateInvalidated, GateNextStep{Transition: "review start", ReasonCode: "candidate_changed"}
+	case ShadowRelationUnrelated:
+		return GateInvalidated, GateNextStep{Transition: "review start", ReasonCode: "no_receipt"}
+	case ShadowRelationAmbiguous:
+		return GateInvalidated, GateNextStep{ReasonCode: "authority_ambiguous"}
+	case ShadowRelationUnknown:
+		return GateInvalidated, GateNextStep{ReasonCode: "target_unresolvable"}
+	default:
+		// CandidateRelation is a closed seven-value vocabulary constructed
+		// only by relateCandidates and this package's own callers; an
+		// out-of-vocabulary value is a caller bug, not an operator-fixable
+		// state, so gateVerdict fails closed rather than guessing an
+		// outcome for a relation that cannot exist. This branch returns a
+		// value rather than constructing an error, so it is not a
+		// refusal-origin site the ratchet tracks.
+		return GateInvalidated, GateNextStep{ReasonCode: "unrecognized_relation"}
 	}
 }

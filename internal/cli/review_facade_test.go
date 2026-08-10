@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,35 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
+
+// TestFacadeLensBindingsPublishFindingIDPrefix proves START output carries the
+// lens-bound finding-ID prefix admission enforces, in the canonical high-risk
+// selection order where lens order and prefix number diverge.
+func TestFacadeLensBindingsPublishFindingIDPrefix(t *testing.T) {
+	lenses := []string{
+		reviewtransaction.LensRisk,
+		reviewtransaction.LensResilience,
+		reviewtransaction.LensReadability,
+		reviewtransaction.LensReliability,
+	}
+	bindings := facadeLensBindings(lenses)
+	if len(bindings) != len(lenses) {
+		t.Fatalf("facadeLensBindings() = %#v, want one binding per lens %v", bindings, lenses)
+	}
+	for index, binding := range bindings {
+		want := reviewtransaction.FindingIDPrefixForLens(lenses[index])
+		if want == "" || binding.FindingIDPrefix != want {
+			t.Fatalf("binding[%d] finding ID prefix = %q, want %q for lens %q", index, binding.FindingIDPrefix, want, lenses[index])
+		}
+	}
+	encoded, err := json.Marshal(bindings[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"finding_id_prefix":"R4-"`) {
+		t.Fatalf("binding JSON = %s, want published finding_id_prefix R4- for %q", encoded, reviewtransaction.LensResilience)
+	}
+}
 
 func TestReviewFacadeStartStagedProjectionFreezesOnlyIndex(t *testing.T) {
 	repo := initReviewCLIRepo(t)
@@ -37,7 +67,7 @@ func TestReviewFacadeStartStagedProjectionFreezesOnlyIndex(t *testing.T) {
 	indexTree := strings.TrimSpace(runReviewCLIGit(t, repo, "write-tree"))
 
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -58,7 +88,7 @@ func TestReviewFacadeStartStagedProjectionFreezesOnlyIndex(t *testing.T) {
 	if record.State.InitialSnapshot.Projection != reviewtransaction.ProjectionStaged || record.State.InitialSnapshot.CandidateTree != indexTree {
 		t.Fatalf("staged authority = %#v, want index tree %s", record.State.InitialSnapshot, indexTree)
 	}
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "future"}, io.Discard); err == nil || !strings.Contains(err.Error(), "unsupported review projection") {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--projection", "future"}, io.Discard); err == nil || !strings.Contains(err.Error(), "unsupported review projection") {
 		t.Fatalf("invalid projection error = %v", err)
 	}
 	runReviewCLIGit(t, repo, "commit", "-qm", "staged candidate")
@@ -67,7 +97,7 @@ func TestReviewFacadeStartStagedProjectionFreezesOnlyIndex(t *testing.T) {
 	// base-diff. The escape is one of the two named commands, not this combo.
 	wantStagedEscape := "gentle-ai review start --projection staged"
 	wantBaseDiffEscape := fmt.Sprintf("gentle-ai review start --base-ref %s --committed-only", base)
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged", "--base-ref", base, "--committed-only"}, io.Discard); err == nil ||
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--projection", "staged", "--base-ref", base, "--committed-only"}, io.Discard); err == nil ||
 		!strings.Contains(err.Error(), wantStagedEscape) || !strings.Contains(err.Error(), wantBaseDiffEscape) {
 		t.Fatalf("staged projection + base-ref start error = %v, want typed refusal naming both %q and %q (1812)", err, wantStagedEscape, wantBaseDiffEscape)
 	}
@@ -107,7 +137,7 @@ func TestReviewFacadeStagedProjectionBaseRefRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callErr := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged", "--base-ref", base, "--committed-only"}, io.Discard)
+	callErr := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--projection", "staged", "--base-ref", base, "--committed-only"}, io.Discard)
 	wantStagedEscape := "gentle-ai review start --projection staged"
 	wantBaseDiffEscape := fmt.Sprintf("gentle-ai review start --base-ref %s --committed-only", base)
 	if callErr == nil || !strings.Contains(callErr.Error(), wantStagedEscape) || !strings.Contains(callErr.Error(), wantBaseDiffEscape) {
@@ -168,7 +198,7 @@ func TestReviewFacadeStartStagedProjectionBaseRefContinuationRefused(t *testing.
 	}
 	runReviewCLIGit(t, repo, "add", "--", "tracked.txt")
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var staged ReviewFacadeStartResult
@@ -190,7 +220,7 @@ func TestReviewFacadeStartStagedProjectionBaseRefContinuationRefused(t *testing.
 
 	wantStagedEscape := "gentle-ai review start --projection staged"
 	wantBaseDiffEscape := fmt.Sprintf("gentle-ai review start --base-ref %s --committed-only", base)
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged", "--base-ref", base, "--committed-only", "--lineage", "staged-base-request"}, io.Discard); err == nil ||
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--projection", "staged", "--base-ref", base, "--committed-only", "--lineage", "staged-base-request"}, io.Discard); err == nil ||
 		!strings.Contains(err.Error(), wantStagedEscape) || !strings.Contains(err.Error(), wantBaseDiffEscape) {
 		t.Fatalf("staged projection + base-ref continuation error = %v, want typed refusal naming both %q and %q (1812)", err, wantStagedEscape, wantBaseDiffEscape)
 	}
@@ -201,6 +231,8 @@ func TestReviewFacadeStartStagedProjectionBaseRefContinuationRefused(t *testing.
 }
 
 func TestReviewFacadeStagedReceiptAllowsDeliveredTreePrePushAndPrePR(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	configureCLIReviewPublicationRemote(t, repo, branch)
@@ -209,7 +241,7 @@ func TestReviewFacadeStagedReceiptAllowsDeliveredTreePrePushAndPrePR(t *testing.
 	}
 	runReviewCLIGit(t, repo, "add", "--", "tracked.txt")
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -239,6 +271,8 @@ func TestReviewFacadeStagedReceiptAllowsDeliveredTreePrePushAndPrePR(t *testing.
 }
 
 func TestReviewFacadeCleanFlowReplacesOneCompactStateAndUsesOnlyReceipt(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate behavior\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -360,6 +394,8 @@ func TestReviewFacadeCleanFlowReplacesOneCompactStateAndUsesOnlyReceipt(t *testi
 }
 
 func TestReviewFacadeStartSupportsCommittedBaseDiff(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
@@ -373,8 +409,13 @@ func TestReviewFacadeStartSupportsCommittedBaseDiff(t *testing.T) {
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
 	runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
 
+	// The committed candidate selects a lens, so a direct base-diff start
+	// through the CLI now hits issue #2447's up-front refusal (see
+	// runReviewFacadeStart). This is SETUP for the pre-PR gate behavior under
+	// test, not the refusal itself, so it constructs legacy authority directly
+	// via runLegacyFacadeStartForTest instead of going through that dispatch.
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", base}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", base}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var result ReviewFacadeStartResult
@@ -392,7 +433,11 @@ func TestReviewFacadeStartSupportsCommittedBaseDiff(t *testing.T) {
 	if record.State.InitialSnapshot.Kind != reviewtransaction.TargetBaseDiff || record.State.InitialSnapshot.BaseTree == record.State.InitialSnapshot.CandidateTree {
 		t.Fatalf("base diff snapshot = %#v", record.State.InitialSnapshot)
 	}
-	if !reflect.DeepEqual(record.State.InitialSnapshot.IntendedUntracked, []string{"notes.txt"}) {
+	// #2394: notes.txt was never declared, so a committed-only review does not
+	// silently pull an uncommitted workspace file into the reviewed candidate.
+	// The assertion used to demand the opposite, which is the swept scope this
+	// fix removed.
+	if len(record.State.InitialSnapshot.IntendedUntracked) != 0 {
 		t.Fatalf("intended untracked = %v", record.State.InitialSnapshot.IntendedUntracked)
 	}
 	resultPath := filepath.Join(t.TempDir(), "review.json")
@@ -425,6 +470,8 @@ func TestReviewFacadeStartSupportsCommittedBaseDiff(t *testing.T) {
 }
 
 func TestReviewFacadeStartRequiresCommittedOnlyAndReusesEquivalentAuthority(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("committed candidate\n"), 0o644); err != nil {
@@ -436,17 +483,25 @@ func TestReviewFacadeStartRequiresCommittedOnlyAndReusesEquivalentAuthority(t *t
 		t.Fatal(err)
 	}
 
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", base}, io.Discard); err == nil || !strings.Contains(err.Error(), "--committed-only") {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", base}, io.Discard); err == nil || !strings.Contains(err.Error(), "--committed-only") {
 		t.Fatalf("dirty base-ref start error = %v, want committed-only acknowledgement", err)
 	}
 	if stores, err := reviewtransaction.CompactAuthorityLeaves(context.Background(), repo); err != nil || len(stores) != 0 {
 		t.Fatalf("rejected start persisted authority = %v, %v", stores, err)
 	}
 
+	// The candidate selects a lens (LensesRequired is asserted true below), and
+	// a direct start over --base-ref for a lens-selecting candidate now hits
+	// issue #2447's up-front refusal in production (see runReviewFacadeStart).
+	// This helper is SETUP for the resume/reuse authority behavior under test
+	// (the underlying reviewtransaction.StartCompactAuthority state machine),
+	// not the refusal itself, so it constructs legacy authority directly via
+	// runLegacyFacadeStartForTest, bypassing the CLI dispatch the refusal lives
+	// in entirely.
 	start := func(args ...string) ReviewFacadeStartResult {
 		t.Helper()
 		var output bytes.Buffer
-		if err := RunReviewFacadeStart(append([]string{"--cwd", repo, "--base-ref", base, "--committed-only"}, args...), &output); err != nil {
+		if err := runLegacyFacadeStartForTest(t, append([]string{"--cwd", repo, "--base-ref", base, "--committed-only"}, args...), &output); err != nil {
 			t.Fatal(err)
 		}
 		var result ReviewFacadeStartResult
@@ -481,8 +536,11 @@ func TestReviewFacadeStartRequiresCommittedOnlyAndReusesEquivalentAuthority(t *t
 	if err := os.WriteFile(policy, []byte("different policy\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The candidate still selects a lens up front (the blocked-scope-action
+	// downgrade to zero lenses is decided downstream of the refusal check);
+	// same bypass rationale as above.
 	var blockedOutput bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", base, "--committed-only", "--policy", policy}, &blockedOutput); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", base, "--committed-only", "--policy", policy}, &blockedOutput); err != nil {
 		t.Fatal(err)
 	}
 	var blocked ReviewFacadeStartResult
@@ -513,7 +571,7 @@ func TestReviewFacadeStartRequiresCommittedOnlyAndReusesEquivalentAuthority(t *t
 		t.Fatal(err)
 	}
 	var malformedOutput bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", base, "--committed-only"}, &malformedOutput); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", base, "--committed-only"}, &malformedOutput); err != nil {
 		t.Fatal(err)
 	}
 	var malformed ReviewFacadeStartResult
@@ -528,12 +586,7 @@ func TestReviewFacadeStartRequiresCommittedOnlyAndReusesEquivalentAuthority(t *t
 func TestReviewFacadeStartServiceTokenSelectsCanonicalHighRiskLenses(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	neutral := filepath.Join(repo, "neutral")
-	if err := os.MkdirAll(neutral, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(neutral, "service-token.ts"), []byte("export const token = 'candidate'\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "neutral/service-token.ts", "export const token = 'candidate'\n", 0o644)
 	hostile := initReviewCLIRepo(t)
 	for name, value := range map[string]string{
 		"GIT_DIR": filepath.Join(hostile, ".git"), "GIT_WORK_TREE": hostile,
@@ -546,7 +599,7 @@ func TestReviewFacadeStartServiceTokenSelectsCanonicalHighRiskLenses(t *testing.
 	want := []string{reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability}
 	for index, cwd := range []string{repo, neutral, "."} {
 		var output bytes.Buffer
-		if err := RunReviewFacadeStart([]string{"--cwd", cwd, "--lineage", fmt.Sprintf("service-token-%d", index)}, &output); err != nil {
+		if err := runLegacyFacadeStartForTest(t, []string{"--cwd", cwd, "--lineage", fmt.Sprintf("service-token-%d", index)}, &output); err != nil {
 			t.Fatalf("facade start from %q: %v", cwd, err)
 		}
 		var started ReviewFacadeStartResult
@@ -568,6 +621,8 @@ func TestReviewFacadeStartServiceTokenSelectsCanonicalHighRiskLenses(t *testing.
 }
 
 func TestReviewFacadeStartProvableShellAndModeRiskSelectsCanonical4R(t *testing.T) {
+	t.Parallel()
+
 	want := []string{reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability}
 	tests := []struct {
 		name  string
@@ -576,9 +631,7 @@ func TestReviewFacadeStartProvableShellAndModeRiskSelectsCanonical4R(t *testing.
 		{
 			name: "shell source",
 			setup: func(t *testing.T, repo string) {
-				if err := os.WriteFile(filepath.Join(repo, "run.sh"), []byte("printf '%s\\n' safe\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
+				writeReviewStartCandidate(t, repo, "run.sh", "printf '%s\\n' safe\n", 0o644)
 			},
 		},
 		{
@@ -608,7 +661,7 @@ func TestReviewFacadeStartProvableShellAndModeRiskSelectsCanonical4R(t *testing.
 			repo := initReviewCLIRepo(t)
 			tt.setup(t, repo)
 			var output bytes.Buffer
-			if err := RunReviewFacadeStart([]string{"--cwd", repo}, &output); err != nil {
+			if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo}, &output); err != nil {
 				t.Fatal(err)
 			}
 			var started ReviewFacadeStartResult
@@ -622,22 +675,17 @@ func TestReviewFacadeStartProvableShellAndModeRiskSelectsCanonical4R(t *testing.
 	}
 }
 
-// TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible proves the
-// unnegotiated response never gains a negotiated field (changed_path_manifest,
-// changed_path_manifest, artifact_subjects, ...); it stays a strict compatible
-// subset. It does NOT promise the field set is frozen forever: "hint" is an
-// existing additive field (see reviewStartEmptyCandidateHint) and now also
-// appears here because this fixture's tracked.txt change requires lenses, so
-// the response names the exact negotiated rerun that returns the frozen
-// payload this lens selection needs (see
-// TestReviewFacadeStartLensesRequiredHintsNegotiatedContract).
+// TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible pins the
+// actual pre-change unnegotiated field set. Negotiated-only transport fields
+// and the internal compact budget policy must remain absent, while the
+// established hint remains part of this exact legacy shape.
 func TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var fields map[string]json.RawMessage
@@ -653,7 +701,7 @@ func TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible(t *testing.T
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unnegotiated start fields = %v, want %v", got, want)
 	}
-	for _, negotiatedOnly := range []string{"changed_path_manifest", "artifact_subjects", "schema", "contract"} {
+	for _, negotiatedOnly := range []string{"changed_path_manifest", "artifact_subjects", "correction_budget_policy", "schema", "contract"} {
 		if _, ok := fields[negotiatedOnly]; ok {
 			t.Fatalf("unnegotiated start leaked negotiated-only field %q: %s", negotiatedOnly, output.String())
 		}
@@ -927,7 +975,7 @@ func TestReviewFacadeStartRejectsInvalidBaseRefWithoutPersistingLineage(t *testi
 		t.Run(tt.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			lineage := "invalid-base-ref"
-			err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage, "--base-ref", tt.ref}, io.Discard)
+			err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", lineage, "--base-ref", tt.ref}, io.Discard)
 			if err == nil {
 				t.Fatalf("base ref %q was accepted", tt.ref)
 			}
@@ -964,8 +1012,16 @@ func TestReadFacadeReviewerResultsRejectsNonNativeFields(t *testing.T) {
 }
 
 func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runReviewCLIGit(t, repo, "clone", "--bare", repo, remote)
+	runReviewCLIGit(t, repo, "remote", "add", "origin", remote)
+	runReviewCLIGit(t, repo, "config", "branch."+branch+".remote", "origin")
+	runReviewCLIGit(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1084,7 +1140,7 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 	}
 	runReviewCLIGit(t, repo, "commit", "-qm", "corrected delivery")
 	output.Reset()
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", base}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", base}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var committedReuse ReviewFacadeStartResult
@@ -1093,6 +1149,15 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 	}
 	if committedReuse.Action != "reuse-receipt" || committedReuse.LensesRequired || committedReuse.LineageID != started.LineageID || committedReuse.State != reviewtransaction.StateApproved {
 		t.Fatalf("equivalent committed corrected target did not reuse receipt: %#v", committedReuse)
+	}
+	output.Reset()
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output); err != nil {
+		t.Fatalf("selector-free corrected pre-push discovery: %v\n%s", err, output.String())
+	}
+	var delivery ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &delivery)
+	if !delivery.Allowed || delivery.Context.LineageID != started.LineageID || !delivery.Context.BaseRelationshipValid {
+		t.Fatalf("selector-free corrected pre-push discovery = %#v", delivery)
 	}
 }
 
@@ -1108,6 +1173,8 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 // escalating afterwards, so this test asserts the refusal and the untouched
 // authority rather than the escalated state that route no longer reaches.
 func TestReviewFacadeRefusesFalseIntroducedFindingOutsideGenesis(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	legacyDir := filepath.Join(repo, "internal", "legacy")
 	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
@@ -1124,13 +1191,7 @@ func TestReviewFacadeRefusesFalseIntroducedFindingOutsideGenesis(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(legacyDir, "unsafe.go"), []byte("package legacy\n\nfunc ParseLimit(value int) int {\n\tif value < 0 { panic(\"negative limit\") }\n\treturn value\n}\n\nfunc Version() string { return \"v2\" }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	candidateDir := filepath.Join(repo, "internal", "candidate")
-	if err := os.MkdirAll(candidateDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(candidateDir, "feature.go"), []byte("package candidate\n\nfunc Enabled() bool { return true }\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "internal/candidate/feature.go", "package candidate\n\nfunc Enabled() bool { return true }\n", 0o644)
 	started := startFacadeReview(t, repo)
 	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	before, err := store.Load()
@@ -1217,7 +1278,7 @@ func TestReviewFacadeStartCannotResetActiveCorrectionBudget(t *testing.T) {
 			if tt.negotiated {
 				err = RunReview(boundNegotiatedStartArgs(t, []string{"start", "--cwd", repo, "--contract", ReviewIntegrationContractV1}), &output)
 			} else {
-				err = RunReviewFacadeStart([]string{"--cwd", repo}, &output)
+				err = runLegacyFacadeStartForTest(t, []string{"--cwd", repo}, &output)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -1242,7 +1303,16 @@ func TestReviewFacadeStartCannotResetActiveCorrectionBudget(t *testing.T) {
 	}
 }
 
-func TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath(t *testing.T) {
+// TestReviewFacadeFinalizeIgnoresCorrectionCreatedUntrackedPath replaces the
+// test that pinned the exact opposite. Before #2394 an untracked file created
+// while correcting was rejected outright, because the sweep would have made it
+// review scope and the correction would have smuggled unreviewed bytes into
+// the candidate. Scope is declared now, so an undeclared file cannot enter the
+// corrected candidate -- and therefore must not block the correction either,
+// which is the false blocker that guard would have become.
+func TestReviewFacadeFinalizeIgnoresCorrectionCreatedUntrackedPath(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1263,39 +1333,14 @@ func TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath(t *testing.T)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Undeclared scratch output of the correction work, left on disk for the
+	// whole acceptance.
 	if err := os.WriteFile(filepath.Join(repo, "correction-evidence.json"), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	validationPath := filepath.Join(t.TempDir(), "validation.json")
-	writeReviewCLIJSON(t, validationPath, facadeValidationResult{
-		OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance test passed for tracked.txt and correction-evidence.json"}},
-		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"targeted regression passed for tracked.txt and correction-evidence.json"}},
-		FollowUps:            []reviewtransaction.FollowUp{},
-	})
 
-	err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validationPath}, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "untracked") || !strings.Contains(err.Error(), "correction-evidence.json") {
-		t.Fatalf("correction-created untracked path error = %v", err)
-	}
-	store, storeErr := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	if storeErr != nil {
-		t.Fatal(storeErr)
-	}
-	record, loadErr := store.Load()
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	if record.State.State != reviewtransaction.StateCorrectionRequired {
-		t.Fatalf("rejected correction mutated authority to %q", record.State.State)
-	}
-	if _, statErr := os.Stat(store.ReceiptPath()); !os.IsNotExist(statErr) {
-		t.Fatalf("rejected correction materialized receipt: %v", statErr)
-	}
-
-	if err := os.Remove(filepath.Join(repo, "correction-evidence.json")); err != nil {
-		t.Fatal(err)
-	}
 	request := capturePassedCorrectionEvidenceForTest(t, repo, started.LineageID)
+	validationPath := filepath.Join(t.TempDir(), "validation.json")
 	writeReviewCLIJSON(t, validationPath, facadeValidationResult{
 		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
 		OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance test passed for tracked.txt"}},
@@ -1303,33 +1348,29 @@ func TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath(t *testing.T)
 		FollowUps:            []reviewtransaction.FollowUp{},
 	})
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validationPath, "--captured-evidence"}, io.Discard); err != nil {
-		t.Fatalf("exact tracked correction: %v", err)
+		t.Fatalf("undeclared correction scratch file blocked the correction: %v", err)
 	}
-	record, loadErr = store.Load()
+
+	store, storeErr := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	record, loadErr := store.Load()
 	if loadErr != nil || record.State.State != reviewtransaction.StateApproved {
-		t.Fatalf("exact correction authority = %#v, %v", record.State, loadErr)
+		t.Fatalf("correction authority = %#v, %v", record.State, loadErr)
+	}
+	for _, path := range record.State.CurrentSnapshot.Paths {
+		if path == "correction-evidence.json" {
+			t.Fatalf("corrected candidate admitted the undeclared path: %v", record.State.CurrentSnapshot.Paths)
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(repo, "correction-evidence.json")); statErr != nil {
+		t.Fatalf("fixture scratch file is gone, so the assertions proved nothing: %v", statErr)
 	}
 }
-
-func TestRejectFacadeCorrectionUntrackedRespectsStagedProjection(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "excluded.json"), []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	state := reviewtransaction.CompactState{
-		InitialSnapshot: reviewtransaction.Snapshot{Projection: reviewtransaction.ProjectionStaged},
-		CurrentSnapshot: reviewtransaction.Snapshot{IntendedUntracked: []string{}},
-	}
-	if err := rejectFacadeCorrectionUntracked(context.Background(), repo, state); err != nil {
-		t.Fatalf("staged projection excluded workspace path: %v", err)
-	}
-	state.InitialSnapshot.Projection = reviewtransaction.ProjectionWorkspace
-	if err := rejectFacadeCorrectionUntracked(context.Background(), repo, state); err == nil {
-		t.Fatal("workspace projection accepted unreviewed correction path")
-	}
-}
-
 func TestReviewFacadePersistsOverBudgetForecastAndActual(t *testing.T) {
+	t.Parallel()
+
 	newCandidate := func(t *testing.T) (string, ReviewFacadeStartResult, string) {
 		t.Helper()
 		repo := initReviewCLIRepo(t)
@@ -1413,9 +1454,7 @@ func TestReviewFacadeCompactRefuterAndHostileGitSelection(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, "new.txt"), []byte("untracked\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "new.txt", "untracked\n", 0o644)
 	hostile := initReviewCLIRepo(t)
 	for name, value := range map[string]string{
 		"GIT_DIR": filepath.Join(hostile, ".git"), "GIT_WORK_TREE": hostile,
@@ -1429,7 +1468,9 @@ func TestReviewFacadeCompactRefuterAndHostileGitSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(record.State.InitialSnapshot.Paths, []string{"new.txt", "tracked.txt"}) || !reflect.DeepEqual(record.State.InitialSnapshot.IntendedUntracked, []string{"new.txt"}) {
+	// #2394: new.txt is in scope because it was declared with `git add`, so it
+	// reaches the candidate through the index rather than as intended-untracked.
+	if !reflect.DeepEqual(record.State.InitialSnapshot.Paths, []string{"new.txt", "tracked.txt"}) || len(record.State.InitialSnapshot.IntendedUntracked) != 0 {
 		t.Fatalf("hostile environment selected wrong compact target: %#v", record.State.InitialSnapshot)
 	}
 }
@@ -1500,6 +1541,152 @@ func TestReviewFacadeHelpAndFlatCompatibilityPathsRemainAvailable(t *testing.T) 
 		if err := test.run([]string{"--help"}, &output); err != nil || !strings.Contains(output.String(), test.want) {
 			t.Fatalf("flat compatibility help %q: %v\n%s", test.want, err, output.String())
 		}
+	}
+}
+
+// reviewFacadeUsageVerbs reads only the compact facade's usage declaration;
+// later help prose may explain a verb but cannot advertise it as a facade verb.
+func reviewFacadeUsageVerbs(t *testing.T, help string) map[string]bool {
+	t.Helper()
+	line, _, _ := strings.Cut(help, "\n")
+	const prefix = "Usage: gentle-ai review <"
+	const suffix = "> [flags]"
+	if !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, suffix) {
+		t.Fatalf("review facade usage declaration = %q", line)
+	}
+
+	verbs := map[string]bool{}
+	for _, verb := range strings.Split(strings.TrimSuffix(strings.TrimPrefix(line, prefix), suffix), "|") {
+		if verbs[verb] {
+			t.Fatalf("review facade usage declaration names %q more than once", verb)
+		}
+		verbs[verb] = true
+	}
+	return verbs
+}
+
+func reviewFacadeUsageConformanceError(advertised, dispatched map[string]bool) error {
+	missing := []string{}
+	for verb := range dispatched {
+		if !advertised[verb] {
+			missing = append(missing, verb)
+		}
+	}
+	unexpected := []string{}
+	for verb := range advertised {
+		if !dispatched[verb] {
+			unexpected = append(unexpected, verb)
+		}
+	}
+	if len(missing) == 0 && len(unexpected) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+	sort.Strings(unexpected)
+	return fmt.Errorf("facade usage drift: missing dispatched verbs %v; advertised without facade dispatch %v", missing, unexpected)
+}
+
+func reviewFacadeUsageHelp(t *testing.T) string {
+	t.Helper()
+	var help bytes.Buffer
+	if err := RunReview([]string{"--help"}, &help); err != nil {
+		t.Fatal(err)
+	}
+	return help.String()
+}
+
+func copyReviewFacadeVerbSet(verbs map[string]bool) map[string]bool {
+	clone := make(map[string]bool, len(verbs))
+	for verb := range verbs {
+		clone[verb] = true
+	}
+	return clone
+}
+
+func TestReviewFacadeUsageMatchesEveryFacadeDispatch(t *testing.T) {
+	advertised := reviewFacadeUsageVerbs(t, reviewFacadeUsageHelp(t))
+	dispatched := reviewCommandDispatchVerbs(t)
+	if err := reviewFacadeUsageConformanceError(advertised, dispatched); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewFacadeHelpHasNoPartialCommandList(t *testing.T) {
+	if strings.Contains(reviewFacadeUsageHelp(t), "Additive headless capabilities") {
+		t.Fatal("review facade help contains a second partial command list")
+	}
+}
+
+func TestEveryAdvertisedReviewFacadeVerbDispatches(t *testing.T) {
+	advertised := reviewFacadeUsageVerbs(t, reviewFacadeUsageHelp(t))
+	verbs := make([]string, 0, len(advertised))
+	for verb := range advertised {
+		verbs = append(verbs, verb)
+	}
+	sort.Strings(verbs)
+
+	for _, verb := range verbs {
+		t.Run(verb, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunReview([]string{verb, "--help"}, &output)
+			evidence := output.String()
+			if err != nil {
+				evidence += "\n" + err.Error()
+			}
+			lowered := strings.ToLower(evidence)
+			if strings.Contains(lowered, "unknown") || strings.Contains(lowered, "unrecognized") {
+				t.Fatalf("review %s dispatch evidence is unrecognized:\n%s", verb, evidence)
+			}
+			usage := "Usage: gentle-ai review " + verb
+			requires := "review " + verb + " requires"
+			if !strings.Contains(evidence, usage) && !strings.Contains(evidence, requires) {
+				t.Fatalf("review %s did not produce verb-specific dispatch evidence; want %q or %q:\n%s", verb, usage, requires, evidence)
+			}
+		})
+	}
+}
+
+func TestReviewFacadeUsageBoundaryExcludesAppMode(t *testing.T) {
+	facade := reviewCommandDispatchVerbs(t)
+	if facade[reviewModeDispatchVerb] {
+		t.Fatalf("review %s belongs to the app pre-dispatch, not the compact facade switch", reviewModeDispatchVerb)
+	}
+	if !reviewDispatchableReviewVerbs(t)[reviewModeDispatchVerb] {
+		t.Fatalf("review %s is missing from the app dispatch boundary", reviewModeDispatchVerb)
+	}
+	if reviewFacadeUsageVerbs(t, reviewFacadeUsageHelp(t))[reviewModeDispatchVerb] {
+		t.Fatalf("review %s must not be advertised by the compact facade usage declaration", reviewModeDispatchVerb)
+	}
+}
+
+func TestReviewFacadeUsageRatchetRejectsDrift(t *testing.T) {
+	advertised := reviewFacadeUsageVerbs(t, reviewFacadeUsageHelp(t))
+	dispatched := reviewCommandDispatchVerbs(t)
+	deletedAdvertised := copyReviewFacadeVerbSet(advertised)
+	delete(deletedAdvertised, "capture-result")
+	inventedDispatched := copyReviewFacadeVerbSet(dispatched)
+	inventedDispatched["invented"] = true
+	for _, test := range []struct {
+		name       string
+		advertised map[string]bool
+		dispatched map[string]bool
+	}{
+		{
+			name:       "deleted advertised verb",
+			advertised: deletedAdvertised,
+			dispatched: dispatched,
+		},
+		{
+			name:       "invented dispatch verb",
+			advertised: advertised,
+			dispatched: inventedDispatched,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := reviewFacadeUsageConformanceError(test.advertised, test.dispatched); err == nil {
+				t.Fatal("facade usage drift unexpectedly passed")
+			}
+		})
 	}
 }
 
@@ -1624,13 +1811,19 @@ func TestReviewerSchemaRequiresRuntimeMandatoryFindingEvidence(t *testing.T) {
 
 func TestReviewSchemasRequireConcreteEvidenceStrings(t *testing.T) {
 	for _, kind := range []string{"reviewer", "refuter", "validator"} {
-		if !bytes.Contains(reviewInputSchemas[kind], []byte(`"pattern":"\\S"`)) {
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, reviewInputSchemas[kind]); err != nil {
+			t.Fatalf("compact %s schema: %v", kind, err)
+		}
+		if !bytes.Contains(compact.Bytes(), []byte(`"pattern":"\\S"`)) {
 			t.Fatalf("%s schema lacks concrete-evidence pattern", kind)
 		}
 	}
 }
 
 func TestReviewFacadeRejectsMalformedInputsWithoutConsumingTerminalValidator(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1726,11 +1919,9 @@ func TestReviewRecoverCreatesSuccessorAndDiscoveryRejectsHistoricalAuthority(t *
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("changed scope\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, "expanded.txt"), []byte("expanded scope\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "expanded.txt", "expanded scope\n", 0o644)
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
-	intended, _ := builder.DiscoverIntendedUntracked(context.Background())
+	intended, _ := builder.DiscoverUnignoredUntracked(context.Background())
 	target, _ := builder.Build(context.Background(), reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: intended})
 	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + started.LineageID +
 		"\npredecessor_revision=" + predecessor.Revision + "\ntarget_identity=" + target.Identity + "\nactor=maintainer\nreason=candidate changed"
@@ -1783,8 +1974,11 @@ func TestReviewRecoverRetainsCommittedOnlyBaseDiffAndIgnoresWorkspace(t *testing
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("ignored workspace\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// This is SETUP for the "recover" behavior under test, not the start
+	// refusal itself; the committed candidate selects a lens, so a direct
+	// base-diff start now hits issue #2447's up-front refusal.
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", baseRef, "--committed-only"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", baseRef, "--committed-only"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -1843,15 +2037,8 @@ func TestReviewBindSDDRequiresExplicitInputs(t *testing.T) {
 
 func TestReviewBindSDDAcceptsEqualsFormForEmptyExpectedRevision(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	change := filepath.Join(repo, "openspec", "changes", "thin")
 	for path, content := range map[string]string{"tasks.md": "- [x] 1.1 Done\n", "proposal.md": "# Proposal\n", "design.md": "# Design\n", "specs/binding/spec.md": "# Spec\n"} {
-		fullPath := filepath.Join(change, path)
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeReviewStartCandidate(t, repo, "openspec/changes/thin/"+path, content, 0o644)
 	}
 	started := startFacadeReview(t, repo)
 	evidence := filepath.Join(t.TempDir(), "evidence.txt")
@@ -1870,25 +2057,13 @@ func TestReviewBindSDDAcceptsEqualsFormForEmptyExpectedRevision(t *testing.T) {
 
 func TestReviewBindSDDFeedsSelectedSDDStatusRuntime(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	change := filepath.Join(repo, "openspec", "changes", "thin")
-	if err := os.MkdirAll(change, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(change, "tasks.md"), []byte("- [x] 1.1 Done\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	for path, content := range map[string]string{
+		"tasks.md":              "- [x] 1.1 Done\n",
 		"proposal.md":           "# Proposal\n",
 		"design.md":             "# Design\n",
 		"specs/binding/spec.md": "# Spec\n",
 	} {
-		fullPath := filepath.Join(change, path)
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeReviewStartCandidate(t, repo, "openspec/changes/thin/"+path, content, 0o644)
 	}
 	started := startFacadeReview(t, repo)
 	evidence := filepath.Join(t.TempDir(), "evidence.txt")
@@ -1942,6 +2117,8 @@ func TestLegacyV1LineageRemainsReadableButRejectsAppend(t *testing.T) {
 }
 
 func TestCompactTransportCommandsRoundTripWithoutEventReconstruction(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1982,6 +2159,8 @@ func TestCompactTransportCommandsRoundTripWithoutEventReconstruction(t *testing.
 }
 
 func TestCompactTransportAllowsCorrectedPrePushWithoutTransientBaseObject(t *testing.T) {
+	t.Parallel()
+
 	source := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(source, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -2034,11 +2213,12 @@ func TestCompactTransportAllowsCorrectedPrePushWithoutTransientBaseObject(t *tes
 	clone := filepath.Join(t.TempDir(), "clone")
 	runReviewCLIGit(t, source, "clone", "--no-local", source, clone)
 	runReviewCLIGit(t, source, "branch", "reviewed-base", "HEAD^")
-	for _, tree := range []string{initial.State.InitialSnapshot.CandidateTree, sourceRecord.State.CurrentSnapshot.BaseTree} {
-		command := exec.Command("git", "-C", clone, "cat-file", "-e", tree+"^{tree}")
-		if err := command.Run(); err == nil {
-			t.Fatalf("clean clone unexpectedly retained dangling intermediate tree %s", tree)
-		}
+	if sourceRecord.State.CurrentSnapshot.BaseTree != initial.State.InitialSnapshot.BaseTree {
+		t.Fatalf("corrected authority base = %s, want reviewed base %s", sourceRecord.State.CurrentSnapshot.BaseTree, initial.State.InitialSnapshot.BaseTree)
+	}
+	intermediate := initial.State.InitialSnapshot.CandidateTree
+	if err := exec.Command("git", "-C", clone, "cat-file", "-e", intermediate+"^{tree}").Run(); err == nil {
+		t.Fatalf("clean clone unexpectedly retained dangling intermediate tree %s", intermediate)
 	}
 	if err := RunReviewBundleImport([]string{"--cwd", clone, "--bundle", bundlePath}, io.Discard); err != nil {
 		t.Fatalf("corrected compact import: %v", err)
@@ -2116,17 +2296,63 @@ func TestReviewFacadePropagatesCausalGitFailureBeforeMutation(t *testing.T) {
 	}
 }
 
+// startFacadeReview builds and starts legacy (compact-v2) authority over the
+// live workspace candidate, with an auto-derived lineage id -- the single
+// most widely shared fixture primitive in this package (44 call sites
+// across 11 files as of Wave 7 S7/WU18).
+//
+// Before WU18, this called the CLI's own `review start` with the (default,
+// unset) activation switch off, which took the legacy compact-v2 branch.
+// WU18 removed that branch entirely -- `review start` is now unconditionally
+// v3, so there is no CLI-reachable way left to create a NEW legacy
+// authority. Every caller of this helper needs genuine compact-v2 authority
+// (proven by pervasive reviewtransaction.CompactAuthoritativeStore/
+// CompactStore-typed follow-up reads throughout this file and its 10
+// siblings), so this constructs it directly through the same
+// reviewtransaction API runReviewFacadeStart's now-deleted legacy branch
+// used to call -- identical to finalizeApprovedFacadeReview's and
+// approveDiscoveryMarkdownProjection's own fixes.
 func startFacadeReview(t *testing.T, repo string) ReviewFacadeStartResult {
 	t.Helper()
-	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo}, &output); err != nil {
-		t.Fatal(err)
+	ctx := context.Background()
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		t.Fatalf("resolve facade review repository root: %v", err)
 	}
-	var result ReviewFacadeStartResult
-	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
-		t.Fatal(err)
+	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
+	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatalf("build facade review target: %v", err)
 	}
-	return result
+	assessment, err := rootBuilder.AssessSnapshotRisk(ctx, snapshot)
+	if err != nil {
+		t.Fatalf("classify facade review target: %v", err)
+	}
+	lenses, err := facadeSelectedLenses(assessment, "reliability")
+	if err != nil {
+		t.Fatalf("select facade review lenses: %v", err)
+	}
+	policy, err := facadePolicyBytes("")
+	if err != nil {
+		t.Fatalf("read facade review policy: %v", err)
+	}
+	lineage := reviewDerivedStartLineage(snapshot.Identity)
+	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+		LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
+		Snapshot: snapshot, PolicyHash: facadePayloadHash(policy), RiskLevel: assessment.Level,
+		SelectedLenses: lenses, OriginalChangedLines: &assessment.ChangedLines,
+	})
+	if err != nil {
+		t.Fatalf("create facade review state: %v", err)
+	}
+	compactStarted, err := reviewtransaction.StartCompactAuthority(ctx, root, reviewtransaction.CompactStartRequest{State: state})
+	if err != nil {
+		t.Fatalf("start facade review compact authority: %v", err)
+	}
+	return reviewFacadeStartResultFor(compactStarted.Action, compactStarted.LensesRequired, compactStarted.Record.State)
 }
 
 // facadeReviewerResultArgs admits one reviewer result per selected lens through
@@ -2164,6 +2390,8 @@ func facadeReviewerResultArgs(t *testing.T, repo string, started ReviewFacadeSta
 // reviewtransaction.EscalationAccountingReasonTemplate, the same template the
 // organic gate and the SDD-bound remediation surface use.
 func TestReviewFacadeFinalizeSurfacesEscalationAccounting(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -2344,6 +2572,8 @@ func TestReviewFacadeOperationDeadlineSelector(t *testing.T) {
 // review state" without ever consuming canonical captured evidence or telling
 // the caller why nothing happened.
 func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
+	t.Parallel()
+
 	setup := func(t *testing.T) (string, ReviewFacadeStartResult) {
 		t.Helper()
 		repo := initReviewCLIRepo(t)

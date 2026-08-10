@@ -21,10 +21,17 @@ import (
 
 const reviewBindingSchema = "gentle-ai.sdd-review-binding/v1"
 
-var reviewBindingChange = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+// A change identity is whatever sdd-status already resolves: an OpenSpec
+// directory name or an Engram change ID such as DEC-EXAMPLE-CHANGE. It stays
+// path-safe by construction, since alphanumeric segments joined by single
+// hyphens or underscores can express neither a separator nor a dot segment.
+var reviewBindingChange = regexp.MustCompile(`^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$`)
+
+// legacyRuntimeChange is the shape the runtime ledger stored directly at
+// v1/<change> before identities widened. It must never change.
+var legacyRuntimeChange = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var reviewBindingLineage = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var reviewBindingHash = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
-var bindingFinalAuthorizationHook = func() {}
 
 type ReviewBindingPublicationError struct{ Cause error }
 
@@ -341,6 +348,7 @@ type RuntimeStrandedSuccessor struct {
 	Lineage          string
 	Revision         string
 	SnapshotIdentity string
+	DiscardedWork    reviewtransaction.CompactDiscardedWorkSummary
 }
 
 // runtimeStrandedSuccessor answers exactly one question: is the ONLY thing
@@ -407,7 +415,7 @@ func runtimeStrandedSuccessor(ctx context.Context, repo string, binding ReviewBi
 	if err != nil || !eligibility.Eligible {
 		return RuntimeStrandedSuccessor{}, false
 	}
-	found.Revision, found.SnapshotIdentity = eligibility.Revision, eligibility.SnapshotIdentity
+	found.Revision, found.SnapshotIdentity, found.DiscardedWork = eligibility.Revision, eligibility.SnapshotIdentity, eligibility.DiscardedWork
 	return found, true
 }
 
@@ -460,69 +468,6 @@ func validateRuntimeBoundCandidate(ctx context.Context, repo string, binding Rev
 	return nil
 }
 
-func validateBoundReview(ctx context.Context, repo, change string) (ReviewBinding, reviewtransaction.NativeGateEvaluation, error) {
-	if !validReviewBindingChange(change) {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("invalid OpenSpec change name")
-	}
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
-	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
-	}
-	changeRoot, err := resolveBindingChangeRoot(ctx, root, repo, change)
-	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
-	}
-	binding, err := loadEffectiveReviewBinding(ctx, root, change)
-	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, fmt.Errorf("approved review binding is missing or invalid: %w", err)
-	}
-	if binding.Change != change {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("approved review binding change does not match selected change")
-	}
-	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, binding.Lineage)
-	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
-	}
-	record, err := store.Load()
-	if err != nil || record.Revision != binding.AuthorityRevision || record.State.State != reviewtransaction.StateApproved {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact authority is stale or not approved")
-	}
-	receiptPayload, err := os.ReadFile(store.ReceiptPath())
-	if err != nil || bindingHash(receiptPayload) != binding.ReceiptHash {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact receipt changed")
-	}
-	receipt, err := reviewtransaction.ParseCompactReceipt(receiptPayload)
-	authoritative, receiptErr := record.State.Receipt()
-	if err != nil || receiptErr != nil || !reflect.DeepEqual(receipt, authoritative) {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact receipt does not match approved authority")
-	}
-	if err := verifyBindingLedger(changeRoot, record.State.Findings); err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
-	}
-	evaluation := reviewtransaction.EvaluateCompactGate(ctx, root, receipt, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: binding.Lineage})
-	if evaluation.Result != reviewtransaction.GateAllow || !boundGateContextMatches(binding.GateContext, evaluation.Context) {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact post-apply gate context changed")
-	}
-	bindingFinalAuthorizationHook()
-	finalBinding, bindingErr := loadEffectiveReviewBinding(ctx, root, change)
-	finalRecord, recordErr := store.Load()
-	finalReceipt, receiptErr := os.ReadFile(store.ReceiptPath())
-	finalChangeRoot, changeErr := resolveBindingChangeRoot(ctx, root, repo, change)
-	if bindingErr != nil || recordErr != nil || receiptErr != nil || changeErr != nil || finalChangeRoot != changeRoot || !reflect.DeepEqual(finalBinding, binding) || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalRecord.State, record.State) || finalRecord.State.State != reviewtransaction.StateApproved || !bytes.Equal(finalReceipt, receiptPayload) || bindingHash(finalReceipt) != binding.ReceiptHash {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound authority, receipt, or binding changed during final read")
-	}
-	finalReceiptValue, parseErr := reviewtransaction.ParseCompactReceipt(finalReceipt)
-	finalAuthoritative, authorityErr := finalRecord.State.Receipt()
-	if parseErr != nil || authorityErr != nil || !reflect.DeepEqual(finalReceiptValue, finalAuthoritative) {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact receipt does not match final authority")
-	}
-	finalGate := reviewtransaction.EvaluateCompactGate(ctx, root, finalReceiptValue, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: binding.Lineage})
-	if finalGate.Result != reviewtransaction.GateAllow || !boundGateContextMatches(binding.GateContext, finalGate.Context) {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact post-apply gate changed during final authorization")
-	}
-	return binding, finalGate, nil
-}
-
 // boundGateContextMatches compares a persisted binding gate context against
 // the live post-apply evaluation. Bindings persisted before compact gate
 // contexts bound the frozen findings ledger recorded the empty-input hash in
@@ -544,30 +489,6 @@ func boundGateContextMatches(bound, live reviewtransaction.GateContext) bool {
 	}
 	bound.LedgerHash = live.LedgerHash
 	return reflect.DeepEqual(bound, live)
-}
-
-func bindingExists(ctx context.Context, repo, change string) (bool, error) {
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
-	if err != nil {
-		return false, nil
-	}
-	store, err := OpenRuntimeStore(ctx, root, change)
-	if err != nil {
-		return false, err
-	}
-	status, err := store.Status()
-	if err != nil {
-		return false, err
-	}
-	if status.Binding != nil {
-		return true, nil
-	}
-	legacyPath := filepath.Join(store.commonDir, "gentle-ai", "sdd-review-bindings", "v1", change, "binding.json")
-	_, err = os.Lstat(legacyPath)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	return err == nil, err
 }
 
 func loadEffectiveReviewBinding(ctx context.Context, repo, change string) (ReviewBinding, error) {
@@ -769,6 +690,12 @@ func validReviewBindingChange(change string) bool {
 	return len(change) <= 96 && reviewBindingChange.MatchString(change)
 }
 
+// legacyRuntimeChangeDir reports whether a change identity is one the runtime
+// ledger has always stored directly at v1/<change>.
+func legacyRuntimeChangeDir(change string) bool {
+	return len(change) <= 96 && legacyRuntimeChange.MatchString(change)
+}
+
 func validReviewBindingLineage(lineage string) bool {
 	return len(lineage) <= 128 && reviewBindingLineage.MatchString(lineage)
 }
@@ -792,9 +719,52 @@ func parseBinding(payload []byte) (ReviewBinding, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return ReviewBinding{}, errors.New("multiple binding values")
 	}
-	canonical, err := bindingBytes(binding)
-	if err != nil || !bytes.Equal(payload, canonical) || binding.Schema != reviewBindingSchema || !validReviewBindingChange(binding.Change) || !validReviewBindingLineage(binding.Lineage) || !reviewBindingHash.MatchString(binding.Revision) || !reviewBindingHash.MatchString(binding.AuthorityRevision) || !reviewBindingHash.MatchString(binding.ReceiptHash) || binding.Revision != bindingDigest(binding) || binding.GateContext.Gate != reviewtransaction.GatePostApply || binding.GateContext.LineageID != binding.Lineage || binding.GateContext.StoreRevision != binding.AuthorityRevision {
-		return ReviewBinding{}, errors.New("invalid binding")
+	if violation := reviewBindingViolation(payload, binding); violation != "" {
+		return ReviewBinding{}, fmt.Errorf("invalid binding: %s", violation) // refusal:by-design world-action: this binding is written and digested by this package itself, so a violation is a mutated or corrupted record and the exit is restoring the Git-common-dir store, not a command
 	}
 	return binding, nil
+}
+
+// reviewBindingViolation names WHICH of the twelve integrity conditions a
+// binding failed, or "" when it satisfies all of them. Root 8 (#2471): these
+// twelve used to answer with one shared `errors.New("invalid binding")`, so a
+// caller holding the error learned only that something was wrong with bytes
+// this package wrote itself.
+//
+// Unlike the reviewer-input surfaces, this validates OUR OWN persisted ledger
+// bytes, so a violation is tamper or corruption rather than user error. That
+// is exactly why naming the condition matters: the reader is an operator
+// diagnosing a damaged store, and "invalid binding" tells them to escalate
+// while "gate context lineage does not match" tells them what broke. The
+// values themselves are never echoed, only the condition that failed, so a
+// damaged binding cannot use this to reflect arbitrary bytes into a message.
+func reviewBindingViolation(payload []byte, binding ReviewBinding) string {
+	canonical, err := bindingBytes(binding)
+	switch {
+	case err != nil:
+		return "binding could not be re-encoded for canonical comparison"
+	case !bytes.Equal(payload, canonical):
+		return "payload is not the canonical encoding of its own fields"
+	case binding.Schema != reviewBindingSchema:
+		return "schema is not " + reviewBindingSchema
+	case !validReviewBindingChange(binding.Change):
+		return "change name is not a valid change identifier"
+	case !validReviewBindingLineage(binding.Lineage):
+		return "lineage is not a valid lineage identifier"
+	case !reviewBindingHash.MatchString(binding.Revision):
+		return "revision is not a sha256 digest"
+	case !reviewBindingHash.MatchString(binding.AuthorityRevision):
+		return "authority_revision is not a sha256 digest"
+	case !reviewBindingHash.MatchString(binding.ReceiptHash):
+		return "receipt_hash is not a sha256 digest"
+	case binding.Revision != bindingDigest(binding):
+		return "revision does not match the digest of its own fields"
+	case binding.GateContext.Gate != reviewtransaction.GatePostApply:
+		return "gate_context.gate is not " + string(reviewtransaction.GatePostApply)
+	case binding.GateContext.LineageID != binding.Lineage:
+		return "gate_context.lineage_id does not match the binding lineage"
+	case binding.GateContext.StoreRevision != binding.AuthorityRevision:
+		return "gate_context.store_revision does not match authority_revision"
+	}
+	return ""
 }

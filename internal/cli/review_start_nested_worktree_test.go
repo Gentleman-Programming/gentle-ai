@@ -2,12 +2,17 @@ package cli
 
 // Issue #1881: a nested, non-gitignored git worktree (`git worktree add
 // .wt/test`) made `review start` fail hard with "logical path is not
-// canonical: \".wt/test/\"" — exit 1 and, in the plain form, an empty stdout.
+// canonical: \".wt/test/\"" -- exit 1 and, in the plain form, an empty stdout.
 // These tests pin the fix end to end: START succeeds with the nested worktree
 // present and provably excludes the worktree's contents from the frozen
-// changed-path manifest, and the one refusal that remains for the related
-// shape (an embedded foreign repository) reaches a negotiated caller as a
-// parseable typed failure envelope on stdout, never as a bare stderr line.
+// changed-path manifest.
+//
+// Issue #2394 removed the second half of the original story. START no longer
+// enumerates untracked workspace content at all, so neither a nested worktree
+// nor an embedded foreign repository can reach the candidate, and the
+// untracked-scope refusal that used to fire here has nothing left to refuse.
+// The refusal still exists where the question is still asked: the delivery
+// gates, which do inspect the live worktree.
 
 import (
 	"bytes"
@@ -23,7 +28,7 @@ func TestReviewStartExcludesNestedWorktreeFromFrozenManifest(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	runReviewCLIGit(t, repo, "worktree", "add", "-q", "-b", "nested-1881", filepath.Join(repo, ".wt", "test"))
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
-	writeReviewStartCandidate(t, repo, "extra-notes.txt", "untracked candidate file\n", 0o644)
+	writeReviewStartCandidate(t, repo, "extra-notes.txt", "declared candidate file\n", 0o644)
 	writeReviewStartCandidate(t, repo, ".wt/stray-note.txt", "beside the worktree, not inside it\n", 0o644)
 
 	var output bytes.Buffer
@@ -50,43 +55,25 @@ func TestReviewStartExcludesNestedWorktreeFromFrozenManifest(t *testing.T) {
 	}
 }
 
-func TestNegotiatedReviewStartEmbeddedRepositoryRefusalCarriesFailureEnvelope(t *testing.T) {
+// #2652 intentionally preserves the nested-repository boundary even when an
+// explicit untracked-scope preflight precedes snapshot construction.
+func TestNegotiatedReviewStartRejectsEmbeddedForeignRepository(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	runReviewCLIGit(t, repo, "init", "-q", filepath.Join(repo, "vendor", "embedded"))
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 
 	var output bytes.Buffer
-	err := RunReview([]string{
-		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
-		"--projection", "workspace",
-		"--target", "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-	}, &output)
+	err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", "embedded-repository-2394",
+	}), &output)
 	if err == nil {
-		t.Fatalf("negotiated review start admitted an embedded foreign repository:\n%s", output.String())
+		t.Fatal("negotiated review start beside an embedded foreign repository succeeded")
 	}
-	if output.Len() == 0 {
-		t.Fatal("negotiated review start failed with an EMPTY stdout; a negotiated caller always receives a parseable envelope")
-	}
-	var failure ReviewIntegrationFailure
-	if decodeErr := json.Unmarshal(output.Bytes(), &failure); decodeErr != nil {
-		t.Fatalf("negotiated failure stdout is not a parseable envelope: %v\n%s", decodeErr, output.String())
-	}
-	if validateErr := failure.Validate(); validateErr != nil {
-		t.Fatalf("negotiated failure envelope is invalid: %v\n%s", validateErr, output.String())
-	}
-	if failure.Code != "untracked_scope_undiscoverable" {
-		t.Fatalf("negotiated failure code = %q, want untracked_scope_undiscoverable\n%s", failure.Code, output.String())
-	}
-	// The failure happens strictly before any authority is created, so the
-	// envelope must say so instead of claiming an unknown mutation outcome.
-	if failure.MutationOutcome != ReviewMutationNotStarted {
-		t.Fatalf("negotiated failure mutation_outcome = %q, want not_started", failure.MutationOutcome)
-	}
-	if failure.Cause == "" {
-		t.Fatal("negotiated failure envelope carries no cause prose for the blocking repository shape")
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Code != "invalid_request" || !strings.Contains(failure.Cause, "another Git repository") {
+		t.Fatalf("embedded repository failure = %#v, want invalid request naming the nested repository", failure)
 	}
 }
-
 func TestReviewStartKeepsSiblingLinkedWorktreeWorking(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	sibling := filepath.Join(t.TempDir(), "sibling-worktree")

@@ -286,37 +286,117 @@ func commandTailIsRunnable(tail string) bool {
 
 // HasEnvelopeContinuation reports whether a JSON envelope on stdout carries a
 // next_action / recovery_operation / collect.capture_operation naming a real
-// operation. next_transition.execute.operation is treated the same way: it is
-// the execute-shaped sibling of collect.capture_operation.
+// operation.
+//
+// An `execute` transition is held to a strictly higher bar than those keys,
+// and the difference is not a detail. next_action and capture_operation name
+// an operation the reader still has to assemble a command for, and the corpus
+// admits them on that basis. An execute transition claims to have already done
+// that assembly: it says "here is the thing to run". So it counts only when it
+// carries a command that really is runnable. An execute transition naming an
+// operation with an empty command tells the reader to run something and then
+// hands them nothing, which is the exact shape this benchmark exists to count
+// as out_of_band -- and it is worse than the keys above, not equal to them,
+// because it looks like the answer.
 func HasEnvelopeContinuation(stdout string) bool {
 	var envelope any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &envelope); err != nil {
 		return false
 	}
-	return walkContinuation(envelope, "")
+	return walkContinuation(envelope)
 }
 
-func walkContinuation(node any, parentKey string) bool {
+func walkContinuation(node any) bool {
 	switch typed := node.(type) {
 	case map[string]any:
 		for key, value := range typed {
-			if continuationKeys[key] || (parentKey == "execute" && key == "operation") {
+			// An execute transition is judged whole, and descending into it
+			// is deliberately skipped: a transition that handed the reader
+			// nothing to run must not be rescued by a continuation key
+			// nested inside its own binding or preconditions.
+			if execute, isObject := value.(map[string]any); isObject && key == "execute" {
+				if executeIsRunnable(execute) {
+					return true
+				}
+				continue
+			}
+			if continuationKeys[key] {
 				if text, ok := value.(string); ok && !nonContinuationValues[strings.ToLower(strings.TrimSpace(text))] {
 					return true
 				}
 			}
-			if walkContinuation(value, key) {
+			if walkContinuation(value) {
 				return true
 			}
 		}
 	case []any:
 		for _, item := range typed {
-			if walkContinuation(item, parentKey) {
+			if walkContinuation(item) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// DeadExecuteTransitions returns one description per `execute` transition in a
+// JSON envelope that names an operation and hands the reader no runnable
+// command.
+//
+// The classifier alone cannot see this. Classify only ever runs on a BLOCK,
+// and the invocation that first shipped this defect exited 0 and denied
+// nothing: a `review status --next-transition` answering with a dead
+// review.recover transition. Nothing in the corpus looked at it. So this is
+// checked for EVERY observation, blocking or not, and a hit fails the journey
+// rather than moving it between buckets.
+//
+// That difference is the point. A bucket can be argued about; a failed journey
+// and a non-zero exit cannot be satisfied by teaching one call site to expect
+// the broken shape. It also does not depend on any journey remembering to run
+// the command it was handed, which is exactly the assumption that failed here.
+func DeadExecuteTransitions(stdout string) []string {
+	var envelope any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &envelope); err != nil {
+		return nil
+	}
+	var dead []string
+	collectDeadExecuteTransitions(envelope, &dead)
+	return dead
+}
+
+func collectDeadExecuteTransitions(node any, dead *[]string) {
+	switch typed := node.(type) {
+	case map[string]any:
+		for key, value := range typed {
+			if execute, isObject := value.(map[string]any); isObject && key == "execute" {
+				operation, named := execute["operation"].(string)
+				if named && !nonContinuationValues[strings.ToLower(strings.TrimSpace(operation))] && !executeIsRunnable(execute) {
+					command, _ := execute["command"].(string)
+					*dead = append(*dead, fmt.Sprintf("execute transition %q carries no runnable command (command: %q)", operation, command))
+				}
+			}
+			collectDeadExecuteTransitions(value, dead)
+		}
+	case []any:
+		for _, item := range typed {
+			collectDeadExecuteTransitions(item, dead)
+		}
+	}
+}
+
+// executeIsRunnable reports whether one `execute` transition object is a real
+// continuation: it names an operation AND carries a command the reader can run
+// as printed. The command is held to the same standard as prose that suggests
+// one, through the same HasRunnableCommand, so an envelope cannot be in-band on
+// a template like `gentle-ai review validate --gate <gate>` that the identical
+// text in a message would be refused for.
+func executeIsRunnable(execute map[string]any) bool {
+	operation, named := execute["operation"].(string)
+	if !named || nonContinuationValues[strings.ToLower(strings.TrimSpace(operation))] {
+		return false
+	}
+	command, printed := execute["command"].(string)
+	return printed && HasRunnableCommand(command)
 }
 
 // denialResults are gate results that deny delivery. A denial is a block even
@@ -387,6 +467,9 @@ var unsupportedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)unknown [a-z-]+ command "`),
 	regexp.MustCompile(`(?i)flag provided but not defined`),
 	regexp.MustCompile(`(?i)unknown (flag|shorthand flag|option)`),
+	// sdd-attempt refuses an operation a build does not have with `unknown
+	// sdd-attempt operation "..."`: a missing surface (j62's settle probe).
+	regexp.MustCompile(`(?i)unknown [a-z-]+ operation "`),
 	regexp.MustCompile(`(?i)unrecognized (flag|option|argument)`),
 	regexp.MustCompile(`(?i)unexpected [a-z ]+ argument "`),
 	regexp.MustCompile(`(?i)unknown [a-z-]+ "--`),

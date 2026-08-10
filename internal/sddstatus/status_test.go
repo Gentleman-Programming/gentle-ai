@@ -10,20 +10,29 @@ import (
 	"testing"
 )
 
-func TestListActiveOpenSpecChanges(t *testing.T) {
+func TestResolveSharesOneNormalizedWorkspaceWithReviewMode(t *testing.T) {
 	root := t.TempDir()
-	mkdir(t, filepath.Join(root, "openspec", "changes", "z-change"))
-	mkdir(t, filepath.Join(root, "openspec", "changes", "a-change"))
-	mkdir(t, filepath.Join(root, "openspec", "changes", "archive", "2026-01-01-old"))
+	mkdir(t, filepath.Join(root, "openspec", "changes"))
+	t.Chdir(root)
 
-	changes, err := ListActiveOpenSpecChanges(root)
+	modeLookups := 0
+	status, err := Resolve(ResolveOptions{
+		ReviewDisabledForWorkspace: func(workspaceRoot string) (bool, error) {
+			modeLookups++
+			if workspaceRoot != root {
+				t.Fatalf("review mode workspace = %q, want %q", workspaceRoot, root)
+			}
+			return true, nil
+		},
+	})
 	if err != nil {
-		t.Fatalf("ListActiveOpenSpecChanges() error = %v", err)
+		t.Fatalf("Resolve() error = %v", err)
 	}
-
-	want := []string{"a-change", "z-change"}
-	if !reflect.DeepEqual(changes, want) {
-		t.Fatalf("ListActiveOpenSpecChanges() = %v, want %v", changes, want)
+	if modeLookups != 1 {
+		t.Fatalf("review mode lookups = %d, want 1", modeLookups)
+	}
+	if status.ActionContext.WorkspaceRoot != root {
+		t.Fatalf("status workspace = %q, want shared root %q", status.ActionContext.WorkspaceRoot, root)
 	}
 }
 
@@ -374,10 +383,23 @@ func TestResolveRuntimeOverrideRestoresExpectedPlanningBlockersForBothStores(t *
 				restore := stubEngramExport(t, engramPlanningRoute("thin", "propose"))
 				t.Cleanup(restore)
 			}
+			// A maintainer decision is the runtime state that still overrides
+			// routing to a final route. An active attempt stopped overriding in
+			// #2463: compact acquire admits its own token holder, so status has
+			// no standing to refuse that launch.
 			store := mustRuntimeStore(t, root, "thin")
-			if _, err := store.Begin(context.Background(), BeginAttemptRequest{
+			active, err := store.Begin(context.Background(), BeginAttemptRequest{
 				ExpectedRevision: "", RequestID: "begin-thin", WorkUnit: "apply",
-				EvidenceGoal: "prove final-route blocker filtering", MaxAttempts: 2, MaxChangedLines: 20,
+				EvidenceGoal: "prove final-route blocker filtering", MaxAttempts: 1, MaxChangedLines: 20,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Finish(context.Background(), FinishAttemptRequest{
+				ExpectedRevision: active.Revision, RequestID: "finish-thin", Outcome: AttemptFailed,
+				EvidenceRevision: runtimeTestHash('4'), Diagnosis: "bounded runtime reproduced the failure",
+				HarnessDisposition: HarnessReused, CleanupEvidence: "runtime process group exited",
+				ProcessEvidence: "post-run scan found no descendants",
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -390,7 +412,7 @@ func TestResolveRuntimeOverrideRestoresExpectedPlanningBlockersForBothStores(t *
 				t.Fatalf("NextRecommended = %q, want resolve-blockers", status.NextRecommended)
 			}
 			reasons := strings.Join(status.BlockedReasons, "\n")
-			for _, want := range []string{"proposal.md is missing or partial.", "native SDD runtime attempt 1 is active"} {
+			for _, want := range []string{"proposal.md is missing or partial.", "blocked(maintainer_decision)"} {
 				if !strings.Contains(reasons, want) {
 					t.Fatalf("BlockedReasons = %v, want containing %q", status.BlockedReasons, want)
 				}
@@ -467,15 +489,19 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			wantNext:    "apply",
 		},
 		{
-			name: "apply all done requires explicit review before verify",
+			// Wave 4 S3 (design.md decision 3, proposal.md's #1 success
+			// criterion): RDD no longer supervises SDD before verify. Apply
+			// done, no verify report yet => verify is immediately ready, no
+			// review transaction required. The offer point is post-verify.
+			name: "apply all done makes verify ready immediately with no pre-verify review supervision",
 			seed: func(t *testing.T, root string) {
 				seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
-			wantVerify:  DependencyBlocked,
+			wantVerify:  DependencyReady,
 			wantArchive: DependencyBlocked,
-			wantNext:    "review",
+			wantNext:    "verify",
 		},
 		{
 			name: "apply progress does not make final verify ready before all tasks complete",

@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"strings"
 
@@ -30,9 +32,12 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	}
 	selection.Agents = unique(agents)
 
-	persona, err := normalizePersona(flags.Persona)
+	persona, personaRemapped, err := normalizePersona(flags.Persona)
 	if err != nil {
 		return InstallInput{}, err
+	}
+	if personaRemapped {
+		fmt.Fprintln(personaNoticeWriter, personaAliasRemapNotice)
 	}
 	selection.Persona = persona
 
@@ -77,16 +82,29 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	return InstallInput{Selection: selection, Scope: scope, Channel: channel, DryRun: flags.DryRun}, nil
 }
 
-func normalizePersona(value string) (model.PersonaID, error) {
+// personaAliasRemapNotice is printed whenever the legacy
+// gentleman-neutral-artifacts alias is remapped to the neutral persona.
+const personaAliasRemapNotice = `"gentleman-neutral-artifacts" now maps to "neutral". For a voseo conversation use --persona gentleman.`
+
+// personaNoticeWriter is swappable in tests.
+var personaNoticeWriter io.Writer = os.Stderr
+
+// normalizePersona resolves a --persona flag or persisted state value.
+// The second return is true when the legacy gentleman-neutral-artifacts
+// alias was remapped to neutral: its name promised a neutral tone, so the
+// name now wins; users who want voseo have --persona gentleman.
+func normalizePersona(value string) (model.PersonaID, bool, error) {
 	if strings.TrimSpace(value) == "" {
-		return model.PersonaGentleman, nil
+		return model.PersonaGentleman, false, nil
 	}
 
 	switch model.PersonaID(value) {
-	case model.PersonaGentleman, model.PersonaGentlemanNeutralArtifacts, model.PersonaNeutral, model.PersonaCustom:
-		return model.PersonaID(value), nil
+	case model.PersonaGentlemanNeutralArtifacts:
+		return model.PersonaNeutral, true, nil
+	case model.PersonaGentleman, model.PersonaNeutral, model.PersonaCustom:
+		return model.PersonaID(value), false, nil
 	default:
-		return "", fmt.Errorf("unsupported persona %q", value)
+		return "", false, fmt.Errorf("unsupported persona %q", value)
 	}
 }
 

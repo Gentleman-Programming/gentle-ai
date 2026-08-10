@@ -1,7 +1,6 @@
 package reviewtransaction
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -288,7 +287,7 @@ func TestChainBundleImportRejectsTamperingTruncationAndWrongBindings(t *testing.
 		{
 			name: "wrong receipt mode",
 			mutate: func(_ *ChainBundle, expectation *BundleImportExpectation) {
-				expectation.Receipt.Mode = ModeJudgmentDay
+				expectation.Receipt.Mode = Mode("")
 			},
 		},
 		{
@@ -445,37 +444,6 @@ func TestLegacyClassificationBundleRemainsReadable(t *testing.T) {
 	}
 	if parsed.HeadRevision != bundle.HeadRevision || len(parsed.Events) != 3 {
 		t.Fatalf("legacy bundle round trip = %#v", parsed)
-	}
-}
-
-func TestChainBundlePreservesHistoricalJudgmentDayFreezeBytes(t *testing.T) {
-	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
-	tx := newTestTransaction(t, ModeJudgmentDay)
-	if err := tx.StartReview(); err != nil {
-		t.Fatal(err)
-	}
-	head := writeStoreEvent(t, store, Record{Operation: "review/start", Transaction: *tx})
-	if err := tx.RecordJudgeProofs([]JudgeProof{{JudgeID: "judge-a", ExecutionHash: hash("a"), ResultHash: hash("b"), Blind: true, Confirmed: true}, {JudgeID: "judge-b", ExecutionHash: hash("c"), ResultHash: hash("d"), Blind: true, Confirmed: true}}, hash("e")); err != nil {
-		t.Fatal(err)
-	}
-	head = writeStoreEvent(t, store, Record{Operation: "review/record-judge-proofs", PreviousRevision: head, Transaction: *tx})
-	legacy := historicalFreezeTransition(t, *tx)
-	head = writeStoreEvent(t, store, Record{Operation: "review/freeze-findings", PreviousRevision: head, Transaction: legacy})
-	payload, err := os.ReadFile(filepath.Join(store.Dir, "events", strings.TrimPrefix(head, "sha256:")+".json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	bundle, err := store.ExportBundle()
-	if err != nil {
-		t.Fatalf("ExportBundle() error = %v", err)
-	}
-	last := bundle.Events[len(bundle.Events)-1]
-	if last.Revision != head || !bytes.Equal(last.Payload, payload) {
-		t.Fatalf("bundle changed historical event: %#v", last)
-	}
-	if _, err := ParseChainBundle(mustJSON(t, bundle)); err != nil {
-		t.Fatalf("ParseChainBundle() error = %v", err)
 	}
 }
 

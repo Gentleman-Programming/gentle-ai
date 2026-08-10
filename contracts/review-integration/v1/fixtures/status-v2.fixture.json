@@ -8,7 +8,7 @@
     "lineage_id": "review-status-fixture",
     "state": "reviewing",
     "generation": 1,
-    "revision": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390"
+    "revision": "sha256:c978e5383ae788a963c5e80c4f887d3b65ca415767398d57de827a9f0905f423"
   },
   "receipt": {
     "status": "expected_missing"
@@ -20,7 +20,7 @@
     "original_changed_lines": 2,
     "correction_budget": 1
   },
-  "target_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+  "target_identity": "sha256:00c0d796b4136e365d0130886f300c954ecf9431c45d96d8031155c415507d49",
   "projection": {
     "schema": "gentle-ai.review-integration.projection/v1",
     "kind": "current-changes",
@@ -34,8 +34,8 @@
     ],
     "intended_untracked": [],
     "intended_untracked_proof": "sha256:b97229718d4c7fe50a8892eb474ae5aa6491697bccb400e3e31dbaca4894d2f3",
-    "initial_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
-    "current_snapshot_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
+    "initial_snapshot_identity": "sha256:00c0d796b4136e365d0130886f300c954ecf9431c45d96d8031155c415507d49",
+    "current_snapshot_identity": "sha256:00c0d796b4136e365d0130886f300c954ecf9431c45d96d8031155c415507d49"
   },
   "repair": {
     "schema": "gentle-ai.review-authority-repair-assessment/v1",
@@ -133,13 +133,13 @@
             },
             {
               "name": "expected-revision",
-              "value": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390",
-              "token": "--expected-revision=sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390"
+              "value": "sha256:c978e5383ae788a963c5e80c4f887d3b65ca415767398d57de827a9f0905f423",
+              "token": "--expected-revision=sha256:c978e5383ae788a963c5e80c4f887d3b65ca415767398d57de827a9f0905f423"
             },
             {
               "name": "target",
-              "value": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
-              "token": "--target=sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6"
+              "value": "sha256:00c0d796b4136e365d0130886f300c954ecf9431c45d96d8031155c415507d49",
+              "token": "--target=sha256:00c0d796b4136e365d0130886f300c954ecf9431c45d96d8031155c415507d49"
             },
             {
               "name": "repository-context",
@@ -159,10 +159,10 @@
           ],
           "artifact_subject": {
             "schema": "gentle-ai.review-artifact-subject/v1",
-            "subject_hash": "sha256:fe57db2ea45a33c7e852d039e8af3291c3bc31911f0c92a710b5fef547b1999d",
+            "subject_hash": "sha256:d8f46ff5cdcd86385033ce73f18cbfd61651c81deba1340b743e034cdf9dce48",
             "lineage_id": "review-status-fixture",
-            "authority_revision": "sha256:81cdad8f3182d4919147d3c4fe8f614814068e5ef68417e3dcbd5e326dd3e390",
-            "target_identity": "sha256:e6faad1cb9ceb2db170e0ec9ea5394b44c3991dff6cbd02fb6787539715968f6",
+            "authority_revision": "sha256:c978e5383ae788a963c5e80c4f887d3b65ca415767398d57de827a9f0905f423",
+            "target_identity": "sha256:00c0d796b4136e365d0130886f300c954ecf9431c45d96d8031155c415507d49",
             "candidate_diff_sha256": "sha256:8ed4bd24d5beb3f73f6026355f6755f5aef7feebcd76447be820860c22bc47c6",
             "changed_path_manifest_sha256": "sha256:64d028ff676fb4ef10f2d4a3488d568854b364b4cc4399578b5932d144d2347b",
             "lens": "review-reliability",

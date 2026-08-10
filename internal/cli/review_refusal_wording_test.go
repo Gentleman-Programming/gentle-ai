@@ -99,6 +99,7 @@ func TestReviewFinalizeNoDiscoverableLineageNamesStartCommand(t *testing.T) {
 func TestReviewValidateReceiptNotAvailableNamesFinalizeCommandWithLineage(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	lineage := "receipt-not-available-needs-finalize"
+	writeReviewStartCandidate(t, repo, "docs/pending.md", "# pending\n\nplain prose, no executable content.\n", 0o644)
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +129,7 @@ func TestReviewCaptureResultOpaqueBindingMismatchNamesRefreshCommand(t *testing.
 		"--expected-revision", started.RepositoryContext.Revision,
 		"--lens", "not-the-selected-lens", "--order", "0", "--preflight",
 	}, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), reviewNextTransitionRefreshCommandV2) {
-		t.Fatalf("opaque capture binding mismatch error = %v, want it to contain %q", err, reviewNextTransitionRefreshCommandV2)
+	if err == nil || !strings.Contains(err.Error(), reviewNextTransitionRefreshCommandV21) {
+		t.Fatalf("opaque capture binding mismatch error = %v, want it to contain %q", err, reviewNextTransitionRefreshCommandV21)
 	}
 }

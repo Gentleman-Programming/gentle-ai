@@ -12,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/vscode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/skillregistry"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
@@ -203,7 +204,6 @@ func (a noSkillsAdapter) Tier() model.SupportTier { return model.TierFull }
 func (a noSkillsAdapter) Detect(_ context.Context, _ string) (bool, string, string, bool, error) {
 	return false, "", "", false, nil
 }
-func (a noSkillsAdapter) SupportsAutoInstall() bool { return false }
 func (a noSkillsAdapter) InstallCommand(_ system.PlatformProfile) ([][]string, error) {
 	return nil, nil
 }
@@ -332,6 +332,33 @@ func TestInjectRequiredBundledSkillsForEverySkillsCapableDefaultAdapter(t *testi
 	}
 }
 
+func TestInjectBundledSkillsAreRegistryDiscoverable(t *testing.T) {
+	for _, skill := range []model.SkillID{
+		model.SkillRDDDefectWorkflow,
+		model.SkillSystemicIssueTriage,
+		model.SkillGentleAIBench,
+	} {
+		t.Run(string(skill), func(t *testing.T) {
+			home := t.TempDir()
+			project := t.TempDir()
+
+			_, err := Inject(home, opencodeAdapter(), []model.SkillID{skill})
+			if err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+
+			wantPath := filepath.Join(home, ".config", "opencode", "skills", string(skill), "SKILL.md")
+			for _, entry := range skillregistry.List(project, home) {
+				if entry.Name == string(skill) && entry.Path == wantPath {
+					return
+				}
+			}
+
+			t.Fatalf("skill registry did not discover %q at %q", skill, wantPath)
+		})
+	}
+}
+
 func TestInjectSkillCreatorAndImproverInstallLocalStyleGuideReference(t *testing.T) {
 	home := t.TempDir()
 
@@ -454,5 +481,8 @@ func requiredBundledSkillIDs() []model.SkillID {
 		model.SkillJudgmentDay,
 		model.SkillSDDInit,
 		model.SkillImprover,
+		model.SkillRDDDefectWorkflow,
+		model.SkillSystemicIssueTriage,
+		model.SkillGentleAIBench,
 	}
 }

@@ -39,7 +39,6 @@ type Receipt struct {
 	PolicyHash         string           `json:"policy_hash"`
 	LedgerHash         string           `json:"ledger_hash"`
 	EvidenceHash       string           `json:"evidence_hash"`
-	JudgeProofHash     string           `json:"judge_proof_hash,omitempty"`
 	Release            *ReleaseEvidence `json:"release,omitempty"`
 	Counters           Counters         `json:"counters"`
 	RiskLevel          RiskLevel        `json:"risk_level,omitempty"`
@@ -91,7 +90,7 @@ func (transaction *Transaction) Receipt() (Receipt, error) {
 		InitialReviewTree: transaction.InitialReviewTree, FinalCandidateTree: transaction.FinalCandidateTree,
 		PathsDigest: transaction.PathsDigest, FixDeltaHash: transaction.FixDeltaHash,
 		PolicyHash: transaction.PolicyHash, LedgerHash: ledgerHash, EvidenceHash: evidenceHash,
-		JudgeProofHash: transaction.JudgeProofHash, Release: cloneReleaseEvidence(transaction.Release),
+		Release:  cloneReleaseEvidence(transaction.Release),
 		Counters: transaction.Counters, RiskLevel: transaction.RiskLevel, SelectedLenses: append([]string(nil), transaction.SelectedLenses...),
 		LensResults: append([]LensResult(nil), transaction.LensResults...), TerminalState: terminal,
 	}
@@ -276,6 +275,18 @@ func RecoverySelfDerivedInputs(predecessor State) []string {
 	}
 }
 
+// baseAdvanceStatusAllowedForGate keeps evaluation and persisted contexts aligned.
+func baseAdvanceStatusAllowedForGate(gate GateKind, status string) bool {
+	switch gate {
+	case GatePrePR:
+		return status == baseAdvanceCompatibleStatus || status == baseAdvanceCompatibleLocalStatus || status == currentChangesBoundaryCompatibleStatus
+	case GatePreCommit, GatePrePush:
+		return status == baseAdvanceCompatibleLocalStatus
+	default:
+		return false
+	}
+}
+
 func validateDerivedGate(receipt Receipt, context GateContext) GateResult {
 	if err := validateReceiptStructure(receipt); err != nil {
 		return GateInvalidated
@@ -286,7 +297,7 @@ func validateDerivedGate(receipt Receipt, context GateContext) GateResult {
 	if receipt.TerminalState != TerminalApproved {
 		return GateInvalidated
 	}
-	compatibleAdvance := context.Gate == GatePrePR && context.BaseAdvance != nil && context.BaseAdvance.Compatible
+	compatibleAdvance := context.BaseAdvance != nil && context.BaseAdvance.Compatible && baseAdvanceStatusAllowedForGate(context.Gate, context.BaseAdvance.Status)
 	if receipt.LineageID != context.LineageID || receipt.Generation != context.Generation {
 		return GateScopeChanged
 	}
@@ -345,14 +356,14 @@ func ParseGateContext(payload []byte) (GateContext, error) {
 		}
 	}
 	if context.BaseAdvance != nil {
-		if context.Gate != GatePrePR || !context.BaseAdvance.valid() {
+		if !context.BaseAdvance.valid() || !baseAdvanceStatusAllowedForGate(context.Gate, context.BaseAdvance.Status) {
 			return GateContext{}, errors.New("gate context contains invalid compatible base advance evidence")
 		}
 	}
 	if context.PrePRBoundary != nil {
 		boundary := context.PrePRBoundary
 		unavailable := boundary.Commit == "" && context.Denial != nil && context.Denial.Stage == "boundary-selection" && context.Denial.Code == "unavailable"
-		if context.Gate != GatePrePR || (!validGitTree(boundary.Commit) && !unavailable) || strings.TrimSpace(boundary.Selector) == "" ||
+		if context.Gate != GatePrePR || (unavailable && boundary.MergeBase != "") || ((!validGitTree(boundary.Commit) || !validGitTree(boundary.MergeBase)) && !unavailable) || strings.TrimSpace(boundary.Selector) == "" ||
 			(boundary.Source != PrePRBoundaryExplicit && boundary.Source != PrePRBoundaryPublicationDefault) {
 			return GateContext{}, errors.New("gate context contains invalid pre-PR boundary evidence")
 		}
@@ -393,7 +404,7 @@ func validateReceiptStructure(receipt Receipt) error {
 	if receipt.Generation < 1 {
 		return errors.New("receipt requires a positive generation")
 	}
-	if receipt.Mode != ModeOrdinary4R && receipt.Mode != ModeOrdinaryBounded && receipt.Mode != ModeJudgmentDay {
+	if receipt.Mode != ModeOrdinary4R && receipt.Mode != ModeOrdinaryBounded {
 		return fmt.Errorf("invalid receipt mode %q", receipt.Mode)
 	}
 	for _, tree := range []string{receipt.BaseTree, receipt.InitialReviewTree, receipt.FinalCandidateTree} {
@@ -427,20 +438,10 @@ func validateReceiptStructure(receipt Receipt) error {
 			if len(receipt.LensResults) != len(receipt.SelectedLenses) || receipt.Counters.FixBatches != receipt.Counters.ScopedFixValidations {
 				return errors.New("approved ordinary bounded receipt has incomplete lenses or incoherent fix counters")
 			}
-		case ModeJudgmentDay:
-			if receipt.Counters.FixRounds != receipt.Counters.ScopedRejudgments {
-				return errors.New("approved judgment-day receipt has incoherent fix/re-judgment counters")
-			}
-			if receipt.Counters.JudgeExecutions != 2 || !validSHA256(receipt.JudgeProofHash) {
-				return errors.New("approved judgment-day receipt requires two immutable judge proofs")
-			}
 		}
 	case TerminalEscalated:
 	default:
 		return fmt.Errorf("invalid terminal_state %q", receipt.TerminalState)
-	}
-	if isOrdinaryMode(receipt.Mode) && receipt.JudgeProofHash != "" {
-		return errors.New("ordinary receipt cannot contain Judgment Day proof")
 	}
 	if receipt.Release != nil {
 		if err := validateReleaseEvidence(*receipt.Release); err != nil {

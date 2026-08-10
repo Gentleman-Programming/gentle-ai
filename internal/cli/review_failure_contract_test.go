@@ -238,10 +238,34 @@ func TestReviewIntegrationOperationRegistryOwnsPublishedAndFailurePolicy(t *test
 			t.Fatalf("duplicate operation name %q", metadata.Operation)
 		}
 		commands[metadata.Command], operations[metadata.Operation] = struct{}{}, struct{}{}
-		byCommand, commandOK := reviewIntegrationOperationByCommand(metadata.Command)
 		byName, nameOK := reviewIntegrationOperationByName(metadata.Operation)
-		if !commandOK || !nameOK || byCommand.Operation != metadata.Operation || byName.Command != metadata.Command ||
-			!validReviewIntegrationFailureOperation(metadata.Operation) || reviewLockOperationLabel(metadata.Operation) != metadata.Label {
+		if !nameOK || byName.Command != metadata.Command || reviewLockOperationLabel(metadata.Operation) != metadata.Label {
+			t.Fatalf("operation metadata does not drive every policy lookup: %#v", metadata)
+		}
+		byCommand, commandOK := reviewIntegrationOperationByCommand(metadata.Command)
+		if !metadata.Negotiated {
+			// A non-negotiated row exists for exactly one reason: to own the
+			// runnable CLI verb for an operation the status schemas publish as
+			// an execute transition. It must stay out of every negotiated
+			// surface -- the capabilities `operations` array and the failure
+			// envelope's `operation` enum are both published contracts with a
+			// closed vocabulary and a pinned length -- and it must not carry
+			// negotiated flag metadata nothing consumes and nothing verifies,
+			// because unverified metadata rots into a confident lie.
+			if commandOK {
+				t.Fatalf("non-negotiated operation %q is routed as a negotiated command", metadata.Operation)
+			}
+			if validReviewIntegrationFailureOperation(metadata.Operation) {
+				t.Fatalf("non-negotiated operation %q widened the published failure operation enum", metadata.Operation)
+			}
+			if len(metadata.ValueFlags) != 0 || len(metadata.BoolFlags) != 0 || len(metadata.IntFlags) != 0 ||
+				metadata.MutatesAuthority || metadata.JoinOnTimeout || metadata.TimeoutRetryable || metadata.ReadOnlyFlag != "" {
+				t.Fatalf("non-negotiated operation %q carries negotiated policy metadata nothing consumes: %#v", metadata.Operation, metadata)
+			}
+			continue
+		}
+		if !commandOK || byCommand.Operation != metadata.Operation ||
+			!validReviewIntegrationFailureOperation(metadata.Operation) {
 			t.Fatalf("operation metadata does not drive every policy lookup: %#v", metadata)
 		}
 		shape := reviewIntegrationOperationFlagShape(metadata.Operation)
@@ -549,8 +573,8 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 		code      string
 		causeText string
 	}{
-		{name: "timeout", err: &reviewtransaction.GitCommandTimeoutError{Timeout: 15 * time.Second}, code: "git_command_timeout"},
-		{name: "exit", err: &reviewtransaction.GitCommandError{ExitCode: 128}, code: "git_command_failed"},
+		{name: "timeout", err: &reviewtransaction.GitCommandTimeoutError{Timeout: 15 * time.Second}, code: "git_command_timeout", causeText: "15s"},
+		{name: "exit", err: &reviewtransaction.GitCommandError{Args: []string{"write-tree"}, ExitCode: 128, Output: "fatal: not a git repository"}, code: "git_command_failed", causeText: "git write-tree failed with exit code 128: fatal: not a git repository"},
 		{
 			name: "process control",
 			err: &reviewtransaction.GitProcessControlError{
@@ -566,7 +590,11 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 				failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "stop" {
 				t.Fatalf("git failure = %#v", failure)
 			}
-			if tt.causeText != "" && !strings.Contains(failure.Message, tt.causeText) {
+			if tt.causeText != "" && !strings.Contains(failure.Cause, tt.causeText) {
+				t.Fatalf("git failure cause field missing diagnostics %q: %q", tt.causeText, failure.Cause)
+			}
+			if tt.code == "git_command_failed" && tt.name == "process control" && !strings.Contains(failure.Message, tt.causeText) {
+				// Process control includes causeText in Message for immediate diagnosis
 				t.Fatalf("git failure message masks cause: %q", failure.Message)
 			}
 		})
@@ -629,7 +657,6 @@ func TestNegotiatedReadOnlyCatchAllStaysContentFreeAndNeverAbsorbsProcessControl
 	if failure.Message != "The negotiated read-only review operation failed safely." {
 		t.Fatalf("read-only catch-all message is not content-free: %q", failure.Message)
 	}
-
 	control := fmt.Errorf("inventory review authority: %w", &reviewtransaction.GitProcessControlError{
 		Args: []string{"status", "--porcelain=v2"}, Cause: errors.New("NtResumeProcess status 0xC0000022"),
 	})
@@ -689,16 +716,25 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
 	oldTimeout := reviewFacadeOperationTimeout
 	// The aggregate budget must comfortably exceed the per-git-command timeout
-	// (localGitCommandTimeout, 15s) plus the slowest-runner overhead of reaching
-	// the committed begin-fix transition. The injected helper stalls longer than
-	// the per-git-command timeout (see reviewGitProcessHelperExitCode), so the
+	// pinned below plus the slowest-runner overhead of reaching the committed
+	// begin-fix transition. The injected helper stalls longer than the
+	// per-git-command timeout (see reviewGitProcessHelperExitCode), so the
 	// per-git-command timeout deterministically fires first and is classified as
 	// git_command_timeout in the native_committed phase. A tight 1s budget raced
 	// the aggregate operation_timeout ahead of that sub-operation timeout on slow
 	// Windows runners; 25s removes the race without slowing the exit, which is
-	// bounded by the 15s per-git-command timeout regardless of this budget.
+	// bounded by the pinned 15s per-git-command timeout regardless of this
+	// budget.
 	reviewFacadeOperationTimeout = 25 * time.Second
 	t.Cleanup(func() { reviewFacadeOperationTimeout = oldTimeout })
+	// The production per-command budget is a generous hang guard (issue #2483)
+	// that would let the stalled helper outlive the 25s aggregate budget and
+	// flip the classification to operation_timeout. Pin the historical 15s
+	// ordering per-command < aggregate < helper stall so the classification
+	// stays deterministic.
+	oldGitBudget := reviewtransaction.LocalGitCommandTimeout
+	reviewtransaction.LocalGitCommandTimeout = 15 * time.Second
+	t.Cleanup(func() { reviewtransaction.LocalGitCommandTimeout = oldGitBudget })
 	oldTransitionHook := reviewFacadeCommittedTransitionHook
 	reviewFacadeCommittedTransitionHook = func(ctx context.Context, hookRepo, operation, _ string) error {
 		if operation != "review/begin-fix" {
@@ -708,7 +744,12 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 			return err
 		}
 		defer func() { _ = os.Setenv("PATH", oldPath) }()
-		_, err := (reviewtransaction.SnapshotBuilder{Repo: hookRepo}).HasDirtyTrackedChanges(ctx)
+		// Bound only the injected post-commit probe. The committed transition is
+		// already durable, so its Git timeout keeps the required status-only shape
+		// without waiting for the production 15s per-command timeout.
+		hookCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		_, err := (reviewtransaction.SnapshotBuilder{Repo: hookRepo}).HasDirtyTrackedChanges(hookCtx)
 		return err
 	}
 	t.Cleanup(func() { reviewFacadeCommittedTransitionHook = oldTransitionHook })
@@ -803,8 +844,8 @@ func reviewGitProcessHelperExitCode() (int, bool) {
 		return 0, false
 	}
 	if payload, err := os.ReadFile(os.Getenv(reviewGitHelperStatePathEnv)); err == nil && strings.Contains(string(payload), `"proposed_correction_lines":`) {
-		// Stall well beyond the per-git-command timeout (localGitCommandTimeout,
-		// 15s) so that the bounded Git subprocess is cut by that per-command
+		// Stall well beyond the per-git-command timeout the parent test pins to
+		// 15s so that the bounded Git subprocess is cut by that per-command
 		// timeout rather than completing on its own. This keeps the post-commit
 		// failure classified as git_command_timeout deterministically instead of
 		// racing the aggregate operation budget on slow runners.
@@ -1117,4 +1158,46 @@ func decodeReviewIntegrationFailure(t *testing.T, payload []byte) ReviewIntegrat
 		t.Fatalf("validate failure envelope: %v\n%s", err, payload)
 	}
 	return failure
+}
+
+// TestNewReviewIntegrationFailureCauseIsUniversal is root 8's structural fix
+// (#2471): Cause used to be per-branch opt-in, and 17 of 25 return sites
+// forgot it, so a caller read a constant Message while the native reason sat
+// in the discarded typed error. Cause is now projected once at construction,
+// so a branch cannot forget it; this test pins two branches that carried no
+// cause before, plus the one branch whose contract REQUIRES staying
+// content-free.
+func TestNewReviewIntegrationFailureCauseIsUniversal(t *testing.T) {
+	// A branch matched via errors.Is: contention keeps its typed code and now
+	// carries the wrapped operational context too.
+	contention := fmt.Errorf("acquire compact authority for lineage %q: %w", "cause-universal", reviewtransaction.ErrStoreLockContended)
+	failure := newReviewIntegrationFailure("review.start", nil, contention)
+	if failure.Code != "authority_lock_contention" {
+		t.Fatalf("contention envelope code = %q", failure.Code)
+	}
+	if !strings.Contains(failure.Cause, "cause-universal") {
+		t.Fatalf("contention envelope discarded the typed cause: %#v", failure)
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatalf("contention envelope with cause validation = %v", err)
+	}
+
+	// The legacy read-only refusal: constant Message, and before this change
+	// no Cause at all, so the lineage the error names never reached the
+	// caller's machine-readable envelope.
+	legacy := &reviewtransaction.LegacyReadOnlyError{Operation: "review/start", LineageID: "cause-universal-legacy"}
+	failure = newReviewIntegrationFailure("review.start", nil, legacy)
+	if failure.Code != reviewtransaction.LegacyReadOnlyErrorCode {
+		t.Fatalf("legacy envelope code = %q", failure.Code)
+	}
+	if !strings.Contains(failure.Cause, "cause-universal-legacy") {
+		t.Fatalf("legacy envelope discarded the typed cause: %#v", failure)
+	}
+
+	// The read-only catch-all is the ONE branch whose contract is
+	// content-free retry; it must clear the universal default, not inherit it.
+	readOnly := newReviewIntegrationFailure("review.status", nil, errors.New("internal detail that must not leak"))
+	if readOnly.Code != "operation_failed" || readOnly.Cause != "" {
+		t.Fatalf("read-only catch-all = %#v, want content-free", readOnly)
+	}
 }

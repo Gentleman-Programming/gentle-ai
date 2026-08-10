@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/status-v5.schema.json",
+  "title": "Gentle AI Review Integration native Git target status v5",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "contract", "operation", "applicability", "receipt", "action", "replayability",
+    "target_identity", "projection", "repair", "candidates"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.review-integration.status/v5"},
+    "contract": {"const": "gentle-ai.review-integration/v2"},
+    "operation": {"const": "review.status"},
+    "applicability": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/applicability"},
+    "authority": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/authority"},
+    "receipt": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/receipt"},
+    "action": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/action"},
+    "action_disposition": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/action_disposition"},
+    "replayability": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/replayability"},
+    "frozen": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/frozen"},
+    "target_identity": {"$ref": "#/$defs/sha256"},
+    "authority_target_identity": {"$ref": "#/$defs/sha256"},
+    "projection": {"$ref": "../../v1/schemas/projection.schema.json"},
+    "repair": {"$ref": "../../v1/schemas/authority-repair-assessment.schema.json"},
+    "candidates": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/candidates"},
+    "reconciliation": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/reconciliation"},
+    "eligibility": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/action_eligibility"},
+    "forecast": {"$ref": "#/$defs/forecast"},
+    "next_transition": {"$ref": "#/$defs/next_transition"},
+    "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"},
+    "final_verification_retry": {"$ref": "../../v1/schemas/status-v2.schema.json#/properties/final_verification_retry"}
+  },
+  "dependentRequired": {"forecast": ["next_transition"]},
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "forecast": {
+      "type": "object", "additionalProperties": false, "required": ["horizon", "steps"],
+      "properties": {
+        "horizon": {"enum": ["partial", "terminal"]},
+        "steps": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["step", "kind", "reason_code", "description"], "properties": {"step": {"const": 1}, "kind": {"enum": ["execute", "collect", "stop"]}, "reason_code": {"type": "string", "pattern": "^[a-z0-9_]+$"}, "description": {"type": "string", "minLength": 1}}}}
+      },
+      "allOf": [{"if": {"properties": {"steps": {"contains": {"properties": {"kind": {"const": "stop"}}, "required": ["kind"]}}}}, "then": {"properties": {"horizon": {"const": "terminal"}}}, "else": {"properties": {"horizon": {"const": "partial"}}}}]
+    },
+    "next_transition": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "reason_code"],
+      "properties": {
+        "kind": {"enum": ["execute", "collect", "stop"]},
+        "reason_code": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "execute": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_execution"},
+        "collect": {"$ref": "#/$defs/transition_collection"},
+        "correction_request": {"$ref": "../../v1/schemas/correction-plan-request.schema.json"}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "execute"}}, "required": ["kind"]}, "then": {"required": ["execute"], "not": {"required": ["collect"]}}},
+        {"if": {"properties": {"kind": {"const": "collect"}}, "required": ["kind"]}, "then": {"required": ["collect"], "not": {"required": ["execute"]}}},
+        {"if": {"properties": {"kind": {"const": "stop"}}, "required": ["kind"]}, "then": {"not": {"anyOf": [{"required": ["execute"]}, {"required": ["collect"]}]}}},
+        {"if": {"properties": {"reason_code": {"enum": ["correction_plan_required", "corrected_candidate_unavailable"]}}, "required": ["reason_code"]}, "then": {"required": ["correction_request"]}, "else": {"not": {"required": ["correction_request"]}}},
+        {"if": {"properties": {"reason_code": {"const": "correction_plan_required"}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "external.plan_correction"}}, "required": ["capture_operation", "submission"]}}}}}}},
+        {"if": {"properties": {"reason_code": {"const": "targeted_validation_required"}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "external.run_targeted_validation"}}, "required": ["capture_operation", "submission"]}}}}}}},
+        {"if": {"properties": {"reason_code": {"enum": ["verification_evidence_required", "correction_repository_verification_required"]}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "review.capture-evidence"}}, "required": ["capture_operation", "submission"]}}}}}}}
+      ]
+    },
+    "transition_collection": {
+      "type": "object", "additionalProperties": false, "required": ["inputs"],
+      "properties": {"inputs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/transition_input"}}}
+    },
+    "transition_input": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "schema", "capture_operation", "arguments"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "schema": {"type": "string", "minLength": 1},
+        "capture_operation": {"type": "string", "minLength": 1},
+        "arguments": {"type": "array", "minItems": 1, "items": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_argument"}},
+        "submission": {"oneOf": [{"$ref": "#/$defs/submission_descriptor"}, {"$ref": "#/$defs/capture_evidence_submission_descriptor"}]},
+        "artifact_subject": {"$ref": "artifact-subject.schema.json"},
+        "base_tree": {"$ref": "#/$defs/git_tree"},
+        "candidate_tree": {"$ref": "#/$defs/git_tree"},
+        "changed_path_manifest": {"type": "array", "uniqueItems": true, "items": {"$ref": "start.schema.json#/$defs/changed_path"}},
+        "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"}
+      },
+      "allOf": [
+        {"if": {"properties": {"capture_operation": {"const": "external.run_targeted_validation"}}, "required": ["capture_operation"]}, "then": {"required": ["validation_request", "submission"], "properties": {"schema": {"const": "gentle-ai.review-targeted-validation-request/v1"}}}, "else": {"not": {"required": ["validation_request"]}}},
+        {"if": {"properties": {"capture_operation": {"const": "external.plan_correction"}}, "required": ["capture_operation"]}, "then": {"required": ["submission"], "properties": {"schema": {"const": "gentle-ai.review-correction-plan/v1"}}}},
+        {"if": {"properties": {"capture_operation": {"const": "review.capture-evidence"}}, "required": ["capture_operation"]}, "then": {"required": ["submission"], "properties": {"schema": {"const": "https://gentle-ai.dev/schema/review/verification-evidence/v1"}, "submission": {"$ref": "#/$defs/capture_evidence_submission_descriptor"}}}},
+        {"if": {"properties": {"capture_operation": {"not": {"enum": ["external.plan_correction", "external.run_targeted_validation", "review.capture-evidence"]}}}, "required": ["capture_operation"]}, "then": {"not": {"required": ["submission"]}}},
+        {"if": {"properties": {"capture_operation": {"const": "review.capture-result"}}, "required": ["capture_operation"]}, "then": {"required": ["artifact_subject", "base_tree", "candidate_tree", "changed_path_manifest"], "properties": {"schema": {"const": "https://gentle-ai.dev/schema/review/reviewer/v1"}}}, "else": {"allOf": [{"not": {"required": ["artifact_subject"]}}, {"not": {"required": ["base_tree"]}}, {"not": {"required": ["candidate_tree"]}}, {"not": {"required": ["changed_path_manifest"]}}]}}
+      ]
+    },
+    "submission_descriptor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation_token", "argument_tokens", "value"],
+      "properties": {
+        "operation_token": {"const": "finalize"},
+        "argument_tokens": {"type": "array", "minItems": 7, "maxItems": 8, "items": {"type": "string", "minLength": 1, "pattern": "^--\\S+$"}},
+        "value": {"$ref": "#/$defs/submission_value"}
+      },
+      "allOf": [
+        {"if": {"properties": {"value": {"properties": {"slot": {"const": "correction_lines"}}, "required": ["slot"]}}, "required": ["value"]}, "then": {"properties": {"argument_tokens": {"minItems": 7, "maxItems": 7, "prefixItems": [{"const": "--contract=gentle-ai.review-integration/v2"}, {"pattern": "^--lineage=\\S+$"}, {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"}, {"pattern": "^--target=sha256:[0-9a-f]{64}$"}, {"pattern": "^--request-hash=sha256:[0-9a-f]{64}$"}, {"pattern": "^--repository-context=rctx1_[0-9a-f]{64}$"}, {"const": "--correction-lines={{value}}"}], "items": false}}}},
+        {"if": {"properties": {"value": {"properties": {"slot": {"const": "validation"}}, "required": ["slot"]}}, "required": ["value"]}, "then": {"properties": {"argument_tokens": {"minItems": 8, "maxItems": 8, "prefixItems": [{"const": "--contract=gentle-ai.review-integration/v2"}, {"pattern": "^--lineage=\\S+$"}, {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"}, {"pattern": "^--target=sha256:[0-9a-f]{64}$"}, {"pattern": "^--request-hash=sha256:[0-9a-f]{64}$"}, {"pattern": "^--repository-context=rctx1_[0-9a-f]{64}$"}, {"const": "--validation={{value}}"}, {"const": "--captured-evidence=true"}], "items": false}}}}
+      ]
+    },
+    "submission_value": {
+      "type": "object", "additionalProperties": false,
+      "required": ["slot", "domain", "substitution_location"],
+      "properties": {
+        "slot": {"enum": ["correction_lines", "validation"]},
+        "domain": {"type": "string", "minLength": 1},
+        "schema": {"type": "string", "minLength": 1},
+        "minimum": {"type": "integer", "minimum": 1, "maximum": 200},
+        "maximum": {"type": "integer", "minimum": 1, "maximum": 200},
+        "substitution_location": {"const": 6}
+      },
+      "allOf": [
+        {"if": {"properties": {"slot": {"const": "correction_lines"}}, "required": ["slot"]}, "then": {"required": ["minimum", "maximum"], "properties": {"domain": {"const": "positive_correction_lines"}}, "not": {"required": ["schema"]}}},
+        {"if": {"properties": {"slot": {"const": "validation"}}, "required": ["slot"]}, "then": {"required": ["schema"], "properties": {"domain": {"const": "artifact_path_or_stdin"}, "schema": {"const": "https://gentle-ai.dev/schema/review/validator/v1"}}, "not": {"anyOf": [{"required": ["minimum"]}, {"required": ["maximum"]}]}}}
+      ]
+    },
+    "capture_evidence_submission_descriptor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation_token", "argument_tokens", "values"],
+      "properties": {
+        "operation_token": {"const": "capture-evidence"},
+        "argument_tokens": {"type": "array", "minItems": 6, "maxItems": 6, "prefixItems": [{"pattern": "^--lineage=\\S+$"}, {"pattern": "^--expected-revision=sha256:[0-9a-f]{64}$"}, {"pattern": "^--target=sha256:[0-9a-f]{64}$"}, {"pattern": "^--repository-context=rctx1_[0-9a-f]{64}$"}, {"const": "--outcome={{outcome}}"}, {"const": "--input={{input}}"}], "items": false},
+        "values": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"$ref": "#/$defs/capture_evidence_outcome_value"}, {"$ref": "#/$defs/capture_evidence_input_value"}], "items": false}
+      }
+    },
+    "capture_evidence_outcome_value": {
+      "type": "object", "additionalProperties": false,
+      "required": ["slot", "domain", "allowed_values", "substitution_location"],
+      "properties": {
+        "slot": {"const": "outcome"},
+        "domain": {"const": "verification_outcome"},
+        "allowed_values": {"const": ["passed", "verification_failed", "procedural_tooling_failed"]},
+        "substitution_location": {"const": 4}
+      }
+    },
+    "capture_evidence_input_value": {
+      "type": "object", "additionalProperties": false,
+      "required": ["slot", "domain", "schema", "substitution_location"],
+      "properties": {
+        "slot": {"const": "input"},
+        "domain": {"const": "artifact_path_or_stdin"},
+        "schema": {"const": "https://gentle-ai.dev/schema/review/verification-evidence/v1"},
+        "substitution_location": {"const": 5}
+      }
+    },
+    "git_tree": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}
+  },
+  "allOf": [
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/0"},
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/1"},
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/2"},
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/3"},
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/4"},
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/5"},
+    {"$ref": "../../v1/schemas/status-v2.schema.json#/allOf/6"}
+  ]
+}

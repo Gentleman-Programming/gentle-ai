@@ -355,7 +355,14 @@ func TestCompactPostApplyPreservesExactCommittedApprovedTarget(t *testing.T) {
 	}
 }
 
-func TestCompactPostApplyRejectsUnboundUntrackedPathAfterCommit(t *testing.T) {
+// TestCompactPostApplyIgnoresUndeclaredUntrackedPathAfterCommit replaces the
+// test that demanded the opposite verdict. The gate used to deny whenever any
+// unignored untracked path was missing from the frozen intended set, which
+// only ever passed because START swept every such path into that set. #2394
+// stopped the sweep, so an undeclared file cannot enter the derived candidate,
+// cannot change its identity, and must not deny delivery either -- otherwise
+// one stray scratch file in the worktree would block every commit.
+func TestCompactPostApplyIgnoresUndeclaredUntrackedPathAfterCommit(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "approved candidate\n")
 	state := newCompactStartStateForTarget(t, repo, "compact-committed-extra-untracked", Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
@@ -365,24 +372,13 @@ func TestCompactPostApplyRejectsUnboundUntrackedPathAfterCommit(t *testing.T) {
 	writeSnapshotFile(t, repo, "correction-evidence.json", "{}\n")
 
 	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID})
-	if got.Result == GateAllow {
-		t.Fatalf("unbound untracked path = %#v", got)
+	if got.Result != GateAllow {
+		t.Fatalf("undeclared untracked path denied delivery = %#v", got)
 	}
-	if err := os.Remove(filepath.Join(repo, "correction-evidence.json")); err != nil {
-		t.Fatal(err)
-	}
-	verifyReport := filepath.Join(repo, "openspec", "changes", "thin", "verify-report.md")
-	if err := os.MkdirAll(filepath.Dir(verifyReport), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(verifyReport, []byte("# Verification\n\nPASS\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if lifecycle := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID}); lifecycle.Result != GateAllow {
-		t.Fatalf("post-review verify report = %#v", lifecycle)
+	if _, err := os.Stat(filepath.Join(repo, "correction-evidence.json")); err != nil {
+		t.Fatalf("fixture file is gone, so the assertion proved nothing: %v", err)
 	}
 }
-
 func TestCompactPostApplyExemptsExactChangeLocalReceiptMirror(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "approved candidate\n")
@@ -638,22 +634,44 @@ func TestCompactPreCommitGateRechecksStagedIntendedTarget(t *testing.T) {
 	}
 }
 
-func TestCompactGateFinalRecheckRejectsConcurrentUntrackedPath(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
-	state, _, receipt := approvedCompactCurrentChangesFixture(t, repo, "compact-untracked-recheck", []string{})
-	originalHook := finalGateAuthorizationHook
-	finalGateAuthorizationHook = func() {
-		writeSnapshotFile(t, repo, "late-evidence.json", "{}\n")
-	}
-	t.Cleanup(func() { finalGateAuthorizationHook = originalHook })
+// TestCompactGateFinalRecheckSeparatesDeclaredFromUndeclaredConcurrentPaths
+// keeps the TOCTOU property the previous version of this test proved, and
+// pins the #2394 boundary it now depends on: a file declared into the index
+// between derivation and authorization still invalidates the gate, while an
+// undeclared file appearing in the same window cannot, because it was never
+// part of the candidate to begin with.
+func TestCompactGateFinalRecheckSeparatesDeclaredFromUndeclaredConcurrentPaths(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		declare  bool
+		expected GateResult
+	}{
+		{name: "declared concurrent path invalidates", declare: true, expected: GateInvalidated},
+		{name: "undeclared concurrent path is not scope", expected: GateAllow},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
+			state, _, receipt := approvedCompactCurrentChangesFixture(t, repo, "compact-untracked-recheck", []string{})
+			originalHook := finalGateAuthorizationHook
+			finalGateAuthorizationHook = func() {
+				writeSnapshotFile(t, repo, "late-evidence.json", "{}\n")
+				if test.declare {
+					gitSnapshot(t, repo, "add", "--", "late-evidence.json")
+				}
+			}
+			t.Cleanup(func() { finalGateAuthorizationHook = originalHook })
 
-	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID})
-	if got.Result != GateInvalidated || !strings.Contains(got.Reason, "changed during final authorization") {
-		t.Fatalf("concurrent untracked path = %#v", got)
+			got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID})
+			if got.Result != test.expected {
+				t.Fatalf("concurrent path evaluation = %#v, want %q", got, test.expected)
+			}
+			if test.expected == GateInvalidated && !strings.Contains(got.Reason, "changed during final authorization") {
+				t.Fatalf("declared concurrent path reason = %q", got.Reason)
+			}
+		})
 	}
 }
-
 func TestCompactCommittedGateRechecksConcurrentDirtyTrackedTarget(t *testing.T) {
 	for _, gate := range []GateKind{GatePostApply, GatePreCommit} {
 		t.Run(string(gate), func(t *testing.T) {
@@ -1215,22 +1233,53 @@ func TestCompactCorrectedPreCommitBindsStagedIndexAndIgnoresWorkspace(t *testing
 }
 
 func TestCompactCorrectedCurrentChangesPrePushUsesFinalDeliveryBinding(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	branch := currentBranch(context.Background(), repo)
-	configurePublicationRemote(t, repo, branch)
-	gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
-	gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
-	state := correctedCompactTestStateWithIntended(t, repo, "compact-corrected-current-delivery", []string{})
-	receipt := persistCorrectedCompactFixture(t, repo, state)
-	gitSnapshot(t, repo, "add", "tracked.txt")
-	gitSnapshot(t, repo, "commit", "-m", "corrected delivery")
-	input := NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: "origin/" + branch}
-	if got := EvaluateCompactGate(context.Background(), repo, receipt, input); got.Result != GateAllow {
-		t.Fatalf("one-commit corrected delivery = %#v", got)
+	tests := []struct {
+		name      string
+		mutate    func(t *testing.T, repo string)
+		wantExact bool
+		wantAllow bool
+	}{
+		{name: "exact squashed delivery", wantExact: true, wantAllow: true},
+		{name: "wrong candidate", mutate: func(t *testing.T, repo string) {
+			writeSnapshotFile(t, repo, "tracked.txt", "wrong corrected candidate\n")
+		}},
+		{name: "path drift", mutate: func(t *testing.T, repo string) {
+			writeSnapshotFile(t, repo, "extra.txt", "outside reviewed scope\n")
+		}},
+		{name: "non-squashed delivery", mutate: func(t *testing.T, repo string) {
+			gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "unreviewed extra commit")
+		}},
 	}
-	gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "unreviewed extra commit")
-	if got := EvaluateCompactGate(context.Background(), repo, receipt, input); got.Result == GateAllow {
-		t.Fatalf("multi-commit current-changes delivery = %#v", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			branch := currentBranch(context.Background(), repo)
+			configurePublicationRemote(t, repo, branch)
+			gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+			gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+			state := correctedCompactTestStateWithIntended(t, repo, "compact-corrected-current-delivery-"+strings.ReplaceAll(tt.name, " ", "-"), []string{})
+			receipt := persistCorrectedCompactFixture(t, repo, state)
+			if tt.mutate != nil {
+				tt.mutate(t, repo)
+			}
+			gitSnapshot(t, repo, "add", "-A")
+			gitSnapshot(t, repo, "commit", "-m", "corrected delivery")
+			input := NativeGateRequestInput{Gate: GatePrePush, LineageID: state.LineageID, BaseRef: "origin/" + branch}
+			assessment, err := AssessCompactGateTarget(context.Background(), repo, state, input)
+			if tt.wantExact && (err != nil || assessment.Applicability != CompactGateTargetExact) {
+				t.Fatalf("delivery assessment = %#v, %v", assessment, err)
+			}
+			if !tt.wantExact && err == nil && assessment.Applicability == CompactGateTargetExact {
+				t.Fatalf("inexact delivery assessment = %#v", assessment)
+			}
+			got := EvaluateCompactGate(context.Background(), repo, receipt, input)
+			if tt.wantAllow && (got.Result != GateAllow || !got.Context.BaseRelationshipValid) {
+				t.Fatalf("exact squashed delivery = %#v", got)
+			}
+			if !tt.wantAllow && got.Result == GateAllow {
+				t.Fatalf("inexact delivery = %#v", got)
+			}
+		})
 	}
 }
 
@@ -1245,7 +1294,7 @@ func TestCompactDeliveryGateRejectsNonGenesisPath(t *testing.T) {
 	}
 }
 
-func TestCompactPrePRGateAllowsOnlyAttestedCompatibleSelectedBaseAdvance(t *testing.T) {
+func TestCompactPrePRGateAllowsContentCompatibleSelectedBaseAdvance(t *testing.T) {
 	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
 	state, receipt := approvedCompactPrePRFixture(t, fixture)
 	input := NativeGateRequestInput{
@@ -1257,8 +1306,8 @@ func TestCompactPrePRGateAllowsOnlyAttestedCompatibleSelectedBaseAdvance(t *test
 		t.Fatalf("attested compact compatible advance = %#v", allowed)
 	}
 	input.PrePRCIAttestation = ""
-	if denied := EvaluateCompactGate(context.Background(), fixture.repo, receipt, input); denied.Result == GateAllow {
-		t.Fatalf("unattested compact compatible advance = %#v", denied)
+	if contentOnly := EvaluateCompactGate(context.Background(), fixture.repo, receipt, input); contentOnly.Result != GateAllow || contentOnly.Context.BaseAdvance == nil || contentOnly.Context.BaseAdvance.Status != baseAdvanceCompatibleLocalStatus {
+		t.Fatalf("content-only compact compatible advance = %#v", contentOnly)
 	}
 }
 

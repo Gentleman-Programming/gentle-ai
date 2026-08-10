@@ -101,7 +101,7 @@ func deriveCompactRecoveryBinding(ctx context.Context, repo string, leaf Compact
 		genesis = append(genesis, member.State.GenesisPaths)
 		fixDeltas = append(fixDeltas, member.State.FixDeltaHash)
 	}
-	union, err := compactPrePRPathUnion(genesis...)
+	union, err := pathUnion(genesis...)
 	if err != nil {
 		return compactRecoveryBinding{}, false, err
 	}
@@ -161,7 +161,7 @@ func verifyCompactRecoveryDelivery(ctx context.Context, repo string, binding com
 	if baseTree != binding.BaseTree {
 		return errors.New("publication base does not carry the composed recovery base tree")
 	}
-	commits, err := compactPrePRLinearCommits(ctx, repo, baseCommit, headCommit)
+	commits, err := linearCommitsBetween(ctx, repo, baseCommit, headCommit)
 	if err != nil {
 		return err
 	}
@@ -203,7 +203,7 @@ func verifyCompactRecoveryDelivery(ctx context.Context, repo string, binding com
 			}
 			touched = append(touched, paths...)
 		}
-		touched, err = compactPrePRPathUnion(touched)
+		touched, err = pathUnion(touched)
 		if err != nil || pathsAreSubset(touched, member.State.GenesisPaths) != nil {
 			return errors.New("publication segment exceeds the recovery member's immutable genesis paths")
 		}
@@ -220,7 +220,7 @@ func verifyCompactRecoveryDelivery(ctx context.Context, repo string, binding com
 	return nil
 }
 
-func verifyCompactOverlappingRecoveryMember(ctx context.Context, builder SnapshotBuilder, commits []compactPrePRChainCommitProof, finalIndex int, member CompactState) error {
+func verifyCompactOverlappingRecoveryMember(ctx context.Context, builder SnapshotBuilder, commits []compactLinearCommitProof, finalIndex int, member CompactState) error {
 	boundary := -1
 	for index := 0; index <= finalIndex; index++ {
 		if commits[index].ParentTree != member.InitialSnapshot.BaseTree {
@@ -242,7 +242,7 @@ func verifyCompactOverlappingRecoveryMember(ctx context.Context, builder Snapsho
 		}
 		touched = append(touched, paths...)
 	}
-	touched, err := compactPrePRPathUnion(touched)
+	touched, err := pathUnion(touched)
 	if err != nil || pathsAreSubset(touched, member.GenesisPaths) != nil {
 		return errors.New("overlapping recovery suffix exceeds the member's immutable genesis paths")
 	}
@@ -283,7 +283,7 @@ func deriveCompactRecoveryAdvanceCompatibility(ctx context.Context, repo string,
 		BaseTree: binding.BaseTree, FinalCandidateTree: snapshot.CandidateTree,
 		PathsDigest: frozen.PathsDigest,
 	}
-	proof, err := deriveBaseAdvanceCompatibility(ctx, repo, synthetic, request, snapshot, refs, preimages)
+	proof, err := deriveBaseAdvanceCompatibility(ctx, repo, synthetic, request, snapshot, refs, preimages, true)
 	if err != nil {
 		return BaseAdvanceCompatibility{}, err
 	}

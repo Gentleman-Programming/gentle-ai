@@ -360,7 +360,7 @@ A staged projection combined with an explicit base ref MUST be refused with a ty
 
 ### Requirement: Terminal receipt
 
-Only `approved | escalated` are terminal transaction states. An approved receipt MUST bind `lineage_id`, mode, generation, base tree, `initial_review_tree`, `final_candidate_tree`, `paths_digest`, `fix_delta_hash`, policy hash, ledger hash, evidence hash, mode-specific counters, judge proof where applicable, and terminal state. A release-bound receipt MUST additionally bind immutable release tree, configuration hash, generated-artifact hash, provenance/signing hash, publication-boundary hash and sealed state, plus evidence-freshness hash and current state.
+Only `approved | escalated` are terminal transaction states. An approved receipt MUST bind `lineage_id`, mode, generation, base tree, `initial_review_tree`, `final_candidate_tree`, `paths_digest`, `fix_delta_hash`, policy hash, ledger hash, evidence hash, counters, and terminal state. A release-bound receipt MUST additionally bind immutable release tree, configuration hash, generated-artifact hash, provenance/signing hash, publication-boundary hash and sealed state, plus evidence-freshness hash and current state.
 
 First publication attempted from an empty-base receipt MUST be refused with a typed error that names the proven in-product escape verbatim — commit an authorized empty root, then run committed base-diff review — rather than failing silently or with a generic error.
 

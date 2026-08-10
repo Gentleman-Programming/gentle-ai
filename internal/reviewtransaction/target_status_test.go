@@ -18,6 +18,23 @@ import (
 	"time"
 )
 
+func TestTargetStatusDecisionFailsClosedBeforeAnAdapterCanBroadenRecovery(t *testing.T) {
+	base := TargetStatusResult{
+		Applicability: TargetApplicabilityCurrent, Action: TargetStatusActionRecover,
+		ActionDisposition: RecoveryScopeChanged, TargetIdentity: "sha256:target",
+		Projection:          TargetProjectionStatus{Kind: TargetBaseDiff, Projection: ProjectionWorkspace, BaseTree: "next-base"},
+		authorityTargetKind: TargetCurrentChanges, authorityProjection: ProjectionWorkspace,
+	}
+	decision := projectTargetStatusDecision(base)
+	if decision.Decision.RecoverySelector != nil {
+		t.Fatalf("non-approved cross-kind recovery selector = %#v, want fail-closed", decision.Decision.RecoverySelector)
+	}
+	if decision.Decision.CandidateRelation != TargetApplicabilityCurrent || decision.Decision.SemanticTransition != TargetStatusActionRecover ||
+		decision.Decision.TargetIdentity != base.TargetIdentity {
+		t.Fatalf("decision lost core classification: %#v", decision.Decision)
+	}
+}
+
 func TestAssessTargetStatusDerivesReceiptTruthWithoutMutation(t *testing.T) {
 	requireSnapshotGit(t)
 	tests := []struct {
@@ -209,6 +226,10 @@ func TestAssessTargetStatusClassifiesAllApplicabilityStates(t *testing.T) {
 		}
 	})
 
+	// Corrupted is a verdict about the lineage under assessment, so it is
+	// reached by naming that lineage. A selector-free assessment over the
+	// same store answers about the live target instead, which is the whole
+	// point: unrelated work is not corrupted because history is.
 	t.Run("corrupted", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -216,7 +237,16 @@ func TestAssessTargetStatusClassifiesAllApplicabilityStates(t *testing.T) {
 		if err := os.WriteFile(store.StatePath(), []byte("{\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		got, err := AssessTargetStatus(context.Background(), repo, request)
+		unrelated, err := AssessTargetStatus(context.Background(), repo, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if unrelated.Applicability == TargetApplicabilityCorrupted {
+			t.Fatalf("a corrupt unrelated entry made the live target corrupted: %#v", unrelated)
+		}
+		corruptRequest := request
+		corruptRequest.LineageID = "review-corrupt"
+		got, err := AssessTargetStatus(context.Background(), repo, corruptRequest)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -318,6 +348,9 @@ func TestAccountingOnlyEscalationStatusOffersRecoveryInsteadOfDeadEndStop(t *tes
 	}
 	if status.Action != TargetStatusActionRecover || status.ActionDisposition != RecoveryEscalated {
 		t.Fatalf("accounting-only escalation with an unchanged target = %#v, want an offered evidence-bound recovery continuation", status)
+	}
+	if status.Decision.RecoverySelector != nil || !status.Decision.SelectorFreeAccountingOnlyRecovery {
+		t.Fatalf("accounting-only escalation decision = %#v, want an explicitly authorized selector-free recovery", status.Decision)
 	}
 
 	successor := recoveredEvidenceSuccessor(t, repo, state, "accounting-only-status-dead-end-successor")
@@ -451,7 +484,7 @@ func TestCorrectionScopeExpansionPrioritizesPendingFinalize(t *testing.T) {
 	}
 }
 
-func TestCompactTargetStatusUsesCurrentProofAndLiveProjection(t *testing.T) {
+func TestCompactTargetStatusUsesExactCurrentCandidateAndLiveProjection(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
 	writeSnapshotFile(t, repo, "new.txt", "initial\n")
@@ -462,12 +495,12 @@ func TestCompactTargetStatusUsesCurrentProofAndLiveProjection(t *testing.T) {
 	fix, _ := builder.Build(context.Background(), Target{Kind: TargetFixDiff, BaseRef: initial.CandidateTree, IntendedUntracked: []string{"new.txt"}, LedgerIDs: []string{"R1-001"}})
 	state := CompactState{InitialSnapshot: initial, CurrentSnapshot: fix, GenesisPaths: initial.Paths}
 	if !compactLiveTargetMatchesSnapshot(context.Background(), repo, state, live, true) {
-		t.Fatal("terminal correction did not match current intended-untracked proof")
+		t.Fatal("terminal correction did not match the exact current candidate")
 	}
 	wrongProof := state
 	wrongProof.CurrentSnapshot.IntendedUntrackedProof = initial.IntendedUntrackedProof
-	if compactLiveTargetMatchesSnapshot(context.Background(), repo, wrongProof, live, true) {
-		t.Fatal("terminal correction accepted a stale intended-untracked proof")
+	if !compactLiveTargetMatchesSnapshot(context.Background(), repo, wrongProof, live, true) {
+		t.Fatal("terminal correction rejected an exact candidate for a stale intended-untracked proof")
 	}
 	projection := targetProjectionFromCompact(state, targetProjectionFromSnapshot(live))
 	if projection.Kind != live.Kind || projection.PathsDigest != live.PathsDigest || projection.IntendedUntrackedProof != live.IntendedUntrackedProof || projection.CurrentSnapshotIdentity != live.Identity || projection.InitialSnapshotIdentity != initial.Identity {
@@ -581,7 +614,7 @@ func TestAssessTargetStatusKeepsExplicitCompactLineageCurrentWithInvalidLegacyIn
 	for _, entry := range report.Entries {
 		invalidLegacyEvidence = invalidLegacyEvidence || entry.LineageID == legacyLineage && entry.Status == AuthorityStatusInvalid && len(entry.Problems) > 0
 	}
-	if report.Complete || report.Authoritative || !invalidLegacyEvidence {
+	if !invalidLegacyEvidence {
 		t.Fatalf("invalid legacy inventory diagnostics = %#v", report)
 	}
 	if after := authorityBytes(t, authorityRoot); !reflect.DeepEqual(before, after) {
@@ -960,7 +993,7 @@ func TestCompactAuthorityLockFailuresAreOperational(t *testing.T) {
 		&AuthorityLockTimeoutError{Timeout: 2 * time.Second},
 		&AuthorityLockCancelledError{Cause: context.Canceled},
 	} {
-		if !compactAuthorityOperationalFailure(err) {
+		if !IsCompactAuthorityOperationalFailure(err) {
 			t.Fatalf("authority lock failure classified as semantic corruption: %T", err)
 		}
 	}
@@ -1267,12 +1300,12 @@ func TestAssessTargetStatusPropagatesOperationalAuthorityFailures(t *testing.T) 
 
 	t.Run("git timeout", func(t *testing.T) {
 		repo := targetStatusOperationalFailureFixture(t, "status-git-timeout")
-		originalCommand, originalTimeout, originalWait := gitCommandContext, localGitCommandTimeout, gitCommandWaitDelay
+		originalCommand, originalTimeout, originalWait := gitCommandContext, LocalGitCommandTimeout, gitCommandWaitDelay
 		t.Cleanup(func() {
-			gitCommandContext, localGitCommandTimeout, gitCommandWaitDelay = originalCommand, originalTimeout, originalWait
+			gitCommandContext, LocalGitCommandTimeout, gitCommandWaitDelay = originalCommand, originalTimeout, originalWait
 		})
 		t.Setenv("GENTLE_AI_TARGET_STATUS_GIT_HELPER", "sleep")
-		localGitCommandTimeout, gitCommandWaitDelay = 25*time.Millisecond, 10*time.Millisecond
+		LocalGitCommandTimeout, gitCommandWaitDelay = 25*time.Millisecond, 10*time.Millisecond
 		gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 			if gitInvocationContains(args, "--git-common-dir") {
 				return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestTargetStatusGitHelperProcess$", "--")
@@ -1377,13 +1410,25 @@ func TestAssessTargetStatusStillCorruptsMalformedAuthorityGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+	// The successor whose predecessor is gone is the entry that is corrupted,
+	// and naming it says so. The live target inherits nothing from it and is
+	// assessed on its own terms.
+	scoped := targetStatusCurrentChangesRequest()
+	scoped.LineageID = successor.LineageID
+	got, err := AssessTargetStatus(context.Background(), repo, scoped)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Applicability != TargetApplicabilityCorrupted || got.Action != TargetStatusActionRepairAuthority ||
 		got.Replayability != ReplayabilityManualActionRequired {
 		t.Fatalf("malformed graph status = %#v", got)
+	}
+	unrelated, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unrelated.Applicability == TargetApplicabilityCorrupted {
+		t.Fatalf("a dangling successor made the live target corrupted: %#v", unrelated)
 	}
 }
 

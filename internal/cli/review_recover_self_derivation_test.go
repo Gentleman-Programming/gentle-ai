@@ -18,6 +18,7 @@ import (
 func invalidatedRecoverySelfDerivationPredecessor(t *testing.T, lineage string) (string, reviewtransaction.CompactRecord) {
 	t.Helper()
 	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/predecessor.md", "# predecessor\n\nplain prose, no executable content.\n", 0o644)
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -180,6 +181,7 @@ func TestReviewRecoverSelfDerivationCorruptedAuthorityStillRefuses(t *testing.T)
 func TestReviewRecoverSelfDerivationActiveAttemptNeverAutoResets(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	lineage := "self-derive-active-attempt"
+	writeReviewStartCandidate(t, repo, "docs/active-attempt.md", "# active attempt\n\nplain prose, no executable content.\n", 0o644)
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)
 	}

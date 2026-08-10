@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"runtime"
 	"unsafe"
 
@@ -163,6 +164,15 @@ func openRARPathNoFollow(path string, directory bool) (*os.File, error) {
 		return nil, errUnsafeRARAuthorityPath
 	}
 	return file, nil
+}
+
+// OpenPhysicalPath opens a file or directory without traversing reparse points.
+func OpenPhysicalPath(path string, directory bool) (*os.File, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	return openRARPathNoFollow(absPath, directory)
 }
 
 func openWindowsRARObject(objectPath string, directory bool) (windows.Handle, error) {

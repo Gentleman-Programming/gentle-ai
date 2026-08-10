@@ -23,13 +23,7 @@ func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
 	for index := range lines {
 		lines[index] = fmt.Sprintf("ordinary documentation line %03d", index+1)
 	}
-	path := filepath.Join(repo, "docs", "ordinary-guide.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "docs/ordinary-guide.md", strings.Join(lines, "\n")+"\n", 0o644)
 
 	startedAt := time.Now()
 	var startOutput bytes.Buffer
@@ -155,13 +149,7 @@ func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
 // structural readback alone.
 func TestActiveMDXRequiresReviewerEvidence(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	path := filepath.Join(repo, "docs", "guide.mdx")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("import Widget from './widget'\n\n# Active guide\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "docs/guide.mdx", "import Widget from './widget'\n\n# Active guide\n", 0o644)
 	var output bytes.Buffer
 	if err := RunReview(boundNegotiatedStartArgs(t, []string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo}), &output); err != nil {
 		t.Fatal(err)
@@ -191,6 +179,7 @@ func TestLowRiskExternalEvidenceRemainsBackwardCompatible(t *testing.T) {
 	if err := os.WriteFile(path, []byte("ordinary documentation\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runReviewCLIGit(t, repo, "add", "docs/guide.md")
 	started := startReviewOperationFixture(t, repo, "review-low-external-evidence")
 	evidence := []byte("external focused tests pass\n")
 	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
@@ -268,10 +257,15 @@ func TestLowRiskNativeVerificationSupportsBaseWorkspaceOverlay(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "docs", "overlay.md"), []byte("overlay documentation\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var output bytes.Buffer
 	if err := RunReviewFacadeStart([]string{
 		"--cwd", repo, "--base-ref", base, "--workspace-overlay", "--lineage", "low-risk-overlay",
+		"--untracked-scope=exclude", "--expected-untracked-inventory=" + digest,
 	}, &output); err != nil {
 		t.Fatal(err)
 	}

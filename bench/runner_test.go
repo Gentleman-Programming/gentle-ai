@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -56,15 +57,11 @@ func TestProbeCapabilityRejectsAMissingFlag(t *testing.T) {
 	}
 }
 
-// The reason Probe exists at all: `sdd-attempt <op> --help` is rejected with
-// the same words a missing flag produces, so the DEFAULT probe reports a build
-// that fully supports the verb as lacking it. This test pins that trap, so
-// nobody quietly converts these capabilities back to the help-reading form.
-func TestHelpProbeMisreadsAVerbThatParsesItsOwnFlags(t *testing.T) {
+func TestHelpProbeRejectsALegacySurface(t *testing.T) {
 	sandbox := fakeBinary(t, `echo "Error: flag provided but not defined: -help" >&2; exit 1`)
-	supported, _ := newCapabilityProbe(sandbox).supported(&Capability{Verb: []string{"sdd-attempt", "finish"}})
+	supported, _ := newCapabilityProbe(sandbox).supported(&Capability{Verb: []string{"legacy", "finish"}})
 	if supported {
-		t.Skip("the help probe no longer misreads this shape; Probe may be unnecessary")
+		t.Fatal("the help read should have reported unsupported for this fake")
 	}
 }
 
@@ -77,12 +74,12 @@ case "$*" in
   *)        echo "Error: sdd-attempt requires --cwd" >&2; exit 1 ;;
 esac`)
 	probe := newCapabilityProbe(sandbox)
-	if supported, _ := probe.supported(&Capability{Verb: []string{"sdd-attempt", "finish"}}); supported {
+	if supported, _ := probe.supported(&Capability{Verb: []string{"legacy", "finish"}}); supported {
 		t.Fatal("the help read should have reported unsupported for this fake")
 	}
 	supported, reason := probe.supported(&Capability{
-		Verb:  []string{"sdd-attempt", "finish"},
-		Probe: []string{"sdd-attempt", "finish", "--expected-binding-revision=probe"},
+		Verb:  []string{"legacy", "finish"},
+		Probe: []string{"legacy", "finish", "--expected-binding-revision=probe"},
 	})
 	if !supported {
 		t.Fatalf("supported = false (%s), want true: the probe answer must not come from the help cache", reason)
@@ -100,5 +97,93 @@ func TestReadBackBlanksGitTrace(t *testing.T) {
 	counted := sandbox.invoke([]string{"sdd-attempt", "status"})
 	if counted.Stdout == "GIT_TRACE=[]\n" {
 		t.Fatal("a counted invocation lost GIT_TRACE, so git_subprocesses would stop being observable")
+	}
+}
+
+func TestSandboxEnvIncludesBenchReceiptMutationPath(t *testing.T) {
+	sandbox, err := newSandbox("gentle-ai", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox.BenchReceiptMutationPath = filepath.Join(sandbox.Root, "receipt.json")
+	for _, entry := range sandbox.env() {
+		if entry == "GENTLE_AI_BENCH_MUTATE_RECEIPT="+sandbox.BenchReceiptMutationPath {
+			return
+		}
+	}
+	t.Fatal("sandbox environment has no benchmark receipt mutation path")
+}
+
+func TestSandboxEnvKeepsTempFilesInsideTheSandbox(t *testing.T) {
+	sandbox, err := newSandbox("gentle-ai", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(sandbox.Root, "tmp")
+	found := map[string]bool{}
+	for _, entry := range sandbox.env() {
+		if entry == "TMP="+want {
+			found["TMP"] = true
+			continue
+		}
+		if entry == "TEMP="+want {
+			found["TEMP"] = true
+			continue
+		}
+		if entry == "TMPDIR="+want {
+			found["TMPDIR"] = true
+			continue
+		}
+		if strings.HasPrefix(entry, "TMP=") || strings.HasPrefix(entry, "TEMP=") || strings.HasPrefix(entry, "TMPDIR=") {
+			t.Fatalf("temporary directory = %q, want %q", entry, want)
+		}
+	}
+	if info, err := os.Stat(want); err != nil || !info.IsDir() {
+		t.Fatalf("sandbox temp directory %q: %v", want, err)
+	}
+	if !found["TMP"] || !found["TEMP"] || !found["TMPDIR"] {
+		t.Fatalf("sandbox temp variables = %v, want TMP, TEMP and TMPDIR", found)
+	}
+}
+
+func TestSandboxEnvKeepsWindowsHomeInsideTheSandbox(t *testing.T) {
+	sandbox, err := newSandbox("gentle-ai", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range sandbox.env() {
+		if entry == "USERPROFILE="+sandbox.Home {
+			return
+		}
+	}
+	t.Fatalf("sandbox environment has no USERPROFILE=%q", sandbox.Home)
+}
+
+func TestSelectedAuthorityCaptureHelpersSelectTheSandboxLineage(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*journeyRun) error
+	}{
+		{name: "results", run: sddCaptureSelectedAuthorityLenses},
+		{name: "evidence", run: sddCaptureSelectedAuthorityEvidence},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sandbox := fakeBinary(t, `printf '%s\n' '{"next_transition":{"kind":"complete"}}'`)
+			sandbox.Lineage = "review-sdd-newer"
+			run := &journeyRun{sandbox: sandbox, accumulator: newAccumulator(), step: tt.name}
+
+			if err := tt.run(run); err != nil {
+				t.Fatalf("capture helper: %v", err)
+			}
+			if len(run.accumulator.records) != 1 {
+				t.Fatalf("invocations = %d, want 1", len(run.accumulator.records))
+			}
+			args := run.accumulator.records[0].Args
+			if len(args) < 2 || args[len(args)-2] != "--lineage" || args[len(args)-1] != sandbox.Lineage {
+				t.Fatalf("status args = %q, want selected lineage %q", args, sandbox.Lineage)
+			}
+		})
 	}
 }

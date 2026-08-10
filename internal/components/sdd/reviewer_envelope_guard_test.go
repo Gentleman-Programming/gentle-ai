@@ -115,7 +115,7 @@ func TestLensAgentPromptsStateTheAdmissionEnvelope(t *testing.T) {
 				runtime, len(paths), paths, len(envelope.LensAgentNames), envelope.LensAgentNames)
 		}
 		for _, path := range paths {
-			prompt := renderBoundedReviewAsset(path)
+			prompt := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
 
 			for _, field := range envelope.RequiredTopLevelFields {
 				if !strings.Contains(prompt, field) {
@@ -199,22 +199,25 @@ func declaredLensTools(t *testing.T, path string) (tools []string, readOnlyAsser
 }
 
 // TestLensAgentPromptsStateWhereTheirInputComesFrom is the input-side twin of
-// the envelope guard. Every runtime receives the same provider-owned immutable
-// inspection contract and must never substitute mutable workspace files.
+// the envelope guard. Claude Code receives immutable prompt context, while
+// unsupported runtimes stop before they can inspect mutable workspace files.
 func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 	envelope := reviewtransaction.NewReviewerResultEnvelope()
 
-	// The orchestrator contract is the source for the one native inspection
-	// recipe every managed runtime must give reviewers.
+	// The orchestrator contract is the source for the current immutable
+	// inspection route that rendered reviewer prompts must preserve.
 	contract := assets.MustRead(boundedReviewContractAsset)
-	if !strings.Contains(contract, "injects only the provider's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered manifest") ||
+	if !strings.Contains(contract, "Claude Code, OpenCode, and Codex advertise immutable reviewer execution") ||
 		!strings.Contains(contract, "read-only native Git commands") {
 		t.Fatalf("%s no longer requires native-Git frozen-tree inspection; update the guard's derivation", boundedReviewContractAsset)
 	}
 
 	for _, paths := range lensAgentAssetPaths(t, envelope.LensAgentNames) {
 		for _, path := range paths {
-			prompt := strings.ToLower(renderBoundedReviewAsset(path))
+			if strings.HasPrefix(path, "claude/agents/") {
+				continue // Claude's separate prompt transport is pinned in bounded_review_contract_test.go.
+			}
+			prompt := strings.ToLower(renderBoundedReviewAsset(agentForAssetPath(t, path), path))
 			for claim, why := range map[string]string{
 				"artifact_subject":      "does not name the bound artifact subject",
 				"changed_path_manifest": "does not name the ordered manifest",
@@ -236,9 +239,8 @@ func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 
 // TestJudgmentDayPromptsDoNotClaimTheLensEnvelope pins the resolution of the
 // contradiction between the two documents: a judgment-day judge result is a
-// different artifact (Transaction mode judgment_day records judge proofs and
-// selects no lenses), so it must NOT carry the capture-result envelope, and it
-// must say so rather than leaving a reader to infer which shape wins.
+// separate standalone artifact, so it must NOT carry the capture-result
+// envelope and must say so rather than leaving a reader to infer which shape wins.
 func TestJudgmentDayPromptsDoNotClaimTheLensEnvelope(t *testing.T) {
 	envelope := reviewtransaction.NewReviewerResultEnvelope()
 	judgePaths := []string{}
@@ -261,7 +263,7 @@ func TestJudgmentDayPromptsDoNotClaimTheLensEnvelope(t *testing.T) {
 	sort.Strings(judgePaths)
 
 	for _, path := range judgePaths {
-		prompt := renderBoundedReviewAsset(path)
+		prompt := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
 		// Match the JSON key forms, not the English words: a judge prompt may
 		// legitimately talk about inspecting a target.
 		if strings.Contains(prompt, `"subject_hash"`) || strings.Contains(prompt, `"inspection"`) {

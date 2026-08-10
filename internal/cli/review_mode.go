@@ -10,9 +10,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
@@ -169,6 +171,71 @@ func (err *ReviewModeUnreadableError) Error() string {
 	)
 }
 
+type reviewModeUnsafePathError struct {
+	Path      string
+	Directory bool
+	Cause     error
+}
+
+func (err *reviewModeUnsafePathError) Unwrap() error { return err.Cause }
+
+func (err *reviewModeUnsafePathError) Error() string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf(
+			"the clone-local review mode path %s is unsafe; run `%s` in a NON-ELEVATED Windows PowerShell 5.1 shell because an elevated TokenOwner can differ from the current user, then rerun the original command",
+			pathquote.Quote(err.Path), err.repairCommand(),
+		)
+	}
+	return fmt.Sprintf(
+		"the clone-local review mode path %s is unsafe; run `%s`, then rerun the original command",
+		pathquote.Quote(err.Path), err.repairCommand(),
+	)
+}
+
+func (err *reviewModeUnsafePathError) repairCommand() string {
+	if runtime.GOOS != "windows" {
+		mode := "600"
+		if err.Directory {
+			mode = "700"
+		}
+		return "chmod " + mode + " " + quotePOSIXShellToken(err.Path)
+	}
+	securityType := "FileSecurity"
+	inheritance := "'None'"
+	setAccessControl := "[System.IO.File]::SetAccessControl($p, $acl)"
+	if err.Directory {
+		securityType = "DirectorySecurity"
+		inheritance = "'ContainerInherit, ObjectInherit'"
+		setAccessControl = "[System.IO.Directory]::SetAccessControl($p, $acl)"
+	}
+	return strings.Join([]string{
+		"$p = " + quotePowerShellLiteral(err.Path),
+		"$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User",
+		"$acl = New-Object System.Security.AccessControl." + securityType,
+		"$acl.SetOwner($sid)",
+		"$acl.SetAccessRuleProtection($true, $false)",
+		"$rule = New-Object -TypeName System.Security.AccessControl.FileSystemAccessRule -ArgumentList @($sid, 'FullControl', " + inheritance + ", 'None', 'Allow')",
+		"$acl.SetAccessRule($rule)",
+		setAccessControl,
+	}, "; ")
+}
+
+func quotePowerShellLiteral(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", "''") + "'"
+}
+
+func quotePOSIXShellToken(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", `'"'"'`) + "'"
+}
+
+func reviewModeUnsafePathRefusal(err error) error {
+	var unsafePath *reviewtransaction.UnsafeRARPathError
+	if errors.As(err, &unsafePath) {
+		return &reviewModeUnsafePathError{Path: unsafePath.Path, Directory: unsafePath.Directory, Cause: err}
+	}
+	return nil
+}
+
 func reviewModeCommandsByVerb(commands []string, verb string) []string {
 	selected := make([]string, 0, len(commands))
 	for _, command := range commands {
@@ -194,6 +261,9 @@ func reviewModeUnreadable(
 ) error {
 	if err == nil {
 		return nil
+	}
+	if unsafePath := reviewModeUnsafePathRefusal(err); unsafePath != nil {
+		return unsafePath
 	}
 	scopes := make([]ReviewModeUnreadableScope, 0, 2)
 	if reviewtransaction.RDDModeValueUnintelligible(global.Value) {
@@ -224,15 +294,18 @@ func reviewModeUnreadable(
 // resolved this fails closed to the managed disposition, so a broken or
 // tampered mode file can never relax a gate into reporting work as unmanaged by
 // choice.
-func reviewDeliveryDisposition(ctx context.Context, repo string, receiptPresent bool) reviewtransaction.RDDDelivery {
+func reviewDeliveryDisposition(ctx context.Context, repo string, receiptPresent bool) (reviewtransaction.RDDDelivery, error) {
 	status, err := reviewModeStatus(ctx, repo)
+	if refusal := reviewModeUnsafePathRefusal(err); refusal != nil {
+		return reviewtransaction.RDDDeliveryUnmanaged, refusal
+	}
 	if err != nil {
 		if receiptPresent {
-			return reviewtransaction.RDDDeliveryReceiptGoverned
+			return reviewtransaction.RDDDeliveryReceiptGoverned, nil
 		}
-		return reviewtransaction.RDDDeliveryUnmanaged
+		return reviewtransaction.RDDDeliveryUnmanaged, nil
 	}
-	return reviewtransaction.RDDDeliveryDisposition(status, receiptPresent)
+	return reviewtransaction.RDDDeliveryDisposition(status, receiptPresent), nil
 }
 
 // reviewDrivenDevelopmentDisabled reports whether the user's kill switch is off
@@ -243,12 +316,12 @@ func reviewDeliveryDisposition(ctx context.Context, repo string, receiptPresent 
 // An unreadable switch is not a disabled switch. It fails closed to "enabled"
 // for the same reason reviewDeliveryDisposition does: a broken or tampered mode
 // record must never be able to relax an enforcement point.
-func reviewDrivenDevelopmentDisabled(ctx context.Context, repo string) bool {
+func reviewDrivenDevelopmentDisabled(ctx context.Context, repo string) (bool, error) {
 	status, err := reviewModeStatus(ctx, repo)
 	if err != nil {
-		return false
+		return false, reviewModeUnsafePathRefusal(err)
 	}
-	return !status.Enabled()
+	return !status.Enabled(), nil
 }
 
 func applyReviewMode(
@@ -567,6 +640,9 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		ctx, repo, global, reviewtransaction.RDDOperationStart)
 	if err != nil {
 		return reviewModeUnreadable(ctx, repo, global, err)
+	}
+	if err := authorizeManagedReviewerAssets(); err != nil {
+		return err
 	}
 	if assessment.Level == reviewtransaction.RiskLow {
 		// Tier 0 is silent structural readback. Asking here would reintroduce

@@ -36,19 +36,23 @@ func reviewDefectReportDir(t *testing.T, repo string) string {
 	return filepath.Join(commonDir, "gentle-ai", reviewDefectReportDirName)
 }
 
-func injectReviewDiscoveryFault(t *testing.T, fault error) {
+// injectReviewStartFault forces an unanticipated internal fault at START's
+// candidate freeze: a real choke point on the mutating path, reached before
+// any authority exists. It replaced the untracked-scope discovery seam that
+// #2394 removed from START.
+func injectReviewStartFault(t *testing.T, fault error) {
 	t.Helper()
-	previous := reviewFacadeDiscoverIntendedUntracked
-	reviewFacadeDiscoverIntendedUntracked = func(context.Context, reviewtransaction.SnapshotBuilder) ([]string, error) {
-		return nil, fault
+	previous := reviewFacadeBuildStartSnapshot
+	reviewFacadeBuildStartSnapshot = func(context.Context, reviewtransaction.SnapshotBuilder, reviewtransaction.Target) (reviewtransaction.Snapshot, error) {
+		return reviewtransaction.Snapshot{}, fault
 	}
-	t.Cleanup(func() { reviewFacadeDiscoverIntendedUntracked = previous })
+	t.Cleanup(func() { reviewFacadeBuildStartSnapshot = previous })
 }
 
 func TestNegotiatedStartUnanticipatedFaultEmitsEnvelopeAndDefectReport(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
-	injectReviewDiscoveryFault(t, errors.New("injected unanticipated discovery fault"))
+	injectReviewStartFault(t, errors.New("injected unanticipated discovery fault"))
 
 	var output bytes.Buffer
 	err := RunReview([]string{
@@ -123,7 +127,7 @@ func TestNamedRefusalsAndReadOnlyOperationsNeverWriteDefectReports(t *testing.T)
 func TestDefectReportSaveFailureNeverMasksTheEnvelopeOrError(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
-	injectReviewDiscoveryFault(t, errors.New("injected unanticipated discovery fault"))
+	injectReviewStartFault(t, errors.New("injected unanticipated discovery fault"))
 	// Occupy the report directory path with a regular file so persisting the
 	// report fails deterministically.
 	commonDir := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "--git-common-dir"))

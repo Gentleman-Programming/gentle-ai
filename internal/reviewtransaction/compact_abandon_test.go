@@ -34,9 +34,12 @@ func pristineReviewingFixture(t *testing.T, repo, lineage string) (CompactRecord
 // TestStalePristineReviewingLineageHasNoSanctionedExit reproduces the #1441
 // deadlock on the pre-abandon remedy surface: once HEAD advances past a
 // pristine reviewing lineage, review/invalidate refuses because the live
-// snapshot no longer matches, reclaim refuses because the entry holds
-// review-state.json, and reconcile-authority refuses because the entry is not
-// a recovery successor. The lineage is permanently unretirable.
+// snapshot no longer matches, and reclaim refuses because the entry holds
+// review-state.json. (A third refusal used to be checked here:
+// reconcile-authority, because the entry is not a recovery successor --
+// that verb and its provider retired in Wave 7 S3a/S3b, so there is one
+// fewer surface to try, not one more exit.) The lineage is permanently
+// unretirable.
 func TestStalePristineReviewingLineageHasNoSanctionedExit(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\naccidental change\n")
@@ -59,15 +62,6 @@ func TestStalePristineReviewingLineageHasNoSanctionedExit(t *testing.T) {
 		LineageID: "abandon-stale-pristine", Reason: "retire accidental lineage", Actor: "maintainer@example.com",
 	}); err == nil || !strings.Contains(err.Error(), "holds authoritative artifact") {
 		t.Fatalf("reclaim refusal = %v", err)
-	}
-
-	if _, err := ReconcileInvalidRecoveryEdge(context.Background(), repo, CompactReconcileRequest{
-		PredecessorLineageID: "abandon-unrelated-predecessor", ExpectedPredecessorRevision: record.Revision,
-		SuccessorLineageID: "abandon-stale-pristine", ExpectedSuccessorRevision: record.Revision,
-		Reason: "retire accidental lineage", Actor: "maintainer@example.com",
-		MaintainerAuthorization: "irrelevant",
-	}); err == nil || !strings.Contains(err.Error(), "is not a recovery successor") {
-		t.Fatalf("reconcile-authority refusal = %v", err)
 	}
 }
 
@@ -122,13 +116,19 @@ func approvedCompactFixture(t *testing.T, repo, lineage string) (CompactRecord, 
 	return record, store
 }
 
-func abandonFixtureRequest(record CompactRecord) CompactAbandonRequest {
+func abandonFixtureRequest(record CompactRecord, summaries ...CompactDiscardedWorkSummary) CompactAbandonRequest {
 	request := CompactAbandonRequest{
 		LineageID: record.State.LineageID, ExpectedRevision: record.Revision,
-		Reason: "retire obsolete accidental lineage", Actor: "maintainer@example.com",
+		Reason: CompactAbandonReasonOperatorDisposition, Actor: "maintainer@example.com",
 	}
-	request.MaintainerAuthorization = compactAbandonAuthorizationBinding(
-		request.LineageID, record.Revision, record.State.InitialSnapshot.Identity, request.Actor, request.Reason)
+	summary := CompactDiscardedWorkSummary{
+		FindingsPresent: len(record.State.Findings) > 0, EvidenceRecordsPresent: record.State.EvidenceRecordDigest != "",
+	}
+	if len(summaries) == 1 {
+		summary = summaries[0]
+	}
+	request.MaintainerAuthorization = RenderCompactAbandonAuthorization(
+		request.LineageID, record.Revision, record.State.InitialSnapshot.Identity, request.Actor, request.Reason, summary)
 	return request
 }
 
@@ -165,11 +165,11 @@ func TestAbandonStalePristineReviewingQuarantinesEntryAndRestoresInventory(t *te
 		committed.Reason != request.Reason || committed.Actor != request.Actor || committed.ReclaimedAt.IsZero() {
 		t.Fatalf("abandonment record = %#v", committed)
 	}
-	if committed.PristineAbandonment == nil || committed.PristineAbandonment.LineageID != record.State.LineageID ||
-		committed.PristineAbandonment.Revision != record.Revision ||
-		committed.PristineAbandonment.SnapshotIdentity != record.State.InitialSnapshot.Identity ||
-		committed.PristineAbandonment.State != StateReviewing || committed.PristineAbandonment.InvalidationReason != "" {
-		t.Fatalf("abandonment proof = %#v", committed.PristineAbandonment)
+	proof := committed.Abandonment
+	if proof == nil || proof.Schema != CompactAbandonAuthorizationSchema || proof.LineageID != record.State.LineageID ||
+		proof.Revision != record.Revision || proof.SnapshotIdentity != record.State.InitialSnapshot.Identity ||
+		len(proof.DiscardedWork.CapturedLensResults) != 0 || proof.DiscardedWork.FindingsPresent || proof.DiscardedWork.EvidenceRecordsPresent {
+		t.Fatalf("abandonment proof = %#v", proof)
 	}
 	if len(committed.Residue) != 1 || committed.Residue[0] != "review-state.json" {
 		t.Fatalf("abandonment residue manifest = %#v", committed.Residue)
@@ -196,8 +196,8 @@ func TestAbandonStalePristineReviewingQuarantinesEntryAndRestoresInventory(t *te
 	if err := json.Unmarshal(persistedPayload, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Status != CompactReclaimCommitted || persisted.PristineAbandonment == nil ||
-		persisted.PristineAbandonment.Revision != record.Revision {
+	if persisted.Status != CompactReclaimCommitted || persisted.Abandonment == nil ||
+		persisted.Abandonment.Schema != CompactAbandonAuthorizationSchema || persisted.Abandonment.Revision != record.Revision {
 		t.Fatalf("persisted abandonment record = %#v", persisted)
 	}
 	approvedStateAfter, _ := os.ReadFile(approvedStore.StatePath())
@@ -234,8 +234,8 @@ func TestAbandonStalePristineReviewingQuarantinesEntryAndRestoresInventory(t *te
 	// A differing request over the quarantined lineage is refused.
 	differing := request
 	differing.Reason = "different reason"
-	differing.MaintainerAuthorization = compactAbandonAuthorizationBinding(
-		differing.LineageID, record.Revision, record.State.InitialSnapshot.Identity, differing.Actor, differing.Reason)
+	differing.MaintainerAuthorization = RenderCompactAbandonAuthorization(
+		differing.LineageID, record.Revision, record.State.InitialSnapshot.Identity, differing.Actor, differing.Reason, CompactDiscardedWorkSummary{})
 	if _, err := AbandonPristineCompactStore(context.Background(), repo, differing); err == nil ||
 		!strings.Contains(err.Error(), "no committed abandonment record matches") {
 		t.Fatalf("differing abandonment replay = %v", err)
@@ -247,7 +247,7 @@ func TestAbandonStalePristineReviewingQuarantinesEntryAndRestoresInventory(t *te
 	}
 }
 
-func TestAbandonPristineInvalidatedPreservesAuthoritativeInventory(t *testing.T) {
+func TestAbandonRefusesTerminalInvalidatedLineage(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	approvedCompactFixture(t, repo, "abandon-unrelated-approved")
 	writeSnapshotFile(t, repo, "tracked.txt", "base\naccidental change\n")
@@ -271,21 +271,17 @@ func TestAbandonPristineInvalidatedPreservesAuthoritativeInventory(t *testing.T)
 		t.Fatalf("pre-abandon invalidated inventory = %#v", before)
 	}
 
-	committed, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record))
-	if err != nil {
-		t.Fatalf("abandon pristine invalidated lineage: %v", err)
-	}
-	if committed.Status != CompactReclaimCommitted || committed.PristineAbandonment == nil ||
-		committed.PristineAbandonment.State != StateInvalidated ||
-		committed.PristineAbandonment.InvalidationReason != "obsolete accidental lineage" {
-		t.Fatalf("invalidated abandonment proof = %#v", committed)
-	}
-	after, err := InventoryAuthority(context.Background(), repo)
+	payload, err := os.ReadFile(store.StatePath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !after.Complete || !after.Authoritative {
-		t.Fatalf("post-abandon inventory = %#v", after)
+	if _, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err == nil ||
+		!strings.Contains(err.Error(), `holds terminal "invalidated" authority`) {
+		t.Fatalf("terminal invalidated refusal = %v", err)
+	}
+	current, err := os.ReadFile(store.StatePath())
+	if err != nil || !bytes.Equal(current, payload) {
+		t.Fatalf("refused invalidated abandonment mutated authority: %v", err)
 	}
 }
 
@@ -295,7 +291,7 @@ func TestAbandonRefusesIneligibleTargetsAndBindings(t *testing.T) {
 	t.Run("terminal approved lineage", func(t *testing.T) {
 		record, store := approvedCompactFixture(t, repo, "abandon-terminal-approved")
 		if _, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err == nil ||
-			!strings.Contains(err.Error(), `holds "approved" authority`) {
+			!strings.Contains(err.Error(), `holds terminal "approved" authority`) {
 			t.Fatalf("terminal approved refusal = %v", err)
 		}
 		if _, err := os.Stat(store.StatePath()); err != nil {
@@ -319,7 +315,7 @@ func TestAbandonRefusesIneligibleTargetsAndBindings(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err == nil ||
-			!strings.Contains(err.Error(), `holds "escalated" authority`) {
+			!strings.Contains(err.Error(), `holds terminal "escalated" authority`) {
 			t.Fatalf("terminal escalated refusal = %v", err)
 		}
 	})
@@ -331,21 +327,24 @@ func TestAbandonRefusesIneligibleTargetsAndBindings(t *testing.T) {
 			t.Fatal(err)
 		}
 		record := writeCompactFixtureRecord(t, store, state)
-		if _, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err == nil ||
-			!strings.Contains(err.Error(), `holds "correction_required" authority`) {
-			t.Fatalf("captured review data refusal = %v", err)
+		request := abandonFixtureRequest(record, CompactDiscardedWorkSummary{FindingsPresent: true, EvidenceRecordsPresent: record.State.EvidenceRecordDigest != ""})
+		if _, err := AbandonPristineCompactStore(context.Background(), repo, request); err != nil {
+			t.Fatalf("captured review data abandonment = %v", err)
 		}
 	})
 
-	t.Run("captured reviewer-results artifact", func(t *testing.T) {
+	t.Run("empty reviewer-results directory has no captured result", func(t *testing.T) {
 		writeSnapshotFile(t, repo, "tracked.txt", "base\ncaptured results change\n")
 		record, store := pristineReviewingFixture(t, repo, "abandon-captured-results")
 		if err := os.MkdirAll(filepath.Join(store.Dir, CompactReviewerResultsDir), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err == nil ||
-			!strings.Contains(err.Error(), `authoritative artifact "reviewer-results"`) {
-			t.Fatalf("captured reviewer-results refusal = %v", err)
+		committed, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record))
+		if err != nil {
+			t.Fatalf("empty reviewer-results abandonment = %v", err)
+		}
+		if got := committed.Abandonment.DiscardedWork.CapturedLensResults; len(got) != 0 {
+			t.Fatalf("empty reviewer-results directory counted as captured work: %v", got)
 		}
 	})
 
@@ -355,9 +354,8 @@ func TestAbandonRefusesIneligibleTargetsAndBindings(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(store.Dir, "finalize-attempt-journal.json"), []byte("{}\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err == nil ||
-			!strings.Contains(err.Error(), `authoritative artifact "finalize-attempt-journal.json"`) {
-			t.Fatalf("finalize journal refusal = %v", err)
+		if _, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err != nil {
+			t.Fatalf("finalize journal abandonment = %v", err)
 		}
 	})
 
@@ -367,9 +365,8 @@ func TestAbandonRefusesIneligibleTargetsAndBindings(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(store.Dir, ".atomic-12345"), []byte("partial\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err == nil ||
-			!strings.Contains(err.Error(), `authoritative artifact ".atomic-12345"`) {
-			t.Fatalf("atomic residue refusal = %v", err)
+		if _, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record)); err != nil {
+			t.Fatalf("atomic residue abandonment = %v", err)
 		}
 	})
 
@@ -386,8 +383,8 @@ func TestAbandonRefusesIneligibleTargetsAndBindings(t *testing.T) {
 			t.Fatalf("stale expected revision = %v", err)
 		}
 		inexact := abandonFixtureRequest(record)
-		inexact.MaintainerAuthorization = compactAbandonAuthorizationBinding(
-			record.State.LineageID, record.State.InitialSnapshot.Identity, record.Revision, inexact.Actor, inexact.Reason)
+		inexact.MaintainerAuthorization = RenderCompactAbandonAuthorization(
+			record.State.LineageID, record.State.InitialSnapshot.Identity, record.Revision, inexact.Actor, inexact.Reason, CompactDiscardedWorkSummary{})
 		if _, err := AbandonPristineCompactStore(context.Background(), repo, inexact); err == nil ||
 			!strings.Contains(err.Error(), "exact maintainer authorization binding") {
 			t.Fatalf("inexact binding = %v", err)
@@ -431,7 +428,7 @@ func TestAbandonRefusesIneligibleTargetsAndBindings(t *testing.T) {
 		}
 		writeCompactFixtureRecord(t, successorStore, successorState)
 		if _, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(predecessor)); err == nil ||
-			!strings.Contains(err.Error(), "superseded by recovery successor") {
+			!strings.Contains(err.Error(), `holds terminal "invalidated" authority`) {
 			t.Fatalf("superseded refusal = %v", err)
 		}
 	})
@@ -449,6 +446,28 @@ func TestAbandonRefusesIneligibleTargetsAndBindings(t *testing.T) {
 	})
 }
 
+func TestAbandonBindsActualAdmittedReviewerResult(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "abandon-admitted-result")
+	if _, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), fixture.request); err != nil {
+		t.Fatal(err)
+	}
+	record, err := fixture.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := compactDiscardedWorkSummary(context.Background(), fixture.store, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed, err := AbandonPristineCompactStore(context.Background(), fixture.store.repo, abandonFixtureRequest(record, summary))
+	if err != nil {
+		t.Fatalf("abandon admitted reviewer result: %v", err)
+	}
+	if got := committed.Abandonment.DiscardedWork.CapturedLensResults; len(got) != 1 || got[0] != filepath.Base(fixture.path) {
+		t.Fatalf("discarded admitted reviewer result = %v", got)
+	}
+}
+
 func TestAbandonCrashBeforeRenameLeavesPreparedRecordAndRetrySucceeds(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "base\ninterrupted change\n")
@@ -464,7 +483,7 @@ func TestAbandonCrashBeforeRenameLeavesPreparedRecordAndRetrySucceeds(t *testing
 	if err == nil {
 		t.Fatal("interrupted abandonment reported success")
 	}
-	if prepared.Status != CompactReclaimPrepared || prepared.QuarantinePath == "" || prepared.PristineAbandonment == nil {
+	if prepared.Status != CompactReclaimPrepared || prepared.QuarantinePath == "" || prepared.Abandonment == nil {
 		t.Fatalf("rename-failure record = %#v", prepared)
 	}
 	if _, statErr := os.Stat(store.StatePath()); statErr != nil {
@@ -510,7 +529,7 @@ func TestAbandonCommitRewriteFailureRefusesReplayAgainstPreparedOrphan(t *testin
 	if err == nil {
 		t.Fatal("failed committed rewrite reported success")
 	}
-	if prepared.Status != CompactReclaimPrepared || prepared.QuarantinePath == "" || prepared.PristineAbandonment == nil {
+	if prepared.Status != CompactReclaimPrepared || prepared.QuarantinePath == "" || prepared.Abandonment == nil {
 		t.Fatalf("committed-rewrite failure record = %#v", prepared)
 	}
 	if !strings.Contains(err.Error(), prepared.QuarantinePath) {
@@ -531,7 +550,7 @@ func TestAbandonCommitRewriteFailureRefusesReplayAgainstPreparedOrphan(t *testin
 	if err := json.Unmarshal(orphanPayload, &orphan); err != nil {
 		t.Fatal(err)
 	}
-	if orphan.Status != CompactReclaimPrepared || orphan.PristineAbandonment == nil {
+	if orphan.Status != CompactReclaimPrepared || orphan.Abandonment == nil {
 		t.Fatalf("orphan abandonment record = %#v", orphan)
 	}
 
@@ -588,36 +607,5 @@ func TestAbandonRefusesCorruptedNonPristineInvalidatedRecord(t *testing.T) {
 	}
 	if _, statErr := os.Stat(store.Dir); statErr != nil {
 		t.Fatalf("refused abandonment moved the corrupted entry: %v", statErr)
-	}
-}
-
-// An abandon refusal must name what to run next. `review reclaim` already ends
-// its cascade by naming `gentle-ai review inspect-authority` and asking for the
-// report to be escalated; abandon refused with the reason alone, which leaves
-// an operator holding a diagnosis and no next command. The damaged-store bench
-// axis declares that composition a dead end, and a refusal that names a
-// runnable command outranks the declaration mechanically.
-func TestAbandonRefusalOverAuthoritativeArtifactNamesAContinuation(t *testing.T) {
-	repo := initSnapshotRepo(t)
-	record, store := pristineReviewingFixture(t, repo, "abandon-holds-results")
-
-	// The entry stays a pristine reviewing state; only its directory gains an
-	// authoritative artifact, which is exactly the shape the axis builds.
-	if err := os.MkdirAll(filepath.Join(store.Dir, CompactReviewerResultsDir), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := AbandonPristineCompactStore(context.Background(), repo, CompactAbandonRequest{
-		LineageID: "abandon-holds-results", ExpectedRevision: record.Revision,
-		Reason: "retire the damaged successor", Actor: "maintainer@example.com",
-	})
-	if err == nil {
-		t.Fatal("abandon must refuse an entry holding an authoritative artifact")
-	}
-	if !strings.Contains(err.Error(), "holds authoritative artifact") {
-		t.Fatalf("abandon refusal lost its reason: %v", err)
-	}
-	if !strings.Contains(err.Error(), "gentle-ai review inspect-authority") {
-		t.Fatalf("abandon refusal names no runnable continuation: %v", err)
 	}
 }

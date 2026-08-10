@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,6 +33,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/verify"
 )
 
@@ -454,12 +457,12 @@ type syncRuntime struct {
 
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
 	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
-	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
-	}
-
 	workspaceDir, _ := os.Getwd()
 	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, selection.Agents)
+	compatibilityTransaction, err := newCompatibilityRefreshTransaction(homeDir, selection.Components, selection)
+	if err != nil {
+		return nil, err
+	}
 
 	return &syncRuntime{
 		homeDir:      homeDir,
@@ -467,13 +470,13 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 		selection:    selection,
 		agentIDs:     selection.Agents,
 		backupRoot:   backupRoot,
-		state:        &runtimeState{},
+		state:        &runtimeState{compatibilityTransaction: compatibilityTransaction},
 	}, nil
 }
 
 func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	adapters := resolveAdapters(r.agentIDs)
-	targets := syncBackupTargets(r.homeDir, r.workspaceDir, r.selection, adapters)
+	targets, targetErr := syncBackupTargets(r.homeDir, r.workspaceDir, r.selection, adapters)
 	r.managedPaths = targets
 
 	prepare := []pipeline.Step{
@@ -482,6 +485,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			snapshotter: backup.NewSnapshotter(),
 			snapshotDir: filepath.Join(r.backupRoot, time.Now().UTC().Format("20060102150405.000000000")),
 			targets:     targets,
+			targetErr:   targetErr,
 			state:       r.state,
 			backupRoot:  r.backupRoot,
 			source:      backup.BackupSourceSync,
@@ -491,7 +495,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	apply := []pipeline.Step{
-		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state},
+		rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir},
 	}
 
 	for _, component := range r.selection.Components {
@@ -503,6 +507,17 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			agents:       r.agentIDs,
 			selection:    r.selection,
 			changedFiles: &r.changedFiles,
+		})
+	}
+	if needsCompatibilitySkillsRefresh(r.selection.Components) {
+		apply = append(apply, compatibilitySkillsRefreshStep{
+			id:           "sync:compatibility-skills-refresh",
+			homeDir:      r.homeDir,
+			components:   r.selection.Components,
+			selection:    r.selection,
+			changedFiles: &r.changedFiles,
+			transaction:  r.state.compatibilityTransaction,
+			anchored:     usesAnchoredCompatibilityTransaction(),
 		})
 	}
 
@@ -554,12 +569,29 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 // syncBackupTargets returns the file paths that need to be backed up
 // before sync executes. Uses syncComponentPaths so that the backup/verify
 // contract matches the actual files sync touches (which differ from install
-// for ComponentPersona — see syncComponentPaths).
-func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) []string {
+// for ComponentPersona, see syncComponentPaths). One deliberate exception:
+// persona backup also captures the non-selected managed output-style file so a
+// failed persona switch can be rolled back (verification still declares only
+// the selected file).
+func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
 	paths := map[string]struct{}{}
 	for _, component := range selection.Components {
 		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
 			paths[path] = struct{}{}
+		}
+		if component == model.ComponentEngram {
+			for _, adapter := range adapters {
+				if adapter.Agent() == model.AgentClaudeCode {
+					paths[adapter.MCPConfigPath(homeDir, "engram")] = struct{}{}
+				}
+			}
+		}
+		if component == model.ComponentPersona {
+			for _, path := range managedOutputStyleBackupPaths(selection, adapters, func(a agents.Adapter) string {
+				return a.OutputStyleDir(componentInjectionDir(homeDir, workspaceDir, a))
+			}) {
+				paths[path] = struct{}{}
+			}
 		}
 	}
 	// Routing guidance is refreshed per agent outside the component loop, at
@@ -582,6 +614,28 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 			paths[filepath.Join(pluginsDir, name)] = struct{}{}
 		}
 	}
+	adapterSkillPaths, err := syncAdapterSkillBackupTargets(homeDir, workspaceDir, selection, adapters)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range adapterSkillPaths {
+		paths[path] = struct{}{}
+	}
+	if !usesAnchoredCompatibilityTransaction() && needsCompatibilitySkillsRefresh(selection.Components) {
+		skillDir, ok, err := compatibilitySkillsDir(homeDir)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			compatibilityPaths, err := compatibilitySkillFiles(skillDir, selection.Components, selection)
+			if err != nil {
+				return nil, err
+			}
+			for _, path := range compatibilityPaths {
+				paths[path] = struct{}{}
+			}
+		}
+	}
 	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
 		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
 			paths[path] = struct{}{}
@@ -595,7 +649,40 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 	for path := range paths {
 		targets = append(targets, path)
 	}
-	return targets
+	sort.Strings(targets)
+	return targets, nil
+}
+
+func syncAdapterSkillBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
+	var paths []string
+	for _, adapter := range adapters {
+		if !adapter.SupportsSkills() {
+			continue
+		}
+		if slices.Contains(selection.Components, model.ComponentSkills) {
+			skillDir := adapter.SkillsDir(componentInjectionDir(homeDir, workspaceDir, adapter))
+			if skillDir == "" {
+				continue
+			}
+			ordinary, err := skills.DirectoryPaths(skillDir, selectedSkillIDs(selection), "")
+			if err != nil {
+				return nil, fmt.Errorf("enumerate %s skill backup targets: %w", adapter.Agent(), err)
+			}
+			paths = append(paths, ordinary...)
+		}
+		if slices.Contains(selection.Components, model.ComponentSDD) {
+			skillDir := adapter.SkillsDir(componentInjectionDir(homeDir, workspaceDir, adapter))
+			if skillDir == "" {
+				continue
+			}
+			sddPaths, err := sdd.SkillDirectoryPaths(skillDir, "")
+			if err != nil {
+				return nil, fmt.Errorf("enumerate %s SDD backup targets: %w", adapter.Agent(), err)
+			}
+			paths = append(paths, sddPaths...)
+		}
+	}
+	return paths, nil
 }
 
 // syncComponentPaths declares the file paths sync writes for a given component.
@@ -660,6 +747,10 @@ func managedOutputStyleName(persona model.PersonaID) string {
 	switch {
 	case isGentlemanConversationPersona(persona):
 		return "Gentleman"
+	// The legacy alias never reaches here: both producers of selection.Persona
+	// (normalizePersona for flags, applyResolvedPersona for persisted state)
+	// remap it to neutral first, so a case for it would be decoration that no
+	// test can reach.
 	case persona == model.PersonaNeutral:
 		return "Neutral"
 	default:
@@ -676,6 +767,39 @@ func managedOutputStyleFile(persona model.PersonaID) string {
 	default:
 		return ""
 	}
+}
+
+// managedOutputStyleFiles returns every managed output-style filename.
+func managedOutputStyleFiles() []string {
+	return []string{"gentleman.md", "neutral.md"}
+}
+
+// managedOutputStyleBackupPaths returns the full set of managed output-style
+// file paths for the adapters. Backup enumeration needs all of them, not only
+// the selected persona's: switching personas removes the previously selected
+// file (persona inject step 3b), so the pre-run snapshot must hold it to roll a
+// failed switch back. This is intentionally backup-only. Post-apply
+// verification keeps declaring just the selected persona's file, since the other
+// one is correctly absent after a switch. outputStyleDir resolves the adapter's
+// output-style directory in the caller's scope (install and sync differ).
+func managedOutputStyleBackupPaths(selection model.Selection, adapters []agents.Adapter, outputStyleDir func(agents.Adapter) string) []string {
+	if managedOutputStyleName(selection.Persona) == "" {
+		return nil
+	}
+	var paths []string
+	for _, adapter := range adapters {
+		if !adapter.SupportsOutputStyles() {
+			continue
+		}
+		dir := outputStyleDir(adapter)
+		if dir == "" {
+			continue
+		}
+		for _, styleFile := range managedOutputStyleFiles() {
+			paths = append(paths, filepath.Join(dir, styleFile))
+		}
+	}
+	return paths
 }
 
 // componentSyncStep is the sync-specific apply step.
@@ -815,6 +939,7 @@ type codeGraphHomeRunner struct {
 
 func (r codeGraphHomeRunner) Run(name string, args ...string) error {
 	command := exec.Command(name, args...)
+	system.EnsureCommandDir(command)
 	actualHome, _ := os.UserHomeDir()
 	if filepath.Clean(r.homeDir) != filepath.Clean(actualHome) {
 		command.Env = overrideCommandEnvironment(os.Environ(), map[string]string{
@@ -970,7 +1095,7 @@ func (s componentSyncStep) Run() error {
 			return nil
 		}
 		for _, adapter := range adapters {
-			res, err := skills.Inject(s.homeDir, adapter, skillIDs)
+			res, err := skills.Inject(componentInjectionDir(s.homeDir, s.workspaceDir, adapter), adapter, skillIDs)
 			if err != nil {
 				return fmt.Errorf("sync skills for %q: %w", adapter.Agent(), err)
 			}
@@ -1288,7 +1413,7 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 		return
 	}
 	if persisted != "" {
-		if id, err := normalizePersona(persisted); err == nil {
+		if id, _, err := normalizePersona(persisted); err == nil {
 			selection.Persona = id
 			return
 		}
@@ -1300,12 +1425,33 @@ func applyResolvedPersona(selection *model.Selection, persisted string) {
 	selection.Persona = model.PersonaNeutral
 }
 
+// migratePersistedPersonaAlias rewrites a persisted legacy
+// gentleman-neutral-artifacts persona to neutral, printing the remap notice
+// once. State that predates persona persistence, explicit gentleman state,
+// and unreadable state are untouched.
+func migratePersistedPersonaAlias(homeDir string, persisted *state.InstallState, persistedErr error) error {
+	if persistedErr != nil || persisted == nil || persisted.Persona != string(model.PersonaGentlemanNeutralArtifacts) {
+		return nil
+	}
+	persisted.Persona = string(model.PersonaNeutral)
+	if err := state.Write(homeDir, *persisted); err != nil {
+		return fmt.Errorf("persist remapped persona: %w", err)
+	}
+	// Notice only after the rewrite is durably persisted: a failed write must
+	// not tell the user the remap happened.
+	fmt.Fprintln(personaNoticeWriter, personaAliasRemapNotice)
+	return nil
+}
+
 // RunSyncWithSelection is the programmatic entry point for sync.
 // It skips flag parsing and agent discovery — the caller provides the homeDir
 // and a fully-built Selection (agents + components + options).
 // This is the function the TUI calls directly to avoid CLI flag parsing.
 func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult, error) {
 	agentIDs := selection.Agents
+	// The read error is captured, not discarded: the persona alias migration
+	// below must not rewrite state it could not read. Managed-asset provenance
+	// re-reads under its own lock later (#2685), so this read stays advisory.
 	persistedState, persistedStateErr := state.Read(homeDir)
 	restorePersistedCommunityTools(homeDir, &selection, persistedState)
 
@@ -1320,23 +1466,29 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 		applyResolvedPersona(&selection, persistedPersona)
 	}
 
+	// Migrate a persisted legacy alias BEFORE any early return: a no-agent
+	// no-op sync and a failing pipeline must still leave state.json remapped,
+	// otherwise the one-time migration never fires for those users. State
+	// records intent — the next sync applies the neutral assets.
+	if err := migratePersistedPersonaAlias(homeDir, &persistedState, persistedStateErr); err != nil {
+		return SyncResult{Agents: agentIDs, Selection: selection}, err
+	}
+
 	result := SyncResult{
 		Agents:    agentIDs,
 		Selection: selection,
 	}
 
-	// No-op path: no agents were discovered or provided.
-	// Per spec: "No managed assets to sync — system completes without modifying
-	// unrelated files and reports that no managed sync actions were needed."
-	if len(agentIDs) == 0 {
-		result.NoOp = true
-		return result, nil
+	result, noOp, err := zeroAgentSyncNoOp(homeDir, selection, result)
+	if err != nil || noOp {
+		return result, err
 	}
 
 	rt, err := newSyncRuntime(homeDir, selection)
 	if err != nil {
 		return result, err
 	}
+	defer rt.state.cleanupCompatibilityTransaction()
 
 	stagePlan := rt.stagePlan()
 	result.Plan = stagePlan
@@ -1347,6 +1499,8 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy())
 	result.Execution = orchestrator.Execute(stagePlan)
+	compatibilityChanged := rt.state.compatibilityChangedFiles()
+	rt.state.cleanupRollbackSnapshot()
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute sync pipeline: %w", result.Execution.Err)
 	}
@@ -1358,6 +1512,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	if err != nil {
 		return result, err
 	}
+	result.ChangedFiles = dedupPaths(append(result.ChangedFiles, compatibilityChanged...))
 	result.FilesChanged = len(result.ChangedFiles)
 
 	// True no-op: agents were discovered but all managed assets were already
@@ -1374,15 +1529,46 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	if !result.Verify.Ready {
 		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
-	if persistedStateErr == nil && !persistedState.CommunityToolsConfigured && selection.CommunityTools != nil {
-		persistedState.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
-		persistedState.CommunityToolsConfigured = true
-		if err := state.Write(homeDir, persistedState); err != nil {
-			return result, fmt.Errorf("persist migrated community tool selection: %w", err)
-		}
+	writer, err := managedAssetDigest()
+	if err != nil {
+		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
+	}
+	if err := persistSyncManagedAssetState(homeDir, selection, writer); err != nil {
+		return result, err
 	}
 
 	return result, nil
+}
+
+func persistSyncManagedAssetState(homeDir string, selection model.Selection, writer string) error {
+	return withInstallStateLock(homeDir, func() error {
+		latest, err := state.Read(homeDir)
+		if errors.Is(err, os.ErrNotExist) {
+			latest = state.InstallState{}
+		} else if err != nil {
+			return fmt.Errorf(
+				"read install state for managed asset provenance: %w; run `gentle-ai install` to rewrite %s",
+				err, state.Path(homeDir))
+		}
+
+		shouldWrite := false
+		if latest.ManagedAssetDigest != writer {
+			latest.ManagedAssetDigest = writer
+			shouldWrite = true
+		}
+		if !latest.CommunityToolsConfigured && selection.CommunityTools != nil {
+			latest.CommunityTools = communityToolIDsToStrings(selection.CommunityTools)
+			latest.CommunityToolsConfigured = true
+			shouldWrite = true
+		}
+		if !shouldWrite {
+			return nil
+		}
+		if err := state.Write(homeDir, latest); err != nil {
+			return fmt.Errorf("persist managed asset provenance: %w", err)
+		}
+		return nil
+	})
 }
 
 // RunSync is the top-level sync entry point, parallel to RunInstall.
@@ -1502,15 +1688,21 @@ func RunSync(args []string) (SyncResult, error) {
 			Selection: selection,
 			DryRun:    true,
 		}
-		if len(agentIDs) == 0 {
-			result.NoOp = true
-			return result, nil
+		result, noOp, err := zeroAgentSyncNoOp(homeDir, selection, result)
+		if err != nil || noOp {
+			return result, err
 		}
 		rt, err := newSyncRuntime(homeDir, selection)
 		if err != nil {
 			return result, err
 		}
+		defer rt.state.cleanupCompatibilityTransaction()
 		result.Plan = rt.stagePlan()
+		for _, step := range result.Plan.Prepare {
+			if prepare, ok := step.(prepareBackupStep); ok && prepare.targetErr != nil {
+				return result, fmt.Errorf("resolve backup targets: %w", prepare.targetErr)
+			}
+		}
 		return result, nil
 	}
 
@@ -1520,6 +1712,23 @@ func RunSync(args []string) (SyncResult, error) {
 	}
 	result.DryRun = false
 	return result, nil
+}
+
+// zeroAgentSyncNoOp reports whether a sync without agents has no compatible
+// shared-skill work to perform.
+func zeroAgentSyncNoOp(homeDir string, selection model.Selection, result SyncResult) (SyncResult, bool, error) {
+	if len(result.Agents) != 0 {
+		return result, false, nil
+	}
+	refreshable, err := compatibilitySkillsRefreshable(homeDir, selection)
+	if err != nil {
+		return result, false, err
+	}
+	if refreshable {
+		return result, false, nil
+	}
+	result.NoOp = true
+	return result, true, nil
 }
 
 func restorePersistedCommunityTools(homeDir string, selection *model.Selection, persisted state.InstallState) {

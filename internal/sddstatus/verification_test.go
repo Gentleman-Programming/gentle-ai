@@ -1,6 +1,7 @@
 package sddstatus
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -97,13 +98,53 @@ func TestValidateVerifyReportAdmission(t *testing.T) {
 	}
 }
 
+func TestVerifyReportAuthorityOnlyFieldCountUsesContract(t *testing.T) {
+	partial := strings.TrimSuffix(testVerifyEnvelope("pass", 0, 0, "2/2", "3/3", 0, 0), "```") + "authority_only_failure: true\n```"
+	admission := ValidateVerifyReportAdmission(partial, SpecCounts{Requirements: 2, Scenarios: 3})
+	contract := VerifyReportValidationContract()
+	want := fmt.Sprintf("authority-only extension must contain exactly %d fields", len(contract.AuthorityOnlyFields))
+	if admission.Valid || admission.Reason != want {
+		t.Fatalf("admission = %#v, want invalid reason %q", admission, want)
+	}
+}
+
 func TestCountSpecRequirementsAndScenariosUsesActualArtifacts(t *testing.T) {
-	counts := countSpecRequirementsAndScenarios([]string{
-		"### Requirement: First\n#### Scenario: A\n#### Scenario: B\n",
-		"### Requirement: Second\n#### Scenario: C\n",
-	})
-	if counts != (SpecCounts{Requirements: 2, Scenarios: 3}) {
-		t.Fatalf("counts = %#v, want 2 requirements and 3 scenarios", counts)
+	tests := []struct {
+		name  string
+		specs []string
+		want  SpecCounts
+	}{
+		{
+			name: "canonical Requirement headings",
+			specs: []string{
+				"### Requirement: First\n#### Scenario: A\n#### Scenario: B\n",
+				"### Requirement: Second\n#### Scenario: C\n",
+			},
+			want: SpecCounts{Requirements: 2, Scenarios: 3},
+		},
+		{
+			name: "historical numeric REQ headings",
+			specs: []string{
+				"### REQ-1: First\n#### Scenario: A\n",
+				"### REQ-12: Second\n#### Scenario: B\n",
+			},
+			want: SpecCounts{Requirements: 2, Scenarios: 2},
+		},
+		{
+			name: "malformed and arbitrary headings are excluded",
+			specs: []string{
+				"### REQ-: Missing number\n### REQ-ABC: Not historical\n### Requirements: Plural\n### Overview: Arbitrary\n#### Scenario: Covered\n",
+			},
+			want: SpecCounts{Requirements: 0, Scenarios: 1},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := countSpecRequirementsAndScenarios(tt.specs); got != tt.want {
+				t.Fatalf("counts = %#v, want %#v", got, tt.want)
+			}
+		})
 	}
 }
 

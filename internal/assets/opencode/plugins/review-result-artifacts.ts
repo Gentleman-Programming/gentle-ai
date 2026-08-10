@@ -1,114 +1,206 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { spawn } from "node:child_process"
 
+// This plugin has two independent responsibilities that happen to share one
+// OpenCode host: reviewer transport (below) and SDD phase task-result
+// handling (isSDDPhase and everything under it). They do not interact.
+//
+// Reviewer transport is advisory-only (rdd-advisory-transport SKILL.md): its
+// entire job is to detect a reviewer task launch carrying the opaque native
+// binding, fetch the one finished provider context via `gentle-ai review
+// lens-context`, inject that block as the task's prompt, and hand the
+// model's raw final text back unmodified. It never parses binding fields
+// beyond the one it needs to route the native call, never rebuilds a
+// prompt, never applies a local budget, never captures or preserves a
+// result, and never decides admission or blocking -- native Go owns all of
+// that after this plugin returns. An ordinary already-running OpenCode
+// session is sufficient: no restart, no child process, no special
+// user-visible session, and no OPENCODE_DISABLE_* variable, because the
+// runtime's output is advisory and cannot mint authority until Go admits it.
 const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-readability", "review-reliability"])
 const BINDING = /^GENTLE_AI_REVIEW_BINDING (\{[^\n]+\})(?:\n|$)/
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
+const SDD_PHASES = ["sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"]
 
-type ReviewBinding = {
-  lineage: string
-  target: string
-  lens: string
-  order: number
-  revision?: string
-  repository_context?: string
-  subject_hash?: string
+// LENS_CONTEXT_DELIVERY declares this plugin's mechanism to the provider, and
+// it is recorded on the receipt beside the captured results. It is the
+// stronger of the two levels the provider accepts: a runtime adapter replaced
+// whatever the caller produced with the provider's own output before the
+// reviewer ran, so relaying is not trusted at all. Declaring the relayed
+// level from here would permanently record a weaker claim than what actually
+// happened.
+const LENS_CONTEXT_DELIVERY = "runtime_interception"
+
+// LENS_CONTEXT_TERMINATOR closes a complete provider block. The provider
+// assembles the whole block in memory before writing a byte, precisely so a
+// partial one cannot exist; this plugin still checks, because a partial block
+// is indistinguishable to a reviewer from a small candidate and would let a
+// truncated view be reported as a clean review.
+const LENS_CONTEXT_TERMINATOR = "GENTLE_AI_REVIEW_CONTEXT_END"
+
+// LENS_CONTEXT_REFUSAL matches the typed, path-free refusal code the native
+// `review lens-context` command emits. Only the [a-z_]+ code token is
+// forwarded -- never the native prose that carries it -- so the opaque path
+// keeps its absolute rule that no native text reaches the session transcript.
+const LENS_CONTEXT_REFUSAL = /\b(lens_context_[a-z_]+):/
+
+// LENS_CONTEXT_REFUSAL_ACTION names a real exit for each refusal a caller
+// cannot recover from by retrying the same binding. Without these, an
+// over-budget candidate or a path that produces no patch bytes collapses into
+// "refresh and retry", advice that deterministically fails and loops.
+const LENS_CONTEXT_REFUSAL_ACTION: Record<string, string> = {
+  lens_context_budget_exceeded:
+    "Immutable candidate evidence is never truncated, and retrying the same candidate cannot succeed. " +
+    "Split this candidate into smaller reviewable commits, each under the budget, then start a review for the reduced scope.",
+  lens_context_empty_patch:
+    "One content-changing path produced no patch bytes at all, which no legitimate candidate does. " +
+    "Refresh the exact native next_transition and relaunch the lens; if the same path keeps producing no patch, " +
+    "treat it as a native inspection defect and stop relaunching.",
+  lens_context_emission_conflict:
+    "This frozen lens slot already recorded a reviewer context produced by a different mechanism, " +
+    "and audit history is never rewritten. Start a review for a fresh candidate.",
 }
 
-interface ReviewArtifactSubject {
-  schema: string
-  subject_hash: string
-  lineage_id: string
-  authority_revision: string
-  target_identity: string
-  base_tree: string
-  candidate_tree: string
-  changed_path_manifest_sha256: string
-  lens: string
-  selected_order: number
-}
+const LENS_CONTEXT_DEFAULT_ACTION = "Refresh the exact native next_transition and relaunch the lens."
 
-interface ChangedPathManifestEntry {
-  path: string
-  status: string
-  old_mode: string
-  new_mode: string
-  deleted: boolean
-  type_changed: boolean
-  mode_only: boolean
-  intended_untracked: boolean
-}
-
-interface ReviewCapturePreflight {
-  schema: string
-  capability: string
-  lineage_id: string
-  target_identity: string
-  lens: string
-  selected_order: number
-  artifact_subject: ReviewArtifactSubject
-  base_tree: string
-  candidate_tree: string
-  changed_path_manifest: ChangedPathManifestEntry[]
-}
-
-function parseBinding(prompt: unknown, lens: string): ReviewBinding {
-  const match = BINDING.exec(typeof prompt === "string" ? prompt : "")
-  if (!match) throw new Error("review task is missing GENTLE_AI_REVIEW_BINDING")
-
-  let binding: unknown
+// bindingRepositoryContext extracts the one field this plugin needs to route
+// the native call: the opaque provider-issued repository-context handle. It
+// deliberately does not validate the binding's shape or any other field --
+// the binding is opaque provider data this plugin passes through, never
+// interprets. A missing or unparsable binding simply yields no handle, and
+// injectReviewerContext below refuses to launch the reviewer without one.
+function bindingRepositoryContext(prompt: string): string | undefined {
+  const match = BINDING.exec(prompt)
+  if (!match) return undefined
   try {
-    binding = JSON.parse(match[1])
+    const value = JSON.parse(match[1]) as unknown
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+    const repositoryContext = (value as Record<string, unknown>).repository_context
+    return typeof repositoryContext === "string" && repositoryContext !== "" ? repositoryContext : undefined
   } catch {
-    throw new Error("review task binding is malformed")
+    return undefined
   }
-  if (!binding || typeof binding !== "object" || Array.isArray(binding)) {
-    throw new Error("review task binding must be an object")
-  }
-  const value = binding as Record<string, unknown>
-  const fields = Object.keys(value).sort().join(",")
-  const legacy = fields === "lens,lineage,order,target"
-  const legacyBound = fields === "lens,lineage,order,subject_hash,target"
-  const priorCurrent = fields === "lens,lineage,order,repository_context,revision,target"
-  const current = fields === "lens,lineage,order,repository_context,revision,subject_hash,target"
-  if ((!legacy && !legacyBound && !priorCurrent && !current) ||
-      typeof value.lineage !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.lineage) ||
-      typeof value.target !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.target) ||
-      ((priorCurrent || current) && (typeof value.revision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.revision) ||
-        typeof value.repository_context !== "string" || !/^rctx1_[a-f0-9]{64}$/.test(value.repository_context))) ||
-      ((legacyBound || current) && (typeof value.subject_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.subject_hash))) ||
-      value.lens !== lens || !Number.isSafeInteger(value.order) || (value.order as number) < 0) {
-    throw new Error("review task binding does not match the selected lens")
-  }
-  return value as ReviewBinding
 }
 
-function reviewerResult(output: unknown): string {
-  if (typeof output !== "string" || output.trim() === "") throw new Error("reviewer output must not be empty")
-  const trimmed = output.trim()
+// taskResult unwraps a completed OpenCode task's `<task_result>` envelope.
+// `classification` is attached to the thrown error only when the caller
+// supplies one -- the SDD phase path (below) needs a machine-readable class
+// to build its terminal handoff; the reviewer path has no such consumer and
+// gets a plain error.
+function taskResult(output: unknown, subject: string, classification?: string): string {
+  const fail = (message: string, taskResultClass: string): never => {
+    if (classification) throw Object.assign(new Error(message), { [classification]: taskResultClass })
+    throw new Error(message)
+  }
+  if (typeof output !== "string" || output.trim() === "") {
+    fail(`${subject} output must not be empty`, "empty_result")
+  }
+  const trimmed = (output as string).trim()
   const envelope = TASK_RESULT.exec(trimmed)
   if (!envelope) {
-    if (TASK_TAG.test(trimmed)) throw new Error("reviewer output contains a malformed task result envelope")
+    if (TASK_TAG.test(trimmed)) fail(`${subject} output contains a malformed task result envelope`, "malformed_result")
     return trimmed
   }
   if (envelope[1].trim() === "") {
-    throw Object.assign(new Error("reviewer task result is empty"), { reviewClass: "empty_result" })
+    fail(`${subject} task result is empty`, "empty_result")
   }
   if (TASK_TAG.test(envelope[1])) {
-    throw Object.assign(new Error("reviewer task result contains a nested task envelope"), { reviewClass: "nested_envelope" })
+    fail(`${subject} task result contains a nested task envelope`, "nested_envelope")
   }
   return envelope[1]
 }
 
-function extractionClass(cause: unknown): string | undefined {
-  const value = (cause as { reviewClass?: unknown } | null)?.reviewClass
+// reviewerResult hands back the model's raw final text. No classification, no
+// capture, no preservation: native admission decides what a malformed or
+// empty result means.
+function reviewerResult(output: unknown): string {
+  return taskResult(output, "reviewer")
+}
+
+function extractionClass(cause: unknown, property: string): string | undefined {
+  const value = (cause as Record<string, unknown> | null)?.[property]
   return typeof value === "string" ? value : undefined
 }
 
+function isSDDPhase(agent: string): boolean {
+  return SDD_PHASES.some((phase) => agent === phase || agent.startsWith(phase + "-"))
+}
+const SDD_TASK_FAILURE_PREFIX = "GENTLE_AI_SDD_FAILURE "
+type SDDTaskFailure = { phase: string, code: string, handoff: string }
+type SDDTaskFailureError = Error & { sddFailure: SDDTaskFailure }
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`
+}
+// SDD_TASK_ROUTE_TOKEN bounds one provider or model identifier before it may
+// enter the failure handoff. The hook cannot see the child session's own
+// provider failure -- a pre-inference rejection (for example an HTTP 403
+// region refusal, #2677) is recorded on the child session record, which this
+// plugin deliberately cannot query since the client argument was removed --
+// so the child's model route from the task result metadata is the one causal
+// fact available at this boundary. A value is carried only when it looks
+// like a plain route identifier; anything with separators, whitespace, or
+// path shapes is omitted entirely rather than truncated, so hostile or
+// accidental metadata (absolute paths, provider dumps) never reaches the
+// session transcript.
+const SDD_TASK_ROUTE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/
+
+// taskRouteModel extracts the child task's provider/model route from the
+// task tool's result metadata ({parentSessionId, sessionId, model:
+// {providerID, modelID}}), or undefined when the metadata does not carry a
+// valid route. Absence is tolerated, never invented: the handoff simply
+// omits the field.
+function taskRouteModel(metadata: unknown): string | undefined {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined
+  const model = (metadata as Record<string, unknown>).model
+  if (!model || typeof model !== "object" || Array.isArray(model)) return undefined
+  const providerID = (model as Record<string, unknown>).providerID
+  const modelID = (model as Record<string, unknown>).modelID
+  if (typeof providerID !== "string" || typeof modelID !== "string") return undefined
+  if (!SDD_TASK_ROUTE_TOKEN.test(providerID) || !SDD_TASK_ROUTE_TOKEN.test(modelID)) return undefined
+  return `${providerID}/${modelID}`
+}
+
+// sddTaskFailure builds the terminal transport handoff for one failed SDD
+// phase task. Two different truths get two different summaries (#2677): an
+// empty result means the child task produced no output at all -- observed
+// when the provider rejects the request before generation (authentication,
+// region, or model access), when the task is interrupted, or when a phase
+// genuinely writes nothing -- while a malformed result means the child did
+// produce output that failed the envelope contract. The old single summary
+// claimed "no valid task result" for both, which hid that in the empty case
+// the child never ran inference at all.
+function sddTaskFailure(phase: string, cwd: string, cause: unknown, metadata?: unknown): SDDTaskFailureError {
+  const classification = extractionClass(cause, "sddClass")
+  const empty = classification === "empty_result"
+  const code = empty ? "sdd_task_result_empty" : "sdd_task_result_malformed"
+  const taskModel = taskRouteModel(metadata)
+  const guidance = "Do not retry or advance SDD; inspect the existing artifact state and surface the terminal failure to the user."
+  const summary = empty
+    ? `${phase} produced no task output at all. The child task returned nothing, which most often means the ` +
+      "provider rejected the request before generation (authentication, region, or model access), the task was " +
+      `interrupted, or the phase genuinely wrote nothing. ${guidance}`
+    : `${phase} returned no valid task result. ${guidance}`
+  const failure: SDDTaskFailure = {
+    phase,
+    code,
+    handoff: SDD_TASK_FAILURE_PREFIX + JSON.stringify({
+      schemaName: "gentle-ai.sdd-task-result-failure/v1",
+      status: "blocked",
+      code,
+      phase,
+      ...(taskModel === undefined ? {} : { taskModel }),
+      summary,
+      continuation: `gentle-ai sdd-status --cwd ${shellQuote(cwd)} --json`,
+    }),
+  }
+  return Object.assign(
+    new Error(failure.handoff),
+    { sddFailure: failure },
+  ) as SDDTaskFailureError
+}
+
 function captureCwd(worktree: string | undefined, directory: string): string {
-  const override = process.env["GENTLE_AI_REVIEW_CWD"]
-  if (typeof override === "string" && override.trim() !== "") return override.trim()
   return worktree || directory
 }
 
@@ -132,122 +224,35 @@ function runNative(cwd: string, args: string[], stdin: string): Promise<string> 
   })
 }
 
-function repositoryBindingArgs(cwd: string, binding: ReviewBinding): string[] {
-  if (binding.repository_context && binding.revision) {
-    return ["--repository-context", binding.repository_context, "--expected-revision", binding.revision]
-  }
-  return ["--cwd", cwd]
-}
-
-function captureResult(cwd: string, binding: ReviewBinding, result: string): Promise<string> {
-  const subjectArgs = binding.subject_hash ? ["--subject-hash", binding.subject_hash] : []
-  return runNative(cwd, [
-    "review", "capture-result", ...repositoryBindingArgs(cwd, binding),
-    "--lineage", binding.lineage, "--target", binding.target,
-    "--lens", binding.lens, "--order", String(binding.order), ...subjectArgs, "--input", "-",
-  ], result)
-}
-
-async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<ReviewCapturePreflight> {
-  try {
-    const subjectArgs = binding.subject_hash ? ["--subject-hash", binding.subject_hash] : []
-    const response = await runNative(cwd, [
-      "review", "capture-result", ...repositoryBindingArgs(cwd, binding),
-      "--lineage", binding.lineage, "--target", binding.target,
-      "--lens", binding.lens, "--order", String(binding.order), ...subjectArgs, "--preflight",
-    ], "")
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(response)
-    } catch {
-      throw new Error("review capture preflight returned malformed artifact-subject JSON")
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("review capture preflight returned malformed artifact-subject JSON")
-    }
-    const value = parsed as Record<string, unknown>
-    const subject = value.artifact_subject as Record<string, unknown> | undefined
-    const manifest = value.changed_path_manifest
-    if (!subject || subject.schema !== "gentle-ai.review-artifact-subject/v2" ||
-        typeof subject.subject_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.subject_hash) ||
-        typeof subject.authority_revision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.authority_revision) ||
-        typeof subject.base_tree !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(subject.base_tree) ||
-        typeof subject.candidate_tree !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(subject.candidate_tree) ||
-        typeof subject.changed_path_manifest_sha256 !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.changed_path_manifest_sha256) ||
-        subject.lineage_id !== binding.lineage || subject.target_identity !== binding.target ||
-        (binding.revision !== undefined && subject.authority_revision !== binding.revision) ||
-        subject.lens !== binding.lens || subject.selected_order !== binding.order ||
-        value.schema !== "gentle-ai.review-capture-preflight/v1" || value.capability !== "review.native_capture_preflight" ||
-        value.lineage_id !== binding.lineage || value.target_identity !== binding.target || value.lens !== binding.lens ||
-        value.selected_order !== binding.order || value.base_tree !== subject.base_tree || value.candidate_tree !== subject.candidate_tree ||
-        !validManifest(manifest)) {
-      throw new Error("review capture preflight returned an incomplete artifact subject")
-    }
-    if (binding.subject_hash && subject.subject_hash !== binding.subject_hash) {
-      throw new Error("review capture preflight returned a different artifact subject")
-    }
-    return value as unknown as ReviewCapturePreflight
-  } catch (cause) {
-    const scope = binding.repository_context ? "the provider-issued repository context" : cwd
-    const recovery = gitTrustRefusal(binding, cause)
-      ? GIT_TRUST_REFUSAL_RECOVERY
-      : binding.repository_context
-      ? `Refresh the exact native next_transition for lineage ${binding.lineage} before relaunching the lens.`
-      : `If lineage ${binding.lineage} was started in a different repository (for example a nested one), ` +
-        `set GENTLE_AI_REVIEW_CWD to that repository and relaunch the lens.`
-    throw new Error(
-      `review capture preflight failed for lens ${binding.lens} under ${scope}: ` +
-      `${sessionErrorMessage(binding, cause, "repository_context_preflight_failed")}. ` +
-      `The reviewer was not launched, so its exactly-once invocation is preserved. ` +
-      recovery,
-    )
-  }
-}
-
-function validManifest(value: unknown): value is ChangedPathManifestEntry[] {
-  if (!Array.isArray(value)) return false
-  let previous = ""
-  for (const entry of value) {
-    if (!validManifestEntry(entry) ||
-        (previous !== "" && Buffer.compare(Buffer.from(previous, "utf8"), Buffer.from(entry.path, "utf8")) >= 0)) return false
-    previous = entry.path
-  }
-  return true
-}
-
-function validManifestEntry(entry: unknown): entry is ChangedPathManifestEntry {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false
-  const value = entry as Record<string, unknown>
-  return Object.keys(value).sort().join(",") ===
-    "deleted,intended_untracked,mode_only,new_mode,old_mode,path,status,type_changed" &&
-    typeof value.path === "string" && value.path !== "" &&
-    typeof value.status === "string" && /^[ADMT]$/.test(value.status) &&
-    typeof value.old_mode === "string" && /^[0-7]{6}$/.test(value.old_mode) &&
-    typeof value.new_mode === "string" && /^[0-7]{6}$/.test(value.new_mode) &&
-    typeof value.deleted === "boolean" && typeof value.type_changed === "boolean" &&
-    typeof value.mode_only === "boolean" && typeof value.intended_untracked === "boolean"
-}
-
-async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<string> {
-  const binding = parseBinding(prompt, lens)
-  const preflight = await preflightCapture(cwd, binding)
-  const injectedBinding = { ...binding, subject_hash: preflight.artifact_subject.subject_hash }
-  return `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(injectedBinding)}\n` +
-    `GENTLE_AI_REVIEW_CONTEXT ${JSON.stringify(preflight)}\n`
-}
-
-function preserveResult(cwd: string, binding: ReviewBinding, raw: string, cls?: string): Promise<string> {
-  const args = [
-    "review", "preserve-result", ...repositoryBindingArgs(cwd, binding),
-    "--lineage", binding.lineage, "--target", binding.target,
-    "--lens", binding.lens, "--order", String(binding.order), "--input", "-",
-  ]
-  if (typeof cls === "string" && cls !== "") args.push("--class", cls)
-  return runNative(cwd, args, raw)
-}
-
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
+}
+
+// The privacy gate a forwarded cause passes through. It mirrors
+// reviewScrubDefectReportField in internal/cli/review_defect_report.go field
+// for field -- same three patterns, same marker, same first-line-only rule --
+// because the plugin cannot call into Go and the two surfaces must redact the
+// same things. The native side scrubs what it forwards; this scrubs what the
+// native side did not author, such as an OS-level spawn failure.
+const REDACTION_MARKER = "<redacted>"
+const ENV_ASSIGNMENT = /\b[A-Z][A-Z0-9_]{2,}=\S+/g
+const EMAIL_ADDRESS = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g
+const ABSOLUTE_PATH = /(?:[A-Za-z]:)?[\\/][^\s"'`]+/g
+// Bounds a cause bound for a session transcript. Native failures can quote
+// reviewer payload fragments, so this is a limit, not a formatting preference.
+const CAUSE_LIMIT = 512
+
+function scrubText(value: string): string {
+  const scrubbed = value.split("\n", 1)[0]
+    .replace(ENV_ASSIGNMENT, REDACTION_MARKER)
+    .replace(EMAIL_ADDRESS, REDACTION_MARKER)
+    .replace(ABSOLUTE_PATH, REDACTION_MARKER)
+    .trim()
+  return scrubbed.length > CAUSE_LIMIT ? `${scrubbed.slice(0, CAUSE_LIMIT)} (truncated)` : scrubbed
+}
+
+function scrubbedCause(cause: unknown): string {
+  return scrubText(errorMessage(cause))
 }
 
 // GIT_TRUST_REFUSAL_CODE is the typed, path-free code the native CLI emits
@@ -262,134 +267,131 @@ const GIT_TRUST_REFUSAL_CODE = "git_repository_untrusted"
 // native stderr, so the opaque path keeps its absolute rule that no native
 // text ever reaches the session transcript. It mirrors the native wording in
 // internal/cli/review_incident.go.
-// It carries its own instruction, so every surface that renders it — including
-// the post-launch capture path, which appends no separate recovery line —
-// tells the caller something they can actually carry out.
 const GIT_TRUST_REFUSAL_MESSAGE =
   `${GIT_TRUST_REFUSAL_CODE}: Git declined to open the bound repository in this process because it is owned by a ` +
   `different account; gentle-ai never provisions a safe.directory exception and never bypasses that protection. ` +
   `Restart the host process under a Git context that already trusts that repository.`
 
-const GIT_TRUST_REFUSAL_RECOVERY =
-  "Relaunch the lens once the host process runs under a Git context that trusts that repository."
-
-function gitTrustRefusal(binding: ReviewBinding, cause: unknown): boolean {
-  return Boolean(binding.repository_context) && new RegExp(`\\b${GIT_TRUST_REFUSAL_CODE}\\b`).test(errorMessage(cause))
+function gitTrustRefusal(cause: unknown): boolean {
+  return new RegExp(`\\b${GIT_TRUST_REFUSAL_CODE}\\b`).test(errorMessage(cause))
 }
 
-// ADMISSION_REJECTION matches the typed decision the native CLI emits when it
-// refused the reviewer RESULT itself (`reviewer artifact admission <decision>:`
-// from internal/cli/review_artifact.go). Only the [a-z_]+ decision token is
-// forwarded — never the native diagnostic, which can embed payload text — so
-// the opaque path keeps its rule that no native prose reaches the transcript.
-// Without this, an invalid result collapsed into "retry the same opaque
-// binding", advice that deterministically fails: recapturing identical bytes
-// can never satisfy admission, only a relaunched reviewer can.
-const ADMISSION_REJECTION = /\breviewer artifact admission ([a-z_]+):/
-
-function admissionRejection(cause: unknown): string | undefined {
-  const match = ADMISSION_REJECTION.exec(errorMessage(cause))
-  return match ? match[1] : undefined
+// lensContextRefusal forwards the provider's typed refusal code and this
+// plugin's own recovery text for it, or undefined when the failure is not a
+// typed lens-context refusal at all (a Git trust refusal, a missing binary, a
+// crash) and the caller should fall back to the generic scrubbed message.
+function lensContextRefusal(cause: unknown): string | undefined {
+  const match = LENS_CONTEXT_REFUSAL.exec(errorMessage(cause))
+  if (!match) return undefined
+  return `${match[1]}: the provider refused to produce the reviewer lens context. ` +
+    `${LENS_CONTEXT_REFUSAL_ACTION[match[1]] ?? LENS_CONTEXT_DEFAULT_ACTION}`
 }
 
-function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string): string {
-  if (!binding.repository_context) return errorMessage(cause)
-  if (gitTrustRefusal(binding, cause)) return GIT_TRUST_REFUSAL_MESSAGE
-  const admission = admissionRejection(cause)
-  if (admission) {
-    return `${code}: native admission rejected the reviewer result as ${admission}; ` +
-      "retrying capture with the same result cannot succeed; relaunch this lens reviewer to produce a corrected result"
-  }
-  return `${code}: provider-owned review operation failed; refresh the exact native next_transition or retry the same opaque binding`
+// lensContextFailureMessage renders one native `review lens-context` failure
+// for the session transcript: a Git trust refusal keeps its own carry-outable
+// instruction, a typed lens-context refusal keeps its named exit, and
+// anything else is scrubbed rather than forwarded verbatim, since native
+// failures can quote reviewer payload fragments.
+function lensContextFailureMessage(cause: unknown): string {
+  if (gitTrustRefusal(cause)) return GIT_TRUST_REFUSAL_MESSAGE
+  return lensContextRefusal(cause) ?? scrubbedCause(cause)
 }
 
-function preservedReference(manifest: string): string {
-  try {
-    const parsed = JSON.parse(manifest) as { reference?: unknown; path?: unknown; sha256?: unknown }
-    if (parsed && typeof parsed.reference === "string" && parsed.reference !== "") return parsed.reference
-    if (parsed && typeof parsed.path === "string" && parsed.path !== "") return parsed.path
-    if (parsed && typeof parsed.sha256 === "string" && parsed.sha256 !== "") return parsed.sha256
-  } catch {
-    // fall through to the full manifest
-  }
-  return manifest
-}
-
-// Bound on the raw payload embedded in a double-failure error message. The
-// native side already caps preserved payloads at 4 MiB; embedding is a last
-// resort into the session transcript, so keep it far smaller.
-const PRESERVE_EMBED_LIMIT = 64 * 1024
-
-function embeddedRawPayload(raw: string): string {
-  if (raw.length <= PRESERVE_EMBED_LIMIT) return raw
-  return `${raw.slice(0, PRESERVE_EMBED_LIMIT)}\n[truncated: first ${PRESERVE_EMBED_LIMIT} of ${raw.length} characters embedded]`
-}
-
-async function preservedCaptureFailure(cwd: string, binding: ReviewBinding, raw: unknown, cause: unknown): Promise<Error> {
-  const captureFailure = sessionErrorMessage(binding, cause, "repository_context_capture_failed")
-  if (typeof raw !== "string" || raw.trim() === "") {
-    return new Error(`${captureFailure}; no raw reviewer result was available to preserve`)
-  }
-  try {
-    const reviewClass = extractionClass(cause)
-    const manifest = await preserveResult(cwd, binding, raw, reviewClass)
-    return new Error(`${captureFailure}; raw reviewer result preserved for recovery as ${preservedReference(manifest)}`)
-  } catch (preserveCause) {
-    const preserveFailure = sessionErrorMessage(binding, preserveCause, "repository_context_preserve_failed")
-    // Double failure: durable preservation itself failed, so the transcript is
-    // the only remaining copy — embed the bounded payload in the error. Both
-    // bindings need this identically: captureResult and preserveResult resolve
-    // the same repository through the same binding path, so one environmental
-    // refusal can fail both, and an opaque binding that omitted the payload
-    // had no equivalent transcript fallback left.
-    return new Error(
-      `${captureFailure}; raw reviewer result could not be preserved: ${preserveFailure}; ` +
-      `raw reviewer result follows for manual recovery:\n${embeddedRawPayload(raw)}`,
+// injectReviewerContext replaces a reviewer task's prompt with the provider's
+// own finished lens context. Everything the reviewer sees is produced by one
+// native call through the shell-less runNative channel: the provider-authored
+// binding, the provider-authored capture context, the reviewer's charge and
+// result schema, discovery, and one verbatim immutable patch per canonical
+// manifest index, budget already applied and refusals already resolved.
+//
+// This plugin assembles nothing and interprets nothing beyond the one
+// repository-context handle it needs to route the call: `lens` is the
+// launched subagent_type itself, never a field parsed out of the binding.
+async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<string> {
+  const repositoryContext = bindingRepositoryContext(prompt)
+  if (!repositoryContext) {
+    throw new Error(
+      "immutable OpenCode candidate inspection requires a repository-context binding; " +
+      "`review lens-context` accepts only the opaque provider-issued handle and has no --cwd fallback. " +
+      "The reviewer was not launched, so its exactly-once invocation is preserved.",
     )
   }
+  let block: string
+  try {
+    block = await runNative(cwd, [
+      "review", "lens-context",
+      "--repository-context", repositoryContext,
+      "--lens", lens,
+      "--delivery", LENS_CONTEXT_DELIVERY,
+    ], "")
+  } catch (cause) {
+    throw new Error(
+      `review lens context failed for lens ${lens}: ${lensContextFailureMessage(cause)}. ` +
+      "The reviewer was not launched, so its exactly-once invocation is preserved.",
+    )
+  }
+  if (!block.endsWith(LENS_CONTEXT_TERMINATOR)) {
+    throw new Error(
+      `review lens context for lens ${lens} is not terminated by ${LENS_CONTEXT_TERMINATOR}; ` +
+      "partial provider context is never injected. " +
+      "The reviewer was not launched, so its exactly-once invocation is preserved.",
+    )
+  }
+  return `${block}\n`
 }
 
-const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => ({
+const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
+  const failedSDDSessions = new Map<string, SDDTaskFailure>()
+  return {
+  dispose: async () => {
+    failedSDDSessions.clear()
+  },
+  event: async ({ event }) => {
+    if (event.type === "session.deleted") {
+      failedSDDSessions.delete(event.properties.info.id)
+    }
+  },
   "tool.execute.before": async (input, output) => {
-    if (input.tool !== "task" || typeof output.args?.subagent_type !== "string" ||
-        !REVIEW_AGENTS.has(output.args.subagent_type)) return
+    if (input.tool !== "task" || typeof output.args?.subagent_type !== "string") return
+    const subagent = output.args.subagent_type
+    if (isSDDPhase(subagent)) {
+      const failure = failedSDDSessions.get(input.sessionID)
+      if (failure) {
+        throw new Error(failure.handoff)
+      }
+      return
+    }
+    if (!REVIEW_AGENTS.has(subagent)) return
     if (typeof output.args.prompt !== "string") {
       throw new Error("review task is missing GENTLE_AI_REVIEW_BINDING")
     }
     if (output.args.background === true) {
-      throw new Error("bound review tasks must run in the foreground for native result capture")
+      throw new Error("bound review tasks must run in the foreground so the launching session can relay the raw result")
     }
     output.args.prompt = await injectReviewerContext(
       output.args.prompt,
-      output.args.subagent_type,
+      subagent,
       captureCwd(worktree, directory),
     )
   },
   "tool.execute.after": async (input, output) => {
-    if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
+    if (input.tool !== "task" || typeof input.args?.subagent_type !== "string") return
+    const subagent = input.args.subagent_type
+    if (isSDDPhase(subagent)) {
+      try {
+        taskResult(output.output, "SDD phase", "sddClass")
+      } catch (cause) {
+        const failure = sddTaskFailure(subagent, captureCwd(worktree, directory), cause, output.metadata)
+        failedSDDSessions.set(input.sessionID, failure.sddFailure)
+        throw failure
+      }
+      return
+    }
+    if (!REVIEW_AGENTS.has(subagent)) return
     if (typeof input.args.prompt !== "string" || !BINDING.test(input.args.prompt)) return
-    const lens = input.args.subagent_type
-    const binding = parseBinding(input.args.prompt, lens)
-    const cwd = captureCwd(worktree, directory)
-    // Extract the replayable payload exactly once, BEFORE capture: recovery
-    // re-runs `review capture-result --input <preserved file>`, whose strict
-    // decoder rejects the task envelope, so a capture failure must preserve
-    // the extracted strict JSON — never the enveloped output.output.
-    let result: string
-    try {
-      result = reviewerResult(output.output)
-    } catch (cause) {
-      // Extraction itself failed (malformed envelope): there is no extracted
-      // payload, so preserve the raw envelope under the distinct extraction
-      // cause for manual inspection.
-      throw await preservedCaptureFailure(cwd, binding, output.output, cause)
-    }
-    try {
-      output.output = await captureResult(cwd, binding, result)
-    } catch (cause) {
-      throw await preservedCaptureFailure(cwd, binding, result, cause)
-    }
+    output.output = reviewerResult(output.output)
   },
-})
+  }
+}
 
 export default ReviewResultArtifactsPlugin

@@ -298,31 +298,31 @@ func TestResolveAgentInstall(t *testing.T) {
 			name:    "claude-code on darwin uses npm without sudo",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
 			agent:   model.AgentClaudeCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@" + versions.ClaudeCode}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@latest"}},
 		},
 		{
 			name:    "claude-code on linux system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
 			agent:   model.AgentClaudeCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@" + versions.ClaudeCode}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@latest"}},
 		},
 		{
 			name:    "claude-code on linux nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", NpmWritable: true},
 			agent:   model.AgentClaudeCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@" + versions.ClaudeCode}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@latest"}},
 		},
 		{
 			name:    "claude-code on arch system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
 			agent:   model.AgentClaudeCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@" + versions.ClaudeCode}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@latest"}},
 		},
 		{
 			name:    "claude-code on fedora nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", NpmWritable: true},
 			agent:   model.AgentClaudeCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@" + versions.ClaudeCode}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@latest"}},
 		},
 		{
 			name:    "opencode on darwin uses official anomalyco brew tap",
@@ -334,43 +334,65 @@ func TestResolveAgentInstall(t *testing.T) {
 			name:    "opencode on ubuntu system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
 		},
 		{
 			name:    "opencode on ubuntu nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", NpmWritable: true},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
 		},
 		{
 			name:    "opencode on arch system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
 		},
 		{
 			name:    "opencode on fedora system npm uses sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
 		},
 		{
 			name:    "opencode on fedora nvm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", NpmWritable: true},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+		},
+		{
+			// Issue #2499: the probe (#2493) accepts any Linux package manager
+			// on PATH; the resolver must not re-enumerate a subset of that list.
+			name:    "opencode on alpine system npm uses sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "alpine", PackageManager: "apk", Supported: true},
+			agent:   model.AgentOpenCode,
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+		},
+		{
+			name:    "opencode on opensuse nvm skips sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "opensuse-leap", PackageManager: "zypper", Supported: true, NpmWritable: true},
+			agent:   model.AgentOpenCode,
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+		},
+		{
+			// A Linux profile the probe rejected (no manager on PATH) must keep
+			// erroring: the default arm is gated on a non-empty PackageManager.
+			name:    "opencode on linux without package manager returns error",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "unknown", PackageManager: ""},
+			agent:   model.AgentOpenCode,
+			wantErr: true,
 		},
 		{
 			name:    "claude-code on windows uses npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", NpmWritable: true},
 			agent:   model.AgentClaudeCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@" + versions.ClaudeCode}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@latest"}},
 		},
 		{
 			name:    "opencode on windows uses npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			agent:   model.AgentOpenCode,
-			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
 		},
 		{
 			name:    "kimi on windows uses uv to strictly enforce secure package installation",
@@ -659,6 +681,40 @@ func TestResolveComponentInstall(t *testing.T) {
 			},
 		},
 		{
+			// Issue #2499: GGA's Linux install is git clone + install.sh and
+			// never touches the package manager, so any probed manager works.
+			name:      "gga on alpine uses git clone and install.sh",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: "alpine", PackageManager: "apk", Supported: true},
+			component: model.ComponentGGA,
+			want: CommandSequence{
+				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
+				{"mkdir", "-p", "/tmp/gentleman-guardian-angel"},
+				{"git", "init", "/tmp/gentleman-guardian-angel"},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "refs/tags/v" + versions.GGAVersion + ":refs/tags/v" + versions.GGAVersion},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "checkout", "-f", "refs/tags/v" + versions.GGAVersion},
+				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
+			},
+		},
+		{
+			name:      "gga on nixos uses git clone and install.sh",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: "nixos", PackageManager: "nix", Supported: true},
+			component: model.ComponentGGA,
+			want: CommandSequence{
+				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
+				{"mkdir", "-p", "/tmp/gentleman-guardian-angel"},
+				{"git", "init", "/tmp/gentleman-guardian-angel"},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "refs/tags/v" + versions.GGAVersion + ":refs/tags/v" + versions.GGAVersion},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "checkout", "-f", "refs/tags/v" + versions.GGAVersion},
+				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
+			},
+		},
+		{
+			name:      "gga on linux without package manager returns error",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: "unknown", PackageManager: ""},
+			component: model.ComponentGGA,
+			wantErr:   true,
+		},
+		{
 			name:      "engram on windows returns error (uses DownloadLatestBinary instead)",
 			profile:   system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			component: model.ComponentEngram,
@@ -669,7 +725,6 @@ func TestResolveComponentInstall(t *testing.T) {
 			profile:   system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			component: model.ComponentGGA,
 			want: CommandSequence{
-				{"powershell", "-NoProfile", "-Command", fmt.Sprintf("$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath '%s') { Remove-Item -Recurse -Force -LiteralPath '%s' }", powerShellSingleQuotedValue(filepath.Join(os.TempDir(), "gentleman-guardian-angel")), powerShellSingleQuotedValue(filepath.Join(os.TempDir(), "gentleman-guardian-angel")))},
 				{"git", "clone", "--depth=1", "--branch", "v" + versions.GGAVersion, "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", filepath.Join(os.TempDir(), "gentleman-guardian-angel")},
 				{gitBashPath(), bashScriptPath(system.PlatformProfile{OS: "windows"}, filepath.Join(os.TempDir(), "gentleman-guardian-angel", "install.sh"))},
 			},
@@ -729,6 +784,9 @@ func TestResolveGGAInstall_UsesPinnedReleaseTag(t *testing.T) {
 }
 
 func TestGGAInstall_CleanupCommandBehavior(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows cleanup moved to the runtime PowerShell boundary")
+	}
 	// Create a temp directory to simulate the clone destination.
 	tmpDir := t.TempDir()
 	staleDir := filepath.Join(tmpDir, "gentleman-guardian-angel")
@@ -764,8 +822,8 @@ func TestGGAInstall_CleanupCommandBehavior(t *testing.T) {
 	if profile.OS == "windows" {
 		// Cleanup command: powershell -NoProfile -Command "..."
 		// Substitute the system Temp path with our local staleDir.
-		systemTemp := powerShellSingleQuotedValue(filepath.Join(os.TempDir(), "gentleman-guardian-angel"))
-		cmdStr := strings.ReplaceAll(cleanupCmd[3], systemTemp, powerShellSingleQuotedValue(staleDir))
+		systemTemp := system.PowerShellSingleQuoted(filepath.Join(os.TempDir(), "gentleman-guardian-angel"))
+		cmdStr := strings.ReplaceAll(cleanupCmd[3], systemTemp, system.PowerShellSingleQuoted(staleDir))
 		testCmd = []string{cleanupCmd[0], cleanupCmd[1], cleanupCmd[2], cmdStr}
 	} else {
 		// Cleanup command: rm -rf /tmp/gentleman-guardian-angel
@@ -801,7 +859,7 @@ func TestGGAInstall_CleanupCommandBehavior(t *testing.T) {
 }
 
 func TestPowerShellSingleQuotedValue(t *testing.T) {
-	if got, want := powerShellSingleQuotedValue(`C:\Users\O'Brien\Temp`), `C:\Users\O''Brien\Temp`; got != want {
-		t.Fatalf("powerShellSingleQuotedValue() = %q, want %q", got, want)
+	if got, want := system.PowerShellSingleQuoted(`C:\Users\O'Brien\Temp`), `C:\Users\O''Brien\Temp`; got != want {
+		t.Fatalf("PowerShellSingleQuoted() = %q, want %q", got, want)
 	}
 }

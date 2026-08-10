@@ -33,6 +33,7 @@ func newCompactReviewerCaptureFixture(
 		t.Fatal(err)
 	}
 	path := filepath.Join(repo, "internal", "a.go")
+	secondPath := filepath.Join(repo, "internal", "b.go")
 	if err := os.WriteFile(
 		path,
 		[]byte("package internal\n\nfunc Value() int { return 1 }\n"),
@@ -40,11 +41,25 @@ func newCompactReviewerCaptureFixture(
 	); err != nil {
 		t.Fatal(err)
 	}
-	gitSnapshot(t, repo, "add", "--", "internal/a.go")
+	if err := os.WriteFile(
+		secondPath,
+		[]byte("package internal\n\nfunc SecondValue() int { return 1 }\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	gitSnapshot(t, repo, "add", "--", "internal/a.go", "internal/b.go")
 	gitSnapshot(t, repo, "commit", "-m", "add go fixture")
 	if err := os.WriteFile(
 		path,
 		[]byte("package internal\n\nfunc Value() int { return 2 }\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		secondPath,
+		[]byte("package internal\n\nfunc SecondValue() int { return 2 }\n"),
 		0o644,
 	); err != nil {
 		t.Fatal(err)
@@ -231,6 +246,60 @@ func TestCompactStoreCaptureAdmittedReviewerResultPublishesDurableExactReplay(
 	}
 }
 
+func TestCompactStoreCaptureAdmittedReviewerResultNormalizesInspectionPathsBeforePersisting(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "capture-reordered-inspection-replay")
+	first, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), fixture.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := os.ReadFile(fixture.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reordered := fixture.request
+	reordered.Inspection.Paths = []string{
+		fixture.request.Inspection.Paths[1],
+		fixture.request.Inspection.Paths[0],
+	}
+	replayed, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), reordered)
+	if err != nil || !reflect.DeepEqual(replayed, first) {
+		t.Fatalf("reordered complete inspection replay = %#v, %v; want %#v, nil", replayed, err, first)
+	}
+	afterReplay, err := os.ReadFile(fixture.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(afterReplay, persisted) {
+		t.Fatal("reordered complete inspection replay changed the persisted result")
+	}
+
+	conflicting := reordered
+	conflicting.Result.Evidence = append([]string(nil), reordered.Result.Evidence...)
+	conflicting.Result.Evidence = append(conflicting.Result.Evidence, "independent verification inspected internal/b.go:1")
+	raw, err := json.Marshal(compactProviderReviewerResult{
+		SubjectHash: conflicting.ArtifactSubject.SubjectHash,
+		Inspection:  conflicting.Inspection,
+		Lens:        conflicting.ArtifactSubject.Lens,
+		Findings:    conflicting.Result.Findings,
+		Evidence:    conflicting.Result.Evidence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflicting.RawPayload = append(raw, '\n')
+	if _, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), conflicting); err == nil || !strings.Contains(err.Error(), "different canonical bytes") {
+		t.Fatalf("conflicting provider payload error = %v", err)
+	}
+	afterConflict, err := os.ReadFile(fixture.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(afterConflict, persisted) {
+		t.Fatal("conflicting provider payload changed the persisted result")
+	}
+}
+
 func TestCompactStoreCaptureAdmittedReviewerResultConvergesAfterExactReplayLockTimeout(t *testing.T) {
 	fixture := newCompactReviewerCaptureFixture(t, "capture-timeout-replay")
 	want, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), fixture.request)
@@ -242,10 +311,15 @@ func TestCompactStoreCaptureAdmittedReviewerResultConvergesAfterExactReplayLockT
 		t.Fatal(err)
 	}
 	defer held.release()
+	reordered := fixture.request
+	reordered.Inspection.Paths = []string{
+		fixture.request.Inspection.Paths[1],
+		fixture.request.Inspection.Paths[0],
+	}
 
-	got, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), fixture.request)
+	got, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), reordered)
 	if err != nil || !reflect.DeepEqual(got, want) {
-		t.Fatalf("exact replay behind held store lock = %#v, %v; want %#v", got, err, want)
+		t.Fatalf("reordered complete inspection replay behind held store lock = %#v, %v; want %#v", got, err, want)
 	}
 
 	payload, _, err := readCompactReviewerArtifact(fixture.path)
@@ -580,6 +654,48 @@ func TestCompactStoreCaptureAdmittedReviewerResultRejectsCallerDerivedContext(
 		fs.ErrNotExist,
 	) {
 		t.Fatalf("context refusal published reviewer directory: %v", err)
+	}
+}
+
+func TestCompactStoreCaptureRefusesInvalidLocationsWithoutConsumingTheSlot(t *testing.T) {
+	for _, tt := range []struct {
+		location string
+		reason   FindingLocationErrorReason
+	}{
+		{"internal/a.go:1-2,4", FindingLocationLineNotInteger},
+		{"internal/a.go:3-2", FindingLocationErrorReason("range_must_be_ascending")},
+		{"internal/a.go:0-1", FindingLocationLineNotPositive},
+		{"internal/a.go:" + strings.Repeat("9", 64), FindingLocationErrorReason("line_overflows_integer")},
+		{"internal/a.go:9223372036854775808", FindingLocationErrorReason("line_overflows_integer")},
+		{"internal/a.go:18446744073709551615", FindingLocationErrorReason("line_overflows_integer")},
+		{"internal/a.go", FindingLocationExpectedPathAndLine},
+	} {
+		t.Run(tt.location, func(t *testing.T) {
+			fixture := newCompactReviewerCaptureFixture(t, "capture-invalid-location")
+			before, err := fixture.store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.request.Result.Findings = []Finding{{
+				ID: "R3-001", Lens: "reliability", Location: tt.location, Severity: "WARNING",
+				Claim: "invalid location", ProofRefs: []string{"internal/a.go:1"},
+			}}
+			if _, err = fixture.store.CaptureAdmittedReviewerResult(t.Context(), fixture.request); err == nil {
+				t.Fatal("CaptureAdmittedReviewerResult() succeeded")
+			} else {
+				var locationErr *FindingLocationError
+				if !errors.As(err, &locationErr) || locationErr.Reason != tt.reason {
+					t.Fatalf("CaptureAdmittedReviewerResult() error = %v; want %q", err, tt.reason)
+				}
+			}
+			after, err := fixture.store.Load()
+			if err != nil || !reflect.DeepEqual(after, before) {
+				t.Fatalf("refused capture changed authority: before=%#v after=%#v err=%v", before, after, err)
+			}
+			if _, err := os.Lstat(fixture.path); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("refused capture consumed reviewer slot: %v", err)
+			}
+		})
 	}
 }
 

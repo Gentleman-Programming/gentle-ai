@@ -393,6 +393,25 @@ func TestComponentPathsContext7ClaudeRespectsWorkspaceScope(t *testing.T) {
 	}
 }
 
+func TestComponentPathsEngramClaudeUsesUserRegistryAndPreservesWorkspaceScope(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentClaudeCode})
+
+	global := componentPaths(home, model.Selection{}, adapters, model.ComponentEngram)
+	registry := filepath.Join(home, ".claude.json")
+	legacy := filepath.Join(home, ".claude", "mcp", "engram.json")
+	if !containsPath(global, registry) || containsPath(global, legacy) {
+		t.Fatalf("global Engram paths must use only Claude's user registry; paths=%v", global)
+	}
+
+	workspacePaths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{}, adapters, model.ComponentEngram)
+	workspaceLegacy := filepath.Join(workspace, ".claude", "mcp", "engram.json")
+	if !containsPath(workspacePaths, workspaceLegacy) || containsPath(workspacePaths, filepath.Join(workspace, ".claude.json")) {
+		t.Fatalf("workspace Engram paths must remain unchanged; paths=%v", workspacePaths)
+	}
+}
+
 // TestComponentPathsEngramCodexIncludesConfigTOML verifies that componentPaths
 // for ComponentEngram + Codex reports ~/.codex/config.toml as a backup target.
 func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
@@ -866,7 +885,10 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 	selection := model.Selection{Agents: []model.AgentID{agent}}
 	resolved := planner.ResolvedPlan{Agents: selection.Agents}
 
-	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
 
 	routing, err := agentguidance.RoutingPaths(home, agent)
 	if err != nil {
@@ -882,6 +904,25 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 	}
 }
 
+func TestBackupTargetsEngramClaudeIncludeRegistryAndLegacyMigrationSource(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Components: []model.ComponentID{model.ComponentEngram}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
+	for _, want := range []string{
+		filepath.Join(home, ".claude.json"),
+		filepath.Join(home, ".claude", "mcp", "engram.json"),
+	} {
+		if !containsPath(targets, want) {
+			t.Fatalf("backupTargets missing Claude Engram path %q; targets=%v", want, targets)
+		}
+	}
+}
+
 func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	home := t.TempDir()
 	agentIDs := []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi}
@@ -892,7 +933,10 @@ func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	}
 	resolved := planner.ResolvedPlan{Agents: agentIDs, OrderedComponents: selection.Components}
 
-	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
 
 	assertNoDuplicatePaths(t, "backupTargets", targets)
 }

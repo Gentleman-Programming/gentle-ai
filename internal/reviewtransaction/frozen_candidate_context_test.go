@@ -3,6 +3,7 @@ package reviewtransaction
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -208,7 +209,7 @@ func TestFrozenCandidateReviewerDiffUsesLiteralManifestPaths(t *testing.T) {
 	}
 }
 
-func TestFrozenCandidateReviewerDiffIgnoresMutableAttributeSources(t *testing.T) {
+func TestFrozenCandidateReviewerDiffUsesRegularAttributesFileAndIgnoresMutableSources(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "attribute-target.txt", "base\n")
@@ -228,7 +229,10 @@ func TestFrozenCandidateReviewerDiffIgnoresMutableAttributeSources(t *testing.T)
 	if err != nil {
 		t.Fatalf("FrozenCandidateContext() error = %v", err)
 	}
-	baseline := frozenCandidateGitDiff(t, repo, frozen, "attribute-target.txt")
+	baseline, err := (SnapshotBuilder{Repo: repo}).InspectCandidate(context.Background(), snapshot, "patch", 0, "")
+	if err != nil {
+		t.Fatalf("InspectCandidate() error = %v", err)
+	}
 	if !bytes.Contains(baseline, []byte("+candidate")) || bytes.Contains(baseline, []byte("GIT binary patch")) {
 		t.Fatalf("baseline reviewer diff is not canonical text:\n%s", baseline)
 	}
@@ -256,7 +260,64 @@ func TestFrozenCandidateReviewerDiffIgnoresMutableAttributeSources(t *testing.T)
 	t.Setenv("GIT_CONFIG_KEY_0", "core.attributesFile")
 	t.Setenv("GIT_CONFIG_VALUE_0", attributes)
 
-	replayed := frozenCandidateGitDiff(t, repo, frozen, "attribute-target.txt")
+	originalStarter := gitProcessTreeStarter
+	var observedAttributesFile bool
+	var carrierErr error
+	verifyEmptyRegular := func(carrier, path string) error {
+		if path == "" {
+			return errors.New(carrier + " is missing")
+		}
+		if path == os.DevNull {
+			return errors.New(carrier + " still uses os.DevNull")
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Size() != 0 {
+			return errors.New(carrier + " is not an empty regular file")
+		}
+		return nil
+	}
+	gitProcessTreeStarter = func(command *exec.Cmd) (func() error, error) {
+		for _, arg := range command.Args {
+			if !strings.HasPrefix(arg, "core.attributesFile=") {
+				continue
+			}
+			observedAttributesFile = true
+			if err := verifyEmptyRegular("core.attributesFile", strings.TrimPrefix(arg, "core.attributesFile=")); err != nil {
+				carrierErr = err
+			}
+			for _, prefix := range []string{"GIT_CONFIG_SYSTEM=", "GIT_CONFIG_GLOBAL="} {
+				foundCarrier := false
+				for _, entry := range command.Env {
+					if strings.HasPrefix(entry, prefix) {
+						foundCarrier = true
+						if err := verifyEmptyRegular(strings.TrimSuffix(prefix, "="), strings.TrimPrefix(entry, prefix)); err != nil {
+							carrierErr = err
+						}
+						break
+					}
+				}
+				if !foundCarrier {
+					carrierErr = errors.New(strings.TrimSuffix(prefix, "=") + " is missing")
+				}
+			}
+		}
+		return originalStarter(command)
+	}
+	t.Cleanup(func() { gitProcessTreeStarter = originalStarter })
+
+	replayed, err := (SnapshotBuilder{Repo: repo}).InspectCandidate(context.Background(), snapshot, "patch", 0, "")
+	if err != nil {
+		t.Fatalf("InspectCandidate() under hostile configuration: %v", err)
+	}
+	if !observedAttributesFile {
+		t.Fatal("isolated candidate inspection did not run core.attributesFile")
+	}
+	if carrierErr != nil {
+		t.Fatal(carrierErr)
+	}
 	if !bytes.Equal(replayed, baseline) {
 		t.Fatalf("reviewer tree diff changed under mutable Git attributes\nfirst=%s\nreplayed=%s", baseline, replayed)
 	}
@@ -380,6 +441,97 @@ func TestFrozenCandidateContextRejectsSnapshotMetadataMismatch(t *testing.T) {
 	}
 }
 
+func TestPreparedCandidateInspectorReusesOneSetupForFourReads(t *testing.T) {
+	requireSnapshotGit(t)
+	repo, snapshot := preparedCandidateSnapshot(t)
+	original := gitCommandContext
+	children := 0
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		children++
+		return original(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = original })
+	inspector, err := (SnapshotBuilder{Repo: repo}).PrepareCandidateInspector(t.Context(), snapshot)
+	if err != nil {
+		t.Fatalf("PrepareCandidateInspector() error = %v", err)
+	}
+	if got := inspector.FrozenCandidateContext(); !reflect.DeepEqual(manifestPaths(got.ChangedPathManifest), snapshot.Paths) {
+		t.Fatalf("prepared manifest paths = %v, want %v", manifestPaths(got.ChangedPathManifest), snapshot.Paths)
+	}
+	for _, read := range []struct {
+		operation string
+		pathIndex int
+	}{
+		{"name-status", -1}, {"numstat", -1}, {"patch", 0}, {"patch", 1},
+	} {
+		if _, err := inspector.Inspect(t.Context(), read.operation, read.pathIndex, ""); err != nil {
+			t.Fatalf("Inspect(%q, %d) error = %v", read.operation, read.pathIndex, err)
+		}
+	}
+	if children != 11 {
+		t.Fatalf("Git children for prepare plus four reads = %d, want 11", children)
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	for _, inspection := range []struct {
+		operation string
+		pathIndex int
+		side      string
+	}{
+		{"name-status", -1, ""}, {"numstat", -1, ""}, {"stat", 0, ""},
+		{"patch", 0, ""}, {"object", 0, "base"}, {"object", 0, "candidate"},
+	} {
+		got, err := inspector.Inspect(t.Context(), inspection.operation, inspection.pathIndex, inspection.side)
+		if err != nil {
+			t.Fatalf("prepared Inspect(%q, %d, %q): %v", inspection.operation, inspection.pathIndex, inspection.side, err)
+		}
+		want, err := builder.InspectCandidate(t.Context(), snapshot, inspection.operation, inspection.pathIndex, inspection.side)
+		if err != nil {
+			t.Fatalf("one-shot InspectCandidate(%q, %d, %q): %v", inspection.operation, inspection.pathIndex, inspection.side, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("prepared Inspect(%q, %d, %q) differs from one-shot", inspection.operation, inspection.pathIndex, inspection.side)
+		}
+	}
+	if _, err := inspector.Inspect(t.Context(), "patch", -1, ""); err == nil {
+		t.Fatal("Inspect() error = nil, want missing canonical path index refusal")
+	}
+	if err := inspector.Close(); err != nil {
+		t.Fatalf("Close() after inspection error = %v", err)
+	}
+	calls := 0
+	failing := &PreparedCandidateInspector{cleanup: func() error {
+		calls++
+		return errors.New("cleanup failed")
+	}}
+	if err := failing.Close(); err == nil || !strings.Contains(err.Error(), "cleanup failed") {
+		t.Fatalf("Close() error = %v, want cleanup failure", err)
+	}
+	if err := failing.Close(); err != nil {
+		t.Fatalf("second Close() = %v, want idempotent cleanup", err)
+	}
+	if calls != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", calls)
+	}
+}
+
+func preparedCandidateSnapshot(t *testing.T) (string, Snapshot) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "one.txt", "base\n")
+	writeSnapshotFile(t, repo, "two.txt", "base\n")
+	gitSnapshot(t, repo, "add", "--", "one.txt", "two.txt")
+	gitSnapshot(t, repo, "commit", "-m", "base")
+	writeSnapshotFile(t, repo, "one.txt", "candidate one.txt\n")
+	writeSnapshotFile(t, repo, "two.txt", "candidate two.txt\n")
+	gitSnapshot(t, repo, "add", "--", "one.txt", "two.txt")
+	gitSnapshot(t, repo, "commit", "-m", "candidate")
+	candidate := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(t.Context(), Target{Kind: TargetExactRevision, Revision: candidate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo, snapshot
+}
+
 func gitSnapshotInput(t *testing.T, repo string, input []byte, args ...string) string {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", repo}, args...)...)
@@ -414,7 +566,7 @@ func frozenCandidateGitDiff(t *testing.T, repo string, frozen FrozenCandidateCon
 	if err != nil {
 		t.Fatalf("create isolated reviewer Git environment: %v", err)
 	}
-	t.Cleanup(cleanup)
+	t.Cleanup(func() { _ = cleanup() })
 	args := []string{
 		"--no-pager", "diff-tree", "-p", "--binary", "--full-index", "--no-color", "--no-renames",
 		"--no-ext-diff", "--no-textconv", "--diff-algorithm=myers", "--no-indent-heuristic", "--unified=3",

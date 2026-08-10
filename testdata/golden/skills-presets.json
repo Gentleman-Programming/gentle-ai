@@ -14,6 +14,7 @@
       "sdd-onboard",
       "judgment-day",
       "go-testing",
+      "gentle-ai-bench",
       "skill-creator",
       "skill-improver",
       "branch-pr",
@@ -22,7 +23,9 @@
       "chained-pr",
       "cognitive-doc-design",
       "comment-writer",
-      "work-unit-commits"
+      "work-unit-commits",
+      "rdd-defect-workflow",
+      "systemic-issue-triage"
     ]
   },
   {
@@ -40,6 +43,7 @@
       "sdd-onboard",
       "judgment-day",
       "go-testing",
+      "gentle-ai-bench",
       "skill-creator",
       "skill-improver",
       "branch-pr",
@@ -48,7 +52,9 @@
       "chained-pr",
       "cognitive-doc-design",
       "comment-writer",
-      "work-unit-commits"
+      "work-unit-commits",
+      "rdd-defect-workflow",
+      "systemic-issue-triage"
     ]
   },
   {

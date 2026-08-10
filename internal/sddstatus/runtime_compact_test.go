@@ -3,7 +3,9 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -16,8 +18,8 @@ func TestCompactAcquireCASClaimsOneAttempt(t *testing.T) {
 	}
 	failNextCompactStoreSync(t, store)
 	requests := []CompactAcquireRequest{
-		{RequestID: "compact-cas-one", WorkUnit: "cas-unit", EvidenceGoal: "prove one compact claimant", MaxAttempts: 2, MaxChangedLines: 20},
-		{RequestID: "compact-cas-two", WorkUnit: "cas-unit", EvidenceGoal: "prove one compact claimant", MaxAttempts: 2, MaxChangedLines: 20},
+		{BeginAttemptRequest: BeginAttemptRequest{RequestID: "compact-cas-one", WorkUnit: "cas-unit", EvidenceGoal: "prove one compact claimant", MaxAttempts: 2, MaxChangedLines: 20}},
+		{BeginAttemptRequest: BeginAttemptRequest{RequestID: "compact-cas-two", WorkUnit: "cas-unit", EvidenceGoal: "prove one compact claimant", MaxAttempts: 2, MaxChangedLines: 20}},
 	}
 	type outcome struct {
 		result CompactAttemptResult
@@ -62,6 +64,116 @@ func TestCompactAcquireCASClaimsOneAttempt(t *testing.T) {
 	}
 	if proceed != 1 || blocked != 1 || len(status.Attempts) != 1 || status.ActiveAttempt == nil || countRuntimeRecords(t, store.Dir) != 1 {
 		t.Fatalf("compact CAS proceed=%d blocked=%d status=%#v records=%d", proceed, blocked, status, countRuntimeRecords(t, store.Dir))
+	}
+}
+
+// TestCompactAcquireTokenProvesOwnershipWithoutMutation reproduces #2291's
+// deadlock shape: a parent acquires (proceed + token), then launches an
+// actor that is a distinct call/process and cannot re-acquire without
+// colliding with the parent's own active attempt. Presenting that exact
+// token as ownership proof must let the actor proceed under the SAME
+// attempt without appending anything to the ledger.
+func TestCompactAcquireTokenProvesOwnershipWithoutMutation(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "ownership-proof")
+	if err := store.ensureDirectories(); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "ownership-parent", WorkUnit: "ownership-unit",
+		EvidenceGoal: "prove the actor can continue the parent's attempt", MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parent.ActiveAttempt == nil {
+		t.Fatalf("parent begin status = %#v", parent)
+	}
+
+	before, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRecords := countRuntimeRecords(t, store.Dir)
+
+	result, err := store.Acquire(context.Background(), CompactAcquireRequest{
+		BeginAttemptRequest: BeginAttemptRequest{
+			RequestID: "ownership-actor", WorkUnit: "ownership-unit",
+			EvidenceGoal: "prove the actor can continue the parent's attempt", MaxAttempts: 2, MaxChangedLines: 20,
+		},
+		Token: parent.Revision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != CompactStateProceed || result.Token != parent.Revision || result.Reason != "" {
+		t.Fatalf("ownership-proof acquire result = %#v", result)
+	}
+
+	after, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != before.Revision {
+		t.Fatalf("ownership-proof acquire mutated the ledger: before=%q after=%q", before.Revision, after.Revision)
+	}
+	if countRuntimeRecords(t, store.Dir) != beforeRecords {
+		t.Fatalf("ownership-proof acquire appended a record: before=%d after=%d", beforeRecords, countRuntimeRecords(t, store.Dir))
+	}
+}
+
+// TestCompactAcquireForeignTokenStaysBlockedWithoutMutation covers the
+// converse of #2291's fix: a token that does NOT match the live active
+// attempt must not be treated as ownership proof. It gets the ordinary
+// active_attempt block naming the REAL active token (not the foreign one),
+// with a named Exit/Detail explaining how to proceed, and — like the
+// matching-token path — zero mutation for a losing ownership check.
+func TestCompactAcquireForeignTokenStaysBlockedWithoutMutation(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "foreign-token")
+	if err := store.ensureDirectories(); err != nil {
+		t.Fatal(err)
+	}
+	active, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "foreign-token-begin", WorkUnit: "foreign-unit",
+		EvidenceGoal: "prove a stale token cannot hijack the active attempt", MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRecords := countRuntimeRecords(t, store.Dir)
+
+	result, err := store.Acquire(context.Background(), CompactAcquireRequest{
+		BeginAttemptRequest: BeginAttemptRequest{
+			RequestID: "foreign-token-actor", WorkUnit: "foreign-unit",
+			EvidenceGoal: "prove a stale token cannot hijack the active attempt", MaxAttempts: 2, MaxChangedLines: 20,
+		},
+		Token: runtimeTestHash('f'),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != CompactStateBlocked || result.Reason != CompactBlockActiveAttempt || result.Token != active.Revision {
+		t.Fatalf("foreign-token acquire result = %#v", result)
+	}
+	if result.Exit == "" || result.Detail == "" {
+		t.Fatalf("foreign-token acquire result missing named exit: %#v", result)
+	}
+
+	after, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != before.Revision {
+		t.Fatalf("foreign-token acquire mutated the ledger: before=%q after=%q", before.Revision, after.Revision)
+	}
+	if countRuntimeRecords(t, store.Dir) != beforeRecords {
+		t.Fatalf("foreign-token acquire appended a record: before=%d after=%d", beforeRecords, countRuntimeRecords(t, store.Dir))
 	}
 }
 
@@ -196,4 +308,53 @@ func failNextCompactStoreSync(t *testing.T, store RuntimeStore) {
 		return original(path)
 	}
 	t.Cleanup(func() { runtimeSyncDirectory = original })
+}
+
+// TestUnreadableAuthorityBlockNamesItsCause is #2829, and root 8's shape on a
+// surface root 8 never reached.
+//
+// A user hit `the attempt ledger for this work unit cannot be read as valid
+// authority` on a published build and neither they nor anyone triaging it
+// could tell an invalid HEAD encoding from a broken chain link from a
+// permissions refusal. Those need different repairs and produced identical
+// output, because seven call sites discarded the error `store.load()` had
+// just returned.
+//
+// The exit text is deliberately NOT part of this assertion: callers route on
+// it and it must keep its exact bytes. Only Detail gains the cause.
+func TestUnreadableAuthorityBlockNamesItsCause(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "unreadable-cause")
+	if _, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "cause-begin", WorkUnit: "apply", EvidenceGoal: "prove it",
+		MaxAttempts: 2, MaxChangedLines: 20,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Damage the ledger the way an interrupted write does: a HEAD that is not
+	// the exact `sha256:<64hex>\n` encoding readRuntimeHead requires.
+	head := filepath.Join(store.Dir, "HEAD")
+	if err := os.WriteFile(head, []byte("sha256:not-a-digest\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := store.Acquire(context.Background(), CompactAcquireRequest{
+		BeginAttemptRequest: BeginAttemptRequest{
+			RequestID: "cause-acquire", WorkUnit: "apply", EvidenceGoal: "prove it",
+			MaxAttempts: 2, MaxChangedLines: 20,
+		},
+	})
+	if err != nil {
+		t.Fatalf("acquire over a damaged ledger returned a hard error rather than a block: %v", err)
+	}
+	if result.State != CompactStateBlocked || result.Reason != CompactBlockCorruptAuthority {
+		t.Fatalf("result = %#v, want blocked/corrupt_authority", result)
+	}
+	if !strings.Contains(result.Detail, "cause:") {
+		t.Fatalf("blocked detail discards the load error, so no reader can tell which damage this is: %q", result.Detail)
+	}
+	if !strings.Contains(result.Exit, "sdd-attempt status") {
+		t.Fatalf("exit text lost its runnable continuation: %q", result.Exit)
+	}
 }

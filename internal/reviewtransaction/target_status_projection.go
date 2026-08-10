@@ -57,26 +57,27 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 		// storeByLineage (needed unfiltered by the explicit-selector branch
 		// below, including for a caller naming this exact quarantined lineage)
 		// must not be the one used here.
+		//
+		// A record this read cannot decode is left out of the graph entirely.
+		// Status is the surface an operator reaches for when something is
+		// wrong, so it is the last surface that may answer "everything is
+		// unavailable" because one entry is (2234, 2270, 2456).
 		healthyStoreByLineage := make(map[string]CompactStore, len(stores))
 		for _, store := range stores {
 			record, loadErr := store.LoadContext(ctx)
 			if loadErr != nil {
-				// Selector-free enumeration quarantines one TERMINAL lineage that
-				// fails semantic validation instead of poisoning every other
-				// healthy lineage's status (issue-1813). An explicit selector
-				// naming this lineage below still fails closed.
-				if _, quarantinable := compactLineageQuarantinable(loadErr); quarantinable {
-					continue
+				// Only content failures quarantine. Not being able to READ the
+				// store is a different fact from an entry being damaged, and
+				// status has to keep saying so.
+				if IsCompactAuthorityOperationalFailure(loadErr) {
+					return nil, loadErr
 				}
-				return nil, loadErr
+				continue
 			}
 			records[record.State.LineageID] = record
 			healthyStoreByLineage[record.State.LineageID] = store
 		}
-		selected, err = compactAuthorityLeaves(records, healthyStoreByLineage)
-		if err != nil {
-			return nil, err
-		}
+		selected = compactAuthorityLeaves(records, healthyStoreByLineage)
 	} else if store, ok := storeByLineage[lineageID]; ok {
 		// An explicit selector keeps unrelated inventory isolated, while still
 		// validating every recovery edge in the selected lineage's ancestry.
@@ -100,12 +101,12 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 			}
 			cursor = predecessor
 		}
-		chainStores := make(map[string]CompactStore, len(records))
-		for lineage := range records {
-			chainStores[lineage] = storeByLineage[lineage]
-		}
-		if _, graphErr := compactAuthorityLeaves(records, chainStores); graphErr != nil {
-			return nil, graphErr
+		// The named lineage's OWN ancestry still has to validate completely.
+		// Scoping the refusal is not relaxing it: what changes is whose
+		// business a defect is, never whether a defect is tolerated.
+		violations, _ := compactAuthorityGraphViolations(records)
+		if carrier, cause := compactAuthorityBlockingCause(records, violations, lineageID); cause != nil {
+			return nil, compactBlockedLineageError(lineageID, carrier, cause)
 		}
 	}
 
@@ -147,14 +148,14 @@ func loadStableCompactTargetStatusCandidate(ctx context.Context, store CompactSt
 			continue
 		}
 
-		if firstErr != nil && compactAuthorityOperationalFailure(firstErr) {
+		if firstErr != nil && IsCompactAuthorityOperationalFailure(firstErr) {
 			return targetStatusCandidate{}, firstErr
 		}
 		second, secondErr := inspectCompactTargetArtifacts(ctx, store, observed.State, "second", attempt)
 		if err := ctx.Err(); err != nil {
 			return targetStatusCandidate{}, err
 		}
-		if secondErr != nil && compactAuthorityOperationalFailure(secondErr) {
+		if secondErr != nil && IsCompactAuthorityOperationalFailure(secondErr) {
 			return targetStatusCandidate{}, secondErr
 		}
 		// The first receipt/journal pair precedes the second state observation,
@@ -321,14 +322,13 @@ func projectCompactTerminalHistory(state CompactState, live Snapshot) compactTer
 
 func compactLiveTargetMatchesValidatedSnapshot(state CompactState, live Snapshot, requireCurrentCandidate bool) bool {
 	initial := state.InitialSnapshot
-	proof := initial.IntendedUntrackedProof
-	if requireCurrentCandidate {
-		proof = state.CurrentSnapshot.IntendedUntrackedProof
-	}
-	return initial.Projection == live.Projection && compactStartTargetKindsCompatible(initial.Kind, live.Kind) &&
+	sideBandMatches := requireCurrentCandidate ||
+		(equalStrings(initial.IntendedUntracked, live.IntendedUntracked) &&
+			initial.IntendedUntrackedProof == live.IntendedUntrackedProof)
+	return compactTargetProjectionsCompatible(initial.Kind, initial.Projection, live.Kind, live.Projection) &&
+		compactStartTargetKindsCompatible(initial.Kind, live.Kind) &&
 		initial.BaseTree == live.BaseTree && (!requireCurrentCandidate || state.CurrentSnapshot.CandidateTree == live.CandidateTree) &&
-		pathsAreSubset(live.Paths, state.GenesisPaths) == nil && equalStrings(initial.IntendedUntracked, live.IntendedUntracked) &&
-		proof == live.IntendedUntrackedProof && len(live.LedgerIDs) == 0
+		pathsAreSubset(live.Paths, state.GenesisPaths) == nil && sideBandMatches && len(live.LedgerIDs) == 0
 }
 
 func legacyLiveTargetMatchesValidatedSnapshot(transaction Transaction, live Snapshot) bool {
@@ -338,10 +338,10 @@ func legacyLiveTargetMatchesValidatedSnapshot(transaction Transaction, live Snap
 	}
 	kindsMatch := compactStartTargetKindsCompatible(transaction.Snapshot.Kind, live.Kind) ||
 		transaction.Snapshot.Kind == TargetFixDiff && (live.Kind == TargetCurrentChanges || live.Kind == TargetBaseDiff)
-	return transaction.Snapshot.Projection == live.Projection && kindsMatch && transaction.BaseTree == live.BaseTree &&
+	return compactTargetProjectionsCompatible(transaction.Snapshot.Kind, transaction.Snapshot.Projection, live.Kind, live.Projection) &&
+		kindsMatch && transaction.BaseTree == live.BaseTree &&
 		transaction.FinalCandidateTree == live.CandidateTree && pathsAreSubset(live.Paths, genesis) == nil &&
-		equalStrings(transaction.Snapshot.IntendedUntracked, live.IntendedUntracked) &&
-		transaction.Snapshot.IntendedUntrackedProof == live.IntendedUntrackedProof && len(live.LedgerIDs) == 0
+		len(live.LedgerIDs) == 0
 }
 
 func classifyCompactCorrectionTargetForStatus(ctx context.Context, repo string, existing CompactState, live Snapshot) (compactCorrectionTargetClaim, error) {
@@ -351,7 +351,7 @@ func classifyCompactCorrectionTargetForStatus(ctx context.Context, repo string, 
 }
 
 func targetStatusFailure(base TargetStatusResult, err error) (TargetStatusResult, error) {
-	if compactAuthorityOperationalFailure(err) {
+	if IsCompactAuthorityOperationalFailure(err) {
 		return TargetStatusResult{}, err
 	}
 	return corruptedTargetStatus(base), nil

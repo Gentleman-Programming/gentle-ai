@@ -237,10 +237,6 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 	return capabilitymanifest.MustForAgent(model.AgentPi)
 }
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return a.CapabilityManifest().Features.AutoInstall
-}
-
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
 	return [][]string{
 		{"pi", "install", "npm:gentle-pi"},

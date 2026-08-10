@@ -302,61 +302,6 @@ func TestBindApprovedReviewRequiresTheSelectedCanonicalChange(t *testing.T) {
 	}
 }
 
-func TestValidateBoundReviewFailsClosedWhenFinalGateChanges(t *testing.T) {
-	root := t.TempDir()
-	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
-	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "approved-thin")
-	if _, err := BindApprovedReview(context.Background(), root, "thin", "approved-thin", ""); err != nil {
-		t.Fatal(err)
-	}
-	original := bindingFinalAuthorizationHook
-	bindingFinalAuthorizationHook = func() { write(t, filepath.Join(changeRoot, "tasks.md"), "- [x] 1.1 Done\n# final gate drift\n") }
-	t.Cleanup(func() { bindingFinalAuthorizationHook = original })
-	if _, _, err := validateBoundReview(context.Background(), root, "thin"); err == nil {
-		t.Fatal("final live gate mutation was accepted")
-	}
-}
-
-func TestValidateBoundReviewFailsClosedForFinalAuthorityArtifacts(t *testing.T) {
-	for _, tt := range []struct {
-		name   string
-		mutate func(t *testing.T, root string, store reviewtransaction.CompactStore)
-	}{
-		{name: "receipt bytes", mutate: func(t *testing.T, _ string, store reviewtransaction.CompactStore) {
-			if err := os.WriteFile(store.ReceiptPath(), []byte("{}\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "authority state", mutate: func(t *testing.T, _ string, store reviewtransaction.CompactStore) {
-			if err := os.WriteFile(store.StatePath(), []byte("{}\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{name: "binding bytes", mutate: func(t *testing.T, root string, _ reviewtransaction.CompactStore) {
-			corruptNativeRuntimeBinding(t, mustRuntimeStore(t, root, "thin"))
-		}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
-			changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
-			writeApprovedCompactAuthorityForChange(t, root, changeRoot, "approved-thin")
-			if _, err := BindApprovedReview(context.Background(), root, "thin", "approved-thin", ""); err != nil {
-				t.Fatal(err)
-			}
-			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "approved-thin")
-			if err != nil {
-				t.Fatal(err)
-			}
-			original := bindingFinalAuthorizationHook
-			bindingFinalAuthorizationHook = func() { tt.mutate(t, root, store) }
-			t.Cleanup(func() { bindingFinalAuthorizationHook = original })
-			if _, _, err := validateBoundReview(context.Background(), root, "thin"); err == nil {
-				t.Fatal("final artifact mutation was accepted")
-			}
-		})
-	}
-}
-
 func TestBindApprovedReviewPreservesAuthorityAcrossBindingPublicationFailures(t *testing.T) {
 	for _, name := range []string{"HEAD replace", "directory sync"} {
 		t.Run(name, func(t *testing.T) {
@@ -705,5 +650,73 @@ func corruptNativeRuntimeBinding(t *testing.T, store RuntimeStore) {
 	path := filepath.Join(store.Dir, "records", strings.TrimPrefix(status.Revision, "sha256:")+".json")
 	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestParseBindingNamesTheConditionItFailed is root 8 (#2471) on the SDD
+// binding surface: twelve integrity conditions used to answer with one shared
+// "invalid binding", so an operator holding that error knew only that bytes
+// this package wrote itself were wrong. These are OUR persisted ledger bytes,
+// so a violation is tamper or corruption, which is exactly why the condition
+// has to be named: it decides whether the reader escalates or repairs.
+func TestParseBindingNamesTheConditionItFailed(t *testing.T) {
+	valid := ReviewBinding{
+		Schema: reviewBindingSchema, Change: "root8-binding", Lineage: "root8-lineage",
+		AuthorityRevision: "sha256:" + strings.Repeat("a", 64),
+		ReceiptHash:       "sha256:" + strings.Repeat("b", 64),
+		GateContext: reviewtransaction.GateContext{
+			Gate: reviewtransaction.GatePostApply, LineageID: "root8-lineage",
+			StoreRevision: "sha256:" + strings.Repeat("a", 64),
+		},
+	}
+	valid.Revision = bindingDigest(valid)
+	payload, err := bindingBytes(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseBinding(payload); err != nil {
+		t.Fatalf("valid fixture rejected: %v", err)
+	}
+
+	for name, corrupt := range map[string]func(ReviewBinding) ReviewBinding{
+		"schema is not":                    func(b ReviewBinding) ReviewBinding { b.Schema = "gentle-ai.wrong/v1"; return b },
+		"change name is not":               func(b ReviewBinding) ReviewBinding { b.Change = "../escape"; return b },
+		"lineage is not":                   func(b ReviewBinding) ReviewBinding { b.Lineage = "not a lineage!"; return b },
+		"receipt_hash is not":              func(b ReviewBinding) ReviewBinding { b.ReceiptHash = "notadigest"; return b },
+		"gate_context.gate is not":         func(b ReviewBinding) ReviewBinding { b.GateContext.Gate = reviewtransaction.GatePreCommit; return b },
+		"gate_context.lineage_id does not": func(b ReviewBinding) ReviewBinding { b.GateContext.LineageID = "other-lineage"; return b },
+		"gate_context.store_revision does not": func(b ReviewBinding) ReviewBinding {
+			b.GateContext.StoreRevision = "sha256:" + strings.Repeat("c", 64)
+			return b
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			broken := corrupt(valid)
+			broken.Revision = bindingDigest(broken)
+			brokenPayload, err := bindingBytes(broken)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, parseErr := parseBinding(brokenPayload)
+			if parseErr == nil {
+				t.Fatal("corrupted binding was accepted")
+			}
+			if !strings.Contains(parseErr.Error(), name) {
+				t.Fatalf("error %q does not name the failed condition %q", parseErr, name)
+			}
+		})
+	}
+
+	// The digest condition needs its own case: it is the one violation that
+	// cannot be reached by recomputing Revision after corrupting a field.
+	tampered := valid
+	tampered.Revision = "sha256:" + strings.Repeat("d", 64)
+	tamperedPayload, err := bindingBytes(tampered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseBinding(tamperedPayload); err == nil ||
+		!strings.Contains(err.Error(), "revision does not match the digest") {
+		t.Fatalf("tampered revision error = %v", err)
 	}
 }

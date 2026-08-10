@@ -145,6 +145,8 @@ func TestLockContentionAfterACommittedTransitionStillReportsUnknown(t *testing.T
 // with explicit-maintainer-action. The reporter saw 19 of 20 concurrent
 // pre-commit gates report exactly that against a healthy authority.
 func TestConcurrentDeliveryGateContentionIsNotReportedAsInvalidated(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	lineage := approvedLowRiskFacadeReview(t, repo)
 
@@ -258,18 +260,26 @@ func TestConcurrentFinalizeElectsExactlyOneWriter(t *testing.T) {
 		// which one it hits is pure scheduling: a loser that reaches the lock
 		// while the winner holds it is refused by the lock, and a loser that
 		// arrives after the winner released it wins the lock and is refused by
-		// the compare-and-set on the revision it read beforehand. CI reached the
-		// second one where this machine reaches the first. Both provably
-		// published nothing, so both must carry the not-started retryable shape
-		// asserted below; see TestFinalizeRevisionConflictIsRetryableNotUnknown
-		// for the deterministic reproduction of the revision-conflict loser.
+		// the compare-and-set on the revision it read beforehand. Both provably
+		// published nothing, so they retain the not-started retryable shape.
+		// TestFinalizeRevisionConflictIsRetryableNotUnknown deterministically
+		// reproduces the revision-conflict loser.
 		switch failure.Code {
 		case "authority_lock_contention", "authority_lock_timeout", "authority_revision_conflict":
+			if failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe {
+				t.Fatalf("concurrent FINALIZE pre-write loser %d = %#v, want a not-started retryable classification", index, failure)
+			}
+		case "operation_outcome_unknown":
+			// This is not a pre-write loser. It is allowed only when FINALIZE
+			// already recorded a native transition, so retrying could double-apply
+			// it and STATUS is the only safe continuation.
+			if failure.Phase != "native_committed" || failure.MutationOutcome != ReviewMutationUnknown ||
+				failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityStatusRequired ||
+				failure.NextAction != "review.status" || strings.TrimSpace(failure.Cause) == "" {
+				t.Fatalf("concurrent FINALIZE post-progress loser %d = %#v, want a diagnosed native-committed unknown classification", index, failure)
+			}
 		default:
 			t.Fatalf("concurrent FINALIZE loser %d = %#v (error: %v)", index, failure, failures[index])
-		}
-		if failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe {
-			t.Fatalf("concurrent FINALIZE loser %d = %#v, want a not-started retryable classification", index, failure)
 		}
 	}
 	if succeeded == 0 {
@@ -293,19 +303,51 @@ func TestConcurrentFinalizeElectsExactlyOneWriter(t *testing.T) {
 	}
 }
 
+// TestFinalizePostCommitFailureReportsUnknownWithCause forces the only unknown
+// outcome accepted by the concurrent test at the hook that runs after
+// progress.record. This proves the post-commit envelope without scheduler
+// timing and keeps the pre-write loser contract narrow.
+func TestFinalizePostCommitFailureReportsUnknownWithCause(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	lineage := startLowRiskFacadeReview(t, repo)
+
+	oldTransitionHook := reviewFacadeCommittedTransitionHook
+	reviewFacadeCommittedTransitionHook = func(context.Context, string, string, string) error {
+		return errors.New("injected failure after recorded native transition")
+	}
+	t.Cleanup(func() { reviewFacadeCommittedTransitionHook = oldTransitionHook })
+
+	var output bytes.Buffer
+	err := RunReview([]string{
+		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage,
+	}, &output)
+	if err == nil {
+		t.Fatal("FINALIZE with an injected post-transition failure succeeded")
+	}
+
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Code != "operation_outcome_unknown" || failure.Phase != "native_committed" ||
+		failure.MutationOutcome != ReviewMutationUnknown || failure.RetrySafe ||
+		failure.Replayability != reviewtransaction.ReplayabilityStatusRequired || failure.NextAction != "review.status" ||
+		strings.TrimSpace(failure.Cause) == "" {
+		t.Fatalf("post-transition FINALIZE failure = %#v, want a diagnosed native-committed unknown classification", failure)
+	}
+	if !strings.Contains(failure.Cause, "injected failure after recorded native transition") {
+		t.Fatalf("post-transition FINALIZE cause = %q, want the injected native reason", failure.Cause)
+	}
+}
+
 func startLowRiskFacadeReview(t *testing.T, repo string) string {
 	t.Helper()
 	lines := make([]string, 129)
 	for index := range lines {
 		lines[index] = fmt.Sprintf("ordinary documentation line %03d", index+1)
 	}
-	path := filepath.Join(repo, "docs", "ordinary-guide.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// Declared, not merely written: since #2394 an untracked path only enters
+	// the candidate once the user stages it, so writing this file raw would
+	// leave START with nothing to freeze — and every caller here needs a real
+	// low-risk candidate to reach the lifecycle it is actually testing.
+	writeReviewStartCandidate(t, repo, "docs/ordinary-guide.md", strings.Join(lines, "\n")+"\n", 0o644)
 	var startOutput bytes.Buffer
 	if err := RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo,

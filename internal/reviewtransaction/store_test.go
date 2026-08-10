@@ -493,22 +493,6 @@ func TestStoreReplaysOnlyDocumentedHistoricalV1Aliases(t *testing.T) {
 		assertHistoricalChainRoundTrips(t, store, head, legacy)
 	})
 
-	t.Run("Judgment Day historical findings freeze", func(t *testing.T) {
-		store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
-		tx := newTestTransaction(t, ModeJudgmentDay)
-		if err := tx.StartReview(); err != nil {
-			t.Fatal(err)
-		}
-		head := writeStoreEvent(t, store, Record{Operation: "review/start", Transaction: *tx})
-		if err := tx.RecordJudgeProofs([]JudgeProof{{JudgeID: "judge-a", ExecutionHash: hash("a"), ResultHash: hash("b"), Blind: true, Confirmed: true}, {JudgeID: "judge-b", ExecutionHash: hash("c"), ResultHash: hash("d"), Blind: true, Confirmed: true}}, hash("e")); err != nil {
-			t.Fatal(err)
-		}
-		head = writeStoreEvent(t, store, Record{Operation: "review/record-judge-proofs", PreviousRevision: head, Transaction: *tx})
-		legacy := historicalFreezeTransition(t, *tx)
-		head = writeStoreEvent(t, store, Record{Operation: "review/freeze-findings", PreviousRevision: head, Transaction: legacy})
-		assertHistoricalChainRoundTrips(t, store, head, legacy)
-	})
-
 	t.Run("ordinary v1.49 historical findings freeze", func(t *testing.T) {
 		store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
 		tx := newTestTransaction(t, ModeOrdinary4R)

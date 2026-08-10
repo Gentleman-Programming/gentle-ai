@@ -33,6 +33,15 @@ type ReviewValidateResult struct {
 	// keeps its exact field set, and only a candidate that is unmanaged by the
 	// user's own choice carries the extra token. It never carries an approval.
 	Delivery reviewtransaction.RDDDelivery `json:"delivery,omitempty"`
+	// Relation and Next are Wave 5 (Gate Cutover) Slice 3's additive wire
+	// projection of NativeGateEvaluation's own new fields (gate.go): omitted
+	// by default, so every existing consumer's exact field set is unchanged,
+	// and populated only where attachGateVerdictRelation (compact_gate.go)
+	// could classify the denial this slice -- currently the "changed"
+	// relation only (see that function's own doc comment for why the rest
+	// is not wired yet).
+	Relation reviewtransaction.CandidateRelation `json:"relation,omitempty"`
+	Next     *reviewtransaction.GateNextStep     `json:"next,omitempty"`
 }
 
 // reviewDeliveryPolicyAction is the action reported when the review gate has no
@@ -47,7 +56,11 @@ func newReviewFlagSet(name string, stdout io.Writer, details string) *flag.FlagS
 	flags.Usage = func() {
 		_, _ = fmt.Fprintf(stdout, "Usage: gentle-ai %s [flags]\n\n%s\n\nFlags:\n", name, details)
 		flags.VisitAll(func(current *flag.Flag) {
-			_, _ = fmt.Fprintf(stdout, "  --%s <value>\n      %s", current.Name, current.Usage)
+			placeholder := " <value>"
+			if boolean, ok := current.Value.(interface{ IsBoolFlag() bool }); ok && boolean.IsBoolFlag() {
+				placeholder = ""
+			}
+			_, _ = fmt.Fprintf(stdout, "  --%s%s\n      %s", current.Name, placeholder, current.Usage)
 			if current.DefValue != "" {
 				_, _ = fmt.Fprintf(stdout, " (default %q)", current.DefValue)
 			}
@@ -63,10 +76,10 @@ func parseReviewFlags(flags *flag.FlagSet, args []string) error {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
-		return err
+		return reviewPreflightError(err)
 	}
 	if hint := reviewBooleanFlagSpacedValueHint(flags, args); hint != "" {
-		return errors.New(hint)
+		return reviewPreflightError(errors.New(hint))
 	}
 	return nil
 }
@@ -560,6 +573,9 @@ func RunReviewBundleImport(args []string, stdout io.Writer) error {
 	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*bundlePath) == "" {
 		return errors.New("review-bundle-import requires --cwd and --bundle")
 	}
+	if err := authorizeManagedReviewerAssets(); err != nil {
+		return err
+	}
 	bundlePayload, err := os.ReadFile(*bundlePath)
 	if err != nil {
 		return fmt.Errorf("read review chain bundle: %w", err)
@@ -694,6 +710,9 @@ func runReviewValidate(ctx context.Context, args []string, stdout io.Writer) err
 	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*receiptPath) == "" {
 		return errors.New("review-validate requires --cwd and --receipt")
 	}
+	if _, err := reviewDrivenDevelopmentDisabled(ctx, *cwd); err != nil {
+		return fmt.Errorf("read review mode: %w", err)
+	}
 	receiptPayload, err := os.ReadFile(*receiptPath)
 	if err != nil {
 		return fmt.Errorf("read review receipt: %w", err)
@@ -724,6 +743,7 @@ func runReviewValidate(ctx context.Context, args []string, stdout io.Writer) err
 		result := ReviewValidateResult{
 			Schema: ReviewValidateSchema, Result: evaluation.Result, Allowed: evaluation.Result == reviewtransaction.GateAllow,
 			Action: reviewGateAction(evaluation.Result), Reason: evaluation.Reason, Context: evaluation.Context,
+			Relation: evaluation.Relation, Next: evaluation.Next,
 		}
 		if err := encodeReviewJSON(stdout, result); err != nil {
 			return err

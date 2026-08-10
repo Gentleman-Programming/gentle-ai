@@ -56,7 +56,7 @@ import (
 // command runs; every measurement crosses the process boundary. These
 // journeys are portable across builds the same way the core is.
 //
-// It is an axis anyway, for two reasons. First, "43 journeys" is a number
+// It is an axis anyway, for two reasons. First, "45 journeys" is a number
 // people compare across time, and growing it silently would make every old
 // results file read as a regression. Second, this axis carries a standing
 // rule the core does not: community-reported shapes become journeys — the
@@ -74,7 +74,7 @@ func init() {
 		BlackBox: true,
 		Properties: []string{
 			"Black-box, unlike damaged-store: every fixture is built with git, the filesystem and the product's own CLI, every state is proven through git or the product before a counted command runs, and nothing product-owned is read or written. These journeys stay portable across builds the way the core does.",
-			"Opt-in anyway, because it is a different population: the core's repositories are sterile and its sequences contiguous; these repositories carry tool residue and accumulated review state, and their lifecycles are interleaved with rebase, amend and pull. \"43 core journeys\" and \"43 plus real-world\" must never look alike.",
+			"Opt-in anyway, because it is a different population: the core's repositories are sterile and its sequences contiguous; these repositories carry tool residue and accumulated review state, and their lifecycles are interleaved with rebase, amend and pull. \"45 core journeys\" and \"45 plus real-world\" must never look alike.",
 			"Community-reported shapes become journeys: the reporter's fixture is the finding. rw01 is issue #1881 verbatim (nested worktree, not gitignored); rw08 and rw09 are the two elements of the same reporter's production composite the corpus could not have built. A product fix for #1881 is in flight, so rw01 may block today and clear tomorrow; the axis records the truth either way.",
 			"rw03 asserts what the emitted bytes QUOTE: a sentinel secret value in an untracked .env must not appear in any counted command's stdout or stderr, and rw09 asserts the same for an ignored binary's path. The journey FAILS, naming the echo, if it ever does. This proves absence from the driven surfaces only — not that the product never read the file, which no black-box harness can see.",
 			"rw02 writes a node_modules-scale tree (3,000 files) and rw09 writes a 15MB binary on every run; the cost of surviving them is part of what is measured (`git_subprocesses`, bytes).",
@@ -315,80 +315,54 @@ var secretMustNotEcho = mustNotEcho(benchSecretValue,
 var ignoredMustNotBeCited = mustNotEcho(ignoredBinaryName,
 	"the file is gitignored and outside every frozen scope; citing it means discovery walked into content git told it to skip")
 
-// lensLoopCheckingEchoes is captureAllLenses with rw03's assertion folded in:
-// every counted observation in the collect loop — the status envelopes that
-// carry the changed-path manifest, and the capture acknowledgements — is
-// checked for the planted secret before the loop trusts it. The untracked
-// .env escalates the review to a lens on the current build, and the collect
-// envelope is exactly the surface most likely to quote content, so the loop
-// that drives it must not be the one gap in the assertion.
-func lensLoopCheckingEchoes(r *journeyRun) error {
-	for round := 0; round < 8; round++ {
-		observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}, false)
-		if err := secretMustNotEcho(r.sandbox, observation); err != nil {
-			return err
+// excludeUntrackedAndRunPrintedStart verifies the #2652 collection, follows
+// its explicit exclusion path, and runs the product's printed START exactly.
+func excludeUntrackedAndRunPrintedStart(r *journeyRun, check func(*Sandbox, Observation) error) error {
+	status := func(selectors ...string) (statusEnvelope, error) {
+		args := append([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContractV2, "--next-transition"}, selectors...)
+		observation := r.run(args, false)
+		if check != nil {
+			if err := check(r.sandbox, observation); err != nil {
+				return statusEnvelope{}, err
+			}
 		}
 		var envelope statusEnvelope
 		if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &envelope); err != nil {
-			return fmt.Errorf("parse review status: %w (stderr: %s)", err, firstLine(observation.Stderr))
+			return envelope, fmt.Errorf("parse intended-untracked STATUS: %w", err)
 		}
-		if envelope.NextTransition.Kind != "collect" ||
-			len(envelope.NextTransition.Collect.Inputs) == 0 ||
-			envelope.NextTransition.Collect.Inputs[0].Name != "reviewer_result" {
-			return nil
-		}
-		result, err := synthesizeReviewerResult(
-			envelope.NextTransition.Collect.Inputs[0].ArtifactSubject.SubjectHash, envelope.paths())
-		if err != nil {
-			return err
-		}
-		path, err := writeScratch(r.sandbox, fmt.Sprintf("reviewer-checked-%d.json", round), result)
-		if err != nil {
-			return err
-		}
-		captured := r.run([]string{
-			"review", "capture-result", "--cwd", r.sandbox.Repo,
-			"--lineage", envelope.argument("lineage"),
-			"--target", envelope.argument("target"),
-			"--expected-revision", envelope.argument("expected-revision"),
-			"--lens", envelope.argument("lens"),
-			"--order", envelope.argument("order"),
-			"--input", path,
-		}, true)
-		if err := secretMustNotEcho(r.sandbox, captured); err != nil {
-			return err
-		}
+		return envelope, nil
 	}
-	return errors.New("lens capture loop did not converge")
-}
-
-// evidenceCheckingEchoes is captureFinalEvidence with the same assertion.
-func evidenceCheckingEchoes(r *journeyRun) error {
-	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo, "--contract", reviewContract, "--next-transition"}, false)
-	if err := secretMustNotEcho(r.sandbox, observation); err != nil {
-		return err
-	}
-	var envelope statusEnvelope
-	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &envelope); err != nil {
-		return fmt.Errorf("parse review status: %w (stderr: %s)", err, firstLine(observation.Stderr))
-	}
-	if envelope.NextTransition.Kind != "collect" {
-		return nil
-	}
-	path, err := writeScratch(r.sandbox, "final-evidence-checked.txt",
-		[]byte("go build ./... ok\ngo test ./... ok\nall packages passed\n"))
+	initial, err := status()
 	if err != nil {
 		return err
 	}
-	captured := r.run([]string{
-		"review", "capture-evidence", "--cwd", r.sandbox.Repo,
-		"--lineage", envelope.argument("lineage"),
-		"--target", envelope.argument("target"),
-		"--expected-revision", envelope.argument("expected-revision"),
-		"--outcome", "passed",
-		"--input", path,
-	}, false)
-	return secretMustNotEcho(r.sandbox, captured)
+	if initial.NextTransition.Kind != "collect" || initial.NextTransition.ReasonCode != "intended_untracked_selection_required" || len(initial.NextTransition.Collect.Inputs) != 1 {
+		return fmt.Errorf("initial intended-untracked STATUS = %+v", initial.NextTransition)
+	}
+	digest := initial.argument("expected_untracked_inventory")
+	if digest == "" {
+		return errors.New("intended-untracked STATUS omitted inventory digest")
+	}
+	selected, err := status("--untracked-scope=exclude", "--expected-untracked-inventory="+digest)
+	if err != nil {
+		return err
+	}
+	if selected.NextTransition.Kind != "execute" || selected.NextTransition.Execute.Operation != "review.start" {
+		return fmt.Errorf("explicit untracked exclusion STATUS = %+v", selected.NextTransition)
+	}
+	started, err := runPrintedTransition(r, selected)
+	if err != nil {
+		return err
+	}
+	if check != nil {
+		if err := check(r.sandbox, started); err != nil {
+			return err
+		}
+	}
+	if started.ExitCode != 0 {
+		return fmt.Errorf("printed exclusion START exited %d: %s", started.ExitCode, firstLine(started.Stderr))
+	}
+	return nil
 }
 
 // mutatingPreCommitHook installs a husky-style pre-commit hook that appends a
@@ -1026,51 +1000,24 @@ func realWorldJourneys() []Journey {
 		},
 		{
 			ID:     "rw02-node-modules-scale-untracked-tree",
-			Title:  "3,000 untracked files beside the candidate: discovery must survive, and the cost is measured",
-			Source: "family A (ecosystem clutter): dependency trees tools leave behind",
-			// Distinct path: untracked-scope freeze over thousands of paths.
-			// The corpus's largest candidate (j04) is 1,200 lines in four
-			// files; nothing has ever made discovery walk a tree this size.
-			// `git_subprocesses` and the byte counts carry the price — and on
-			// the current build the price includes an escalation: the same
-			// staged docs change that reviews at tier 0 in j01 demands a
-			// reviewer lens here, purely because of what sits UNTRACKED
-			// beside it. The lens flow below is what the product dictated.
+			Title:  "3,000 untracked files beside the candidate: STATUS requires explicit exclusion before START",
+			Source: "family A (ecosystem clutter): dependency trees tools leave behind; #2652",
+			// Distinct path: inventorying a node_modules-scale tree, then running
+			// the exact exclusion START that STATUS printed.
 			Steps: []Step{
 				{Name: "fixture: 3,000 untracked files proven enumerated by git", Fixture: largeUntrackedTree},
-				{Name: "review start beside the tree", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "capture every lens the tree escalated to", Requires: captureResultCapability, Composite: captureAllLenses},
-				{Name: "finalize with captured results", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--captured-results=true")},
-				{Name: "capture final evidence", Requires: captureEvidenceCapability, Composite: captureFinalEvidence},
-				{Name: "finalize with captured evidence", Requires: finalizeEvidenceCapability, Args: productArgs("review", "finalize", "--captured-evidence=true")},
-				{Name: "gate pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit")},
+				{Name: "STATUS collects the inventory and its printed exclusion START executes", Requires: intendedUntrackedStatusCapability, Composite: func(r *journeyRun) error { return excludeUntrackedAndRunPrintedStart(r, nil) }},
 			},
 		},
 		{
 			ID:     "rw03-untracked-env-with-secrets",
-			Title:  "Untracked .env with secret-looking content: nothing counted may quote the value",
-			Source: "family A (ecosystem clutter): secrets files beside every real candidate",
-			// Distinct path: what risk evidence and scope envelopes QUOTE.
-			// Naming the .env's PATH is honest — it is in the untracked scope.
-			// Echoing its VALUE would be a first-order finding, and every
-			// counted observation in the journey is checked for it — the lens
-			// flow (which the untracked .env itself escalates the review
-			// into) through the checked composites, everything else through
-			// After assertions.
+			Title:  "Untracked .env with secret-looking content: explicit exclusion must not quote the value",
+			Source: "family A (ecosystem clutter): secrets files beside every real candidate; #2652",
+			// Distinct path: redaction in the two STATUS envelopes and printed
+			// exclusion START that name an untracked secret path.
 			Steps: []Step{
 				{Name: "fixture: sentinel secret proven planted, untracked and not ignored", Fixture: secretEnvUntracked},
-				{Name: "review start beside the .env", Requires: startCapability,
-					Args: productArgs("review", "start"), After: afterEach(rememberLineage, secretMustNotEcho)},
-				{Name: "review status beside the .env", Requires: statusOnlyCapability,
-					Args: productArgs("review", "status"), After: secretMustNotEcho},
-				{Name: "capture every lens, checking each envelope for the secret", Requires: captureResultCapability, Composite: lensLoopCheckingEchoes},
-				{Name: "finalize with captured results", Requires: finalizeResultsCapability,
-					Args: productArgs("review", "finalize", "--captured-results=true"), After: secretMustNotEcho},
-				{Name: "capture final evidence, checking for the secret", Requires: captureEvidenceCapability, Composite: evidenceCheckingEchoes},
-				{Name: "finalize with captured evidence", Requires: finalizeEvidenceCapability,
-					Args: productArgs("review", "finalize", "--captured-evidence=true"), After: afterEach(rememberLineage, secretMustNotEcho)},
-				{Name: "gate pre-commit", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: secretMustNotEcho},
+				{Name: "STATUS excludes the secret and its printed START never quotes the value", Requires: intendedUntrackedStatusCapability, Composite: func(r *journeyRun) error { return excludeUntrackedAndRunPrintedStart(r, secretMustNotEcho) }},
 			},
 		},
 		{

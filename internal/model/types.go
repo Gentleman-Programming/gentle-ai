@@ -66,33 +66,39 @@ const (
 type SkillID string
 
 const (
-	SkillSDDInit         SkillID = "sdd-init"
-	SkillSDDApply        SkillID = "sdd-apply"
-	SkillSDDVerify       SkillID = "sdd-verify"
-	SkillSDDExplore      SkillID = "sdd-explore"
-	SkillSDDPropose      SkillID = "sdd-propose"
-	SkillSDDSpec         SkillID = "sdd-spec"
-	SkillSDDDesign       SkillID = "sdd-design"
-	SkillSDDTasks        SkillID = "sdd-tasks"
-	SkillSDDArchive      SkillID = "sdd-archive"
-	SkillSDDOnboard      SkillID = "sdd-onboard"
-	SkillGoTesting       SkillID = "go-testing"
-	SkillCreator         SkillID = "skill-creator"
-	SkillImprover        SkillID = "skill-improver"
-	SkillJudgmentDay     SkillID = "judgment-day"
-	SkillBranchPR        SkillID = "branch-pr"
-	SkillIssueCreation   SkillID = "issue-creation"
-	SkillSkillRegistry   SkillID = "skill-registry"
-	SkillChainedPR       SkillID = "chained-pr"
-	SkillCognitiveDoc    SkillID = "cognitive-doc-design"
-	SkillCommentWriter   SkillID = "comment-writer"
-	SkillWorkUnitCommits SkillID = "work-unit-commits"
+	SkillSDDInit             SkillID = "sdd-init"
+	SkillSDDApply            SkillID = "sdd-apply"
+	SkillSDDVerify           SkillID = "sdd-verify"
+	SkillSDDExplore          SkillID = "sdd-explore"
+	SkillSDDPropose          SkillID = "sdd-propose"
+	SkillSDDSpec             SkillID = "sdd-spec"
+	SkillSDDDesign           SkillID = "sdd-design"
+	SkillSDDTasks            SkillID = "sdd-tasks"
+	SkillSDDArchive          SkillID = "sdd-archive"
+	SkillSDDOnboard          SkillID = "sdd-onboard"
+	SkillGoTesting           SkillID = "go-testing"
+	SkillCreator             SkillID = "skill-creator"
+	SkillImprover            SkillID = "skill-improver"
+	SkillJudgmentDay         SkillID = "judgment-day"
+	SkillBranchPR            SkillID = "branch-pr"
+	SkillIssueCreation       SkillID = "issue-creation"
+	SkillSkillRegistry       SkillID = "skill-registry"
+	SkillChainedPR           SkillID = "chained-pr"
+	SkillCognitiveDoc        SkillID = "cognitive-doc-design"
+	SkillCommentWriter       SkillID = "comment-writer"
+	SkillWorkUnitCommits     SkillID = "work-unit-commits"
+	SkillRDDDefectWorkflow   SkillID = "rdd-defect-workflow"
+	SkillSystemicIssueTriage SkillID = "systemic-issue-triage"
+	SkillGentleAIBench       SkillID = "gentle-ai-bench"
 )
 
 type PersonaID string
 
 const (
-	PersonaGentleman                 PersonaID = "gentleman"
+	PersonaGentleman PersonaID = "gentleman"
+	// PersonaGentlemanNeutralArtifacts is a legacy alias accepted for backward
+	// compatibility. The CLI and sync normalization treat it as PersonaNeutral,
+	// and it is never offered as a selectable choice.
 	PersonaGentlemanNeutralArtifacts PersonaID = "gentleman-neutral-artifacts"
 	PersonaNeutral                   PersonaID = "neutral"
 	PersonaCustom                    PersonaID = "custom"

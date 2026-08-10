@@ -499,7 +499,7 @@ func validateSuccessor(previous, next Transaction, operation string) error {
 	} else if lensStateChanged || operation == "review/record-lens-result" {
 		return fmt.Errorf("%w: lens state changed outside the native lens result transition", ErrInvalidSuccessor)
 	}
-	freezeTransition := (previous.State == StateReviewing || previous.State == StateJudgesConfirmed) && next.State == StateFindingsFrozen
+	freezeTransition := previous.State == StateReviewing && next.State == StateFindingsFrozen
 	if freezeTransition {
 		expected := previous
 		ledger, err := CanonicalLedger(next.Findings)
@@ -574,10 +574,7 @@ func validateSuccessor(previous, next Transaction, operation string) error {
 	if previous.LedgerHash != "" && (previous.LedgerHash != next.LedgerHash || previous.LedgerFindingsHash != next.LedgerFindingsHash) {
 		return fmt.Errorf("%w: frozen ledger hash changed", ErrInvalidSuccessor)
 	}
-	if previous.JudgeProofHash != "" && (previous.JudgeProofHash != next.JudgeProofHash || previous.JudgeAgreementHash != next.JudgeAgreementHash || !reflect.DeepEqual(previous.JudgeProofs, next.JudgeProofs)) {
-		return fmt.Errorf("%w: Judgment Day proof changed", ErrInvalidSuccessor)
-	}
-	if previous.State != StateReviewing && previous.State != StateJudgesConfirmed && !reflect.DeepEqual(previous.Findings, next.Findings) {
+	if previous.State != StateReviewing && !reflect.DeepEqual(previous.Findings, next.Findings) {
 		return fmt.Errorf("%w: frozen findings changed", ErrInvalidSuccessor)
 	}
 	if !mapIsMonotonic(previous.Classifications, next.Classifications) || !mapIsMonotonic(previous.Outcomes, next.Outcomes) {
@@ -634,9 +631,7 @@ func validatePersistedV1Successor(previous, next Transaction, operation string, 
 		next.OriginalCriteria == nil && next.CorrectionRegression == nil {
 		return validateSuccessor(previous, next, "review/validate-fix-delta")
 	}
-	if operation == "review/freeze-findings" &&
-		(previous.Mode == ModeOrdinary4R || previous.Mode == ModeJudgmentDay) &&
-		(previous.State == StateReviewing || previous.State == StateJudgesConfirmed) &&
+	if operation == "review/freeze-findings" && previous.Mode == ModeOrdinary4R && previous.State == StateReviewing &&
 		next.State == StateFindingsFrozen {
 		return validateHistoricalFreezeFindings(previous, next)
 	}
@@ -706,9 +701,6 @@ func transactionsEqual(left, right Transaction) bool {
 		if len(transaction.FollowUps) == 0 {
 			transaction.FollowUps = nil
 		}
-		if len(transaction.JudgeProofs) == 0 {
-			transaction.JudgeProofs = nil
-		}
 		if len(transaction.SelectedLenses) == 0 {
 			transaction.SelectedLenses = nil
 		}
@@ -750,22 +742,12 @@ func validateSuccessorCounters(previous, next Transaction) error {
 			return fmt.Errorf("%w: lens result transition must consume exactly one execution", ErrInvalidSuccessor)
 		}
 		setLensCounter(&expected, next.LensResults[len(next.LensResults)-1].Lens, 1)
-	case previous.State == StateReviewing && next.State == StateJudgesConfirmed:
-		expected.JudgeExecutions = 2
 	case previous.State == StateEvidenceClassified && next.State != StateEvidenceClassified:
 		expected.RefuterBatches++
 	case previous.State == StateFixRequired && next.State == StateFixing:
-		if isOrdinaryMode(previous.Mode) {
-			expected.FixBatches++
-		} else {
-			expected.FixRounds++
-		}
-	case previous.State == StateFixValidating && (next.State == StateReadyFinalVerification || next.State == StateFixRequired || next.State == StateEscalated):
-		if isOrdinaryMode(previous.Mode) {
-			expected.ScopedFixValidations++
-		} else {
-			expected.ScopedRejudgments++
-		}
+		expected.FixBatches++
+	case previous.State == StateFixValidating && (next.State == StateReadyFinalVerification || next.State == StateEscalated):
+		expected.ScopedFixValidations++
 	case previous.State == StateReadyFinalVerification && next.State == StateFinalVerifying:
 		expected.FinalVerifications++
 	}
@@ -807,12 +789,10 @@ func validInitialStoreRecord(record Record) bool {
 		transaction.FinalCandidateTree != transaction.InitialReviewTree ||
 		transaction.FixDeltaHash != EmptyFixDeltaHash ||
 		transaction.LedgerHash != "" || transaction.EvidenceHash != "" ||
-		transaction.JudgeProofHash != "" || transaction.JudgeAgreementHash != "" ||
 		transaction.Release != nil || transaction.FailedEvidenceRevision != "" ||
 		len(transaction.Findings) != 0 || len(transaction.Classifications) != 0 ||
 		len(transaction.Outcomes) != 0 || len(transaction.FixFindingIDs) != 0 ||
-		len(transaction.PendingRefuterIDs) != 0 || len(transaction.FixCausedFindings) != 0 ||
-		len(transaction.JudgeProofs) != 0 {
+		len(transaction.PendingRefuterIDs) != 0 || len(transaction.FixCausedFindings) != 0 {
 		return false
 	}
 	switch transaction.Mode {
@@ -820,8 +800,6 @@ func validInitialStoreRecord(record Record) bool {
 		return transaction.Counters == (Counters{FullReviews: 1})
 	case ModeOrdinaryBounded:
 		return transaction.Counters == (Counters{}) && len(transaction.LensResults) == 0
-	case ModeJudgmentDay:
-		return transaction.Counters == (Counters{})
 	default:
 		return false
 	}
@@ -838,13 +816,12 @@ func chainIdentity(revisions []string) string {
 
 func legalStateTransition(previous, next State) bool {
 	allowed := map[State][]State{
-		StateReviewing:              {StateJudgesConfirmed, StateFindingsFrozen, StateEscalated},
-		StateJudgesConfirmed:        {StateFindingsFrozen, StateEscalated},
+		StateReviewing:              {StateFindingsFrozen, StateEscalated},
 		StateFindingsFrozen:         {StateEvidenceClassified, StateFixRequired, StateReadyFinalVerification, StateEscalated},
 		StateEvidenceClassified:     {StateFixRequired, StateReadyFinalVerification, StateEscalated},
 		StateFixRequired:            {StateFixing, StateEscalated},
 		StateFixing:                 {StateFixValidating, StateEscalated},
-		StateFixValidating:          {StateReadyFinalVerification, StateFixRequired, StateEscalated},
+		StateFixValidating:          {StateReadyFinalVerification, StateEscalated},
 		StateReadyFinalVerification: {StateFinalVerifying, StateEscalated},
 		StateFinalVerifying:         {StateApproved, StateEscalated},
 	}
@@ -862,9 +839,6 @@ func countersMonotonic(previous, next Counters) bool {
 		next.FixBatches >= previous.FixBatches &&
 		next.ScopedFixValidations >= previous.ScopedFixValidations &&
 		next.FinalVerifications >= previous.FinalVerifications &&
-		next.FixRounds >= previous.FixRounds &&
-		next.ScopedRejudgments >= previous.ScopedRejudgments &&
-		next.JudgeExecutions >= previous.JudgeExecutions &&
 		next.RiskExecutions >= previous.RiskExecutions &&
 		next.ResilienceExecutions >= previous.ResilienceExecutions &&
 		next.ReadabilityExecutions >= previous.ReadabilityExecutions &&
