@@ -2435,6 +2435,7 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 	}
 	if _, _, err := normalizeRuntimeAssignmentFields(
 		event.ObligationAssignmentExplicit, event.AssignedRequirementIDs, event.AssignedScenarioIDs); err != nil {
+		// refusal:by-design operator-knowledge: operator must satisfy the bind-time contract (presence marker, comma-free IDs, no duplicates, no 'none' sentinel, ≤4096 IDs, ≤240 bytes per ID); no runnable continuation can reformat the payload
 		return errors.New("invalid SDD runtime begin obligation assignment")
 	}
 	request := BeginAttemptRequest{
@@ -2835,6 +2836,7 @@ func (store RuntimeStore) SliceAssignments() ([]SliceAssignment, error) {
 // copied, normalized slices — the input is never mutated.
 func normalizeRuntimeAssignmentFields(explicit bool, requirements, scenarios []string) ([]string, []string, error) {
 	if !explicit && (len(requirements) != 0 || len(scenarios) != 0) {
+		// refusal:by-design operator-knowledge: operator must set obligation_assignment_explicit=true when binding any IDs; no runnable continuation can silently infer the marker
 		return nil, nil, errors.New("obligation assignment IDs require obligation_assignment_explicit")
 	}
 	if !explicit {
@@ -2843,6 +2845,7 @@ func normalizeRuntimeAssignmentFields(explicit bool, requirements, scenarios []s
 
 	normalize := func(field string, ids []string) ([]string, error) {
 		if len(ids) > maximumRuntimeAssignmentIDs {
+			// refusal:by-design operator-knowledge: operator must split the assignment across attempts; no runnable continuation can silently truncate
 			return nil, fmt.Errorf("%s exceeds the maximum of %d IDs", field, maximumRuntimeAssignmentIDs)
 		}
 		copyIDs := make([]string, len(ids))
@@ -2852,12 +2855,15 @@ func normalizeRuntimeAssignmentFields(explicit bool, requirements, scenarios []s
 				return nil, fmt.Errorf("invalid %s[%d]: %w", field, index, err)
 			}
 			if strings.Contains(id, ",") {
+				// refusal:by-design operator-knowledge: operator must remove the comma (wire format splits on ','); no runnable continuation can rewrite IDs
 				return nil, fmt.Errorf("invalid %s[%d]: IDs must not contain commas", field, index)
 			}
 			if id == runtimeAssignmentEmptySentinel {
+				// refusal:by-design operator-knowledge: operator must omit explicit empty assignments; no runnable continuation can silently substitute a sentinel
 				return nil, fmt.Errorf("invalid %s[%d]: %q is reserved for an explicit empty assignment", field, index, id)
 			}
 			if _, duplicate := seen[id]; duplicate {
+				// refusal:by-design operator-knowledge: operator must deduplicate before binding; no runnable continuation can drop entries silently
 				return nil, fmt.Errorf("duplicate %s ID %q", field, id)
 			}
 			seen[id] = struct{}{}

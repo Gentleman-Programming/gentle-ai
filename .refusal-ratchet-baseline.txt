@@ -130,7 +130,6 @@ internal/cli/review_facade.go	"review recover requires --reason, --actor, and --
 internal/cli/review_facade.go	"review start repeats --%s"
 internal/cli/review_facade.go	"review start target does not match the freshly built snapshot"
 internal/cli/review_facade.go	"review start with --base-ref omits dirty tracked changes; rerun with --committed-only to acknowledge committed-only review scope"
-internal/cli/review_facade.go	"review start with --projection staged and --base-ref is refused because intent is ambiguous: for a staged-index review rerun with %q; for a base-diff review rerun with %q"
 internal/cli/review_facade.go	"review validate requires --gate: one of %s"
 internal/cli/review_facade.go	"reviewer artifact context is unavailable"
 internal/cli/review_facade.go	"reviewer result %d lens %q does not match selected lens %q"
