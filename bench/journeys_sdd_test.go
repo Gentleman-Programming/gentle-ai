@@ -50,7 +50,8 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// proves #2871's correction binds the immutable failure across a later interrupt;
 	// j88 proves #2843's unborn STATUS collects explicit untracked intent first;
 	// j89 proves #2758 never offers a workspace receipt for a different index;
-	// j93 proves #2822 classifies stale managed assets before START can persist.
+	// j93 proves #2822 classifies stale managed assets before START can persist;
+	// j95 proves #1612 accepts exact recovery authorization from a file.
 	// #1993 REMOVED two: j38 (the bound-passing-finish refusal routing to the
 	// review router) and j39 (the stranded-successor exit it named). Review
 	// acts after implementation and verification, so that refusal is gone and
@@ -60,8 +61,8 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	//
 	// Bump this deliberately when a journey is added OR removed, and name it
 	// here: the count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 87 {
-		t.Errorf("core journey count = %d, want 87", got)
+	if got := len(seen); got != 88 {
+		t.Errorf("core journey count = %d, want 88", got)
 	}
 	for id, found := range want {
 		if !found {

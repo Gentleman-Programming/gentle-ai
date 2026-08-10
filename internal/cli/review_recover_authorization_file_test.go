@@ -56,6 +56,7 @@ func TestReviewRecoverAuthorizationFileAndStdin(t *testing.T) {
 
 func TestReviewRecoverNonDerivableErrorIncludesTemplate(t *testing.T) {
 	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/non-derivable.md", "# non-derivable recovery\n", 0o644)
 	lineage := "escalated-template-test"
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)
