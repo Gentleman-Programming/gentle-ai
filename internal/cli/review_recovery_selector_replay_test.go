@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"reflect"
@@ -10,20 +9,6 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
-
-type recoverySelectorReplayTransition struct {
-	Kind    string `json:"kind"`
-	Collect *struct {
-		Inputs []struct {
-			Arguments         []ReviewTransitionArgument  `json:"arguments"`
-			SelectorArguments *[]ReviewTransitionArgument `json:"selector_arguments,omitempty"`
-		} `json:"inputs"`
-	} `json:"collect,omitempty"`
-	Execute *struct {
-		Arguments         []ReviewTransitionArgument  `json:"arguments"`
-		SelectorArguments *[]ReviewTransitionArgument `json:"selector_arguments,omitempty"`
-	} `json:"execute,omitempty"`
-}
 
 func TestRecoveryAuthorizationCollectionPreservesNormalizedSelectors(t *testing.T) {
 	t.Parallel()
@@ -149,11 +134,21 @@ func recoverySelectorReplayStatus(t *testing.T, recovery reviewtransaction.Targe
 
 func validateRecoverySelectorReplaySchemas(t *testing.T, transition ReviewNextTransition) {
 	t.Helper()
-	payload, err := json.Marshal(transition)
-	if err != nil {
-		t.Fatal(err)
+	marshal := func(transition ReviewNextTransition) []byte {
+		payload, err := json.Marshal(transition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return payload
 	}
-	tokenized := bytes.Replace(payload, []byte(`"value":"main"`), []byte(`"value":"main","token":"--base-ref=main"`), 1)
+	payload := marshal(transition)
+	selector := &(*transition.Collect.Inputs[0].SelectorArguments)[0]
+	selector.Token = "--base-ref=main"
+	tokenized := marshal(transition)
+	selector.Token = ""
+	if string(marshal(transition)) != string(payload) {
+		t.Fatal("tokenized fixture changed more than one selector argument")
+	}
 	for _, schema := range []struct{ version, file string }{
 		{version: "v1", file: "status.schema.json"},
 		{version: "v1", file: "status-v2.schema.json"},
@@ -168,13 +163,13 @@ func validateRecoverySelectorReplaySchemas(t *testing.T, transition ReviewNextTr
 	}
 }
 
-func decodeRecoverySelectorReplayTransition(t *testing.T, transition ReviewNextTransition) recoverySelectorReplayTransition {
+func decodeRecoverySelectorReplayTransition(t *testing.T, transition ReviewNextTransition) ReviewNextTransition {
 	t.Helper()
 	payload, err := json.Marshal(transition)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var decoded recoverySelectorReplayTransition
+	var decoded ReviewNextTransition
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		t.Fatal(err)
 	}
