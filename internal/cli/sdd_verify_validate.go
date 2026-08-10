@@ -129,7 +129,7 @@ func runSDDVerifyValidate(args []string, stdin io.Reader, stdout io.Writer) erro
 	if !admission.Valid {
 		return fmt.Errorf("verify report admission denied: %s", admission.Reason)
 	}
-	if objective != nil {
+	if objective != nil && sddstatus.IsPassingVerifyReportVerdict(admission.Verdict) {
 		store, err := sddstatus.OpenRuntimeStore(context.Background(), *cwd, *change)
 		if err != nil {
 			return fmt.Errorf("open native SDD runtime authority: %w", err)

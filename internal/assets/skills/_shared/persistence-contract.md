@@ -77,7 +77,7 @@ The orchestrator persists DAG state after each phase transition to enable SDD re
 
 Build a complete `verify-report` in memory as exact candidate bytes before any OpenSpec or Engram write. For a whole-change report, run `gentle-ai sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>` with required authoritative nonnegative caller totals. For a provider-owned slice, run `gentle-ai sdd-verify-validate --input <path|-> --cwd <repo> --change <name> --scope slice --slice-id <runtime-objective-id>`, declare matching `scope`/`slice_id` fields, and never provide caller totals; slice totals derive only from the runtime objective.
 
-If admission fails or the validator is unavailable, STOP with zero persistence calls. Do not create, truncate, delete, or overwrite any prior `verify-report`. On success, persist the same candidate bytes for the selected mode; hybrid preflights once before both writes. A valid `fail` report must be persisted because validity and archive readiness are separate decisions.
+If admission fails or the validator is unavailable, STOP with zero persistence calls. Do not create, truncate, delete, or overwrite any prior `verify-report`. On success, persist the same candidate bytes for the selected mode; hybrid preflights once before both writes. A valid `fail` report must be persisted because validity and archive readiness are separate decisions. For a scoped `fail`, persistence creates no SliceProof or runtime write and advancement remains blocked; only scoped `pass` and `pass_with_warnings` are proof-eligible.
 
 ## Sub-Agent Context Rules
 
