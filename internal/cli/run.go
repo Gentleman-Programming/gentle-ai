@@ -2197,6 +2197,9 @@ func codeGraphGuidanceMarkdownForSDD(homeDir string, selected []model.CommunityT
 }
 
 func shouldInjectCodeGraphGuidanceForSDD(homeDir string, selected []model.CommunityToolID) bool {
+	if !system.CodeGraphPlatformSupported() {
+		return false
+	}
 	for _, tool := range selected {
 		if tool == model.CommunityToolCodeGraph {
 			return true

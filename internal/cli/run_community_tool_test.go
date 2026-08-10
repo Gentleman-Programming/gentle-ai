@@ -268,6 +268,10 @@ func TestCodeGraphFailureDoesNotLeaveEarlierOpenCodePluginRegistration(t *testin
 }
 
 func TestInstallRollbackRestoresSelectedOpenCodePluginPathsAfterPluginRegistration(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	for _, test := range []struct {
 		name        string
 		preexisting bool
@@ -468,6 +472,10 @@ func TestRenderInstallManualActionsIncludesPiCodeGraphDrift(t *testing.T) {
 }
 
 func TestCodeGraphGuidanceMarkdownForSDDOnlyWhenSelected(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	tests := []struct {
 		name      string
 		setupHome func(t *testing.T, home string)
@@ -552,6 +560,10 @@ func TestCodeGraphGuidanceMarkdownForSDDOnlyWhenSelected(t *testing.T) {
 }
 
 func TestComponentApplyStepInjectsCodeGraphGuidanceWhenCodeGraphSelected(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	home := t.TempDir()
 	withCodeGraphLookPath(t, func(string) (string, error) { return "", errors.New("not found") })
 
@@ -702,6 +714,10 @@ func TestCommunityToolInstallStepPassesRuntimeHomeToPiReconciler(t *testing.T) {
 }
 
 func TestInstallPipelinePropagatesInitialPiPendingWhenPiUnselected(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	previous := installCommunityToolWithHome
 	t.Cleanup(func() { installCommunityToolWithHome = previous })
 	pending := communitytool.PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph runtime verification is pending."}}

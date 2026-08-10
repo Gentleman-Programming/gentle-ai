@@ -1774,6 +1774,10 @@ func TestSyncRuntimeSkipsCodeGraphStepsOnUnsupportedPlatform(t *testing.T) {
 }
 
 func TestComponentSyncStepInjectsCodeGraphGuidanceWhenCodeGraphSelected(t *testing.T) {
+	supported := true
+	system.SetCodeGraphPlatformSupportedForTest(&supported)
+	t.Cleanup(func() { system.SetCodeGraphPlatformSupportedForTest(nil) })
+
 	home := t.TempDir()
 	step := componentSyncStep{
 		id:           "sync:sdd",
@@ -1831,7 +1835,7 @@ func TestRestorePersistedCommunityToolsDoesNotAdoptExternalWiring(t *testing.T) 
 }
 
 func TestRunSyncMigratesLegacyManagedCodeGraphSelection(t *testing.T) {
-	if !system.CodeGraphPlatformSupported() || os.Getenv("ANDROID_ROOT") != "" {
+	if !system.CodeGraphPlatformSupported() {
 		t.Skip("CodeGraph not supported on this platform")
 	}
 	home := t.TempDir()
@@ -1867,7 +1871,7 @@ func TestRunSyncMigratesLegacyManagedCodeGraphSelection(t *testing.T) {
 }
 
 func TestRunSyncMigratesLegacyManagedPiCodeGraphSelection(t *testing.T) {
-	if !system.CodeGraphPlatformSupported() || os.Getenv("ANDROID_ROOT") != "" {
+	if !system.CodeGraphPlatformSupported() {
 		t.Skip("CodeGraph not supported on this platform")
 	}
 	home := t.TempDir()
@@ -1906,7 +1910,7 @@ func TestRunSyncMigratesLegacyManagedPiCodeGraphSelection(t *testing.T) {
 }
 
 func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) {
-	if !system.CodeGraphPlatformSupported() || os.Getenv("ANDROID_ROOT") != "" {
+	if !system.CodeGraphPlatformSupported() {
 		t.Skip("CodeGraph not supported on this platform")
 	}
 	home := t.TempDir()
