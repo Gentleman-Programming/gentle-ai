@@ -708,6 +708,53 @@ func TestCurrentChangesRecoverSelectorPresenceSurvivesJSONRoundTrip(t *testing.T
 	}
 }
 
+func TestStatusCollectsInvalidatedSameTargetCurrentChangesRecoveryAuthorization(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "selector-current-invalidated"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewInvalidate([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--expected-revision", record.Revision,
+		"--reason", "replace invalidated current-changes review",
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	record, err = store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(store.StatePath())
+	storesBefore, _ := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+
+	status := selectorTransitionStatus(t, repo, "--lineage", started.LineageID)
+	if status.Action != reviewtransaction.TargetStatusActionRecover ||
+		status.ActionDisposition != reviewtransaction.RecoveryInvalidated ||
+		status.TargetIdentity != reviewAuthorityTargetIdentity(status) {
+		t.Fatalf("invalidated current-changes status = %#v", status)
+	}
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "recovery_authorization_required" {
+		t.Fatalf("invalidated same-target current-changes transition = %#v", status.NextTransition)
+	}
+	after, _ := os.ReadFile(store.StatePath())
+	storesAfter, _ := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	if !bytes.Equal(before, after) || len(storesAfter) != len(storesBefore) {
+		t.Fatalf("invalidated same-target STATUS mutated authority: stores before=%d after=%d", len(storesBefore), len(storesAfter))
+	}
+}
+
 func TestStatusStopsUnrepresentableRecoveryWithoutMutation(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))

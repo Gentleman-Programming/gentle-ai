@@ -607,6 +607,41 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 	})
 }
 
+func TestReviewRecoveryCollectionSameTargetSelectorGuard(t *testing.T) {
+	t.Parallel()
+
+	target := "sha256:" + strings.Repeat("b", 64)
+	status := ReviewTargetStatusResult{
+		Applicability:  reviewtransaction.TargetApplicabilityCurrent,
+		Action:         reviewtransaction.TargetStatusActionRecover,
+		Replayability:  reviewtransaction.ReplayabilityManualActionRequired,
+		Authority:      &ReviewTargetStatusAuthority{LineageID: "same-target-selector", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateInvalidated},
+		TargetIdentity: target, AuthorityTargetIdentity: target,
+		ActionDisposition: reviewtransaction.RecoveryInvalidated,
+		Frozen:            &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
+		Projection:        ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace},
+	}
+	for _, tt := range []struct {
+		name       string
+		recovery   reviewtransaction.Target
+		wantKind   string
+		wantReason string
+	}{
+		{name: "invalidated current changes collects authorization", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges}, wantKind: reviewNextTransitionCollect, wantReason: "recovery_authorization_required"},
+		{name: "unchanged base diff stops", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetBaseDiff}, wantKind: reviewNextTransitionStop, wantReason: "recovery_scope_unchanged"},
+		{name: "unchanged workspace overlay stops", recovery: reviewtransaction.Target{Kind: reviewtransaction.TargetBaseWorkspaceOverlay}, wantKind: reviewNextTransitionStop, wantReason: "recovery_scope_unchanged"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{
+				Selector: &reviewTransitionSelector{Recovery: &tt.recovery},
+			})
+			if got.Kind != tt.wantKind || got.ReasonCode != tt.wantReason {
+				t.Fatalf("same-target recovery transition = %#v", got)
+			}
+		})
+	}
+}
+
 // TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedSchema is
 // the RED-first proof for the 1745 follow-up: the "token" field 1745 added to
 // ReviewTransitionArgument for execution arguments must be admissible under
