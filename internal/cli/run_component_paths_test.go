@@ -53,6 +53,20 @@ func TestComponentPathsSDDIncludesOpenCodeSettingsAndCommands(t *testing.T) {
 	}
 }
 
+func TestComponentPathsSDDIncludesKilocodeSettingsWithoutOpenCodeOwnership(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentKilocode})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentSDD)
+	settings := filepath.Join(home, ".config", "kilo", "opencode.json")
+	if !containsPath(paths, settings) {
+		t.Fatalf("componentPaths(sdd) missing Kilocode settings path %q\npaths=%v", settings, paths)
+	}
+	if ownership := opencodedefault.OwnershipPath(settings); containsPath(paths, ownership) {
+		t.Fatalf("componentPaths(sdd) assigned OpenCode ownership path %q to Kilocode\npaths=%v", ownership, paths)
+	}
+}
+
 func TestComponentPathsSDDIncludesClaudeLazyWorkflow(t *testing.T) {
 	home := t.TempDir()
 	adapters := resolveAdapters([]model.AgentID{model.AgentClaudeCode})

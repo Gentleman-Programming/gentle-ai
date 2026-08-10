@@ -2011,10 +2011,15 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					paths = append(paths, filepath.Join(adapter.CommandsDir(targetDir), command.Name+".md"))
 				}
 			}
-			if adapter.Agent() == model.AgentOpenCode {
+			if sdd.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 				if p := adapter.SettingsPath(targetDir); p != "" {
-					paths = append(paths, p, opencodedefault.OwnershipPath(p))
+					paths = append(paths, p)
+					if adapter.Agent() == model.AgentOpenCode {
+						paths = append(paths, opencodedefault.OwnershipPath(p))
+					}
 				}
+			}
+			if adapter.Agent() == model.AgentOpenCode {
 				paths = append(paths, openCodeSDDPluginPaths(targetDir)...)
 				// Shared prompt files in the selected OpenCode config scope — back these up
 				// so a sync does not silently overwrite user-customized prompt content.

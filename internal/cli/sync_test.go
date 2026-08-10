@@ -1051,6 +1051,24 @@ func TestSyncBackupTargetsIncludeClaudeEngramLegacyMigrationSource(t *testing.T)
 	}
 }
 
+func TestSyncBackupTargetsIncludeKilocodeSDDSettings(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentKilocode},
+		Components: []model.ComponentID{model.ComponentSDD},
+	}
+
+	targets, err := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatalf("syncBackupTargets() error = %v", err)
+	}
+
+	want := filepath.Join(home, ".config", "kilo", "opencode.json")
+	if !containsPath(targets, want) {
+		t.Fatalf("sync backup targets missing Kilocode SDD settings path %q: %v", want, targets)
+	}
+}
+
 type failingSyncStep struct{}
 
 func (failingSyncStep) ID() string { return "sync:test:fail-after-engram" }
@@ -1128,6 +1146,73 @@ func TestRunSyncRollbackRestoresClaudeEngramMigrationSource(t *testing.T) {
 	}
 	if len(backups) != 1 {
 		t.Fatalf("persistent backup count = %d, want 1 after duplicate transaction", len(backups))
+	}
+}
+
+func TestRunSyncRollbackRestoresKilocodeNamedProfileSettings(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "kilo", "opencode.json")
+	settingsBefore := []byte("{\n  \"userOwned\": true\n}\n")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, settingsBefore, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	restoreBackupHome := backup.UserHomeDirFn
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() { backup.UserHomeDirFn = restoreBackupHome })
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentKilocode},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeMulti,
+		Profiles:   []model.Profile{{Name: "fast"}},
+	}
+	rt, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := rt.stagePlan()
+	plan.Apply = append(plan.Apply, failingSyncStep{})
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+	if result.Err == nil {
+		t.Fatal("sync transaction error = nil; want forced post-profile failure")
+	}
+	if !result.Rollback.Success {
+		t.Fatalf("sync rollback failed: error=%v steps=%#v", result.Rollback.Err, result.Rollback.Steps)
+	}
+
+	got, err := os.ReadFile(settingsPath)
+	if err != nil || !bytes.Equal(got, settingsBefore) {
+		t.Fatalf("rollback did not restore Kilocode named-profile settings bytes: got=%q error=%v", got, err)
+	}
+}
+
+func TestSyncKilocodeNamedProfileSettingsAreByteIdempotent(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentKilocode},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeMulti,
+		Profiles:   []model.Profile{{Name: "fast"}},
+	}
+
+	runSyncComponentSteps(t, home, selection)
+	settingsPath := filepath.Join(home, ".config", "kilo", "opencode.json")
+	first, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) after first sync error = %v", settingsPath, err)
+	}
+
+	runSyncComponentSteps(t, home, selection)
+	second, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) after second sync error = %v", settingsPath, err)
+	}
+	if !bytes.Equal(second, first) {
+		t.Fatal("repeated Kilocode named-profile sync changed settings bytes")
 	}
 }
 
