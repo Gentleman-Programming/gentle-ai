@@ -95,8 +95,8 @@ func TestDedicatedReviewersAndRefutersAreStructurallyReadOnly(t *testing.T) {
 			}
 		}
 	}
-	if frontmatter := markdownFrontmatter(t, "claude/agents/review-refuter.md"); strings.Contains(frontmatter, "Bash") || strings.Contains(frontmatter, "Write") || strings.Contains(frontmatter, "Edit") {
-		t.Errorf("Claude refuter grants an execution or mutation tool: %s", frontmatter)
+	if frontmatter := markdownFrontmatter(t, "claude/agents/review-refuter.md"); strings.Contains(frontmatter, "Read") || strings.Contains(frontmatter, "Grep") || strings.Contains(frontmatter, "Glob") || strings.Contains(frontmatter, "Bash") || strings.Contains(frontmatter, "Write") || strings.Contains(frontmatter, "Edit") || strings.Contains(frontmatter, "mem_search") {
+		t.Errorf("Claude refuter grants live adjudication tools: %s", frontmatter)
 	}
 	for _, path := range []string{
 		"kiro/agents/review-risk.md", "kiro/agents/review-readability.md",
@@ -107,8 +107,8 @@ func TestDedicatedReviewersAndRefutersAreStructurallyReadOnly(t *testing.T) {
 		}
 	}
 	for _, path := range []string{"kiro/agents/review-refuter.md", "kiro/agents/jd-judge-a.md", "kiro/agents/jd-judge-b.md"} {
-		if frontmatter := markdownFrontmatter(t, path); !strings.Contains(frontmatter, `tools: ["read"]`) {
-			t.Errorf("%s is not read-only:\n%s", path, frontmatter)
+		if frontmatter := markdownFrontmatter(t, path); !strings.Contains(frontmatter, `tools: []`) {
+			t.Errorf("%s grants live adjudication tools:\n%s", path, frontmatter)
 		}
 	}
 	for _, path := range []string{
@@ -169,7 +169,7 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 					t.Errorf("%s %s does not use the native role-only judgment contract", path, name)
 				}
 				assertNoReviewerLifecycleInstructions(t, path+" "+name, prompt)
-				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any), true, false)
+				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any), false, false)
 			}
 			refuter := agentsMap[opencode.ReviewRefuterAgent].(map[string]any)
 			refuterPrompt := refuter["prompt"].(string)
@@ -177,7 +177,7 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 				t.Errorf("%s refuter prompt is not bounded: %s", path, refuterPrompt)
 			}
 			assertNoReviewerLifecycleInstructions(t, path+" refuter", refuterPrompt)
-			assertOpenCodeReadOnlyTools(t, path+" refuter", refuter["tools"].(map[string]any), true, false)
+			assertOpenCodeReadOnlyTools(t, path+" refuter", refuter["tools"].(map[string]any), false, false)
 		})
 	}
 }
@@ -661,5 +661,5 @@ func readGentleOrchestratorPrompt(t *testing.T, settingsPath string) string {
 
 func assertOpenCodeRefuterToolsReadOnly(t *testing.T, label string, tools map[string]any) {
 	t.Helper()
-	assertOpenCodeReadOnlyTools(t, label, tools, true, false)
+	assertOpenCodeReadOnlyTools(t, label, tools, false, false)
 }

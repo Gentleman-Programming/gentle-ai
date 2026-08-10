@@ -165,7 +165,7 @@ func assertOpenCodeSubAgentReadOnlyTools(t *testing.T, agentsMap map[string]any,
 		t.Fatalf("agent %q tools have type %T, want object", agentName, agent["tools"])
 	}
 	for tool, want := range map[string]bool{
-		"read":  true,
+		"read":  false,
 		"write": false,
 		"edit":  false,
 		"bash":  false,
@@ -630,11 +630,21 @@ func TestInjectNativeSDDSubagentsIncludeCodeGraphGuidanceWhenEnabled(t *testing.
 					t.Fatalf("ReadFile(%q) error = %v", path, err)
 				}
 				text := string(content)
+
+				source := renderBoundedReviewAsset(adapter.Agent(), adapter.EmbeddedSubAgentsDir()+"/"+fileName)
+				if hasNoToolFrontmatter(source) {
+					if strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") || strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>") {
+						t.Fatalf("%s frozen no-tool adjudicator unexpectedly contains CodeGraph guidance", fileName)
+					}
+					sourceTools := nativeToolsLineForCodeGraphTest(t, source)
+					if got := nativeToolsLineForCodeGraphTest(t, text); got != sourceTools {
+						t.Fatalf("%s tools = %q, want %q", fileName, got, sourceTools)
+					}
+					continue
+				}
 				if count := strings.Count(text, "<!-- gentle-ai:codegraph-guidance -->"); count != 1 {
 					t.Fatalf("%s guidance count = %d, want 1", fileName, count)
 				}
-
-				source := renderBoundedReviewAsset(adapter.Agent(), adapter.EmbeddedSubAgentsDir()+"/"+fileName)
 				if tc.toolGrant != "" {
 					sourceTools := nativeToolsLineForCodeGraphTest(t, source)
 					wantTools := sourceTools + ", " + tc.toolGrant
