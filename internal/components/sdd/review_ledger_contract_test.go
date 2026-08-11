@@ -358,7 +358,11 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// body and section limits and normalizes nested list indentation. Kilocode
 	// embeds this shared orchestrator contract, so the hash moved. Deliberate,
 	// not drift.
-	const want = "e45ef3e488d89394a37d8ddaf101ae658ee4425d49dca94576e76b02c1df26f9"
+	// #3076 permits only a narrowly scoped read-only lookup after an ambiguous
+	// creation outcome, avoiding both a deadlock and duplicate issue creation.
+	// Kilocode embeds the shared orchestrator contract, so the hash moved.
+	// Deliberate, not drift.
+	const want = "c85db0efc051cf9288fce36ca611ce81c210cdd5675f5dc80df7365778ca60ae"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
