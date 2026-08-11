@@ -95,7 +95,10 @@ const (
 type PersonaID string
 
 const (
-	PersonaGentleman                 PersonaID = "gentleman"
+	PersonaGentleman PersonaID = "gentleman"
+	// PersonaGentlemanNeutralArtifacts is a legacy alias accepted for backward
+	// compatibility. The CLI and sync normalization treat it as PersonaNeutral,
+	// and it is never offered as a selectable choice.
 	PersonaGentlemanNeutralArtifacts PersonaID = "gentleman-neutral-artifacts"
 	PersonaNeutral                   PersonaID = "neutral"
 	PersonaCustom                    PersonaID = "custom"

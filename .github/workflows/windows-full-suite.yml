@@ -43,9 +43,9 @@ jobs:
   #
   # Split by measured cost: internal/cli and internal/reviewtransaction are
   # ~44% and ~33% of total test time. internal/cli alone exceeded the 30m
-  # go-test timeout, so it takes four shards and TestR* -- 453 of its 960
-  # tests -- keeps one to itself. `rest` is derived from `go list` rather than
-  # listed, so a new package is covered the day it is added.
+  # go-test timeout, so it takes five shards; TestR* dominates the package and
+  # is split again by its next letter. `rest` is derived from `go list` rather
+  # than listed, so a new package is covered the day it is added.
   #
   # Intra-package t.Parallel() would be the deeper fix, but internal/cli has 89
   # os.Setenv/t.Setenv sites and t.Setenv panics in a parallel test, so that is
@@ -57,11 +57,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Ranges are contiguous and disjoint over A-Z, which is what keeps
-        # sharding honest: internal/assets asserts that, so a shard cannot be
-        # edited into leaving a letter uncovered and silently skipping tests
-        # while the lane still reports green. Every Go test name begins with
-        # "Test" plus an uppercase letter, so A-Z is the whole space.
+        # Top-level ranges are contiguous and disjoint over A-Z. R is further
+        # partitioned by its next letter; internal/assets requires that exact
+        # pair and treats it as the R tile. A shard therefore cannot leave a
+        # letter uncovered and silently skip tests while the lane reports green.
         shard:
           - name: cli-a-c
             packages: ./internal/cli
@@ -69,9 +68,12 @@ jobs:
           - name: cli-d-q
             packages: ./internal/cli
             run: ^Test[D-Q]
-          - name: cli-r
+          - name: cli-r-a-m
             packages: ./internal/cli
-            run: ^Test[R-R]
+            run: ^TestR[A-Ma-m]
+          - name: cli-r-n-z
+            packages: ./internal/cli
+            run: ^TestR[N-Zn-z]
           - name: cli-s-z
             packages: ./internal/cli
             run: ^Test[S-Z]

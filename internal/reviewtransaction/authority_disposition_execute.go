@@ -189,9 +189,11 @@ func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *Mainte
 	// with a forged Authorization and it would commit every remaining
 	// closure member.
 	var records map[string]CompactRecord
+	var report CompactRecoveryInspectionReport
+	var freshRecords map[string]CompactRecord
 	validationInventoryRevision := plan.AuthorityInventoryRevision
 	if freshExecution {
-		report, freshRecords, err := loadCompactRecoveryRecordsUnderMaintenanceHold(ctx, root)
+		report, freshRecords, err = loadCompactRecoveryRecordsUnderMaintenanceHold(ctx, root)
 		if err != nil {
 			return CompactReclaimRecord{}, err
 		}
@@ -210,7 +212,7 @@ func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *Mainte
 		if currentPlan.PlanDigest != plan.PlanDigest {
 			return CompactReclaimRecord{}, fmt.Errorf("%w: plan digest drifted under lock re-derivation (expected_revisions or authority_inventory_revision changed)", ErrConcurrentUpdate)
 		}
-		currentInventoryRevision, err := authorityInventoryRevision(records)
+		currentInventoryRevision, err := authorityInventoryRevision(records, report.historical)
 		if err != nil {
 			return CompactReclaimRecord{}, err
 		}
@@ -237,13 +239,20 @@ func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *Mainte
 	// were not already loaded above (freshExecution == false skipped
 	// re-derivation), so load them once here, for CAS-all-N only.
 	if records == nil {
-		_, freshRecords, err := loadCompactRecoveryRecordsUnderMaintenanceHold(ctx, root)
+		report, freshRecords, err = loadCompactRecoveryRecordsUnderMaintenanceHold(ctx, root)
 		if err != nil {
 			return CompactReclaimRecord{}, err
 		}
 		records = freshRecords
 	}
 	for _, lineage := range plan.Closure {
+		expectedRevision, expectedFound := plan.ExpectedRevisions[lineage]
+		if historical, found := report.historical[lineage]; found {
+			if !expectedFound || historical.RawDigest != expectedRevision {
+				return CompactReclaimRecord{}, fmt.Errorf("%w: expected revision for closure member %q drifted", ErrConcurrentUpdate, lineage)
+			}
+			continue
+		}
 		targetRecord, found := records[lineage]
 		if !found {
 			// On a fresh execution a missing member is drift — nothing has
@@ -258,7 +267,6 @@ func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *Mainte
 			}
 			continue
 		}
-		expectedRevision, expectedFound := plan.ExpectedRevisions[lineage]
 		if !expectedFound || targetRecord.Revision != expectedRevision {
 			return CompactReclaimRecord{}, fmt.Errorf("%w: expected revision for closure member %q drifted", ErrConcurrentUpdate, lineage)
 		}
@@ -442,7 +450,7 @@ func quarantineDirectoryLineageMatches(quarantineRoot, entryName, expectedLineag
 // "uncoordinated read for a caller that already holds the required
 // coordination" primitive, compact_store.go) instead of Load.
 func loadCompactRecoveryRecordsUnderMaintenanceHold(ctx context.Context, repo string) (CompactRecoveryInspectionReport, map[string]CompactRecord, error) {
-	report := CompactRecoveryInspectionReport{Complete: true, Valid: true, Edges: []CompactRecoveryEdgeInspection{}, EntryDiagnostics: []CompactRecoveryEntryDiagnostic{}}
+	report := CompactRecoveryInspectionReport{Complete: true, Valid: true, Edges: []CompactRecoveryEdgeInspection{}, EntryDiagnostics: []CompactRecoveryEntryDiagnostic{}, historical: map[string]historicalCompactForensicRecord{}}
 	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {
 		return report, nil, err
@@ -476,6 +484,11 @@ func loadCompactRecoveryRecordsUnderMaintenanceHold(ctx context.Context, repo st
 			lockPath: filepath.Join(versionRoot, "LOCK"), maintenanceLockPath: compactMaintenanceLockPath(base)}
 		record, loadErr := store.loadCompactRecordLocked()
 		if loadErr != nil {
+			if payload, err := os.ReadFile(store.StatePath()); err == nil {
+				if historical, ok := forensicHistoricalCompactRecord(payload, entry.Name()); ok {
+					report.historical[entry.Name()] = historical
+				}
+			}
 			report.EntryDiagnostics = append(report.EntryDiagnostics, CompactRecoveryEntryDiagnostic{
 				LineageID: entry.Name(), Problem: compactRecoveryEntryProblem(loadErr),
 			})

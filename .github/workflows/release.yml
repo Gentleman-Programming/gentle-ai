@@ -173,11 +173,13 @@ jobs:
         if: always()
         run: |
           if command -v shred >/dev/null 2>&1; then
-            shred --remove "$MINISIGN_SECRET_KEY_FILE" 2>/dev/null || true
+            shred --remove "$MINISIGN_SECRET_KEY_FILE" 2>/dev/null || rm -f "$MINISIGN_SECRET_KEY_FILE"
           else
             rm -f "$MINISIGN_SECRET_KEY_FILE"
           fi
           rm -f "$MINISIGN_SIGNING_PUBLIC_KEY_FILE"
+          test ! -e "$MINISIGN_SECRET_KEY_FILE"
+          test ! -e "$MINISIGN_SIGNING_PUBLIC_KEY_FILE"
 
   verify:
     needs: release

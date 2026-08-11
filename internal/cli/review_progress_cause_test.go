@@ -24,6 +24,8 @@ import (
 // authoritative mutation evidence" with an empty cause and has nothing to act
 // on or report, for a state whose reason the tool already held.
 func TestUnclassifiedProgressFailureStillCarriesItsCause(t *testing.T) {
+	t.Parallel()
+
 	const lineage = "unclassified-progress-cause"
 	native := errors.New("authority store rejected the terminal successor")
 	progressed := &reviewFacadeOperationProgressError{

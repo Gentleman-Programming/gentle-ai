@@ -63,25 +63,10 @@ func TestRuntimeFinishDoesNotDemandAReviewSuccessorWhileReviewIsDisabled(t *test
 	}
 }
 
-// TestRuntimeFinishStillDemandsAReviewSuccessorWhileReviewIsEnabled is the
-// regression that matters most: with the switch on, the identical attempt still
-// refuses to close without an approved recovery successor.
-func TestRuntimeFinishStillDemandsAReviewSuccessorWhileReviewIsEnabled(t *testing.T) {
-	fixture := newRuntimeRemediationFixture(t, true)
-	request := fixture.finishRequest("finish-while-review-enabled")
-	request.ExpectedBindingRevision = ""
-	request.SuccessorLineageID = ""
-	request.RemediatesEvidenceRevision = ""
-
-	if fixture.store.ReviewDisabled {
-		t.Fatal("the default RuntimeStore must enforce review obligations")
-	}
-	before := countRuntimeRecords(t, fixture.store.Dir)
-	if _, err := fixture.store.Finish(context.Background(), request); !errors.Is(err, ErrRuntimeRemediationSuccessorRequired) {
-		t.Fatalf("enabled finish without a successor = %T %v", err, err)
-	}
-	assertRuntimeRemediationUnchanged(t, fixture, before)
-}
+// The enabled-side counterpart of the test above is gone with its subject:
+// review no longer demands a successor when implementation finishes, because
+// it acts after implementation and verification. Its replacement lives in
+// runtime_review_acts_after_verify_test.go.
 
 // TestRuntimeFinishStillValidatesAnExplicitSuccessorWhileReviewIsDisabled holds
 // the other edge: the switch removes the IMPLICIT demand, never the checks on

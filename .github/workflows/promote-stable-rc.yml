@@ -1,0 +1,268 @@
+name: Promote stable RC
+on:
+  workflow_dispatch:
+    inputs:
+      source_prerelease_tag:
+        required: true
+      stable_tag:
+        required: true
+      release_environment_policy_id:
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: promote-stable-${{ inputs.stable_tag }}
+  cancel-in-progress: false
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      source_sha: ${{ steps.provenance.outputs.source_sha }}
+      recovery_state: ${{ steps.provenance.outputs.recovery_state }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ENVIRONMENT_POLICY_ID: ${{ inputs.release_environment_policy_id }}
+          SOURCE_PRERELEASE_TAG: ${{ inputs.source_prerelease_tag }}
+          STABLE_TAG: ${{ inputs.stable_tag }}
+        run: ./scripts/promote-stable-preflight.sh
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ steps.provenance.outputs.source_sha }}
+          path: source
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: source/go.mod
+      - name: Verify immutable source checkout
+        working-directory: source
+        env:
+          SOURCE_SHA: ${{ steps.provenance.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          go mod tidy -diff
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          go test ./... -count=1
+          go vet ./...
+          go run ./internal/gofmtcheck
+      - name: Mark release distribution snapshot start
+        working-directory: source
+        run: |
+          set -euo pipefail
+          marker="$RUNNER_TEMP/gentle-ai-release-policy-snapshot-start"
+          umask 077
+          printf '%s:%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_JOB" >"$marker"
+          printf 'RELEASE_POLICY_SNAPSHOT_MARKER=%s\n' "$marker" >>"$GITHUB_ENV"
+          printf 'RELEASE_POLICY_SNAPSHOT_RUN_ID=%s:%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_JOB" >>"$GITHUB_ENV"
+      - name: Resolve source distribution plan without publishing
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.15.2
+          workdir: source
+          args: release --snapshot --clean --skip=sign,publish
+        env:
+          MINISIGN_PUBLIC_KEYS_CANONICAL: release-policy-validation-only
+      - name: Verify source distribution policy
+        working-directory: source
+        run: ./scripts/verify-release-distribution-policy.sh
+  release:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # The operator adds main immediately before dispatch, retaining reviewers.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Create and verify stable tag
+        id: tag
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          SOURCE_PRERELEASE_TAG: ${{ inputs.source_prerelease_tag }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+          STABLE_TAG: ${{ inputs.stable_tag }}
+          RECOVERY_STATE: ${{ needs.preflight.outputs.recovery_state }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const sourceTag = process.env.SOURCE_PRERELEASE_TAG;
+            const sourceSHA = process.env.SOURCE_SHA;
+            const stableTag = process.env.STABLE_TAG;
+            const recovery = process.env.RECOVERY_STATE;
+            const expectedAssets = [`gentle-ai_${stableTag.slice(1)}_darwin_amd64.tar.gz`, `gentle-ai_${stableTag.slice(1)}_darwin_arm64.tar.gz`, `gentle-ai_${stableTag.slice(1)}_linux_amd64.tar.gz`, `gentle-ai_${stableTag.slice(1)}_linux_arm64.tar.gz`, 'checksums.txt', 'checksums.txt.minisig'].sort().join('\n');
+            const optional = async (request) => {
+              try { return await request(); } catch (error) {
+                if (error.status === 404) return null;
+                throw error;
+              }
+            };
+            const sourceRef = await github.rest.git.getRef({ owner, repo, ref: `tags/${sourceTag}` });
+            let source = sourceRef.data.object;
+            if (source.type === 'tag') source = (await github.rest.git.getTag({ owner, repo, tag_sha: source.sha })).data.object;
+            if (source.type !== 'commit' || source.sha !== sourceSHA) throw new Error('source prerelease tag drifted');
+            const sourceRelease = await github.rest.repos.getReleaseByTag({ owner, repo, tag: sourceTag });
+            if (sourceRelease.data.draft || !sourceRelease.data.prerelease || !sourceRelease.data.immutable) throw new Error('source prerelease release drifted');
+            let ref = await optional(() => github.rest.git.getRef({ owner, repo, ref: `tags/${stableTag}` }));
+            let release = await optional(() => github.rest.repos.getReleaseByTag({ owner, repo, tag: stableTag }));
+            if (recovery === 'fresh') {
+              if (ref || release) throw new Error('stable state appeared after preflight');
+              // A GITHUB_TOKEN-created ref cannot race release.yml from the RC source tree.
+              const created = await github.rest.git.createTag({ owner, repo, tag: stableTag, message: `Promote ${sourceTag} to ${stableTag}`, object: sourceSHA, type: 'commit' });
+              await github.rest.git.createRef({ owner, repo, ref: `refs/tags/${stableTag}`, sha: created.data.sha });
+              ref = await github.rest.git.getRef({ owner, repo, ref: `tags/${stableTag}` });
+            } else {
+              if (!ref || ref.data.object.type !== 'tag') throw new Error('stable tag recovery identity changed');
+              const existingTag = await github.rest.git.getTag({ owner, repo, tag_sha: ref.data.object.sha });
+              if (existingTag.data.tag !== stableTag || existingTag.data.object.type !== 'commit' || existingTag.data.object.sha !== sourceSHA) throw new Error('stable tag recovery identity changed');
+              if (recovery === 'resume-tag' && release) throw new Error('stable release appeared during tag-only recovery');
+              if (recovery === 'reset-empty-draft') {
+                if (!release || !release.data.draft || release.data.assets.length !== 0) throw new Error('stable draft recovery state changed');
+                await github.rest.repos.deleteRelease({ owner, repo, release_id: release.data.id });
+                release = null;
+              }
+              if (recovery === 'verify-existing' && (!release || release.data.draft || release.data.prerelease || !release.data.immutable || release.data.assets.map((asset) => asset.name).sort().join('\n') !== expectedAssets)) throw new Error('stable published recovery state changed');
+              if (!['resume-tag', 'reset-empty-draft', 'verify-existing'].includes(recovery)) throw new Error('unknown stable recovery state');
+            }
+            const tag = await github.rest.git.getTag({ owner, repo, tag_sha: ref.data.object.sha });
+            if (tag.data.tag !== stableTag || tag.data.object.type !== 'commit' || tag.data.object.sha !== sourceSHA) throw new Error('stable tag readback failed');
+            core.setOutput('publish', recovery === 'verify-existing' ? 'false' : 'true');
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ inputs.stable_tag }}
+          path: source
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: source/go.mod
+      - name: Recheck stable tag source
+        working-directory: source
+        env:
+          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+          STABLE_TAG: ${{ inputs.stable_tag }}
+        run: |
+          set -euo pipefail
+          git fetch --force --quiet origin "refs/tags/$STABLE_TAG:refs/tags/$STABLE_TAG"
+          test "$(git cat-file -t "refs/tags/$STABLE_TAG")" = tag
+          test "$(git rev-parse "refs/tags/$STABLE_TAG^{commit}")" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          go mod tidy -diff
+      - name: Export canonical release trust anchors
+        id: trust-anchors
+        working-directory: source
+        env:
+          MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
+        run: |
+          set -euo pipefail
+          canonical=$(./scripts/canonicalize-release-public-keys.sh)
+          printf 'canonical=%s\n' "$canonical" >>"$GITHUB_OUTPUT"
+      - name: Configure ephemeral signing paths
+        run: printf 'MINISIGN_SECRET_KEY_FILE=%s/gentle-ai-release.key\n' "$RUNNER_TEMP" >>"$GITHUB_ENV"; printf 'MINISIGN_SIGNING_PUBLIC_KEY_FILE=%s/gentle-ai-release-signing.pub\n' "$RUNNER_TEMP" >>"$GITHUB_ENV"
+      - name: Install Minisign
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y minisign
+      - name: Materialize signing key
+        env:
+          SIGNING_KEY_B64: ${{ secrets.MINISIGN_SECRET_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$SIGNING_KEY_B64"; printf '%s' "$SIGNING_KEY_B64" | base64 --decode >"$MINISIGN_SECRET_KEY_FILE"; test -s "$MINISIGN_SECRET_KEY_FILE"; chmod 600 "$MINISIGN_SECRET_KEY_FILE"
+      - name: Verify signing credential and identity binding
+        working-directory: source
+        env:
+          RELEASE_SIGNING_TAG: ${{ inputs.stable_tag }}
+          MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
+          MINISIGN_PUBLIC_KEYS_CANONICAL: ${{ steps.trust-anchors.outputs.canonical }}
+        run: ./scripts/release-signing-preflight.sh
+      - name: Run GoReleaser
+        if: steps.tag.outputs.publish == 'true'
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.15.2
+          workdir: source
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GORELEASER_CURRENT_TAG: ${{ inputs.stable_tag }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          MINISIGN_SECRET_KEY_FILE: ${{ env.MINISIGN_SECRET_KEY_FILE }}
+          MINISIGN_PUBLIC_KEYS_CANONICAL: ${{ steps.trust-anchors.outputs.canonical }}
+      - name: Remove signing material
+        if: always()
+        run: |
+          if command -v shred >/dev/null 2>&1; then
+            shred --remove "$MINISIGN_SECRET_KEY_FILE" 2>/dev/null || rm -f "$MINISIGN_SECRET_KEY_FILE"
+          else
+            rm -f "$MINISIGN_SECRET_KEY_FILE"
+          fi
+          rm -f "$MINISIGN_SIGNING_PUBLIC_KEY_FILE"
+          test ! -e "$MINISIGN_SECRET_KEY_FILE"
+          test ! -e "$MINISIGN_SIGNING_PUBLIC_KEY_FILE"
+  verify:
+    needs: [preflight, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          # The verifier is orchestration code, not a release artifact. It must
+          # come from the reviewed main revision that dispatched this promotion.
+          ref: ${{ github.sha }}
+          path: orchestration
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Install Minisign
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y minisign
+      - name: Verify published assets from GitHub
+        working-directory: orchestration
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERIFICATION_TAG: ${{ inputs.stable_tag }}
+          MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
+        run: ./scripts/verify-release-assets.sh
+      - name: Verify immutable public provenance
+        working-directory: orchestration
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+          STABLE_TAG: ${{ inputs.stable_tag }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$STABLE_TAG" | jq -e --arg tag "$STABLE_TAG" '.tag_name == $tag and .draft == false and .prerelease == false and .immutable == true' >/dev/null
+          test "$(git ls-remote origin "refs/tags/$STABLE_TAG^{}" | awk 'NR == 1 { print $1 }')" = "$SOURCE_SHA"
+  restore-main-access:
+    needs: [release, verify]
+    if: always()
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: none
+    steps:
+      - name: Restore temporary environment policy
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_ENVIRONMENT_POLICY_TOKEN }}
+          POLICY_ID: ${{ inputs.release_environment_policy_id }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          [[ "$POLICY_ID" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies/$POLICY_ID" | jq -e '.name == "main" and .type == "branch"' >/dev/null
+          gh api --method DELETE "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies/$POLICY_ID"

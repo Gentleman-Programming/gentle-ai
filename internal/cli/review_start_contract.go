@@ -189,8 +189,7 @@ func (result ReviewIntegrationStartResult) Validate() error {
 	if result.ChangedFiles < 0 || result.ChangedLines < 0 {
 		return errors.New("negotiated START change counts cannot be negative")
 	}
-	budget, err := reviewtransaction.CorrectionBudget(result.ChangedLines)
-	if err != nil || budget != result.CorrectionBudget {
+	if !reviewContractCorrectionBudgetValid(result.ChangedLines, result.CorrectionBudget) {
 		return errors.New("negotiated START correction budget is inconsistent")
 	}
 	if err := validateReviewStartRiskReasons(result.RiskReasons); err != nil {
@@ -268,6 +267,11 @@ func (result ReviewIntegrationStartResult) Validate() error {
 		}
 	}
 	return nil
+}
+
+func reviewContractCorrectionBudgetValid(originalChangedLines, correctionBudget int) bool {
+	legacyBudget, err := reviewtransaction.CorrectionBudget(originalChangedLines)
+	return err == nil && correctionBudget == legacyBudget
 }
 
 func validateReviewStartRiskReasons(reasons []reviewtransaction.RiskReason) error {

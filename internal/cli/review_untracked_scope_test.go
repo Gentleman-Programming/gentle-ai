@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +33,22 @@ func startedChangedPathManifest(t *testing.T, started ReviewIntegrationStartResu
 	return *started.ChangedPathManifest
 }
 
+func runNegotiatedReviewStartExcludingUntracked(t *testing.T, repo, lineage string) ReviewIntegrationStartResult {
+	t.Helper()
+	_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage,
+		"--untracked-scope=exclude", "--expected-untracked-inventory=" + digest,
+	}), &output); err != nil {
+		t.Fatal(err)
+	}
+	return decodeNegotiatedReviewStart(t, output.Bytes())
+}
+
 // startWithUnrelatedUntrackedCredential freezes a candidate whose only real
 // change is one tracked file, while an unrelated credential-shaped file sits
 // untracked and undeclared next to it.
@@ -41,7 +59,7 @@ func startWithUnrelatedUntrackedCredential(t *testing.T, lineage string) (string
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "reviewed candidate\n", 0o644)
 	writeUndeclaredWorkspaceFile(t, repo, unrelatedCredentialPath, unrelatedCredentialContents, 0o600)
-	return repo, runNegotiatedReviewStart(t, repo, lineage)
+	return repo, runNegotiatedReviewStartExcludingUntracked(t, repo, lineage)
 }
 
 // TestNegotiatedStartKeepsUndeclaredUntrackedFileOutOfCandidate pins the first
@@ -78,7 +96,7 @@ func TestNegotiatedStartKeepsDeclaredUntrackedFileInCandidate(t *testing.T) {
 	writeUndeclaredWorkspaceFile(t, repo, unrelatedCredentialPath, unrelatedCredentialContents, 0o600)
 	runReviewCLIGit(t, repo, "add", "declared-helper.txt")
 
-	started := runNegotiatedReviewStart(t, repo, "untracked-scope-declared")
+	started := runNegotiatedReviewStartExcludingUntracked(t, repo, "untracked-scope-declared")
 
 	declared := false
 	manifest := startedChangedPathManifest(t, started)

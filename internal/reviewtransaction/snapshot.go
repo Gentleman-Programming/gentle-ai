@@ -44,6 +44,17 @@ type Target struct {
 	LedgerIDs         []string   `json:"ledger_ids,omitempty"`
 }
 
+// CanonicalTarget projects a requested selector onto the executable target
+// vocabulary before any snapshot identity is derived. A base diff is always a
+// committed-only comparison, so its staged spelling cannot name distinct
+// authority.
+func CanonicalTarget(target Target) Target {
+	if target.Kind == TargetBaseDiff && target.Projection == ProjectionStaged {
+		target.Projection = ProjectionWorkspace
+	}
+	return target
+}
+
 type Snapshot struct {
 	Kind                   TargetKind `json:"kind"`
 	Projection             Projection `json:"projection,omitempty"`
@@ -66,7 +77,12 @@ type SnapshotBuilder struct {
 var exactObjectPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
 
 func (builder SnapshotBuilder) Build(ctx context.Context, target Target) (Snapshot, error) {
-	return builder.build(ctx, target, false)
+	// Canonicalization makes a staged base diff committed-only. Validate the
+	// incompatible staged-only untracked form before that projection is erased.
+	if target.Kind == TargetBaseDiff && target.Projection == ProjectionStaged && len(target.IntendedUntracked) != 0 {
+		return Snapshot{}, errors.New("staged projection does not accept intended-untracked paths")
+	}
+	return builder.build(ctx, CanonicalTarget(target), false)
 }
 
 // BuildStagedWorkspaceOverlayRecovery freezes the exact real index for the
@@ -352,20 +368,32 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 	if err := builder.ValidateEvidence(ctx, snapshot); err != nil {
 		return false, err
 	}
-	logicalPath, line, err := parseFindingLocation(location)
+	finding, err := parseFindingLocation(location)
 	if err != nil {
 		return false, err
 	}
-	if stringIndex(snapshot.Paths, logicalPath) < 0 {
+	return builder.candidateFindingSupportsCausality(ctx, snapshot, finding, causality)
+}
+
+// candidateFindingSupportsCausality answers causality for an already parsed
+// finding location. The non-positive line refusal lives here, at the level the
+// causality comparisons actually consume, so a start or end line below 1 can
+// never be judged causal even when it reaches this point without having been
+// filtered by the location parser.
+func (builder SnapshotBuilder) candidateFindingSupportsCausality(ctx context.Context, snapshot Snapshot, finding findingLocation, causality CausalDisposition) (bool, error) {
+	if stringIndex(snapshot.Paths, finding.Path) < 0 {
+		return false, nil
+	}
+	if !findingLocationHasPositiveLines(finding) {
 		return false, nil
 	}
 	if causality == CausalBehaviorActivated {
-		entry, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(logicalPath))
+		entry, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(finding.Path))
 		if err != nil || len(entry) == 0 {
 			return false, err
 		}
 		for _, tree := range []string{snapshot.CandidateTree} {
-			blob, err := runGit(ctx, builder.Repo, nil, nil, "show", tree+":"+logicalPath)
+			blob, err := runGit(ctx, builder.Repo, nil, nil, "show", tree+":"+finding.Path)
 			if err != nil {
 				return false, err
 			}
@@ -373,7 +401,7 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 			if len(blob) > 0 && blob[len(blob)-1] != '\n' {
 				lines++
 			}
-			if line <= lines {
+			if finding.EndLine <= lines {
 				return true, nil
 			}
 		}
@@ -382,7 +410,7 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 	if causality != CausalIntroduced && causality != CausalWorsened {
 		return false, nil
 	}
-	output, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--unified=0", "--no-renames", "--no-ext-diff", "--no-textconv", snapshot.BaseTree, snapshot.CandidateTree, "--", literalPathspec(logicalPath))
+	output, err := runGit(ctx, builder.Repo, nil, nil, "diff", "--unified=0", "--no-renames", "--no-ext-diff", "--no-textconv", snapshot.BaseTree, snapshot.CandidateTree, "--", literalPathspec(finding.Path))
 	if err != nil {
 		return false, err
 	}
@@ -393,7 +421,7 @@ func (builder SnapshotBuilder) CandidateLocationSupportsCausality(ctx context.Co
 		if len(match[offset+1]) > 0 {
 			count, _ = strconv.Atoi(string(match[offset+1]))
 		}
-		if count > 0 && line >= start && line < start+count {
+		if count > 0 && finding.StartLine >= start && finding.EndLine < start+count {
 			return true, nil
 		}
 	}
@@ -652,6 +680,49 @@ func (builder SnapshotBuilder) DiscoverUnignoredUntracked(ctx context.Context) (
 		return nil, &UntrackedScopeRefusalError{Cause: err}
 	}
 	return canonical, nil
+}
+
+// IntendedUntrackedInventory returns the canonical digest-bound eligible workspace inventory.
+func (builder SnapshotBuilder) IntendedUntrackedInventory(ctx context.Context) ([]string, string, error) {
+	paths, err := builder.DiscoverUnignoredUntracked(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	return paths, intendedUntrackedInventoryDigest(paths), nil
+}
+
+// ValidateIntendedUntrackedSelection proves paths remain eligible in STATUS's inventory.
+func (builder SnapshotBuilder) ValidateIntendedUntrackedSelection(ctx context.Context, expectedDigest string, selected []string) ([]string, error) {
+	paths, digest, err := builder.IntendedUntrackedInventory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if expectedDigest != digest {
+		return nil, errors.New("untracked inventory changed; rerun `gentle-ai review status --next-transition` before selecting paths")
+	}
+	selected, err = canonicalPaths(selected)
+	if err != nil {
+		return nil, err
+	}
+	eligible := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		eligible[path] = struct{}{}
+	}
+	for _, path := range selected {
+		if _, ok := eligible[path]; !ok {
+			return nil, fmt.Errorf("intended-untracked path %q is not in the current eligible inventory; rerun `gentle-ai review status --next-transition`", path)
+		}
+	}
+	return selected, nil
+}
+
+func intendedUntrackedInventoryDigest(paths []string) string {
+	hash := sha256.New()
+	writeLengthPrefixed(hash, []byte("gentle-ai.intended-untracked-inventory/v1"))
+	for _, path := range paths {
+		writeLengthPrefixed(hash, []byte(path))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 // UntrackedScopeRefusalError marks a working-tree shape that untracked-scope
@@ -1092,7 +1163,7 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 		return "", "", "", err
 	}
 	candidateTree := strings.TrimSpace(string(candidateOutput))
-	if unborn && candidateTree == baseTree {
+	if unborn && projection == ProjectionStaged && candidateTree == baseTree {
 		return "", "", "", errors.New("unborn repository has no staged changes; stage the review candidate with git add")
 	}
 	if allowStagedIntended && projection != ProjectionStaged {

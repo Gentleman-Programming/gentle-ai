@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"testing"
 )
 
@@ -52,22 +51,13 @@ func TestCompactSettleRemediationRefusalIsClassifiedNotAuthorityFailure(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != CompactStateBlocked {
-		t.Fatalf("drifted compact settle result = %#v, want state=blocked", result)
-	}
-	if result.Reason == CompactBlockAuthorityFailure {
-		t.Fatalf("drifted compact settle reason = %q, want a specific classification, not the opaque default authority_failure dead end", result.Reason)
-	}
-	if result.Reason != CompactBlockRemediationRequired {
-		t.Fatalf("drifted compact settle reason = %q, want %q", result.Reason, CompactBlockRemediationRequired)
-	}
-	if result.Detail == "" || result.Exit == "" {
-		t.Fatalf("drifted compact settle result = %#v, want non-empty Detail/Exit carrying the wrapped refusal instead of throwing it away", result)
-	}
-	for _, want := range []string{"--expected-binding-revision", "--successor-lineage", "--remediates-evidence-revision"} {
-		if !strings.Contains(result.Detail, want) {
-			t.Fatalf("drifted compact settle detail = %q, want it to name the remediation trio exit including %s", result.Detail, want)
-		}
+	// #2249's scenario no longer blocks at all: review acts after
+	// implementation and verification, so a passing settle closes on the
+	// attempt's own evidence and the delivery gates decide afterwards whether
+	// the drifted candidate may ship. #2249's value — no opaque
+	// authority_failure dead end — is preserved by the enumeration guard below.
+	if result.State == CompactStateBlocked {
+		t.Fatalf("drifted compact settle = %#v, want it to close: review must not gate implementation", result)
 	}
 }
 
@@ -97,8 +87,8 @@ func TestCompactMutationFailureClassifiesEveryReachableLedgerSentinel(t *testing
 		{name: "ErrRuntimeConcurrentUpdate", err: ErrRuntimeConcurrentUpdate, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockInvalidContinuation},
 		{name: "ErrRuntimeRequestConflict", err: ErrRuntimeRequestConflict, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockInvalidContinuation},
 		{name: "ErrRuntimeNoActiveAttempt", err: ErrRuntimeNoActiveAttempt, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockInvalidContinuation},
-		{name: "ErrRuntimeRemediationSuccessorRequired", err: ErrRuntimeRemediationSuccessorRequired, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockRemediationRequired},
 		{name: "ErrRuntimeWorktreeMismatch", err: ErrRuntimeWorktreeMismatch, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockWorktreeMismatch},
+		{name: "ErrRuntimeCandidateUnavailable", err: ErrRuntimeCandidateUnavailable, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockCandidateUnavailable},
 		{name: "ErrBindingRevisionConflict", err: ErrBindingRevisionConflict, reachable: true, wantState: CompactStateBlocked, wantReason: CompactBlockInvalidContinuation},
 		// Reset is the only mutation that can produce these two; Begin/Finish
 		// never do, so Acquire/Settle never route them into

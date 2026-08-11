@@ -228,18 +228,29 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		Persona:                     string(input.Selection.Persona),
 	}
 	newState.SetSelection(input.Selection)
-	if len(flags.Agents) > 0 {
-		merged, err := mergeExplicitAgentInstallState(homeDir, newState, agentIDs, flags)
-		if err != nil {
-			return result, fmt.Errorf("merge explicit agent install state: %w", err)
-		}
-		newState = merged
+	writer, err := managedAssetDigest()
+	if err != nil {
+		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
 	}
-	if err := state.Write(homeDir, newState); err != nil {
+	if err := persistInstallState(homeDir, newState, agentIDs, flags, writer); err != nil {
 		return result, fmt.Errorf("persist install state: %w", err)
 	}
 
 	return result, nil
+}
+
+func persistInstallState(homeDir string, newState state.InstallState, agentIDs []string, flags InstallFlags, writer string) error {
+	return withInstallStateLock(homeDir, func() error {
+		if len(flags.Agents) > 0 {
+			merged, err := mergeExplicitAgentInstallState(homeDir, newState, agentIDs, flags)
+			if err != nil {
+				return fmt.Errorf("merge explicit agent install state: %w", err)
+			}
+			newState = merged
+		}
+		newState.ManagedAssetDigest = writer
+		return state.Write(homeDir, newState)
+	})
 }
 
 // mergeExplicitAgentInstallState merges a fresh single-agent install's state
@@ -1515,6 +1526,14 @@ func (s componentApplyStep) Run() error {
 		return nil
 	case model.ComponentPersona:
 		for _, adapter := range adapters {
+			if adapter.Agent() == model.AgentPi {
+				for _, rootDir := range piPersonaConfigRoots(s.homeDir, s.workspaceDir, s.scope) {
+					if _, err := persona.InjectPiPersona(rootDir, s.selection.Persona); err != nil {
+						return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
+					}
+				}
+				continue
+			}
 			targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
 			if _, err := persona.Inject(targetDir, adapter, s.selection.Persona); err != nil {
 				return fmt.Errorf("inject persona for %q: %w", adapter.Agent(), err)
@@ -1816,11 +1835,26 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		for _, path := range componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
+		if component == model.ComponentContext7 {
+			for _, path := range claudeMCPSettingsCleanupPaths(homeDir, workspaceDir, scope, adapters) {
+				paths[path] = struct{}{}
+			}
+		}
 		if component == model.ComponentEngram && scope == ScopeGlobal {
 			for _, adapter := range adapters {
 				if adapter.Agent() == model.AgentClaudeCode {
 					paths[adapter.MCPConfigPath(homeDir, "engram")] = struct{}{}
 				}
+			}
+		}
+		// Persona backup captures every managed output-style file, not just the
+		// selected one, so a failed persona switch can restore the file its
+		// cleanup removed. Backup-only: verification stays on the selected file.
+		if component == model.ComponentPersona {
+			for _, path := range managedOutputStyleBackupPaths(selection, adapters, func(a agents.Adapter) string {
+				return a.OutputStyleDir(componentPathDirScoped(homeDir, workspaceDir, scope, a, model.ComponentPersona))
+			}) {
+				paths[path] = struct{}{}
 			}
 		}
 	}
@@ -1904,6 +1938,24 @@ func adapterSkillBackupTargets(homeDir, workspaceDir string, scope InstallScope,
 		}
 	}
 	return paths, nil
+}
+
+// claudeMCPSettingsCleanupPaths returns legacy Claude settings files that MCP
+// injection may rewrite while removing an inert mcpServers block. These paths
+// belong in the rollback snapshot, but not in post-apply verification because
+// cleanup is best-effort and the file may not exist.
+func claudeMCPSettingsCleanupPaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
+	paths := []string{}
+	for _, adapter := range adapters {
+		if adapter.Agent() != model.AgentClaudeCode || adapter.MCPStrategy() != model.StrategySeparateMCPFiles {
+			continue
+		}
+		targetDir := componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentContext7)
+		if path := adapter.SettingsPath(targetDir); path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths
 }
 
 // routingGuidancePaths declares the files agentRoutingGuidanceStep rewrites for
@@ -2081,6 +2133,10 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			if selection.Persona == model.PersonaCustom {
 				break
 			}
+			if adapter.Agent() == model.AgentPi {
+				paths = append(paths, piPersonaConfigPaths(homeDir, workspaceDir, scope)...)
+				break
+			}
 			if adapter.Agent() == model.AgentOpenClaw {
 				paths = append(paths, filepath.Join(targetDir, "SOUL.md"))
 				break
@@ -2160,6 +2216,27 @@ func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScop
 		return workspaceDir
 	}
 	return ResolveAgentConfigDir(scope, homeDir, workspaceDir)
+}
+
+// piPersonaConfigRoots returns the roots whose Pi persona state is managed by
+// install. Global install keeps its global fallback and seeds the active
+// workspace so Pi sees the selected persona immediately; workspace install is
+// limited to the workspace root like every other scoped component.
+func piPersonaConfigRoots(homeDir, workspaceDir string, scope InstallScope) []string {
+	roots := []string{ResolveAgentConfigDir(scope, homeDir, workspaceDir)}
+	if scope == ScopeGlobal && strings.TrimSpace(workspaceDir) != "" && filepath.Clean(workspaceDir) != filepath.Clean(homeDir) {
+		roots = append(roots, workspaceDir)
+	}
+	return roots
+}
+
+func piPersonaConfigPaths(homeDir, workspaceDir string, scope InstallScope) []string {
+	roots := piPersonaConfigRoots(homeDir, workspaceDir, scope)
+	paths := make([]string, 0, len(roots))
+	for _, root := range roots {
+		paths = append(paths, persona.PiPersonaConfigPath(root))
+	}
+	return paths
 }
 
 func codeGraphGuidanceMarkdownForSDD(homeDir string, selected []model.CommunityToolID) string {

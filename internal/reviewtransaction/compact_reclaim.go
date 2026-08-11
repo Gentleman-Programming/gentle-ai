@@ -86,6 +86,8 @@ type CompactReclaimRecord struct {
 	// lens partition; it is set only for review-abandon quarantines of a
 	// reviewing lineage whose selected plan never finished reporting.
 	IncompleteAbandonment *CompactIncompleteAbandonmentProof `json:"incomplete_abandonment,omitempty"`
+	// Abandonment carries the single v2 authorization proof.
+	Abandonment *CompactAbandonmentProof `json:"abandonment,omitempty"`
 	// MalformedLegacyFreeze carries the natively re-derived semantic replay
 	// failure for a shipped legacy-v1 findings-freeze event.
 	MalformedLegacyFreeze *LegacyMalformedFreezeProof `json:"malformed_legacy_freeze,omitempty"`
@@ -202,14 +204,14 @@ func compactReclaimAuthorityRefusal(ctx context.Context, repo, dir, lineageID, a
 			return fmt.Errorf("%s The entry holds no readable review-state.json beside that artifact, so nothing can prove the artifact never carried authority, and no advertised operation admits this shape today."+
 				" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %s` and escalate that report", refused, pathquote.Quote(repo))
 		}
-		return fmt.Errorf("%s Its record cannot be loaded (%v) — inspection classifies it %s, which an interrupted write leaves behind — and no advertised operation admits an unreadable record:"+
+		return fmt.Errorf("%s Its record cannot be loaded (%v) — inspection classifies it %s — and no advertised operation admits an unreadable record:"+
 			" reconciliation re-derives its proof from readable state, and admitting bytes that can prove nothing is a maintainer policy decision, not a repair."+
 			" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %s` and escalate that report",
 			refused, loadErr, compactRecoveryEntryProblem(loadErr), pathquote.Quote(repo))
 	}
 	eligibility, eligibilityErr := InspectCompactPristineAbandonment(ctx, repo, lineageID)
 	if eligibilityErr == nil && eligibility.Eligible {
-		return fmt.Errorf("%s The entry is pristine, so `gentle-ai review abandon` quarantines it whole: %s",
+		return fmt.Errorf("%s The entry is eligible for abandonment, so `gentle-ai review abandon` quarantines it whole: %s",
 			refused, compactAbandonCommandText(repo, lineageID, eligibility))
 	}
 	return fmt.Errorf("%s No advertised operation admits it: %s."+

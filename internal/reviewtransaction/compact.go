@@ -27,6 +27,14 @@ const (
 	historicalCompactCorrectionAttempts       = 3
 )
 
+// CorrectionBudgetPolicy names the persisted budget formula a compact state
+// uses. New states persist CorrectionBudgetPolicyFloorTwo so every positive
+// budget admits one atomic line replacement; historical states omit the field
+// and retain the legacy CorrectionBudget formula byte-for-byte (issue #2247).
+const (
+	CorrectionBudgetPolicyFloorTwo = "floor_two"
+)
+
 var ErrCompactCorrectionConsumed = errors.New("ordinary compact correction already consumed")
 
 // CompactSemanticStateError identifies a CompactState.Validate() failure with
@@ -39,6 +47,14 @@ type CompactSemanticStateError struct {
 	LineageID string
 	State     State
 	Problem   string
+	// OutdatedIdentity marks the one semantic failure a retired
+	// snapshot-identity formula leaves behind (#2743): the record's bytes
+	// parse and its structure is intact, but the identity it froze was
+	// computed by an earlier release's formula, so recomputation under the
+	// current formula no longer matches. Outdated means gate-invalid, not
+	// damaged: diagnostics classify it historical instead of malformed, and
+	// no scoped walk lets it block another lineage's operation.
+	OutdatedIdentity bool
 }
 
 func (err *CompactSemanticStateError) Error() string {
@@ -80,6 +96,7 @@ type CompactState struct {
 	SelectedLenses               []string                     `json:"selected_lenses"`
 	OriginalChangedLines         int                          `json:"original_changed_lines"`
 	CorrectionBudget             int                          `json:"correction_budget"`
+	CorrectionBudgetPolicy       string                       `json:"correction_budget_policy,omitempty"`
 	LensResults                  []LensResult                 `json:"lens_results"`
 	Findings                     []Finding                    `json:"findings"`
 	Classifications              map[string]FindingEvidence   `json:"classifications"`
@@ -339,7 +356,7 @@ func NewCompactState(start Start) (CompactState, error) {
 	if err != nil {
 		return CompactState{}, err
 	}
-	budget, err := CorrectionBudget(*start.OriginalChangedLines)
+	budget, err := CompactCorrectionBudget(*start.OriginalChangedLines)
 	if err != nil {
 		return CompactState{}, err
 	}
@@ -348,11 +365,28 @@ func NewCompactState(start Start) (CompactState, error) {
 		State: StateReviewing, InitialSnapshot: start.Snapshot, CurrentSnapshot: start.Snapshot,
 		GenesisPaths: append([]string(nil), start.Snapshot.Paths...), PolicyHash: start.PolicyHash,
 		RiskLevel: start.RiskLevel, SelectedLenses: lenses, OriginalChangedLines: *start.OriginalChangedLines,
-		CorrectionBudget: budget, LensResults: []LensResult{}, Findings: []Finding{},
+		CorrectionBudget: budget, CorrectionBudgetPolicy: CorrectionBudgetPolicyFloorTwo,
+		LensResults: []LensResult{}, Findings: []Finding{},
 		Classifications: map[string]FindingEvidence{}, Outcomes: map[string]EvidenceOutcome{},
 		FixFindingIDs: []string{}, FollowUps: []FollowUp{}, FixDeltaHash: EmptyFixDeltaHash,
 	}
 	return state, state.Validate()
+}
+
+// CompactExpectedBudget derives the budget a compact state should carry under
+// its persisted policy. Floor-two states use CompactCorrectionBudget;
+// historical states with no policy field retain the legacy CorrectionBudget
+// formula byte-for-byte. An unrecognized policy is rejected (issue #2247).
+func CompactExpectedBudget(originalChangedLines int, policy string) (int, error) {
+	switch policy {
+	case CorrectionBudgetPolicyFloorTwo:
+		return CompactCorrectionBudget(originalChangedLines)
+	case "":
+		return CorrectionBudget(originalChangedLines)
+	default:
+		// refusal:by-design world-action: a persisted policy outside the closed contract cannot be repaired safely without provider-owned authority
+		return 0, errors.New("compact correction budget policy is unrecognized")
+	}
 }
 
 func (state CompactState) Validate() error {
@@ -459,9 +493,12 @@ func (state CompactState) Validate() error {
 	if err != nil || !equalStrings(selected, state.SelectedLenses) {
 		return errors.New("compact selected lenses are invalid")
 	}
-	wantBudget, err := CorrectionBudget(state.OriginalChangedLines)
+	wantBudget, err := CompactExpectedBudget(state.OriginalChangedLines, state.CorrectionBudgetPolicy)
 	preservedRecoveryBudget := state.Recovery != nil && state.Recovery.ConsumedCorrectionAttempts > 0
-	if err != nil || state.CorrectionBudget != wantBudget && !preservedRecoveryBudget {
+	if err != nil {
+		return err
+	}
+	if state.CorrectionBudget != wantBudget && !preservedRecoveryBudget {
 		return errors.New("compact correction budget does not match original changed lines")
 	}
 	if state.LensResults == nil || state.Findings == nil || state.Classifications == nil || state.Outcomes == nil || state.FixFindingIDs == nil || state.FollowUps == nil {
@@ -596,10 +633,21 @@ func validateCompactSnapshotMetadata(snapshot Snapshot) error {
 	}
 	wantIdentity := snapshotIdentityForProjection(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
 	if snapshot.Identity != wantIdentity {
-		return errors.New("compact snapshot identity does not match its metadata")
+		return errCompactSnapshotIdentityMismatch
 	}
 	return nil
 }
+
+// errCompactSnapshotIdentityMismatch is the exact semantic failure a record
+// frozen under a retired snapshot-identity formula produces when the current
+// formula recomputes its identity (#2743: every pre-rc.2 compact-v2 record
+// fails here after the #2659/PR-#2667 identity purification). It is a
+// sentinel so parseCompactRecord can mark the resulting typed
+// *CompactSemanticStateError as OutdatedIdentity — the clean-break policy
+// keeps such records gate-invalid without rewriting their bytes, and
+// diagnostics owe them an honest historical classification instead of
+// narrating them as damage.
+var errCompactSnapshotIdentityMismatch = errors.New("compact snapshot identity does not match its metadata")
 
 func validateCompactFindings(state CompactState) error {
 	if state.State == StateReviewing || state.State == StateInvalidated {
@@ -1068,23 +1116,25 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 }
 
 func findingLocationInGenesis(location string, genesisPaths []string) bool {
-	logicalPath, _, err := parseFindingLocation(location)
-	return err == nil && stringIndex(genesisPaths, logicalPath) >= 0
+	finding, err := parseFindingLocation(location)
+	return err == nil && stringIndex(genesisPaths, finding.Path) >= 0
 }
 
 // ErrInvalidFindingLocation identifies reviewer locations that cannot be used
 // as repository line evidence.
-var ErrInvalidFindingLocation = errors.New("invalid reviewer finding location; correct it to repository/path:<positive-line> before running gentle-ai review capture-result again")
+var ErrInvalidFindingLocation = errors.New("invalid reviewer finding location; correct it to repository/path:<positive-line> or repository/path:<positive-start>-<positive-end> before running gentle-ai review capture-result again")
 
 // FindingLocationErrorReason is a stable machine-readable validation reason.
 type FindingLocationErrorReason string
 
 const (
-	FindingLocationExpectedPathAndLine FindingLocationErrorReason = "expected_path_and_line"
-	FindingLocationLineNotInteger      FindingLocationErrorReason = "line_suffix_not_integer"
-	FindingLocationLineNotPositive     FindingLocationErrorReason = "line_must_be_positive"
-	FindingLocationPathNotRelative     FindingLocationErrorReason = "path_must_be_repository_relative"
-	FindingLocationPathNotCanonical    FindingLocationErrorReason = "path_must_be_canonical"
+	FindingLocationExpectedPathAndLine  FindingLocationErrorReason = "expected_path_and_line"
+	FindingLocationLineNotInteger       FindingLocationErrorReason = "line_suffix_not_integer"
+	FindingLocationLineNotPositive      FindingLocationErrorReason = "line_must_be_positive"
+	FindingLocationLineOverflowsInteger FindingLocationErrorReason = "line_overflows_integer"
+	FindingLocationRangeNotAscending    FindingLocationErrorReason = "range_must_be_ascending"
+	FindingLocationPathNotRelative      FindingLocationErrorReason = "path_must_be_repository_relative"
+	FindingLocationPathNotCanonical     FindingLocationErrorReason = "path_must_be_canonical"
 )
 
 // FindingLocationError describes why a reviewer location is invalid.
@@ -1099,41 +1149,90 @@ func (err *FindingLocationError) Error() string {
 
 func (err *FindingLocationError) Unwrap() error { return ErrInvalidFindingLocation }
 
-func parseFindingLocation(location string) (string, int, error) {
+type findingLocation struct {
+	Path      string
+	StartLine int
+	EndLine   int
+}
+
+// findingLocationHasPositiveLines reports whether a parsed finding location
+// carries strictly positive 1-based line numbers. It is a defense-in-depth
+// lower bound for causality: source lines are numbered from 1, so a location
+// whose start or end line is below 1 can never designate a line that exists in
+// the candidate and must never be treated as candidate-causal. This holds the
+// invariant even if a parser path ever yielded a non-positive line.
+func findingLocationHasPositiveLines(finding findingLocation) bool {
+	return finding.StartLine >= 1 && finding.EndLine >= 1
+}
+
+func parseFindingLocation(location string) (findingLocation, error) {
+	fail := func(reason FindingLocationErrorReason) (findingLocation, error) {
+		return findingLocation{}, &FindingLocationError{Location: location, Reason: reason}
+	}
 	separator := strings.LastIndexByte(location, ':')
 	if separator <= 0 || separator == len(location)-1 {
-		return "", 0, &FindingLocationError{Location: location, Reason: FindingLocationExpectedPathAndLine}
+		return fail(FindingLocationExpectedPathAndLine)
 	}
 	lineSuffix := location[separator+1:]
-	line, err := strconv.Atoi(lineSuffix)
-	if err != nil {
-		return "", 0, &FindingLocationError{Location: location, Reason: FindingLocationLineNotInteger}
+	if strings.HasPrefix(lineSuffix, "-") && strings.Count(lineSuffix, "-") == 1 {
+		return fail(FindingLocationLineNotPositive)
 	}
-	for index := range lineSuffix {
-		if lineSuffix[index] < '0' || lineSuffix[index] > '9' {
-			reason := FindingLocationLineNotInteger
-			if line <= 0 {
-				reason = FindingLocationLineNotPositive
-			}
-			return "", 0, &FindingLocationError{Location: location, Reason: reason}
+	startText, endText, ranged := strings.Cut(lineSuffix, "-")
+	if strings.Count(lineSuffix, "-") > 1 {
+		return fail(FindingLocationLineNotInteger)
+	}
+	start, reason := parseFindingLocationLine(startText)
+	if reason != "" {
+		return fail(reason)
+	}
+	end := start
+	if ranged {
+		end, reason = parseFindingLocationLine(endText)
+		if reason != "" {
+			return fail(reason)
 		}
-	}
-	if line <= 0 {
-		return "", 0, &FindingLocationError{Location: location, Reason: FindingLocationLineNotPositive}
+		if start > end {
+			return fail(FindingLocationRangeNotAscending)
+		}
 	}
 	logicalPath := location[:separator]
 	if len(logicalPath) >= 3 && logicalPath[1] == ':' && logicalPath[2] == '/' &&
 		((logicalPath[0] >= 'A' && logicalPath[0] <= 'Z') || (logicalPath[0] >= 'a' && logicalPath[0] <= 'z')) {
-		return "", 0, &FindingLocationError{Location: location, Reason: FindingLocationPathNotRelative}
+		return fail(FindingLocationPathNotRelative)
 	}
 	if _, pathErr := normalizeLogicalPath(strings.ReplaceAll(logicalPath, ":", "/")); pathErr != nil {
-		return "", 0, &FindingLocationError{Location: location, Reason: FindingLocationPathNotCanonical}
+		return fail(FindingLocationPathNotCanonical)
 	}
 	canonical, pathErr := normalizeLogicalPath(logicalPath)
 	if pathErr != nil || canonical != logicalPath {
-		return "", 0, &FindingLocationError{Location: location, Reason: FindingLocationPathNotCanonical}
+		return fail(FindingLocationPathNotCanonical)
 	}
-	return canonical, line, nil
+	return findingLocation{Path: canonical, StartLine: start, EndLine: end}, nil
+}
+
+func parseFindingLocationLine(value string) (int, FindingLocationErrorReason) {
+	if value == "" {
+		return 0, FindingLocationLineNotInteger
+	}
+	for index := range value {
+		if value[index] < '0' || value[index] > '9' {
+			return 0, FindingLocationLineNotInteger
+		}
+	}
+	// The all-digits check above guarantees no sign character reaches here, so
+	// the value is a non-negative literal. Parse it as an unsigned integer that
+	// must fit a positive Go int: bit size strconv.IntSize-1 caps the result at
+	// the platform's MaxInt, so any value above it (including the [2^63, 2^64-1]
+	// band that a full 64-bit parse accepted before wrapping negative via int())
+	// refuses as an overflow instead of silently becoming a negative line.
+	line, err := strconv.ParseUint(value, 10, strconv.IntSize-1)
+	if err != nil {
+		return 0, FindingLocationLineOverflowsInteger
+	}
+	if line == 0 {
+		return 0, FindingLocationLineNotPositive
+	}
+	return int(line), ""
 }
 
 func (state *CompactState) Invalidate(reason string) error {

@@ -154,8 +154,8 @@ func TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled(t *testing.T) {
 	root := t.TempDir()
 	seedScopeChangedApprovedSDDChange(t, root)
 
-	if reviewDrivenDevelopmentDisabled(context.Background(), root) {
-		t.Fatal("fixture is wrong: receipt-driven development is not enabled")
+	if disabled, err := reviewDrivenDevelopmentDisabled(context.Background(), root); err != nil || disabled {
+		t.Fatalf("fixture must enable receipt-driven development: disabled=%t err=%v", disabled, err)
 	}
 	status := resolveSDDStatusJSON(t, root)
 	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateScopeChanged {
@@ -237,8 +237,8 @@ func TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable(t *testing.T) {
 	disableReviewForClone(t, root)
 	corruptCloneLocalReviewMode(t, root)
 
-	if reviewDrivenDevelopmentDisabled(context.Background(), root) {
-		t.Fatal("an unreadable switch resolved to disabled; it must fail closed to enabled")
+	if disabled, err := reviewDrivenDevelopmentDisabled(context.Background(), root); err != nil || disabled {
+		t.Fatalf("unreadable switch must fail closed to enabled: disabled=%t err=%v", disabled, err)
 	}
 	t.Chdir(root)
 	for _, args := range [][]string{

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,7 +13,7 @@ import (
 // reviewAbandonAuthorizationLines is the number of lines the abandon
 // authorization binding carries. The refusal prints the binding template as
 // its final lines, so a consumer — human or test — reads them off the end.
-const reviewAbandonAuthorizationLines = 6
+const reviewAbandonAuthorizationLines = 9
 
 // TestReviewAbandonRefusalTerminatesInASuccessfulAbandon consumes the refusal
 // the product actually emits and nothing else. The command the refusal names
@@ -27,11 +28,10 @@ const reviewAbandonAuthorizationLines = 6
 // advertises as still abandonable, and it is the case in which any
 // worktree-derived surface would hand the operator the wrong identity.
 func TestReviewAbandonRefusalTerminatesInASuccessfulAbandon(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	pristineInvalidatedCLIFixture(t, repo)
+	repo, _, _, _, _ := partiallyCapturedReview(t)
 
 	const actor = "maintainer"
-	const reason = "abandon an accidental pristine lineage"
+	const reason = reviewtransaction.CompactAbandonReasonOperatorDisposition
 
 	var refused bytes.Buffer
 	err := RunReview([]string{"abandon", "--cwd", repo}, &refused)
@@ -108,6 +108,18 @@ func reviewLookupValues(t *testing.T, message string, envelope map[string]any) m
 			values["entries[]."+field] = text
 		}
 	}
+	discarded := entry["discarded_work"].(map[string]any)
+	capturedResults := discarded["captured_lens_results"].([]any)
+	if len(capturedResults) == 0 {
+		t.Fatal("refusal fixture did not expose captured lens results")
+	}
+	capturedLenses := make([]string, len(capturedResults))
+	for index, lens := range capturedResults {
+		capturedLenses[index] = lens.(string)
+	}
+	values["entries[].discarded_work.captured_lens_results comma-joined with \",\" in listed order"] = strings.Join(capturedLenses, ",")
+	values["entries[].discarded_work.findings_present"] = strconv.FormatBool(discarded["findings_present"].(bool))
+	values["entries[].discarded_work.evidence_records_present"] = strconv.FormatBool(discarded["evidence_records_present"].(bool))
 	for _, line := range strings.Split(message, "\n") {
 		flag, path, found := strings.Cut(strings.TrimSpace(line), " = entries[].")
 		if !found || !strings.HasPrefix(flag, "--") {

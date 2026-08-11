@@ -20,9 +20,14 @@ const (
 	CompactBlockMaintainerDecision  CompactBlockReason = "maintainer_decision"
 	CompactBlockCorruptAuthority    CompactBlockReason = "corrupt_authority"
 	CompactBlockInvalidContinuation CompactBlockReason = "invalid_continuation"
-	CompactBlockRemediationRequired CompactBlockReason = "remediation_required"
 	CompactBlockWorktreeMismatch    CompactBlockReason = "worktree_mismatch"
 	CompactBlockAuthorityFailure    CompactBlockReason = "authority_failure"
+	// CompactBlockCandidateUnavailable is the repository-side block: the
+	// attempt authority is intact and unmutated, and what refused is the Git
+	// capture of the candidate the mutation must record (#2114). It is
+	// deliberately distinct from authority_failure, which now means only what
+	// its name says.
+	CompactBlockCandidateUnavailable CompactBlockReason = "candidate_unavailable"
 	// CompactBlockRemediationUnsatisfiable is #2564's acquire-time fail-fast:
 	// the caller declared a correction for failed evidence the immutable
 	// attempt chain does not hold unremediated (nothing failed, the failure
@@ -47,6 +52,14 @@ type CompactAttemptResult struct {
 	Token  string              `json:"token,omitempty"`
 	Exit   string              `json:"exit,omitempty"`
 	Detail string              `json:"detail,omitempty"`
+	// SettleObligation names what this attempt's passing settle will already
+	// be bound to, at the moment the token is issued rather than after the
+	// work is done (#2912). An attempt is a bounded, spendable resource, and
+	// every report in this class paid one to discover a demand acquire could
+	// have named up front. It is never a block: the state stays proceed and
+	// the token is real. Empty whenever the chain holds nothing, because a
+	// field that is always populated is noise.
+	SettleObligation string `json:"settle_obligation,omitempty"`
 }
 
 // CompactAcquireRequest is the bounded orchestration projection of
@@ -94,6 +107,10 @@ type CompactSettleRequest struct {
 	SuccessorLineageID string
 
 	RemediatesEvidenceRevision string
+}
+
+type CompactHandoffRequest struct {
+	HandoffAttemptRequest
 }
 
 // runtimeReadinessInput is everything the one readiness predicate reads. It
@@ -181,12 +198,12 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 
 	replay, err := store.load()
 	if err != nil {
-		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+		return compactBlockedByUnreadableAuthority(err), nil
 	}
 	if receipt, exists := replay.Requests[begin.RequestID]; exists {
 		record, loadErr := store.loadRecord(receipt.Revision)
 		if loadErr != nil {
-			return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+			return compactBlockedByUnreadableAuthority(loadErr), nil
 		}
 		begin.ExpectedRevision = record.PreviousRevision
 		if !compactAcquireMatches(record, begin) {
@@ -197,7 +214,7 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		}
 		current, loadErr := store.load()
 		if loadErr != nil {
-			return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+			return compactBlockedByUnreadableAuthority(loadErr), nil
 		}
 		return compactAcquireResult(current, begin, receipt.Revision), nil
 	}
@@ -206,6 +223,9 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		Status: replay.Status, AttemptTokens: replay.AttemptTokens,
 		Request: begin, PresentedToken: request.Token,
 	}); terminal {
+		if result.State == CompactStateProceed {
+			result.SettleObligation = runtimeSettleObligation(replay.Status, store.ReviewDisabled)
+		}
 		return result, nil
 	}
 	// #2564 fail-fast: a declared unmanaged correction whose settlement is
@@ -227,7 +247,12 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	if err != nil {
 		return store.compactMutationFailure(err, false, begin), nil
 	}
-	return CompactAttemptResult{State: CompactStateProceed, Token: started.Revision}, nil
+	return CompactAttemptResult{
+		State: CompactStateProceed, Token: started.Revision,
+		// Derived from the PRE-mutation chain: the obligation this attempt
+		// inherits is the one that existed when it was opened.
+		SettleObligation: runtimeSettleObligation(replay.Status, store.ReviewDisabled),
+	}, nil
 }
 
 // Settle closes the attempt selected by Token through the ordinary Finish
@@ -240,12 +265,12 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 	}
 	replay, err := store.load()
 	if err != nil {
-		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+		return compactBlockedByUnreadableAuthority(err), nil
 	}
 	if receipt, exists := replay.Requests[request.RequestID]; exists {
 		record, loadErr := store.loadRecord(receipt.Revision)
 		if loadErr != nil {
-			return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+			return compactBlockedByUnreadableAuthority(loadErr), nil
 		}
 		finish, ok := compactSettleReplayRequest(replay, record, request)
 		if !ok {
@@ -279,10 +304,7 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		ProcessEvidence: request.ProcessEvidence,
 	}
 	explicitSuccessor := request.SuccessorLineageID != ""
-	failedEvidence := status.EvidenceRevision
-	if failedEvidence == "" {
-		failedEvidence = request.RemediatesEvidenceRevision
-	}
+	failedEvidence, _ := runtimeChainFailedEvidence(status.Attempts)
 	if request.RemediatesEvidenceRevision != "" && failedEvidence != request.RemediatesEvidenceRevision {
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}
@@ -302,6 +324,18 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
 	}
 	return store.compactSettleResult()
+}
+
+func (store RuntimeStore) HandoffCompact(ctx context.Context, request CompactHandoffRequest) (CompactAttemptResult, error) {
+	_, err := store.Handoff(ctx, request.HandoffAttemptRequest)
+	if err == nil {
+		return CompactAttemptResult{State: CompactStateProceed}, nil
+	}
+	var publication *RuntimePublicationError
+	if errors.As(err, &publication) && publication.Committed {
+		return CompactAttemptResult{State: CompactStateProceed}, nil
+	}
+	return store.compactMutationFailure(err, false, BeginAttemptRequest{}), nil
 }
 
 // unmanagedRemediationSettleable reports whether a settle carrying
@@ -393,7 +427,7 @@ func compactAcquireResult(replay runtimeReplay, request BeginAttemptRequest, own
 func (store RuntimeStore) compactSettleResult(expected ...string) (CompactAttemptResult, error) {
 	replay, err := store.load()
 	if err != nil {
-		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
+		return compactBlockedByUnreadableAuthority(err), nil
 	}
 	if len(expected) == 1 && replay.Status.Revision != expected[0] {
 		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
@@ -415,7 +449,7 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 		}
 		replay, loadErr := store.load()
 		if loadErr != nil {
-			return compactBlocked(CompactBlockCorruptAuthority, "")
+			return compactBlockedByUnreadableAuthority(loadErr)
 		}
 		return compactAcquireResult(replay, begin, publication.Revision)
 	}
@@ -438,13 +472,6 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 		errors.Is(err, ErrRuntimeRequestConflict), errors.Is(err, ErrRuntimeNoActiveAttempt),
 		errors.Is(err, ErrBindingRevisionConflict):
 		reason = CompactBlockInvalidContinuation
-	// ErrRuntimeRemediationSuccessorRequired is the sentinel behind
-	// runtimeRemediationExitRefusal (runtime_ledger.go:628-646): the candidate
-	// moved after Begin, so a passing finish demands the remediation trio
-	// naming its own runnable exit. It previously fell through to the
-	// default authority_failure and lost that exit entirely (#2249).
-	case errors.Is(err, ErrRuntimeRemediationSuccessorRequired):
-		reason = CompactBlockRemediationRequired
 	// ErrRuntimeWorktreeMismatch is the sentinel behind
 	// runtimeWorktreeMismatchRefusal (#2296 part 1): Finish is running from a
 	// different linked worktree than the one Begin recorded. Left
@@ -452,22 +479,27 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 	// authority_failure and lose the exact --cwd the refusal names.
 	case errors.Is(err, ErrRuntimeWorktreeMismatch):
 		reason = CompactBlockWorktreeMismatch
+	// ErrRuntimeCandidateUnavailable is the sentinel behind both of
+	// Begin/Finish's candidate captures (#2114), reachable on the very first
+	// acquire of a brand-new change, where authority_failure is doubly wrong:
+	// nothing about the authority failed, and the consumer had no prior state
+	// to inspect and no continuation to run.
+	case errors.Is(err, ErrRuntimeCandidateUnavailable):
+		reason = CompactBlockCandidateUnavailable
+	case errors.Is(err, ErrRuntimeHandoffSource):
+		reason = CompactBlockWorktreeMismatch
+	case errors.Is(err, ErrRuntimeHandoffDestination), errors.Is(err, ErrRuntimeHandoffAlreadyPerformed):
+		reason = CompactBlockInvalidContinuation
 	}
 	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Exit: detail, Detail: detail}
 }
 
-// compactBlockedReviewModeDisableExit is the self-service delivery fallback
-// named below where a reason offers no more specific runnable command.
-// Adversarial finding F6: `--scope` defaults to global
-// (review_mode.go's own flag default), so naming the bare command would let
-// an orchestrator silently disable receipt-driven development for every
-// repository on the machine instead of just this one. Always name the
-// clone-scoped form and disclose the default, verified by execution: running
-// `gentle-ai review mode disable` with no --scope writes
-// ~/.gentle-ai/state.json (machine-wide); `--scope clone --cwd <repo>`
-// writes only under that repository's own .git/gentle-ai directory.
-const compactBlockedReviewModeDisableExit = "`gentle-ai review mode disable --scope clone --cwd <repo>` to proceed without receipt-driven review for this repository only " +
-	"(omitting --scope disables it for every repository on the machine)"
+// compactBlockedReviewModeDisableExit is gone with its last caller (#2913).
+// It offered `review mode disable --scope clone` as the way out of SDD attempt
+// blockers. It is a real delivery fallback, but it is not an exit from any of
+// these: every reason below blocks the SDD attempt ledger, and receipt-driven
+// review has no authority over whether a work unit may open. A reporter ran it,
+// watched it succeed, and found the block untouched.
 
 // compactBlockedExitText names the runnable continuation for every reason
 // compactBlocked itself is ever called with (exit-naming audit fix #2):
@@ -480,15 +512,33 @@ func compactBlockedExitText(reason CompactBlockReason, token string) string {
 	case CompactBlockCorruptAuthority:
 		return "the attempt ledger for this work unit cannot be read as valid authority; run " +
 			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to see what is readable, " +
-			"or run " + compactBlockedReviewModeDisableExit
+			"then ask a maintainer to inspect the SDD runtime authority under the Git common directory"
 	case CompactBlockInvalidContinuation:
 		return "this call does not continue the attempt currently on record; run " +
 			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to see the live attempt and its " +
 			"current revision, then reissue this call against that state"
 	case CompactBlockMaintainerDecision:
+		// #2530: this said "rescope or reset", and rescope is structurally
+		// refused for exactly this state — runtimeObjectiveRescopeStructurally
+		// Permitted returns false whenever DecisionRequired is set, which is
+		// the only way this block is reached. Reset is the admitted one, and
+		// the ledger's own next_action has said so all along.
+		//
+		// #2913: this also offered `review mode disable --scope clone` as an
+		// exit. A reporter ran it, it SUCCEEDED, effective mode went to off,
+		// and this block was exactly where they left it — then status told
+		// them to run it again. The command could never have cleared this.
+		// Receipt-driven review governs DELIVERY of a finished change; it has
+		// no authority over whether an SDD work unit may open, so turning it
+		// off cannot open one. Reset is the whole exit, and it is named here
+		// as a complete command instead of as advice.
 		return "this work unit's attempt or changed-line budget needs a maintainer decision; run " +
-			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` for the accounting, then ask a " +
-			"maintainer to rescope or reset the objective, or run " + compactBlockedReviewModeDisableExit
+			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` for the accounting, then have a " +
+			"maintainer reset the objective with `gentle-ai sdd-attempt reset --cwd <repo> --change <change> " +
+			"--expected-revision <the revision that status prints> --request-id \"<unique-request-id>\" " +
+			"--reason \"<why-the-objective-is-being-reset>\" --actor \"<actor>\"`; turning receipt-driven " +
+			"review off does not clear this, because review governs delivery of a finished change, not " +
+			"whether a work unit may open"
 	case CompactBlockActiveAttempt:
 		// Adversarial finding F2: the bare `sdd-attempt acquire --token <t>`
 		// / `settle --token <t>` forms are not complete commands -- each
@@ -511,6 +561,58 @@ func compactBlockedExitText(reason CompactBlockReason, token string) string {
 	default:
 		return ""
 	}
+}
+
+// compactBlockedByUnreadableAuthority is compactBlocked for the one reason
+// whose typed cause was being discarded at every site.
+//
+// #2829 / root 8's shape on a surface root 8 did not cover: seven call sites
+// wrote `compactBlocked(CompactBlockCorruptAuthority, "")`, throwing away the
+// error `store.load()` had just returned. The operator, and anyone triaging
+// their report, then saw "the attempt ledger cannot be read as valid
+// authority" with no way to tell an invalid HEAD encoding from a broken chain
+// link from a permissions refusal. Those need different repairs and looked
+// identical.
+//
+// Exit text is unchanged: this appends the cause to Detail only, so the
+// runnable continuation a caller routes on keeps its exact bytes.
+func compactBlockedByUnreadableAuthority(cause error) CompactAttemptResult {
+	result := compactBlocked(CompactBlockCorruptAuthority, "")
+	var repair *runtimeConsecutiveRescopeRepairRequiredError
+	if errors.As(cause, &repair) {
+		result.Exit = repair.Error()
+		result.Detail = repair.Error()
+		return result
+	}
+	if cause != nil {
+		result.Detail = result.Detail + " (cause: " + cause.Error() + ")"
+	}
+	return result
+}
+
+// runtimeSettleObligation is the ONE derivation of "what will this attempt's
+// passing settle already owe". Acquire and the read-only admission surface
+// both call it; neither computes it alongside the other. That is #2114's
+// lesson applied before the fact — two derivations of one truth drift, and the
+// surface that speaks earliest is the one that ends up lying.
+//
+// It reads the same chain-derived binding the settle itself enforces
+// (runtimeChainFailedAttempt, #1974 slice 2 / #2565), so the notice cannot
+// promise something the settle will not demand, or stay silent about
+// something it will.
+func runtimeSettleObligation(status RuntimeStatus, reviewDisabled bool) string {
+	if !reviewDisabled || status.Binding != nil {
+		return ""
+	}
+	failed, ok := runtimeChainFailedAttempt(status.Attempts)
+	if !ok || failed.EvidenceRevision == "" {
+		return ""
+	}
+	return "this attempt's passing settle is already bound to the chain's unremediated failed verification " +
+		failed.EvidenceRevision + ": settle it passed with `--remediates-evidence-revision \"" + failed.EvidenceRevision +
+		"\"`, and with verification evidence distinct from it, over a candidate this attempt actually changed. " +
+		"An audited reset or an interrupted settlement between that failure and this correction does not release the " +
+		"binding — only a passing settlement that names it does."
 }
 
 func compactBlocked(reason CompactBlockReason, token string) CompactAttemptResult {

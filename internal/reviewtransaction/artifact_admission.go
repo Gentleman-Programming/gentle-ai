@@ -85,10 +85,12 @@ func (err *ArtifactAdmissionError) Unwrap() error { return err.cause }
 
 // ArtifactAdmissionDiagnostic contains bounded, non-sensitive recovery fields.
 type ArtifactAdmissionDiagnostic struct {
-	Code      string `json:"code"`
-	FindingID string `json:"finding_id,omitempty"`
-	Location  string `json:"location,omitempty"`
-	Reason    string `json:"reason"`
+	Code             string `json:"code"`
+	FindingID        string `json:"finding_id,omitempty"`
+	Location         string `json:"location,omitempty"`
+	Reason           string `json:"reason"`
+	MissingPathCount int    `json:"missing_path_count,omitempty"`
+	ForeignPathCount int    `json:"foreign_path_count,omitempty"`
 }
 
 func safeAdmissionLocation(code, value, reason string) string {
@@ -104,7 +106,7 @@ func safeAdmissionLocation(code, value, reason string) string {
 	if !artifactAdmissionLocationSuffix.MatchString(suffix) {
 		return ""
 	}
-	_, _, locationErr := parseFindingLocation(value)
+	_, locationErr := parseFindingLocation(value)
 	if code == "candidate_causality_unproven" {
 		if reason != "line_not_changed_by_candidate" || locationErr != nil {
 			return ""
@@ -117,6 +119,78 @@ func safeAdmissionLocation(code, value, reason string) string {
 		return ""
 	}
 	return value
+}
+
+// InspectionCoverageError gives advisory and direct callers scrubbed coverage counts.
+type InspectionCoverageError struct {
+	MissingPathCount int
+	ForeignPathCount int
+}
+
+func (err *InspectionCoverageError) reason() string {
+	switch {
+	case err.MissingPathCount > 0 && err.ForeignPathCount > 0:
+		return "missing_and_foreign_inspection_paths"
+	case err.MissingPathCount > 0:
+		return "missing_frozen_manifest_paths"
+	default:
+		return "foreign_inspection_paths"
+	}
+}
+
+func (err *InspectionCoverageError) Error() string {
+	count := err.ForeignPathCount
+	if err.MissingPathCount > 0 {
+		count = err.MissingPathCount
+	}
+	return fmt.Sprintf("reviewer inspection coverage: %s=%d", err.reason(), count)
+}
+
+func inspectionCoverageDiagnostic(coverage *InspectionCoverageError) *ArtifactAdmissionDiagnostic {
+	return &ArtifactAdmissionDiagnostic{
+		Code:             "inspection_coverage",
+		Reason:           coverage.reason(),
+		MissingPathCount: coverage.MissingPathCount,
+		ForeignPathCount: coverage.ForeignPathCount,
+	}
+}
+
+func validateCompleteInspectionCoverage(paths []string, manifest []ChangedPathManifestEntry) (*InspectionCoverageError, error) {
+	inspected, err := canonicalPaths(paths)
+	if err != nil {
+		return nil, err
+	}
+	wantPaths := make([]string, len(manifest))
+	for index, entry := range manifest {
+		wantPaths[index] = entry.Path
+	}
+	want, err := canonicalPaths(wantPaths)
+	if err != nil {
+		return nil, errors.New("frozen changed-path manifest is not canonical") // refusal:by-design world-action: a frozen manifest that does not canonicalize cannot safely bind reviewer coverage
+	}
+	wantSet := make(map[string]struct{}, len(want))
+	for _, path := range want {
+		wantSet[path] = struct{}{}
+	}
+	coverage := &InspectionCoverageError{}
+	for _, path := range inspected {
+		if _, ok := wantSet[path]; !ok {
+			coverage.ForeignPathCount++
+		}
+	}
+	inspectedSet := make(map[string]struct{}, len(inspected))
+	for _, path := range inspected {
+		inspectedSet[path] = struct{}{}
+	}
+	for _, path := range want {
+		if _, ok := inspectedSet[path]; !ok {
+			coverage.MissingPathCount++
+		}
+	}
+	if coverage.MissingPathCount == 0 && coverage.ForeignPathCount == 0 {
+		return nil, nil
+	}
+	return coverage, coverage
 }
 
 func findingAdmissionDiagnostic(code, findingID, location, reason string) *ArtifactAdmissionDiagnostic {
@@ -247,25 +321,24 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 		return fail(ArtifactAdmissionBindingMismatch, "frozen changed-path manifest does not match the artifact subject")
 	}
 	wantPaths := make([]string, len(request.FrozenContext.ChangedPathManifest))
-	allowed := make(map[string]struct{}, len(wantPaths))
 	for index, entry := range request.FrozenContext.ChangedPathManifest {
 		wantPaths[index] = entry.Path
-		allowed[entry.Path] = struct{}{}
 	}
 	if request.Inspection.Status != ArtifactInspectionCompleted {
 		return fail(ArtifactAdmissionIncomplete, "reviewer did not report completed candidate inspection")
 	}
-	inspectionPaths, err := canonicalPaths(request.Inspection.Paths)
-	if err != nil || !equalStrings(inspectionPaths, request.Inspection.Paths) {
-		return fail(ArtifactAdmissionOutOfScope, "reviewer inspection paths are not canonical candidate paths")
-	}
-	for _, path := range inspectionPaths {
-		if _, ok := allowed[path]; !ok {
-			return fail(ArtifactAdmissionOutOfScope, "reviewer inspection includes a path outside the frozen candidate")
+	coverage, coverageErr := validateCompleteInspectionCoverage(request.Inspection.Paths, request.FrozenContext.ChangedPathManifest)
+	if coverageErr != nil {
+		if coverage == nil {
+			return fail(ArtifactAdmissionOutOfScope, "reviewer inspection paths are not canonical candidate paths")
 		}
-	}
-	if !equalStrings(inspectionPaths, wantPaths) {
-		return fail(ArtifactAdmissionIncomplete, "reviewer inspection did not cover the complete frozen path manifest")
+		decision := ArtifactAdmissionIncomplete
+		diagnostic := "reviewer inspection did not cover the complete frozen path manifest"
+		if coverage.ForeignPathCount > 0 {
+			decision = ArtifactAdmissionOutOfScope
+			diagnostic = "reviewer inspection includes paths outside the frozen candidate"
+		}
+		return failFinding(decision, diagnostic, inspectionCoverageDiagnostic(coverage), coverageErr)
 	}
 	canonical, err := canonicalReviewerResult(request.Result, request.ExpectedSubject.Lens)
 	if err != nil {
@@ -299,7 +372,7 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 			return fail(ArtifactAdmissionAmbiguous, "reviewer result repeats a finding ID")
 		}
 		seenFindingIDs[finding.ID] = struct{}{}
-		logicalPath, _, locationErr := parseFindingLocation(finding.Location)
+		location, locationErr := parseFindingLocation(finding.Location)
 		if locationErr != nil {
 			var typedLocationErr *FindingLocationError
 			reason := "invalid_location"
@@ -309,7 +382,7 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 			return failFinding(ArtifactAdmissionOutOfScope, "reviewer finding location is invalid",
 				findingAdmissionDiagnostic("invalid_finding_location", finding.ID, finding.Location, reason), locationErr)
 		}
-		if stringIndex(wantPaths, logicalPath) < 0 {
+		if stringIndex(wantPaths, location.Path) < 0 {
 			return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
 		}
 		for _, proof := range finding.ProofRefs {
@@ -422,7 +495,7 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 }
 
 var artifactFindingID = regexp.MustCompile(`^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*$`)
-var artifactAdmissionLocationSuffix = regexp.MustCompile(`^[A-Za-z0-9+.-]*$`)
+var artifactAdmissionLocationSuffix = regexp.MustCompile(`^[A-Za-z0-9+,.-]*$`)
 
 type artifactReferenceToken struct {
 	value  string
@@ -454,7 +527,7 @@ func newFrozenRepositoryPathLookup(ctx context.Context, frozen FrozenCandidateCo
 	}
 	return &frozenRepositoryPathLookup{
 		ctx: ctx, repo: frozen.repositoryRoot, isolation: isolation, trees: trees, cache: make(map[string]bool),
-	}, cleanup, nil
+	}, func() { _ = cleanup() }, nil
 }
 
 func (lookup *frozenRepositoryPathLookup) contains(logicalPath string) (bool, error) {

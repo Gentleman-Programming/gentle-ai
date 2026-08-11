@@ -4,9 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -89,87 +87,11 @@ func canonicalBindingLedgerHash(t *testing.T, findings []reviewtransaction.Findi
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// validateCurrentBoundCandidate reloads the change's effective review binding
-// from disk (native or legacy) and validates it via validateRuntimeBoundCandidate
-// — the same call runtime_ledger.go's Finish (the remediation-successor CAS)
-// still makes, and the one remaining production caller of
-// boundGateContextMatches after S5c'/S7 rerouted the archive-gate read path
-// onto ValidateSDDReceiptRef's re-derivation instead. It exists so ledger/
-// GateContext-comparison-specific tests (like the empty-hash backward
-// compatibility exemption below) keep exercising a real production call
-// path now that validateBoundReview itself is deleted.
-func validateCurrentBoundCandidate(t *testing.T, repo, change string) error {
-	t.Helper()
-	binding, err := loadEffectiveReviewBinding(context.Background(), repo, change)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return validateRuntimeBoundCandidate(context.Background(), repo, binding, binding.GateContext.CandidateTree)
-}
-
-func TestBoundReviewBindsLedgerAcceptsLegacyEmptyAndRejectsForgedHash(t *testing.T) {
-	root := t.TempDir()
-	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
-	state := writeApprovedCompactAuthorityWithWarningFinding(t, root, changeRoot, "approved-ledger")
-	want := canonicalBindingLedgerHash(t, state.Findings)
-	if want == reviewtransaction.EmptyFixDeltaHash {
-		t.Fatalf("frozen findings ledger collides with empty-input hash %q", want)
-	}
-
-	binding, err := BindApprovedReview(context.Background(), root, "thin", "approved-ledger", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if binding.GateContext.LedgerHash != want {
-		t.Fatalf("fresh binding ledger_hash = %q, want frozen findings ledger %q", binding.GateContext.LedgerHash, want)
-	}
-	if err := validateCurrentBoundCandidate(t, root, "thin"); err != nil {
-		t.Fatalf("fresh binding validation: %v", err)
-	}
-	// Recreate the pre-native compatibility state. Once a native binding is
-	// present the mutable legacy artifact is intentionally ignored.
-	if err := os.RemoveAll(mustRuntimeStore(t, root, "thin").Dir); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, "approved-ledger")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// A binding persisted before gate contexts bound the frozen findings
-	// ledger recorded the empty-input hash; it must keep validating against
-	// the now-populated live context.
-	legacy := binding
-	legacy.GateContext.LedgerHash = reviewtransaction.EmptyFixDeltaHash
-	legacy.Revision = bindingDigest(legacy)
-	payload, err := bindingBytes(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyPath := bindingPath(store, "thin")
-	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(legacyPath, payload, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateCurrentBoundCandidate(t, root, "thin"); err != nil {
-		t.Fatalf("legacy empty-ledger binding rejected: %v", err)
-	}
-
-	// Any other ledger hash is a real divergence and must stay rejected.
-	forged := binding
-	forged.GateContext.LedgerHash = "sha256:" + strings.Repeat("ab", 32)
-	forged.Revision = bindingDigest(forged)
-	payload, err = bindingBytes(forged)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(legacyPath, payload, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateCurrentBoundCandidate(t, root, "thin"); err == nil {
-		t.Fatal("forged ledger hash binding was accepted")
-	}
-}
+// validateCurrentBoundCandidate and the ledger-forgery test it served are
+// gone with their only production caller. Both existed to exercise
+// validateRuntimeBoundCandidate, which ran exclusively inside the
+// bound-passing-finish gate that #1993 removed, so the check they proved had
+// already stopped running in production the moment that gate did. Keeping a
+// green test over deleted code would assert an enforcement that no longer
+// exists. Delivery still re-derives the receipt from the candidate actually
+// being delivered, which is where this property is enforced now.

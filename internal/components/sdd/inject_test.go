@@ -66,6 +66,8 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				t.Fatalf("sddOrchestratorAsset(%q) = %q, want %q", tc.agent, got, tc.want)
 			}
 			for _, required := range []string{
+				"exactly three semantic choices in this order",
+				"`report_and_continue`, `continue_without_reporting`, `stop_here`",
 				"Only after explicit consent and that final privacy scan",
 				"search open and closed issues",
 				"confirms a newly-created issue identity/URL",
@@ -74,6 +76,9 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				"do not add, remove, or change any labels on it",
 				"label application fails or has an ambiguous outcome",
 				"re-resolve that exact created issue identity",
+				"Both continue choices execute that exact captured decline invocation exactly once",
+				"`consent: \"declined_this_candidate\"`",
+				"native negotiated STATUS",
 			} {
 				if !strings.Contains(renderSDDOrchestratorAsset(tc.agent), required) {
 					t.Fatalf("rendered %s orchestrator missing provider-defect handoff clause %q", tc.agent, required)

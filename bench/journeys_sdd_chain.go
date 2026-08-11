@@ -1,6 +1,10 @@
 package main
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
 
 // journeys_sdd_chain.go pins #1974 slice 2 (#2565): the unmanaged-remediation
 // binding derives from the immutable attempt chain, so an audited reset
@@ -19,19 +23,27 @@ var sddChainVerifyObjective = []string{
 	"--max-attempts", "1", "--max-changed-lines", "20",
 }
 
+const sddChainInterruptedEvidence = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
 // sddChainFailedVerificationExhaustsBudget settles the admitted verification
 // failure and proves the runtime demands a maintainer decision.
 func sddChainFailedVerificationExhaustsBudget(r *journeyRun) error {
-	status, err := readRuntimeStatus(r)
-	if err != nil {
-		return err
+	acquire := r.run(append([]string{
+		"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange,
+		"--request-id", "bench-chain-acquire-verification",
+	}, sddChainVerifyObjective...), false)
+	var result sddCompactAttemptResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(acquire.Stdout)), &result); err != nil {
+		return fmt.Errorf("parse failed verification acquire: %w (stderr: %s)", err, firstLine(acquire.Stderr))
 	}
-	r.run(sddAttemptArgs(r, "begin", status.Revision, "bench-chain-begin-verification", sddChainVerifyObjective...), false)
-	if status, err = readRuntimeStatus(r); err != nil {
-		return err
+	if acquire.ExitCode != 0 || result.State != "proceed" || result.Token == "" {
+		return fmt.Errorf("failed verification acquire = %#v exit=%d", result, acquire.ExitCode)
 	}
-	r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-chain-finish-verification",
-		append([]string{"--outcome", "failed", "--evidence-revision", sddFailedEvidence}, sddTerminalEvidence...)...), false)
+	r.run(append([]string{
+		"sdd-attempt", "settle", "--cwd", r.sandbox.Repo, "--change", sddChange,
+		"--token", result.Token, "--request-id", "bench-chain-settle-verification",
+		"--outcome", "failed", "--evidence-revision", sddFailedEvidence,
+	}, sddTerminalEvidence...), false)
 	proved, err := proveRuntime(r.sandbox)
 	if err != nil {
 		return err
@@ -63,6 +75,76 @@ func sddChainAuditedReset(r *journeyRun) error {
 	return nil
 }
 
+// sddChainInterruptedAttempt records a later non-remediation interruption.
+// Its evidence becomes the live pointer, while the earlier failed verification
+// remains the immutable correction binding after the audited reset.
+func sddChainInterruptedAttempt(r *journeyRun) error {
+	acquire := r.run(append([]string{
+		"sdd-attempt", "acquire", "--cwd", r.sandbox.Repo, "--change", sddChange,
+		"--request-id", "bench-chain-acquire-interruption",
+	}, sddUnmanagedObjective...), false)
+	var result sddCompactAttemptResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(acquire.Stdout)), &result); err != nil {
+		return fmt.Errorf("parse interruption acquire: %w (stderr: %s)", err, firstLine(acquire.Stderr))
+	}
+	if acquire.ExitCode != 0 || result.State != "proceed" || result.Token == "" {
+		return fmt.Errorf("interruption acquire = %#v exit=%d", result, acquire.ExitCode)
+	}
+	r.run(append([]string{
+		"sdd-attempt", "settle", "--cwd", r.sandbox.Repo, "--change", sddChange,
+		"--token", result.Token, "--request-id", "bench-chain-settle-interruption",
+		"--outcome", "interrupted", "--evidence-revision", sddChainInterruptedEvidence,
+	}, sddTerminalEvidence...), false)
+	status, err := proveRuntime(r.sandbox)
+	if err != nil {
+		return err
+	}
+	if status.ActiveAttempt != nil || len(status.Attempts) != 2 || status.Attempts[1].Outcome != "interrupted" ||
+		status.EvidenceRevision != sddChainInterruptedEvidence || status.NextAction != "begin" {
+		return fmt.Errorf("interrupted successor did not retain its distinct live evidence: %#v", status)
+	}
+	return nil
+}
+
+// sddChainCorrectionCompletes keeps the RED diagnostic load-bearing: before
+// #2871, compact settle compares the caller's failed evidence to the later
+// interruption's live pointer, blocks invalid_continuation, and leaves token 3
+// running. The chain-derived correction must instead settle atomically.
+func sddChainCorrectionCompletes(r *journeyRun) error {
+	token := r.sandbox.Scratch["unmanaged-token"]
+	observation := r.run(append([]string{
+		"sdd-attempt", "settle", "--cwd", r.sandbox.Repo, "--change", sddChange, "--token", token,
+		"--request-id", "bench-chain-correct", "--outcome", "passed", "--evidence-revision", sddCorrectedEvidence,
+		"--remediates-evidence-revision", sddFailedEvidence,
+	}, sddTerminalEvidence...), false)
+	var result sddCompactAttemptResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &result); err != nil {
+		return fmt.Errorf("parse chain correction settle: %w (stderr: %s)", err, firstLine(observation.Stderr))
+	}
+	if result.State == "blocked" && result.Reason == "invalid_continuation" {
+		status, err := proveRuntime(r.sandbox)
+		if err != nil {
+			return err
+		}
+		if status.ActiveAttempt == nil || len(status.Attempts) != 3 || status.ActiveAttempt.Ordinal != 3 ||
+			status.EvidenceRevision != sddChainInterruptedEvidence {
+			return fmt.Errorf("invalid continuation did not leave the exact remediation attempt running: %#v", status)
+		}
+		return fmt.Errorf("bounded correction was blocked as invalid_continuation and left the exact live remediation attempt running")
+	}
+	if observation.ExitCode != 0 || result.State != "complete" {
+		return fmt.Errorf("chain correction settle = %#v exit=%d", result, observation.ExitCode)
+	}
+	status, err := proveRuntime(r.sandbox)
+	if err != nil {
+		return err
+	}
+	if len(status.Attempts) != 3 || status.ActiveAttempt != nil || status.Attempts[2].RemediatesEvidenceRevision != sddFailedEvidence {
+		return fmt.Errorf("chain correction did not settle against the immutable failed evidence: %#v", status)
+	}
+	return nil
+}
+
 // sddChainJourneys is the corpus slice this file registers.
 func sddChainJourneys() []Journey {
 	return []Journey{
@@ -88,6 +170,21 @@ func sddChainJourneys() []Journey {
 						}
 						return nil
 					})},
+			},
+		},
+		{
+			ID:     "j87-unmanaged-remediation-uses-chain-failed-evidence",
+			Title:  "A reset-authorized correction settles against its failed evidence, not a later interruption",
+			Source: "#2871: compact settle must match the immutable failed-evidence chain",
+			Steps: []Step{
+				{Name: "fixture: completed change with admitted failed verification", Fixture: sddPlanningArtifacts(sddFailedVerifyReport)},
+				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
+				{Name: "failed verification exhausts its objective budget", Requires: sddAttemptBeginCapability, Composite: sddChainFailedVerificationExhaustsBudget},
+				{Name: "audited reset records the maintainer decision", Requires: sddAttemptResetCapability, Composite: sddChainAuditedReset},
+				{Name: "later interruption records distinct live evidence", Requires: sddAttemptRemediationCapability, Composite: sddChainInterruptedAttempt},
+				{Name: "acquire the correction bound to the original failed evidence", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedAcquireCorrection},
+				{Name: "fixture: correction changes the candidate", Fixture: sddBoundedCorrection},
+				{Name: "settle the exact live remediation token against the failed evidence chain", Requires: sddAttemptRemediationCapability, Composite: sddChainCorrectionCompletes},
 			},
 		},
 	}

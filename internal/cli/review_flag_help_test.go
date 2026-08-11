@@ -10,6 +10,8 @@ import (
 // were right not to invent one -- for all the output told them, it had to be
 // obtained rather than chosen. It is caller-minted, and only the code knew.
 func TestRecoverSuccessorLineageHelpSaysWhereItComesFrom(t *testing.T) {
+	t.Parallel()
+
 	var out strings.Builder
 	_ = RunReviewRecover([]string{"--help"}, &out)
 	help := out.String()
@@ -26,6 +28,8 @@ func TestRecoverSuccessorLineageHelpSaysWhereItComesFrom(t *testing.T) {
 // warned the two are mutually exclusive, and the maintainer made this exact
 // mistake while writing the guide.
 func TestCaptureResultHelpWarnsRepositoryContextExcludesCwd(t *testing.T) {
+	t.Parallel()
+
 	var out strings.Builder
 	_ = RunReviewCaptureResult([]string{"--help"}, &out)
 	help := out.String()

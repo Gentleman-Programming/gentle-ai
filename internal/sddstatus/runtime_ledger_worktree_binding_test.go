@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ import (
 // fix that diff silently measured the distance between two unrelated trees:
 // worktree B's own clean checkout matched the pinned base exactly, so the
 // authorized apply that really ran in worktree A was charged changed_lines: 0.
-func TestRuntimeLedgerRefusesFinishFromADifferentLinkedWorktreeThanBegin(t *testing.T) {
+func TestRuntimeLedgerFinishRefusesDelegatedWorktreeUntilHandoff(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
 	worktree := filepath.Join(t.TempDir(), "sibling-worktree")
 	runRuntimeLedgerGit(t, repo, "worktree", "add", "-q", "-b", "worktree-b", worktree)
@@ -89,6 +90,175 @@ func TestRuntimeLedgerRefusesFinishFromADifferentLinkedWorktreeThanBegin(t *test
 	if len(finished.Attempts) != 1 || finished.Attempts[0].ChangedLines != 1 {
 		t.Fatalf("same-worktree finish attempts = %#v, want exactly one changed line", finished.Attempts)
 	}
+}
+
+func TestRuntimeLedgerHandoffAtomicallyBindsDelegatedLinkedWorktree(t *testing.T) {
+	_, worktree, storeA, _, began := newRuntimeLedgerHandoffFixture(t, "handoff-atomic")
+	originWorktree := canonicalRuntimeLedgerWorktreePath(t, storeA.Workspace)
+	destinationWorktree := canonicalRuntimeLedgerWorktreePath(t, worktree)
+
+	handedOff, err := storeA.Handoff(context.Background(), HandoffAttemptRequest{
+		ExpectedRevision: began.Revision, RequestID: "handoff-a-to-b", DestinationWorktree: worktree,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countRuntimeRecords(t, storeA.Dir) != 2 || handedOff.CumulativeAttempts != began.CumulativeAttempts ||
+		handedOff.CumulativeChangedLines != began.CumulativeChangedLines {
+		t.Fatalf("handoff must append exactly one uncharged record: %#v", handedOff)
+	}
+	active := handedOff.ActiveAttempt
+	if active == nil || canonicalRuntimeLedgerWorktreePath(t, active.BeginWorktree) != originWorktree ||
+		canonicalRuntimeLedgerWorktreePath(t, active.EffectiveWorktree) != destinationWorktree || active.Handoff == nil {
+		t.Fatalf("handoff active attempt = %#v", active)
+	}
+	if active.BeginCandidateIdentity != began.ActiveAttempt.BeginCandidateIdentity || active.BeginCandidateTree != began.ActiveAttempt.BeginCandidateTree ||
+		canonicalRuntimeLedgerWorktreePath(t, active.Handoff.SourceWorktree) != originWorktree ||
+		canonicalRuntimeLedgerWorktreePath(t, active.Handoff.DestinationWorktree) != destinationWorktree ||
+		active.Handoff.ExpectedRevision != began.Revision || active.Handoff.DestinationCandidateIdentity == "" || active.Handoff.DestinationCandidateTree == "" {
+		t.Fatalf("handoff provenance = %#v", active)
+	}
+	record, err := storeA.loadRecord(handedOff.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Operation != runtimeOperationHandoff || record.Handoff == nil || record.Handoff.RequestDigest != record.RequestDigest {
+		t.Fatalf("handoff record = %#v", record)
+	}
+	replay, err := storeA.Status()
+	if err != nil || replay.Revision != handedOff.Revision || replay.ActiveAttempt == nil ||
+		canonicalRuntimeLedgerWorktreePath(t, replay.ActiveAttempt.EffectiveWorktree) != destinationWorktree {
+		t.Fatalf("handoff replay = %#v err=%v", replay, err)
+	}
+}
+
+func TestRuntimeLedgerHandoffPreservesOriginAndChargesOnlyFinalSettlement(t *testing.T) {
+	_, worktree, storeA, storeB, began := newRuntimeLedgerHandoffFixture(t, "handoff-final-charge")
+	originWorktree := canonicalRuntimeLedgerWorktreePath(t, storeA.Workspace)
+	destinationWorktree := canonicalRuntimeLedgerWorktreePath(t, worktree)
+	handedOff, err := storeA.Handoff(context.Background(), HandoffAttemptRequest{
+		ExpectedRevision: began.Revision, RequestID: "handoff-final-charge", DestinationWorktree: worktree,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handedOff.CumulativeAttempts != 1 || handedOff.CumulativeChangedLines != 0 || handedOff.ActiveAttempt == nil {
+		t.Fatalf("handoff changed accounting: %#v", handedOff)
+	}
+	appendRuntimeLedgerFile(t, worktree, "implemented-in-b\n")
+	finished, err := storeB.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: handedOff.Revision, RequestID: "finish-in-b", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('b'), Diagnosis: "handoff delegates final measurement to worktree b",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup completed", ProcessEvidence: "process scan clean",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(finished.Attempts) != 1 || canonicalRuntimeLedgerWorktreePath(t, finished.Attempts[0].BeginWorktree) != originWorktree ||
+		canonicalRuntimeLedgerWorktreePath(t, finished.Attempts[0].EffectiveWorktree) != destinationWorktree || finished.Attempts[0].ChangedLines != 1 ||
+		finished.CumulativeAttempts != 1 || finished.CumulativeChangedLines != 1 {
+		t.Fatalf("final handoff settlement = %#v", finished)
+	}
+	if finished.Attempts[0].BeginCandidateIdentity != began.ActiveAttempt.BeginCandidateIdentity ||
+		finished.Attempts[0].BeginCandidateTree != began.ActiveAttempt.BeginCandidateTree || finished.Attempts[0].Handoff == nil {
+		t.Fatalf("final settlement rewrote begin provenance: %#v", finished.Attempts[0])
+	}
+}
+
+func TestRuntimeLedgerHandoffRejectsForeignOrUnregisteredWorktreeWithoutMutation(t *testing.T) {
+	tests := []struct {
+		name        string
+		destination func(*testing.T, string) string
+	}{
+		{
+			name: "foreign repository",
+			destination: func(t *testing.T, _ string) string {
+				return initRuntimeLedgerRepo(t)
+			},
+		},
+		{
+			name: "unregistered directory",
+			destination: func(t *testing.T, repo string) string {
+				path := filepath.Join(repo, "unregistered-worktree")
+				if err := os.MkdirAll(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, _, storeA, _, began := newRuntimeLedgerHandoffFixture(t, "handoff-reject-"+strings.ReplaceAll(tt.name, " ", "-"))
+			beforeRecords := countRuntimeRecords(t, storeA.Dir)
+			_, err := storeA.Handoff(context.Background(), HandoffAttemptRequest{
+				ExpectedRevision: began.Revision, RequestID: "handoff-reject", DestinationWorktree: tt.destination(t, repo),
+			})
+			if !errors.Is(err, ErrRuntimeHandoffDestination) {
+				t.Fatalf("handoff error = %v, want ErrRuntimeHandoffDestination", err)
+			}
+			status, statusErr := storeA.Status()
+			if statusErr != nil || status.Revision != began.Revision || countRuntimeRecords(t, storeA.Dir) != beforeRecords ||
+				status.ActiveAttempt == nil || status.ActiveAttempt.EffectiveWorktree != storeA.Workspace {
+				t.Fatalf("rejected handoff mutated authority: status=%#v err=%v", status, statusErr)
+			}
+		})
+	}
+}
+
+func TestRuntimeLedgerHandoffReplayIsIdempotentAndCannotChargeTwice(t *testing.T) {
+	_, worktree, storeA, storeB, began := newRuntimeLedgerHandoffFixture(t, "handoff-replay")
+	request := HandoffAttemptRequest{ExpectedRevision: began.Revision, RequestID: "handoff-replay", DestinationWorktree: worktree}
+	first, err := storeA.Handoff(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := storeA.Handoff(context.Background(), request)
+	if err != nil || replayed.Revision != first.Revision || countRuntimeRecords(t, storeA.Dir) != 2 {
+		t.Fatalf("handoff replay = %#v err=%v records=%d", replayed, err, countRuntimeRecords(t, storeA.Dir))
+	}
+	appendRuntimeLedgerFile(t, worktree, "one-final-charge\n")
+	finished, err := storeB.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: first.Revision, RequestID: "finish-after-handoff-replay", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('c'), Diagnosis: "finish once after the replayed handoff",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "cleanup completed", ProcessEvidence: "process scan clean",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterFinish, err := storeA.Handoff(context.Background(), request)
+	if err != nil || afterFinish.Revision != finished.Revision || afterFinish.CumulativeChangedLines != 1 || countRuntimeRecords(t, storeA.Dir) != 3 {
+		t.Fatalf("post-finish handoff replay = %#v err=%v records=%d", afterFinish, err, countRuntimeRecords(t, storeA.Dir))
+	}
+	conflict := request
+	conflict.DestinationWorktree = storeA.Workspace
+	if _, err := storeA.Handoff(context.Background(), conflict); !errors.Is(err, ErrRuntimeRequestConflict) {
+		t.Fatalf("different handoff request with replay id error = %v, want ErrRuntimeRequestConflict", err)
+	}
+}
+
+func newRuntimeLedgerHandoffFixture(t *testing.T, change string) (string, string, RuntimeStore, RuntimeStore, RuntimeStatus) {
+	t.Helper()
+	repo := initRuntimeLedgerRepo(t)
+	worktree := filepath.Join(t.TempDir(), "delegated-worktree")
+	runRuntimeLedgerGit(t, repo, "worktree", "add", "-q", "-b", change+"-b", worktree)
+	storeA, err := OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeB, err := OpenRuntimeStore(context.Background(), worktree, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	began, err := storeA.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "begin-a", WorkUnit: "delegated-worktree", EvidenceGoal: "prove explicit execution handoff",
+		MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo, worktree, storeA, storeB, began
 }
 
 func canonicalRuntimeLedgerWorktreePath(t *testing.T, path string) string {
@@ -200,7 +370,7 @@ func TestRuntimeLedgerLegacyBeginRecordReplaysWithoutWorktreeEnforcement(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.ActiveAttempt == nil || status.ActiveAttempt.BeginWorktree != "" {
+	if status.ActiveAttempt == nil || status.ActiveAttempt.BeginWorktree != "" || status.ActiveAttempt.EffectiveWorktree != "" {
 		t.Fatalf("legacy replay invented a begin_worktree: %#v", status.ActiveAttempt)
 	}
 

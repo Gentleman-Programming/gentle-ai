@@ -17,12 +17,12 @@ func TestResolveSharesOneNormalizedWorkspaceWithReviewMode(t *testing.T) {
 
 	modeLookups := 0
 	status, err := Resolve(ResolveOptions{
-		ReviewDisabledForWorkspace: func(workspaceRoot string) bool {
+		ReviewDisabledForWorkspace: func(workspaceRoot string) (bool, error) {
 			modeLookups++
 			if workspaceRoot != root {
 				t.Fatalf("review mode workspace = %q, want %q", workspaceRoot, root)
 			}
-			return true
+			return true, nil
 		},
 	})
 	if err != nil {

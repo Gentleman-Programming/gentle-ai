@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/advisoryreview"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -203,11 +205,11 @@ func TestReviewLensContextRefusesEmptyPatchForContentChangingPath(t *testing.T) 
 	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
 	deps := reviewLensContextDependencies()
-	deps.inspect = func(builder reviewtransaction.SnapshotBuilder, ctx context.Context, snapshot reviewtransaction.Snapshot, operation string, pathIndex int, side string) ([]byte, error) {
+	deps.inspect = func(ctx context.Context, inspector reviewLensCandidateInspector, operation string, pathIndex int, side string) ([]byte, error) {
 		if operation == "patch" {
 			return nil, nil
 		}
-		return builder.InspectCandidate(ctx, snapshot, operation, pathIndex, side)
+		return inspector.Inspect(ctx, operation, pathIndex, side)
 	}
 	block, err := runReviewLensContext([]string{"--repository-context", handle, "--lens", lens}, io.Discard, deps)
 	if err == nil || !strings.Contains(err.Error(), "lens_context_empty_patch") {
@@ -233,6 +235,159 @@ func TestReviewLensContextCarriesAggregateDeadline(t *testing.T) {
 	}
 	if len(block) != 0 {
 		t.Fatalf("deadline refusal emitted %d bytes of reviewer context", len(block))
+	}
+	want := "lens_context_deadline_exceeded: provider-owned reviewer lens context was not produced; " + reviewLensContextDeadlineAction
+	if err.Error() != want {
+		t.Fatalf("deadline guidance = %q, want %q", err, want)
+	}
+	if !strings.Contains(err.Error(), "execute the returned transition once") || !strings.Contains(err.Error(), "if the same lens slot reaches the same deadline again") ||
+		!strings.Contains(err.Error(), "split the candidate into a chained sequence of smaller reviewable commits") || !strings.Contains(err.Error(), reviewNextTransitionRefreshCommandV21) {
+		t.Fatalf("deadline guidance is not a single transition execution followed by a runnable reduced-scope exit: %q", err)
+	}
+}
+
+func TestReviewLensContextRefusesManifestOverAdvisoryCapacityBeforePatchInspection(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	repo := initReviewCLIRepo(t)
+	for index := range 33 {
+		writeReviewStartCandidate(t, repo, fmt.Sprintf("path-%02d.txt", index), "candidate\n", 0o644)
+	}
+	started := runNegotiatedReviewStart(t, repo, "lens-context-entry-capacity")
+	deps := reviewLensContextDependencies()
+	inspect := deps.inspect
+	patchReads := 0
+	deps.inspect = func(ctx context.Context, inspector reviewLensCandidateInspector, operation string, pathIndex int, side string) ([]byte, error) {
+		if operation == "patch" {
+			patchReads++
+		}
+		return inspect(ctx, inspector, operation, pathIndex, side)
+	}
+	block, err := runReviewLensContext([]string{
+		"--repository-context", started.RepositoryContext.Handle, "--lens", started.SelectedLenses[0],
+	}, io.Discard, deps)
+	if err == nil || !strings.Contains(err.Error(), "lens_context_budget_exceeded") {
+		t.Fatalf("entry-capacity error = %v", err)
+	}
+	if strings.Contains(err.Error(), "advisory review") || !strings.Contains(err.Error(), "provider-owned reviewer context accepts at most") ||
+		!strings.Contains(err.Error(), "33") || !strings.Contains(err.Error(), "32") || !strings.Contains(err.Error(), "retrying this candidate cannot succeed") ||
+		!strings.Contains(err.Error(), "chained sequence of smaller reviewable commits") || !strings.Contains(err.Error(), reviewNextTransitionRefreshCommandV21) {
+		t.Fatalf("entry-capacity guidance does not name its limit and runnable continuation: %q", err)
+	}
+	if patchReads != 0 {
+		t.Fatalf("patch inspections before entry-capacity refusal = %d, want 0", patchReads)
+	}
+	if len(block) != 0 {
+		t.Fatalf("entry-capacity refusal emitted %d bytes of reviewer context", len(block))
+	}
+}
+
+func TestReviewLensContextRecoveryGuidanceRefreshesThenExecutesNextTransition(t *testing.T) {
+	tests := []struct {
+		name   string
+		action string
+	}{
+		{name: "evidence capacity", action: reviewLensContextBudgetAction},
+		{name: "entry capacity", action: reviewLensContextCapacityAction(advisoryreview.MaxEvidenceEntries + 1)},
+		{name: "deadline", action: reviewLensContextDeadlineAction},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if !strings.Contains(test.action, reviewNextTransitionRefreshCommandV21) ||
+				!strings.Contains(test.action, "refresh the exact native next transition") ||
+				!strings.Contains(test.action, "execute the returned transition") {
+				t.Fatalf("recovery guidance = %q, want STATUS to refresh the exact transition and the caller to execute it", test.action)
+			}
+			if strings.Contains(test.action, "start a review") {
+				t.Fatalf("recovery guidance = %q, must not claim STATUS itself starts a review", test.action)
+			}
+		})
+	}
+}
+
+func TestReviewLensContextCleanupClassifiesCleanupFailureIndependentlyOfOperationContext(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, cancelExpired := context.WithTimeout(context.Background(), 0)
+	defer cancelExpired()
+
+	for _, test := range []struct {
+		name     string
+		ctx      context.Context
+		closeErr error
+	}{
+		{name: "canceled", ctx: canceled, closeErr: errors.New("close canceled inspector")},
+		{name: "deadline exceeded", ctx: expired, closeErr: errors.New("close expired inspector")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := reviewLensContextCleanup(test.ctx, "reviewer context", nil, func() error {
+				return test.closeErr
+			})
+			if result != "" {
+				t.Fatalf("cleanup-only result = %q, want zero result", result)
+			}
+			var refusal *reviewLensContextError
+			if !errors.As(err, &refusal) || refusal.Code != "lens_context_inspection_failed" {
+				t.Fatalf("cleanup-only error = %v, want ordinary inspection-failed refusal", err)
+			}
+			if !errors.Is(err, test.closeErr) {
+				t.Fatalf("cleanup-only error = %v, want close error %v", err, test.closeErr)
+			}
+		})
+	}
+}
+
+func TestReviewLensContextCallersFailClosedOnInspectorCleanupFailure(t *testing.T) {
+	cleanupErr := errors.New("close inspector")
+	for _, caller := range []struct {
+		name string
+		call func(reviewLensContextDeps, string, string) (error, bool)
+	}{
+		{"lens context", func(deps reviewLensContextDeps, handle, lens string) (error, bool) {
+			payload, err := runReviewLensContext([]string{"--repository-context", handle, "--lens", lens}, io.Discard, deps)
+			return err, payload == nil
+		}},
+		{"advisory request", func(deps reviewLensContextDeps, handle, lens string) (error, bool) {
+			request, err := resolveAdvisoryRequest(context.Background(), deps, handle, lens)
+			return err, request.ArtifactSubject == (reviewtransaction.ArtifactSubject{}) && request.ChangedPathManifest == nil && request.Evidence == nil
+		}},
+	} {
+		for _, operation := range []bool{false, true} {
+			t.Run(caller.name, func(t *testing.T) {
+				_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+				handle, lens := args[slices.Index(args, "--repository-context")+1], args[slices.Index(args, "--lens")+1]
+				deps := reviewLensContextDependencies()
+				deps.close = func(inspector reviewLensCandidateInspector) error {
+					if err := inspector.Close(); err != nil {
+						return err
+					}
+					return cleanupErr
+				}
+				if operation {
+					inspect := deps.inspect
+					deps.inspect = func(ctx context.Context, inspector reviewLensCandidateInspector, kind string, index int, side string) ([]byte, error) {
+						if kind == "patch" {
+							return nil, nil
+						}
+						return inspect(ctx, inspector, kind, index, side)
+					}
+				}
+				err, zero := caller.call(deps, handle, lens)
+				if !zero {
+					t.Fatal("cleanup did not zero the result")
+				}
+				if !operation {
+					if !errors.Is(err, cleanupErr) {
+						t.Fatalf("cleanup-only error = %v, want cleanup cause %v", err, cleanupErr)
+					}
+					return
+				}
+				var refusal *reviewLensContextError
+				if !errors.As(err, &refusal) || refusal.Code != "lens_context_empty_patch" || !errors.Is(err, cleanupErr) {
+					t.Fatalf("operation and cleanup error = %v, want empty-patch refusal and cleanup cause", err)
+				}
+			})
+		}
 	}
 }
 
@@ -408,7 +563,7 @@ func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 			}
 			// The reviewer must know the evidence in the block is the whole
 			// candidate, and that reading anything else is not permitted.
-			for _, required := range []string{"complete and only", "working tree", "subject_hash"} {
+			for _, required := range []string{"complete and only", "working tree", "subject_hash", "complete unique unordered set", "path:line or path:start-end"} {
 				if !strings.Contains(instruction, required) {
 					t.Fatalf("instruction omits %q:\n%s", required, instruction)
 				}

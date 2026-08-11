@@ -3,7 +3,9 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -176,11 +178,7 @@ func TestCompactAcquireForeignTokenStaysBlockedWithoutMutation(t *testing.T) {
 }
 
 func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
-	legacyFixture := newRuntimeUnchangedBindingFixture(t, "compact-legacy-evidence")
-	write(t, filepath.Join(legacyFixture.store.Repo, "openspec", "changes", "compact-legacy-evidence", "tasks.md"), "- [x] 1.1 Done\n# candidate-changing remediation\n")
-	fixture := runtimeRemediationFixture{repo: legacyFixture.store.Repo, store: legacyFixture.store, predecessorBinding: legacyFixture.binding,
-		failedEvidence: runtimeTestHash('b'), active: legacyFixture.active,
-		successor: createRuntimeRecoverySuccessor(t, legacyFixture.store.Repo, legacyFixture.binding.Lineage, "compact-legacy-successor", true)}
+	fixture := newRuntimeRemediationFixture(t, true)
 	failNextCompactStoreSync(t, fixture.store)
 	before := countRuntimeRecords(t, fixture.store.Dir)
 	legacy := fixture.finishRequest("compact-remediation-settle")
@@ -306,4 +304,53 @@ func failNextCompactStoreSync(t *testing.T, store RuntimeStore) {
 		return original(path)
 	}
 	t.Cleanup(func() { runtimeSyncDirectory = original })
+}
+
+// TestUnreadableAuthorityBlockNamesItsCause is #2829, and root 8's shape on a
+// surface root 8 never reached.
+//
+// A user hit `the attempt ledger for this work unit cannot be read as valid
+// authority` on a published build and neither they nor anyone triaging it
+// could tell an invalid HEAD encoding from a broken chain link from a
+// permissions refusal. Those need different repairs and produced identical
+// output, because seven call sites discarded the error `store.load()` had
+// just returned.
+//
+// The exit text is deliberately NOT part of this assertion: callers route on
+// it and it must keep its exact bytes. Only Detail gains the cause.
+func TestUnreadableAuthorityBlockNamesItsCause(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "unreadable-cause")
+	if _, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "cause-begin", WorkUnit: "apply", EvidenceGoal: "prove it",
+		MaxAttempts: 2, MaxChangedLines: 20,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Damage the ledger the way an interrupted write does: a HEAD that is not
+	// the exact `sha256:<64hex>\n` encoding readRuntimeHead requires.
+	head := filepath.Join(store.Dir, "HEAD")
+	if err := os.WriteFile(head, []byte("sha256:not-a-digest\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := store.Acquire(context.Background(), CompactAcquireRequest{
+		BeginAttemptRequest: BeginAttemptRequest{
+			RequestID: "cause-acquire", WorkUnit: "apply", EvidenceGoal: "prove it",
+			MaxAttempts: 2, MaxChangedLines: 20,
+		},
+	})
+	if err != nil {
+		t.Fatalf("acquire over a damaged ledger returned a hard error rather than a block: %v", err)
+	}
+	if result.State != CompactStateBlocked || result.Reason != CompactBlockCorruptAuthority {
+		t.Fatalf("result = %#v, want blocked/corrupt_authority", result)
+	}
+	if !strings.Contains(result.Detail, "cause:") {
+		t.Fatalf("blocked detail discards the load error, so no reader can tell which damage this is: %q", result.Detail)
+	}
+	if !strings.Contains(result.Exit, "sdd-attempt status") {
+		t.Fatalf("exit text lost its runnable continuation: %q", result.Exit)
+	}
 }

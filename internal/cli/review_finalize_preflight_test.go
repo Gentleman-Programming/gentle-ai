@@ -82,6 +82,8 @@ func TestNegotiatedReviewFinalizeRejectsStaleZeroTransitionWithoutMutation(t *te
 }
 
 func TestReviewFinalizeAcceptsExactLiveTargetSemantics(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		prepare func(*testing.T, string) ([]string, func())
@@ -239,6 +241,8 @@ func TestReviewFinalizeConvergesCommittedPendingJournalAfterWorktreeDrift(t *tes
 }
 
 func TestReviewFinalizeBindsCorrectedRetrySuccessorToLiveFixDiff(t *testing.T) {
+	t.Parallel()
+
 	for _, drift := range []bool{false, true} {
 		name := "exact"
 		if drift {

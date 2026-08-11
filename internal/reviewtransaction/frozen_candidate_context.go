@@ -94,6 +94,14 @@ type FrozenCandidateContext struct {
 	repositoryRoot      string
 }
 
+type PreparedCandidateInspector struct {
+	frozen         FrozenCandidateContext
+	isolation      []string
+	attributesFile string
+	cleanup        func() error
+	closed         bool
+}
+
 // WithLegacyCandidateDiff adds the exact published v1 candidate transport.
 // Callers use it only after explicitly negotiating the legacy contract.
 func (builder SnapshotBuilder) WithLegacyCandidateDiff(ctx context.Context, snapshot Snapshot, frozen FrozenCandidateContext) (FrozenCandidateContext, error) {
@@ -127,19 +135,36 @@ func (builder SnapshotBuilder) WithLegacyCandidateDiff(ctx context.Context, snap
 // FrozenCandidateContext returns immutable Git tree references and their typed
 // path manifest. Reviewers read only path-scoped diffs between these trees.
 func (builder SnapshotBuilder) FrozenCandidateContext(ctx context.Context, snapshot Snapshot) (FrozenCandidateContext, error) {
-	repo, err := builder.repositoryRoot(ctx)
+	inspector, err := builder.PrepareCandidateInspector(ctx, snapshot)
 	if err != nil {
 		return FrozenCandidateContext{}, err
 	}
+	frozen := inspector.FrozenCandidateContext()
+	if err := inspector.Close(); err != nil {
+		return FrozenCandidateContext{}, err
+	}
+	return frozen, nil
+}
+
+func (builder SnapshotBuilder) PrepareCandidateInspector(ctx context.Context, snapshot Snapshot) (*PreparedCandidateInspector, error) {
+	repo, err := builder.repositoryRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
 	builder.Repo = repo
 	if err := builder.ValidateEvidence(ctx, snapshot); err != nil {
-		return FrozenCandidateContext{}, fmt.Errorf("validate frozen candidate snapshot: %w", err)
+		return nil, fmt.Errorf("validate frozen candidate snapshot: %w", err)
 	}
-	isolation, cleanup, err := isolatedImmutableTreeGit(ctx, repo)
+	isolation, attributesFile, cleanup, err := isolatedImmutableTreeGitWithAttributesFile(ctx, repo)
 	if err != nil {
-		return FrozenCandidateContext{}, fmt.Errorf("prepare isolated frozen candidate Git view: %w", err)
+		return nil, fmt.Errorf("prepare isolated frozen candidate Git view: %w", err)
 	}
-	defer cleanup()
+	fail := func(err error) (*PreparedCandidateInspector, error) {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("clean up prepared frozen candidate Git view: %w", cleanupErr))
+		}
+		return nil, err
+	}
 
 	raw, err := runGitLimited(ctx, repo, isolation, nil, maxFrozenCandidateManifestBytes,
 		"diff",
@@ -155,14 +180,14 @@ func (builder SnapshotBuilder) FrozenCandidateContext(ctx context.Context, snaps
 		"--",
 	)
 	if err != nil {
-		return FrozenCandidateContext{}, fmt.Errorf("render frozen candidate manifest: %w", err)
+		return fail(fmt.Errorf("render frozen candidate manifest: %w", err))
 	}
 	modesByPath, err := parseRawDiffModes(raw)
 	if err != nil {
-		return FrozenCandidateContext{}, err
+		return fail(err)
 	}
 	if len(modesByPath) != len(snapshot.Paths) {
-		return FrozenCandidateContext{}, errors.New("immutable raw tree diff does not exactly match snapshot paths")
+		return fail(errors.New("immutable raw tree diff does not exactly match snapshot paths"))
 	}
 
 	intended := make(map[string]struct{}, len(snapshot.IntendedUntracked))
@@ -173,7 +198,7 @@ func (builder SnapshotBuilder) FrozenCandidateContext(ctx context.Context, snaps
 	for _, path := range snapshot.Paths {
 		modes, ok := modesByPath[path]
 		if !ok {
-			return FrozenCandidateContext{}, fmt.Errorf("immutable snapshot path %q is missing from raw tree diff", path)
+			return fail(fmt.Errorf("immutable snapshot path %q is missing from raw tree diff", path))
 		}
 		_, wasIntendedUntracked := intended[path]
 		entry := ChangedPathManifestEntry{
@@ -183,26 +208,32 @@ func (builder SnapshotBuilder) FrozenCandidateContext(ctx context.Context, snaps
 			IntendedUntracked: wasIntendedUntracked,
 		}
 		if err := validateChangedPathManifestEntry(entry); err != nil {
-			return FrozenCandidateContext{}, err
+			return fail(err)
 		}
 		manifest = append(manifest, entry)
 	}
-	return FrozenCandidateContext{
-		BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree,
-		ChangedPathManifest: manifest, repositoryRoot: repo,
+	return &PreparedCandidateInspector{
+		frozen: FrozenCandidateContext{
+			BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree,
+			ChangedPathManifest: manifest, repositoryRoot: repo,
+		},
+		isolation: isolation, attributesFile: attributesFile, cleanup: cleanup,
 	}, nil
 }
 
-// InspectCandidate renders one bounded, read-only frozen-candidate view; path operations select only by canonical manifest index.
-func (builder SnapshotBuilder) InspectCandidate(ctx context.Context, snapshot Snapshot, operation string, pathIndex int, side string) ([]byte, error) {
-	repo, err := builder.repositoryRoot(ctx)
-	if err != nil {
-		return nil, err
+// FrozenCandidateContext returns a copy that cannot mutate later inspection scope.
+func (inspector *PreparedCandidateInspector) FrozenCandidateContext() FrozenCandidateContext {
+	frozen := inspector.frozen
+	frozen.ChangedPathManifest = append(frozen.ChangedPathManifest[:0:0], frozen.ChangedPathManifest...)
+	return frozen
+}
+
+// Inspect renders one bounded view selected only by canonical manifest index.
+func (inspector *PreparedCandidateInspector) Inspect(ctx context.Context, operation string, pathIndex int, side string) ([]byte, error) {
+	if inspector == nil || inspector.closed {
+		return nil, errors.New("prepared candidate inspector is closed") // refusal:by-design operator-knowledge: provider code must retain and use its invocation-owned inspector before closing it
 	}
-	frozen, err := builder.FrozenCandidateContext(ctx, snapshot)
-	if err != nil {
-		return nil, err
-	}
+	frozen := inspector.frozen
 	pathOperation := operation == "stat" || operation == "patch" || operation == "object"
 	if pathOperation != (pathIndex >= 0) || pathIndex >= len(frozen.ChangedPathManifest) {
 		return nil, errors.New("candidate inspection operation requires its exact canonical path index") // refusal:by-design operator-knowledge: the native CLI validates this closed combination before calling the provider boundary
@@ -215,12 +246,7 @@ func (builder SnapshotBuilder) InspectCandidate(ctx context.Context, snapshot Sn
 		return nil, errors.New("candidate inspection side is valid only for object content") // refusal:by-design operator-knowledge: reaching this means provider code bypassed the validated native CLI contract
 	}
 
-	isolation, cleanup, err := isolatedImmutableTreeGit(ctx, repo)
-	if err != nil {
-		return nil, err
-	}
-	defer cleanup()
-	common := []string{"--no-pager", "-c", "color.ui=false", "-c", "core.attributesFile=" + os.DevNull, "-c", "diff.external="}
+	common := []string{"--no-pager", "-c", "color.ui=false", "-c", "core.attributesFile=" + inspector.attributesFile, "-c", "diff.external="}
 	var args []string
 	switch operation {
 	case "name-status", "numstat":
@@ -240,38 +266,74 @@ func (builder SnapshotBuilder) InspectCandidate(ctx context.Context, snapshot Sn
 	default:
 		return nil, fmt.Errorf("unknown candidate inspection operation %q", operation) // refusal:by-design operator-knowledge: the native CLI validates the closed operation enum before calling this boundary
 	}
-	return runGitLimited(ctx, repo, isolation, nil, MaxFrozenCandidateDiffBytes, args...)
+	return runGitLimited(ctx, frozen.repositoryRoot, inspector.isolation, nil, MaxFrozenCandidateDiffBytes, args...)
 }
 
-func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func(), error) {
+func (inspector *PreparedCandidateInspector) Close() error {
+	if inspector == nil || inspector.closed {
+		return nil
+	}
+	inspector.closed = true
+	if inspector.cleanup == nil {
+		return nil
+	}
+	return inspector.cleanup()
+}
+
+// InspectCandidate preserves the one-shot inspection boundary.
+func (builder SnapshotBuilder) InspectCandidate(ctx context.Context, snapshot Snapshot, operation string, pathIndex int, side string) ([]byte, error) {
+	inspector, err := builder.PrepareCandidateInspector(ctx, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	payload, inspectErr := inspector.Inspect(ctx, operation, pathIndex, side)
+	if cleanupErr := inspector.Close(); cleanupErr != nil {
+		if inspectErr != nil {
+			return nil, errors.Join(inspectErr, cleanupErr)
+		}
+		return nil, cleanupErr
+	}
+	return payload, inspectErr
+}
+
+func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func() error, error) {
+	isolation, _, cleanup, err := isolatedImmutableTreeGitWithAttributesFile(ctx, repo)
+	return isolation, cleanup, err
+}
+
+func isolatedImmutableTreeGitWithAttributesFile(ctx context.Context, repo string) ([]string, string, func() error, error) {
 	identity, err := reviewRepositoryIdentity(ctx, repo)
 	if err != nil {
-		return nil, func() {}, err
+		return nil, "", func() error { return nil }, err
 	}
 	objectFormatOutput, err := runGit(ctx, identity.RepositoryRoot, nil, nil, "rev-parse", "--show-object-format")
 	if err != nil {
-		return nil, func() {}, err
+		return nil, "", func() error { return nil }, err
 	}
 	objectFormat := strings.TrimSpace(string(objectFormatOutput))
 	if objectFormat != "sha1" && objectFormat != "sha256" {
-		return nil, func() {}, fmt.Errorf("unsupported Git object format %q", objectFormat)
+		return nil, "", func() error { return nil }, fmt.Errorf("unsupported Git object format %q", objectFormat)
 	}
 	// The repository Git directory is the reliable writable location when a
 	// sandboxed caller does not expose an accessible process temp directory.
 	gitDir, err := os.MkdirTemp(identity.GitDir, ".gentle-ai-frozen-git-*")
 	if err != nil {
-		return nil, func() {}, err
+		return nil, "", func() error { return nil }, err
 	}
-	cleanup := func() { _ = os.RemoveAll(gitDir) }
+	cleanup := func() error { return os.RemoveAll(gitDir) }
+	fail := func(err error) ([]string, string, func() error, error) {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("clean up isolated frozen candidate Git view: %w", cleanupErr))
+		}
+		return nil, "", func() error { return nil }, err
+	}
 	for _, dir := range []string{"objects", "refs"} {
 		if err := os.Mkdir(filepath.Join(gitDir, dir), 0o700); err != nil {
-			cleanup()
-			return nil, func() {}, err
+			return fail(err)
 		}
 	}
 	if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/frozen-context\n"), 0o600); err != nil {
-		cleanup()
-		return nil, func() {}, err
+		return fail(err)
 	}
 	repositoryFormatVersion := "0"
 	extensions := ""
@@ -281,19 +343,29 @@ func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func(
 	}
 	config := "[core]\n\trepositoryFormatVersion = " + repositoryFormatVersion + "\n\tbare = true\n" + extensions
 	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte(config), 0o600); err != nil {
-		cleanup()
-		return nil, func() {}, err
+		return fail(err)
+	}
+	emptyFiles := make([]string, 0, 3)
+	for _, prefix := range []string{"git-iso-system-*", "git-iso-global-*", "git-iso-attrs-*"} {
+		file, err := os.CreateTemp(gitDir, prefix)
+		if err != nil {
+			return fail(err)
+		}
+		if err := file.Close(); err != nil {
+			return fail(err)
+		}
+		emptyFiles = append(emptyFiles, file.Name())
 	}
 	return []string{
 		"GIT_DIR=" + gitDir,
 		"GIT_OBJECT_DIRECTORY=" + filepath.Join(identity.GitCommonDir, "objects"),
 		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_SYSTEM=" + os.DevNull,
-		"GIT_CONFIG_GLOBAL=" + os.DevNull,
+		"GIT_CONFIG_SYSTEM=" + emptyFiles[0],
+		"GIT_CONFIG_GLOBAL=" + emptyFiles[1],
 		"GIT_CONFIG_COUNT=0",
 		"GIT_ATTR_NOSYSTEM=1",
 		"LANG=C",
-	}, cleanup, nil
+	}, emptyFiles[2], cleanup, nil
 }
 
 func validateChangedPathManifestEntry(entry ChangedPathManifestEntry) error {

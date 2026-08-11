@@ -133,13 +133,19 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 		)
 	}
 
+	canonicalInspection := request.Inspection
+	canonicalInspectionPaths, err := canonicalPaths(request.Inspection.Paths)
+	if err != nil {
+		return LensResult{}, err
+	}
+	canonicalInspection.Paths = canonicalInspectionPaths
 	canonicalResult, err := CanonicalCompactLensResult(request.Result)
 	if err != nil {
 		return LensResult{}, err
 	}
 	providerResult := compactProviderReviewerResult{
 		SubjectHash: request.ArtifactSubject.SubjectHash,
-		Inspection:  request.Inspection,
+		Inspection:  canonicalInspection,
 		Lens:        request.ArtifactSubject.Lens,
 		Findings:    canonicalResult.Findings,
 		Evidence:    canonicalResult.Evidence,
@@ -190,7 +196,7 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 					ExpectedSubject:           expected,
 					FrozenContext:             nativeContext,
 					EchoedSubjectHash:         providerResult.SubjectHash,
-					Inspection:                providerResult.Inspection,
+					Inspection:                canonicalInspection,
 					Result:                    canonicalResult,
 					CandidateCausalFindingIDs: request.CandidateCausalFindingIDs,
 					RawPayload:                request.RawPayload,
@@ -235,7 +241,7 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 		if errors.Is(err, ErrAuthorityLockTimeout) {
 			_, expectedAdmission, admissionErr := AdmitArtifact(ctx, ArtifactAdmissionRequest{
 				ExpectedSubject: request.ArtifactSubject, FrozenContext: request.FrozenContext,
-				EchoedSubjectHash: request.ArtifactSubject.SubjectHash, Inspection: request.Inspection,
+				EchoedSubjectHash: request.ArtifactSubject.SubjectHash, Inspection: canonicalInspection,
 				Result: request.Result, CandidateCausalFindingIDs: request.CandidateCausalFindingIDs,
 				RawPayload: request.RawPayload, CanonicalPayload: canonicalPayload,
 			})

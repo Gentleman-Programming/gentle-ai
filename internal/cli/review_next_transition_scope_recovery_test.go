@@ -154,7 +154,7 @@ func TestNegotiatedStatusRecoversApprovedFeatureOntoCurrentBase(t *testing.T) {
 	writeCLIAttemptFile(t, attempt, "# approved feature\n")
 	runReviewCLIGit(t, repo, "add", "--", "docs/attempt.md")
 	var startedOut bytes.Buffer
-	if err := RunReview([]string{"start", "--cwd", repo, "--projection", "staged"}, &startedOut); err != nil {
+	if err := RunReview([]string{"start", "--cwd", repo}, &startedOut); err != nil {
 		t.Fatalf("review start: %v\n%s", err, startedOut.String())
 	}
 	var started ReviewFacadeStartResult
@@ -177,7 +177,7 @@ func TestNegotiatedStatusRecoversApprovedFeatureOntoCurrentBase(t *testing.T) {
 
 	statusArgs := []string{
 		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition",
-		"--lineage", started.LineageID, "--base-ref", currentBase, "--projection", "staged",
+		"--lineage", started.LineageID, "--base-ref", currentBase,
 	}
 	var statusOut bytes.Buffer
 	if err := RunReview(statusArgs, &statusOut); err != nil {
@@ -191,6 +191,12 @@ func TestNegotiatedStatusRecoversApprovedFeatureOntoCurrentBase(t *testing.T) {
 		status.Authority.LineageID != started.LineageID || status.NextTransition == nil ||
 		status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.Collect == nil {
 		t.Fatalf("rebased status did not select scope recovery:\n%s", statusOut.String())
+	}
+	native, _, nativeErr := reviewtransaction.AssessTargetStatusWithSnapshot(context.Background(), repo, reviewtransaction.TargetStatusRequest{
+		Target: reviewtransaction.Target{Kind: reviewtransaction.TargetBaseDiff, BaseRef: currentBase, IntendedUntracked: []string{}}, LineageID: started.LineageID,
+	})
+	if nativeErr != nil || native.Decision.RecoverySelector == nil || native.Decision.RecoverySelector.Kind != reviewtransaction.TargetBaseDiff || native.Decision.RecoverySelector.BaseRef == "" {
+		t.Fatalf("core did not project the native scope recovery: decision=%#v err=%v", native.Decision, nativeErr)
 	}
 	input := status.NextTransition.Collect.Inputs[0]
 	bound := map[string]string{}
@@ -238,7 +244,7 @@ func TestNegotiatedStatusRecoversApprovedFeatureOntoCurrentBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if recovered.State.InitialSnapshot.BaseTree != currentBaseTree || recovered.State.InitialSnapshot.CandidateTree != headTree ||
-		recovered.State.InitialSnapshot.Projection != reviewtransaction.ProjectionStaged ||
+		facadeProjection(recovered.State.InitialSnapshot.Projection) != reviewtransaction.ProjectionWorkspace ||
 		len(recovered.State.InitialSnapshot.Paths) != 1 || recovered.State.InitialSnapshot.Paths[0] != "docs/attempt.md" ||
 		recovered.State.Recovery == nil || recovered.State.Recovery.PredecessorLineageID != started.LineageID {
 		t.Fatalf("successor did not bind only the rebased feature on the current base: %#v", recovered.State)

@@ -18,6 +18,43 @@ type InjectionResult struct {
 	Files   []string
 }
 
+// PiPersonaConfigPath returns the managed Pi persona state path beneath rootDir.
+// Pi resolves this file relative to the active agent configuration root, which
+// is the user's home for global install and the workspace for workspace install.
+func PiPersonaConfigPath(rootDir string) string {
+	return filepath.Join(rootDir, ".pi", "gentle-ai", "persona.json")
+}
+
+// InjectPiPersona writes the small runtime config consumed by gentle-pi.
+// Custom personas remain user-owned and therefore intentionally do nothing.
+func InjectPiPersona(rootDir string, persona model.PersonaID) (InjectionResult, error) {
+	if strings.TrimSpace(rootDir) == "" {
+		return InjectionResult{}, fmt.Errorf("Pi persona root must not be empty")
+	}
+	if persona == model.PersonaCustom {
+		return InjectionResult{}, nil
+	}
+
+	mode := string(persona)
+	if mode == "" {
+		mode = string(model.PersonaGentleman)
+	}
+	content, err := json.MarshalIndent(struct {
+		Mode string `json:"mode"`
+	}{Mode: mode}, "", "  ")
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("encode Pi persona config: %w", err)
+	}
+	content = append(content, '\n')
+
+	path := PiPersonaConfigPath(rootDir)
+	writeResult, err := filemerge.WriteFileAtomic(path, content, 0o644)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	return InjectionResult{Changed: writeResult.Changed, Files: []string{path}}, nil
+}
+
 // bootstrapper is an optional adapter capability: if an adapter implements
 // this interface, any injector that writes Jinja modules will first ensure
 // the base template (entry point) exists.
@@ -61,6 +98,14 @@ func InjectForSync(homeDir string, adapter agents.Adapter, persona model.Persona
 // syncManaged is the internal flag previously called `markdownOnly`.
 // When true the OpenCode/Kilocode agent overlay is skipped (see InjectForSync).
 func injectInternal(homeDir string, adapter agents.Adapter, persona model.PersonaID, syncManaged bool) (InjectionResult, error) {
+	// Normalize the legacy alias at the single entry point so every branch
+	// below (persona content, output-style write, Kimi module selection,
+	// cleanup) sees one canonical neutral identity. CLI callers already pass
+	// normalized IDs (cli.normalizePersona, internal/cli/validate.go); this
+	// guards direct callers.
+	if persona == model.PersonaGentlemanNeutralArtifacts {
+		persona = model.PersonaNeutral
+	}
 	if !adapter.SupportsSystemPrompt() {
 		return InjectionResult{}, nil
 	}
@@ -488,8 +533,12 @@ func shouldStripManagedLegacyPersona(existing string) bool {
 	return strings.Contains(existing, "<!-- gentle-ai:persona -->")
 }
 
+// isGentlemanConversationPersona reports whether the persona keeps the voseo
+// conversation tone. The gentleman-neutral-artifacts legacy alias is remapped
+// to neutral (cli.normalizePersona in internal/cli/validate.go, mirrored at
+// the injectInternal entry) and is intentionally NOT gentleman here.
 func isGentlemanConversationPersona(persona model.PersonaID) bool {
-	return persona == model.PersonaGentleman || persona == model.PersonaGentlemanNeutralArtifacts
+	return persona == model.PersonaGentleman
 }
 
 // residualChannel reports whether the adapter already delivers tone/language/
@@ -506,7 +555,7 @@ func residualChannel(adapter agents.Adapter) bool {
 // personaContent returns the persona asset for the given agent and persona.
 func personaContent(agent model.AgentID, persona model.PersonaID, residualContentAvailable bool) string {
 	switch persona {
-	case model.PersonaNeutral:
+	case model.PersonaNeutral, model.PersonaGentlemanNeutralArtifacts:
 		return neutralPersonaContent(agent, residualContentAvailable)
 	case model.PersonaCustom:
 		return ""

@@ -587,27 +587,32 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 		cmd.Env = append(os.Environ(),
 			"GENTLE_AI_UPGRADE_HELPER=1",
 			"GENTLE_AI_UPGRADE_HELPER_CWD_FILE="+cwdFile,
+			"GENTLE_AI_UPGRADE_HELPER_MANIFEST_PATH="+filepath.Join(pkgDir, "package.json"),
+			"GENTLE_AI_UPGRADE_HELPER_MANIFEST_VERSION=0.2.0",
 		)
 		return cmd
 	}
 
-	_, err := runStrategy(context.Background(), update.UpdateResult{
+	outcome, err := runStrategyWithOutcome(context.Background(), update.UpdateResult{
 		Tool: update.ToolInfo{
 			Name:          pkg,
 			InstallMethod: update.InstallOpenCodePlugin,
 			NpmPackage:    pkg,
 		},
 		InstalledVersion: "0.1.0",
-		LatestVersion:    "0.2.0",
+		LatestVersion:    " 0.2.0 ",
 	}, system.PlatformProfile{PackageManager: "brew"})
 	if err != nil {
 		t.Fatalf("runStrategy OpenCode plugin: unexpected error: %v", err)
+	}
+	if outcome.observedVersion != "0.2.0" {
+		t.Fatalf("observed version = %q, want 0.2.0 from the installed manifest", outcome.observedVersion)
 	}
 
 	if gotName != "bun" {
 		t.Fatalf("exec name = %q, want bun", gotName)
 	}
-	wantArgs := []string{"add", pkg + "@latest", "@opencode-ai/plugin@latest"}
+	wantArgs := []string{"add", pkg + "@0.2.0", "@opencode-ai/plugin@latest"}
 	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
@@ -633,6 +638,118 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 	}
 	if gotCwd != wantCwd {
 		t.Fatalf("command cwd = %q, want %q", gotCwd, wantCwd)
+	}
+}
+
+func TestRunStrategyOpenCodePluginRejectsUnverifiedMaterialization(t *testing.T) {
+	tests := []struct {
+		name           string
+		manifest       string
+		registerOnly   bool
+		latestVersion  string
+		wantFallback   bool
+		wantErrorParts []string
+	}{
+		{
+			name:           "empty expected version skips before package manager mutation",
+			registerOnly:   true,
+			latestVersion:  "  ",
+			wantFallback:   true,
+			wantErrorParts: []string{"expected version is empty"},
+		},
+		{
+			name:           "package manager succeeds without materializing the package",
+			registerOnly:   true,
+			latestVersion:  "0.8.0",
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "absent", "No automatic rollback", "restore or correct"},
+		},
+		{
+			name:           "package manager succeeds but leaves the stale version",
+			manifest:       `{"version":"0.7.1"}`,
+			latestVersion:  "0.8.0",
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "0.7.1", "No automatic rollback", "restore or correct"},
+		},
+		{
+			name:           "package manager succeeds but leaves an invalid manifest",
+			manifest:       `{not valid json`,
+			latestVersion:  "0.8.0",
+			wantErrorParts: []string{"after bun mutation", "expected version \"0.8.0\"", "invalid", "No automatic rollback", "restore or correct"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			origHomeDir, origLookPath, origExecCommand := openCodeHomeDir, lookPathCommand, execCommand
+			t.Cleanup(func() {
+				openCodeHomeDir, lookPathCommand, execCommand = origHomeDir, origLookPath, origExecCommand
+			})
+
+			home := t.TempDir()
+			opencodeDir := filepath.Join(home, ".config", "opencode")
+			if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			pkg := "opencode-subagent-statusline"
+			pkgDir := filepath.Join(opencodeDir, "node_modules", pkg)
+			if tc.manifest != "" {
+				if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(tc.manifest), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.registerOnly {
+				if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["`+pkg+`"]}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			openCodeHomeDir = func() (string, error) { return home, nil }
+			lookPathCommand = func(file string) (string, error) {
+				if file == "bun" {
+					return "/usr/bin/bun", nil
+				}
+				return "", errors.New("not found")
+			}
+			execCalled := false
+			execCommand = func(name string, args ...string) *exec.Cmd {
+				execCalled = true
+				return mockCmd("true")
+			}
+
+			outcome, err := runStrategyWithOutcome(context.Background(), update.UpdateResult{
+				Tool: update.ToolInfo{
+					Name:          pkg,
+					InstallMethod: update.InstallOpenCodePlugin,
+					NpmPackage:    pkg,
+				},
+				LatestVersion: tc.latestVersion,
+				Status:        update.UpdateAvailable,
+			}, system.PlatformProfile{})
+			if err == nil {
+				t.Fatal("expected verification failure after a successful package-manager command")
+			}
+			if outcome.observedVersion != "" {
+				t.Fatalf("observed version = %q, want empty on verification failure", outcome.observedVersion)
+			}
+			if hint, ok := AsManualFallback(err); ok != tc.wantFallback {
+				t.Fatalf("error = %T %v, ManualFallbackError = %t, want %t", err, err, ok, tc.wantFallback)
+			} else if ok && !strings.Contains(hint, tc.wantErrorParts[0]) {
+				t.Errorf("fallback hint %q does not contain %q", hint, tc.wantErrorParts[0])
+			}
+			if tc.wantFallback {
+				if execCalled {
+					t.Fatal("package manager must not run without a pinned expected version")
+				}
+				return
+			}
+			for _, want := range tc.wantErrorParts {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err, want)
+				}
+			}
+		})
 	}
 }
 
@@ -668,6 +785,13 @@ func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = append([]string(nil), args...)
+		pkgDir := filepath.Join(opencodeDir, "node_modules", pkg)
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.2.0"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		return mockCmd("true")
 	}
 
@@ -677,7 +801,8 @@ func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing
 			InstallMethod: update.InstallOpenCodePlugin,
 			NpmPackage:    pkg,
 		},
-		Status: update.RegisteredNotMaterialized,
+		LatestVersion: "1.2.0",
+		Status:        update.RegisteredNotMaterialized,
 	}, system.PlatformProfile{})
 	if err != nil {
 		t.Fatalf("registered OpenCode plugin should be npm-managed during upgrade, got: %v", err)
@@ -685,7 +810,7 @@ func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing
 	if gotName != "npm" {
 		t.Fatalf("exec name = %q, want npm", gotName)
 	}
-	wantArgs := []string{"install", "--save", "--no-audit", "--no-fund", pkg + "@latest", "@opencode-ai/plugin@latest"}
+	wantArgs := []string{"install", "--save", "--no-audit", "--no-fund", pkg + "@1.2.0", "@opencode-ai/plugin@latest"}
 	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
@@ -730,7 +855,7 @@ func TestRunStrategyOpenCodePluginNpmERESOLVERetriesWithLegacyPeerDeps(t *testin
 	if len(callHistory) != 2 {
 		t.Fatalf("expected 2 exec calls (initial + retry), got %d", len(callHistory))
 	}
-	wantRetry := []string{"npm", "install", "--save", "--no-audit", "--no-fund", "--legacy-peer-deps", "opencode-sdd-engram-manage@latest", "@opencode-ai/plugin@latest"}
+	wantRetry := []string{"npm", "install", "--save", "--no-audit", "--no-fund", "--legacy-peer-deps", "opencode-sdd-engram-manage@1.2.0", "@opencode-ai/plugin@latest"}
 	if strings.Join(callHistory[1], " ") != strings.Join(wantRetry, " ") {
 		t.Fatalf("retry command = %v, want %v", callHistory[1], wantRetry)
 	}
@@ -808,6 +933,13 @@ func configureOpenCodeNpmTest(t *testing.T, command func(string, ...string) *exe
 	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	pkgDir := filepath.Join(opencodeDir, "node_modules", "opencode-sdd-engram-manage")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.2.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	openCodeHomeDir = func() (string, error) { return home, nil }
 	lookPathCommand = func(file string) (string, error) {
 		if file == "npm" {
@@ -819,7 +951,7 @@ func configureOpenCodeNpmTest(t *testing.T, command func(string, ...string) *exe
 }
 
 func openCodePluginUpdateResult(pkg string) update.UpdateResult {
-	return update.UpdateResult{Tool: update.ToolInfo{Name: pkg, InstallMethod: update.InstallOpenCodePlugin, NpmPackage: pkg}, Status: update.RegisteredNotMaterialized}
+	return update.UpdateResult{Tool: update.ToolInfo{Name: pkg, InstallMethod: update.InstallOpenCodePlugin, NpmPackage: pkg}, LatestVersion: "1.2.0", Status: update.RegisteredNotMaterialized}
 }
 
 func slicesContain(values []string, want string) bool {
@@ -919,6 +1051,13 @@ func TestOpenCodePluginUpgradeHelperProcess(t *testing.T) {
 	if err := os.WriteFile(os.Getenv("GENTLE_AI_UPGRADE_HELPER_CWD_FILE"), []byte(cwd), 0o644); err != nil {
 		_, _ = os.Stderr.WriteString(err.Error())
 		os.Exit(2)
+	}
+	if manifestPath := os.Getenv("GENTLE_AI_UPGRADE_HELPER_MANIFEST_PATH"); manifestPath != "" {
+		version := os.Getenv("GENTLE_AI_UPGRADE_HELPER_MANIFEST_VERSION")
+		if err := os.WriteFile(manifestPath, []byte(`{"version":"`+version+`"}`), 0o644); err != nil {
+			_, _ = os.Stderr.WriteString(err.Error())
+			os.Exit(2)
+		}
 	}
 	os.Exit(0)
 }

@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/advisoryreview"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 // RunReviewAdvisory exposes the generic prompt/text seam. It is intentionally
@@ -114,16 +113,21 @@ func runReviewAdvisoryValidate(args []string, stdout io.Writer) error {
 // candidate in memory before a single check. This is the same refuse-before-
 // invocation, never-truncate discipline, applied to the same budget, not a
 // second competing one.
-func resolveAdvisoryRequest(ctx context.Context, deps reviewLensContextDeps, repositoryContext, lens string) (advisoryreview.Request, error) {
+func resolveAdvisoryRequest(ctx context.Context, deps reviewLensContextDeps, repositoryContext, lens string) (request advisoryreview.Request, err error) {
 	authority, err := resolveReviewLensAuthority(ctx, deps, repositoryContext, lens)
 	if err != nil {
 		return advisoryreview.Request{}, err
 	}
-	builder := reviewtransaction.SnapshotBuilder{Repo: authority.Root}
+	defer func() {
+		request, err = reviewLensContextCleanup(ctx, request, err, func() error { return deps.close(authority.Inspector) })
+	}()
+	if len(authority.Frozen.ChangedPathManifest) > advisoryreview.MaxEvidenceEntries {
+		return advisoryreview.Request{}, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextCapacityAction(len(authority.Frozen.ChangedPathManifest)))
+	}
 	budget := reviewLensContextByteBudget
 	evidence := make([]advisoryreview.Evidence, 0, len(authority.Frozen.ChangedPathManifest))
 	for index, entry := range authority.Frozen.ChangedPathManifest {
-		payload, err := deps.inspect(builder, ctx, authority.State.InitialSnapshot, "patch", index, "")
+		payload, err := deps.inspect(ctx, authority.Inspector, "patch", index, "")
 		if err != nil {
 			return advisoryreview.Request{}, reviewLensContextInspectionFailure(ctx, err)
 		}

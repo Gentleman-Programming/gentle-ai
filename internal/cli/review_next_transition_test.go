@@ -77,6 +77,8 @@ func TestValidatingEvidenceCollectionUnblocksFinalizeAndPreCommit(t *testing.T) 
 }
 
 func TestFinalizeNextTransitionBindsCorrectedCurrentSnapshot(t *testing.T) {
+	t.Parallel()
+
 	initialTarget := strings.Repeat("a", 64)
 	currentTarget := strings.Repeat("b", 64)
 	transition := reviewFinalizeNextTransition(reviewtransaction.CompactState{
@@ -218,6 +220,8 @@ func TestCorrectionNextTransitionAgreesBetweenFinalizeAndRestartStatus(t *testin
 }
 
 func TestConsumedHistoricalCorrectionRoutesToRecoveryOrStop(t *testing.T) {
+	t.Parallel()
+
 	forecast := 1
 	for _, proposed := range []*int{nil, &forecast} {
 		for _, changed := range []bool{false, true} {
@@ -365,6 +369,8 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 }
 
 func TestReviewNextTransitionStateTable(t *testing.T) {
+	t.Parallel()
+
 	status := func(applicability reviewtransaction.TargetApplicability, state reviewtransaction.State, action reviewtransaction.TargetStatusAction, replayability reviewtransaction.Replayability) ReviewTargetStatusResult {
 		return ReviewTargetStatusResult{
 			Applicability: applicability, Action: action, Replayability: replayability,
@@ -431,6 +437,8 @@ func TestReviewNextTransitionStateTable(t *testing.T) {
 // emitted Execute.Arguments entry must carry the exact, literally executable
 // argv token, and Preconditions (assertions, not argv) must never carry one.
 func TestReviewTransitionArgumentToken(t *testing.T) {
+	t.Parallel()
+
 	status := func(applicability reviewtransaction.TargetApplicability, state reviewtransaction.State, action reviewtransaction.TargetStatusAction, replayability reviewtransaction.Replayability) ReviewTargetStatusResult {
 		return ReviewTargetStatusResult{
 			Applicability: applicability, Action: action, Replayability: replayability,
@@ -529,6 +537,8 @@ func TestReviewTransitionArgumentToken(t *testing.T) {
 // still applies — that guard is unrelated to StateEscalated and is not
 // softened by this fix.
 func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
+	t.Parallel()
+
 	baseStatus := func(target, authorityTarget string) ReviewTargetStatusResult {
 		return ReviewTargetStatusResult{
 			Applicability: reviewtransaction.TargetApplicabilityCurrent, Action: reviewtransaction.TargetStatusActionRecover,
@@ -586,7 +596,7 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 
 	t.Run("unchanged target with a selector still stops via the generic recovery_scope_unchanged guard", func(t *testing.T) {
 		status := baseStatus(unchangedTarget, unchangedTarget)
-		input := reviewNextTransitionInput{Selector: &reviewTransitionSelector{Kind: reviewtransaction.TargetCurrentChanges, RecoveryRepresentable: true}}
+		input := reviewNextTransitionInput{Selector: &reviewTransitionSelector{Recovery: &reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges}}}
 		got := newReviewNextTransition(status, nil, nil, nil, nil, input)
 		if got.Kind != reviewNextTransitionStop || got.Execute != nil || got.Collect != nil {
 			t.Fatalf("escalated unchanged-target transition (selector) = %#v, want a bare stop", got)

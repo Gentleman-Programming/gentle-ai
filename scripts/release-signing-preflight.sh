@@ -7,11 +7,18 @@ die() {
 }
 
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-: "${GITHUB_REF_NAME:?GITHUB_REF_NAME is required}"
 : "${MINISIGN_PUBLIC_KEYS:?MINISIGN_PUBLIC_KEYS is required}"
 : "${MINISIGN_PUBLIC_KEYS_CANONICAL:?MINISIGN_PUBLIC_KEYS_CANONICAL is required}"
 : "${MINISIGN_SECRET_KEY_FILE:?MINISIGN_SECRET_KEY_FILE is required}"
 : "${MINISIGN_SIGNING_PUBLIC_KEY_FILE:?MINISIGN_SIGNING_PUBLIC_KEY_FILE is required}"
+
+if [[ -v RELEASE_SIGNING_TAG ]]; then
+  release_tag=$RELEASE_SIGNING_TAG
+  [[ -n "$release_tag" ]] || die "RELEASE_SIGNING_TAG is empty"
+else
+  : "${GITHUB_REF_NAME:?GITHUB_REF_NAME is required when RELEASE_SIGNING_TAG is unset}"
+  release_tag=$GITHUB_REF_NAME
+fi
 
 [[ -s "$MINISIGN_SECRET_KEY_FILE" ]] || die "signing key file is missing or empty"
 [[ "$(stat -c '%a' "$MINISIGN_SECRET_KEY_FILE")" == "600" ]] || die "signing key file mode must be 600"
@@ -53,7 +60,7 @@ chmod 600 "$MINISIGN_SIGNING_PUBLIC_KEY_FILE"
 
 canary=$work/canary.txt
 signature=$work/canary.txt.minisig
-trusted="repo=$GITHUB_REPOSITORY;tag=$GITHUB_REF_NAME"
+trusted="repo=$GITHUB_REPOSITORY;tag=$release_tag"
 printf 'gentle-ai release signing preflight\n' >"$canary"
 if ! timeout 15s minisign -S -s "$MINISIGN_SECRET_KEY_FILE" -m "$canary" -x "$signature" \
   -c 'gentle-ai release preflight' -t "$trusted" </dev/null >/dev/null 2>&1; then

@@ -776,9 +776,9 @@ func initOrganicUnbornRepository(t *testing.T) string {
 	return repo
 }
 
-// TestOrganicReviewTargetShapeRefusals proves Group G: combining staged
-// projection with an explicit base ref is refused, naming both real escapes
-// verbatim because the seam cannot guess which one the caller meant (1812);
+// TestOrganicReviewTargetShapeRefusals proves Group G: staged base-diff input
+// is canonicalized to its committed-only route, so an empty candidate names
+// that real continuation rather than the retired staged/base-ref ambiguity;
 // a selector-free status call on an unborn HEAD resolves to the empty-tree
 // projection instead of surfacing a raw Git command failure (1771); and a
 // first publication attempted from an empty-base receipt is refused, naming
@@ -797,10 +797,9 @@ func TestOrganicReviewTargetShapeRefusals(t *testing.T) {
 		if err == nil {
 			t.Fatal("staged projection + base-ref start unexpectedly succeeded")
 		}
-		wantStagedEscape := "gentle-ai review start --projection staged"
-		wantBaseDiffEscape := fmt.Sprintf("gentle-ai review start --base-ref %s --committed-only", base)
-		if !strings.Contains(stderr, wantStagedEscape) || !strings.Contains(stderr, wantBaseDiffEscape) {
-			t.Fatalf("staged projection + base-ref refusal did not name both escapes verbatim: stderr=%q", stderr)
+		if strings.Contains(stderr, "intent is ambiguous") || !strings.Contains(stderr, "candidate has no pending changes") ||
+			!strings.Contains(stderr, "--base-ref <commit>") {
+			t.Fatalf("staged base-diff empty-candidate continuation = %q", stderr)
 		}
 		harness.assertNoSDDArtifacts()
 	})

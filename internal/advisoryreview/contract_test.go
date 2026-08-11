@@ -10,9 +10,10 @@ import (
 
 func testRequest(t *testing.T) Request {
 	t.Helper()
-	manifest := []reviewtransaction.ChangedPathManifestEntry{{
-		Path: "internal/example.go", Status: reviewtransaction.CandidatePathModified, OldMode: "100644", NewMode: "100644",
-	}}
+	manifest := []reviewtransaction.ChangedPathManifestEntry{
+		{Path: "internal/example.go", Status: reviewtransaction.CandidatePathModified, OldMode: "100644", NewMode: "100644"},
+		{Path: "internal/other.go", Status: reviewtransaction.CandidatePathModified, OldMode: "100644", NewMode: "100644"},
+	}
 	state := reviewtransaction.CompactState{
 		LineageID:      "review-advisory",
 		SelectedLenses: []string{reviewtransaction.LensReliability},
@@ -20,7 +21,7 @@ func testRequest(t *testing.T) Request {
 			Identity:      "sha256:" + strings.Repeat("a", 64),
 			BaseTree:      strings.Repeat("a", 40),
 			CandidateTree: strings.Repeat("b", 40),
-			Paths:         []string{"internal/example.go"},
+			Paths:         []string{"internal/example.go", "internal/other.go"},
 		},
 	}
 	subject, err := reviewtransaction.NewArtifactSubject(state, "sha256:"+strings.Repeat("c", 64), reviewtransaction.FrozenCandidateContext{
@@ -31,14 +32,14 @@ func testRequest(t *testing.T) Request {
 	}
 	return Request{
 		ArtifactSubject: subject, ChangedPathManifest: manifest,
-		Evidence: []Evidence{{Path: "internal/example.go", Content: "package example\n"}},
+		Evidence: []Evidence{{Path: "internal/example.go", Content: "package example\n"}, {Path: "internal/other.go", Content: "package other\n"}},
 	}
 }
 
 func testResult(request Request) reviewtransaction.ReviewerResult {
 	return reviewtransaction.ReviewerResult{
 		SubjectHash: request.ArtifactSubject.SubjectHash, Lens: request.ArtifactSubject.Lens,
-		Inspection: reviewtransaction.ArtifactInspection{Status: reviewtransaction.ArtifactInspectionCompleted, Paths: []string{"internal/example.go"}},
+		Inspection: reviewtransaction.ArtifactInspection{Status: reviewtransaction.ArtifactInspectionCompleted, Paths: []string{"internal/other.go", "internal/example.go"}},
 		Findings:   []reviewtransaction.Finding{{ID: "R3-001", Lens: "reliability", Location: "internal/example.go:1", Severity: "BLOCKER", Claim: "example", EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced, ProofRefs: []string{"internal/example.go:1"}}},
 		Evidence:   []string{"inspected internal/example.go"},
 	}
@@ -165,7 +166,7 @@ func TestValidateMatchesNativeReviewerResultRules(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "finding lens is accepted", mutate: func(result *reviewtransaction.ReviewerResult) { result.Findings[0].Lens = "reliability" }},
-		{name: "lens binding is required", mutate: func(result *reviewtransaction.ReviewerResult) { result.Lens = "" }, wantErr: true},
+		{name: "omitted lens binding canonicalizes", mutate: func(result *reviewtransaction.ReviewerResult) { result.Lens = "" }},
 		{name: "finding ID must use native schema", mutate: func(result *reviewtransaction.ReviewerResult) { result.Findings[0].ID = "bad-id" }, wantErr: true},
 		{name: "proof reference must be concrete", mutate: func(result *reviewtransaction.ReviewerResult) { result.Findings[0].ProofRefs = []string{"TODO"} }, wantErr: true},
 		{name: "evidence must be concrete", mutate: func(result *reviewtransaction.ReviewerResult) { result.Evidence = []string{"passed"} }, wantErr: true},

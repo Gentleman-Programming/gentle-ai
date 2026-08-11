@@ -89,6 +89,9 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 		status.Projection.Schema != ReviewIntegrationProjectionSchema || !reflect.DeepEqual(status.Projection.Paths, []string{"tracked.txt"}) || status.Projection.IntendedUntracked == nil {
 		t.Fatalf("restart projection = %#v", status)
 	}
+	if bytes.Contains(first.Bytes(), []byte("correction_budget_policy")) {
+		t.Fatalf("frozen v1 status leaked internal budget policy: %s", first.String())
+	}
 	var document any
 	if err := json.Unmarshal(first.Bytes(), &document); err != nil {
 		t.Fatal(err)
@@ -119,6 +122,14 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 		t.Fatalf("status repository context = %q: %v", gotContext, err)
 	}
 	normalized := bytes.ReplaceAll(first.Bytes(), []byte(gotContext), []byte(wantContext))
+	normalized = bytes.ReplaceAll(normalized, []byte(status.Authority.Revision), []byte(fixtureStatus.Authority.Revision))
+	gotExpectedRevision := transitionArgumentValue(t, status.NextTransition, "expected-revision")
+	wantExpectedRevision := transitionArgumentValue(t, fixtureStatus.NextTransition, "expected-revision")
+	normalized = bytes.ReplaceAll(normalized, []byte(gotExpectedRevision), []byte(wantExpectedRevision))
+	gotSubject := status.NextTransition.Collect.Inputs[0].ArtifactSubject
+	wantSubject := fixtureStatus.NextTransition.Collect.Inputs[0].ArtifactSubject
+	normalized = bytes.ReplaceAll(normalized, []byte(gotSubject.SubjectHash), []byte(wantSubject.SubjectHash))
+	normalized = bytes.ReplaceAll(normalized, []byte(gotSubject.AuthorityRevision), []byte(wantSubject.AuthorityRevision))
 	if !bytes.Equal(normalized, fixture) {
 		t.Fatalf("status fixture mismatch:\ngot=%s\nwant=%s", first.String(), fixture)
 	}
@@ -222,6 +233,14 @@ func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 				t.Fatalf("%s accepted compact current target without frozen inputs", item.name)
 			}
 		}
+	}
+}
+
+func TestReviewStatusContractRequirementNamesAllAcceptedContracts(t *testing.T) {
+	var output bytes.Buffer
+	err := RunReview([]string{"status", "--next-transition"}, &output)
+	if err == nil || err.Error() != "--action-eligibility and --next-transition require --contract gentle-ai.review-integration/v1 or gentle-ai.review-integration/v2" {
+		t.Fatalf("unnegotiated next-transition refusal = %q, want both accepted contracts", err)
 	}
 }
 

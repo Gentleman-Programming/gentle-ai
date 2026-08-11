@@ -194,6 +194,35 @@ func TestPersonaBackwardCompat(t *testing.T) {
 	}
 }
 
+func TestPersonaPresenceDistinguishesOmittedAndExplicitEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		stateJSON   string
+		wantPresent bool
+	}{
+		{name: "omitted", stateJSON: `{"installed_agents":["pi"]}`, wantPresent: false},
+		{name: "explicit empty", stateJSON: `{"installed_agents":["pi"],"persona":""}`, wantPresent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			if err := os.WriteFile(Path(home), []byte(tc.stateJSON), 0o644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+
+			got, err := Read(home)
+			if err != nil {
+				t.Fatalf("Read() error = %v", err)
+			}
+			if got.PersonaPresent != tc.wantPresent {
+				t.Fatalf("PersonaPresent = %t, want %t", got.PersonaPresent, tc.wantPresent)
+			}
+		})
+	}
+}
+
 // TestWriteCreatesStateDir verifies that Write creates the .gentle-ai directory
 // when it does not exist yet.
 func TestWriteCreatesStateDir(t *testing.T) {
@@ -276,7 +305,7 @@ func TestWriteOverwrite(t *testing.T) {
 
 func TestWriteFailurePreservesExistingState(t *testing.T) {
 	home := t.TempDir()
-	original := InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral"}
+	original := InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral", PersonaPresent: true}
 	if err := Write(home, original); err != nil {
 		t.Fatal(err)
 	}

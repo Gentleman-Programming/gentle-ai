@@ -19,8 +19,8 @@ const reviewerBindingEnvironmentVariable = "GENTLE_AI_REVIEW_BINDING"
 const claudeReviewerContextMarker = "GENTLE_AI_CLAUDE_REVIEW_CONTEXT"
 const openCodeReviewContextMarker = "GENTLE_AI_REVIEW_CONTEXT"
 
-const nativeReviewerResultSchema = `{"findings":[{"location":"path:line","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
-const providerReviewerResultSchema = `{"subject_hash":"<artifact_subject.subject_hash>","inspection":{"status":"completed","paths":["<every changed_path_manifest.path in exact order>"]},"findings":[{"location":"path:line","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
+const nativeReviewerResultSchema = `{"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
+const providerReviewerResultSchema = `{"subject_hash":"<artifact_subject.subject_hash>","inspection":{"status":"completed","paths":["<complete unique unordered set>"]},"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
 
 const reviewerInspectionCommandPrefix = `gentle-ai review inspect-candidate --repository-context <repository_context> --expected-revision <revision> --lineage <lineage> --target <target> --lens <lens> --order <order> --operation `
 
@@ -269,7 +269,7 @@ Report real user-impacting defects only. BLOCKER/CRITICAL need changed-hunk, cre
 
 ## Evidence
 
-Each finding needs path:line, neutral claim, evidence class, causal disposition, and concrete proof. Never invent evidence or placeholders.
+Each finding needs path:line or contiguous path:start-end, neutral claim, evidence class, causal disposition, and concrete proof. Never invent evidence or placeholders.
 
 ## Output
 
@@ -279,7 +279,7 @@ Return one JSON object and no prose. Use exactly this native result shape:
 
 Copy subject_hash from %s.subject_hash; never compute or invent it. Missing or different bindings are refused.
 
-Status %q requires every manifest path in exact order. Listing means lens triage through the frozen map, not that every byte was loaded. Otherwise return incomplete and stop.
+Status %q requires the complete unique unordered manifest set. Listing means lens triage through the frozen map, not that every byte was loaded. Otherwise return incomplete and stop.
 
 Required top-level fields: %s. Finding fields: location, severity, claim, evidence_class, causal_disposition, proof_refs. Emit no unknown fields or orchestration metadata.
 

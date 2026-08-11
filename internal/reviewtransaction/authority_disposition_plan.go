@@ -72,16 +72,16 @@ type AuthorityDispositionSelector struct {
 // — a dead end (design decision 2).
 const compactContentMismatchedRecoveryAuthorizationClass = "content_mismatched_recovery_authorization"
 
+const compactHistoricalSnapshotIdentityClass = "retired_compact_snapshot_identity"
+
 // errAuthorityDispositionPlanNotDerivable is returned, always wrapped with a
 // specific cause, whenever derivation refuses to produce a plan: an
-// unclassifiable shape, a mixed/ambiguous set of eligible edges, or an
-// incomplete inspection. There is never a generic fallback plan.
+// unclassifiable shape, a mixed/ambiguous set of eligible edges, or a
+// diagnostic affecting the selected closure. There is never a generic
+// fallback plan.
 var errAuthorityDispositionPlanNotDerivable = errors.New("authority disposition plan refused: anomaly classification is not closed") // refusal:by-design human-authority: an unclassifiable or ambiguous graph shape needs a maintainer's diagnosis before any plan can be derived, not a command this refusal can name
 
 func authorityDispositionSelectors(report CompactRecoveryInspectionReport, records map[string]CompactRecord) ([]AuthorityDispositionSelector, error) {
-	if !report.Complete || len(report.EntryDiagnostics) > 0 {
-		return nil, fmt.Errorf("%w: inspection carries %d entry diagnostic(s)", errAuthorityDispositionPlanNotDerivable, len(report.EntryDiagnostics))
-	}
 	selectors := []AuthorityDispositionSelector{}
 	for _, edge := range report.Edges {
 		if edge.Valid {
@@ -109,8 +109,9 @@ func authorityDispositionSelectors(report CompactRecoveryInspectionReport, recor
 // the single loadCompactRecoveryRecords seam (compact_inspect.go), so no
 // second, independent record-loading path ever feeds derivation (mandatory
 // obligation (a)). It refuses (no plan) unless the inspection that produced
-// report carried no entry diagnostics and exactly one report edge re-derives
-// into the one closed content_mismatched_recovery_authorization class.
+// selected closure carries no entry diagnostics and exactly one report edge
+// re-derives into the one closed content_mismatched_recovery_authorization
+// class, except one forensic historical entry whose only diagnostic is outdated.
 func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, records map[string]CompactRecord, binding, actor, reason string, requested ...AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
 	if len(requested) > 1 {
 		return AuthorityDispositionPlan{}, fmt.Errorf("%w: multiple exact content-mismatch selectors supplied", errAuthorityDispositionPlanNotDerivable)
@@ -118,6 +119,21 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 	selectors, err := authorityDispositionSelectors(report, records)
 	if err != nil {
 		return AuthorityDispositionPlan{}, err
+	}
+	if len(requested) == 0 && len(selectors) == 0 && len(report.historical) == 1 && len(report.EntryDiagnostics) == 1 {
+		for lineage, historical := range report.historical {
+			diagnostic := report.EntryDiagnostics[0]
+			if diagnostic.LineageID != lineage || diagnostic.Problem != compactInspectionEntryOutdated {
+				break
+			}
+			inventory, err := authorityInventoryRevision(records, report.historical)
+			if err != nil {
+				return AuthorityDispositionPlan{}, err
+			}
+			plan := AuthorityDispositionPlan{Schema: AuthorityDispositionPlanSchema, RepositoryBinding: binding, AuthorityInventoryRevision: inventory, AnomalyClass: compactHistoricalSnapshotIdentityClass, SeedSet: []string{lineage}, Closure: []string{lineage}, ExpectedRevisions: map[string]string{lineage: historical.RawDigest}, Actor: strings.TrimSpace(actor), Reason: strings.TrimSpace(reason)}
+			plan.PlanDigest, err = authorityDispositionPlanDigest(plan)
+			return plan, err
+		}
 	}
 	var selector *AuthorityDispositionSelector
 	if len(requested) == 1 {
@@ -134,6 +150,15 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 	}
 	seed := selector.SuccessorLineageID
 	closure := authorityDispositionClosure(report, seed)
+	closureMembers := make(map[string]struct{}, len(closure))
+	for _, lineage := range closure {
+		closureMembers[lineage] = struct{}{}
+	}
+	for _, diagnostic := range report.EntryDiagnostics {
+		if _, found := closureMembers[diagnostic.LineageID]; found {
+			return AuthorityDispositionPlan{}, fmt.Errorf("%w: inspection carries %q diagnostic for closure member %q", errAuthorityDispositionPlanNotDerivable, diagnostic.Problem, diagnostic.LineageID)
+		}
+	}
 	expectedRevisions := make(map[string]string, len(closure))
 	for _, lineage := range closure {
 		record, found := records[lineage]
@@ -142,7 +167,7 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 		}
 		expectedRevisions[lineage] = record.Revision
 	}
-	inventoryRevision, err := authorityInventoryRevision(records)
+	inventoryRevision, err := authorityInventoryRevision(records, report.historical)
 	if err != nil {
 		return AuthorityDispositionPlan{}, err
 	}
@@ -243,10 +268,13 @@ func authorityDispositionClosure(report CompactRecoveryInspectionReport, seed st
 // including outside the closure. encoding/json sorts map keys, so this is
 // already deterministic (the same idiom classifiedAuthorityRepairDigest's own
 // doc comment relies on).
-func authorityInventoryRevision(records map[string]CompactRecord) (string, error) {
-	revisions := make(map[string]string, len(records))
+func authorityInventoryRevision(records map[string]CompactRecord, historical map[string]historicalCompactForensicRecord) (string, error) {
+	revisions := make(map[string]string, len(records)+len(historical))
 	for lineage, record := range records {
 		revisions[lineage] = record.Revision
+	}
+	for lineage, record := range historical {
+		revisions[lineage] = record.RawDigest
 	}
 	return classifiedAuthorityRepairDigest("gentle-ai.review-authority-inventory-revision/v1", revisions)
 }

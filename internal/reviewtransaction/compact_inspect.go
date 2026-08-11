@@ -17,6 +17,12 @@ const (
 	compactInspectionEntryMissing    = "missing_compact_state"
 	compactInspectionEntryUnreadable = "unreadable_compact_state"
 	compactInspectionEntryMalformed  = "malformed_compact_state"
+	// compactInspectionEntryOutdated classifies a record whose bytes parse
+	// intact but whose frozen snapshot identity was computed by an earlier
+	// release's retired formula (#2743). It is historical, not damaged:
+	// gate-invalid under the clean-break policy, preserved unrewritten for
+	// forensics, and never a verdict on any other lineage.
+	compactInspectionEntryOutdated   = "outdated_compact_state"
 	compactInspectionEntryUnexpected = "unexpected_authority_root_entry"
 )
 
@@ -26,6 +32,7 @@ type CompactRecoveryInspectionReport struct {
 	Totals           CompactRecoveryInspectionTotals  `json:"totals"`
 	Edges            []CompactRecoveryEdgeInspection  `json:"edges"`
 	EntryDiagnostics []CompactRecoveryEntryDiagnostic `json:"entry_diagnostics"`
+	historical       map[string]historicalCompactForensicRecord
 }
 type CompactRecoveryInspectionTotals struct {
 	CompactEntries   int `json:"compact_entries"`
@@ -122,7 +129,7 @@ func InspectCompactRecoveryEdges(ctx context.Context, repo string) (CompactRecov
 // down one level with InspectCompactRecoveryEdges left as a thin wrapper: no
 // inspection semantics or JSON output changed by this extraction.
 var loadCompactRecoveryRecords = func(ctx context.Context, repo string) (CompactRecoveryInspectionReport, map[string]CompactRecord, error) {
-	report := CompactRecoveryInspectionReport{Complete: true, Valid: true, Edges: []CompactRecoveryEdgeInspection{}, EntryDiagnostics: []CompactRecoveryEntryDiagnostic{}}
+	report := CompactRecoveryInspectionReport{Complete: true, Valid: true, Edges: []CompactRecoveryEdgeInspection{}, EntryDiagnostics: []CompactRecoveryEntryDiagnostic{}, historical: map[string]historicalCompactForensicRecord{}}
 	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {
 		return report, nil, err
@@ -156,6 +163,11 @@ var loadCompactRecoveryRecords = func(ctx context.Context, repo string) (Compact
 			lockPath: filepath.Join(versionRoot, "LOCK"), maintenanceLockPath: compactMaintenanceLockPath(base)}
 		record, loadErr := store.Load()
 		if loadErr != nil {
+			if payload, err := os.ReadFile(store.StatePath()); err == nil {
+				if historical, ok := forensicHistoricalCompactRecord(payload, entry.Name()); ok {
+					report.historical[entry.Name()] = historical
+				}
+			}
 			report.EntryDiagnostics = append(report.EntryDiagnostics, CompactRecoveryEntryDiagnostic{
 				LineageID: entry.Name(), Problem: compactRecoveryEntryProblem(loadErr),
 			})
@@ -202,7 +214,11 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	// aborts the whole exit computation.
 	dispositionSeed := ""
 	if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitClosureDisposition(plan) == nil {
-		dispositionSeed = plan.SeedSet[0]
+		if plan.AnomalyClass == compactHistoricalSnapshotIdentityClass {
+			exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: plan.SeedSet[0], Operation: CompactRecoveryEdgeExitRepair})
+		} else {
+			dispositionSeed = plan.SeedSet[0]
+		}
 	}
 	for _, edge := range report.Edges {
 		if err := ctx.Err(); err != nil {
@@ -253,7 +269,9 @@ func CompactAuthorityDamageKinds(report CompactRecoveryInspectionReport) []strin
 	for _, diagnostic := range report.EntryDiagnostics {
 		switch diagnostic.Problem {
 		case compactInspectionEntryMalformed:
-			kinds = append(kinds, fmt.Sprintf("store entry %q holds a record that does not parse (%s), which an interrupted write leaves behind", diagnostic.LineageID, diagnostic.Problem))
+			kinds = append(kinds, fmt.Sprintf("store entry %q holds a record that does not load (%s): either its bytes do not parse — what an interrupted write leaves behind — or its persisted state is semantically invalid", diagnostic.LineageID, diagnostic.Problem))
+		case compactInspectionEntryOutdated:
+			kinds = append(kinds, fmt.Sprintf("store entry %q holds authority frozen by an earlier release under a retired snapshot-identity formula (%s); it is outdated — gate-invalid, preserved for forensics — not damaged, and it never blocks another lineage's operation", diagnostic.LineageID, diagnostic.Problem))
 		case compactInspectionEntryMissing:
 			kinds = append(kinds, fmt.Sprintf("store entry %q holds no compact state (%s)", diagnostic.LineageID, diagnostic.Problem))
 		case compactInspectionEntryUnreadable:
@@ -419,6 +437,10 @@ func compactRecoveryEntryProblem(err error) string {
 	var pathErr *os.PathError
 	if errors.As(err, &pathErr) {
 		return compactInspectionEntryUnreadable
+	}
+	var semantic *CompactSemanticStateError
+	if errors.As(err, &semantic) && semantic.OutdatedIdentity {
+		return compactInspectionEntryOutdated
 	}
 	return compactInspectionEntryMalformed
 }
