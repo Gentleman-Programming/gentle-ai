@@ -193,6 +193,7 @@ type admittedReviewerResult struct {
 type ReviewerResultPayloadError struct {
 	Code    string
 	Message string
+	cause   error
 }
 
 func (e *ReviewerResultPayloadError) Error() string {
@@ -202,13 +203,14 @@ func (e *ReviewerResultPayloadError) Error() string {
 	return e.Message + " [" + e.Code + "]"
 }
 
-func reviewerResultPayloadError(code, message string) error {
-	return &ReviewerResultPayloadError{Code: code, Message: message}
+func (e *ReviewerResultPayloadError) Unwrap() error { return e.cause }
+
+func reviewerResultPayloadError(code, message string, cause error) error {
+	return &ReviewerResultPayloadError{Code: code, Message: message, cause: cause}
 }
 
-// readReviewerResultPayload bounds both file and stdin capture before any
-// decoder or store code sees the bytes. A provider that ends a stream early or
-// exceeds the native bound therefore cannot publish a partial artifact.
+// readReviewerResultPayload bounds file and stdin capture before decoding or
+// publication, rejecting partial artifacts from early or oversized streams.
 func readReviewerResultPayload(path string) ([]byte, error) {
 	var reader io.Reader = os.Stdin
 	var file *os.File
@@ -225,17 +227,17 @@ func readReviewerResultPayload(path string) ([]byte, error) {
 	if err != nil {
 		if len(payload) > reviewResultArtifactLimit {
 			return nil, reviewerResultPayloadError(string(reviewtransaction.ResultIncidentTruncatedCapture),
-				"reviewer artifact admission incomplete: reviewer result capture exceeded the native size bound before atomic publication")
+				"reviewer artifact admission incomplete: reviewer result capture exceeded the native size bound before atomic publication", err)
 		}
 		if len(payload) > 0 {
 			return payload, reviewerResultPayloadError(string(reviewtransaction.ResultIncidentTruncatedCapture),
-				"reviewer artifact admission incomplete: reviewer result capture ended during a read before atomic publication")
+				"reviewer artifact admission incomplete: reviewer result capture ended during a read before atomic publication", err)
 		}
 		return payload, err
 	}
 	if len(payload) > reviewResultArtifactLimit {
 		return nil, reviewerResultPayloadError(string(reviewtransaction.ResultIncidentTruncatedCapture),
-			"reviewer artifact admission incomplete: reviewer result capture exceeded the native size bound before atomic publication")
+			"reviewer artifact admission incomplete: reviewer result capture exceeded the native size bound before atomic publication", nil)
 	}
 	return payload, nil
 }
@@ -245,15 +247,14 @@ func reviewerResultPayloadLooksTruncated(payload []byte) bool {
 	if len(trimmed) == 0 || json.Valid(trimmed) || !bytes.Contains(trimmed, []byte("{")) {
 		return false
 	}
-	var value any
-	err := json.Unmarshal(trimmed, &value)
-	return strings.Contains(err.Error(), "unexpected end of JSON input") || strings.Contains(err.Error(), "unexpected EOF")
+	err := json.Unmarshal(trimmed, new(any))
+	return strings.Contains(err.Error(), "unexpected end of JSON input")
 }
 
 func reviewerResultExtractionError(payload []byte, decision reviewtransaction.ArtifactAdmissionDecision, cause error) error {
 	if decision == reviewtransaction.ArtifactAdmissionIncomplete && reviewerResultPayloadLooksTruncated(payload) {
 		return reviewerResultPayloadError(string(reviewtransaction.ResultIncidentTruncatedCapture),
-			"reviewer artifact admission incomplete: reviewer result capture ended before a complete JSON object was available; no partial result was published")
+			"reviewer artifact admission incomplete: reviewer result capture ended before a complete JSON object was available; no partial result was published", nil)
 	}
 	return fmt.Errorf("reviewer artifact admission %s: %w", decision, cause)
 }
@@ -314,11 +315,11 @@ func preserveCaptureFailure(ctx context.Context, repo, lineage, target, lens str
 //     task wrapper before being passed as the strict JSON payload.
 func validateReviewerResultPayload(payload []byte) error {
 	if len(bytes.TrimSpace(payload)) == 0 {
-		return reviewerResultPayloadError(string(reviewtransaction.ResultIncidentEmptyResult), "reviewer result payload is empty or whitespace-only: the task may have completed without producing output")
+		return reviewerResultPayloadError(string(reviewtransaction.ResultIncidentEmptyResult), "reviewer result payload is empty or whitespace-only: the task may have completed without producing output", nil)
 	}
 	if bytes.Contains(payload, []byte("<task_result>")) || bytes.Contains(payload, []byte("</task_result>")) {
 		if !json.Valid(payload) {
-			return reviewerResultPayloadError(string(reviewtransaction.ResultIncidentNestedEnvelope), "reviewer result payload contains a raw XML task envelope: extract the strict JSON reviewer output from <task_result> before capture")
+			return reviewerResultPayloadError(string(reviewtransaction.ResultIncidentNestedEnvelope), "reviewer result payload contains a raw XML task envelope: extract the strict JSON reviewer output from <task_result> before capture", nil)
 		}
 	}
 	return nil
