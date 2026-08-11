@@ -1121,6 +1121,88 @@ func TestSnapshotBuilderExactRevisionIgnoresReplacementObjects(t *testing.T) {
 	}
 }
 
+func TestSnapshotBuilderExactRevisionRejectsRepositoryLocalGrafts(t *testing.T) {
+	requireSnapshotGit(t)
+	for _, tt := range []struct {
+		name   string
+		linked bool
+	}{
+		{name: "primary worktree"},
+		{name: "linked worktree", linked: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+			baseTree := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", base+"^{tree}"))
+			writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+			gitSnapshot(t, repo, "add", "--", "tracked.txt")
+			gitSnapshot(t, repo, "commit", "-m", "graft candidate")
+			candidate := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+			if tt.linked {
+				linked := filepath.Join(t.TempDir(), "linked")
+				gitSnapshot(t, repo, "worktree", "add", "-b", "graft-linked", linked, candidate)
+				repo = linked
+			}
+
+			target := Target{Kind: TargetExactRevision, Revision: candidate}
+			baseline, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+			if err != nil {
+				t.Fatalf("Build(without graft) error = %v", err)
+			}
+			if baseline.BaseTree != baseTree || !reflect.DeepEqual(baseline.Paths, []string{"tracked.txt"}) {
+				t.Fatalf("ungrafted exact snapshot = %#v, want base %q and only tracked.txt", baseline, baseTree)
+			}
+
+			commonDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+			if tt.linked {
+				gitDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--path-format=absolute", "--git-dir"))
+				if commonDir == gitDir {
+					t.Fatal("linked worktree did not report a distinct Git common directory")
+				}
+			}
+			grafts := filepath.Join(commonDir, "info", "grafts")
+			if err := os.MkdirAll(filepath.Dir(grafts), 0o755); err != nil {
+				t.Fatalf("MkdirAll(grafts parent): %v", err)
+			}
+			gitSnapshot(t, repo, "config", "advice.graftFileDeprecated", "false")
+			if err := os.WriteFile(grafts, []byte(candidate+"\n"), 0o644); err != nil {
+				t.Fatalf("WriteFile(grafts): %v", err)
+			}
+
+			parents := strings.Fields(gitSnapshot(t, repo, "--no-replace-objects", "rev-list", "--parents", "-n", "1", candidate))
+			if !reflect.DeepEqual(parents, []string{candidate}) {
+				t.Fatalf("local graft did not alter rev-list parent output: %v", parents)
+			}
+			emptyTree := strings.TrimSpace(gitSnapshot(t, repo, "mktree"))
+			if emptyTree == baseline.BaseTree {
+				t.Fatalf("local graft would not alter base-tree derivation: grafted=%q ungrafted=%q", emptyTree, baseline.BaseTree)
+			}
+			graftedPaths := strings.Fields(gitSnapshot(t, repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--no-renames", "--ignore-submodules=none", emptyTree, baseline.CandidateTree))
+			if reflect.DeepEqual(graftedPaths, baseline.Paths) {
+				t.Fatalf("local graft would not alter path derivation: grafted=%v ungrafted=%v", graftedPaths, baseline.Paths)
+			}
+			rawParents, err := (SnapshotBuilder{Repo: repo}).rawCommitParents(context.Background(), candidate)
+			if err != nil {
+				t.Fatalf("rawCommitParents() error = %v", err)
+			}
+			if !reflect.DeepEqual(rawParents, []string{base}) {
+				t.Fatalf("raw commit parents = %v, want original parent %q", rawParents, base)
+			}
+			rawBaseTree, err := (SnapshotBuilder{Repo: repo}).resolveTree(context.Background(), rawParents[0])
+			if err != nil {
+				t.Fatalf("resolveTree(raw parent) error = %v", err)
+			}
+			if rawBaseTree != baseline.BaseTree {
+				t.Fatalf("raw parent base tree = %q, want ungrafted base tree %q", rawBaseTree, baseline.BaseTree)
+			}
+			if _, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target); err == nil || !strings.Contains(err.Error(), "refuses repository-local Git grafts") {
+				t.Fatalf("Build(with local graft) error = %v, want graft refusal", err)
+			}
+		})
+	}
+}
+
 func TestBaseWorkspaceOverlayFreezesFullBoundaryWithoutMutation(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
