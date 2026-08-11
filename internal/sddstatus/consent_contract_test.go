@@ -31,7 +31,13 @@ var sddConsentDeclineInvocationShape = regexp.MustCompile(
 func TestSDDIntegrationConsentContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "sdd-integration", "v1")
 	want := map[string]string{
-		"fixtures/consent.fixture.json": "aecd0f4d3ae85527a33ebc708a7a49d7f9fda99b13ccabd1fbe9b89bbf2c41e9",
+		// #2891 widened detection to a second kind of unauthorized root: a
+		// directory inside the planning repository. The envelope's prose said
+		// "repository roots" and "is a Git repository root", which is a false
+		// statement of fact for that kind, so the wording moved to what is
+		// true of both. No field, choice, answer token, or invocation
+		// changed. Deliberate, not drift.
+		"fixtures/consent.fixture.json": "44a3b7d68f75981c9758650526819d9fc49399074d4740beb9d2efbf1620e2f6",
 		"schemas/consent.schema.json":   "249e415c09223e75983abf6c55caa0eea57bd3389c23115a123e09da2ce07efb",
 	}
 	for name, expected := range want {

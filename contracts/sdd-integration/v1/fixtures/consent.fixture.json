@@ -10,17 +10,17 @@
     "/workspace/service-b"
   ],
   "headline": "This change plans work outside its authorized edit roots.",
-  "reason": "the task plan targets repository roots that no edit authority covers, so apply stays blocked until a human decides.",
+  "reason": "the task plan targets paths that no edit authority covers, so apply stays blocked until a human decides.",
   "value": "Granting scopes edit authority to this change alone: the grant is recorded in the change's ledger, auditable, and dies with archive.",
   "evidence": [
-    "/workspace/service-a is a Git repository root outside the authorized edit roots",
-    "/workspace/service-b is a Git repository root outside the authorized edit roots"
+    "/workspace/service-a is outside the authorized edit roots",
+    "/workspace/service-b is outside the authorized edit roots"
   ],
   "choices": [
     {
       "answer": "granted",
       "label": "Grant this change edit authority over the named roots",
-      "effect": "This change's apply actor may edit the named repositories. The grant is per-change, audited (who, when, which roots), and dies with archive; nothing is granted to any other change.",
+      "effect": "This change's apply actor may edit the named roots. The grant is per-change, audited (who, when, which roots), and dies with archive; nothing is granted to any other change.",
       "invocation": "gentle-ai sdd-attempt grant --cwd \"/workspace/planning\" --change multi-repo-rollout --root \"/workspace/service-a\" --root \"/workspace/service-b\" --actor maintainer --reason edit-authority-consent-granted --request-id grant-ce874466367354a2 --change-instance sdd-b2f4c0a1d8e64953a7c15b9d3e0f2a68"
     },
     {
@@ -31,7 +31,7 @@
     }
   ],
   "off_path": {
-    "note": "To keep this change single-repository instead, edit its tasks.md so no work unit targets an unauthorized root, then re-enter through 'gentle-ai sdd-status multi-repo-rollout --cwd \"/workspace/planning\"'.",
+    "note": "To keep this change inside its current authority instead, edit its tasks.md so no work unit targets an unauthorized root, then re-enter through 'gentle-ai sdd-status multi-repo-rollout --cwd \"/workspace/planning\"'.",
     "command": "gentle-ai sdd-status multi-repo-rollout --cwd \"/workspace/planning\""
   }
 }

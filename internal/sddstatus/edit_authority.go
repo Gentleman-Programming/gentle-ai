@@ -55,10 +55,28 @@ func detectUnauthorizedEditRoots(tasksText string, workspaceRoot string, allowed
 			}
 			resolved = resolveExistingPath(filepath.Clean(resolved))
 			target := gitRootOf(resolved)
-			if target == "" || target == planningGitRoot || withinAnyRoot(target, allowed) {
+			if target == "" {
 				continue
 			}
-			unauthorized[target] = true
+			if target != planningGitRoot {
+				if withinAnyRoot(target, allowed) {
+					continue
+				}
+				unauthorized[target] = true
+				continue
+			}
+			// Same repository, and #2891's case: the original derivation
+			// stopped here, treating "belongs to the planning repository" as
+			// proof of authorization. It is not. When the planning workspace
+			// is a nested subproject, a sibling directory shares the Git root
+			// while sitting outside every authorized edit root, so apply
+			// stayed ready for a plan the sdd-apply outside-root guard would
+			// refuse. The authorized unit inside one repository is the edit
+			// root, not the repository.
+			if withinAnyRoot(resolved, allowed) {
+				continue
+			}
+			unauthorized[containingDirectory(resolved)] = true
 		}
 	}
 
@@ -132,6 +150,29 @@ func gitRootOf(path string) string {
 	}
 }
 
+// containingDirectory reports the directory an in-repository target belongs
+// to, so the refusal names the unit an operator would actually grant. A file
+// yields its parent rather than itself: granting a single file is not a root,
+// and granting the whole repository would be broader than the plan needs.
+func containingDirectory(path string) string {
+	if info, err := os.Lstat(path); err == nil && info.IsDir() {
+		return path
+	}
+	return filepath.Dir(path)
+}
+
+// editAuthorityRootEvidence states the one fact that decides the block, for
+// both kinds of unauthorized root.
+//
+// It used to say "is a Git repository root", which #2891 made false: the new
+// kind is a directory inside the planning repository. Re-deriving the kind
+// from the filesystem was the obvious fix and it is wrong -- task plans name
+// paths that do not exist yet, so the probe would mislabel exactly the roots
+// it cannot see. The honest line is the one that needs no probe.
+func editAuthorityRootEvidence(root string) string {
+	return fmt.Sprintf("%s is outside the authorized edit roots", root)
+}
+
 func withinAnyRoot(target string, roots []string) bool {
 	for _, root := range roots {
 		if target == root || strings.HasPrefix(target, root+string(filepath.Separator)) {
@@ -151,7 +192,7 @@ func editAuthorityBlockedReason(roots []string) string {
 		quoted = append(quoted, pathquote.Quote(root))
 	}
 	return fmt.Sprintf(
-		"blocked(edit_authority_missing): tasks.md targets repositories outside the authorized edit roots: %s; edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority for those repositories",
+		"blocked(edit_authority_missing): tasks.md targets paths outside the authorized edit roots: %s; edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority for those roots",
 		strings.Join(quoted, ", "),
 	)
 }

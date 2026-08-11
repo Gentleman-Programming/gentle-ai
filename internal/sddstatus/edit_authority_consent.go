@@ -95,7 +95,7 @@ func newEditAuthorityConsent(change, workspaceRoot string, missingRoots []string
 	statusInvocation := fmt.Sprintf("gentle-ai sdd-status %s --cwd %s", change, pathquote.Quote(workspaceRoot))
 	evidence := make([]string, 0, len(missingRoots))
 	for _, root := range missingRoots {
-		evidence = append(evidence, fmt.Sprintf("%s is a Git repository root outside the authorized edit roots", root))
+		evidence = append(evidence, editAuthorityRootEvidence(root))
 	}
 	var grant strings.Builder
 	fmt.Fprintf(&grant, "%s--cwd %s --change %s", sddConsentGrantInvocationPrefix, pathquote.Quote(workspaceRoot), change)
@@ -117,14 +117,14 @@ func newEditAuthorityConsent(change, workspaceRoot string, missingRoots []string
 		Change:       change,
 		MissingRoots: append([]string{}, missingRoots...),
 		Headline:     "This change plans work outside its authorized edit roots.",
-		Reason:       "the task plan targets repository roots that no edit authority covers, so apply stays blocked until a human decides.",
+		Reason:       "the task plan targets paths that no edit authority covers, so apply stays blocked until a human decides.",
 		Value:        "Granting scopes edit authority to this change alone: the grant is recorded in the change's ledger, auditable, and dies with archive.",
 		Evidence:     evidence,
 		Choices: []consentenvelope.Choice{
 			{
 				Answer:     sddConsentAnswerGranted,
 				Label:      "Grant this change edit authority over the named roots",
-				Effect:     "This change's apply actor may edit the named repositories. The grant is per-change, audited (who, when, which roots), and dies with archive; nothing is granted to any other change.",
+				Effect:     "This change's apply actor may edit the named roots. The grant is per-change, audited (who, when, which roots), and dies with archive; nothing is granted to any other change.",
 				Invocation: grant.String(),
 			},
 			{
@@ -135,7 +135,7 @@ func newEditAuthorityConsent(change, workspaceRoot string, missingRoots []string
 			},
 		},
 		OffPath: consentenvelope.OffPath{
-			Note:    fmt.Sprintf("To keep this change single-repository instead, edit its tasks.md so no work unit targets an unauthorized root, then re-enter through '%s'.", statusInvocation),
+			Note:    fmt.Sprintf("To keep this change inside its current authority instead, edit its tasks.md so no work unit targets an unauthorized root, then re-enter through '%s'.", statusInvocation),
 			Command: statusInvocation,
 		},
 	}
