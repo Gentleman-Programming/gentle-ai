@@ -301,8 +301,8 @@ func reviewRefuterLensContext(ctx context.Context, deps reviewLensContextDeps, r
 	if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Identity != binding.TargetIdentity || record.Revision != binding.Revision {
 		return nil, reviewLensContextRefusal("lens_context_binding_stale", reviewLensContextRefreshAction)
 	}
-	claims := discoverPendingRefuterClaims(ctx, root, store.Dir, state, record.Revision)
-	if len(claims) == 0 {
+	claims, err := discoverPendingRefuterClaims(ctx, root, store.Dir, state, record.Revision)
+	if err != nil || len(claims) == 0 {
 		return nil, reviewLensContextRefusal("lens_context_refuter_claims_unavailable", reviewLensContextRefreshAction)
 	}
 	inspector, err := deps.prepare(reviewtransaction.SnapshotBuilder{Repo: root}, ctx, state.InitialSnapshot)

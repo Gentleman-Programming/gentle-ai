@@ -4220,7 +4220,7 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 			} else {
 				artifacts, artifactErr = discoverCapturedReviewerArtifacts(contexts[0].Context, contexts[0].Repo, store.Dir, state, revision)
 				if artifactErr == nil && len(artifacts) == len(state.SelectedLenses) {
-					refuterClaims = discoverPendingRefuterClaims(contexts[0].Context, contexts[0].Repo, store.Dir, state, revision)
+					refuterClaims, artifactErr = discoverPendingRefuterClaims(contexts[0].Context, contexts[0].Repo, store.Dir, state, revision)
 				}
 			}
 		}

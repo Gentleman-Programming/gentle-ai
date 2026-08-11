@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -92,6 +93,16 @@ func TestStatusFinalizesDeterministicFindingWithoutRefuter(t *testing.T) {
 	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
 		status.NextTransition.ReasonCode != "captured_results_ready" || status.NextTransition.Execute.Operation != "review.finalize" {
 		t.Fatalf("next_transition = %#v, want direct finalize", status.NextTransition)
+	}
+}
+
+func TestPendingRefuterClaimDiscoveryReturnsCapturedArtifactFailure(t *testing.T) {
+	repo, _, store, record, _ := capturedArtifacts(t, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	claims, err := discoverPendingRefuterClaims(ctx, repo, store.Dir, record.State, record.Revision)
+	if err == nil || claims != nil {
+		t.Fatalf("claims = %#v, err = %v; want captured artifact failure", claims, err)
 	}
 }
 

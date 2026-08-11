@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1036,6 +1037,45 @@ func TestNativeStatusSchemasValidateWholeForecastEnvelope(t *testing.T) {
 			document["unknown"] = true
 			if err := schema.Validate(document); err == nil {
 				t.Fatal("whole schema accepted an unknown property")
+			}
+		})
+	}
+}
+
+func TestNativeStatusV5RefuterCollectionRequiresCanonicalInput(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "status-v5.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(fixture, &document); err != nil {
+		t.Fatal(err)
+	}
+	delete(document, "forecast")
+	document["next_transition"] = map[string]any{
+		"kind": "collect", "reason_code": "refuter_outcomes_required",
+		"collect": map[string]any{"inputs": []any{map[string]any{
+			"name": "refuter_outcomes", "schema": reviewRefuterSchemaID, "capture_operation": "external.run_refuter",
+			"arguments": []any{map[string]any{"name": "lineage", "value": "review-status-v5-fixture"}},
+		}}},
+	}
+	schema := compileWholeNativeStatusSchema(t, "status-v5.schema.json")
+	for _, test := range []struct {
+		name, field, value string
+	}{
+		{"wrong name", "name", "reviewer_result"},
+		{"wrong schema", "schema", "https://gentle-ai.dev/schema/review/reviewer/v1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := maps.Clone(document)
+			transition := maps.Clone(candidate["next_transition"].(map[string]any))
+			collect := maps.Clone(transition["collect"].(map[string]any))
+			inputs := slices.Clone(collect["inputs"].([]any))
+			input := maps.Clone(inputs[0].(map[string]any))
+			input[test.field] = test.value
+			inputs[0], collect["inputs"], transition["collect"], candidate["next_transition"] = input, inputs, collect, transition
+			if err := schema.Validate(candidate); err == nil {
+				t.Fatalf("status-v5 schema accepted refuter input with %s %q", test.field, test.value)
 			}
 		})
 	}
