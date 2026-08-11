@@ -342,6 +342,87 @@ func TestNegotiatedStatusRejectsNonexistentLineageSelector(t *testing.T) {
 	}
 }
 
+// TestLineageNotFoundContinuationRunsVerbatim pins issue #1997's refusal
+// continuation: the Message printed by a lineage_not_found failure must be a
+// runnable command that exits 0 and carries the real --cwd and negotiated
+// --contract, never placeholders and never --lineage. Re-issuing
+// `review status --lineage <id>` with the SAME nonexistent selector would loop
+// straight back into this refusal, so the printed command must be
+// selector-free: a plain status lists every stored entry, including the one
+// the operator was asking about.
+func TestLineageNotFoundContinuationRunsVerbatim(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate behavior\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	startFacadeReview(t, repo)
+
+	for _, contract := range []string{ReviewIntegrationContractV1, ReviewIntegrationContractV2} {
+		t.Run(contract, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunReview([]string{"status", "--contract", contract, "--cwd", repo, "--lineage", "review-ffffffffffffffff"}, &output)
+			if err == nil {
+				t.Fatalf("status --lineage accepted: %s", output.String())
+			}
+			failure := decodeReviewIntegrationFailure(t, output.Bytes())
+			if failure.Code != "lineage_not_found" {
+				t.Fatalf("failure code = %q; want lineage_not_found", failure.Code)
+			}
+			continuation := reviewFailureContinuation(t, failure.Message)
+			if strings.Contains(continuation, "--lineage") {
+				t.Fatalf("continuation re-issues the refused selector: %q", continuation)
+			}
+			if strings.Contains(continuation, "<repo>") || strings.Contains(continuation, "<id>") {
+				t.Fatalf("continuation carries a placeholder: %q", continuation)
+			}
+			if !strings.Contains(continuation, "--cwd "+repo) {
+				t.Fatalf("continuation does not carry the real cwd %q: %q", repo, continuation)
+			}
+			if !strings.Contains(continuation, "--contract "+contract) {
+				t.Fatalf("continuation does not carry the negotiated contract %q: %q", contract, continuation)
+			}
+
+			args := reviewContinuationArgs(t, continuation)
+			var rerun bytes.Buffer
+			if err := RunReview(args, &rerun); err != nil {
+				t.Fatalf("continuation %q failed: %v\n%s", continuation, err, rerun.String())
+			}
+			var status ReviewTargetStatusResult
+			decoder := json.NewDecoder(bytes.NewReader(rerun.Bytes()))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&status); err != nil {
+				t.Fatalf("decode continuation status: %v\n%s", err, rerun.String())
+			}
+			if err := status.Validate(); err != nil {
+				t.Fatalf("continuation status invalid: %v\n%s", err, rerun.String())
+			}
+		})
+	}
+}
+
+// reviewFailureContinuation extracts the backtick-quoted command a failure
+// Message tells the operator to run.
+func reviewFailureContinuation(t *testing.T, message string) string {
+	t.Helper()
+	start := strings.IndexByte(message, '`')
+	end := strings.LastIndexByte(message, '`')
+	if start < 0 || end <= start {
+		t.Fatalf("failure message has no backtick continuation: %q", message)
+	}
+	return message[start+1 : end]
+}
+
+// reviewContinuationArgs converts a printed `gentle-ai review ...` continuation
+// into the argv shape RunReview expects, so the test executes it verbatim.
+func reviewContinuationArgs(t *testing.T, continuation string) []string {
+	t.Helper()
+	const prefix = "gentle-ai review "
+	if !strings.HasPrefix(continuation, prefix) {
+		t.Fatalf("continuation does not start with %q: %q", prefix, continuation)
+	}
+	return strings.Fields(strings.TrimPrefix(continuation, prefix))
+}
+
 func TestNegotiatedPendingFinalizeStatusMatchesPublishedSchema(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {

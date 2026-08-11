@@ -420,6 +420,21 @@ func newReviewIntegrationPreflightFailure(operation, code, message string) Revie
 	}
 }
 
+// reviewLineageNotFoundContinuation renders the operator-runnable continuation
+// for the lineage_not_found refusal. It deliberately carries NO --lineage: the
+// refused selector is exactly what failed, so re-running it would dead-end in
+// the same refusal. A selector-free `review status` lists every stored entry
+// (including the one the caller asked about) and exits 0, so it is the honest
+// next runnable command. cwd and contract are the real values derived from the
+// original invocation; when cwd cannot be derived it is simply omitted rather
+// than replaced with a placeholder that misleads the caller.
+func reviewLineageNotFoundContinuation(cwd, contract string) string {
+	if cwd == "" {
+		return "gentle-ai review status --contract " + contract
+	}
+	return "gentle-ai review status --cwd " + cwd + " --contract " + contract
+}
+
 func newReviewIntegrationFailure(operation string, args []string, runErr error) ReviewIntegrationFailure {
 	failure := ReviewIntegrationFailure{
 		Schema: ReviewIntegrationFailureSchema, Contract: ReviewIntegrationContractV1, Operation: operation,
@@ -979,18 +994,27 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 	if errors.As(runErr, &lineageNotFound) {
 		failure.Phase = "pre_native"
 		failure.Code = "lineage_not_found"
-		failure.Message = "The requested review lineage does not exist; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --lineage <id>` (or v2) to see where this review actually is."
+		// The refusal continuation from issue #1997 must run verbatim and exit
+		// 0. Re-issuing `review status --lineage <id>` with the SAME nonexistent
+		// selector would loop straight back into this refusal, so the printed
+		// command carries the real --cwd and negotiated --contract (never a
+		// placeholder) and NO --lineage: a selector-free status lists the stored
+		// entries, including the lineage the operator was asking about.
+		cwd := ""
+		if values, valid := safeReviewIntegrationArguments(operation, args); valid && values["cwd"] != "" {
+			cwd = values["cwd"]
+		}
+		contract := ReviewIntegrationContractV1
+		if provided, value, missing := reviewIntegrationContractArgument(args); provided && !missing && value != "" {
+			contract = value
+		}
+		failure.Message = "The requested review lineage does not exist; run `" + reviewLineageNotFoundContinuation(cwd, contract) + "` to see where the review is."
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "not_evaluated"
 		failure.RetrySafe = true
 		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
 		failure.LineageID = lineageNotFound.LineageID
 		failure.RequiredInputs = []string{}
-		// The refusal continuation from issue #1997 asks the operator to see
-		// where a review actually is with `review status --lineage <id>`. A
-		// corrected selector is the exact way back in, so status is the next
-		// runnable action; a blind retry of the same nonexistent selector
-		// would never create the lineage and must not be advertised.
 		failure.NextAction = "review.status"
 		failure.Cause = reviewIntegrationFailureCause(runErr)
 		return failure
