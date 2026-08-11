@@ -28,10 +28,7 @@ const (
 
 type ArtifactInspectionStatus string
 
-const (
-	ArtifactInspectionCompleted        ArtifactInspectionStatus = "completed"
-	ArtifactInspectionScopeUnavailable ArtifactInspectionStatus = "scope_unavailable"
-)
+const ArtifactInspectionCompleted ArtifactInspectionStatus = "completed"
 
 // ArtifactInspection is the reviewer's structured assertion that every path
 // in the immutable manifest was actually inspected.
@@ -96,10 +93,7 @@ type ArtifactAdmissionDiagnostic struct {
 	ForeignPathCount int    `json:"foreign_path_count,omitempty"`
 }
 
-const (
-	ArtifactAdmissionDiagnosticInspectionIncomplete     = "inspection_incomplete"
-	ArtifactAdmissionDiagnosticCandidateInputUnreadable = "candidate_input_unreadable"
-)
+const ArtifactAdmissionDiagnosticCandidateInputUnreadable = "candidate_input_unreadable"
 
 func safeAdmissionLocation(code, value, reason string) string {
 	value = strings.TrimSpace(value)
@@ -333,15 +327,8 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 		wantPaths[index] = entry.Path
 	}
 	if request.Inspection.Status != ArtifactInspectionCompleted {
-		diagnostic := &ArtifactAdmissionDiagnostic{
-			Code:   ArtifactAdmissionDiagnosticInspectionIncomplete,
-			Reason: "reviewer_did_not_complete_candidate_inspection",
-		}
-		if request.Inspection.Status == ArtifactInspectionScopeUnavailable {
-			diagnostic.Code = ArtifactAdmissionDiagnosticCandidateInputUnreadable
-			diagnostic.Reason = "scope_unavailable"
-		}
-		return failFinding(ArtifactAdmissionIncomplete, "reviewer did not report completed candidate inspection", diagnostic, nil)
+		return failFinding(ArtifactAdmissionIncomplete, "reviewer did not report completed candidate inspection",
+			&ArtifactAdmissionDiagnostic{Code: ArtifactAdmissionDiagnosticCandidateInputUnreadable, Reason: "scope_unavailable"}, nil)
 	}
 	coverage, coverageErr := validateCompleteInspectionCoverage(request.Inspection.Paths, request.FrozenContext.ChangedPathManifest)
 	if coverageErr != nil {

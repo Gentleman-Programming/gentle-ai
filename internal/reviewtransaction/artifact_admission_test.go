@@ -175,22 +175,6 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 	}
 }
 
-func TestAdmitArtifactClassifiesUnavailableScope(t *testing.T) {
-	_, _, request := admittedArtifactFixture(t)
-	request.Inspection.Status = ArtifactInspectionScopeUnavailable
-	request.Inspection.Paths = nil
-	_, admission, err := AdmitArtifact(t.Context(), request)
-	if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
-		t.Fatalf("scope-unavailable admission = %q, %v; want incomplete", admission.Decision, err)
-	}
-	var admissionErr *ArtifactAdmissionError
-	if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil ||
-		admissionErr.Diagnostic.Code != ArtifactAdmissionDiagnosticCandidateInputUnreadable ||
-		admissionErr.Diagnostic.Reason != "scope_unavailable" {
-		t.Fatalf("scope-unavailable diagnostic = %#v, error = %v", admissionErr, err)
-	}
-}
-
 func TestAdmitArtifactCanonicalizesCompleteInspectionCoverage(t *testing.T) {
 	tests := []struct {
 		name           string

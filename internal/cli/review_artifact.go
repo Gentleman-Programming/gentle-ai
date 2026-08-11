@@ -269,7 +269,7 @@ func reviewerResultIncidentClass(err error) (reviewtransaction.ResultIncidentCla
 	var admissionErr *reviewtransaction.ArtifactAdmissionError
 	if errors.As(err, &admissionErr) && admissionErr.Diagnostic != nil {
 		switch admissionErr.Diagnostic.Code {
-		case reviewtransaction.ArtifactAdmissionDiagnosticCandidateInputUnreadable, reviewtransaction.ArtifactAdmissionDiagnosticInspectionIncomplete:
+		case reviewtransaction.ArtifactAdmissionDiagnosticCandidateInputUnreadable:
 			return reviewtransaction.ResultIncidentScopeUnavailable, true
 		}
 	}
