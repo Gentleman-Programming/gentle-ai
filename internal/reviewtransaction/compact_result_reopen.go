@@ -74,11 +74,12 @@ type compactAdmittedReviewerResult struct {
 }
 
 type compactProviderReviewerResult struct {
-	SubjectHash string             `json:"subject_hash"`
-	Inspection  ArtifactInspection `json:"inspection"`
-	Lens        string             `json:"lens,omitempty"`
-	Findings    []Finding          `json:"findings"`
-	Evidence    []string           `json:"evidence"`
+	SubjectHash string                 `json:"subject_hash"`
+	Inspection  ArtifactInspection     `json:"inspection"`
+	Lens        string                 `json:"lens,omitempty"`
+	Findings    []Finding              `json:"findings"`
+	Evidence    []string               `json:"evidence"`
+	Provider    *ProviderCausalCarrier `json:"provider,omitempty"`
 }
 
 // CompactReviewerResultSlot is one immutable reviewer-result publication slot.
@@ -413,6 +414,7 @@ func reAdmitCompactReviewerResult(ctx context.Context, envelope compactAdmittedR
 		Inspection:                provider.Inspection,
 		Result:                    LensResult{Lens: expected.Lens, Findings: provider.Findings, Evidence: provider.Evidence},
 		CandidateCausalFindingIDs: envelope.Admission.CandidateCausalFindingIDs,
+		ProviderCausalCarrier:     provider.Provider,
 		RawPayload:                canonicalPayload, CanonicalPayload: canonicalPayload,
 	})
 	if err != nil || admission.Decision != ArtifactAdmissionCompleted ||

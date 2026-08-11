@@ -99,6 +99,19 @@ func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
 	}
 }
 
+func TestNewLineageProviderClaimsCanonicalizesMissingIDsAndPreservesProofInputs(t *testing.T) {
+	claims, err := newLineageProviderClaims(reviewtransaction.LensReliability, facadeReviewerResult{
+		Findings: []facadeFinding{{Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate regression", ProofRefs: []string{"tracked.txt:1"}, CausalDisposition: reviewtransaction.CausalIntroduced, BaseProofRefs: []string{"tracked.txt:1"}, CandidateProofRefs: []string{"tracked.txt:1"}}},
+		Evidence: []string{"reviewed"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 1 || claims[0].FindingID != "R3-001" || claims[0].CausalDisposition != reviewtransaction.CausalIntroduced || len(claims[0].BaseProofRefs) != 1 || len(claims[0].CandidateProofRefs) != 1 {
+		t.Fatalf("canonical provider claims = %#v", claims)
+	}
+}
+
 func TestReviewCaptureResultAdmitsOneJSONEnvelopeInsideProse(t *testing.T) {
 	repo, started, _, record := newArtifactReview(t, false)
 	payload := admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0)
@@ -355,6 +368,43 @@ func TestReviewCaptureResultRejectsInvalidLocationWithActionableDiagnostic(t *te
 		admissionErr.Diagnostic.Location != "tracked.txt:1-2,3" ||
 		admissionErr.Diagnostic.Reason != "line_suffix_not_integer" {
 		t.Fatalf("capture diagnostic = %#v", admissionErr.Diagnostic)
+	}
+}
+
+func TestReviewCaptureResultPersistsProviderCarrierForV2CompactAdmission(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		disposition reviewtransaction.CausalDisposition
+		wantClass   reviewtransaction.ProviderCausalClassification
+	}{
+		{name: "canonical candidate causal", disposition: reviewtransaction.CausalIntroduced, wantClass: reviewtransaction.ProviderCandidateCausal},
+		{name: "behavior activated without differential proof", disposition: reviewtransaction.CausalBehaviorActivated, wantClass: reviewtransaction.ProviderUnknown},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, started, store, record := newArtifactReview(t, false)
+			result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+			result.Findings = []facadeFinding{{
+				Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate finding", ProofRefs: []string{"tracked.txt:1"},
+				EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: tt.disposition,
+			}}
+			input := filepath.Join(t.TempDir(), "result.json")
+			writeReviewCLIJSON(t, input, result)
+			if err := RunReviewCaptureResult([]string{
+				"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+				"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+			}, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			payload, err := os.ReadFile(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir, "00-"+record.State.SelectedLenses[0]+".json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var envelope admittedReviewerResult
+			decodeStrictReviewJSON(t, payload, &envelope)
+			if envelope.Result.Provider == nil || len(envelope.Result.Provider.Findings) != 1 || envelope.Result.Provider.Findings[0].FindingID != "R3-001" || envelope.Result.Provider.Findings[0].Classification != tt.wantClass {
+				t.Fatalf("persisted provider carrier = %#v", envelope.Result.Provider)
+			}
+		})
 	}
 }
 

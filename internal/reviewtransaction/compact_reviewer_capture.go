@@ -23,6 +23,7 @@ type CompactAdmittedReviewerResultRequest struct {
 	Inspection                ArtifactInspection
 	Result                    LensResult
 	CandidateCausalFindingIDs []string
+	ProviderCausalCarrier     *ProviderCausalCarrier
 	RawPayload                []byte
 	// PreparePublication performs caller-owned quarantine work under the authority lock.
 	PreparePublication func(CompactState) error
@@ -120,6 +121,9 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 	if err := ValidateArtifactSubject(request.ArtifactSubject); err != nil {
 		return LensResult{}, err
 	}
+	if request.ArtifactSubject.Schema == ArtifactSubjectSchema && request.ProviderCausalCarrier == nil {
+		return LensResult{}, errors.New("v2 compact reviewer capture requires a provider causal carrier")
+	}
 	if request.ArtifactSubject.AuthorityRevision != request.ExpectedRevision ||
 		request.Result.Lens != request.ArtifactSubject.Lens {
 		return LensResult{}, errors.New(
@@ -149,6 +153,7 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 		Lens:        request.ArtifactSubject.Lens,
 		Findings:    canonicalResult.Findings,
 		Evidence:    canonicalResult.Evidence,
+		Provider:    request.ProviderCausalCarrier,
 	}
 	canonicalPayload, err := json.Marshal(providerResult)
 	if err != nil {
@@ -199,6 +204,7 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 					Inspection:                canonicalInspection,
 					Result:                    canonicalResult,
 					CandidateCausalFindingIDs: request.CandidateCausalFindingIDs,
+					ProviderCausalCarrier:     request.ProviderCausalCarrier,
 					RawPayload:                request.RawPayload,
 					CanonicalPayload:          canonicalPayload,
 				},
@@ -243,7 +249,8 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 				ExpectedSubject: request.ArtifactSubject, FrozenContext: request.FrozenContext,
 				EchoedSubjectHash: request.ArtifactSubject.SubjectHash, Inspection: canonicalInspection,
 				Result: request.Result, CandidateCausalFindingIDs: request.CandidateCausalFindingIDs,
-				RawPayload: request.RawPayload, CanonicalPayload: canonicalPayload,
+				ProviderCausalCarrier: request.ProviderCausalCarrier,
+				RawPayload:            request.RawPayload, CanonicalPayload: canonicalPayload,
 			})
 			if admissionErr == nil {
 				replayed, found, replayErr := store.resolveAdmittedReviewerResult(

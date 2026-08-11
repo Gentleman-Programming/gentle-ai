@@ -401,6 +401,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	nativeResult := reviewtransaction.LensResult{
 		Lens: canonicalReviewerResult.Lens, Findings: canonicalReviewerResult.Findings, Evidence: canonicalReviewerResult.Evidence,
 	}
+	var providerCarrier *reviewtransaction.ProviderCausalCarrier
 	// Derive verified candidate-causal IDs from the CANONICALIZED result, not
 	// the raw one: CanonicalCompactLensResult assigns a fallback ID
 	// (`<prefix>-NNN`) to any severe finding submitted without an explicit
@@ -413,13 +414,43 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if err != nil {
 		return reviewPreflightError(fmt.Errorf("canonicalize reviewer result: %w", err))
 	}
-	candidateCausalIDs, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, canonicalForCausality)
-	if err != nil {
-		return reviewPreflightError(err)
+	var candidateCausalIDs []string
+	if subject.Schema == reviewtransaction.ArtifactSubjectSchema {
+		candidate, deriveErr := reviewtransaction.FreezeCandidateIdentity(ctx, root, state.InitialSnapshot, state.PolicyHash)
+		if deriveErr != nil {
+			return reviewPreflightError(fmt.Errorf("derive compact provider candidate: %w", deriveErr))
+		}
+		claims, claimErr := newLineageProviderClaims(subject.Lens, result)
+		if claimErr != nil {
+			return reviewPreflightError(fmt.Errorf("canonicalize compact provider claims: %w", claimErr))
+		}
+		carrier, deriveErr := reviewtransaction.DeriveProviderCausalCarrier(ctx, root, subject.SubjectHash, candidate, claims)
+		if deriveErr != nil {
+			if errors.Is(deriveErr, reviewtransaction.ErrInvalidFindingLocation) {
+				for _, claim := range claims {
+					if claim.Location != "" {
+						return reviewPreflightError(reviewtransaction.NewArtifactLocationAdmissionError(claim.FindingID, claim.Location, deriveErr))
+					}
+				}
+			}
+			return reviewPreflightError(fmt.Errorf("derive compact provider carrier: %w", deriveErr))
+		}
+		binding := compactProviderArtifactBinding(subject, frozen, result.Inspection, candidate)
+		carrier, deriveErr = reviewtransaction.BindProviderCausalCarrier(carrier, binding)
+		if deriveErr != nil {
+			return reviewPreflightError(fmt.Errorf("bind compact provider carrier: %w", deriveErr))
+		}
+		providerCarrier = &carrier
+		candidateCausalIDs = providerCandidateCausalFindingIDs(carrier, canonicalForCausality)
+	} else {
+		candidateCausalIDs, err = verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, canonicalForCausality)
+		if err != nil {
+			return reviewPreflightError(err)
+		}
 	}
 	_, admission, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
 		ExpectedSubject: subject, FrozenContext: frozen, EchoedSubjectHash: result.SubjectHash,
-		Inspection: result.Inspection, Result: nativeResult, CandidateCausalFindingIDs: candidateCausalIDs,
+		Inspection: result.Inspection, Result: nativeResult, CandidateCausalFindingIDs: candidateCausalIDs, ProviderCausalCarrier: providerCarrier,
 		RawPayload: rawPayload, CanonicalPayload: canonicalResult,
 	})
 	if err != nil {
@@ -436,7 +467,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	_, err = store.CaptureAdmittedReviewerResult(ctx, reviewtransaction.CompactAdmittedReviewerResultRequest{
 		ExpectedRevision: record.Revision, TargetIdentity: *target, FrozenContext: frozen,
 		ArtifactSubject: subject, Inspection: result.Inspection, Result: nativeResult,
-		CandidateCausalFindingIDs: candidateCausalIDs, RawPayload: rawPayload,
+		CandidateCausalFindingIDs: candidateCausalIDs, ProviderCausalCarrier: providerCarrier, RawPayload: rawPayload,
 		PreparePublication: func(current reviewtransaction.CompactState) error {
 			return archiveQuarantinedReviewerArtifact(store.Dir, current, *order, path)
 		},
@@ -847,6 +878,7 @@ func decodeAdmittedReviewerResult(ctx context.Context, payload []byte, expected 
 		ExpectedSubject: expected, FrozenContext: frozen, EchoedSubjectHash: envelope.Result.SubjectHash,
 		Inspection: envelope.Result.Inspection, Result: native,
 		CandidateCausalFindingIDs: envelope.Admission.CandidateCausalFindingIDs,
+		ProviderCausalCarrier:     envelope.Result.Provider,
 		RawPayload:                canonical, CanonicalPayload: canonical,
 	})
 	if err != nil || revalidated.Decision != reviewtransaction.ArtifactAdmissionCompleted ||
@@ -854,6 +886,32 @@ func decodeAdmittedReviewerResult(ctx context.Context, payload []byte, expected 
 		return facadeReviewerResult{}, errors.New("captured reviewer result no longer satisfies its admission record")
 	}
 	return envelope.Result, nil
+}
+
+func compactProviderArtifactBinding(subject reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext, inspection reviewtransaction.ArtifactInspection, candidate reviewtransaction.CandidateIdentity) reviewtransaction.NewLineageArtifactBinding {
+	return reviewtransaction.NewLineageArtifactBinding{
+		Subject: reviewtransaction.NewLineageArtifactSubject{
+			Schema: subject.Schema, SubjectHash: subject.SubjectHash, LineageID: subject.LineageID,
+			RepositoryID: candidate.RepositoryID, BaseTree: subject.BaseTree, CandidateTree: subject.CandidateTree,
+			ChangedPathManifestSHA256: subject.ChangedPathManifestSHA256, Lens: subject.Lens, SelectedOrder: subject.SelectedOrder,
+		},
+		FrozenPathManifest: append([]reviewtransaction.ChangedPathManifestEntry(nil), frozen.ChangedPathManifest...), Inspection: inspection,
+	}
+}
+
+func providerCandidateCausalFindingIDs(carrier reviewtransaction.ProviderCausalCarrier, result reviewtransaction.LensResult) []string {
+	severe := make(map[string]bool, len(result.Findings))
+	for _, finding := range result.Findings {
+		severe[finding.ID] = facadeSevere(finding.Severity)
+	}
+	ids := make([]string, 0, len(carrier.Findings))
+	for _, finding := range carrier.Findings {
+		if finding.Classification == reviewtransaction.ProviderCandidateCausal && severe[finding.FindingID] {
+			ids = append(ids, finding.FindingID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func verifiedCandidateCausalFindingIDs(ctx context.Context, repo string, snapshot reviewtransaction.Snapshot, result reviewtransaction.LensResult) ([]string, error) {
@@ -982,14 +1040,28 @@ type ReviewFacadeCaptureResultNewLineageResult struct {
 
 // newLineageProviderClaims converts reviewer findings into claims. The
 // provider derives classification from the frozen Git trees.
-func newLineageProviderClaims(findings []facadeFinding) []reviewtransaction.ProviderCausalEvidence {
-	converted := make([]reviewtransaction.ProviderCausalEvidence, len(findings))
-	for index, finding := range findings {
-		converted[index] = reviewtransaction.ProviderCausalEvidence{
-			FindingID: finding.ID, Location: finding.Location, ProofRefs: append([]string(nil), finding.ProofRefs...),
+func newLineageProviderClaims(lens string, result facadeReviewerResult) ([]reviewtransaction.ProviderCausalEvidence, error) {
+	findings := make([]reviewtransaction.Finding, len(result.Findings))
+	for index, finding := range result.Findings {
+		findings[index] = reviewtransaction.Finding{
+			ID: finding.ID, Lens: finding.Lens, Location: finding.Location, Severity: finding.Severity,
+			Claim: finding.Claim, ProofRefs: finding.ProofRefs, EvidenceClass: finding.EvidenceClass,
+			CausalDisposition: finding.CausalDisposition,
 		}
 	}
-	return converted
+	canonical, err := reviewtransaction.CanonicalCompactLensResult(reviewtransaction.LensResult{Lens: lens, Findings: findings, Evidence: result.Evidence})
+	if err != nil {
+		return nil, err
+	}
+	claims := make([]reviewtransaction.ProviderCausalEvidence, len(canonical.Findings))
+	for index, finding := range canonical.Findings {
+		raw := result.Findings[index]
+		claims[index] = reviewtransaction.ProviderCausalEvidence{
+			FindingID: finding.ID, Location: finding.Location, ProofRefs: append([]string(nil), finding.ProofRefs...),
+			CausalDisposition: finding.CausalDisposition, BaseProofRefs: append([]string(nil), raw.BaseProofRefs...), CandidateProofRefs: append([]string(nil), raw.CandidateProofRefs...),
+		}
+	}
+	return claims, nil
 }
 
 // runReviewFacadeCaptureResultNewLineage is C-A's CLI wiring for the minimal
@@ -1046,7 +1118,10 @@ func runReviewFacadeCaptureResultNewLineage(
 	if result.SubjectHash != wantSubject {
 		return reviewPreflightError(fmt.Errorf("reviewer result subject hash does not match the provider-owned authority; refresh the binding with `gentle-ai review capture-result --cwd <repo> --lineage %s --target <target> --lens %s --order %d --preflight`", lineage, lens, order))
 	}
-	claims := newLineageProviderClaims(result.Findings)
+	claims, err := newLineageProviderClaims(lens, result)
+	if err != nil {
+		return reviewPreflightError(fmt.Errorf("canonicalize provider claims: %w", err))
+	}
 	if _, err := reviewtransaction.DeriveProviderCausalCarrier(ctx, root, result.SubjectHash, authority.CandidateIdentity, claims); err != nil {
 		return reviewPreflightError(err)
 	}

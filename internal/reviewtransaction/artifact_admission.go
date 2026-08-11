@@ -60,6 +60,7 @@ type ArtifactAdmissionRequest struct {
 	// causality the provider verified against repository-derived changed-line
 	// evidence before admission.
 	CandidateCausalFindingIDs []string
+	ProviderCausalCarrier     *ProviderCausalCarrier
 	RawPayload                []byte
 	CanonicalPayload          []byte
 }
@@ -348,6 +349,24 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 		}
 		return fail(ArtifactAdmissionIncomplete, err.Error())
 	}
+	if request.ProviderCausalCarrier != nil {
+		carrier := *request.ProviderCausalCarrier
+		if err := carrier.Validate(); err != nil || carrier.SubjectHash != request.ExpectedSubject.SubjectHash || carrier.CandidateIdentity.BaseTree != request.FrozenContext.BaseTree || carrier.CandidateIdentity.CandidateTree != request.FrozenContext.CandidateTree {
+			return fail(ArtifactAdmissionBindingMismatch, "provider causal carrier does not bind the frozen artifact")
+		}
+		findingIDs := make(map[string]bool, len(canonical.Findings))
+		for _, finding := range canonical.Findings {
+			findingIDs[finding.ID] = isSevereSeverity(finding.Severity)
+		}
+		for _, finding := range carrier.Findings {
+			if _, ok := findingIDs[finding.FindingID]; !ok {
+				return fail(ArtifactAdmissionBindingMismatch, "provider causal carrier finding is outside the canonical reviewer result")
+			}
+		}
+		if len(carrier.Findings) != len(canonical.Findings) {
+			return fail(ArtifactAdmissionBindingMismatch, "provider causal carrier does not cover the canonical reviewer result")
+		}
+	}
 	repository, cleanup, err := newFrozenRepositoryPathLookup(ctx, request.FrozenContext)
 	if err != nil {
 		return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup is unavailable")
@@ -409,6 +428,22 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 	verifiedIDs, err := canonicalStrings(request.CandidateCausalFindingIDs, "candidate-causal finding id")
 	if err != nil {
 		return fail(ArtifactAdmissionIncomplete, err.Error())
+	}
+	if request.ProviderCausalCarrier != nil {
+		wantCandidateCausalIDs = wantCandidateCausalIDs[:0]
+		severeFindingIDs := make(map[string]bool, len(canonical.Findings))
+		for _, finding := range canonical.Findings {
+			severeFindingIDs[finding.ID] = isSevereSeverity(finding.Severity)
+		}
+		for _, finding := range request.ProviderCausalCarrier.Findings {
+			if finding.Classification == ProviderCandidateCausal && severeFindingIDs[finding.FindingID] {
+				wantCandidateCausalIDs = append(wantCandidateCausalIDs, finding.FindingID)
+			}
+		}
+		wantCandidateCausalIDs, wantErr = canonicalStrings(wantCandidateCausalIDs, "candidate-causal finding id")
+		if wantErr != nil {
+			return fail(ArtifactAdmissionIncomplete, wantErr.Error())
+		}
 	}
 	// Both sides are canonicalized before comparing: a submission that names
 	// the same candidate-causal findings in a different order or with

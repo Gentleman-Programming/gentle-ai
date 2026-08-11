@@ -459,22 +459,25 @@ type ReviewRecoverResult struct {
 }
 
 type facadeFinding struct {
-	ID                string                              `json:"id,omitempty"`
-	Lens              string                              `json:"lens,omitempty"`
-	Location          string                              `json:"location,omitempty"`
-	Severity          string                              `json:"severity,omitempty"`
-	Claim             string                              `json:"claim,omitempty"`
-	ProofRefs         []string                            `json:"proof_refs,omitempty"`
-	EvidenceClass     reviewtransaction.EvidenceClass     `json:"evidence_class,omitempty"`
-	CausalDisposition reviewtransaction.CausalDisposition `json:"causal_disposition,omitempty"`
+	ID                 string                              `json:"id,omitempty"`
+	Lens               string                              `json:"lens,omitempty"`
+	Location           string                              `json:"location,omitempty"`
+	Severity           string                              `json:"severity,omitempty"`
+	Claim              string                              `json:"claim,omitempty"`
+	ProofRefs          []string                            `json:"proof_refs,omitempty"`
+	EvidenceClass      reviewtransaction.EvidenceClass     `json:"evidence_class,omitempty"`
+	CausalDisposition  reviewtransaction.CausalDisposition `json:"causal_disposition,omitempty"`
+	BaseProofRefs      []string                            `json:"base_proof_refs,omitempty"`
+	CandidateProofRefs []string                            `json:"candidate_proof_refs,omitempty"`
 }
 
 type facadeReviewerResult struct {
-	SubjectHash string                               `json:"subject_hash"`
-	Inspection  reviewtransaction.ArtifactInspection `json:"inspection"`
-	Lens        string                               `json:"lens,omitempty"`
-	Findings    []facadeFinding                      `json:"findings"`
-	Evidence    []string                             `json:"evidence"`
+	SubjectHash string                                   `json:"subject_hash"`
+	Inspection  reviewtransaction.ArtifactInspection     `json:"inspection"`
+	Lens        string                                   `json:"lens,omitempty"`
+	Findings    []facadeFinding                          `json:"findings"`
+	Evidence    []string                                 `json:"evidence"`
+	Provider    *reviewtransaction.ProviderCausalCarrier `json:"provider,omitempty"`
 }
 
 type facadeValidationCheck struct {
