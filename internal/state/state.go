@@ -196,6 +196,11 @@ func acquireStateLock(homeDir string) (func(), error) {
 	}
 	deadline := time.Now().Add(lockTimeout)
 	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			_ = f.Close()
+			return nil, ErrLockTimeout
+		}
 		locked, err := tryLockFile(f)
 		if err != nil {
 			_ = f.Close()
@@ -207,9 +212,9 @@ func acquireStateLock(homeDir string) (func(), error) {
 				_ = f.Close()
 			}, nil
 		}
-		if time.Now().After(deadline) {
-			_ = f.Close()
-			return nil, ErrLockTimeout
+		if remaining < lockRetryDelay {
+			time.Sleep(remaining)
+			continue
 		}
 		time.Sleep(lockRetryDelay)
 	}

@@ -280,3 +280,29 @@ func TestUpdateReleasesLockOnPanic(t *testing.T) {
 		t.Fatal("Update after panic blocked; the lock was not released")
 	}
 }
+
+// TestLockTimeoutDoesNotOvershoot pins the acquisition deadline. The retry loop
+// must check the deadline before each attempt and cap its sleep to the time
+// remaining, otherwise a 20ms timeout waits a full 100ms lockRetryDelay and can
+// even acquire the lock after the deadline has already passed.
+func TestLockTimeoutDoesNotOvershoot(t *testing.T) {
+	homeDir := t.TempDir()
+	previous := lockTimeout
+	lockTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { lockTimeout = previous })
+
+	release, err := acquireStateLock(homeDir)
+	if err != nil {
+		t.Fatalf("acquire held lock: %v", err)
+	}
+	t.Cleanup(release)
+
+	start := time.Now()
+	if _, err := acquireStateLock(homeDir); !errors.Is(err, ErrLockTimeout) {
+		t.Fatalf("second acquire error = %v, want ErrLockTimeout", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed > 60*time.Millisecond {
+		t.Errorf("acquire took %v for a %v timeout; the loop sleeps past its own deadline", elapsed, lockTimeout)
+	}
+}
