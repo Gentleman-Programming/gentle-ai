@@ -737,6 +737,18 @@ func discoverReviewerContextLevel(ctx context.Context, repo, storeDir string, st
 	return reviewtransaction.DiscoverReviewerContextLevel(storeDir, state.LineageID, state.InitialSnapshot.Identity, revision, state.SelectedLenses, subjects)
 }
 
+func discoverPendingRefuterClaims(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) []reviewtransaction.RefuterClaim {
+	results, err := readCapturedReviewerResults(ctx, repo, storeDir, state, revision)
+	if err != nil {
+		return nil
+	}
+	input, err := prepareCompactReviewerResults(state, results, facadeRefuterResult{}, facadeRepositoryEvidence{ctx: ctx, repo: repo})
+	if err != nil {
+		return nil
+	}
+	return reviewtransaction.PendingRefuterClaims(state, input)
+}
+
 func readCapturedReviewerResults(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) ([]facadeReviewerResult, error) {
 	artifacts, err := discoverCapturedReviewerArtifacts(ctx, repo, storeDir, state, revision)
 	if err != nil {

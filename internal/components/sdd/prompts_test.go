@@ -165,7 +165,7 @@ func assertOpenCodeSubAgentReadOnlyTools(t *testing.T, agentsMap map[string]any,
 		t.Fatalf("agent %q tools have type %T, want object", agentName, agent["tools"])
 	}
 	for tool, want := range map[string]bool{
-		"read":  true,
+		"read":  agentName != "review-refuter",
 		"write": false,
 		"edit":  false,
 		"bash":  false,

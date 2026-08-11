@@ -43,6 +43,7 @@ const (
 	reviewLensContextResultSchema  = "GENTLE_AI_REVIEW_RESULT_SCHEMA"
 	reviewLensContextPatch         = "GENTLE_AI_REVIEW_PATCH"
 	reviewLensContextTerminator    = "GENTLE_AI_REVIEW_CONTEXT_END"
+	reviewRefuterRole              = "review-refuter"
 )
 
 // reviewLensContextBinding is the machine data a relaying orchestrator used to
@@ -193,6 +194,9 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	if !reviewtransaction.ReviewerContextLevelAccepted(level) {
 		return nil, reviewPreflightError(fmt.Errorf("unknown reviewer context delivery %q; run `gentle-ai review lens-context --help` for the closed command form", *delivery))
 	}
+	if strings.TrimSpace(*lens) == reviewRefuterRole {
+		return reviewRefuterLensContext(ctx, deps, strings.TrimSpace(*repositoryContext))
+	}
 
 	authority, err := resolveReviewLensAuthority(ctx, deps, strings.TrimSpace(*repositoryContext), strings.TrimSpace(*lens))
 	if err != nil {
@@ -282,6 +286,67 @@ func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, st
 		}
 	}
 	return false
+}
+
+func reviewRefuterLensContext(ctx context.Context, deps reviewLensContextDeps, repositoryContext string) (payload []byte, err error) {
+	root, binding, err := deps.resolve(ctx, repositoryContext)
+	if err != nil {
+		return nil, reviewRepositoryContextResolutionFailure(err)
+	}
+	store, record, err := deps.discover(ctx, root, binding.LineageID, false)
+	if err != nil {
+		return nil, reviewLensContextRefusal("lens_context_authority_unavailable", reviewLensContextRefreshAction)
+	}
+	state := record.State
+	if state.State != reviewtransaction.StateReviewing || state.InitialSnapshot.Identity != binding.TargetIdentity || record.Revision != binding.Revision {
+		return nil, reviewLensContextRefusal("lens_context_binding_stale", reviewLensContextRefreshAction)
+	}
+	claims := discoverPendingRefuterClaims(ctx, root, store.Dir, state, record.Revision)
+	if len(claims) == 0 {
+		return nil, reviewLensContextRefusal("lens_context_refuter_claims_unavailable", reviewLensContextRefreshAction)
+	}
+	inspector, err := deps.prepare(reviewtransaction.SnapshotBuilder{Repo: root}, ctx, state.InitialSnapshot)
+	if err != nil {
+		return nil, reviewLensContextInspectionFailure(ctx, err)
+	}
+	defer func() {
+		payload, err = reviewLensContextCleanup(ctx, payload, err, func() error { return deps.close(inspector) })
+	}()
+	frozen := inspector.FrozenCandidateContext()
+	if len(frozen.ChangedPathManifest) > advisoryreview.MaxEvidenceEntries {
+		return nil, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextCapacityAction(len(frozen.ChangedPathManifest)))
+	}
+
+	var block bytes.Buffer
+	providerBinding := reviewLensContextBinding{
+		Lineage: binding.LineageID, Target: binding.TargetIdentity, Lens: reviewRefuterRole, Order: -1,
+		Revision: binding.Revision, RepositoryContext: repositoryContext,
+	}
+	if err := reviewLensContextWriteLine(&block, reviewLensContextBindingHeader, providerBinding); err != nil {
+		return nil, err
+	}
+	if err := reviewLensContextWriteLine(&block, "GENTLE_AI_REFUTER_CLAIMS", claims); err != nil {
+		return nil, err
+	}
+	block.WriteString("GENTLE_AI_REVIEW_INSTRUCTION\nReturn exactly one JSON object and nothing else. Include one result for every claim above, in the same order, and no others. Use only corroborated, refuted, or inconclusive. proof_refs must cite concrete immutable evidence below; facts not established there are inconclusive.\nGENTLE_AI_REVIEW_INSTRUCTION_END\n")
+	block.WriteString("GENTLE_AI_REVIEW_RESULT_SCHEMA\n")
+	block.Write(bytes.TrimSpace(reviewInputSchemas["refuter"]))
+	block.WriteString("\nGENTLE_AI_REVIEW_RESULT_SCHEMA_END\n")
+	for index, entry := range frozen.ChangedPathManifest {
+		patch, inspectErr := deps.inspect(ctx, inspector, "patch", index, "")
+		if inspectErr != nil {
+			return nil, reviewLensContextInspectionFailure(ctx, inspectErr)
+		}
+		if len(bytes.TrimSpace(patch)) == 0 && !entry.ModeOnly && !entry.Deleted {
+			return nil, reviewLensContextRefusal("lens_context_empty_patch", reviewLensContextEmptyPatchAction)
+		}
+		fmt.Fprintf(&block, "%s %d %s\n%s\n%s_END\n", reviewLensContextPatch, index, entry.Path, bytes.TrimSpace(patch), reviewLensContextPatch)
+		if block.Len() > reviewLensContextByteBudget {
+			return nil, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextBudgetAction)
+		}
+	}
+	block.WriteString(reviewLensContextTerminator + "\n")
+	return block.Bytes(), nil
 }
 
 // reviewLensAuthority is the resolved provider-owned binding, subject, and
