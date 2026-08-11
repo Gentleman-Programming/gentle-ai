@@ -36,7 +36,7 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 			want[journey.ID] = true
 		}
 	}
-	// 88 total after j94's #1867 unreadable/truncated capture recovery journey,
+	// 90 total after j94's #1867 unreadable/truncated capture recovery journey,
 	// j77-capture-result-input-preflight-is-read-only (#2630 D2),
 	// j78-lens-finding-id-prefix-discovery (#1844), j79-consecutive-rescope-
 	// refuses-before-publication (#2830), and j80-rescope-authorized-evidence-
@@ -60,8 +60,8 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	//
 	// Bump this deliberately when a journey is added OR removed, and name it
 	// here: the count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 89 {
-		t.Errorf("core journey count = %d, want 89", got)
+	if got := len(seen); got != 90 {
+		t.Errorf("core journey count = %d, want 90", got)
 	}
 	for id, found := range want {
 		if !found {
