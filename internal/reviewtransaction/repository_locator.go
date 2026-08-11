@@ -531,7 +531,7 @@ func readReviewRepositoryContext(path string) ([]byte, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || !privateLocatorFileModeSafe(info.Mode()) {
 		return nil, errors.New("review repository context is not a private regular file")
 	}
-	file, err := os.Open(path)
+	file, err := openReviewRepositoryContextFile(path)
 	if err != nil {
 		return nil, err
 	}
