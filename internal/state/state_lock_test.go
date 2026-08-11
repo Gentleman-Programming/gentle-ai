@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -107,19 +108,11 @@ func TestWriteWaitsForUpdateLock(t *testing.T) {
 		t.Fatalf("seed state: %v", err)
 	}
 
-	inMutate, resume := make(chan struct{}), make(chan struct{})
-	updateDone, writeDone := make(chan error, 1), make(chan error, 1)
+	resume, updateDone := startUpdateWindow(t, homeDir, func(s *InstallState) {
+		s.Persona += "-updated"
+	})
 
-	go func() {
-		updateDone <- Update(homeDir, func(s *InstallState) error {
-			close(inMutate)
-			<-resume
-			s.Persona += "-updated"
-			return nil
-		})
-	}()
-	<-inMutate
-
+	writeDone := make(chan error, 1)
 	go func() { writeDone <- Write(homeDir, InstallState{Persona: "written"}) }()
 	select {
 	case err := <-writeDone:
@@ -127,7 +120,7 @@ func TestWriteWaitsForUpdateLock(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 
-	close(resume)
+	resume()
 	if err := <-updateDone; err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -305,4 +298,60 @@ func TestLockTimeoutDoesNotOvershoot(t *testing.T) {
 	if elapsed > 60*time.Millisecond {
 		t.Errorf("acquire took %v for a %v timeout; the loop sleeps past its own deadline", elapsed, lockTimeout)
 	}
+}
+
+// TestUpdateWindowIsReleasedWhenTheSubtestEnds pins the scaffolding contract. A
+// test that opens an Update window and returns without resuming it must still
+// release the state lock, or the window stays open and every later test in the
+// package times out — which is exactly what happens when a real test fails
+// early inside the window. The subtest below leaves the window open on purpose;
+// the outer assertion proves the helper's cleanup closed it.
+//
+// The subtest must PASS. An earlier draft made it fail deliberately, but Go
+// propagates a subtest failure to its parent and to the package result, so that
+// design reported FAIL forever. Leaving the window open exercises the same
+// cleanup path without poisoning the suite.
+func TestUpdateWindowIsReleasedWhenTheSubtestEnds(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := Write(homeDir, InstallState{Persona: "gentleman"}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	t.Run("leaves the window open", func(t *testing.T) {
+		startUpdateWindow(t, homeDir, func(s *InstallState) { s.Persona = "resumed-by-cleanup" })
+	})
+
+	previous := lockTimeout
+	lockTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { lockTimeout = previous })
+
+	release, err := acquireStateLock(homeDir)
+	if err != nil {
+		t.Fatalf("state lock still held after the subtest: %v", err)
+	}
+	release()
+}
+
+// startUpdateWindow enters an Update read-modify-write window and blocks inside
+// mutate until the returned resume func runs. resume is registered with
+// t.Cleanup and guarded by sync.Once, so every exit path — a passing test, a
+// failed assertion, or an explicit call — releases the state lock exactly once.
+func startUpdateWindow(t *testing.T, homeDir string, apply func(*InstallState)) (resume func(), done <-chan error) {
+	t.Helper()
+	inMutate, resumeCh := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	resume = func() { once.Do(func() { close(resumeCh) }) }
+	t.Cleanup(resume)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Update(homeDir, func(s *InstallState) error {
+			close(inMutate)
+			<-resumeCh
+			apply(s)
+			return nil
+		})
+	}()
+	<-inMutate
+	return resume, errCh
 }
