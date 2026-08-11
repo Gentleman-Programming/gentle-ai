@@ -160,6 +160,8 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "create new automated report", text: "create a new automated provider-defect report"},
 		{name: "versioned report marker", text: "<!-- gentle-ai-provider-report:v1 -->"},
 		{name: "bounded report shape", text: "non-empty `## Automated Provider Defect Report`, `## Gentle AI Version / Build`, `## Environment`, `## Operation`, `## Observed Evidence`, `## Expected Behavior`, `## Actual Behavior`, `## Minimal Reproduction`, and `## Preserved State` sections"},
+		{name: "report body limit", text: "total body length must be no greater than 16,000 characters"},
+		{name: "report section limit", text: "every section must be no greater than 4,000 characters"},
 		{name: "confirmed creation report precondition", text: "Confirmed creation is a HARD precondition for report success: confirm the newly-created issue identity/URL"},
 		{name: "no output-only creation inference", text: "never infer creation from output text alone."},
 		{name: "definitive duplicate lookup", text: "Only a completed duplicate lookup with a definitive result may branch to a write."},
@@ -215,6 +217,16 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 			contract := providerDefectHandoffSection(t, path)
 			if contract != canonical {
 				t.Error("provider-defect handoff differs from the canonical cross-variant block")
+			}
+			choiceStart := strings.Index(contract, "  1. **Report the Gentle AI defect and continue**:")
+			choiceEnd := strings.Index(contract, "  2. **Continue without reporting**:")
+			if choiceStart < 0 || choiceEnd < 0 || choiceStart >= choiceEnd {
+				t.Fatal("provider-defect handoff is missing its numbered report choice")
+			}
+			for _, line := range strings.Split(contract[choiceStart:choiceEnd], "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "-") && !strings.HasPrefix(line, "      -") {
+					t.Errorf("provider-defect report-choice sub-bullet must use six spaces: %q", line)
+				}
 			}
 			choiceMatches := semanticChoicePattern.FindAllString(contract, -1)
 			if got := len(choiceMatches); got != 3 {
@@ -275,7 +287,7 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 				{
 					name:   "new reports are marked and shaped",
 					prefix: "If an equivalent issue exists",
-					must:   []string{"add exactly one new occurrence comment", "do not add, remove, or change any labels on it", "<!-- gentle-ai-provider-report:v1 -->", "in this order", "non-empty", "Keep each section bounded and privacy-scrubbed"},
+					must:   []string{"add exactly one new occurrence comment", "do not add, remove, or change any labels on it", "<!-- gentle-ai-provider-report:v1 -->", "in this order", "non-empty", "Keep each section privacy-scrubbed and bounded", "total body length must be no greater than 16,000 characters", "every section must be no greater than 4,000 characters"},
 				},
 				{
 					name:   "occurrence comment uncertainty fails closed without a duplicate",

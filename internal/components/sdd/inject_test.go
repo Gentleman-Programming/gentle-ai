@@ -65,6 +65,33 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 			if got := sddOrchestratorAsset(tc.agent); got != tc.want {
 				t.Fatalf("sddOrchestratorAsset(%q) = %q, want %q", tc.agent, got, tc.want)
 			}
+			rendered := renderSDDOrchestratorAsset(tc.agent)
+			const reportMarker = "<!-- gentle-ai-provider-report:v1 -->"
+			if got := strings.Count(rendered, reportMarker); got != 1 {
+				t.Fatalf("rendered %s orchestrator has %d report markers, want exactly one", tc.agent, got)
+			}
+			lastHeading := -1
+			for _, section := range []string{
+				"Automated Provider Defect Report",
+				"Gentle AI Version / Build",
+				"Environment",
+				"Operation",
+				"Observed Evidence",
+				"Expected Behavior",
+				"Actual Behavior",
+				"Minimal Reproduction",
+				"Preserved State",
+			} {
+				heading := "## " + section
+				if got := strings.Count(rendered, heading); got != 1 {
+					t.Fatalf("rendered %s orchestrator has %d occurrences of report heading %q, want exactly one", tc.agent, got, heading)
+				}
+				index := strings.Index(rendered, heading)
+				if index <= lastHeading {
+					t.Fatalf("rendered %s orchestrator places report heading %q out of canonical order", tc.agent, heading)
+				}
+				lastHeading = index
+			}
 			for _, required := range []string{
 				"exactly three semantic choices in this order",
 				"`report_and_continue`, `continue_without_reporting`, `stop_here`",
@@ -83,7 +110,7 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				"`consent: \"declined_this_candidate\"`",
 				"native negotiated STATUS",
 			} {
-				if !strings.Contains(renderSDDOrchestratorAsset(tc.agent), required) {
+				if !strings.Contains(rendered, required) {
 					t.Fatalf("rendered %s orchestrator missing provider-defect handoff clause %q", tc.agent, required)
 				}
 			}

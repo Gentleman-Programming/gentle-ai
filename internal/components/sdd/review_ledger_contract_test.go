@@ -354,7 +354,11 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// #3076 makes the non-idempotent occurrence-comment write fail closed when
 	// its exact outcome is unknown. Kilocode embeds the shared orchestrator
 	// contract, so the hash moved. Deliberate, not drift.
-	const want = "022fd2d05b7b04c17e4d14c14e8cf60075bbe6fb6048c64abb81ffd18a05468d"
+	// #3076 aligns the rendered report instructions with the workflow's exact
+	// body and section limits and normalizes nested list indentation. Kilocode
+	// embeds this shared orchestrator contract, so the hash moved. Deliberate,
+	// not drift.
+	const want = "e45ef3e488d89394a37d8ddaf101ae658ee4425d49dca94576e76b02c1df26f9"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
