@@ -80,10 +80,20 @@ func TestStatusOffersBoundRefuterBeforeFinalizeForInferentialFinding(t *testing.
 	writeReviewCLIJSON(t, refuter, facadeRefuterResult{Results: []facadeRefuterOutcome{{
 		FindingID: findingID, Outcome: reviewtransaction.OutcomeRefuted, ProofRefs: []string{"immutable patch does not establish the external contract"},
 	}}})
+	var finalized bytes.Buffer
 	if err := RunReviewFacadeFinalize([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--captured-results", "--refuter", refuter,
-	}, &bytes.Buffer{}); err != nil {
+	}, &finalized); err != nil {
 		t.Fatalf("finalize canonical refuter result: %v", err)
+	}
+	result := decodeFacadeFinalize(t, finalized.Bytes())
+	if result.State != reviewtransaction.StateValidating {
+		t.Fatalf("finalize refuted finding = %#v, want validating state", result)
+	}
+	status = reviewStatusWithTransition(t, repo, started.LineageID)
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "verification_evidence_required" {
+		t.Fatalf("post-refuter next_transition = %#v, want collect/verification_evidence_required", status.NextTransition)
 	}
 }
 

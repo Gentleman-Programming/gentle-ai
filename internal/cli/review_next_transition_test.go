@@ -1060,6 +1060,9 @@ func TestNativeStatusV5RefuterCollectionRequiresCanonicalInput(t *testing.T) {
 		}}},
 	}
 	schema := compileWholeNativeStatusSchema(t, "status-v5.schema.json")
+	if err := schema.Validate(document); err != nil {
+		t.Fatalf("status-v5 schema rejected canonical refuter input: %v", err)
+	}
 	for _, test := range []struct {
 		name, field, value string
 	}{
