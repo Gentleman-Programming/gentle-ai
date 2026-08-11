@@ -1366,67 +1366,57 @@ func TestReviewDispatchableReviewVerbsExports(t *testing.T) {
 	}
 	test := reviewDispatchableReviewVerbs(t)
 	for verb := range test {
-		if !production[verb] {
-			t.Errorf("production missing %q; views forked", verb)
-		}
-	}
-	for verb := range production {
-		if !test[verb] {
-			t.Errorf("production extra %q; views forked", verb)
+		if production[verb] != test[verb] {
+			t.Errorf("view diverged on %q (prod=%v test=%v)", verb, production[verb], test[verb])
 		}
 	}
 }
 
 // TestByDesignEnvelopeParsing: ParseByDesignEnvelope's six rules.
 func TestByDesignEnvelopeParsing(t *testing.T) {
-	t.Run("named continuation satisfies", func(t *testing.T) {
-		env, err := ParseByDesignEnvelope("Run `gentle-ai review reopen-results --lineage L` to clear.", 42)
-		if err != nil || env.Verb != "reopen-results" || env.Line != 42 || env.IsAnnotated() {
-			t.Fatalf("got %+v err=%v", env, err)
-		}
-	})
-	t.Run("valid by-design marker satisfies", func(t *testing.T) {
-		env, err := ParseByDesignEnvelope("<!-- by-design: operator-knowledge -->", 7)
-		if err != nil || env.Shape != byDesignOperatorKnowledge || env.IsNamed() {
-			t.Fatalf("got %+v err=%v", env, err)
-		}
-	})
-	t.Run("unknown shape fails closed", func(t *testing.T) {
-		_, err := ParseByDesignEnvelope("<!-- by-design: because-reasons -->", 1)
-		if err == nil || !strings.Contains(err.Error(), "because-reasons") || !strings.Contains(err.Error(), "operator-knowledge") {
-			t.Fatalf("want shape vocab error, got %v", err)
-		}
-	})
-	t.Run("marker plus verb is contradictory", func(t *testing.T) {
-		_, err := ParseByDesignEnvelope("<!-- by-design: human-authority --> run gentle-ai review status", 1)
-		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
-			t.Fatalf("want contradictory error, got %v", err)
-		}
-	})
-	t.Run("no marker and no verb fails closed", func(t *testing.T) {
-		_, err := ParseByDesignEnvelope("plain prose with no exit named", 1)
-		if err == nil || !strings.Contains(err.Error(), "neither") {
-			t.Fatalf("want empty-directive error, got %v", err)
-		}
-	})
-	t.Run("malformed marker fails closed", func(t *testing.T) {
-		_, err := ParseByDesignEnvelope("<!-- by-design: somebody-said-this-is-fine -->", 1)
-		if err == nil || !strings.Contains(err.Error(), "closed vocabulary") {
-			t.Fatalf("want malformed-marker error, got %v", err)
-		}
-	})
+	cases := []struct {
+		name, in, wantErr string
+	}{{
+		"named continuation satisfies",
+		"Run `gentle-ai review reopen-results --lineage L` to clear.", "",
+	}, {
+		"valid by-design marker satisfies",
+		"<!-- by-design: operator-knowledge -->", "",
+	}, {"unknown shape fails closed", "<!-- by-design: because-reasons -->", "closed vocabulary"},
+		{"marker plus verb is contradictory",
+			"<!-- by-design: human-authority --> run gentle-ai review status", "mutually exclusive"},
+		{"no marker and no verb fails closed", "plain prose with no exit named", "neither"},
+		{"malformed marker fails closed", "<!-- by-design: somebody-said-this-is-fine -->", "closed vocabulary"},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			env, err := ParseByDesignEnvelope(c.in, i+1)
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("got err=%v", err)
+				}
+				if env.IsAnnotated() && env.IsNamed() {
+					t.Fatalf("env %+v is both annotated and named", env)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("want %q in err, got %v", c.wantErr, err)
+			}
+		})
+	}
 }
 
 // TestByDesignEnvelopeVocabularyMatch: production byDesignShapeSet and refusalRatchetByDesignShapes must agree.
 func TestByDesignEnvelopeVocabularyMatch(t *testing.T) {
 	for shape := range byDesignShapeSet {
 		if !refusalRatchetByDesignShapes[shape] {
-			t.Errorf("production has %q; test side missing; taxonomy forked", shape)
+			t.Errorf("production has %q; test side missing", shape)
 		}
 	}
 	for shape := range refusalRatchetByDesignShapes {
 		if !byDesignShapeSet[shape] {
-			t.Errorf("test side has %q; production missing; taxonomy forked", shape)
+			t.Errorf("test side has %q; production missing", shape)
 		}
 	}
 }
