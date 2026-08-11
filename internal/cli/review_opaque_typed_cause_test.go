@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -66,7 +67,7 @@ func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			want: opaqueNativeCause("no such file or directory", "The system cannot find the file specified."),
+			want: nativeNotExistCause(t),
 		},
 		{
 			name: "authority-record-unparsable",
@@ -186,7 +187,7 @@ func TestOpaqueRepositoryContextCauseIsScrubbed(t *testing.T) {
 	if strings.Contains(message, repo) || strings.Contains(message, lineage+"/review-state.json") {
 		t.Fatalf("forwarded cause leaked an absolute path: %s", message)
 	}
-	if !strings.Contains(message, opaqueNativeCause("no such file or directory", "The system cannot find the file specified.")) {
+	if !strings.Contains(message, nativeNotExistCause(t)) {
 		t.Fatalf("scrubbing removed the cause along with the path: %s", message)
 	}
 	if scrubbed := reviewScrubDefectReportField(message); scrubbed != message {
@@ -207,6 +208,40 @@ func assertOpaqueFailureNamesCause(t *testing.T, message, code, wantCause, repo 
 	}
 }
 
+// nativeNotExistCause asks THIS installation how it renders a missing file,
+// instead of pinning the sentence a US English installation renders. What the
+// assertion needs is that the forwarded cause survives scrubbing, and the
+// condition behind it -- ERROR_FILE_NOT_FOUND, the errno the removed authority
+// record leaves behind -- does not vary. The sentence does: syscall.Errno.Error
+// asks FormatMessage for US English first and falls back to the installation's
+// own message resources when that lookup fails, so an installation carrying no
+// English resources renders the same errno in its own language. Pinning the
+// text asserted the machine, not the contract.
+func nativeNotExistCause(t *testing.T) string {
+	t.Helper()
+	// The parent directory must exist. A missing parent is a different
+	// condition (ERROR_PATH_NOT_FOUND on Windows) and renders a different
+	// sentence, which would silently weaken every assertion built on this.
+	_, err := os.Open(filepath.Join(t.TempDir(), "absent-authority-record.json"))
+	if err == nil {
+		t.Fatal("opening an absent file succeeded, so this platform cannot render the cause under test")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("probe reported something other than a missing file, so its sentence is not the one under test: %v", err)
+	}
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("probe error carries no separable cause to render: %v", err)
+	}
+	return pathErr.Err.Error()
+}
+
+// opaqueNativeCause still serves one call site, and its two arms are safe for
+// different reasons. The Windows arm expects "unsafe RAR authority path",
+// which gentle-ai produces itself. The Unix arm does pin an errno text, "not
+// a directory", and is safe because Go renders errno 20 from its own
+// compile-time table rather than from the installation. Neither arm reaches
+// FormatMessage, which is what the replaced assertions depended on.
 func opaqueNativeCause(unix, windows string) string {
 	if runtime.GOOS == "windows" {
 		return windows
