@@ -351,7 +351,10 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// adds the versioned, privacy-safe report marker and required shape.
 	// Kilocode embeds this shared orchestrator contract, so the hash moved.
 	// Deliberate, not drift.
-	const want = "176e425c940b98b4493802f6fcce49474a8ab48d001b07e7dd84d6bf6b7e4f9d"
+	// #3076 makes the non-idempotent occurrence-comment write fail closed when
+	// its exact outcome is unknown. Kilocode embeds the shared orchestrator
+	// contract, so the hash moved. Deliberate, not drift.
+	const want = "022fd2d05b7b04c17e4d14c14e8cf60075bbe6fb6048c64abb81ffd18a05468d"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

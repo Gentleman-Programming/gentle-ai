@@ -76,6 +76,8 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				"Only a completed duplicate lookup with a definitive result may branch to a write",
 				"Do not create, comment, update, or label any issue",
 				"do not add, remove, or change any labels on it",
+				"If the occurrence-comment write fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome",
+				"Do not retry that comment or perform another GitHub mutation until the exact comment outcome on that exact canonical issue is definitively resolved",
 				"is not a report-success precondition",
 				"Both continue choices execute that exact captured decline invocation exactly once",
 				"`consent: \"declined_this_candidate\"`",

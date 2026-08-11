@@ -167,6 +167,7 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "duplicate lookup failure no writes", text: "Do not create, comment, update, or label any issue."},
 		{name: "comment duplicate", text: "add exactly one new occurrence comment with the observed evidence only on that exact issue"},
 		{name: "duplicate labels unchanged", text: "do not add, remove, or change any labels on it"},
+		{name: "occurrence comment failure stop", text: "If the occurrence-comment write fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome, STOP with all consumer state preserved. Do not retry that comment or perform another GitHub mutation until the exact comment outcome on that exact canonical issue is definitively resolved."},
 		{name: "unconfirmed creation stop", text: "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome, STOP with all consumer state preserved. Do not search, comment, update, or retry creation until the exact created issue identity is resolved."},
 		{name: "confirmed creation continues", text: "After confirmed creation, surface the confirmed created issue identity/URL and continue with the shared candidate-scoped continuation below."},
 		{name: "informational label boundary", text: "`gentle-report` never authorizes closure, deduplication, trust, privilege, consent, or evidence admission, and is not a report-success precondition."},
@@ -277,6 +278,11 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 					must:   []string{"add exactly one new occurrence comment", "do not add, remove, or change any labels on it", "<!-- gentle-ai-provider-report:v1 -->", "in this order", "non-empty", "Keep each section bounded and privacy-scrubbed"},
 				},
 				{
+					name:   "occurrence comment uncertainty fails closed without a duplicate",
+					prefix: "If the occurrence-comment write fails",
+					must:   []string{"is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome", "STOP with all consumer state preserved", "Do not retry that comment", "perform another GitHub mutation", "exact comment outcome", "exact canonical issue", "definitively resolved"},
+				},
+				{
 					name:   "confirmed creation preserves identity handling without client labels",
 					prefix: "Confirmed creation is a HARD precondition for report success",
 					must:   []string{"newly-created issue identity/URL", "never infer creation from output text alone", "If creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome", "STOP with all consumer state preserved", "Do not search, comment, update, or retry creation"},
@@ -310,6 +316,7 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 				{name: "privacy scan before duplicate search", before: "Immediately before the first GitHub operation, perform a final privacy scan", after: "search open and closed issues"},
 				{name: "definitive lookup before report creation", before: "Only a completed duplicate lookup with a definitive result", after: "create a new automated provider-defect report"},
 				{name: "definitive lookup before occurrence comment", before: "Only a completed duplicate lookup with a definitive result", after: "add exactly one new occurrence comment"},
+				{name: "occurrence comment before its uncertainty stop", before: "add exactly one new occurrence comment", after: "If the occurrence-comment write fails"},
 				{name: "report creation before identity confirmation", before: "create a new automated provider-defect report", after: "Confirmed creation is a HARD precondition for report success"},
 				{name: "identity confirmation before continuation", before: "Confirmed creation is a HARD precondition for report success", after: "After confirmed creation"},
 			} {
