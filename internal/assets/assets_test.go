@@ -519,6 +519,14 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`"sdd_task_result_malformed"`,
 		`failedSDDSessions`,
 		`extractionClass(cause, "sddClass")`,
+		// #2677: an empty result means the child produced no output at all
+		// (for example a provider rejection before generation), and the
+		// handoff must say so and carry the one causal fact the hook
+		// receives -- the child's provider/model route -- after validation.
+		`function taskRouteModel(`,
+		`produced no task output at all`,
+		`provider rejected the request before generation (authentication, region, or model access)`,
+		`taskRouteModel(metadata)`,
 		`export default ReviewResultArtifactsPlugin`,
 	} {
 		if !strings.Contains(source, want) {

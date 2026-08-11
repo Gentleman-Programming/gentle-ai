@@ -329,7 +329,16 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// valid, but an explicit maintainer-authorized native recovery or reset that
 	// the runtime supports is no longer overridden. Kilocode renders that shared
 	// orchestrator contract, so the hash moved again. Deliberate, not drift.
-	const want = "7b4baa31cd41d42ef2543f5b86152f084e751e95891124edefff7edb98447663"
+	//
+	// The canonical artifact language contract is appended to all eight agent
+	// prompts (+458 characters each); no key is added, removed, or otherwise
+	// changed. The hash is recomputed from the rebased tree. Deliberate, not
+	// drift.
+	// #2758 adds the staged_delivery_candidate_required continuation row to
+	// the shared contract. Kilocode embeds it in the orchestrator prompt, so
+	// the hash moved. A rendered comparison against origin/main confirmed this
+	// is the only changed settings scalar.
+	const want = "c614460175fbf92a20d7b372c7e5a179ffac3dd46f54b92e5510ad5389816eae"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -549,8 +558,19 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// session boundary: no restart, child process, special session, or
 		// OPENCODE_DISABLE_* variable. Ceilings are unchanged: both rows keep
 		// more than 15% headroom.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_484, maxCharacters: 23_600},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 31_062, maxCharacters: 36_000},
+		//
+		// +458 per lens injects the canonical artifact language contract into every
+		// rendered sub-agent prompt, so executors no longer depend on the orchestrator
+		// remembering to forward it. The ceilings move to preserve the required 15%
+		// headroom after that deliberate increase.
+		// Root 7 (#2471) removed two stop-reason rows from the shipped contract
+		// because the machine now routes them as collect transitions, so the
+		// rendered protocol got 372 characters cheaper. The pins move DOWN,
+		// which is the direction this table exists to protect.
+		// #2758 adds one staged-delivery STOP continuation (383 rendered
+		// characters per row). The ceilings preserve the required 15% headroom.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 21_261, maxCharacters: 24_500},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 33_606, maxCharacters: 38_700},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -78,8 +78,32 @@ jobs:
             completed_once("j54-sdd-missing-authority-receipt-fails-closed") and
             completed_once("j55-sdd-mismatched-authority-receipt-fails-closed") and
             completed_once("j56-sdd-non-allow-post-apply-gate-fails-closed") and
-            completed_once("j58-sdd-foreign-openspec-path-fails-closed")
+            completed_once("j58-sdd-foreign-openspec-path-fails-closed") and
+            completed_once("j81-rc1-consecutive-rescope-repair-executes-printed-command") and
+            completed_once("j75-intended-untracked-selection-executes-printed-start")
           ' "$RUNNER_TEMP/bench-portable.json"
+          # Transition axis (#2829): sequences of ordinary operations, which is
+          # how #2830 shipped. #2830 now refuses the second consecutive rescope
+          # before publication, so every transition journey must complete.
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis transition --out "$RUNNER_TEMP/bench-transition.json"
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            ([.journeys[] | select(.id | startswith("tr"))] | length) == 11 and
+            ([.journeys[] | select((.id | startswith("tr")) and .status == "completed")] | length) == 11 and
+            completed_once("tr01-consecutive-rescope-keeps-the-ledger-readable") and
+            completed_once("tr02-reset-after-rescope-keeps-the-ledger-readable") and
+            completed_once("tr03-review-disabled-mid-change-keeps-sdd-moving") and
+            completed_once("tr04-reset-then-rescope-keeps-the-ledger-readable") and
+            completed_once("tr05-review-re-enabled-mid-change-keeps-sdd-moving") and
+            completed_once("tr06-mode-flip-during-an-active-attempt") and
+            completed_once("tr07-reset-then-reset-keeps-the-ledger-readable") and
+            completed_once("tr08-scope-change-after-a-delegated-handoff") and
+            completed_once("tr09-mode-flip-while-a-review-lineage-is-open") and
+            completed_once("tr10-scope-change-after-the-review-is-bound") and
+            completed_once("tr11-abandon-the-review-while-an-attempt-is-open")
+          ' "$RUNNER_TEMP/bench-transition.json"
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed --out "$RUNNER_TEMP/bench-source-coupled-untagged.json"
           jq -e '
             def unsupported_once($id):
@@ -185,7 +209,7 @@ jobs:
         env:
           GENTLE_AI_TEST_BINARY: ${{ runner.temp }}\gentle-ai.exe
           GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER: "1"
-        run: go test -v ./internal/cli ./internal/reviewtransaction ./internal/sddstatus ./internal/components/engram -run '^(TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals|TestRARPrivateOwnerRemainsTokenUserOnly|TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags|TestWindowsSecureOpenDriveFallbackFailsClosed|TestWindowsSecureOpenDoesNotRetryOtherErrors|TestWindowsStoreLockUsesExistingInodeAdvisoryTruth|TestRunGitBoundsLocalAndRemoteCommands|TestRunGitDistinguishesAggregateDeadlineAndTypedExit|TestStoreLockReportsLiveOwnerAndCannotBeStolen|TestStoreLockRecoversCrashAndCorruptOwnerRecords|TestStoreLockIsReleasedWhenOwnerProcessExits|TestConcurrentStoreLockRecoverersCannotBothWin|TestCompactStoresShareRepositoryWriteLock|TestCompactStoreRejectsConcurrentLockedWriter|TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline|TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance|TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays|TestRepairClassifiedAuthorityResumesEachDurablePhase|TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState|TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath|TestRejectFacadeCorrectionUntrackedRespectsStagedProjection|TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree|TestWindowsPowerShell51ArtifactManifestFileFinalize|TestNegotiatedStatusUnderUnavailableProcessTempOffersFreshStartOnBothContracts|TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBaseRef|TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection|TestNegotiatedStatusLeavesNoTemporaryGitArtifactsAfterFailure|TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart|TestStdioHandshake_TerminatesDescendantOnContextEnd|TestStdioHandshake_PreservesEarlierDeadline|TestStdioHandshake_PreservesCallerCancellation|TestProbeStdio_MissingAbsoluteConfiguredCommandFails|TestProbeStdio_MissingRelativeWindowsExecutableIsNotInstalled)$' -count=1 -timeout=8m
+        run: go test -v ./internal/cli ./internal/reviewtransaction ./internal/sddstatus ./internal/components/engram -run '^(TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals|TestRARPrivateOwnerRemainsTokenUserOnly|TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags|TestWindowsSecureOpenDriveFallbackFailsClosed|TestWindowsSecureOpenDoesNotRetryOtherErrors|TestWindowsStoreLockUsesExistingInodeAdvisoryTruth|TestRunGitBoundsLocalAndRemoteCommands|TestRunGitDistinguishesAggregateDeadlineAndTypedExit|TestStoreLockReportsLiveOwnerAndCannotBeStolen|TestStoreLockRecoversCrashAndCorruptOwnerRecords|TestStoreLockIsReleasedWhenOwnerProcessExits|TestConcurrentStoreLockRecoverersCannotBothWin|TestCompactStoresShareRepositoryWriteLock|TestCompactStoreRejectsConcurrentLockedWriter|TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline|TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance|TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays|TestRepairClassifiedAuthorityResumesEachDurablePhase|TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState|TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath|TestRejectFacadeCorrectionUntrackedRespectsStagedProjection|TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree|TestWindowsPowerShell51ArtifactManifestFileFinalize|TestNegotiatedStatusUnderUnavailableProcessTempOffersFreshStartOnBothContracts|TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBaseRef|TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection|TestNegotiatedStatusLeavesNoTemporaryGitArtifactsAfterFailure|TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart|TestFrozenCandidateReviewerDiffUsesRegularAttributesFileAndIgnoresMutableSources|TestStdioHandshake_TerminatesDescendantOnContextEnd|TestStdioHandshake_PreservesEarlierDeadline|TestStdioHandshake_PreservesCallerCancellation|TestProbeStdio_MissingAbsoluteConfiguredCommandFails|TestProbeStdio_MissingRelativeWindowsExecutableIsNotInstalled)$' -count=1 -timeout=8m
 
       # PR runs the release-blocker subset only; the full Windows suite runs
       # in the separate, honestly-named "Windows Full Suite" workflow.

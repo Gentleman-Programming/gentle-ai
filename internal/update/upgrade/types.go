@@ -10,6 +10,10 @@ import (
 type ToolUpgradeStatus string
 
 const (
+	// UpgradeSucceeded means the selected strategy completed successfully. For
+	// OpenCode plugins, this specifically means the expected package manifest
+	// version was observed; it does not assert that a running OpenCode process
+	// has already reloaded the plugin.
 	UpgradeSucceeded ToolUpgradeStatus = "succeeded"
 	UpgradeFailed    ToolUpgradeStatus = "failed"
 	UpgradeSkipped   ToolUpgradeStatus = "skipped" // dry-run, dev build, or unsupported platform

@@ -76,7 +76,17 @@ try {
     const artifact = cwd + "/proposal.md"
     await writeFile(artifact, "existing artifact")
     const input = { tool: "task", sessionID: "sdd-session", callID: "call-sdd", args: { subagent_type: phase, prompt: "phase work" } }
-    const output = { title: "", output: result, metadata: {} }
+    // The task tool's real result metadata carries the child route
+    // ({parentSessionId, sessionId, model: {providerID, modelID}}); the
+    // hostile shape proves path-like or dump-like values are omitted from
+    // the handoff entirely, and the no-model shape proves absence is
+    // tolerated rather than invented.
+    const metadata = scenario.includes("hostile-model")
+      ? { sessionId: "child", model: { providerID: "/home/user/secret-provider", modelID: "x".repeat(400) + " RegionError: request rejected" } }
+      : scenario.includes("no-model")
+        ? {}
+        : { parentSessionId: "sdd-session", sessionId: "child", model: { providerID: "opencode-go", modelID: "deepseek-v4-flash" } }
+    const output = { title: "", output: result, metadata }
     let failure = "NO_ERROR"
     try { await hooks["tool.execute.after"](input, output) } catch (cause: unknown) { failure = cause instanceof Error ? cause.message : String(cause) }
     if (scenario === "sdd-lifecycle") {
@@ -255,6 +265,17 @@ func TestReviewPluginRejectsMissingOrMalformedBindingBeforeReviewerLaunch(t *tes
 	}
 }
 
+// sddEmptySummaryFragment is the truthful empty-result summary (#2677): an
+// empty result means the child task produced no output at all -- observed
+// when the provider rejects the request before generation -- and the summary
+// must say so instead of claiming the child "returned no valid task result".
+const sddEmptySummaryFragment = "produced no task output at all"
+
+// sddEmptyCauseFragment names the likeliest cause class for a child that
+// produced nothing, so the operator is pointed at the provider boundary
+// rather than at the phase's artifact contract.
+const sddEmptyCauseFragment = "provider rejected the request before generation (authentication, region, or model access)"
+
 func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -262,9 +283,32 @@ func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 		wantCode    string
 		wantPhase   string
 		wantBlocked bool
+		wantSummary string
+		wantModel   string
+		forbid      []string
 	}{
-		{name: "empty unsuffixed phase", scenario: "sdd-empty", wantCode: "sdd_task_result_empty", wantPhase: "sdd-propose", wantBlocked: true},
-		{name: "malformed profile-suffixed phase", scenario: "sdd-profile-malformed", wantCode: "sdd_task_result_malformed", wantPhase: "sdd-propose-cheap", wantBlocked: true},
+		{
+			name: "empty unsuffixed phase", scenario: "sdd-empty",
+			wantCode: "sdd_task_result_empty", wantPhase: "sdd-propose", wantBlocked: true,
+			wantSummary: sddEmptySummaryFragment, wantModel: "opencode-go/deepseek-v4-flash",
+		},
+		{
+			name: "empty phase without model metadata", scenario: "sdd-empty-no-model",
+			wantCode: "sdd_task_result_empty", wantPhase: "sdd-propose", wantBlocked: true,
+			wantSummary: sddEmptySummaryFragment,
+		},
+		{
+			name: "empty phase with hostile model metadata", scenario: "sdd-empty-hostile-model",
+			wantCode: "sdd_task_result_empty", wantPhase: "sdd-propose", wantBlocked: true,
+			wantSummary: sddEmptySummaryFragment,
+			forbid:      []string{"/home/user/secret-provider", "RegionError", "xxxxxxxxxx"},
+		},
+		{
+			name: "malformed profile-suffixed phase", scenario: "sdd-profile-malformed",
+			wantCode: "sdd_task_result_malformed", wantPhase: "sdd-propose-cheap", wantBlocked: true,
+			wantSummary: "returned no valid task result", wantModel: "opencode-go/deepseek-v4-flash",
+			forbid: []string{sddEmptySummaryFragment},
+		},
 		{name: "unrelated sdd-prefixed agent", scenario: "sdd-unrelated", wantCode: "NO_ERROR"},
 	}
 	for _, tt := range tests {
@@ -283,8 +327,13 @@ func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 				t.Fatalf("downstream SDD launch was not terminally blocked: %q", parts[1])
 			}
 			if tt.wantBlocked {
-				assertSDDTaskResultHandoff(t, parts[0], tt.wantCode, tt.wantPhase)
-				assertSDDTaskResultHandoff(t, parts[1], tt.wantCode, tt.wantPhase)
+				assertSDDTaskResultHandoff(t, parts[0], tt.wantCode, tt.wantPhase, tt.wantSummary, tt.wantModel)
+				assertSDDTaskResultHandoff(t, parts[1], tt.wantCode, tt.wantPhase, tt.wantSummary, tt.wantModel)
+			}
+			for _, leaked := range tt.forbid {
+				if strings.Contains(parts[0], leaked) || strings.Contains(parts[1], leaked) {
+					t.Fatalf("failure handoff leaked %q: %q", leaked, parts[:2])
+				}
 			}
 			if !tt.wantBlocked && parts[1] != "NOT_ATTEMPTED" {
 				t.Fatalf("unrelated agent unexpectedly entered SDD routing: %q", parts[1])
@@ -296,24 +345,41 @@ func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 	}
 }
 
-func assertSDDTaskResultHandoff(t *testing.T, message, code, phase string) {
+func assertSDDTaskResultHandoff(t *testing.T, message, code, phase, summary, model string) {
 	t.Helper()
 	const prefix = "GENTLE_AI_SDD_FAILURE "
 	if !strings.HasPrefix(message, prefix) {
 		t.Fatalf("failure lacks a machine-readable handoff: %q", message)
 	}
+	raw := strings.TrimPrefix(message, prefix)
 	var handoff struct {
 		SchemaName   string `json:"schemaName"`
 		Status       string `json:"status"`
 		Code         string `json:"code"`
 		Phase        string `json:"phase"`
+		TaskModel    string `json:"taskModel"`
+		Summary      string `json:"summary"`
 		Continuation string `json:"continuation"`
 	}
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(message, prefix)), &handoff); err != nil {
+	if err := json.Unmarshal([]byte(raw), &handoff); err != nil {
 		t.Fatalf("failure handoff is not JSON: %v: %q", err, message)
 	}
 	if handoff.SchemaName != "gentle-ai.sdd-task-result-failure/v1" || handoff.Status != "blocked" || handoff.Code != code || handoff.Phase != phase {
 		t.Fatalf("failure handoff = %#v", handoff)
+	}
+	if !strings.Contains(handoff.Summary, summary) {
+		t.Fatalf("failure handoff summary = %q, want it to contain %q", handoff.Summary, summary)
+	}
+	if code == "sdd_task_result_empty" && !strings.Contains(handoff.Summary, sddEmptyCauseFragment) {
+		t.Fatalf("empty-result summary does not name the likeliest cause class: %q", handoff.Summary)
+	}
+	if handoff.TaskModel != model {
+		t.Fatalf("failure handoff taskModel = %q, want %q", handoff.TaskModel, model)
+	}
+	// An absent route is omitted, never invented: the key itself must not
+	// appear when no valid provider/model identity was available.
+	if model == "" && strings.Contains(raw, `"taskModel"`) {
+		t.Fatalf("failure handoff carries an empty taskModel field: %q", raw)
 	}
 	if !strings.HasPrefix(handoff.Continuation, "gentle-ai sdd-status --cwd '") || !strings.HasSuffix(handoff.Continuation, "' --json") {
 		t.Fatalf("failure handoff names no runnable sdd-status continuation: %#v", handoff)

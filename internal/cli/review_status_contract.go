@@ -89,6 +89,11 @@ type ReviewTargetStatusResult struct {
 	NextTransition         *ReviewNextTransition                                `json:"next_transition,omitempty"`
 	ValidationRequest      *reviewtransaction.TargetedValidationRequest         `json:"validation_request,omitempty"`
 	FinalVerificationRetry *reviewtransaction.FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
+	decision               reviewtransaction.TargetStatusDecision               `json:"-"`
+	intendedUntracked      reviewIntendedUntrackedScope
+	repositoryRoot         string
+	rddMode                reviewtransaction.RDDModeStatus
+	rddModeResolved        bool
 }
 
 // ReviewActionEligibility remains an additive compatibility detail for older
@@ -165,6 +170,7 @@ const (
 	reviewActionForbiddenReconciliation        = "forbidden_reconciliation_requires_exact_request"
 	reviewActionForbiddenInputsUnavailable     = "forbidden_required_inputs_unavailable"
 	reviewActionForbiddenFinalizeStatus        = "forbidden_finalize_requires_target_status"
+	reviewActionForbiddenRDDDisabled           = "forbidden_rdd_disabled"
 )
 
 type ReviewFinalizeReconciliation struct {
@@ -215,6 +221,7 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 		Applicability: native.Applicability, Action: native.Action, ActionDisposition: native.ActionDisposition,
 		Replayability:  native.Replayability,
 		TargetIdentity: native.TargetIdentity,
+		decision:       native.Decision,
 		Candidates:     append([]string{}, native.CandidateLineageIDs...),
 		Repair:         reviewtransaction.UnsupportedAuthorityRepairAssessment(),
 		Projection: ReviewTargetStatusProjection{
@@ -246,8 +253,9 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 		Generation: native.Generation, Revision: native.Revision,
 	}
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact {
+		correctionBudget, _ := reviewtransaction.CorrectionBudget(native.OriginalChangedLines)
 		result.Frozen = &ReviewTargetStatusFrozen{
-			Tier: native.Tier, OriginalChangedLines: native.OriginalChangedLines, CorrectionBudget: native.CorrectionBudget,
+			Tier: native.Tier, OriginalChangedLines: native.OriginalChangedLines, CorrectionBudget: correctionBudget,
 		}
 	}
 	if native.ReceiptIdentity != "" {
@@ -265,7 +273,11 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 	allowed := ReviewEligibleAction{RequiredInputs: []string{}}
 	switch status.Action {
 	case reviewtransaction.TargetStatusActionStart:
-		allowed.Action, allowed.ReasonCode = "review.start", reviewActionEligibleCurrent
+		if status.rddModeResolved && !status.rddMode.Enabled() {
+			allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenRDDDisabled
+		} else {
+			allowed.Action, allowed.ReasonCode = "review.start", reviewActionEligibleCurrent
+		}
 	case reviewtransaction.TargetStatusActionValidate:
 		allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenInputsUnavailable
 	case reviewtransaction.TargetStatusActionFinalize:
@@ -324,6 +336,8 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 		forbiddenReason = reviewActionForbiddenUnchangedEscalated
 	case status.Action == reviewtransaction.TargetStatusActionReconcileFinalize:
 		forbiddenReason = reviewActionForbiddenReconciliation
+	case status.Action == reviewtransaction.TargetStatusActionStart && status.rddModeResolved && !status.rddMode.Enabled():
+		forbiddenReason = reviewActionForbiddenRDDDisabled
 	case allowed.Action == "stop" && allowed.ReasonCode == reviewActionForbiddenInputsUnavailable:
 		forbiddenReason = reviewActionForbiddenInputsUnavailable
 	}
@@ -347,7 +361,17 @@ func reviewStopEligibility(reason string, requiredInputs []string) *ReviewAction
 	}
 }
 
+type reviewStatusCompactAuthority struct {
+	OriginalChangedLines   int
+	CorrectionBudget       int
+	CorrectionBudgetPolicy string
+}
+
 func (result ReviewTargetStatusResult) Validate() error {
+	return result.validateWithCompactAuthority(nil)
+}
+
+func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *reviewStatusCompactAuthority) error {
 	legacyTransport := result.Schema == ReviewIntegrationStatusSchemaV2 && result.Contract == ReviewIntegrationContractV1
 	nativeGitTransport := (result.Schema == ReviewIntegrationStatusSchemaV3 || result.Schema == ReviewIntegrationStatusSchemaV4 || result.Schema == ReviewIntegrationStatusSchemaV5) && result.Contract == ReviewIntegrationContractV2
 	if (!legacyTransport && !nativeGitTransport) || result.Operation != "review.status" {
@@ -408,10 +432,21 @@ func (result ReviewTargetStatusResult) Validate() error {
 			return errors.New("negotiated status validation request copies differ")
 		}
 		if request := result.NextTransition.CorrectionRequest; request != nil {
+			expectedBudget := 0
+			if result.Frozen != nil {
+				expectedBudget = result.Frozen.CorrectionBudget
+			}
+			if authority != nil {
+				budget, budgetErr := reviewtransaction.CompactExpectedBudget(authority.OriginalChangedLines, authority.CorrectionBudgetPolicy)
+				if budgetErr != nil || budget != authority.CorrectionBudget {
+					return errors.New("native compact status budget is invalid") // refusal:by-design world-action: provider-generated status and persisted compact authority budget require a code fix when they disagree
+				}
+				expectedBudget = authority.CorrectionBudget
+			}
 			if result.Authority == nil || result.Frozen == nil || result.Authority.Version != reviewtransaction.AuthorityVersionCompact ||
 				result.Authority.State != reviewtransaction.StateCorrectionRequired || request.LineageID != result.Authority.LineageID ||
 				request.ExpectedRevision != result.Authority.Revision || request.TargetIdentity != reviewAuthorityTargetIdentity(result) ||
-				request.CorrectionBudget != result.Frozen.CorrectionBudget {
+				request.CorrectionBudget != expectedBudget {
 				return errors.New("negotiated status correction request binding is invalid") // refusal:by-design world-action: provider-generated status and request bindings require a code fix when they disagree
 			}
 		}
@@ -471,8 +506,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 			if result.Frozen.Tier != reviewtransaction.RiskLow && result.Frozen.Tier != reviewtransaction.RiskMedium && result.Frozen.Tier != reviewtransaction.RiskHigh {
 				return errors.New("current-target frozen tier is invalid")
 			}
-			budget, err := reviewtransaction.CorrectionBudget(result.Frozen.OriginalChangedLines)
-			if err != nil || budget != result.Frozen.CorrectionBudget {
+			if !reviewContractCorrectionBudgetValid(result.Frozen.OriginalChangedLines, result.Frozen.CorrectionBudget) {
 				return errors.New("current-target frozen budget is invalid")
 			}
 		case reviewtransaction.AuthorityVersionLegacy:
@@ -693,11 +727,21 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			}
 			return nil
 		}
+		if result.Action == reviewtransaction.TargetStatusActionStart && result.rddModeResolved && !result.rddMode.Enabled() {
+			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "rdd_disabled" {
+				// refusal:by-design world-action: only a producer defect can pair a disabled effective mode with a fresh transition other than rdd_disabled
+				return errors.New("disabled fresh target lacks an RDD STOP transition")
+			}
+			return nil
+		}
 		// The one fresh target that has no representable START: a workspace
 		// candidate with zero paths (issue #2584). It collects the base the
 		// caller must choose instead, so requiring an executable START here
 		// would only relocate the contradiction.
 		if result.Projection.Kind == reviewtransaction.TargetCurrentChanges && len(result.Projection.Paths) == 0 {
+			if result.NextTransition.Kind == reviewNextTransitionCollect && result.NextTransition.ReasonCode == "intended_untracked_selection_required" {
+				return result.validateIntendedUntrackedSelectionTransition()
+			}
 			if result.NextTransition.Kind != reviewNextTransitionCollect || result.NextTransition.ReasonCode != "empty_candidate_base_ref_required" ||
 				result.NextTransition.Collect == nil || len(result.NextTransition.Collect.Inputs) != 1 {
 				return errors.New("fresh empty workspace target lacks a base-ref collection transition") // refusal:by-design world-action: only a provider code fix can emit the base-ref collection this classification requires
@@ -709,6 +753,9 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 				return errors.New("fresh empty workspace target lacks a base-ref collection transition") // refusal:by-design world-action: only a provider code fix can emit the base-ref collection this classification requires
 			}
 			return nil
+		}
+		if result.NextTransition.Kind == reviewNextTransitionCollect && result.NextTransition.ReasonCode == "intended_untracked_selection_required" {
+			return result.validateIntendedUntrackedSelectionTransition()
 		}
 		return result.validateStartNextTransition()
 	}
@@ -763,6 +810,22 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			result.Contract == ReviewIntegrationContractV2 && (input.CandidateDiff != nil || input.BaseTree != result.Projection.BaseTree || input.CandidateTree != result.Projection.InitialReviewTree) {
 			return errors.New("negotiated status capture transport differs from its contract") // refusal:by-design world-action: provider-built STATUS mixed negotiated transports and requires a code fix
 		}
+	}
+	return nil
+}
+
+func (result ReviewTargetStatusResult) validateIntendedUntrackedSelectionTransition() error {
+	if result.NextTransition.Collect == nil || len(result.NextTransition.Collect.Inputs) != 1 {
+		return errors.New("fresh target lacks an intended-untracked selection transition; rerun `gentle-ai review status --next-transition`")
+	}
+	input := result.NextTransition.Collect.Inputs[0]
+	if input.Name != "intended_untracked_selection" || input.Schema != reviewIntendedUntrackedSelectionSchema ||
+		input.CaptureOperation != "external.select_intended_untracked" || input.Submission != nil || len(input.Arguments) != 6 {
+		return errors.New("fresh target lacks an intended-untracked selection transition; rerun `gentle-ai review status --next-transition`")
+	}
+	if !reflect.DeepEqual(input.Arguments[:4], reviewTargetArguments(result)) || input.Arguments[4].Name != "eligible_paths_json" ||
+		input.Arguments[5].Name != "expected_untracked_inventory" || input.Arguments[5].Value == "" {
+		return errors.New("fresh target lacks an intended-untracked selection transition; rerun `gentle-ai review status --next-transition`")
 	}
 	return nil
 }
@@ -843,9 +906,12 @@ func (result ReviewTargetStatusResult) validateStartNextTransition() error {
 		transition.Execute.Operation != "review.start" || len(transition.Execute.Artifacts) != 0 {
 		return errors.New("fresh target lacks an executable START transition")
 	}
-	arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments)
+	arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments, transition.Execute.Operation)
 	if err != nil {
 		return err
+	}
+	if result.repositoryRoot == "" {
+		result.repositoryRoot = arguments["cwd"]
 	}
 	lineage := arguments["lineage"]
 	if lineage != "" && !validReviewIntegrationLineage(lineage) {
@@ -858,7 +924,7 @@ func (result ReviewTargetStatusResult) validateStartNextTransition() error {
 			return errors.New("fresh target START runtime lacks immutable review transport")
 		}
 	}
-	wantArguments := reviewStartArguments(result, lineage, runtime)
+	wantArguments := reviewStartArguments(result, lineage, runtime, result.intendedUntracked)
 	for index, argument := range wantArguments {
 		argument.Token = reviewTransitionArgumentToken(argument)
 		wantArguments[index] = argument
@@ -936,7 +1002,7 @@ func (result ReviewTargetStatusResult) validateRepairNextTransition() error {
 			transition.Execute.Binding.LineageID != candidate.LineageID || transition.Execute.Binding.Revision != candidate.Revision {
 			return errors.New("classified repair execution transition is incomplete")
 		}
-		arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments)
+		arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments, transition.Execute.Operation)
 		if err != nil || len(arguments) != len(provider)+3 {
 			return errors.New("classified repair execution arguments are incomplete")
 		}
@@ -1109,7 +1175,7 @@ func (transition ReviewNextTransition) Validate() error {
 				return errors.New("execution transition has an incomplete precondition")
 			}
 		}
-		arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments)
+		arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments, transition.Execute.Operation)
 		if err != nil {
 			return err
 		}
@@ -1214,10 +1280,11 @@ func (submission ReviewTransitionSubmission) validateFinalize() error {
 	return nil
 }
 
-func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument) (map[string]string, error) {
+func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument, operation ...string) (map[string]string, error) {
+	allowIntendedUntracked := len(operation) == 1 && operation[0] == "review.start"
 	values := make(map[string]string, len(arguments))
 	for _, argument := range arguments {
-		if _, duplicate := values[argument.Name]; duplicate {
+		if previous, duplicate := values[argument.Name]; duplicate && (!allowIntendedUntracked || argument.Name != "intended-untracked" || previous == argument.Value) {
 			return nil, errors.New("review transition repeats an argument")
 		}
 		values[argument.Name] = argument.Value
@@ -1226,6 +1293,9 @@ func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument) (map[stri
 }
 
 func validateReviewTransitionExecution(execution ReviewTransitionExecution, arguments map[string]string) error {
+	if execution.Command != reviewTransitionCommandLine(execution.Operation, execution.Arguments) {
+		return errors.New("execution transition command does not match its arguments") // refusal:by-design world-action: a producer must publish the exact command its executable arguments define
+	}
 	exact := func(required []string, selectors []ReviewTransitionArgument) bool {
 		if len(arguments) != len(required)+len(selectors) {
 			return false
@@ -1255,7 +1325,8 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		}
 		if !exact([]string{"lineage", "gate"}, wantSelectors) ||
 			arguments["lineage"] != execution.Binding.LineageID || !validReviewIntegrationGate(gate) ||
-			arguments["base-ref"] != "" && (gate != reviewtransaction.GatePrePR || !validReviewTransitionSelector(arguments["base-ref"])) {
+			arguments["base-ref"] != "" &&
+				((gate != reviewtransaction.GatePrePush && gate != reviewtransaction.GatePrePR) || !validReviewTransitionSelector(arguments["base-ref"])) {
 			return errors.New("review validate transition selectors are invalid")
 		}
 	case "review.recover":
@@ -1317,9 +1388,14 @@ func (eligibility ReviewActionEligibility) Validate(status ReviewTargetStatusRes
 	if strings.TrimSpace(allowed.Action) == "" || strings.TrimSpace(allowed.ReasonCode) == "" || allowed.RequiredInputs == nil {
 		return errors.New("review action eligibility has an invalid allowed action")
 	}
-	if status.Action == reviewtransaction.TargetStatusActionStart &&
+	if status.Action == reviewtransaction.TargetStatusActionStart && (!status.rddModeResolved || status.rddMode.Enabled()) &&
 		(allowed.Action != "review.start" || allowed.ReasonCode != reviewActionEligibleCurrent || len(allowed.RequiredInputs) != 0) {
 		return errors.New("fresh target eligibility does not allow START")
+	}
+	if status.Action == reviewtransaction.TargetStatusActionStart && status.rddModeResolved && !status.rddMode.Enabled() &&
+		(allowed.Action != "stop" || allowed.ReasonCode != reviewActionForbiddenRDDDisabled || len(allowed.RequiredInputs) != 0) {
+		// refusal:by-design world-action: only a producer defect can advertise START after the resolved mode disabled it
+		return errors.New("disabled fresh target eligibility does not stop START")
 	}
 	seen := map[string]bool{allowed.Action: true}
 	if allowed.Action == "review.recover" || allowed.Action == ReviewIntegrationOperationRetryFinalVerification {

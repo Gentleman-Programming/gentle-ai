@@ -619,6 +619,10 @@ func readCloneLocalRDDOverrideHead(dir string) (rddModeOverrideRecord, bool, err
 	}
 	payload, err := readPrivateRARFile(filepath.Join(dir, rddModeGenerationName(head)))
 	if err != nil {
+		var unsafePath *UnsafeRARPathError
+		if errors.As(err, &unsafePath) {
+			return rddModeOverrideRecord{}, false, err
+		}
 		return rddModeOverrideRecord{}, false, fmt.Errorf("%w: read generation %d: %v", ErrRDDModeCorrupt, head, err)
 	}
 	record, err := parseRDDModeOverride(payload)

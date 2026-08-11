@@ -76,6 +76,9 @@ type baseAdvanceScenario struct {
 	// five content checks (conditions 1-5 and 7) are otherwise identical;
 	// condition 6 (CI attestation) does not apply.
 	localGate bool
+	// localMerge stages B1 into C0 so the snapshot proves the base-relative
+	// B1-to-M delivery that an explicit local gate receives.
+	localMerge bool
 }
 
 type baseAdvanceScenarioResult struct {
@@ -110,6 +113,10 @@ func runBaseAdvanceScenario(t *testing.T, scenario baseAdvanceScenario) baseAdva
 	gitSnapshot(t, repo, "branch", "main", baseCommit)
 	remote := configurePublicationRemote(t, repo, "main")
 	gitSnapshot(t, repo, "checkout", "-qb", "feature")
+	if scenario.localMerge {
+		gitSnapshot(t, repo, "config", "branch.feature.remote", "origin")
+		gitSnapshot(t, repo, "config", "branch.feature.merge", "refs/heads/main")
+	}
 
 	writeSnapshotFile(t, repo, deliveryPath, "reviewed delivery\n")
 	gitSnapshot(t, repo, "add", "--", deliveryPath)
@@ -152,8 +159,21 @@ func runBaseAdvanceScenario(t *testing.T, scenario baseAdvanceScenario) baseAdva
 		t.Fatalf("resolveCommit(HEAD): %v", err)
 	}
 	refs := &resolvedPrePRRefs{Selection: selection, HeadCommit: headCommit}
+	if scenario.localMerge {
+		refs.Selection, err = selectExplicitBaseAdvanceBoundary(ctx, repo, selection.Commit)
+		if err != nil {
+			t.Fatalf("selectExplicitBaseAdvanceBoundary: %v", err)
+		}
+	}
 
-	snapshot, err := builder.Build(ctx, Target{Kind: TargetBaseDiff, BaseRef: "main"})
+	if scenario.localMerge {
+		gitSnapshot(t, repo, "merge", "main", "--no-commit", "--no-ff")
+	}
+	target := Target{Kind: TargetBaseDiff, BaseRef: selection.MergeBase}
+	if scenario.localMerge {
+		target = Target{Kind: TargetBaseWorkspaceOverlay, Projection: ProjectionStaged, BaseRef: selection.Commit, IntendedUntracked: []string{}}
+	}
+	snapshot, err := builder.BuildStoredSnapshot(ctx, target)
 	if err != nil {
 		t.Fatalf("Build(TargetBaseDiff): %v", err)
 	}
@@ -172,6 +192,9 @@ func runBaseAdvanceScenario(t *testing.T, scenario baseAdvanceScenario) baseAdva
 	requireAttestation := !scenario.localGate
 	var preimages gateArtifactPreimages
 	request := GateRequest{Gate: GatePrePR, ExternalEvidence: ExternalEvidenceNone}
+	if scenario.localMerge {
+		request.Gate, request.Target = GatePreCommit, target
+	}
 	if scenario.localGate {
 		// A real pre-commit/pre-push GateRequest never carries a PrePR block;
 		// leaving it unset here (instead of a present-but-empty one) proves
@@ -245,8 +268,9 @@ func TestDeriveBaseAdvanceCompatibilitySucceedsWhenAllSevenConditionsHold(t *tes
 	// Condition 7: base/HEAD non-advance revalidation — a nil error already
 	// proves the final re-check found no drift between the captured refs and
 	// live repository state.
-	if result.proof.NewBaseTree != result.snapshot.BaseTree {
-		t.Fatalf("NewBaseTree = %q, want snapshot.BaseTree %q", result.proof.NewBaseTree, result.snapshot.BaseTree)
+	advertisedBaseTree := trimGit(gitSnapshot(t, result.repo, "rev-parse", result.refs.Selection.Commit+"^{tree}"))
+	if result.proof.NewBaseTree != advertisedBaseTree {
+		t.Fatalf("NewBaseTree = %q, want advertised base tree %q", result.proof.NewBaseTree, advertisedBaseTree)
 	}
 }
 
@@ -349,19 +373,11 @@ func TestDeriveBaseAdvanceCompatibilityFailsClosedOnSingleConditionViolation(t *
 	}
 }
 
-// TestDeriveBaseAdvanceCompatibilityCertifiesLocalGateWithoutAttestation is
-// the #2388 / D2 (#2471 option a) characterization at the derivation layer:
-// requireAttestation=false runs the exact same five content checks (merge-base
-// tree preservation, path digest identity, patch identity, path disjointness,
-// conflict-free merge-tree) without ever requiring or reading a CI
-// attestation, and returns a proof carrying baseAdvanceCompatibleLocalStatus
-// instead of baseAdvanceCompatibleStatus. This is the reusable machinery a
-// pre-commit/pre-push gate would consult for a disjoint, content-identical
-// parent advance; see the compact_gate_local_advance_test.go stop-evidence for
-// why no gate currently reaches this precondition (gate-request derivation,
-// not this function, is the missing piece).
+// TestDeriveBaseAdvanceCompatibilityCertifiesLocalGateWithoutAttestation
+// proves the #2388 B0-to-C0 versus B1-to-M case with the same content checks
+// and without a CI attestation.
 func TestDeriveBaseAdvanceCompatibilityCertifiesLocalGateWithoutAttestation(t *testing.T) {
-	result := runBaseAdvanceScenario(t, baseAdvanceScenario{localGate: true})
+	result := runBaseAdvanceScenario(t, baseAdvanceScenario{localGate: true, localMerge: true})
 	if result.err != nil {
 		t.Fatalf("deriveBaseAdvanceCompatibility(requireAttestation=false) error = %v, want nil", result.err)
 	}

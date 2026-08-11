@@ -304,8 +304,16 @@ func (s failAfterPluginRegistrationStep) Run() error {
 	if err != nil {
 		return fmt.Errorf("read plugin registration before rollback control: %w", err)
 	}
-	if !strings.Contains(string(tui), "opencode-subagent-statusline") || !strings.Contains(string(tui), s.logoPath) {
-		return errors.New("plugins were not registered before rollback control")
+	var config struct {
+		Plugin []string `json:"plugin"`
+	}
+	if err := json.Unmarshal(tui, &config); err != nil {
+		return fmt.Errorf("decode plugin registration %q: %w", s.tuiPath, err)
+	}
+	for _, plugin := range []string{"opencode-subagent-statusline", s.logoPath} {
+		if !slices.Contains(config.Plugin, plugin) {
+			return fmt.Errorf("plugin registration %q is missing exact plugin %q", s.tuiPath, plugin)
+		}
 	}
 	if _, err := os.Stat(s.logoPath); err != nil {
 		return fmt.Errorf("Gentle Logo was not written before rollback control: %w", err)

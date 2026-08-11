@@ -2,6 +2,7 @@ package sddstatus
 
 import (
 	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -215,4 +216,64 @@ func isRuntimeStatusExpression(expression ast.Expr, bound map[string]bool) bool 
 		return node.Sel.Name == "Status" || node.Sel.Name == "RuntimeStatus"
 	}
 	return false
+}
+
+// TestMaintainerDecisionExitNamesOnlyTheAdmittedOperation is #2530. The
+// maintainer-decision block told the caller to "rescope or reset", and
+// runtimeObjectiveRescopeStructurallyPermitted returns false whenever
+// DecisionRequired is set, which is the only way this block is reached. Half
+// that advice could never run, and a wrong exit is worse than a missing one:
+// a dead end says stop, while advice that cannot work sends the caller in
+// circles blaming themselves.
+//
+// Both operations are executed against the real blocked state rather than
+// matched as strings, because the defect was precisely that the text and the
+// admissibility rules disagreed.
+func TestMaintainerDecisionExitNamesOnlyTheAdmittedOperation(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	seedReadyChange(t, repo, "decision-exit", "- [ ] 1.1 Work\n")
+	store := mustRuntimeStore(t, repo, "decision-exit")
+	active, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "begin-decision-exit", WorkUnit: "apply-auth",
+		EvidenceGoal: "prove the auth runtime", MaxAttempts: 1, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: active.Revision, RequestID: "finish-decision-exit", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('8'), Diagnosis: "bounded runtime reproduced the failure",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "runtime process group exited",
+		ProcessEvidence: "post-run scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !blocked.DecisionRequired {
+		t.Fatalf("fixture did not reach the maintainer-decision state: %#v", blocked)
+	}
+
+	exit := compactBlockedExitText(CompactBlockMaintainerDecision, "")
+	if strings.Contains(exit, "rescope") {
+		t.Fatalf("maintainer-decision exit still names rescope, which this state refuses: %s", exit)
+	}
+	if !strings.Contains(exit, "reset the objective") {
+		t.Fatalf("maintainer-decision exit stopped naming reset: %s", exit)
+	}
+
+	// The advice it dropped is genuinely refused here.
+	if _, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: blocked.Revision, RequestID: "decision-exit-rescope", WorkUnit: "narrower-auth",
+		EvidenceGoal: "prove a narrower auth runtime", MaxAttempts: 1, MaxChangedLines: 20,
+		Reason: "attempted the exit the old message named", Actor: "maintainer",
+	}); !errors.Is(err, ErrRuntimeRescopeNotAllowed) {
+		t.Fatalf("rescope at decision-required error = %v, want ErrRuntimeRescopeNotAllowed", err)
+	}
+	// The advice it kept genuinely runs.
+	if _, err := store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: blocked.Revision, RequestID: "decision-exit-reset",
+		Reason: "maintainer decided the budget is spent", Actor: "maintainer",
+	}); err != nil {
+		t.Fatalf("the reset this exit names was refused: %v", err)
+	}
 }

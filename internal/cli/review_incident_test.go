@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestValidResultIncidentClass(t *testing.T) {
@@ -72,11 +74,118 @@ func TestReviewCaptureResultPreflightVerifiesBindingWithoutMutation(t *testing.T
 	if err != nil || after.Revision != record.Revision {
 		t.Fatalf("preflight mutated review authority: %v", err)
 	}
-	if err := RunReviewCaptureResult(append(bindingArgs(record.State.SelectedLenses[0], "0"), "--input", "-"), io.Discard); err == nil {
-		t.Fatal("preflight combined with --input was accepted")
-	}
 	if err := RunReviewCaptureResult(bindingArgs("review-risk", "0"), io.Discard); err == nil {
 		t.Fatal("wrong-lens preflight was accepted")
+	}
+}
+
+func TestReviewCaptureResultInputPreflightValidatesWithoutPersistence(t *testing.T) {
+	repo, started, store, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	wantSubject := admittedReviewerResultForTest(t, repo, record, lens, 0).SubjectHash
+	input := filepath.Join(t.TempDir(), "result.json")
+	if err := os.WriteFile(input, admittedReviewerPayloadForTest(t, repo, record, lens, 0), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binding := []string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", lens, "--order", "0",
+	}
+	stateBefore, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitBefore := runReviewCLIGit(t, repo, "status", "--porcelain=v1")
+
+	var output bytes.Buffer
+	if err := RunReviewCaptureResult(append(binding, "--preflight", "--input", input), &output); err != nil {
+		t.Fatalf("valid input preflight failed: %v", err)
+	}
+	var dryRun map[string]any
+	decodeStrictReviewJSON(t, output.Bytes(), &dryRun)
+	allowed := map[string]bool{
+		"schema": true, "operation": true, "validation": true, "lineage_id": true,
+		"lens": true, "selected_order": true, "subject_hash": true, "admission_decision": true,
+	}
+	if dryRun["schema"] != reviewResultDryRunSchema || dryRun["operation"] != "review/capture-result" ||
+		dryRun["validation"] != "accepted" || dryRun["lineage_id"] != started.LineageID ||
+		dryRun["lens"] != lens || dryRun["selected_order"] != float64(0) || dryRun["subject_hash"] != wantSubject ||
+		dryRun["admission_decision"] != "completed" || len(dryRun) != len(allowed) {
+		t.Fatalf("dry-run response = %#v", dryRun)
+	}
+	for field := range dryRun {
+		if !allowed[field] {
+			t.Fatalf("dry-run response exposed forbidden field %q: %#v", field, dryRun)
+		}
+	}
+	assertReviewResultDryRunMatchesPublishedSchema(t, output.Bytes())
+	stateAfter, err := os.ReadFile(store.StatePath())
+	if err != nil || !bytes.Equal(stateAfter, stateBefore) {
+		t.Fatalf("dry run changed authority: %v", err)
+	}
+	if got := runReviewCLIGit(t, repo, "status", "--porcelain=v1"); got != gitBefore {
+		t.Fatalf("dry run changed Git state: before %q, after %q", gitBefore, got)
+	}
+	resultDir := filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir)
+	if _, err := os.Stat(resultDir); !os.IsNotExist(err) {
+		t.Fatalf("dry run created reviewer result storage: %v", err)
+	}
+
+	invalid := filepath.Join(t.TempDir(), "invalid.json")
+	if err := os.WriteFile(invalid, []byte(`{"subject_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000","findings":[],"evidence":["reviewed"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewCaptureResult(append(binding, "--preflight", "--input", invalid), io.Discard); err == nil {
+		t.Fatal("invalid input dry run succeeded")
+	}
+	if after, err := os.ReadFile(store.StatePath()); err != nil || !bytes.Equal(after, stateBefore) {
+		t.Fatalf("invalid dry run changed authority: %v", err)
+	}
+	if _, err := os.Stat(resultDir); !os.IsNotExist(err) {
+		t.Fatalf("invalid dry run created reviewer result storage: %v", err)
+	}
+
+	output.Reset()
+	if err := RunReviewCaptureResult(append(binding, "--input", input), &output); err != nil {
+		t.Fatalf("real capture after dry run failed: %v", err)
+	}
+	var artifact reviewResultArtifact
+	decodeStrictReviewJSON(t, output.Bytes(), &artifact)
+	if artifact.Path == "" {
+		t.Fatalf("real capture did not persist an artifact: %#v", artifact)
+	}
+	if _, err := os.Stat(artifact.Path); err != nil {
+		t.Fatalf("real capture artifact: %v", err)
+	}
+}
+
+func assertReviewResultDryRunMatchesPublishedSchema(t *testing.T, response []byte) {
+	t.Helper()
+	var exposed bytes.Buffer
+	if err := RunReviewSchema([]string{"capture-result-dry-run"}, &exposed); err != nil {
+		t.Fatal(err)
+	}
+	var document, exposedSchema, packagedSchema any
+	if json.Unmarshal(response, &document) != nil || json.Unmarshal(exposed.Bytes(), &exposedSchema) != nil {
+		t.Fatal("decode dry-run response contract")
+	}
+	schemaPayload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "schemas", "capture-result-dry-run.schema.json"))
+	if err != nil || json.Unmarshal(schemaPayload, &packagedSchema) != nil || !reflect.DeepEqual(exposedSchema, packagedSchema) {
+		t.Fatalf("exposed and packaged dry-run schemas differ: %v", err)
+	}
+	compiler := jsonschema.NewCompiler()
+	schemaID := exposedSchema.(map[string]any)["$id"].(string)
+	if err := compiler.AddResource(schemaID, exposedSchema); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile(schemaID)
+	if err != nil || schema.Validate(document) != nil {
+		t.Fatalf("emitted dry-run response violates its public schema: %v", err)
+	}
+	fixturePayload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "capture-result-dry-run.fixture.json"))
+	var fixture any
+	if err != nil || json.Unmarshal(fixturePayload, &fixture) != nil || schema.Validate(fixture) != nil {
+		t.Fatalf("dry-run fixture violates its public schema: %v", err)
 	}
 }
 

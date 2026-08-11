@@ -17,7 +17,7 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repo, "tracked.txt", "workspace\n", 0o644)
 		status := negotiatedStartStatus(t, repo, "--lineage", "status-start-workspace")
-		assertStartTransition(t, status, []string{"contract", "target", "projection", "lineage"})
+		assertStartTransition(t, status, []string{"cwd", "contract", "target", "projection", "lineage"})
 		started := executeStartTransition(t, repo, status)
 		if negotiatedStartTarget(started) != status.TargetIdentity || started.LineageID != "status-start-workspace" {
 			t.Fatalf("START = %#v, status target = %q", started, status.TargetIdentity)
@@ -30,8 +30,11 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 		writeReviewStartCandidate(t, repo, "tracked.txt", "committed\n", 0o644)
 		runReviewCLIGit(t, repo, "add", "tracked.txt")
 		runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
-		status := negotiatedStartStatus(t, repo, "--base-ref", "moving-base")
-		assertStartTransition(t, status, []string{"contract", "target", "projection", "base-ref", "committed-only"})
+		status := negotiatedStartStatus(t, repo, "--base-ref", "moving-base", "--committed-only")
+		assertStartTransition(t, status, []string{"cwd", "contract", "target", "projection", "base-ref", "committed-only"})
+		if got := startTransitionArgumentValue(t, status, "committed-only"); got != "true" {
+			t.Fatalf("emitted committed-only = %q, want true", got)
+		}
 		if got := startTransitionArgumentValue(t, status, "base-ref"); got != status.Projection.BaseTree {
 			t.Fatalf("emitted base-ref = %q, want resolved tree %q", got, status.Projection.BaseTree)
 		}
@@ -49,7 +52,7 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 		runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
 		writeReviewStartCandidate(t, repo, "tracked.txt", "overlay\n", 0o644)
 		status := negotiatedStartStatus(t, repo, "--base-tree", base, "--workspace-overlay")
-		assertStartTransition(t, status, []string{"contract", "target", "projection", "base-ref", "workspace-overlay"})
+		assertStartTransition(t, status, []string{"cwd", "contract", "target", "projection", "base-ref", "workspace-overlay"})
 		if started := executeStartTransition(t, repo, status); started.TargetIdentity != status.TargetIdentity || started.TargetMode != reviewtransaction.TargetBaseWorkspaceOverlay {
 			t.Fatalf("overlay START = %#v, want target %q", started, status.TargetIdentity)
 		}
@@ -63,9 +66,77 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 		writeReviewStartCandidate(t, repo, "first.txt", "first\n", 0o644)
 		runReviewCLIGit(t, repo, "add", "first.txt")
 		status := negotiatedStartStatus(t, repo, "--projection", "staged")
-		assertStartTransition(t, status, []string{"contract", "target", "projection"})
+		assertStartTransition(t, status, []string{"cwd", "contract", "target", "projection"})
 		if started := executeStartTransition(t, repo, status); negotiatedStartTarget(started) != status.TargetIdentity || started.Projection != reviewtransaction.ProjectionStaged {
 			t.Fatalf("unborn START = %#v, want target %q", started, status.TargetIdentity)
+		}
+	})
+}
+
+func TestNegotiatedStatusStartReplayCanonicalBaseDiffStaged(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "tracked.txt", "committed\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
+
+	status := negotiatedStartStatus(t, repo, "--base-ref", "HEAD~1", "--committed-only", "--projection", "staged")
+	if status.Projection.Projection != reviewtransaction.ProjectionWorkspace {
+		t.Fatalf("STATUS projection = %q, want canonical committed-only workspace projection", status.Projection.Projection)
+	}
+	assertStartTransition(t, status, []string{"cwd", "contract", "target", "projection", "base-ref", "committed-only"})
+	if got := startTransitionArgumentValue(t, status, "projection"); got != string(reviewtransaction.ProjectionWorkspace) {
+		t.Fatalf("emitted projection = %q, want workspace", got)
+	}
+	if started := executeStartTransition(t, repo, status); negotiatedStartTarget(started) != status.TargetIdentity {
+		t.Fatalf("START target = %q, want STATUS target %q", negotiatedStartTarget(started), status.TargetIdentity)
+	}
+}
+
+func TestNegotiatedStatusInterpretsCommittedOnlyValue(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "true without base", args: []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--committed-only"}, want: "--committed-only requires --base-ref"},
+		{name: "false without base", args: []string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--committed-only=false"}},
+		{name: "false without contract", args: []string{"--cwd", repo, "--committed-only=false"}, want: reviewStatusTargetSelectorsRequireContractReason},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := RunReviewStatus(test.args, io.Discard)
+			if test.want == "" && err != nil || test.want != "" && (err == nil || !strings.Contains(err.Error(), test.want)) {
+				t.Fatalf("status error = %v, want %q", err, test.want)
+			}
+		})
+	}
+
+	t.Run("omitted with base preserves compatibility", func(t *testing.T) {
+		err := RunReviewStatus([]string{
+			"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--base-ref", "HEAD",
+		}, io.Discard)
+		if err != nil {
+			t.Fatalf("STATUS rejected --base-ref without --committed-only: %v", err)
+		}
+	})
+
+	t.Run("false with base refuses like START", func(t *testing.T) {
+		statusErr := RunReviewStatus([]string{
+			"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo,
+			"--base-ref", "HEAD", "--committed-only=false",
+		}, io.Discard)
+		if statusErr == nil {
+			t.Fatal("STATUS accepted --base-ref with --committed-only=false")
+		}
+
+		startErr := RunReviewFacadeStart([]string{
+			"--contract", ReviewIntegrationContractV1, "--cwd", repo,
+			"--target", "sha256:" + strings.Repeat("0", 64), "--projection", "workspace",
+			"--base-ref", "HEAD", "--committed-only=false",
+		}, io.Discard)
+		if startErr == nil {
+			t.Fatal("START accepted --base-ref with --committed-only=false")
 		}
 	})
 }
@@ -76,12 +147,13 @@ func TestNegotiatedV2FreshStatusIncludesExactConsentRelay(t *testing.T) {
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
 
 	status := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV2, "--lineage", "status-v2-consent-relay")
-	assertStartTransition(t, status, []string{"contract", "target", "projection", "lineage", "consent"})
+	assertStartTransition(t, status, []string{"cwd", "contract", "target", "projection", "lineage", "consent"})
 	consent := status.NextTransition.Execute.Arguments[len(status.NextTransition.Execute.Arguments)-1]
 	if consent != (ReviewTransitionArgument{Name: "consent", Value: "relay", Token: "--consent=relay"}) {
 		t.Fatalf("v2 START consent argument = %#v", consent)
 	}
 	wantCommand := "gentle-ai review start" +
+		" " + reviewTransitionShellWord("--cwd="+repo) +
 		" --contract=" + ReviewIntegrationContractV2 +
 		" --target=" + status.TargetIdentity +
 		" --projection=workspace" +
@@ -104,7 +176,7 @@ func TestNegotiatedV2FreshStatusIncludesExactConsentRelay(t *testing.T) {
 	}
 
 	legacy := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV1, "--lineage", "status-v1-compatible")
-	assertStartTransition(t, legacy, []string{"contract", "target", "projection", "lineage"})
+	assertStartTransition(t, legacy, []string{"cwd", "contract", "target", "projection", "lineage"})
 	if strings.Contains(legacy.NextTransition.Execute.Command, "--consent") {
 		t.Fatalf("v1 START command changed compatibility behavior: %s", legacy.NextTransition.Execute.Command)
 	}
@@ -236,6 +308,12 @@ func TestStatusRejectsNonCanonicalStartTransition(t *testing.T) {
 		if err := invalid.Validate(); err == nil {
 			t.Fatalf("status accepted non-canonical START: %#v", invalid.NextTransition)
 		}
+	}
+	valid.intendedUntracked = reviewIntendedUntrackedScope{Declared: true, Digest: "untracked", Intended: []string{"note--cwd.txt"}}
+	valid.NextTransition.Execute.Arguments = reviewTokenizedTransitionArguments(reviewStartArguments(valid, "", "", valid.intendedUntracked))
+	valid.NextTransition.Execute.Command = reviewTransitionCommandLine(valid.NextTransition.Execute.Operation, valid.NextTransition.Execute.Arguments)
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("status treated embedded --cwd as an explicit flag: %v", err)
 	}
 }
 

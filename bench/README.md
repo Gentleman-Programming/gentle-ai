@@ -797,8 +797,8 @@ across days of sessions, and a large gitignored binary inside the tree.
 | ID | Shape | Family |
 |---|---|---|
 | `rw01-nested-worktree-not-ignored` | linked worktree at `.wt/test` INSIDE the tree, untracked, not ignored — #1881 verbatim | A |
-| `rw02-node-modules-scale-untracked-tree` | 3,000 untracked files beside a docs candidate; discovery's cost is the measurement | A |
-| `rw03-untracked-env-with-secrets` | untracked `.env` holding a sentinel secret; no counted command may quote the value | A |
+| `rw02-node-modules-scale-untracked-tree` | 3,000 untracked files beside a docs candidate; STATUS must collect explicit exclusion before START | A |
+| `rw03-untracked-env-with-secrets` | untracked `.env` holding a sentinel secret; explicit exclusion must not quote the value | A |
 | `rw04-mutating-pre-commit-hook` | husky-style hook rewrites a tracked file during commit; bytes proven moved between review and commit | A |
 | `rw05-dirty-submodule-gitlink-bump` | staged gitlink bump while the submodule's working tree holds uncommitted edits | A |
 | `rw06-shallow-clone-depth-1` | `--depth 1` clone proven to hold 1 of 3 commits; pre-push derivation against missing history | A |
@@ -852,25 +852,6 @@ Unicode-normalizing or case-insensitive volumes, Windows long paths. Same
 verdict as honesty-contract entry 8 — they need a machine this harness cannot
 build in a Linux temp directory, and naming them is honest where implying
 coverage would not be.
-
-**Measured against commit `745b6064`** (a build with the #1881 fix still in
-flight): all 12 journeys complete, nothing unsupported, nothing failed. The
-axis adds 6 blocks to the corpus — five `in_band` and one `out_of_band`,
-which is `rw01` recording #1881 exactly (`discover intended untracked files:
-logical path is not canonical: ".wt/test/"`, exit 1, nothing runnable named).
-Against the then-43-journey core alone, the axis added +60 commands, +3 model runs,
-+3 human prompts, +2,739 stderr bytes — and **+98,512 git subprocesses,
-96,294 of them in `rw02`**, whose `review start` alone spends 15,089 walking
-3,000 untracked files. The honest reading of the block pattern: untracked
-not-ignored content beside a tier-0 docs change escalates it into a lens
-review and then draws a `scope-changed` pre-commit denial for the untracked
-paths themselves (`rw02`, `rw03`), while the same content gitignored costs
-almost nothing and is cited nowhere (`rw09`, 122 git subprocesses, receipt
-and gate clean); the hook, the rebase and the pull all end at a
-`scope-changed` denial naming a runnable, filled-in `review recover` command
-(`in_band`); and the amend passes pre-push — tree-not-commit identity holds
-where a human actually trips it. Re-run against your own binary rather than
-reading these as current totals; `rw01` in particular exists to change.
 
 ## Layout
 

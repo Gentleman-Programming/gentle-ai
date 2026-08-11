@@ -85,18 +85,9 @@ func TestNonPhaseRoutingInstructionsRenderWindowsPathVerbatim(t *testing.T) {
 	}
 }
 
-func TestRuntimeStrandedSuccessorRefusalRendersWindowsPathVerbatim(t *testing.T) {
-	store := RuntimeStore{Workspace: `C:\Users\dev\repo`}
-	err := store.runtimeStrandedSuccessorRefusal(
-		ReviewBinding{Lineage: "lineage-1", Revision: "rev-1"},
-		RuntimeStrandedSuccessor{Lineage: "lineage-2", Revision: "rev-2", SnapshotIdentity: "snap-1"},
-		1,
-	)
-	want := `--cwd "C:\Users\dev\repo"`
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("stranded-successor abandon invocation does not contain the path as the filesystem knows it:\nwant substring: %s\ngot: %s", want, err)
-	}
-}
+// The stranded-successor refusal is gone with the gate it served. The Windows
+// path-quoting rule it guarded stays covered by the reset and
+// objective-change refusals above.
 
 func TestRuntimeWorktreeMismatchRefusalRendersWindowsPathVerbatim(t *testing.T) {
 	store := RuntimeStore{Workspace: `C:\Users\dev\elsewhere`}

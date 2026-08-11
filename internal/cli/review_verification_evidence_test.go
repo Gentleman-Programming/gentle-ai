@@ -120,6 +120,8 @@ func TestLegacyRawEvidenceWithoutMetadataFailsClosed(t *testing.T) {
 }
 
 func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)

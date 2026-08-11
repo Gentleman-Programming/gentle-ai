@@ -118,12 +118,7 @@ func TestValidateDerivedGateGeneralizesCompatibleBaseAdvanceToLocalGates(t *test
 	}
 }
 
-// TestValidateDerivedGateRefusesLocalStatusAtPrePRRegression is the byte-strict
-// regression guard D2 requires: the unattested local proof must never
-// authorize GatePrePR, even when every content-check field matches, because
-// GatePrePR alone can reach real CI and D2 keeps its attestation requirement
-// exactly as strict as before this change.
-func TestValidateDerivedGateRefusesLocalStatusAtPrePRRegression(t *testing.T) {
+func TestValidateDerivedGateAllowsContentProofAtPrePR(t *testing.T) {
 	tx := ordinaryAtFixValidation(t)
 	if err := tx.ValidateFixDelta([]string{"R1-DET"}, true); err != nil {
 		t.Fatalf("ValidateFixDelta() error = %v", err)
@@ -148,11 +143,11 @@ func TestValidateDerivedGateRefusesLocalStatusAtPrePRRegression(t *testing.T) {
 		PolicyHash: receipt.PolicyHash, LedgerHash: receipt.LedgerHash, EvidenceHash: receipt.EvidenceHash,
 		BaseRelationshipValid: false, BaseAdvance: &advance,
 	}
-	if got := validateDerivedGate(receipt, context); got == GateAllow {
-		t.Fatalf("validateDerivedGate(pre-pr, unattested local advance) = %q, want refused", got)
+	if got := validateDerivedGate(receipt, context); got != GateAllow {
+		t.Fatalf("validateDerivedGate(pre-pr, content proof) = %q, want allow", got)
 	}
-	if baseAdvanceStatusAllowedForGate(GatePrePR, baseAdvanceCompatibleLocalStatus) {
-		t.Fatal("baseAdvanceStatusAllowedForGate(pre-pr, local) = true, want false")
+	if !baseAdvanceStatusAllowedForGate(GatePrePR, baseAdvanceCompatibleLocalStatus) {
+		t.Fatal("baseAdvanceStatusAllowedForGate(pre-pr, local) = false, want true")
 	}
 	for _, gate := range []GateKind{GatePreCommit, GatePrePush} {
 		if baseAdvanceStatusAllowedForGate(gate, baseAdvanceCompatibleStatus) {
@@ -162,9 +157,9 @@ func TestValidateDerivedGateRefusesLocalStatusAtPrePRRegression(t *testing.T) {
 }
 
 // TestParseGateContextRestrictsBaseAdvanceStatusPerGate proves the same
-// byte-strict split at the persisted-context boundary: ParseGateContext must
-// accept the local status only at GatePreCommit/GatePrePush, accept the
-// attested (or current-changes-boundary) status only at GatePrePR, and a
+// per-gate split at the persisted-context boundary: ParseGateContext must
+// accept the local content proof at every delivery gate, accept the
+// attested (or current-changes-boundary) status at GatePrePR, and a
 // historical context with no base_advanced_compatible field at all -- every
 // context ever persisted before this change -- must still parse unchanged
 // (the additive-only, forensic-invariant requirement).
@@ -206,7 +201,7 @@ func TestParseGateContextRestrictsBaseAdvanceStatusPerGate(t *testing.T) {
 		{"local status at pre-commit parses", withLocal(GatePreCommit), false},
 		{"local status at pre-push parses", withLocal(GatePrePush), false},
 		{"attested status at pre-pr parses", withAttested(GatePrePR), false},
-		{"local status at pre-pr is rejected (byte-strict regression)", withLocal(GatePrePR), true},
+		{"local content proof at pre-pr parses", withLocal(GatePrePR), false},
 		{"attested status at pre-commit is rejected", withAttested(GatePreCommit), true},
 		{"attested status at pre-push is rejected", withAttested(GatePrePush), true},
 		{"historical context without base advance still parses at pre-commit", withoutAdvance(GatePreCommit), false},
@@ -222,6 +217,13 @@ func TestParseGateContextRestrictsBaseAdvanceStatusPerGate(t *testing.T) {
 				t.Fatalf("ParseGateContext(%s) error = %v, want nil", tt.name, err)
 			}
 		})
+	}
+	boundaries := []string{`,"pre_pr_boundary":{"source":"explicit","selector":"origin/main","commit":"` + base + `","merge_base":""}}`, `,"pre_pr_boundary":{"source":"explicit","selector":"origin/main","commit":"` + base + `","merge_base":"not-a-tree"}}`, `,"pre_pr_boundary":{"source":"explicit","selector":"origin/main","commit":"","merge_base":"not-a-tree"},"denial":{"stage":"boundary-selection","code":"unavailable"}}`}
+	for _, boundary := range boundaries {
+		payload := baseContext(GatePrePR) + boundary
+		if _, err := ParseGateContext([]byte(payload)); err == nil {
+			t.Fatalf("ParseGateContext accepted invalid pre-PR boundary %s", boundary)
+		}
 	}
 }
 

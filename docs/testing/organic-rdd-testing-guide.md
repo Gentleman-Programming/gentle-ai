@@ -1,5 +1,8 @@
-# 🧪 How to test — Organic RDD (pre-release 2.2.0-rc.1)
+# 🧪 How to test — Organic RDD (prerelease 2.2.0-rc.1)
 
+> [!WARNING]
+> **Historical and superseded guide.** This document preserves the candidate-specific validation procedure for `v2.2.0-rc.1` and PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801). It is not current installation or validation guidance for stable [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0), prerelease [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1), or unreleased `main`. Use the [Quickstart version policy](../quickstart.md#version-policy) for current installation channels and validation entry points.
+>
 > Community testing guide for the candidate built from PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801). Every **Expected** here was validated against real output before publication. The guide uses a throwaway HOME precisely so it does not touch your real config — do not skip the setup.
 
 > [!IMPORTANT]
@@ -15,7 +18,7 @@
 
 ## How to get this binary
 
-The binaries are on the pre-release page: **https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.2.0-rc.1**
+The binaries are on the prerelease page: **https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.2.0-rc.1**
 
 1. Download the asset for your platform from the Assets section of that page.
 2. Verify the checksum against `SHA256SUMS.txt`:
@@ -664,30 +667,31 @@ sudo date -s "-1 hour"        # or restore a VM snapshot taken an hour ago
 
 ---
 
-## Flow 34: a shipped contract the harness cannot execute
+## Flow 34: historical candidate contract the harness could not execute
 
-**Why this exists.** The friction harness drives the binary. It cannot drive a
-document — and one of the two documented known-open limitations lives entirely
-in one. `j42-kill-switch-versus-sdd-archive` proves the **product** half is
-closed: with reviews off, `gentle-ai sdd-status <change> --json` reports the
-archive dependency `ready` and a `reviewGate` carrying
-`delivery: "disabled/unmanaged"` whose `result` is never `allow`, because
-declining to manage is not approval. What no journey can check is what an
-**agent** does when it reads the shipped `sdd-archive` skill, whose own contract
-requires structured status with `reviewGate.result: allow` — a value a disabled
-run is right never to produce.
+**Historical candidate rationale, superseded.** The `v2.2.0-rc.1` friction
+harness drove the binary but could not drive a document. At that time, its
+candidate procedure treated the product as closed when reviews were off and
+`gentle-ai sdd-status <change> --json` reported the archive dependency `ready`
+with a `reviewGate` carrying `delivery: "disabled/unmanaged"` whose `result`
+was never `allow`. It then contrasted that result with the candidate
+`sdd-archive` skill, which required `reviewGate.result: allow`. The procedure
+below is preserved only as superseded candidate history, not as current release
+behavior.
 
 1. [ ] `gentle-ai install` (or `gentle-ai sync`) into a throwaway HOME, then
    read the installed `sdd-archive` skill and the shared review-ledger contract
-   → **Expected today**: both still require `reviewGate.result: allow`.
+   → **Historical candidate expectation, superseded:** both require
+   `reviewGate.result: allow`.
 2. [ ] In a repository with a complete, verified SDD change, run
    `gentle-ai review mode disable` and then
-   `gentle-ai sdd-status <change> --json` → **Expected**: `archive` is not
-   blocked, `reviewGate.delivery` is `disabled/unmanaged`, `reviewGate.result`
-   is **not** `allow`.
-3. [ ] Ask your agent to archive that change → **Report what it does.** An agent
-   following the skill literally stops here, on a value the product is correct
-   to withhold, which is a rule blocking where the product no longer does.
+   `gentle-ai sdd-status <change> --json` → **Historical candidate expectation,
+   superseded:** `archive` is not blocked, `reviewGate.delivery` is
+   `disabled/unmanaged`, and `reviewGate.result` is **not** `allow`.
+3. [ ] Ask your agent to archive that change → **Historical candidate observation
+   to report:** an agent following the candidate skill literally stopped here,
+   on a value the candidate product was correct to withhold, which was a rule
+   blocking where the product no longer did.
 4. [ ] **Report the result even if the agent archives anyway**, and say which
    sentence it followed. An agent that ignores its own contract is a different
    finding, not a passing one.
@@ -729,13 +733,9 @@ echo "exit=$?"
 
 **"2.2.0-rc.1" does not identify a binary.** Release assets get replaced in place, so an asset downloaded two days ago and one downloaded today both call themselves `2.2.0-rc.1` — and a tester reported against the old one without any way to know, because nothing in the binary's own output could tell the two refreshes apart. Refresh 8 binaries solve this at the root: they embed `-pr1801-<shortsha>` in the version string. So paste the **complete `--version` output** in any report, not the release version; they are different things and only one is actionable.
 
-## What to report
+## Historical reporting instructions
 
-Anything that does not match an **Expected** — and anything you find confusing even if it works. Open an issue with: what you tried, what you expected, what you saw, `gentle-ai --version`, OS, and terminal output.
-
-👉 https://github.com/Gentleman-Programming/gentle-ai/issues/new/choose — mention that this is the **2.2.0-rc.1 pre-release**.
-
-If everything worked, comment on PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801) with which flows passed and on which platform — that feedback decides the merge.
+This section is retained to explain the original candidate procedure. Do not open a current issue or comment on PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801) for results from `v2.2.0-rc.1`; that candidate process is complete. For a current concern, first reproduce it against stable [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0) or the opt-in prerelease [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1), then use the repository's current contribution and issue workflow.
 
 ## What is NOT a bug
 

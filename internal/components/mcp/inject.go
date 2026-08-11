@@ -333,13 +333,12 @@ func removeInertSettingsMCPServers(settingsPath string) (bool, error) {
 		return false, nil
 	}
 	servers, ok := root["mcpServers"].(map[string]any)
-	if !ok {
+	if !ok || len(servers) != 1 {
 		return false, nil
 	}
-	for name, entry := range servers {
-		if name != "context7" || !isManagedSettingsContext7Entry(entry) {
-			return false, nil
-		}
+	entry, ok := servers["context7"]
+	if !ok || !isManagedSettingsContext7Entry(entry) {
+		return false, nil
 	}
 	delete(root, "mcpServers")
 

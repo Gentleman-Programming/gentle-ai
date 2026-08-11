@@ -104,6 +104,13 @@ func TestRunInstallPersistsConfiguredSelection(t *testing.T) {
 	if err != nil || !got.SelectionConfigured || got.Preset != model.PresetCustom || got.SDDMode != model.SDDModeMulti || len(got.Components) != 0 {
 		t.Fatalf("persisted selection = %#v, err = %v", got, err)
 	}
+	wantDigest, err := managedAssetDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ManagedAssetDigest != wantDigest {
+		t.Fatalf("managed asset digest = %q, want %q", got.ManagedAssetDigest, wantDigest)
+	}
 }
 
 func TestMergeExplicitAgentInstallStatePreservesFreshAssignments(t *testing.T) {

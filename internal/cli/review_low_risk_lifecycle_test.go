@@ -257,10 +257,15 @@ func TestLowRiskNativeVerificationSupportsBaseWorkspaceOverlay(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "docs", "overlay.md"), []byte("overlay documentation\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	_, digest, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var output bytes.Buffer
 	if err := RunReviewFacadeStart([]string{
 		"--cwd", repo, "--base-ref", base, "--workspace-overlay", "--lineage", "low-risk-overlay",
+		"--untracked-scope=exclude", "--expected-untracked-inventory=" + digest,
 	}, &output); err != nil {
 		t.Fatal(err)
 	}

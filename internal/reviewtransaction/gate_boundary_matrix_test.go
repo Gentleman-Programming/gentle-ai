@@ -32,6 +32,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -111,6 +112,7 @@ var (
 	gateBoundaryMatrixBinaryOnce sync.Once
 	gateBoundaryMatrixBinaryPath string
 	gateBoundaryMatrixBinaryErr  error
+	gateBoundaryMatrixHome       string
 )
 
 // gateBoundaryMatrixBinary compiles the real gentle-ai binary once for the
@@ -168,6 +170,7 @@ func runGateBoundaryMatrixReview(binary, repo string, args ...string) (string, e
 	full := append([]string{"review"}, args...)
 	full = append(full, "--cwd", repo)
 	cmd := exec.CommandContext(context.Background(), binary, full...)
+	cmd.Env = gateBoundaryMatrixEnvironment(gateBoundaryMatrixHome)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -176,6 +179,18 @@ func runGateBoundaryMatrixReview(binary, repo string, args ...string) (string, e
 		return stdout.String(), fmt.Errorf("%w: %s", err, stderr.String())
 	}
 	return stdout.String(), nil
+}
+
+func gateBoundaryMatrixEnvironment(home string) []string {
+	environment := make([]string, 0, len(os.Environ())+2)
+	for _, entry := range os.Environ() {
+		key, _, found := strings.Cut(entry, "=")
+		if found && (key == "HOME" || key == "USERPROFILE") {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	return append(environment, "HOME="+home, "USERPROFILE="+home)
 }
 
 type gateBoundaryMatrixCLIResult struct {
@@ -213,6 +228,8 @@ func decodeGateBoundaryMatrixResult(t *testing.T, payload string) gateBoundaryMa
 // see each SKIP's own comment above for why it is not wired yet.
 func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 	binary := gateBoundaryMatrixBinary(t)
+	gateBoundaryMatrixHome = t.TempDir()
+	t.Cleanup(func() { gateBoundaryMatrixHome = "" })
 	wired := map[[2]string]gateBoundaryMatrixRow{}
 
 	// post-apply / exact: workspace candidate matches the approved receipt

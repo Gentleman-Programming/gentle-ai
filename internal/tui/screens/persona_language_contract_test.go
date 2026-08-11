@@ -7,16 +7,11 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
-func TestPersonaOptionsIncludeGentlemanNeutralArtifacts(t *testing.T) {
-	options := PersonaOptions()
-	found := false
-	for _, option := range options {
+func TestPersonaOptionsExcludeGentlemanNeutralArtifacts(t *testing.T) {
+	for _, option := range PersonaOptions() {
 		if option == model.PersonaGentlemanNeutralArtifacts {
-			found = true
+			t.Fatalf("PersonaOptions() still offers the remapped legacy alias %q", option)
 		}
-	}
-	if !found {
-		t.Fatalf("PersonaOptions() = %v, missing %q", options, model.PersonaGentlemanNeutralArtifacts)
 	}
 }
 
@@ -57,15 +52,15 @@ func TestPersonaDescriptionsSeparateToneFromArtifactLanguage(t *testing.T) {
 			t.Fatalf("persona %q must state that technical artifacts are English: %q", persona, description)
 		}
 		mentionsVoseo := strings.Contains(strings.ToLower(description), "voseo")
-		isGentleman := persona == model.PersonaGentleman || persona == model.PersonaGentlemanNeutralArtifacts
+		isGentleman := persona == model.PersonaGentleman
 		if mentionsVoseo != isGentleman {
 			t.Fatalf("persona %q voseo claim = %v, want %v (only Gentleman personas carry a regional tone): %q",
 				persona, mentionsVoseo, isGentleman, description)
 		}
 	}
 
-	if personaDescriptions[model.PersonaGentleman] == personaDescriptions[model.PersonaGentlemanNeutralArtifacts] {
-		t.Fatal("the Gentleman persona and its legacy alias must stay distinguishable in the selector")
+	if personaDescriptions[model.PersonaNeutral] == personaDescriptions[model.PersonaGentlemanNeutralArtifacts] {
+		t.Fatal("the neutral persona and its legacy alias must stay distinguishable in the review label")
 	}
 }
 
@@ -75,7 +70,6 @@ func TestPersonaDescriptionsSeparateToneFromArtifactLanguage(t *testing.T) {
 func TestRenderPersonaShowsEveryManagedDescription(t *testing.T) {
 	for _, persona := range []model.PersonaID{
 		model.PersonaGentleman,
-		model.PersonaGentlemanNeutralArtifacts,
 		model.PersonaNeutral,
 	} {
 		out := RenderPersona(persona, 0)

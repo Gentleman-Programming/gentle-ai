@@ -215,7 +215,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - **Active workspace**: gentle-ai reads `agents.defaults.workspace` from `~/.openclaw/openclaw.json` and writes instruction files there.
 - **Instructions**: Engram and SDD protocols are injected into workspace `AGENTS.md`; persona is injected into workspace `SOUL.md`.
 - **MCP config**: Engram and Context7 are merged into global `~/.openclaw/openclaw.json` under `mcp.servers`; legacy root `mcpServers` entries are migrated.
-- **Skills**: SDD phase skills are workspace-scoped at `<workspace>/.openclaw/skills/sdd-*`; portable skills remain global at `~/.openclaw/skills/`.
+- **Skills**: selected portable skills and SDD phase skills are workspace-scoped at `<workspace>/.openclaw/skills/`.
 
 ### Trae
 

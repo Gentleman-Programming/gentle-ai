@@ -15,6 +15,8 @@ import (
 )
 
 func TestNegotiatedCorrectionPlanningExposesProviderOwnedFindings(t *testing.T) {
+	t.Parallel()
+
 	for _, tt := range []struct {
 		name             string
 		path             string

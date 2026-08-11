@@ -20,7 +20,7 @@ import (
 // switch-off-equivalence goldens (tasks 5.6-5.10) depend on this being true
 // for the ordinary hook-invoked gate call shape.
 func TestResolveGoverningAuthorityAbsentWithoutMarkerCostsNoGitCall(t *testing.T) {
-	governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), "/does/not/exist", "", reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	governs, _, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), "/does/not/exist", "", reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
 	if governs || discoveryErr != nil || evaluation != (reviewtransaction.NativeGateEvaluation{}) {
 		t.Fatalf("resolveGoverningAuthority(no marker) = governs=%v evaluation=%#v discoveryErr=%v, want a pure no-op", governs, evaluation, discoveryErr)
 	}
@@ -126,7 +126,7 @@ func TestResolveGoverningAuthorityInFlightDeniesEveryGate(t *testing.T) {
 		reviewtransaction.GatePrePR, reviewtransaction.GateRelease,
 	} {
 		t.Run(string(gate), func(t *testing.T) {
-			governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: gate})
+			governs, _, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: gate})
 			if !governs {
 				t.Fatalf("gate %q: an in-flight (reviewing) v3 record must still govern (deny), got governs=false", gate)
 			}
@@ -171,7 +171,7 @@ func TestResolveGoverningAuthorityApprovedWithoutReceiptDenies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	governs, _, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
 	if !governs {
 		t.Fatal("an approved-without-receipt authority must still govern (deny), got governs=false")
 	}
@@ -222,7 +222,7 @@ func TestResolveGoverningAuthorityApprovedWithValidReceiptAllowsExactCandidate(t
 		t.Fatal(err)
 	}
 
-	governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	governs, _, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
 	if !governs || discoveryErr != nil || evaluation.Result != reviewtransaction.GateAllow {
 		t.Fatalf("approved authority with a valid receipt and exact live candidate must allow, got governs=%v evaluation=%#v discoveryErr=%v", governs, evaluation, discoveryErr)
 	}
@@ -293,7 +293,7 @@ func TestResolveGoverningAuthorityCandidateIdentityMismatchDenies(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	governs, _, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
 	if !governs {
 		t.Fatal("a candidate-identity-mismatched receipt must still govern (deny), got governs=false")
 	}
@@ -368,7 +368,7 @@ func TestResolveGoverningAuthorityCorruptReceiptNamesFreshLineageNotFinalize(t *
 		t.Fatal(err)
 	}
 
-	governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	governs, _, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
 	if !governs {
 		t.Fatal("a corrupted receipt must still govern (deny), got governs=false")
 	}

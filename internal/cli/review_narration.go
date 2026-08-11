@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
@@ -151,11 +152,11 @@ var reviewStopReasonNarration = map[string]string{
 		"Ask a maintainer to review it before doing anything else, or run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 	"original_finalize_request_required": "Re-run `gentle-ai review finalize` with the exact same results or evidence you submitted before.",
-	"pre_pr_selector_unrepresentable":    "Pass a branch or tag name to `--base-ref` instead of a raw commit id when selecting the pre-pr gate.",
 	"recovery_scope_unchanged": "Change the candidate so it targets something different from what is already on record, then retry the recovery, " +
 		"or run `" + reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
-	"recovery_target_unrepresentable": "Use one of the supported ways to select what to recover: no base selector for current changes, " +
-		"`--base-ref <ref> --committed-only` for a base diff, or `--workspace-overlay --base-ref <ref>` for a workspace overlay.",
+	"rdd_disabled": "Review mode is disabled. Run `gentle-ai review mode status --cwd <repo> --json` to inspect the deciding scope; STATUS renders the exact scoped enable command for this request.",
+	"staged_delivery_candidate_required": "Stage every reviewed path exactly as it was reviewed, then re-run " +
+		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --lineage <id> --projection staged --gate pre-commit --next-transition`.",
 	"staged_workspace_overlay_recovery_unavailable": "Pass `--lineage <id>` to continue the review you already started, " +
 		"or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh.",
 	"unchanged_or_unverified_authority": "This review already used its one correction attempt without a verified change. " +
@@ -244,12 +245,35 @@ func reviewStopReasonStatement(reason string) (string, bool) {
 // terminal state emits exactly one statement" scenario. A reason with no
 // registry entry prints nothing: TestReviewNarrationRegistryCoversEveryStopReasonCode
 // is the fail-closed proof that should never happen for a code the source emits.
-func reviewNarrateStopReason(reason string, runtimeAgent model.AgentID) {
+func reviewNarrateStopReason(reason string, runtimeAgent model.AgentID, continuation string) {
 	statement, ok := reviewStopReasonStatement(reason)
 	if !ok {
 		return
 	}
+	if strings.TrimSpace(continuation) != "" {
+		statement = continuation
+	}
 	_, _ = fmt.Fprintln(reviewNarrationOutput, bindNarrationRuntimeIdentity(statement, runtimeAgent))
+}
+
+func reviewRDDDisabledNarration(mode reviewtransaction.RDDModeStatus, root string, statusArgs []string) string {
+	enable := "gentle-ai review mode enable --scope=global"
+	if mode.Source == reviewtransaction.RDDModeSourceCloneLocal {
+		enable = "gentle-ai review mode enable --scope=clone --cwd=" + reviewTransitionShellWord(root)
+	}
+	parts := []string{reviewTransitionCommandTool, "review", "status", reviewTransitionShellWord("--cwd=" + root)}
+	for index := 0; index < len(statusArgs); index++ {
+		argument := statusArgs[index]
+		if argument == "--cwd" {
+			index++
+			continue
+		}
+		if strings.HasPrefix(argument, "--cwd=") {
+			continue
+		}
+		parts = append(parts, reviewTransitionShellWord(argument))
+	}
+	return "Review mode is disabled. Run `" + enable + "`, then re-run `" + strings.Join(parts, " ") + "`."
 }
 
 // reviewNarrateForecast keeps the v2 machine envelope on stdout while showing

@@ -142,6 +142,9 @@ type CompactRecord struct {
 	HistoricalCompat bool `json:"-"`
 }
 
+// historicalCompactForensicRecord is raw-byte identity, never authority.
+type historicalCompactForensicRecord struct{ RawDigest string }
+
 type CompactStore struct {
 	Dir                 string
 	lineageID           string
@@ -349,11 +352,14 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 			importCompactRecoveredEvidence(&request.Successor, predecessor.State, evidence)
 		}
 	}
-	stores, err := DiscoverCompactStores(ctx, repo)
+	// The recovery graph is scoped the same way every other authority walk is
+	// (#2495, finished here for #2741/#2743): a foreign record nobody can read
+	// is ABSENT from the graph, never a repository-wide refusal issued to a
+	// healthy, unrelated recovery. scanCompactAuthority still propagates
+	// operational failures, and the predecessor's own readability was already
+	// proven by its explicit load above.
+	scan, err := scanCompactAuthority(ctx, repo)
 	if err != nil {
-		return CompactRecord{}, err
-	}
-	if _, err := CompactAuthorityLeaves(ctx, repo); err != nil {
 		return CompactRecord{}, err
 	}
 	if existingErr == nil {
@@ -362,11 +368,7 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 		}
 		return CompactRecord{}, errors.New("recovery successor lineage already exists with different authority")
 	}
-	for _, store := range stores {
-		record, loadErr := store.Load()
-		if loadErr != nil {
-			return CompactRecord{}, fmt.Errorf("validate recovery graph: %w", loadErr)
-		}
+	for _, record := range scan.records {
 		if record.State.Recovery != nil && record.State.Recovery.PredecessorLineageID == request.PredecessorLineageID {
 			return CompactRecord{}, errors.New("recovery predecessor already has successor")
 		}
@@ -1477,7 +1479,7 @@ func compactApprovedScopeChangedRecovery(existing CompactState, live Snapshot) b
 func compactApprovedRebasedScopeRecovery(ctx context.Context, repo string, existing CompactState, live Snapshot) (bool, error) {
 	original, approved := existing.InitialSnapshot, existing.CurrentSnapshot
 	if existing.State != StateApproved || original.Kind != TargetCurrentChanges || approved.Kind != TargetCurrentChanges ||
-		live.Kind != TargetBaseDiff || !sameRecoveryProjection(original.Projection, live.Projection) ||
+		live.Kind != TargetBaseDiff || !sameApprovedRebasedRecoveryProjection(original.Projection, live.Projection) ||
 		original.BaseTree != approved.BaseTree || original.BaseTree == live.BaseTree ||
 		approved.CandidateTree == live.CandidateTree || approved.Identity == live.Identity ||
 		len(existing.GenesisPaths) == 0 || !equalStrings(approved.Paths, existing.GenesisPaths) ||
@@ -1522,12 +1524,23 @@ func compactApprovedRebasedScopeRecovery(ctx context.Context, repo string, exist
 	return originalPatch == livePatch, nil
 }
 
+// A base-diff has no index-backed staged execution mode. STATUS therefore
+// projects this narrow approved staged-current-changes rebase to its executable
+// committed-only base-diff form before identity derivation. No other mixed
+// projection is admitted here.
+func sameApprovedRebasedRecoveryProjection(original, live Projection) bool {
+	if live == "" {
+		live = ProjectionWorkspace
+	}
+	return sameRecoveryProjection(original, live) || original == ProjectionStaged && live == ProjectionWorkspace
+}
+
 // compactStartDeliveryScopeMatches compares the immutable delivery boundary
 // without Snapshot.Identity because current-changes and base-diff have distinct
 // representations for the same base-to-candidate tree range.
 func compactStartDeliveryScopeMatches(existing, requested CompactState) bool {
 	original, live := existing.InitialSnapshot, requested.InitialSnapshot
-	return original.Projection == live.Projection &&
+	return compactTargetProjectionsCompatible(original.Kind, original.Projection, live.Kind, live.Projection) &&
 		compactStartTargetKindsCompatible(original.Kind, live.Kind) &&
 		live.BaseTree == original.BaseTree &&
 		live.PathsDigest == original.PathsDigest &&
@@ -1543,6 +1556,25 @@ func compactStartTargetKindsCompatible(existing, requested TargetKind) bool {
 	}
 	return existing == TargetCurrentChanges && requested == TargetBaseDiff ||
 		existing == TargetBaseDiff && requested == TargetCurrentChanges
+}
+
+func compactTargetProjectionsCompatible(existingKind TargetKind, existingProjection Projection, requestedKind TargetKind, requestedProjection Projection) bool {
+	if existingProjection == "" {
+		existingProjection = ProjectionWorkspace
+	}
+	if requestedProjection == "" {
+		requestedProjection = ProjectionWorkspace
+	}
+	if existingProjection == requestedProjection {
+		return true
+	}
+	// Staged/workspace representations are safe only for this content-equivalent
+	// kind class because surrounding predicates still bind one content boundary;
+	// workspace-overlay remains excluded.
+	return (existingKind == TargetCurrentChanges || existingKind == TargetBaseDiff) &&
+		(requestedKind == TargetCurrentChanges || requestedKind == TargetBaseDiff) &&
+		(existingProjection == ProjectionStaged && requestedProjection == ProjectionWorkspace ||
+			existingProjection == ProjectionWorkspace && requestedProjection == ProjectionStaged)
 }
 
 type compactCorrectionTargetClaim uint8
@@ -2025,7 +2057,7 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		!snapshotsEqual(previous.InitialSnapshot, next.InitialSnapshot) || !equalStrings(previous.GenesisPaths, next.GenesisPaths) ||
 		previous.PolicyHash != next.PolicyHash || previous.RiskLevel != next.RiskLevel ||
 		!equalStrings(previous.SelectedLenses, next.SelectedLenses) || previous.OriginalChangedLines != next.OriginalChangedLines ||
-		previous.CorrectionBudget != next.CorrectionBudget {
+		previous.CorrectionBudget != next.CorrectionBudget || previous.CorrectionBudgetPolicy != next.CorrectionBudgetPolicy {
 		return fmt.Errorf("%w: compact review scope, tier, policy, and budget are immutable", ErrInvalidSuccessor)
 	}
 	switch operation {
@@ -2226,7 +2258,9 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 		return CompactRecord{}, errors.New("invalid compact review state record")
 	}
 	if err := record.State.Validate(); err != nil {
-		return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error()}
+		_, historical := forensicHistoricalCompactRecord(payload, lineageID)
+		return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error(),
+			OutdatedIdentity: historical}
 	}
 	if lineageID != "" && record.State.LineageID != lineageID {
 		return CompactRecord{}, errors.New("compact state lineage does not match its directory")
@@ -2238,6 +2272,54 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 		}
 	}
 	return record, nil
+}
+
+func forensicHistoricalCompactRecord(payload []byte, lineageID string) (historicalCompactForensicRecord, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var record CompactRecord
+	if err := decoder.Decode(&record); err != nil {
+		return historicalCompactForensicRecord{}, false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF || record.Schema != compactRecordSchema || !validSHA256(record.Revision) || record.State.LineageID != lineageID {
+		return historicalCompactForensicRecord{}, false
+	}
+	want, _, err := makeCompactRecord(record.State)
+	if err != nil || want.Revision != record.Revision || !errors.Is(record.State.Validate(), errCompactSnapshotIdentityMismatch) {
+		return historicalCompactForensicRecord{}, false
+	}
+	state := record.State
+	for _, snapshot := range []*Snapshot{&state.InitialSnapshot, &state.CurrentSnapshot} {
+		if snapshot.Identity != retiredCompactSnapshotIdentity(*snapshot) {
+			return historicalCompactForensicRecord{}, false
+		}
+		snapshot.Identity = snapshotIdentityForProjection(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
+	}
+	if state.Validate() != nil {
+		return historicalCompactForensicRecord{}, false
+	}
+	sum := sha256.Sum256(payload)
+	return historicalCompactForensicRecord{RawDigest: "sha256:" + hex.EncodeToString(sum[:])}, true
+}
+
+func retiredCompactSnapshotIdentity(snapshot Snapshot) string {
+	hash := sha256.New()
+	if snapshot.Kind == TargetBaseWorkspaceOverlay {
+		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v1\x00"))
+	} else if snapshot.Projection == ProjectionStaged {
+		hash.Write([]byte("gentle-ai.review-snapshot/v2\x00"))
+	} else {
+		hash.Write([]byte("gentle-ai.review-snapshot/v1\x00"))
+	}
+	values := []string{string(snapshot.Kind), snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof}
+	if snapshot.Projection == ProjectionStaged {
+		values = []string{string(snapshot.Kind), string(snapshot.Projection), snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof}
+	}
+	for _, value := range append(values, append(snapshot.IntendedUntracked, snapshot.LedgerIDs...)...) {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 // retiredCompactFieldError reports whether a strict decode failure names a

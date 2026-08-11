@@ -65,15 +65,25 @@ func reviewAvailableStartLineage(ctx context.Context, root, targetIdentity strin
 	return ""
 }
 
-// reviewStartLineageAvailable reports whether no compact authority occupies
-// this name. It is fail-closed on purpose: a name whose record exists but does
-// not load is still taken, and a store that cannot be resolved at all answers
-// taken rather than inviting a start that would collide.
+// reviewStartLineageAvailable reports whether neither compact-v2 nor legacy-v1
+// authority occupies this name. It is fail-closed on purpose: a name whose
+// record exists but does not load is still taken, and a store that cannot be
+// resolved at all answers taken rather than inviting a start that would collide.
 func reviewStartLineageAvailable(ctx context.Context, root, lineage string) bool {
+	if lineage == "" {
+		return false
+	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, lineage)
 	if err != nil {
 		return false
 	}
-	_, loadErr := store.Load()
+	if _, loadErr := store.Load(); !errors.Is(loadErr, os.ErrNotExist) {
+		return false
+	}
+	legacy, err := reviewtransaction.AuthoritativeStore(ctx, root, lineage)
+	if err != nil {
+		return false
+	}
+	_, loadErr := legacy.LoadChain()
 	return errors.Is(loadErr, os.ErrNotExist)
 }

@@ -244,10 +244,9 @@ func TestReviewCaptureResultRecapturesSameLensAfterPreInspectionAccessFailure(t 
 }
 
 // TestReviewAbandonAfterRejectedAdmissionIncidentArtifact answers the open
-// pristineness question from the community report: a quarantined incident
+// disposition question from the community report: a quarantined incident
 // artifact records a REJECTED admission — never a capture — so it must not
-// disqualify the reviewing lineage from `review abandon`, which accepts "a
-// reviewing authority that never captured lens results". The incident lives
+// alter the discarded-work summary bound by `review abandon`. The incident lives
 // beside the authority root (incidents/<lineage>), not inside the store entry,
 // and it survives the quarantine as audit history.
 func TestReviewAbandonAfterRejectedAdmissionIncidentArtifact(t *testing.T) {
@@ -255,14 +254,13 @@ func TestReviewAbandonAfterRejectedAdmissionIncidentArtifact(t *testing.T) {
 	failEnvelopelessCapture(t, repo, started, record)
 	incident := preserveEnvelopelessIncident(t, repo, started, record)
 
-	binding := "gentle-ai.review-abandon-authorization/v1\nlineage=" + started.LineageID +
-		"\nrevision=" + record.Revision +
-		"\nsnapshot_identity=" + record.State.InitialSnapshot.Identity +
-		"\nactor=maintainer@example.com\nreason=abandon after rejected reviewer admission"
+	const actor = "maintainer@example.com"
+	const reason = reviewtransaction.CompactAbandonReasonOperatorDisposition
+	binding := abandonBindingFromInventory(t, repo, started.LineageID, record.Revision, record.State.InitialSnapshot.Identity, actor, reason)
 	var output bytes.Buffer
 	err := RunReviewAbandon([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--expected-revision", record.Revision,
-		"--reason", "abandon after rejected reviewer admission", "--actor", "maintainer@example.com",
+		"--reason", reason, "--actor", actor,
 		"--maintainer-authorization", binding,
 	}, &output)
 	if err != nil {
@@ -271,8 +269,8 @@ func TestReviewAbandonAfterRejectedAdmissionIncidentArtifact(t *testing.T) {
 	var result ReviewAbandonResult
 	decodeStrictReviewJSON(t, output.Bytes(), &result)
 	if result.Record.Status != reviewtransaction.CompactReclaimCommitted ||
-		result.Record.PristineAbandonment == nil ||
-		result.Record.PristineAbandonment.State != reviewtransaction.StateReviewing {
+		result.Record.Abandonment == nil ||
+		result.Record.Abandonment.Schema != reviewtransaction.CompactAbandonAuthorizationSchema {
 		t.Fatalf("abandon after incident result = %#v", result)
 	}
 	if _, statErr := os.Stat(filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", started.LineageID)); !os.IsNotExist(statErr) {

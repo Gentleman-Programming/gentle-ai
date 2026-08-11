@@ -737,13 +737,13 @@ func reflectDeepEqualStrings(got, want []string) bool {
 // without remediation flags. With reviews ON that still demands an approved
 // recovery successor. With reviews OFF it closes, because the successor could
 // only come from `review start`, which the same switch refuses.
-func TestSDDAttemptFinishHonorsTheKillSwitchOverRemediationObligations(t *testing.T) {
+func TestSDDAttemptFinishImposesNoRemediationObligationEitherWay(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string
 		disable  bool
 		wantFail bool
 	}{
-		{name: "reviews enabled still demand a successor", disable: false, wantFail: true},
+		{name: "reviews enabled impose no obligation", disable: false, wantFail: false},
 		{name: "reviews disabled impose no obligation", disable: true, wantFail: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -787,14 +787,8 @@ func TestSDDAttemptFinishHonorsTheKillSwitchOverRemediationObligations(t *testin
 				"--diagnosis", "attempt passed", "--harness-disposition", "reused",
 				"--cleanup-evidence", "cleanup completed", "--process-evidence", "process scan found no descendants",
 			}, &output)
-			if testCase.wantFail {
-				if !errors.Is(err, sddstatus.ErrRuntimeRemediationSuccessorRequired) {
-					t.Fatalf("enabled bound finish = %T %v, want the successor demand\n%s", err, err, output.String())
-				}
-				return
-			}
 			if err != nil {
-				t.Fatalf("disabled bound finish demanded a review obligation: %T %v\n%s", err, err, output.String())
+				t.Fatalf("bound finish demanded a review obligation: %T %v\n%s", err, err, output.String())
 			}
 			var status sddstatus.RuntimeStatus
 			decodeStrictReviewJSON(t, output.Bytes(), &status)

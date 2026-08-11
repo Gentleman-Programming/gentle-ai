@@ -1237,6 +1237,99 @@ func approveDiscoveryMarkdown(t *testing.T, repo, lineage, logicalPath, content 
 	return approveDiscoveryMarkdownProjection(t, repo, lineage, logicalPath, content, reviewtransaction.ProjectionWorkspace)
 }
 
+// TestNegotiatedStatusRequiresExactStagedDeliveryCandidate proves #2758 at the
+// negotiated CLI boundary. A workspace receipt remains applicable to the
+// workspace while the index is empty, partial, or different, so STATUS must
+// inspect the pre-commit candidate before it offers validation.
+func TestNegotiatedStatusRequiresExactStagedDeliveryCandidate(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	const lineage = "review-staged-delivery-candidate"
+	for path, content := range map[string]string{"docs/alpha.md": "baseline alpha\n", "docs/bravo.md": "baseline bravo\n"} {
+		fullPath := filepath.Join(repo, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runReviewCLIGit(t, repo, "add", "docs/alpha.md", "docs/bravo.md")
+	runReviewCLIGit(t, repo, "commit", "-qm", "fixture: add tracked delivery paths")
+	files := map[string]string{
+		"docs/alpha.md": "# Alpha\n",
+		"docs/bravo.md": "# Bravo\n",
+	}
+	_, store := approveDiscoveryMarkdownFilesProjection(t, repo, lineage, files, reviewtransaction.ProjectionWorkspace)
+	stateBefore, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptBefore, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status := func(selectors ...string) ReviewTargetStatusResult {
+		t.Helper()
+		args := []string{"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--next-transition", "--lineage", lineage, "--gate", "pre-commit"}
+		args = append(args, selectors...)
+		var output bytes.Buffer
+		if err := RunReview(args, &output); err != nil {
+			t.Fatalf("STATUS %v: %v\n%s", selectors, err, output.String())
+		}
+		var result ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &result)
+		return result
+	}
+	requireBlocked := func(name string) {
+		t.Helper()
+		result := status()
+		if result.NextTransition == nil || result.NextTransition.Kind != reviewNextTransitionStop ||
+			result.NextTransition.ReasonCode != "staged_delivery_candidate_required" ||
+			result.NextTransition.Execute != nil || result.NextTransition.Collect != nil {
+			t.Fatalf("%s staged delivery transition = %#v", name, result.NextTransition)
+		}
+		stateAfter, stateErr := os.ReadFile(store.StatePath())
+		receiptAfter, receiptErr := os.ReadFile(store.ReceiptPath())
+		if stateErr != nil || receiptErr != nil || !bytes.Equal(stateBefore, stateAfter) || !bytes.Equal(receiptBefore, receiptAfter) {
+			t.Fatalf("%s STATUS mutated authority: state=%v receipt=%v", name, stateErr, receiptErr)
+		}
+	}
+
+	runReviewCLIGit(t, repo, "reset", "--", "docs/alpha.md", "docs/bravo.md")
+	requireBlocked("empty index")
+
+	runReviewCLIGit(t, repo, "add", "docs/alpha.md")
+	requireBlocked("partial index")
+
+	runReviewCLIGit(t, repo, "add", "docs/bravo.md")
+	if err := os.WriteFile(filepath.Join(repo, "docs", "alpha.md"), []byte("# Different\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "docs/alpha.md")
+	if err := os.WriteFile(filepath.Join(repo, "docs", "alpha.md"), []byte(files["docs/alpha.md"]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	requireBlocked("different index")
+
+	runReviewCLIGit(t, repo, "add", "docs/alpha.md", "docs/bravo.md")
+	ready := status("--projection", "staged")
+	if ready.NextTransition == nil || ready.NextTransition.Kind != reviewNextTransitionExecute ||
+		ready.NextTransition.Execute == nil || ready.NextTransition.Execute.Operation != "review.validate" ||
+		ready.NextTransition.ReasonCode != "approved_receipt_ready" {
+		t.Fatalf("exact staged delivery transition = %#v", ready.NextTransition)
+	}
+	payload, err := runSelectorTransition(repo, ready)
+	if err != nil {
+		t.Fatalf("execute exact staged validation: %v\n%s", err, payload)
+	}
+	var validation ReviewValidateResult
+	decodeStrictReviewJSON(t, payload, &validation)
+	if !validation.Allowed || validation.Result != reviewtransaction.GateAllow {
+		t.Fatalf("exact staged validation = %#v", validation)
+	}
+}
+
 // approveDiscoveryMarkdownProjection builds and finalizes a LOW-risk legacy
 // (compact-v2) approved receipt over one passive markdown candidate.
 //
@@ -1253,13 +1346,19 @@ func approveDiscoveryMarkdown(t *testing.T, repo, lineage, logicalPath, content 
 // fix -- then finalizes through the unchanged CLI RunReviewFacadeFinalize
 // (finalize's discovery-by-kind logic never depended on the switch).
 func approveDiscoveryMarkdownProjection(t *testing.T, repo, lineage, logicalPath, content string, projection reviewtransaction.Projection) (ReviewFacadeStartResult, reviewtransaction.CompactStore) {
+	return approveDiscoveryMarkdownFilesProjection(t, repo, lineage, map[string]string{logicalPath: content}, projection)
+}
+
+func approveDiscoveryMarkdownFilesProjection(t *testing.T, repo, lineage string, files map[string]string, projection reviewtransaction.Projection) (ReviewFacadeStartResult, reviewtransaction.CompactStore) {
 	t.Helper()
-	path := filepath.Join(repo, filepath.FromSlash(logicalPath))
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
+	for logicalPath, content := range files {
+		path := filepath.Join(repo, filepath.FromSlash(logicalPath))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// #2394: a new file is reviewable only once the user declared it, and the
 	// index is that declaration for both projections.

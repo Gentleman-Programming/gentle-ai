@@ -41,10 +41,6 @@ func (result ReviewFinalVerificationRetryResult) Validate() error {
 	return nil
 }
 
-func RunReviewRetryFinalVerification(args []string, stdout io.Writer) error {
-	return runReviewRetryFinalVerification(context.Background(), args, stdout)
-}
-
 func runReviewRetryFinalVerification(ctx context.Context, args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review retry-final-verification", stdout, "Create the one provider-derived validating successor admitted only for an exact completed failed final-verification tooling incident.")
 	cwd := flags.String("cwd", ".", "repository path")

@@ -780,24 +780,47 @@ func finalizeAsFailedVerification(r *journeyRun) error {
 // authorityHead is the subset of `review status` a recovery of an escalated
 // lineage needs.
 type authorityHead struct {
-	Status  string `json:"status"`
-	Entries []struct {
-		LineageID        string `json:"lineage_id"`
-		State            string `json:"state"`
-		Revision         string `json:"revision"`
-		SnapshotIdentity string `json:"snapshot_identity"`
-	} `json:"entries"`
+	Status  string           `json:"status"`
+	Entries []authorityEntry `json:"entries"`
+}
+
+type authorityDiscardedWork struct {
+	CapturedLensResults    []string `json:"captured_lens_results"`
+	FindingsPresent        bool     `json:"findings_present"`
+	EvidenceRecordsPresent bool     `json:"evidence_records_present"`
+}
+
+type authorityEntry struct {
+	LineageID        string                 `json:"lineage_id"`
+	State            string                 `json:"state"`
+	Revision         string                 `json:"revision"`
+	SnapshotIdentity string                 `json:"snapshot_identity"`
+	DiscardedWork    authorityDiscardedWork `json:"discarded_work"`
 }
 
 // entry finds one lineage by name. Journeys that hold more than one authority
 // must select by identity, never by position.
-func (h authorityHead) entry(lineage string) (string, string, bool) {
+func (h authorityHead) entry(lineage string) (authorityEntry, bool) {
 	for _, candidate := range h.Entries {
 		if candidate.LineageID == lineage {
-			return candidate.Revision, candidate.SnapshotIdentity, true
+			return candidate, true
 		}
 	}
-	return "", "", false
+	return authorityEntry{}, false
+}
+
+func renderAbandonAuthorization(entry authorityEntry, actor, reason string) string {
+	return strings.Join([]string{
+		"gentle-ai.review-abandon-authorization/v2",
+		"lineage=" + entry.LineageID,
+		"revision=" + entry.Revision,
+		"snapshot_identity=" + entry.SnapshotIdentity,
+		"reason=" + reason,
+		"captured_lens_results=" + strings.Join(entry.DiscardedWork.CapturedLensResults, ","),
+		fmt.Sprintf("findings_present=%t", entry.DiscardedWork.FindingsPresent),
+		fmt.Sprintf("evidence_records_present=%t", entry.DiscardedWork.EvidenceRecordsPresent),
+		"actor=" + actor,
+	}, "\n")
 }
 
 // recoverEscalated tries the recovery twice on purpose. The first attempt is
@@ -1192,7 +1215,7 @@ func edgeJourneys() []Journey {
 		},
 		{
 			ID:     "j34-abandon-then-start-again",
-			Title:  "Abandon a lineage, then start a fresh review of the same candidate",
+			Title:  "Abandon a non-terminal lineage, then start a fresh review of the same candidate",
 			Source: "shape 2 (an abandoned lineage must not poison the repository permanently)",
 			// Expected: after the abandonment the same candidate starts a new
 			// review, finalizes and gates to `allow`. A quarantined lineage
@@ -1202,7 +1225,7 @@ func edgeJourneys() []Journey {
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "fixture: stage docs", Fixture: stageProse("", "abandoned")},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "abandon a pristine lineage", Requires: abandonCapability, Composite: abandonPristineLineage},
+				{Name: "abandon a non-terminal lineage with its V2 discarded-work binding", Requires: abandonCapability, Composite: abandonNonTerminalLineage},
 				{Name: "review start again after the abandonment", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
 				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberLineage},
 				{Name: "gate pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit")},

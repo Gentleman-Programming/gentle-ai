@@ -24,6 +24,27 @@ var (
 	errRARAuthorityPathReplaced = errors.New("RAR authority path changed during access")
 )
 
+// UnsafeRARPathError preserves the unsafe private RAR path for recovery.
+type UnsafeRARPathError struct {
+	Path      string
+	Directory bool
+	Cause     error
+}
+
+func (err *UnsafeRARPathError) Error() string {
+	kind := "file"
+	if err.Directory {
+		kind = "directory"
+	}
+	return fmt.Sprintf("unsafe private RAR %s %q: %v", kind, err.Path, err.Cause)
+}
+
+func (err *UnsafeRARPathError) Unwrap() error { return err.Cause }
+
+func unsafeRARPathError(path string, directory bool) error {
+	return &UnsafeRARPathError{Path: path, Directory: directory, Cause: errUnsafeRARAuthorityPath}
+}
+
 func ensureRARRepositoryRoot(commonDir, root string, create bool) error {
 	commonDir = filepath.Clean(commonDir)
 	root = filepath.Clean(root)
@@ -136,7 +157,7 @@ func ensurePrivateRARDirectoryTree(base, dir string, create bool) error {
 			return statErr
 		}
 		if rarPathUnsafe(current, info) || !info.IsDir() {
-			return errUnsafeRARAuthorityPath
+			return unsafeRARPathError(current, true)
 		}
 		if err := validatePrivateRARDirectory(current); err != nil {
 			return fmt.Errorf("validate nested private RAR directory %q: %w", current, err)
@@ -197,7 +218,7 @@ func validatePrivateRARPath(path string, directory bool) error {
 	}
 	if rarPathUnsafe(path, before) || before.IsDir() != directory ||
 		!privateRARPathSafe(path, before) {
-		return errUnsafeRARAuthorityPath
+		return unsafeRARPathError(path, directory)
 	}
 	file, err := openRARPathNoFollow(path, directory)
 	if err != nil {
@@ -226,7 +247,7 @@ func readPrivateRARFile(path string) ([]byte, error) {
 	}
 	if rarPathUnsafe(path, before) || !before.Mode().IsRegular() ||
 		!privateRARPathSafe(path, before) {
-		return nil, errUnsafeRARAuthorityPath
+		return nil, unsafeRARPathError(path, false)
 	}
 	file, err := openRARPathNoFollow(path, false)
 	if err != nil {

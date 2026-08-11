@@ -419,9 +419,24 @@ func TestOrphanedSuccessorHasARunnableAbandonThatDoesNotBlockNewWork(t *testing.
 	if expectedRevision == nil || snapshotIdentity == nil {
 		t.Fatalf("the refusal renders no authorization template: %q", message)
 	}
-	const actor, reason = "maintainer@example.com", "its predecessor is gone"
+	const actor = "maintainer@example.com"
+	const reason = reviewtransaction.CompactAbandonReasonOperatorDisposition
+	report, err := reviewtransaction.InventoryAuthority(t.Context(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var discarded *reviewtransaction.CompactDiscardedWorkSummary
+	for _, entry := range report.Entries {
+		if entry.LineageID == successor {
+			discarded = entry.DiscardedWork
+			break
+		}
+	}
+	if discarded == nil {
+		t.Fatalf("review status publishes no discarded-work summary for %q", successor)
+	}
 	authorization := reviewtransaction.RenderCompactAbandonAuthorization(
-		successor, expectedRevision[1], snapshotIdentity[1], actor, reason)
+		successor, expectedRevision[1], snapshotIdentity[1], actor, reason, *discarded)
 	abandonArgs := append(tokens[1:], "--reason", reason, "--actor", actor, "--maintainer-authorization", authorization)
 	var abandoned bytes.Buffer
 	if err := RunReview(abandonArgs, &abandoned); err != nil {

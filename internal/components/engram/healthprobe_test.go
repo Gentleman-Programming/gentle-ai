@@ -260,20 +260,121 @@ func TestStdioHandshake_TerminatesDescendantOnContextEnd(t *testing.T) {
 	}
 }
 
+func TestWaitForHelperPID_RetriesTransientEmptyContent(t *testing.T) {
+	const wantPID = 2858
+	pidPath := filepath.Join(t.TempDir(), "descendant.pid")
+	if err := os.WriteFile(pidPath, nil, 0o600); err != nil {
+		t.Fatalf("create empty descendant pid file: %v", err)
+	}
+
+	firstRead := make(chan []byte, 1)
+	allowRetry := make(chan struct{})
+	readCount := 0
+	readFile := func(path string) ([]byte, error) {
+		raw, err := os.ReadFile(path)
+		if readCount == 0 {
+			firstRead <- raw
+			<-allowRetry
+		}
+		readCount++
+		return raw, err
+	}
+	type waitResult struct {
+		pid int
+		err error
+	}
+	result := make(chan waitResult, 1)
+	go func() {
+		pid, err := waitForHelperPIDWithReadFile(pidPath, 100*time.Millisecond, readFile)
+		result <- waitResult{pid: pid, err: err}
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-allowRetry:
+		default:
+			close(allowRetry)
+		}
+	})
+
+	select {
+	case raw := <-firstRead:
+		if string(raw) != "" {
+			t.Fatalf("first descendant pid content = %q, want empty", raw)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waitForHelperPID() did not read the empty pid file")
+	}
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(wantPID)), 0o600); err != nil {
+		t.Fatalf("write descendant pid: %v", err)
+	}
+	close(allowRetry)
+
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatalf("waitForHelperPID() error = %v", got.err)
+		}
+		if got.pid != wantPID {
+			t.Fatalf("descendant pid = %d, want %d", got.pid, wantPID)
+		}
+		if readCount < 2 {
+			t.Fatalf("descendant pid reads = %d, want retry after empty content", readCount)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waitForHelperPID() did not retry after empty pid content")
+	}
+}
+
+func TestWaitForHelperPIDWithTimeout_PermanentMalformedContent(t *testing.T) {
+	pidPath := filepath.Join(t.TempDir(), "descendant.pid")
+	if err := os.WriteFile(pidPath, []byte("not-a-pid"), 0o600); err != nil {
+		t.Fatalf("write malformed descendant pid: %v", err)
+	}
+
+	_, err := waitForHelperPIDWithTimeout(pidPath, 30*time.Millisecond)
+	if err == nil {
+		t.Fatal("waitForHelperPIDWithTimeout() error = nil, want malformed PID diagnostic")
+	}
+	if !strings.Contains(err.Error(), `last content = "not-a-pid"`) || !strings.Contains(err.Error(), "invalid syntax") {
+		t.Fatalf("waitForHelperPIDWithTimeout() error = %v, want last malformed content and parse error", err)
+	}
+}
+
 func waitForHelperPID(t *testing.T, path string) int {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	pid, err := waitForHelperPIDWithTimeout(path, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pid
+}
+
+func waitForHelperPIDWithTimeout(path string, timeout time.Duration) (int, error) {
+	return waitForHelperPIDWithReadFile(path, timeout, os.ReadFile)
+}
+
+func waitForHelperPIDWithReadFile(path string, timeout time.Duration, readFile func(string) ([]byte, error)) (int, error) {
+	deadline := time.Now().Add(timeout)
+	var lastContent []byte
+	var lastErr error
 	for {
-		raw, err := os.ReadFile(path)
+		raw, err := readFile(path)
 		if err == nil {
 			pid, parseErr := strconv.Atoi(string(raw))
-			if parseErr != nil || pid <= 0 {
-				t.Fatalf("descendant pid = %q, parse error = %v", raw, parseErr)
+			if parseErr == nil && pid > 0 {
+				return pid, nil
 			}
-			return pid
+			lastContent = raw
+			if parseErr != nil {
+				lastErr = parseErr
+			} else {
+				lastErr = fmt.Errorf("pid must be positive, got %d", pid)
+			}
+		} else {
+			lastErr = err
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("wait for descendant pid: %v", err)
+		if !time.Now().Before(deadline) {
+			return 0, fmt.Errorf("wait for descendant pid: last content = %q, last error = %w", lastContent, lastErr)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

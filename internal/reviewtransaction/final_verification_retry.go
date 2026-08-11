@@ -717,22 +717,23 @@ func InspectCompactFinalVerificationRetrySource(ctx context.Context, repo, linea
 		}
 		return FinalVerificationRetryEligibility{}, false, err
 	}
-	stores, err := DiscoverCompactStores(ctx, store.repo)
+	// This inspection is on the negotiated STATUS path for every escalated
+	// lineage, so its walk must be scoped exactly like the rest of the
+	// authority graph (#2743): one unreadable foreign record used to abort
+	// it, and the aborted STATUS then declared the whole repository
+	// authority corrupted. An unreadable record is absent from the graph;
+	// an absent ancestor already makes the ancestry check below answer
+	// ineligible for this one lineage, which is the honest scoped verdict.
+	scan, err := scanCompactAuthority(ctx, store.repo)
 	if err != nil {
 		return FinalVerificationRetryEligibility{}, false, err
 	}
-	records := make(map[string]CompactRecord, len(stores))
-	for _, candidateStore := range stores {
-		candidate, loadErr := candidateStore.LoadContext(ctx)
-		if loadErr != nil {
-			return FinalVerificationRetryEligibility{}, false, loadErr
-		}
-		records[candidate.State.LineageID] = candidate
+	for _, candidate := range scan.records {
 		if candidate.State.Recovery != nil && candidate.State.Recovery.PredecessorLineageID == lineageID {
 			return FinalVerificationRetryEligibility{}, false, nil
 		}
 	}
-	if err := finalVerificationRetryAncestryEligible(record, records); err != nil {
+	if err := finalVerificationRetryAncestryEligible(record, scan.records); err != nil {
 		return FinalVerificationRetryEligibility{}, false, nil
 	}
 	return source.eligibility, true, nil

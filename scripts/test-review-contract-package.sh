@@ -15,13 +15,17 @@ import zipfile
 repo = pathlib.Path(sys.argv[1]).resolve()
 dist_arg = sys.argv[2]
 contract_root = pathlib.PurePosixPath("contracts/review-integration/v1")
+current_contract_root = pathlib.PurePosixPath("contracts/review-integration/v2")
 expected_contract = [
+	contract_root / "FREEZE.md",
 	contract_root / "fixtures/binding-revision-conflict.fixture.json",
 	contract_root / "fixtures/capabilities-v1.1.fixture.json",
 	contract_root / "fixtures/capabilities-v1.2.fixture.json",
 	contract_root / "fixtures/capabilities-v1.3.fixture.json",
 	contract_root / "fixtures/capabilities-v1.4.fixture.json",
+	contract_root / "fixtures/capabilities-v1.5.fixture.json",
     contract_root / "fixtures/capabilities.fixture.json",
+	contract_root / "fixtures/consent.fixture.json",
 	contract_root / "fixtures/final-verification-incident.fixture.json",
     contract_root / "fixtures/failure.fixture.json",
     contract_root / "fixtures/operation.fixture.json",
@@ -40,6 +44,7 @@ expected_contract = [
     contract_root / "fixtures/status-v2-unrelated.fixture.json",
     contract_root / "fixtures/status-v2.fixture.json",
     contract_root / "fixtures/status.fixture.json",
+	contract_root / "fixtures/verification-evidence.fixture.json",
 	contract_root / "schemas/admitted-result.schema.json",
 	contract_root / "schemas/artifact-subject.schema.json",
 	contract_root / "schemas/authority-repair-assessment.schema.json",
@@ -47,7 +52,10 @@ expected_contract = [
 	contract_root / "schemas/capabilities-v1.2.schema.json",
 	contract_root / "schemas/capabilities-v1.3.schema.json",
 	contract_root / "schemas/capabilities-v1.4.schema.json",
+	contract_root / "schemas/capabilities-v1.5.schema.json",
     contract_root / "schemas/capabilities.schema.json",
+	contract_root / "schemas/consent.schema.json",
+	contract_root / "schemas/correction-plan-request.schema.json",
     contract_root / "schemas/failure.schema.json",
 	contract_root / "schemas/final-verification-incident.schema.json",
     contract_root / "schemas/operation.schema.json",
@@ -60,13 +68,38 @@ expected_contract = [
     contract_root / "schemas/status-v2.schema.json",
     contract_root / "schemas/status.schema.json",
     contract_root / "schemas/targeted-validation-request.schema.json",
+	contract_root / "schemas/verification-evidence.schema.json",
+	current_contract_root / "fixtures/capabilities-v2.1.fixture.json",
+	current_contract_root / "fixtures/capabilities-v2.2.fixture.json",
+	current_contract_root / "fixtures/capabilities.fixture.json",
+	current_contract_root / "fixtures/capture-result-dry-run.fixture.json",
+	current_contract_root / "fixtures/consent-v3.fixture.json",
+	current_contract_root / "fixtures/consent.fixture.json",
+	current_contract_root / "fixtures/start.fixture.json",
+	current_contract_root / "fixtures/status-v5.fixture.json",
+	current_contract_root / "fixtures/status.fixture.json",
+	current_contract_root / "schemas/admitted-result.schema.json",
+	current_contract_root / "schemas/artifact-subject.schema.json",
+	current_contract_root / "schemas/capabilities-v2.1.schema.json",
+	current_contract_root / "schemas/capabilities-v2.2.schema.json",
+	current_contract_root / "schemas/capabilities.schema.json",
+	current_contract_root / "schemas/capture-result-dry-run.schema.json",
+	current_contract_root / "schemas/consent-v3.schema.json",
+	current_contract_root / "schemas/consent.schema.json",
+	current_contract_root / "schemas/failure.schema.json",
+	current_contract_root / "schemas/operation.schema.json",
+	current_contract_root / "schemas/repair.schema.json",
+	current_contract_root / "schemas/start.schema.json",
+	current_contract_root / "schemas/status-v4.schema.json",
+	current_contract_root / "schemas/status-v5.schema.json",
+	current_contract_root / "schemas/status.schema.json",
 ]
 expected_names = sorted(path.as_posix() for path in expected_contract)
 
-source_root = repo / pathlib.Path(contract_root.as_posix())
 source_names = sorted(
     path.relative_to(repo).as_posix()
-    for path in source_root.rglob("*")
+    for root in (contract_root, current_contract_root)
+    for path in (repo / pathlib.Path(root.as_posix())).rglob("*")
     if path.is_file()
 )
 assert source_names == expected_names, (
@@ -131,7 +164,7 @@ def archive_payloads(path):
 for artifact in archives:
     path = archive_path(artifact)
     names, payloads = archive_payloads(path)
-    packaged_contract = sorted(name for name in names if name.startswith(contract_root.as_posix() + "/"))
+    packaged_contract = sorted(name for name in names if any(name.startswith(root.as_posix() + "/") for root in (contract_root, current_contract_root)))
     assert packaged_contract == expected_names, (
         f"{path.name} contract inventory mismatch\ngot={packaged_contract}\nwant={expected_names}"
     )

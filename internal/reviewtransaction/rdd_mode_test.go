@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -382,6 +383,36 @@ func TestUnknownRDDModeFailsClosedAsDisabled(t *testing.T) {
 	}
 	if status.Effective != RDDModeOff || status.Enabled() {
 		t.Fatalf("corrupt override did not fail closed: %#v", status)
+	}
+}
+
+func TestResolveRDDModeUnsafePrivatePathIsNotACorruptHead(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permissions are covered by the Windows ACL test")
+	}
+	repo := initSnapshotRepo(t)
+	if _, err := SetCloneLocalRDDMode(context.Background(), repo, RDDModeOff, "", RDDGlobalMode{}); err != nil {
+		t.Fatalf("disable clone-local mode: %v", err)
+	}
+	modeRecord := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode", "gen-0000000001.json")
+	if err := os.Chmod(modeRecord, 0o644); err != nil {
+		t.Fatalf("make private RAR file unsafe: %v", err)
+	}
+	defer os.Chmod(modeRecord, 0o600)
+
+	status, err := ResolveRDDMode(context.Background(), repo, RDDGlobalMode{})
+	if err == nil {
+		t.Fatal("unsafe private RAR path resolved without an error")
+	}
+	if errors.Is(err, ErrRDDModeCorrupt) {
+		t.Fatalf("unsafe private RAR path entered corrupt-head recovery: %v", err)
+	}
+	var unsafePath *UnsafeRARPathError
+	if !errors.As(err, &unsafePath) || unsafePath.Path != modeRecord || unsafePath.Directory {
+		t.Fatalf("unsafe private RAR path lost its typed cause: %#v", err)
+	}
+	if status.Enabled() {
+		t.Fatalf("unsafe private RAR path did not fail closed: %#v", status)
 	}
 }
 

@@ -21,6 +21,8 @@ import (
 // chain instead of denying with candidate-or-paths-mismatch or the empty
 // one-commit topology context.
 func TestValidateBindsScopeChangedRecoveryChainAtPublicationGates(t *testing.T) {
+	t.Parallel()
+
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	remote := filepath.Join(t.TempDir(), "remote.git")

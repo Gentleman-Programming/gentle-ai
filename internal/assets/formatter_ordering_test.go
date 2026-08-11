@@ -242,7 +242,12 @@ func TestWindowsFullSuiteShardsCoverEveryTestName(t *testing.T) {
 	// Ranges are read straight out of the matrix, so this cannot drift from
 	// what actually runs the way a copy of the list would.
 	type shard struct{ pkg, lo, hi string }
+	const (
+		cliRAM = "^TestR[A-Ma-m]"
+		cliRNZ = "^TestR[N-Zn-z]"
+	)
 	var shards []shard
+	var cliRSelectors []string
 	var pkg string
 	for _, line := range strings.Split(section, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -257,14 +262,33 @@ func TestWindowsFullSuiteShardsCoverEveryTestName(t *testing.T) {
 		if value == "" {
 			continue
 		}
-		if len(value) != len(`^Test[A-Z]`) || !strings.HasPrefix(value, "^Test[") || !strings.HasSuffix(value, "]") {
-			t.Fatalf("shard selector %q is not the ^Test[A-Z] form this guard can verify", value)
+		if len(value) == len(`^Test[A-Z]`) && strings.HasPrefix(value, "^Test[") && strings.HasSuffix(value, "]") {
+			shards = append(shards, shard{pkg: pkg, lo: value[6:7], hi: value[8:9]})
+			continue
 		}
-		shards = append(shards, shard{pkg: pkg, lo: value[6:7], hi: value[8:9]})
+		if pkg != "./internal/cli" || (value != cliRAM && value != cliRNZ) {
+			t.Fatalf("shard selector %q is neither a ^Test[A-Z] range nor a required cli TestR partition", value)
+		}
+		cliRSelectors = append(cliRSelectors, value)
 	}
 	if len(shards) == 0 {
 		t.Fatal("no range shards found; the guard would pass vacuously")
 	}
+	if len(cliRSelectors) != 2 {
+		t.Fatalf("cli TestR partitions = %v, want exactly %q and %q", cliRSelectors, cliRAM, cliRNZ)
+	}
+	seenRSelector := map[string]bool{}
+	for _, selector := range cliRSelectors {
+		seenRSelector[selector] = true
+	}
+	for _, selector := range []string{cliRAM, cliRNZ} {
+		if !seenRSelector[selector] {
+			t.Fatalf("cli TestR partition %q is required", selector)
+		}
+	}
+	// The two required selectors split TestR's next letter across uppercase and
+	// lowercase A-Z, so together they are the cli range shard for R.
+	shards = append(shards, shard{pkg: "./internal/cli", lo: "R", hi: "R"})
 
 	byPackage := map[string][]shard{}
 	for _, s := range shards {

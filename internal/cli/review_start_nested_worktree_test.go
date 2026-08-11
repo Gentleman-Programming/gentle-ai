@@ -55,34 +55,23 @@ func TestReviewStartExcludesNestedWorktreeFromFrozenManifest(t *testing.T) {
 	}
 }
 
-// TestNegotiatedReviewStartIgnoresEmbeddedForeignRepository replaces the test
-// that pinned the opposite outcome. An embedded foreign clone used to block
-// START, because the sweep tried to make its directory part of the candidate
-// and Git refuses to enumerate inside it. #2394 stopped the sweep, so an
-// embedded clone is now ordinary undeclared workspace content: START succeeds
-// and the clone never appears in the frozen manifest.
-func TestNegotiatedReviewStartIgnoresEmbeddedForeignRepository(t *testing.T) {
+// #2652 intentionally preserves the nested-repository boundary even when an
+// explicit untracked-scope preflight precedes snapshot construction.
+func TestNegotiatedReviewStartRejectsEmbeddedForeignRepository(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	runReviewCLIGit(t, repo, "init", "-q", filepath.Join(repo, "vendor", "embedded"))
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 
 	var output bytes.Buffer
-	if err := RunReview(boundNegotiatedStartArgs(t, []string{
+	err := RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", "embedded-repository-2394",
-	}), &output); err != nil {
-		t.Fatalf("negotiated review start beside an embedded foreign repository: %v\n%s", err, output.String())
+	}), &output)
+	if err == nil {
+		t.Fatal("negotiated review start beside an embedded foreign repository succeeded")
 	}
-	result := decodeNegotiatedReviewStart(t, output.Bytes())
-	if result.ChangedPathManifest == nil {
-		t.Fatalf("negotiated START carries no changed-path manifest:\n%s", output.String())
-	}
-	for _, entry := range *result.ChangedPathManifest {
-		if strings.HasPrefix(entry.Path, "vendor/") {
-			t.Fatalf("frozen manifest admitted embedded repository content %q", entry.Path)
-		}
-	}
-	if len(*result.ChangedPathManifest) != 1 || (*result.ChangedPathManifest)[0].Path != "tracked.txt" {
-		t.Fatalf("frozen manifest = %#v, want only the declared change", *result.ChangedPathManifest)
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Code != "invalid_request" || !strings.Contains(failure.Cause, "another Git repository") {
+		t.Fatalf("embedded repository failure = %#v, want invalid request naming the nested repository", failure)
 	}
 }
 func TestReviewStartKeepsSiblingLinkedWorktreeWorking(t *testing.T) {

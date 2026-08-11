@@ -18,12 +18,20 @@
 ---
 
 > [!IMPORTANT]
-> **Receipt-Driven Development (RDD) is the supported stable path** as of `v2.2.0`. It started in `v1.47.0` and became stable once the outcome-first workflow was restored: small work stays direct, broader implementation is delegated, SDD stays optional, and every route converges on structural proof, bounded review, an exact receipt, and delivery authorization.
+> **Receipt-Driven Development (RDD) is the supported stable path.** `v2.2.0` was the historical release where that path became supported after RDD began in `v1.47.0`: small work stays direct, broader implementation is delegated, SDD stays optional, and every route converges on structural proof, bounded review, an exact receipt, and delivery authorization.
 >
-> Install the latest release:
+> The current stable release is [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0). `@latest` is the stable channel:
+>
 > ```bash
 > go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 > ```
+>
+> To opt into the current prerelease, [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1), install its exact tag:
+>
+> ```bash
+> go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.1
+> ```
+>
 > Use `@main` only for unreleased development changes. See the [full RDD version policy](docs/quickstart.md#version-policy).
 >
 > Note the `/v2` suffix: Go requires it for major version 2 and above. Releases before `v2.0.0` use the unsuffixed import path.
@@ -100,6 +108,9 @@ go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 > [!WARNING]
 > Windows source builds and CI/runtime tests remain supported, but official Windows binary distribution and Scoop are temporarily unavailable. Windows installation and upgrades require Go 1.25.10+ and fail closed to source-install guidance; they never download an unsigned Gentle AI executable or execute a remote update script.
 
+> [!IMPORTANT]
+> After replacing or upgrading the `gentle-ai` binary, run `gentle-ai sync` to refresh its managed assets. See the [sync and upgrade reference](docs/usage.md#sync).
+
 ### Configure project context
 
 Once your agents are configured, open your AI agent in a project and run these two commands to register the project context:
@@ -124,7 +135,7 @@ brew trust --formula gentleman-programming/tap/gentle-ai  # one-time, for Homebr
 brew install gentle-ai
 ```
 
-**Go install (any platform with Go 1.25.10+)**
+**Go install: stable channel (any platform with Go 1.25.10+)**
 
 ```bash
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
@@ -143,7 +154,7 @@ gentle-ai install --scope=workspace
 
 Workspace scope applies to selected agents for agent-scoped files such as system prompts, skills, SDD agents, and persona files. Global-only integrations remain global by design.
 
-**Beta channel** — use only to test unreleased `main` builds. It requires Go 1.25.10+:
+**Unreleased development channel (`main`)** — use only to test changes that are not part of a release. The managed beta installer tracks `main`; it requires Go 1.25.10+:
 
 ```bash
 # macOS / Linux
@@ -155,25 +166,25 @@ $env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentl
 
 ### RDD version policy
 
-Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, with the first bounded native review transactions, and became the supported stable path in `v2.2.0`. The negotiated public review contract was published in `v2.1.6`.
+Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, with the first bounded native review transactions, and became the supported stable path in `v2.2.0`. Those are historical milestones; the negotiated public review contract was published in `v2.1.6`.
 
-Use `@latest` for the current release. Use `@main` only when you explicitly want unreleased development changes.
+The current stable release is [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0). The current prerelease is [`v2.4.0-rc.1`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.4.0-rc.1). `main` is unreleased development.
 
-**Latest release**
+**Stable channel (`@latest`, currently `v2.3.0`)**
 
 ```bash
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
-**Unreleased `main`**
+**Prerelease channel (`v2.4.0-rc.1`)**
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@v2.4.0-rc.1
 gentle-ai version
 ```
 
-**Unreleased RDD development build (`main`)**
+**Unreleased development (`main`)**
 
 ```bash
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
@@ -294,7 +305,7 @@ gentle-ai review mode enable --cwd .
 
 `status` is read-only. Any global or clone-local disabled source wins; a clone can opt out with `--scope clone` but cannot force review on. Re-enabling applies only to future candidates, while declining a one-candidate review prompt does not change the mode. When review is disabled, existing exact governing receipts remain authoritative; otherwise native review gates report `disabled/unmanaged` and defer delivery to ordinary repository policy without fabricating approval.
 
-SDD closes cleanly under a disabled switch as of `v2.2.2`: pre-verify no longer routes to a review that `review start` would refuse, and archive accepts `reviewGate.delivery: disabled/unmanaged` instead of demanding a receipt that cannot be produced.
+Historical note: `v2.2.2` introduced the native delivery-gate `disabled/unmanaged` disposition. Current SDD status does not use that disposition: with review disabled, it skips review authority, emits no `reviewGate`, and pre-verify continues without routing to a review that cannot start. Archive proceeds under ordinary repository policy when `reviewGate` is absent; a present `reviewGate.result: allow` is required only for discovered review activity. This differs from native delivery gates, which report `disabled/unmanaged` when review is disabled.
 
 ### Release verification
 

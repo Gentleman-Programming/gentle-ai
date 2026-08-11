@@ -322,101 +322,9 @@ func validateRuntimeRemediationSelfSuccessor(ctx context.Context, repo string, c
 	return errors.New("approved SDD self-remediation authority is not the current compact recovery leaf")
 }
 
-// runtimeSelfSuccessorAvailable answers exactly one question: would the
-// self-successor finish be ACCEPTED right now? It runs the same preparation
-// and the same validator the finish itself would run, against the same
-// candidate tree the finish already charged, so a refusal that consults it
-// can only name the self-successor exit when running that exit works.
-//
-// It is deliberately read-only and fail-closed: any preparation error, any
-// gate that is not allow, an approved authority that binds different bytes, or
-// a lineage that is no longer the compact recovery leaf all answer false, and
-// the caller then names the review router instead of a command that would be
-// refused one layer deeper.
-func runtimeSelfSuccessorAvailable(ctx context.Context, repo, workspace, change string, binding ReviewBinding, candidateTree string) bool {
-	prepared, err := prepareApprovedRuntimeSuccessorBinding(ctx, repo, workspace, change, binding.Lineage)
-	if err != nil || prepared.Lineage != binding.Lineage || prepared.GateContext.CandidateTree != candidateTree {
-		return false
-	}
-	return validateRuntimeRemediationSelfSuccessor(ctx, repo, binding, prepared) == nil
-}
-
-// RuntimeStrandedSuccessor identifies the one recovery successor that stands
-// between a bound lineage and its own approved review, together with the two
-// persisted values `review abandon` demands in its authorization binding.
-type RuntimeStrandedSuccessor struct {
-	Lineage          string
-	Revision         string
-	SnapshotIdentity string
-}
-
-// runtimeStrandedSuccessor answers exactly one question: is the ONLY thing
-// standing between the bound lineage and the self-successor finish a recovery
-// successor that can never be finalized?
-//
-// A recovery successor freezes its own review target when it is minted. If the
-// candidate then moves away from that frozen target — the widened scope is
-// taken back out, the corrected file is reverted — the successor's live
-// projection will never match its own authority again, so it can never be
-// reviewed, never be approved, and never become a legal --successor-lineage.
-// While it exists the bound lineage is not the compact recovery leaf and its
-// post-apply gate does not allow, so every exit through the review router leads
-// to a review the runtime then refuses to accept. Quarantining the stranded
-// successor is the one operation that resolves it, and it destroys nothing the
-// operator still wants: a stranded successor is by definition pristine, and the
-// approved predecessor it superseded — which holds the operator's corrected
-// work — is exactly what quarantining it restores.
-//
-// It is deliberately read-only and fail-closed. The bound authority must be
-// approved for the very bytes this finish charged, the successor must be the
-// bound lineage's own direct recovery successor, it must be the current leaf,
-// its frozen candidate must NOT be the charged candidate, and `review abandon`
-// must already accept it. Anything else answers false and the caller names the
-// review router instead of an abandonment that would be refused one layer in —
-// most importantly a successor that DOES govern the charged candidate, which is
-// a live review the operator still wants and must never be sent to quarantine.
-func runtimeStrandedSuccessor(ctx context.Context, repo string, binding ReviewBinding, candidateTree string) (RuntimeStrandedSuccessor, bool) {
-	bound, err := loadRuntimeBoundCompactArtifacts(ctx, repo, binding)
-	if err != nil || bound.State.CurrentSnapshot.CandidateTree != candidateTree {
-		return RuntimeStrandedSuccessor{}, false
-	}
-	leaves, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
-	if err != nil {
-		return RuntimeStrandedSuccessor{}, false
-	}
-	found := RuntimeStrandedSuccessor{}
-	for _, store := range leaves {
-		record, loadErr := store.Load()
-		if loadErr != nil {
-			return RuntimeStrandedSuccessor{}, false
-		}
-		recovery := record.State.Recovery
-		if recovery == nil || recovery.PredecessorLineageID != binding.Lineage ||
-			recovery.PredecessorRevision != binding.AuthorityRevision {
-			continue
-		}
-		if found.Lineage != "" {
-			// A fork is structurally refused elsewhere; seeing one here means
-			// the graph is not what this probe can reason about.
-			return RuntimeStrandedSuccessor{}, false
-		}
-		if record.State.InitialSnapshot.CandidateTree == candidateTree {
-			// Not stranded: this successor governs the charged candidate and
-			// can still be reviewed, approved and named as the successor.
-			return RuntimeStrandedSuccessor{}, false
-		}
-		found.Lineage = record.State.LineageID
-	}
-	if found.Lineage == "" {
-		return RuntimeStrandedSuccessor{}, false
-	}
-	eligibility, err := reviewtransaction.InspectCompactPristineAbandonment(ctx, repo, found.Lineage)
-	if err != nil || !eligibility.Eligible {
-		return RuntimeStrandedSuccessor{}, false
-	}
-	found.Revision, found.SnapshotIdentity = eligibility.Revision, eligibility.SnapshotIdentity
-	return found, true
-}
+// runtimeSelfSuccessorAvailable, RuntimeStrandedSuccessor and
+// runtimeStrandedSuccessor answered "which review exit should the gate name".
+// The gate is gone, so nothing asks.
 
 // loadRuntimeBoundCompactArtifacts validates immutable authority and receipt
 // identity without evaluating the live post-apply gate. The old binding is
@@ -428,8 +336,18 @@ func loadRuntimeBoundCompactArtifacts(ctx context.Context, repo string, binding 
 		return reviewtransaction.CompactRecord{}, err
 	}
 	record, err := store.Load()
-	if err != nil || record.Revision != binding.AuthorityRevision || record.State.State != reviewtransaction.StateApproved {
-		return reviewtransaction.CompactRecord{}, errors.New("bound compact predecessor is stale or not approved")
+	if err != nil {
+		return reviewtransaction.CompactRecord{}, fmt.Errorf("read bound compact predecessor %s: %w", binding.Lineage, err)
+	}
+	// #2894: "stale or not approved" reported two different problems, with two
+	// different exits, in one sentence that distinguished neither.
+	if record.Revision != binding.AuthorityRevision {
+		return reviewtransaction.CompactRecord{}, runtimeBoundPredecessorRefusal(
+			binding.Lineage, binding.AuthorityRevision, record.Revision, true)
+	}
+	if record.State.State != reviewtransaction.StateApproved {
+		return reviewtransaction.CompactRecord{}, runtimeBoundPredecessorRefusal(
+			binding.Lineage, binding.AuthorityRevision, record.Revision, false)
 	}
 	payload, err := os.ReadFile(store.ReceiptPath())
 	if err != nil || bindingHash(payload) != binding.ReceiptHash {
@@ -441,53 +359,6 @@ func loadRuntimeBoundCompactArtifacts(ctx context.Context, repo string, binding 
 		return reviewtransaction.CompactRecord{}, errors.New("bound compact predecessor receipt does not match authority")
 	}
 	return record, nil
-}
-
-// validateRuntimeBoundCandidate proves that an unchanged runtime attempt still
-// has the exact approved compact authority, receipt, live gate context, and
-// candidate tree recorded by its existing binding. It deliberately does not
-// resolve an OpenSpec change root, so Engram-backed changes use the same native
-// compact authority path.
-func validateRuntimeBoundCandidate(ctx context.Context, repo string, binding ReviewBinding, candidateTree string) error {
-	record, err := loadRuntimeBoundCompactArtifacts(ctx, repo, binding)
-	if err != nil {
-		return err
-	}
-	receipt, err := record.State.Receipt()
-	if err != nil {
-		return errors.New("bound compact authority cannot produce its receipt")
-	}
-	evaluation := reviewtransaction.EvaluateCompactGate(ctx, repo, receipt, reviewtransaction.NativeGateRequestInput{
-		Gate: reviewtransaction.GatePostApply, LineageID: binding.Lineage,
-	})
-	if evaluation.Result != reviewtransaction.GateAllow || evaluation.Context.CandidateTree != candidateTree ||
-		!boundGateContextMatches(binding.GateContext, evaluation.Context) {
-		return errors.New("bound compact post-apply gate context changed")
-	}
-	return nil
-}
-
-// boundGateContextMatches compares a persisted binding gate context against
-// the live post-apply evaluation. Bindings persisted before compact gate
-// contexts bound the frozen findings ledger recorded the empty-input hash in
-// ledger_hash; they stay valid against a now-populated live context because
-// the findings ledger itself is still pinned by the authority state through
-// AuthorityRevision and ReceiptHash. Every other divergence — including any
-// non-empty ledger hash that does not match the live binding — still fails.
-// The reverse mix is a known residual this side cannot repair: a binding
-// written by a ledger-binding binary but validated by an older binary
-// deterministically fails closed here ("bound compact post-apply gate context
-// changed"), because the older binary hardcodes the empty hash in its live
-// context; the remedy is upgrading that older binary.
-func boundGateContextMatches(bound, live reviewtransaction.GateContext) bool {
-	if reflect.DeepEqual(bound, live) {
-		return true
-	}
-	if bound.LedgerHash != reviewtransaction.EmptyFixDeltaHash {
-		return false
-	}
-	bound.LedgerHash = live.LedgerHash
-	return reflect.DeepEqual(bound, live)
 }
 
 func loadEffectiveReviewBinding(ctx context.Context, repo, change string) (ReviewBinding, error) {
@@ -718,9 +589,52 @@ func parseBinding(payload []byte) (ReviewBinding, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return ReviewBinding{}, errors.New("multiple binding values")
 	}
-	canonical, err := bindingBytes(binding)
-	if err != nil || !bytes.Equal(payload, canonical) || binding.Schema != reviewBindingSchema || !validReviewBindingChange(binding.Change) || !validReviewBindingLineage(binding.Lineage) || !reviewBindingHash.MatchString(binding.Revision) || !reviewBindingHash.MatchString(binding.AuthorityRevision) || !reviewBindingHash.MatchString(binding.ReceiptHash) || binding.Revision != bindingDigest(binding) || binding.GateContext.Gate != reviewtransaction.GatePostApply || binding.GateContext.LineageID != binding.Lineage || binding.GateContext.StoreRevision != binding.AuthorityRevision {
-		return ReviewBinding{}, errors.New("invalid binding")
+	if violation := reviewBindingViolation(payload, binding); violation != "" {
+		return ReviewBinding{}, fmt.Errorf("invalid binding: %s", violation) // refusal:by-design world-action: this binding is written and digested by this package itself, so a violation is a mutated or corrupted record and the exit is restoring the Git-common-dir store, not a command
 	}
 	return binding, nil
+}
+
+// reviewBindingViolation names WHICH of the twelve integrity conditions a
+// binding failed, or "" when it satisfies all of them. Root 8 (#2471): these
+// twelve used to answer with one shared `errors.New("invalid binding")`, so a
+// caller holding the error learned only that something was wrong with bytes
+// this package wrote itself.
+//
+// Unlike the reviewer-input surfaces, this validates OUR OWN persisted ledger
+// bytes, so a violation is tamper or corruption rather than user error. That
+// is exactly why naming the condition matters: the reader is an operator
+// diagnosing a damaged store, and "invalid binding" tells them to escalate
+// while "gate context lineage does not match" tells them what broke. The
+// values themselves are never echoed, only the condition that failed, so a
+// damaged binding cannot use this to reflect arbitrary bytes into a message.
+func reviewBindingViolation(payload []byte, binding ReviewBinding) string {
+	canonical, err := bindingBytes(binding)
+	switch {
+	case err != nil:
+		return "binding could not be re-encoded for canonical comparison"
+	case !bytes.Equal(payload, canonical):
+		return "payload is not the canonical encoding of its own fields"
+	case binding.Schema != reviewBindingSchema:
+		return "schema is not " + reviewBindingSchema
+	case !validReviewBindingChange(binding.Change):
+		return "change name is not a valid change identifier"
+	case !validReviewBindingLineage(binding.Lineage):
+		return "lineage is not a valid lineage identifier"
+	case !reviewBindingHash.MatchString(binding.Revision):
+		return "revision is not a sha256 digest"
+	case !reviewBindingHash.MatchString(binding.AuthorityRevision):
+		return "authority_revision is not a sha256 digest"
+	case !reviewBindingHash.MatchString(binding.ReceiptHash):
+		return "receipt_hash is not a sha256 digest"
+	case binding.Revision != bindingDigest(binding):
+		return "revision does not match the digest of its own fields"
+	case binding.GateContext.Gate != reviewtransaction.GatePostApply:
+		return "gate_context.gate is not " + string(reviewtransaction.GatePostApply)
+	case binding.GateContext.LineageID != binding.Lineage:
+		return "gate_context.lineage_id does not match the binding lineage"
+	case binding.GateContext.StoreRevision != binding.AuthorityRevision:
+		return "gate_context.store_revision does not match authority_revision"
+	}
+	return ""
 }

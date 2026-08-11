@@ -106,38 +106,15 @@ var (
 //     lens is refused (ErrNewLineageCaptureConflict) -- there is no reopen.
 func (store AuthorityStore) CaptureLensResult(ctx context.Context, expectedRevision, lens string, order int, subjectHash string, findings []FindingEvidence) (NewLineageRecord, error) {
 	if _, err := store.Mutate(ctx, expectedRevision, func(next *NewLineageAuthority) error {
-		if next.State != NewLineageStateReviewing && next.State != NewLineageStateValidating {
-			return fmt.Errorf("%w: lineage %q is %q", ErrNewLineageCaptureNotReviewable, next.LineageID, next.State)
-		}
-		if order < 0 || order >= len(next.SelectedLenses) || next.SelectedLenses[order] != lens {
-			return fmt.Errorf("%w: lineage %q lens %q order %d", ErrNewLineageCaptureLensNotSelected, next.LineageID, lens, order)
-		}
-		want := NewLineageArtifactSubjectHash(*next, lens, order)
-		if subjectHash != want {
-			return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureSubjectMismatch, next.LineageID, lens)
-		}
 		normalizedFindings := append([]FindingEvidence(nil), findings...)
-		// W-10 (Wave 7 S1, design decision 3a): refuse a severe finding at
-		// capture time if it lacks a supported evidence_class or
-		// causal_disposition -- previously this was silently accepted
-		// because Severity itself was dropped before reaching this store
-		// (review_artifact.go's newLineageCapturedFindings), so nothing
-		// downstream could even detect the gap. Reuses the identical
-		// in-package vocabulary artifact_admission.go's --admission-findings
-		// channel already enforces for the same shape.
-		for _, finding := range normalizedFindings {
-			if isSevereSeverity(finding.Severity) && (!isSupportedEvidenceClass(finding.Class) || !isSupportedCausalDisposition(finding.Causality)) {
-				return fmt.Errorf("%w: lineage %q lens %q finding %q", ErrNewLineageCaptureIncompleteSeverity, next.LineageID, lens, finding.FindingID)
-			}
+		if err := ValidateNewLineageLensResult(*next, lens, order, subjectHash, normalizedFindings); err != nil {
+			return err
 		}
 		for _, existing := range next.CapturedResults {
 			if existing.Lens != lens {
 				continue
 			}
-			if existing.SubjectHash == subjectHash && reflect.DeepEqual(existing.Findings, normalizedFindings) {
-				return nil // identical binding already captured: idempotent no-op
-			}
-			return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureConflict, next.LineageID, lens)
+			return nil // validation permits only the idempotent existing result
 		}
 		next.CapturedResults = append(append([]NewLineageCapturedResult(nil), next.CapturedResults...), NewLineageCapturedResult{
 			Lens: lens, Order: order, SubjectHash: subjectHash, Findings: normalizedFindings,
@@ -147,4 +124,29 @@ func (store AuthorityStore) CaptureLensResult(ctx context.Context, expectedRevis
 		return NewLineageRecord{}, err
 	}
 	return store.Load()
+}
+
+// ValidateNewLineageLensResult applies the native admission checks without
+// mutating authority, allowing capture and input-backed preflight to share them.
+func ValidateNewLineageLensResult(authority NewLineageAuthority, lens string, order int, subjectHash string, findings []FindingEvidence) error {
+	if authority.State != NewLineageStateReviewing && authority.State != NewLineageStateValidating {
+		return fmt.Errorf("%w: lineage %q is %q", ErrNewLineageCaptureNotReviewable, authority.LineageID, authority.State)
+	}
+	if order < 0 || order >= len(authority.SelectedLenses) || authority.SelectedLenses[order] != lens {
+		return fmt.Errorf("%w: lineage %q lens %q order %d", ErrNewLineageCaptureLensNotSelected, authority.LineageID, lens, order)
+	}
+	if subjectHash != NewLineageArtifactSubjectHash(authority, lens, order) {
+		return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureSubjectMismatch, authority.LineageID, lens)
+	}
+	for _, finding := range findings {
+		if isSevereSeverity(finding.Severity) && (!isSupportedEvidenceClass(finding.Class) || !isSupportedCausalDisposition(finding.Causality)) {
+			return fmt.Errorf("%w: lineage %q lens %q finding %q", ErrNewLineageCaptureIncompleteSeverity, authority.LineageID, lens, finding.FindingID)
+		}
+	}
+	for _, existing := range authority.CapturedResults {
+		if existing.Lens == lens && (existing.SubjectHash != subjectHash || !reflect.DeepEqual(existing.Findings, findings)) {
+			return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureConflict, authority.LineageID, lens)
+		}
+	}
+	return nil
 }

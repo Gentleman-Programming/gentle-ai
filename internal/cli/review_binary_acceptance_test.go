@@ -238,8 +238,6 @@ func TestMainBinaryExecutesSubmissionDescriptorsFromArbitraryCWD(t *testing.T) {
 	if _, err := os.Stat(binary); err != nil {
 		t.Fatalf("GENTLE_AI_TEST_BINARY: %v", err)
 	}
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	repo := initReviewCLIRepo(t)
 	outside := t.TempDir()
 	writeBinaryCandidate(t, repo, "wrong")

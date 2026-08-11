@@ -236,8 +236,17 @@ func TestRuntimeUnmanagedRemediationRefusesASecondCorrectionForSettledEvidence(t
 		HarnessDisposition: HarnessReused, CleanupEvidence: "correction cleanup completed",
 		ProcessEvidence: "correction process scan completed", RemediatesEvidenceRevision: failedEvidence,
 	})
-	if err == nil || err.Error() != "unmanaged remediation requires the current failed evidence and a direct correction attempt" {
-		t.Fatalf("second correction against settled evidence = %v, want the exact direct-correction refusal", err)
+	// The anti-laundering property is unchanged: a second correction may not
+	// claim evidence a passing settlement already repaired. What changed is
+	// that the refusal now says so (#2881). Asserting the property and the
+	// disclosure beats pinning the prose, which is what made this brittle.
+	if err == nil {
+		t.Fatal("second correction against settled evidence was admitted; a passing settlement already repaired it")
+	}
+	for _, want := range []string{"already been repaired", failedEvidence, "--remediates-evidence-revision"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the laundering refusal does not disclose %q:\n%v", want, err)
+		}
 	}
 	status, statusErr := store.Status()
 	if statusErr != nil || status.Revision != second.Revision || status.ActiveAttempt == nil ||

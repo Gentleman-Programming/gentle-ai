@@ -103,6 +103,8 @@ Consumers MUST NOT reconstruct receipts, derive canonical hashes, inspect the Gi
 
 `gentle-ai review capture-result` is an additive headless command, not a negotiated repository operation. It accepts no `--contract`; the provider-issued subject hash selects the transport version. Capture emits a manifest with capability `review.native_result_artifact` and schema `gentle-ai.review-result-artifact/v2`; the manifest binds `subject_hash` and `admission_decision: completed`, and exactly one provider-owned `path` or opaque `reference` locates the durable admitted-result envelope (`review-admitted-result/v1` for a v1 subject, `review-admitted-result/v2` for a v2 subject). A negotiated capture transition carries `--repository-context <opaque-handle>` plus `--expected-revision <revision>`, so consumers can invoke capture from an unrelated working directory without learning the repository path. Explicit `--cwd` remains the capture compatibility path-manifest mode and cannot be combined with a repository-context handle.
 
+Add `--preflight --input <file>` to validate the same native admission without persistence. A successful input preflight emits `gentle-ai.review-capture-result-dry-run/v1` with `validation: accepted` and the existing lineage, lens, order, and subject binding. It does not emit an artifact path, reference, raw-input hash, or canonical-result hash. `--preflight` without `--input` retains the binding-only response.
+
 ### Choose the target explicitly
 
 | Invocation | Frozen boundary |
@@ -195,9 +197,9 @@ An exact no-input FINALIZE is eligible only when the frozen authority is low ris
 
 There is no `archive` gate. An advisory preflight is not delivery authorization; the native live gate result is authoritative.
 
-### Unmanaged delivery windows and re-enabling (v2.2.0 boundary)
+### Historical v2.2.0 compatibility boundary: unmanaged delivery and re-enabling
 
-Work delivered while the kill switch is off is recorded as unmanaged, and it stays recorded as unmanaged: gates and `sdd-status` report `disabled/unmanaged` at exit 0, the change closes under ordinary repository policy, and nothing — not a stale receipt, not a later empty-candidate approval — may ever make that window read as reviewed. Re-enabling re-validates the current state through one full fresh review, exactly as if receipt-driven development had never run: every downstream stop over unreviewed content names `gentle-ai review start` (with `--base-ref <commit>` when the delivered work is already committed), and completing that review is what unblocks the stop. The fresh review subsumes the unmanaged history; durable retroactive reconciliation — per-delivery dispositions, retroactive receipts, or any ledger that blesses past unmanaged deliveries — is deliberately not part of this release.
+This is a historical compatibility boundary introduced in `v2.2.0`, not the current release version. Work delivered while the kill switch is off and no exact governing receipt applies is recorded as unmanaged, and it stays recorded as unmanaged: native lifecycle gates report `disabled/unmanaged` at exit 0, the change closes under ordinary repository policy, and nothing — not a stale receipt, not a later empty-candidate approval — may ever make that window read as reviewed. SDD status differs: it structurally omits `reviewGate` while the kill switch is off, and also when it is on but no review was discovered for the candidate; archive proceeds under ordinary policy in both cases. A present `reviewGate.result: allow` is required only for discovered review activity. Re-enabling re-validates the current state through one full fresh review, exactly as if receipt-driven development had never run: every downstream stop over unreviewed content names `gentle-ai review start` (with `--base-ref <commit>` when the delivered work is already committed), and completing that review is what unblocks the stop. The fresh review subsumes the unmanaged history; durable retroactive reconciliation — per-delivery dispositions, retroactive receipts, or any ledger that blesses past unmanaged deliveries — is deliberately not part of that historical release boundary.
 
 ### Follow applicability and action, not inventory
 
@@ -220,6 +222,8 @@ For a fresh target, STATUS emits a complete START call with `contract`, frozen `
 
 For compact-v2 current STATUS, `target_identity` identifies the live selected Git target. When the frozen authority `CurrentSnapshot` differs, STATUS also emits `authority_target_identity`; absence means the authority target equals the live target. A corrected candidate awaiting a dedicated final-verification retry keeps the corrected live identity in `target_identity` and the frozen validating identity in `authority_target_identity`. Retry authorization, retry execution, and successor final-evidence capture bind the authority identity; consumers MUST NOT substitute the live identity when the two differ.
 
+An explicit compact-v2 reviewing lineage with pending reviewer input resumes its frozen collection after live drift; it never replays live target or untracked selectors. Selectorless STATUS remains live and collects new intended-untracked selection.
+
 For `repair_authority`, the provider scans every compact-v2 and legacy-v1 lineage within fixed lineage, event, operation, event-size, and total-byte limits. Exactly one legacy lineage whose only anomaly is an approved historical `review/complete-fix` or `review/validate-fix` alias yields `repair.status: eligible`. Unknown or mixed corruption, multiple candidates, same-lineage v1/v2 collision, invalidated authority, active maintenance ownership, concurrent change, or a limit hit yields a non-executable stop with no candidate. This filesystem classification adds no Git subprocess after STATUS has resolved the repository root.
 
 Run `gentle-ai review repair --preflight --cwd <repo>` before collecting maintainer intent. The path-free response supplies only provider-owned class, lineage, expected revision, cause, disposition, opaque repository binding, and authorization schema. The maintainer then provides `actor`, `reason`, and the exact nine-line LF-only authorization. An authorized STATUS transition marks `maintainer-authorization` as `provided` instead of echoing the completed authorization; the controller must reuse the exact secret it already holds. No response emits a repository path, quarantine record, or ready-made authorization string. The direct `repair-legacy-alias` verb remains compatibility-only.
@@ -229,6 +233,28 @@ STATUS keeps repair classification scoped to the selected native target. It publ
 Classified execution persists a route-specific assessment digest, authorization-free request digest, and opaque record identity around the prepare/rename/commit boundary. A timeout joins the executing repair worker before reporting its mutation truth. Durable prepared or renamed progress retains `mutation_outcome: unknown` but permits only the bound `exact_replay_safe` repair request; committed progress reports `mutation_outcome: committed`. Exact retry accepts only one strict classified record, revalidates the complete live inventory and physical residue under exclusive maintenance ownership, and never adopts a compatibility-command record.
 
 Before any correction edit, `correction_plan_required` carries a strict `gentle-ai.review-correction-plan-request/v1` object. Its provider-derived hash binds the current lineage, authority revision, frozen target, correction budget, canonical `fix_finding_ids`, and each accepted finding's location, claim, proof references, classification evidence, evidence class, and causal disposition. The same request is re-derived at the post-forecast revision and retained on `corrected_candidate_unavailable`; reading it does not consume an attempt or correction budget. Consumers plan and edit only from this accepted set, never from raw reviewer output.
+
+### Already-edited pre-plan correction
+
+At `correction_plan_required`, do not submit a retrospective forecast. Read the lineage row from `gentle-ai review status --cwd <repo>`, then run `review abandon` with `operator_disposition`, a maintainer actor, and this exact LF-only V2 binding (no trailing newline):
+
+```text
+gentle-ai.review-abandon-authorization/v2
+lineage=<entries[].lineage_id>
+revision=<entries[].revision>
+snapshot_identity=<entries[].snapshot_identity>
+reason=operator_disposition
+captured_lens_results=<entries[].discarded_work.captured_lens_results comma-joined in the listed order>
+findings_present=<entries[].discarded_work.findings_present>
+evidence_records_present=<entries[].discarded_work.evidence_records_present>
+actor=<actor>
+```
+
+Copy every array item verbatim in its listed order, then join them with a single `,` and no added whitespace. The native inventory uses lexicographic captured reviewer-result artifact filename order; do not re-sort or derive a different lens order.
+
+Run `gentle-ai review abandon --cwd <repo> --lineage <lineage> --expected-revision <revision> --reason operator_disposition --actor <actor> --maintainer-authorization <binding>`.
+
+The audit record quarantines authority and provenance; it creates no receipt and preserves candidate bytes. With RDD enabled, delivery stays denied until a fresh review. This applies only before a forecast or validator result, not post-forecast failed-validator or broader-scope cases.
 
 After a correction forecast and an actual candidate change, STATUS first collects candidate-bound repository/full-suite verification evidence. A `verification_failed` record leaves the correction transaction open: no attempt, changed-line charge, or budget is consumed, and a changed candidate receives a distinct immutable evidence directory without replacing the failed bytes. A `procedural_tooling_failed` record executes a terminal escalation before any retry eligibility is considered. Only `passed` repository evidence unlocks `targeted_validation` with a strict `gentle-ai.review-targeted-validation-request/v1` object.
 
@@ -255,9 +281,9 @@ One recovery-only target expands an approved base-diff receipt into the exact st
 | `missing_authority_binding` | Terminal — internal invariant violation: applicability was `current_target` but no authority binding resolved. File a defect; there is no caller-side retry. |
 | `native_stop_required` | Terminal — the authority state (for example an escalated lineage not yet eligible for recovery) accepts no automated action from this negotiation. Requires maintainer review of the lineage before any further command. |
 | `original_finalize_request_required` | Re-run `gentle-ai review finalize --lineage <id>` with the exact original content-bound payload (results/evidence). A different payload is a typed reconciliation failure, not a retry — see "Re-run a non-terminal FINALIZE" above. |
-| `pre_pr_selector_unrepresentable` | Pass a symbolic ref name for `--base-ref` (for example `origin/<branch>`), not a raw commit SHA, when selecting the pre-pr gate. |
 | `recovery_scope_unchanged` | Change the candidate so its target identity differs from the current authority's, then retry the same selector-scoped `review.recover` once the identities differ. |
-| `recovery_target_unrepresentable` | Use one of the three representable recovery selector shapes: no base selector for current-changes, `--base-ref <ref> --committed-only` for base-diff, or `--workspace-overlay --base-ref <ref>` (optionally with `--projection staged`) for workspace overlay. |
+| `rdd_disabled` | Run the exact source-scoped `gentle-ai review mode enable` command rendered with this STATUS result, then re-run its exact repository-bound STATUS command. |
+| `staged_delivery_candidate_required` | Stage every reviewed path exactly as it was reviewed, then re-run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --lineage <id> --projection staged --gate pre-commit --next-transition`. STATUS returns `review.validate` only when that staged candidate exactly matches the approved receipt. |
 | `staged_workspace_overlay_recovery_unavailable` | Terminal for a fresh target — staged projection combined with `--workspace-overlay` is recovery-only. Pass `--lineage <id>` to recover an existing lineage, or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh. |
 | `unchanged_or_unverified_authority` | Terminal — the single correction attempt for this lineage is already consumed without a verified candidate change. `gentle-ai review start` on this exact unchanged candidate only resumes this same lineage, not a fresh one. Change the candidate content first, then run `gentle-ai review start` to begin a genuinely new lineage. |
 
@@ -349,7 +375,7 @@ The provider does not auto-upgrade, migrate, rewrite, quarantine, or delete lega
 
 ## Respect compatibility and non-goals
 
-Protocol v1 supports `workspace` and `staged` projections and preserves existing compact authority and receipt schemas. Published archives contain the versioned JSON Schemas and conformance fixtures under `contracts/review-integration/v1/`; consumers should validate against those packaged bytes rather than copying private Go structs.
+Protocol v1 supports `workspace` and `staged` projections and preserves existing compact authority and receipt schemas. Published archives contain the versioned JSON Schemas and conformance fixtures under `contracts/review-integration/v1/` and `contracts/review-integration/v2/`; consumers should validate against those packaged bytes rather than copying private Go structs.
 
 This contract does not implement Gentle Pi, select a model or provider, transmit repository data, add remote telemetry, claim Windows runtime durability, define an archive coordinator, defend against a malicious actor with local filesystem access, or authorize a command merely because review passed.
 
@@ -373,6 +399,8 @@ Each release archive contains:
 
 - `contracts/review-integration/v1/schemas/` — 24 strict JSON Schemas, including preserved capability protocols v1.0–v1.4, current v1.5, versioned START/status/result-artifact contracts, outcome-bound verification evidence, final-verification incident, classified repair, provider subject/admission, correction planning, and targeted validation.
 - `contracts/review-integration/v1/fixtures/` — 27 deterministic conformance fixtures, including all six capability minors, preserved v1 plus current v2 START/status examples, outcome-bound verification evidence, the final-verification incident and retry projection, classified repair preflight, and typed failure envelopes.
+- `contracts/review-integration/v2/schemas/` — 15 strict JSON Schemas, including the capture-result dry-run response contract.
+- `contracts/review-integration/v2/fixtures/` — 9 deterministic conformance fixtures, including the capture-result dry-run response.
 - `docs/review-integration.md` — this ownership and consumption guide.
 
 Repository maintainers can verify source inventory or a complete GoReleaser snapshot:

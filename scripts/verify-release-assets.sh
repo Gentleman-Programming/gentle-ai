@@ -7,7 +7,6 @@ die() {
 }
 
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-: "${GITHUB_REF_NAME:?GITHUB_REF_NAME is required}"
 : "${MINISIGN_PUBLIC_KEYS:?MINISIGN_PUBLIC_KEYS is required}"
 [[ "$GITHUB_REPOSITORY" == "Gentleman-Programming/gentle-ai" ]] || die "unexpected repository"
 
@@ -16,7 +15,13 @@ if ! canonical_public_keys=$(./scripts/canonicalize-release-public-keys.sh); the
 fi
 [[ "$canonical_public_keys" == "$MINISIGN_PUBLIC_KEYS" ]] || die "public-key canonicalization changed the configured value"
 
-tag=$GITHUB_REF_NAME
+if [[ -v RELEASE_VERIFICATION_TAG ]]; then
+  tag=$RELEASE_VERIFICATION_TAG
+  [[ -n "$tag" ]] || die "RELEASE_VERIFICATION_TAG is empty"
+else
+  : "${GITHUB_REF_NAME:?GITHUB_REF_NAME is required when RELEASE_VERIFICATION_TAG is unset}"
+  tag=$GITHUB_REF_NAME
+fi
 [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die "tag is not exact stable semver"
 version=${tag#v}
 

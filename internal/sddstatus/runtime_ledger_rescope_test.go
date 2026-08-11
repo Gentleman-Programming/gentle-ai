@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -130,6 +131,112 @@ func TestRuntimeLedgerRescopeRecoversZeroDriftDeadlock(t *testing.T) {
 	if next.ActiveAttempt == nil || next.ActiveAttempt.Ordinal != 2 || next.ActiveAttempt.ObjectiveID != rescoped.Objective.ID ||
 		next.CumulativeAttempts != 2 || next.LifetimeAttempts != 2 || next.NextOrdinal != 3 {
 		t.Fatalf("post-rescope begin status = %#v", next)
+	}
+}
+
+// TestRuntimeLedgerRescopeRefusesConsecutiveRescopeWithoutOwnAttempt proves
+// #2830's ratified boundary: a rescope successor needs its own terminal
+// attempt before it can itself be rescoped. Its predecessor's terminal attempt
+// remains immutable provenance, not authority for another successor.
+func TestRuntimeLedgerRescopeRefusesConsecutiveRescopeWithoutOwnAttempt(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "rescope-2830")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "2830-begin-a", WorkUnit: "objective-a",
+		EvidenceGoal: "prove the original bounded objective", MaxAttempts: 3, MaxChangedLines: 90,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "2830-finish-a", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('a'), Diagnosis: "objective A failed with the workspace unchanged",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "workspace remained unchanged",
+		ProcessEvidence: "post-verification process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.CumulativeChangedLines != 0 || failed.DecisionRequired || failed.Complete || failed.NextAction != RuntimeActionBegin {
+		t.Fatalf("failed objective A status = %#v", failed)
+	}
+
+	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "2830-rescope-a-to-b",
+		WorkUnit: "objective-b", EvidenceGoal: "prove the narrower successor objective",
+		MaxAttempts: 3, MaxChangedLines: 60,
+		Reason: "maintainer narrowed objective A into successor B", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatalf("first rescope was refused: %v", err)
+	}
+	if rescoped.Objective == nil || rescoped.Objective.WorkUnit != "objective-b" || rescoped.Objective.MaxAttempts != 3 ||
+		rescoped.Objective.MaxChangedLines != 60 || rescoped.NextAction != RuntimeActionBegin || rescoped.ActiveAttempt != nil {
+		t.Fatalf("rescoped objective B status = %#v", rescoped)
+	}
+	if len(rescoped.Attempts) != 1 || rescoped.Attempts[0].ObjectiveID == rescoped.Objective.ID {
+		t.Fatalf("successor B must have no attempt of its own yet: %#v", rescoped)
+	}
+
+	beforeRevision := rescoped.Revision
+	beforeRecords := countRuntimeRecords(t, store.Dir)
+	_, err = store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: beforeRevision, RequestID: "2830-rescope-b-to-c-before-attempt",
+		WorkUnit: "objective-c", EvidenceGoal: "prove the still narrower successor objective",
+		MaxAttempts: 3, MaxChangedLines: 30,
+		Reason: "maintainer attempted to rescope B before B has an attempt", Actor: "maintainer",
+	})
+	if !errors.Is(err, ErrRuntimeRescopeNotAllowed) {
+		t.Errorf("consecutive rescope error = %v, want ErrRuntimeRescopeNotAllowed", err)
+	}
+	if records := countRuntimeRecords(t, store.Dir); records != beforeRecords {
+		t.Errorf("refused consecutive rescope published a record: records=%d, want %d", records, beforeRecords)
+	}
+	status, statusErr := store.Status()
+	if statusErr != nil {
+		t.Errorf("status after refused consecutive rescope = %v", statusErr)
+	} else if status.Revision != beforeRevision || status.Objective == nil || status.Objective.ID != rescoped.Objective.ID ||
+		len(status.Attempts) != 1 || status.ActiveAttempt != nil || status.NextAction != RuntimeActionBegin {
+		t.Errorf("refused consecutive rescope changed authoritative status: %#v", status)
+	}
+	if statusErr != nil {
+		return
+	}
+
+	// Negative control: the same narrowing transition is admitted once objective
+	// B owns a terminal attempt, so the refusal above cannot be a generic rescope
+	// failure unrelated to objective ownership.
+	startedB, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: status.Revision, RequestID: "2830-begin-b", WorkUnit: "objective-b",
+		EvidenceGoal: "prove the narrower successor objective", MaxAttempts: 3, MaxChangedLines: 60,
+	})
+	if err != nil {
+		t.Fatalf("begin objective B for negative control: %v", err)
+	}
+	failedB, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: startedB.Revision, RequestID: "2830-finish-b", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('b'), Diagnosis: "objective B failed with the workspace unchanged",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "workspace remained unchanged",
+		ProcessEvidence: "post-verification process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatalf("finish objective B for negative control: %v", err)
+	}
+	accepted, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: failedB.Revision, RequestID: "2830-rescope-b-to-c-after-attempt",
+		WorkUnit: "objective-c", EvidenceGoal: "prove the still narrower successor objective",
+		MaxAttempts: 3, MaxChangedLines: 30,
+		Reason: "maintainer narrowed B only after B recorded its own attempt", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatalf("rescope after objective B's terminal attempt was refused: %v", err)
+	}
+	if accepted.Objective == nil || accepted.Objective.WorkUnit != "objective-c" || accepted.NextAction != RuntimeActionBegin {
+		t.Fatalf("accepted post-attempt rescope status = %#v", accepted)
 	}
 }
 
@@ -480,5 +587,287 @@ func TestRuntimeLedgerRescopeRequiresPreconditions(t *testing.T) {
 		Reason: "attempted rescope on a drifted candidate", Actor: "maintainer",
 	}); !errors.Is(err, ErrRuntimeRescopeNotAllowed) {
 		t.Fatalf("rescope on a drifted candidate error = %v, want ErrRuntimeRescopeNotAllowed", err)
+	}
+}
+
+// TestRuntimeLedgerZeroDriftResetRefusalNamesBothExits is #1974's reproduction.
+// The reporter reached a failed verification objective with the candidate
+// unchanged and budget remaining, ran reset, and concluded the lifecycle was
+// deadlocked. It was not: rescope already owned that transition. The refusal
+// they received named neither it nor the route to a wider successor budget, and
+// status answered next_action: begin, which for failed verification evidence is
+// the one continuation that cannot help.
+//
+// Both named exits are executed here, not just matched as strings, because a
+// refusal that names a command nothing can run is worse than one that names
+// nothing at all.
+func TestRuntimeLedgerZeroDriftResetRefusalNamesBothExits(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "reset-exit-1974")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "verify-begin-1", WorkUnit: "independent-verification",
+		EvidenceGoal: "independently verify the applied change", MaxAttempts: 2, MaxChangedLines: 40,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "verify-finish-1", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('7'), Diagnosis: "verification failed with the workspace unchanged",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "verification harness exited cleanly",
+		ProcessEvidence: "post-verification process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.DecisionRequired || failed.Complete || failed.NextAction != RuntimeActionBegin || failed.CumulativeAttempts != 1 {
+		t.Fatalf("pre-reset failed-verification status = %#v", failed)
+	}
+
+	_, resetErr := store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "verify-reset-1",
+		Reason: "failed evidence proves implementation must remediate", Actor: "maintainer",
+	})
+	if !errors.Is(resetErr, ErrRuntimeResetNotAllowed) {
+		t.Fatalf("zero-drift reset error = %v, want ErrRuntimeResetNotAllowed", resetErr)
+	}
+	for _, want := range []string{
+		"gentle-ai sdd-attempt rescope",
+		"--expected-revision " + strconv.Quote(failed.Revision),
+		"at most 40",
+		"decision-required",
+	} {
+		if !strings.Contains(resetErr.Error(), want) {
+			t.Fatalf("zero-drift reset refusal does not name %q: %v", want, resetErr)
+		}
+	}
+
+	// Exit 1 runs: the rescope the refusal names is admitted at this exact
+	// revision, with the ceiling it advertises.
+	rescoped, err := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "verify-rescope-1",
+		WorkUnit: "verification-remediation", EvidenceGoal: "remediate the verification gap",
+		MaxAttempts: 2, MaxChangedLines: 40,
+		Reason: "failed evidence names the remediation", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatalf("the rescope this refusal names was refused: %v", err)
+	}
+	if rescoped.Objective == nil || rescoped.Objective.WorkUnit != "verification-remediation" ||
+		rescoped.CumulativeAttempts != 1 {
+		t.Fatalf("rescoped objective = %#v", rescoped)
+	}
+}
+
+// TestRuntimeLedgerExhaustedAttemptsAdmitTheResetForAWiderScope is the second
+// exit #1974's refusal now names, and the reason the narrow-only rescope rule
+// is not itself a deadlock: a caller who needs a successor budget WIDER than
+// the failed objective's ceiling spends the remaining attempts honestly, and
+// the run that exhausts them reaches decision-required, where reset opens a
+// fresh budget of any size.
+func TestRuntimeLedgerExhaustedAttemptsAdmitTheResetForAWiderScope(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "reset-exit-1974-wider")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	revision := ""
+	for ordinal, request := range []string{"verify-1", "verify-2"} {
+		started, beginErr := store.Begin(context.Background(), BeginAttemptRequest{
+			ExpectedRevision: revision, RequestID: request + "-begin", WorkUnit: "independent-verification",
+			EvidenceGoal: "independently verify the applied change", MaxAttempts: 2, MaxChangedLines: 40,
+		})
+		if beginErr != nil {
+			t.Fatalf("begin %d: %v", ordinal+1, beginErr)
+		}
+		finished, finishErr := store.Finish(context.Background(), FinishAttemptRequest{
+			ExpectedRevision: started.Revision, RequestID: request + "-finish", Outcome: AttemptFailed,
+			EvidenceRevision: runtimeTestHash(byte('a' + ordinal)), Diagnosis: "verification failed with the workspace unchanged",
+			HarnessDisposition: HarnessInvalidated, CleanupEvidence: "verification harness exited cleanly",
+			ProcessEvidence: "post-verification process scan found no descendants",
+		})
+		if finishErr != nil {
+			t.Fatalf("finish %d: %v", ordinal+1, finishErr)
+		}
+		revision = finished.Revision
+		if ordinal == 1 && (!finished.DecisionRequired || finished.NextAction != RuntimeActionReset) {
+			t.Fatalf("exhausting the attempt budget did not reach decision-required: %#v", finished)
+		}
+	}
+
+	after, err := store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: revision, RequestID: "wider-reset-1",
+		Reason: "verification exhausted its budget; remediation needs a wider scope", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatalf("reset at decision-required was refused: %v", err)
+	}
+
+	// The fresh objective may exceed the exhausted one's ceiling, which is the
+	// capability rescope structurally cannot provide.
+	wider, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: after.Revision, RequestID: "wider-begin-1", WorkUnit: "implementation-remediation",
+		EvidenceGoal: "remediate what the failed verification named", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatalf("begin with a wider budget after reset was refused: %v", err)
+	}
+	if wider.Objective == nil || wider.Objective.MaxChangedLines != 400 {
+		t.Fatalf("post-reset objective = %#v", wider.Objective)
+	}
+	if wider.LifetimeAttempts != 3 {
+		t.Fatalf("reset laundered lifetime attempts: %#v", wider)
+	}
+}
+
+// TestRuntimeLedgerWidenedRescopeRefusalNamesTheExhaustRoute is #2769 A, the
+// complement of #1974: that caller reached for reset and heard nothing about
+// rescope, this one reaches for rescope and hears only that a wider budget is
+// refused. Status answers begin, which repeats the ceiling they just called
+// too small. The exhaust-then-reset route is executed here, not asserted as
+// prose, because a refusal naming a route nothing can walk is worse than one
+// naming nothing.
+func TestRuntimeLedgerWidenedRescopeRefusalNamesTheExhaustRoute(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "widened-2769")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "widen-begin-1", WorkUnit: "independent-verification",
+		EvidenceGoal: "independently verify the applied change", MaxAttempts: 2, MaxChangedLines: 40,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "widen-finish-1", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('3'), Diagnosis: "verification failed with the workspace unchanged",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "verification harness exited cleanly",
+		ProcessEvidence: "post-verification process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.NextAction != RuntimeActionBegin {
+		t.Fatalf("status must still answer begin for this state: %#v", failed)
+	}
+
+	_, widenErr := store.Rescope(context.Background(), RescopeObjectiveRequest{
+		ExpectedRevision: failed.Revision, RequestID: "widen-rescope-1",
+		WorkUnit: "implementation-remediation", EvidenceGoal: "remediate what verification named",
+		MaxAttempts: 2, MaxChangedLines: 400,
+		Reason: "remediation needs more than the verification ceiling", Actor: "maintainer",
+	})
+	if !errors.Is(widenErr, ErrRuntimeRescopeWidened) {
+		t.Fatalf("widened rescope error = %v, want ErrRuntimeRescopeWidened", widenErr)
+	}
+	for _, want := range []string{"1 remaining attempt", "decision-required", "gentle-ai sdd-attempt reset"} {
+		if !strings.Contains(widenErr.Error(), want) {
+			t.Fatalf("widened rescope refusal does not name %q: %v", want, widenErr)
+		}
+	}
+
+	// Walk the route the refusal names: spend the last attempt, land on
+	// decision-required, reset, and open the wider budget rescope refused.
+	last, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: failed.Revision, RequestID: "widen-begin-2", WorkUnit: "independent-verification",
+		EvidenceGoal: "independently verify the applied change", MaxAttempts: 2, MaxChangedLines: 40,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exhausted, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: last.Revision, RequestID: "widen-finish-2", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('4'), Diagnosis: "verification failed again with the workspace unchanged",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "verification harness exited cleanly",
+		ProcessEvidence: "post-verification process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exhausted.DecisionRequired {
+		t.Fatalf("the route the refusal names did not reach decision-required: %#v", exhausted)
+	}
+	after, err := store.Reset(context.Background(), ResetObjectiveRequest{
+		ExpectedRevision: exhausted.Revision, RequestID: "widen-reset-1",
+		Reason: "remediation needs a wider scope than verification allowed", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatalf("the reset this refusal names was refused: %v", err)
+	}
+	wider, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: after.Revision, RequestID: "widen-begin-3", WorkUnit: "implementation-remediation",
+		EvidenceGoal: "remediate what verification named", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatalf("the wider budget the refusal promises was refused: %v", err)
+	}
+	if wider.Objective == nil || wider.Objective.MaxChangedLines != 400 {
+		t.Fatalf("post-reset objective = %#v", wider.Objective)
+	}
+}
+
+// TestRuntimeLedgerCompleteObjectiveRefusalNamesTheSuccessor is #2769 B. A
+// completed objective refused a repeated begin with "objective is complete"
+// and pointed at status, whose next_action is `complete`: true, and useless to
+// a caller with more work on this change. Advance was one flag away the whole
+// time, and the code comment above the refusal already said so.
+func TestRuntimeLedgerCompleteObjectiveRefusalNamesTheSuccessor(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "complete-2769")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "done-begin-1", WorkUnit: "apply-the-change",
+		EvidenceGoal: "apply the approved change", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	passed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "done-finish-1", Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('5'), Diagnosis: "the change applied and its evidence passed",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "harness exited cleanly",
+		ProcessEvidence: "post-run process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !passed.Complete || passed.NextAction != RuntimeActionComplete {
+		t.Fatalf("post-pass status = %#v", passed)
+	}
+
+	_, doneErr := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: passed.Revision, RequestID: "done-begin-2", WorkUnit: "apply-the-change",
+		EvidenceGoal: "apply the approved change", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if !errors.Is(doneErr, ErrRuntimeObjectiveDone) {
+		t.Fatalf("repeated begin error = %v, want ErrRuntimeObjectiveDone", doneErr)
+	}
+	for _, want := range []string{"--work-unit", "advance", "gentle-ai sdd-attempt reset"} {
+		if !strings.Contains(doneErr.Error(), want) {
+			t.Fatalf("complete-objective refusal does not name %q: %v", want, doneErr)
+		}
+	}
+
+	// Exit 1 runs: the same begin with only --work-unit changed is admitted.
+	advanced, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: passed.Revision, RequestID: "done-begin-3", WorkUnit: "verify-the-change",
+		EvidenceGoal: "apply the approved change", MaxAttempts: 2, MaxChangedLines: 400,
+	})
+	if err != nil {
+		t.Fatalf("the advance this refusal names was refused: %v", err)
+	}
+	if advanced.ActiveAttempt == nil || advanced.Objective == nil || advanced.Objective.WorkUnit != "verify-the-change" {
+		t.Fatalf("advanced objective = %#v", advanced)
 	}
 }

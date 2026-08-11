@@ -204,10 +204,6 @@ func (err *reviewRepairOperationError) Error() string {
 }
 func (err *reviewRepairOperationError) Unwrap() error { return err.cause }
 
-func RunReviewRepair(args []string, stdout io.Writer) error {
-	return runReviewRepair(context.Background(), args, stdout)
-}
-
 func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only one provider-owned classified repair. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. A maintainer supplies actor, reason, and an exact gentle-ai.review-repair-authorization/v1 binding. When multiple content-mismatched leaves exist, --preflight enumerates exact predecessor/successor selectors; re-run it with one selector before executing its plan.")
 	cwd := flags.String("cwd", ".", "repository path")

@@ -239,7 +239,16 @@ func compactLineageSupersededUnderMaintenance(
 	for _, store := range stores {
 		record, loadErr := store.loadCompactRecordLocked()
 		if loadErr != nil {
-			return false, loadErr
+			// Scoped like every other authority walk (#2743): the probe
+			// answers whether THIS lineage has a recovery successor, so an
+			// unreadable foreign record is absent from the graph, not a
+			// receipt-derivation failure. The caller already holds the
+			// maintenance lock, hence the locked read instead of
+			// scanCompactAuthority; operational failures still propagate.
+			if IsCompactAuthorityOperationalFailure(loadErr) {
+				return false, loadErr
+			}
+			continue
 		}
 		if record.State.Recovery != nil &&
 			record.State.Recovery.PredecessorLineageID == lineageID {

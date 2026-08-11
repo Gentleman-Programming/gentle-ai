@@ -683,6 +683,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			if isMarkdownSubAgentPromptFile(entry.Name()) {
 				contentStr = injectCodeGraphToolGrantIntoPrompt(contentStr, adapter.Agent(), opts.CodeGraphGuidanceMarkdown)
 				contentStr = injectCodeGraphGuidanceIntoPrompt(contentStr, opts.CodeGraphGuidanceMarkdown)
+				contentStr = injectLanguageContractIntoPrompt(contentStr)
 			}
 			outPath := filepath.Join(agentsDir, entry.Name())
 			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
@@ -907,6 +908,7 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 	// needs the same search-order rule the orchestrator gets; task artifact
 	// references alone are not enough.
 	injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentsMap, codeGraphGuidance)
+	injectLanguageContractIntoOpenCodeSubagentPrompts(agentsMap)
 
 	result, err := json.MarshalIndent(overlay, "", "  ")
 	if err != nil {

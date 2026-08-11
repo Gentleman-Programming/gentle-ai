@@ -169,6 +169,13 @@ func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
+		pkgDir := filepath.Join(opencodeDir, "node_modules", "opencode-sdd-engram-manage")
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.2.0"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		return mockCmd("true")
 	}
 
@@ -187,8 +194,122 @@ func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
 	if report.Results[0].Status != UpgradeSucceeded {
 		t.Fatalf("status = %q, want %q", report.Results[0].Status, UpgradeSucceeded)
 	}
+	if report.Results[0].NewVersion != "1.2.0" {
+		t.Fatalf("new version = %q, want observed materialized version 1.2.0", report.Results[0].NewVersion)
+	}
 	if report.BackupID == "" {
 		t.Fatal("BackupID should be populated before executing registered-pending plugin upgrade")
+	}
+}
+
+func TestExecute_OpenCodePluginPostMutationVerificationFailureIsFailed(t *testing.T) {
+	origExecCommand := execCommand
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-subagent-statusline"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "npm" {
+			return "/usr/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		// Model a successful npm mutation that leaves the plugin manifest absent.
+		if err := os.WriteFile(filepath.Join(opencodeDir, "package-lock.json"), []byte(`{"packages":{}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return mockCmd("true")
+	}
+
+	result := makeResult("opencode-subagent-statusline", update.RegisteredNotMaterialized, "0.7.1", "0.8.0", update.InstallOpenCodePlugin)
+	result.Tool.NpmPackage = "opencode-subagent-statusline"
+	toolResult := executeOne(context.Background(), result, linuxProfile(), false)
+
+	if toolResult.Status != UpgradeFailed {
+		t.Fatalf("status = %q, want %q", toolResult.Status, UpgradeFailed)
+	}
+	if toolResult.Err == nil {
+		t.Fatal("Err = nil, want failed postcondition error")
+	}
+	if toolResult.NewVersion != "" {
+		t.Fatalf("new version = %q, want empty when materialization is unverified", toolResult.NewVersion)
+	}
+	if toolResult.ManualHint != "" {
+		t.Fatalf("ManualHint = %q, want empty for a real failure", toolResult.ManualHint)
+	}
+	for _, want := range []string{"after npm mutation", "expected version \"0.8.0\"", "absent", "No automatic rollback", "restore or correct", opencodeDir} {
+		if !strings.Contains(toolResult.Err.Error(), want) {
+			t.Errorf("error %q does not contain %q", toolResult.Err, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(opencodeDir, "package-lock.json")); err != nil {
+		t.Fatalf("simulated package-manager mutation should remain inspectable: %v", err)
+	}
+}
+
+func TestExecute_OpenCodePluginUnregisteredSkipsWithoutMutation(t *testing.T) {
+	origExecCommand := execCommand
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["other-plugin"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "npm" {
+			return "/usr/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return mockCmd("true")
+	}
+
+	result := makeResult("opencode-subagent-statusline", update.UpdateAvailable, "0.7.1", "0.8.0", update.InstallOpenCodePlugin)
+	result.Tool.NpmPackage = "opencode-subagent-statusline"
+	toolResult := executeOne(context.Background(), result, linuxProfile(), false)
+
+	if toolResult.Status != UpgradeSkipped {
+		t.Fatalf("status = %q, want %q", toolResult.Status, UpgradeSkipped)
+	}
+	if toolResult.Err != nil {
+		t.Fatalf("Err = %v, want nil for a zero-mutation skip", toolResult.Err)
+	}
+	if toolResult.ManualHint == "" {
+		t.Fatal("ManualHint = empty, want an actionable pre-mutation hint")
+	}
+	if execCalled {
+		t.Fatal("package manager must not run for an unregistered, unmaterialized plugin")
+	}
+	if _, err := os.Stat(filepath.Join(opencodeDir, "package-lock.json")); !os.IsNotExist(err) {
+		t.Fatalf("package manager state exists after zero-mutation skip, stat err: %v", err)
 	}
 }
 

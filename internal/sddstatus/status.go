@@ -245,6 +245,7 @@ type Status struct {
 	// answer, not part of the SDD v1 wire document, and the ratified contract
 	// keeps full runtime payload off that document.
 	runtimeAttemptTokens map[int]string
+	verifyRefreshReason  string
 }
 
 // ReviewOfferBlock carries what an orchestrator needs to present the
@@ -314,7 +315,7 @@ type ResolveOptions struct {
 	// ReviewDisabledForWorkspace lets the composition root resolve the switch
 	// against the exact workspace normalized by Resolve. When set, it is called
 	// once and its result replaces ReviewDisabled for the whole status decision.
-	ReviewDisabledForWorkspace func(workspaceRoot string) bool
+	ReviewDisabledForWorkspace func(workspaceRoot string) (bool, error)
 }
 
 type CommandArgs struct {
@@ -412,7 +413,10 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 	reviewDisabled := options.ReviewDisabled
 	if options.ReviewDisabledForWorkspace != nil {
-		reviewDisabled = options.ReviewDisabledForWorkspace(workspaceRoot)
+		reviewDisabled, err = options.ReviewDisabledForWorkspace(workspaceRoot)
+		if err != nil {
+			return Status{}, err
+		}
 	}
 	planningHome := filepath.Join(workspaceRoot, "openspec")
 	changesDir := filepath.Join(planningHome, "changes")
@@ -687,6 +691,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 		applyNativeRuntimeRouting(&status)
 	}
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
+	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
+		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
+	}
 	if options.IncludeInstructions {
 		instructions := renderPhaseInstructions(status)
 		status.PhaseInstructions = &instructions
@@ -843,12 +850,35 @@ func applyNativeRuntimeRouting(status *Status) {
 		"native SDD runtime execution is blocked(%s) for %q in %s; compact acquire reports the same: %s",
 		readiness.Reason, change, pathquote.Quote(status.ActionContext.WorkspaceRoot), readiness.Exit,
 	)
+	// The attempt ledger governs exactly one question: may a bounded
+	// implementation work unit OPEN. A blocked answer is a true and permanent
+	// answer to that, so Apply is blocked.
+	//
+	// It is not an answer about anything else. Projecting it onto Verify and
+	// Archive stranded #2902's reporter: every task complete, the merged
+	// candidate green on repository CI, receipt-driven review off both
+	// globally and clone-locally, and one historical objective sitting at
+	// maintainer_decision from accounting on work that had already landed.
+	// The change could never be verified and never be archived.
+	//
+	// Nothing is laundered by letting the later phases answer for themselves.
+	// A change whose budget was exhausted mid-flight still has incomplete
+	// tasks and no passing verification, so its own Verify and Archive
+	// dependencies keep it exactly where it was. Those dependencies are the
+	// ones entitled to speak for those phases. The blocker stays in
+	// BlockedReasons either way, so it remains auditable.
 	status.Dependencies.Apply = DependencyBlocked
-	status.Dependencies.Verify = DependencyBlocked
-	status.Dependencies.Archive = DependencyBlocked
-	status.NextRecommended = "resolve-blockers"
 	if !contains(status.BlockedReasons, reason) {
 		status.BlockedReasons = append(status.BlockedReasons, reason)
+	}
+	// resolve-blockers is the right next step only while this block is
+	// actually in the change's way. Once implementation is done and verified,
+	// the change's next step is its own remaining phase, not a reset of an
+	// objective nobody needs to reopen.
+	if status.Dependencies.Verify != DependencyAllDone || status.Dependencies.Archive == DependencyBlocked {
+		status.Dependencies.Verify = DependencyBlocked
+		status.Dependencies.Archive = DependencyBlocked
+		status.NextRecommended = "resolve-blockers"
 	}
 }
 
@@ -1065,6 +1095,9 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		applyNativeRuntimeRouting(&status)
 	}
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
+	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
+		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
+	}
 	if includeInstructions {
 		instructions := renderPhaseInstructions(status)
 		status.PhaseInstructions = &instructions
@@ -1897,6 +1930,8 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, ve
 	return "resolve-blockers"
 }
 
+const runtimeRemediationVerifyRefreshInstruction = "A passing native remediation settlement completed after the persisted verification report; run fresh verification and persist a report bound after that settlement before archive."
+
 func renderPhaseInstructions(status Status) PhaseInstructions {
 	change := "<unresolved>"
 	if status.ChangeName != nil {
@@ -1914,6 +1949,9 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 		fmt.Sprintf("State: %s", status.Dependencies.Verify),
 		"Verify implementation against proposal, specs, design, and task completion.",
 		"Run final verification only after every task is complete; apply-progress never makes final verification ready.",
+	}
+	if status.verifyRefreshReason != "" {
+		verifyInstructions = append(verifyInstructions, status.verifyRefreshReason)
 	}
 	remediateInstructions := []string{
 		fmt.Sprintf("Change: %s", change),

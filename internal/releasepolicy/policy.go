@@ -521,8 +521,11 @@ archives:
       - LICENSE
       - README.md
       - docs/review-integration.md
+      - contracts/review-integration/v1/FREEZE.md
       - contracts/review-integration/v1/schemas/*.schema.json
       - contracts/review-integration/v1/fixtures/*.fixture.json
+      - contracts/review-integration/v2/schemas/*.schema.json
+      - contracts/review-integration/v2/fixtures/*.fixture.json
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
@@ -692,11 +695,13 @@ jobs:
         if: always()
         run: |
           if command -v shred >/dev/null 2>&1; then
-            shred --remove "$MINISIGN_SECRET_KEY_FILE" 2>/dev/null || true
+            shred --remove "$MINISIGN_SECRET_KEY_FILE" 2>/dev/null || rm -f "$MINISIGN_SECRET_KEY_FILE"
           else
             rm -f "$MINISIGN_SECRET_KEY_FILE"
           fi
           rm -f "$MINISIGN_SIGNING_PUBLIC_KEY_FILE"
+          test ! -e "$MINISIGN_SECRET_KEY_FILE"
+          test ! -e "$MINISIGN_SIGNING_PUBLIC_KEY_FILE"
   verify:
     needs: release
     runs-on: ubuntu-24.04

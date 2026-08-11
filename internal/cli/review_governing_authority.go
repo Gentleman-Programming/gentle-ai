@@ -36,7 +36,11 @@ import (
 // denial). No silent default: every reachable *ReviewReceiptDiscoveryError
 // this function returns has an explicit Kind assigned at its construction
 // site below.
-func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateInput reviewtransaction.NativeGateRequestInput) (governs bool, evaluation reviewtransaction.NativeGateEvaluation, discoveryErr *ReviewReceiptDiscoveryError) {
+//
+// receiptBacked is true only on the approved path whose receipt loaded, which
+// is the one shape whose allow the caller may gate on managed asset
+// provenance.
+func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateInput reviewtransaction.NativeGateRequestInput) (governs, receiptBacked bool, evaluation reviewtransaction.NativeGateEvaluation, discoveryErr *ReviewReceiptDiscoveryError) {
 	if strings.TrimSpace(lineage) == "" {
 		// Discovery rule (design's corrected Amendment C clause): lineage
 		// kind is established SOLELY by v3/ record presence. No explicit
@@ -44,25 +48,25 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 		// candidate at all — "new absent" by construction — so the
 		// ordinary hook-invoked gate call costs no extra Git subprocess
 		// here, matching decision 5's zero-cost-by-default guarantee.
-		return false, reviewtransaction.NativeGateEvaluation{}, nil
+		return false, false, reviewtransaction.NativeGateEvaluation{}, nil
 	}
 	record, found, err := reviewtransaction.DiscoverNewLineage(ctx, root, lineage)
 	if err != nil {
 		var corrupted *reviewtransaction.NewLineageMarkerCorruptedError
 		if errors.As(err, &corrupted) {
-			return true, reviewtransaction.NativeGateEvaluation{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Detail: corrupted.Error()}
+			return true, false, reviewtransaction.NativeGateEvaluation{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Detail: corrupted.Error()}
 		}
-		return false, reviewtransaction.NativeGateEvaluation{}, nil
+		return false, false, reviewtransaction.NativeGateEvaluation{}, nil
 	}
 	if !found {
-		return false, reviewtransaction.NativeGateEvaluation{}, nil
+		return false, false, reviewtransaction.NativeGateEvaluation{}, nil
 	}
 	live, evidence, err := governingAuthorityLiveEvidence(ctx, root, gateInput)
 	if err != nil {
 		// No live candidate could be resolved at all — legacy discovery
 		// below reports its own target-resolution failure; nothing new
 		// governs a candidate identity that could not even be built.
-		return false, reviewtransaction.NativeGateEvaluation{}, nil
+		return false, false, reviewtransaction.NativeGateEvaluation{}, nil
 	}
 	observation := reviewtransaction.DeriveObservation(record.Authority, live, evidence)
 	legacyPresent := false
@@ -73,11 +77,11 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 	}
 	switch reviewtransaction.ResolveGoverningAuthority(true, observation.Relation, legacyPresent) {
 	case reviewtransaction.GoverningAuthorityKindDeny:
-		return true, reviewtransaction.NativeGateEvaluation{}, &ReviewReceiptDiscoveryError{
+		return true, false, reviewtransaction.NativeGateEvaluation{}, &ReviewReceiptDiscoveryError{
 			Kind: ReviewReceiptUnrelated, Detail: "a new-lineage candidate is never authorized by a legacy receipt",
 		}
 	case reviewtransaction.GoverningAuthorityKindLegacy:
-		return false, reviewtransaction.NativeGateEvaluation{}, nil
+		return false, false, reviewtransaction.NativeGateEvaluation{}, nil
 	default: // reviewtransaction.GoverningAuthorityKindNew
 		// C5 remediation (verify-report CRITICAL, "default-deny at gates"):
 		// the prior implementation special-cased only `escalated`, so every
@@ -99,7 +103,7 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 		case reviewtransaction.NewLineageStateApproved:
 			authorityStore, storeErr := reviewtransaction.NewLineageAuthorityStore(ctx, root, lineage)
 			if storeErr != nil {
-				return true, reviewtransaction.NativeGateEvaluation{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Detail: storeErr.Error()}
+				return true, false, reviewtransaction.NativeGateEvaluation{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Detail: storeErr.Error()}
 			}
 			receipt, receiptErr := authorityStore.LoadReceipt()
 			// W-7 (Wave 5 fix cycle 2, verify-report #10186): a genuinely ABSENT
@@ -127,7 +131,7 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 					reason = reviewFacadeApprovedReceiptCorruptReason(record.Authority.LineageID)
 					code = "approved_receipt_corrupt"
 				}
-				return true, reviewtransaction.NativeGateEvaluation{
+				return true, false, reviewtransaction.NativeGateEvaluation{
 					Result: reviewtransaction.GateInvalidated, Reason: reason,
 					Context: reviewtransaction.GateContext{
 						Gate: gateInput.Gate, LineageID: record.Authority.LineageID, StoreRevision: record.Revision,
@@ -148,9 +152,9 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 				PolicyHash: record.Authority.CandidateIdentity.PolicyHash,
 				Denial:     &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: string(reviewtransaction.NewLineageStateEscalated)},
 			}
-			return true, reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateEscalated, Reason: "authority already escalated: escalated is a terminal non-approval", Context: context}, nil
+			return true, false, reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateEscalated, Reason: "authority already escalated: escalated is a terminal non-approval", Context: context}, nil
 		default: // reviewing, correcting, validating — and any future non-approved value
-			return true, reviewtransaction.NativeGateEvaluation{
+			return true, false, reviewtransaction.NativeGateEvaluation{
 				Result: reviewtransaction.GateInvalidated, Reason: reviewFacadeReceiptNotAvailableReason(record.Authority.LineageID),
 				Context: reviewtransaction.GateContext{
 					Gate: gateInput.Gate, LineageID: record.Authority.LineageID, StoreRevision: record.Revision,
@@ -160,13 +164,14 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 				},
 			}, nil
 		}
+		receiptBacked = true
 		transition, err := (reviewtransaction.ReviewCore{}).Next(ctx, record.Authority, reviewtransaction.CoreRequest{
 			Kind: reviewtransaction.CoreRequestValidate, LiveCandidateIdentity: live, Evidence: evidence,
 		})
 		if err != nil {
-			return true, reviewtransaction.NativeGateEvaluation{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Detail: err.Error()}
+			return true, false, reviewtransaction.NativeGateEvaluation{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Detail: err.Error()}
 		}
-		return true, reviewtransaction.EvaluateNewLineageGate(ctx, root, record, transition, live, gateInput), nil
+		return true, receiptBacked, reviewtransaction.EvaluateNewLineageGate(ctx, root, record, transition, live, gateInput), nil
 	}
 }
 
