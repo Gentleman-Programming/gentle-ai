@@ -400,6 +400,107 @@ func TestLineageNotFoundContinuationRunsVerbatim(t *testing.T) {
 	}
 }
 
+// TestLineageNotFoundContinuationQuotesHostileCwd pins Major 1: the printed
+// continuation must survive POSIX word splitting even when cwd contains spaces,
+// quotes, or shell metacharacters. The full line rendered from a hostile cwd
+// round-trips through SplitPrintedCommandWords (the same inverse grammar the
+// product uses for every printed continuation) back into the exact argv the
+// refusal intended, and the envelope stays valid.
+func TestLineageNotFoundContinuationQuotesHostileCwd(t *testing.T) {
+	hostile := []string{
+		"/tmp/gitlab runner/path with spaces",  // spaces
+		"/tmp/o'brien/quote in path",           // embedded single quote
+		"/tmp/semi;colon && dollar $HOME",      // shell metacharacters
+		"/tmp/$(whoami)/`touchtmp/x` backtick", // command substitution
+		"relative/path without leading slash",  // no cwd derivation issues
+	}
+	for _, cwd := range hostile {
+		t.Run("cwd="+strings.ReplaceAll(strings.ReplaceAll(cwd, "/", "_"), " ", ""), func(t *testing.T) {
+			line := reviewLineageNotFoundContinuation(cwd, ReviewIntegrationContractV1)
+			if strings.Contains(line, "\n") || strings.Contains(line, "\r") {
+				t.Fatalf("rendered continuation contains a newline: %q", line)
+			}
+			words, err := SplitPrintedCommandWords(line)
+			if err != nil {
+				t.Fatalf("printed continuation does not survive POSIX splitting: %v (%q)", err, line)
+			}
+			want := []string{"gentle-ai", "review", "status", "--cwd", cwd, "--contract", ReviewIntegrationContractV1}
+			if !reflect.DeepEqual(words, want) {
+				t.Fatalf("split continuation = %#v, want %#v\nline: %q", words, want, line)
+			}
+			message, cause := reviewLineageNotFoundMessage(line)
+			if err := (ReviewIntegrationFailure{Message: message, Cause: cause}).messageCauseBound(); err != nil {
+				t.Fatalf("hostile cwd envelope fields invalid: %v", err)
+			}
+		})
+	}
+}
+
+// TestLineageNotFoundContinuationDegradesForDeepCwd pins Major 2: a cwd longer
+// than the ~88-byte message budget must not be truncated and must not produce
+// an invalid envelope. The message degrades to a bounded sentence and the full,
+// executable continuation travels in `cause` (4000-byte bound). A continuation
+// that cannot be represented in the single-line envelope at all (embedded
+// newline) fails closed with no printed command.
+func TestLineageNotFoundContinuationDegradesForDeepCwd(t *testing.T) {
+	deep := "/" + strings.Repeat("very/deep/workspace/", 24) + "repo"
+	if len(deep) <= 100 {
+		t.Fatalf("test cwd not deep enough: %d bytes", len(deep))
+	}
+	line := reviewLineageNotFoundContinuation(deep, ReviewIntegrationContractV1)
+	message, cause := reviewLineageNotFoundMessage(line)
+	if strings.Contains(message, "`") {
+		t.Fatalf("degraded message still embeds a command: %q", message)
+	}
+	if len(message) > 240 {
+		t.Fatalf("degraded message exceeds 240 bytes: %d (%q)", len(message), message)
+	}
+	if cause == "" {
+		t.Fatalf("deep cwd dropped the continuation instead of moving it to cause")
+	}
+	if !strings.Contains(cause, deep) {
+		t.Fatalf("cause truncated the cwd: %q", cause)
+	}
+	words, err := SplitPrintedCommandWords(cause)
+	if err != nil {
+		t.Fatalf("cause continuation does not survive POSIX splitting: %v (%q)", err, cause)
+	}
+	if !reflect.DeepEqual(words, []string{"gentle-ai", "review", "status", "--cwd", deep, "--contract", ReviewIntegrationContractV1}) {
+		t.Fatalf("cause split = %#v, want full cwd argv (never truncated)", words)
+	}
+	if err := (ReviewIntegrationFailure{Message: message, Cause: cause}).messageCauseBound(); err != nil {
+		t.Fatalf("deep cwd envelope fields invalid: %v", err)
+	}
+
+	newlineCwd := "/tmp/line\nbreak"
+	line = reviewLineageNotFoundContinuation(newlineCwd, ReviewIntegrationContractV1)
+	message, cause = reviewLineageNotFoundMessage(line)
+	if strings.Contains(message, "`") || cause != "" {
+		t.Fatalf("newline cwd must fail closed with no command: message=%q cause=%q", message, cause)
+	}
+	if len(message) > 240 {
+		t.Fatalf("newline-degraded message exceeds 240 bytes: %d", len(message))
+	}
+	if err := (ReviewIntegrationFailure{Message: message, Cause: cause}).messageCauseBound(); err != nil {
+		t.Fatalf("newline cwd envelope fields invalid: %v", err)
+	}
+}
+
+// messageCauseBound is the subset of ReviewIntegrationFailure.Validate that
+// governs the message/cause pair alone, so the hostile-cwd and deep-cwd tests
+// can prove envelope validity without constructing a full failure.
+func (failure ReviewIntegrationFailure) messageCauseBound() error {
+	if strings.TrimSpace(failure.Message) != failure.Message ||
+		failure.Message == "" || len(failure.Message) > 240 || strings.ContainsAny(failure.Message, "\r\n") {
+		return errors.New("invalid negotiated review failure message")
+	}
+	if failure.Cause != "" && (strings.ContainsAny(failure.Cause, "\r\n") ||
+		len([]rune(failure.Cause)) > reviewIntegrationFailureCauseLimit) {
+		return errors.New("invalid negotiated review failure cause")
+	}
+	return nil
+}
+
 // reviewFailureContinuation extracts the backtick-quoted command a failure
 // Message tells the operator to run.
 func reviewFailureContinuation(t *testing.T, message string) string {
@@ -420,7 +521,11 @@ func reviewContinuationArgs(t *testing.T, continuation string) []string {
 	if !strings.HasPrefix(continuation, prefix) {
 		t.Fatalf("continuation does not start with %q: %q", prefix, continuation)
 	}
-	return strings.Fields(strings.TrimPrefix(continuation, prefix))
+	words, err := SplitPrintedCommandWords(strings.TrimPrefix(continuation, prefix))
+	if err != nil {
+		t.Fatalf("continuation does not survive POSIX splitting: %v (%q)", err, continuation)
+	}
+	return words
 }
 
 func TestNegotiatedPendingFinalizeStatusMatchesPublishedSchema(t *testing.T) {

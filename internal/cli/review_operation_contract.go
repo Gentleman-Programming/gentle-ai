@@ -428,11 +428,47 @@ func newReviewIntegrationPreflightFailure(operation, code, message string) Revie
 // next runnable command. cwd and contract are the real values derived from the
 // original invocation; when cwd cannot be derived it is simply omitted rather
 // than replaced with a placeholder that misleads the caller.
+//
+// Both dynamic values are rendered through reviewTransitionShellWord so the
+// printed line stays executable when pasted: a cwd with spaces, quotes, shell
+// metacharacters, or newlines must survive POSIX word splitting and must never
+// introduce extra commands. This is the same quoting every other printed
+// continuation in the review contract uses, so SplitPrintedCommandWords (the
+// inverse grammar) can re-derive the exact argv.
 func reviewLineageNotFoundContinuation(cwd, contract string) string {
-	if cwd == "" {
-		return "gentle-ai review status --contract " + contract
+	quoted := "gentle-ai review status"
+	if cwd != "" {
+		quoted += " --cwd " + reviewTransitionShellWord(cwd)
 	}
-	return "gentle-ai review status --cwd " + cwd + " --contract " + contract
+	return quoted + " --contract " + reviewTransitionShellWord(contract)
+}
+
+// reviewLineageNotFoundMessage bounds the lineage_not_found failure sentence to
+// the published 240-byte message limit while keeping the refusal continuation
+// complete and executable. A short cwd keeps the command inside the message
+// (the common, human-visible path). When a deep or hostile cwd would push the
+// full command past the limit, the message degrades to a fixed, bounded
+// sentence that points at the `cause` field, which carries the full command
+// under its own 4000-byte bound; the cwd is never truncated, because a
+// truncated path makes the advertised command unusable. A continuation that
+// itself contains a newline cannot be represented in the single-line envelope
+// at all: no command is printed, the message names the selector-free exit, and
+// the envelope stays valid (fail closed rather than advertise an unrunnable
+// line).
+func reviewLineageNotFoundMessage(continuation string) (message string, cause string) {
+	const (
+		prefix    = "The requested review lineage does not exist; run `"
+		suffix    = "` to see where the review is."
+		degraded  = "The requested review lineage does not exist; the cause names the runnable next command."
+		noCommand = "The requested review lineage does not exist; run review status without --lineage to list stored reviews."
+	)
+	if strings.ContainsAny(continuation, "\r\n") {
+		return noCommand, ""
+	}
+	if len(prefix)+len(continuation)+len(suffix) <= 240 {
+		return prefix + continuation + suffix, ""
+	}
+	return degraded, continuation
 }
 
 func newReviewIntegrationFailure(operation string, args []string, runErr error) ReviewIntegrationFailure {
@@ -1008,7 +1044,16 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		if provided, value, missing := reviewIntegrationContractArgument(args); provided && !missing && value != "" {
 			contract = value
 		}
-		failure.Message = "The requested review lineage does not exist; run `" + reviewLineageNotFoundContinuation(cwd, contract) + "` to see where the review is."
+		message, continuation := reviewLineageNotFoundMessage(reviewLineageNotFoundContinuation(cwd, contract))
+		failure.Message = message
+		if continuation != "" {
+			// A deep or hostile cwd pushed the runnable command out of the
+			// 240-byte message; the full, executable continuation travels in
+			// the bounded `cause` field instead. It is never truncated.
+			failure.Cause = continuation
+		} else {
+			failure.Cause = reviewIntegrationFailureCause(runErr)
+		}
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "not_evaluated"
 		failure.RetrySafe = true
@@ -1016,7 +1061,6 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.LineageID = lineageNotFound.LineageID
 		failure.RequiredInputs = []string{}
 		failure.NextAction = "review.status"
-		failure.Cause = reviewIntegrationFailureCause(runErr)
 		return failure
 	}
 	if operation == "review.capabilities" || operation == "review.status" || operation == "review.validate" {
