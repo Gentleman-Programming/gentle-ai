@@ -246,7 +246,7 @@ func TestReviewCaptureResultRecapturesSameLensAfterPreInspectionAccessFailure(t 
 		"--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", "0", "--input", failed,
 	}
 	if err := RunReviewCaptureResult(captureArgs, io.Discard); err == nil ||
-		!strings.Contains(err.Error(), "reviewer did not report completed candidate inspection") {
+		!strings.Contains(err.Error(), "reviewer did not report completed candidate inspection") || strings.Contains(err.Error(), "scope_unavailable") {
 		t.Fatalf("incomplete inspection capture error = %v", err)
 	}
 	afterFailure, err := store.Load()

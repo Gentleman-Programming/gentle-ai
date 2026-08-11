@@ -171,6 +171,13 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 			if err == nil || admission.Decision != tc.decision {
 				t.Fatalf("AdmitArtifact() decision = %q, error = %v; want %q", admission.Decision, err, tc.decision)
 			}
+			if len(candidate.Result.Findings) == 0 {
+				var admissionErr *ArtifactAdmissionError
+				if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil ||
+					admissionErr.Diagnostic.Code != ArtifactAdmissionDiagnosticCandidateInputUnreadable || admissionErr.Diagnostic.Reason != "scope_unavailable" {
+					t.Fatalf("unavailable inspection diagnostic = %#v, error = %v", admissionErr.Diagnostic, err)
+				}
+			}
 		})
 	}
 }

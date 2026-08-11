@@ -327,8 +327,7 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 		wantPaths[index] = entry.Path
 	}
 	if request.Inspection.Status != ArtifactInspectionCompleted {
-		return failFinding(ArtifactAdmissionIncomplete, "reviewer did not report completed candidate inspection",
-			&ArtifactAdmissionDiagnostic{Code: ArtifactAdmissionDiagnosticCandidateInputUnreadable, Reason: "scope_unavailable"}, nil)
+		return fail(ArtifactAdmissionIncomplete, "reviewer did not report completed candidate inspection")
 	}
 	coverage, coverageErr := validateCompleteInspectionCoverage(request.Inspection.Paths, request.FrozenContext.ChangedPathManifest)
 	if coverageErr != nil {
