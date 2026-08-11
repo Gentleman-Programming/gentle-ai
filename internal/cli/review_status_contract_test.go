@@ -484,6 +484,26 @@ func TestLineageNotFoundContinuationDegradesForDeepCwd(t *testing.T) {
 	if err := (ReviewIntegrationFailure{Message: message, Cause: cause}).messageCauseBound(); err != nil {
 		t.Fatalf("newline cwd envelope fields invalid: %v", err)
 	}
+
+	// A cwd deep enough that the full continuation would exceed the bounded
+	// cause field (4000 runes) must fail closed just like the newline case:
+	// no command is printed, the message names the selector-free exit, and the
+	// envelope stays valid -- never a truncated continuation.
+	huge := "/" + strings.Repeat("very/deep/workspace/segment/", 200) + "repo"
+	line = reviewLineageNotFoundContinuation(huge, ReviewIntegrationContractV1)
+	if len([]rune(line)) <= reviewIntegrationFailureCauseLimit {
+		t.Fatalf("test cwd not big enough: continuation is %d runes", len([]rune(line)))
+	}
+	message, cause = reviewLineageNotFoundMessage(line)
+	if strings.Contains(message, "`") || cause != "" {
+		t.Fatalf("huge cwd must fail closed with no command: message=%q cause=%q", message, cause)
+	}
+	if len(message) > 240 {
+		t.Fatalf("huge-degraded message exceeds 240 bytes: %d", len(message))
+	}
+	if err := (ReviewIntegrationFailure{Message: message, Cause: cause}).messageCauseBound(); err != nil {
+		t.Fatalf("huge cwd envelope fields invalid: %v", err)
+	}
 }
 
 // messageCauseBound is the subset of ReviewIntegrationFailure.Validate that

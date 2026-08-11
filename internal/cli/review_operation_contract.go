@@ -451,10 +451,10 @@ func reviewLineageNotFoundContinuation(cwd, contract string) string {
 // sentence that points at the `cause` field, which carries the full command
 // under its own 4000-byte bound; the cwd is never truncated, because a
 // truncated path makes the advertised command unusable. A continuation that
-// itself contains a newline cannot be represented in the single-line envelope
-// at all: no command is printed, the message names the selector-free exit, and
-// the envelope stays valid (fail closed rather than advertise an unrunnable
-// line).
+// itself cannot fit the single-line envelope at all -- an embedded newline, or
+// one longer than the bounded cause field itself -- prints no command, the
+// message names the selector-free exit, and the envelope stays valid (fail
+// closed rather than advertise an unrunnable line).
 func reviewLineageNotFoundMessage(continuation string) (message string, cause string) {
 	const (
 		prefix    = "The requested review lineage does not exist; run `"
@@ -462,7 +462,11 @@ func reviewLineageNotFoundMessage(continuation string) (message string, cause st
 		degraded  = "The requested review lineage does not exist; the cause names the runnable next command."
 		noCommand = "The requested review lineage does not exist; run review status without --lineage to list stored reviews."
 	)
-	if strings.ContainsAny(continuation, "\r\n") {
+	// A continuation that cannot be represented in the single-line envelope at
+	// all -- embedded newline, or longer than the bounded cause field itself --
+	// names the selector-free exit instead of advertising a line that would
+	// make the refusal envelope invalid (fail closed).
+	if strings.ContainsAny(continuation, "\r\n") || len([]rune(continuation)) > reviewIntegrationFailureCauseLimit {
 		return noCommand, ""
 	}
 	if len(prefix)+len(continuation)+len(suffix) <= 240 {
