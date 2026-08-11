@@ -241,6 +241,57 @@ function captureCwd(worktree: string | undefined, directory: string): string {
   return worktree || directory
 }
 
+// hasRealWork decides whether a failed SDD phase actually left work behind.
+// A phase can complete its files/tests/progress yet still return an empty task
+// result (transport/timing failure: the child ran, the result was lost). When
+// real work exists, latching the whole session is wrong: the orchestrator
+// should run the handoff's continuation (sdd-status), see the progress, and
+// relaunch a directed retry that merges the existing apply-progress. When no
+// work exists, the failure is genuine and the session must stay latched (no
+// blind relaunch over an empty change).
+async function hasRealWork(phase: string, cwd: string, prompt: unknown): Promise<boolean> {
+  // 1. Extract the change name from the task prompt, if present. Support both
+  //    the JSON binding form ("change":"<name>") and the plain form (change: <name>).
+  const text = typeof prompt === "string" ? prompt : ""
+  let change = ""
+  const jsonM = /"change"\s*:\s*"([A-Za-z0-9._-]+)"/i.exec(text)
+  const plainM = /\bchange[=:]\s*([A-Za-z0-9._-]+)/i.exec(text)
+  change = (jsonM && jsonM[1]) || (plainM && plainM[1]) || ""
+  if (!change) return false
+  // 1b. Prefer the project root named in the prompt over the plugin's cwd. In a
+  //     global/desktop session the plugin's directory/worktree can resolve to
+  //     "/", which makes both the native status query and the filesystem
+  //     fallback miss the real project. The orchestrator always names the root
+  //     in the task prompt ("Project root: <path>").
+  const rootM = /\bProject root:\s*([^\n]+)/i.exec(text)
+  const root = (rootM && rootM[1] && rootM[1].trim()) || cwd
+  // 2. Query the native dispatcher for the change's apply state. A task
+  //    returning empty but leaving apply-progress or a ready apply state means
+  //    the work is present; a blocked apply with no progress means nothing ran.
+  try {
+    const status = await runNative(root, ["sdd-status", change, "--json"], "")
+    const parsed = JSON.parse(status) as Record<string, unknown>
+    const paths = parsed.artifactPaths as Record<string, unknown> | undefined
+    if (paths && Array.isArray(paths.applyProgress) && paths.applyProgress.length > 0) return true
+    const applyState = parsed.applyState as Record<string, unknown> | undefined
+    if (applyState && typeof applyState === "object") {
+      const s = JSON.stringify(applyState)
+      if (s.includes("ready") || s.includes("progress")) return true
+    }
+  } catch {
+    // Dispatcher unavailable or change not found: fall back to filesystem check.
+  }
+  // 3. Filesystem fallback: apply-progress.md under the change directory.
+  try {
+    const fs = await import("node:fs")
+    const path = await import("node:path")
+    const changeRoot = path.join(root, "openspec", "changes", change)
+    return fs.existsSync(path.join(changeRoot, "apply-progress.md"))
+  } catch {
+    return false
+  }
+}
+
 function runNative(cwd: string, args: string[], stdin: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("gentle-ai", args, { cwd, stdio: ["pipe", "pipe", "pipe"] })
@@ -418,8 +469,17 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
       try {
         taskResult(output.output, "SDD phase", "sddClass")
       } catch (cause) {
-        const failure = sddTaskFailure(subagent, captureCwd(worktree, directory), cause, output.metadata)
-        failedSDDSessions.set(input.sessionID, failure.sddFailure)
+        const cwd = captureCwd(worktree, directory)
+        const failure = sddTaskFailure(subagent, cwd, cause, output.metadata)
+        const realWork = await hasRealWork(subagent, cwd, input.args.prompt)
+        if (!realWork) {
+          // No work left behind: the failure is genuine. Latch the session so a
+          // blind relaunch cannot loop over an empty change.
+          failedSDDSessions.set(input.sessionID, failure.sddFailure)
+        }
+        // Real work exists: transport/timing failure. Do NOT latch the session;
+        // the orchestrator runs the continuation (sdd-status), sees the
+        // progress, and relaunches a directed retry that merges apply-progress.
         throw failure
       }
       return
