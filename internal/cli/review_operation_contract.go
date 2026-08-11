@@ -975,6 +975,26 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		}
 		return failure
 	}
+	var lineageNotFound *reviewtransaction.ReviewLineageNotFoundError
+	if errors.As(runErr, &lineageNotFound) {
+		failure.Phase = "pre_native"
+		failure.Code = "lineage_not_found"
+		failure.Message = "The requested review lineage does not exist; run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --lineage <id>` (or v2) to see where this review actually is."
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.AuthorityApplicability = "not_evaluated"
+		failure.RetrySafe = true
+		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
+		failure.LineageID = lineageNotFound.LineageID
+		failure.RequiredInputs = []string{}
+		// The refusal continuation from issue #1997 asks the operator to see
+		// where a review actually is with `review status --lineage <id>`. A
+		// corrected selector is the exact way back in, so status is the next
+		// runnable action; a blind retry of the same nonexistent selector
+		// would never create the lineage and must not be advertised.
+		failure.NextAction = "review.status"
+		failure.Cause = reviewIntegrationFailureCause(runErr)
+		return failure
+	}
 	if operation == "review.capabilities" || operation == "review.status" || operation == "review.validate" {
 		failure.Phase = "pre_native"
 		failure.Code = "operation_failed"

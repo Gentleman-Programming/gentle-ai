@@ -244,6 +244,19 @@ func TestReviewStatusContractRequirementNamesAllAcceptedContracts(t *testing.T) 
 	}
 }
 
+// TestReviewStatusSelectorsRequirementNamesAllAcceptedContracts pins the
+// sibling refusal for review status target selectors (--lineage, --base-ref,
+// --base-tree, --projection, --gate, and the recovery selectors): it must
+// name every contract the negotiated surface accepts, not just v1, so an
+// operator rerunning with either v1 or v2 knows the runnable form.
+func TestReviewStatusSelectorsRequirementNamesAllAcceptedContracts(t *testing.T) {
+	var output bytes.Buffer
+	err := RunReview([]string{"status", "--lineage", "review-ffffffffffffffff"}, &output)
+	if err == nil || err.Error() != "review status target selectors require --contract gentle-ai.review-integration/v1 or gentle-ai.review-integration/v2" {
+		t.Fatalf("unnegotiated target-selector refusal = %q, want both accepted contracts", err)
+	}
+}
+
 func TestV4StatusRemainsReadableAlongsideV5(t *testing.T) {
 	status := ReviewTargetStatusResult{
 		Schema:        ReviewIntegrationStatusSchemaV4,
@@ -271,6 +284,61 @@ func TestV4StatusRemainsReadableAlongsideV5(t *testing.T) {
 	}
 	if err := status.Validate(); err != nil {
 		t.Fatalf("v4 STATUS must remain readable: %v", err)
+	}
+}
+
+// TestNegotiatedStatusRejectsNonexistentLineageSelector pins issue #1997: an
+// explicit --lineage selector that names no stored authority must fail loudly
+// instead of returning the same fresh-target envelope as selector-free status.
+// Before the fix, every one of these commands produced the same byte-identical
+// output and exited 0, so the refusal continuation "see where this review
+// actually is with `review status --lineage <id>`" could never be answered.
+func TestNegotiatedStatusRejectsNonexistentLineageSelector(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate behavior\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+
+	tests := []struct {
+		name    string
+		lineage string
+		wantErr bool
+	}{
+		{name: "existing lineage succeeds", lineage: started.LineageID},
+		{name: "well-formed nonexistent lineage refused", lineage: "review-ffffffffffffffff", wantErr: true},
+		{name: "kebab-shaped junk refused", lineage: "not-even-a-lineage-shape", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", test.lineage}, &output)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("status --lineage %q accepted: %s", test.lineage, output.String())
+				}
+				failure := decodeReviewIntegrationFailure(t, output.Bytes())
+				if failure.Code != "lineage_not_found" {
+					t.Fatalf("status --lineage %q code = %q; want lineage_not_found", test.lineage, failure.Code)
+				}
+				if !strings.Contains(failure.Cause, `review lineage "`+test.lineage+`" does not exist`) {
+					t.Fatalf("status --lineage %q cause = %q; want does-not-exist reason", test.lineage, failure.Cause)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("status --lineage %q error: %v", test.lineage, err)
+			}
+			var status ReviewTargetStatusResult
+			decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&status); err != nil {
+				t.Fatalf("decode status: %v", err)
+			}
+			if err := status.Validate(); err != nil {
+				t.Fatalf("status invalid: %v", err)
+			}
+		})
 	}
 }
 

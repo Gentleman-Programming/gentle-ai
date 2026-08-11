@@ -39,6 +39,45 @@ func loadTargetStatusAuthorityView(ctx context.Context, repo string, request Tar
 	return targetStatusAuthorityView{compact: compact, legacy: legacy}, nil
 }
 
+// targetStatusLineageExists reports whether an explicit lineage selector names
+// authority present in this repository, without classifying or governing the
+// live target. Existence is the only question it answers: a lineage that
+// exists but does not govern the live target remains a legitimate recovery or
+// scope-changed outcome and is never refused here.
+func targetStatusLineageExists(ctx context.Context, repo, lineageID string) (bool, error) {
+	compactStores, err := DiscoverCompactStores(ctx, repo)
+	if err != nil {
+		return false, err
+	}
+	for _, store := range compactStores {
+		if store.lineageID == lineageID {
+			return true, nil
+		}
+	}
+	legacyStores, err := DiscoverAuthoritativeStores(ctx, repo)
+	if err != nil {
+		return false, err
+	}
+	for _, store := range legacyStores {
+		if store.lineageID == lineageID {
+			return true, nil
+		}
+	}
+	// v3 (new-lineage) authority is a real store in the same common-dir root
+	// even though the status classification layer does not yet surface it as a
+	// candidate. Existence is a different question from classification: a v3
+	// record means the lineage is NOT the phantom #1997 describes, so it must
+	// pass the veto and keep its frozen downstream classification.
+	_, found, discoverErr := DiscoverNewLineage(ctx, repo, lineageID)
+	if discoverErr != nil {
+		return false, discoverErr
+	}
+	if found {
+		return true, nil
+	}
+	return false, nil
+}
+
 func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID string) (map[string]targetStatusCandidate, error) {
 	stores, err := DiscoverCompactStores(ctx, repo)
 	if err != nil {

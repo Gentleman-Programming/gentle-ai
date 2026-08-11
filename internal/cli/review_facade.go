@@ -33,10 +33,11 @@ const reviewContractRequiredForActionEligibilityReason = "--action-eligibility a
 
 // reviewStatusTargetSelectorsRequireContractReason is the sibling of
 // reviewContractRequiredForActionEligibilityReason above: it names the same
-// exact contract value for the other set of --contract-gated review status
-// flags (target selectors such as --lineage, --base-ref, --base-tree,
+// exact accepted contract values for the other set of --contract-gated review
+// status flags (target selectors such as --lineage, --base-ref, --base-tree,
 // --workspace-overlay, --projection, --gate, and the recovery selectors).
-const reviewStatusTargetSelectorsRequireContractReason = "review status target selectors require --contract " + ReviewIntegrationContractV1
+const reviewStatusTargetSelectorsRequireContractReason = "review status target selectors require --contract " +
+	ReviewIntegrationContractV1 + " or " + ReviewIntegrationContractV2
 
 // reviewStartTargetRequiresContractReason is the sibling of
 // reviewContractRequiredForActionEligibilityReason above, naming the same
@@ -759,7 +760,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	runtimeAgent := flags.String("agent", "", "generated active runtime identity for negotiated lifecycle routing")
 	actionEligibility := flags.Bool("action-eligibility", false, "include optional machine-readable review action eligibility in negotiated output")
 	nextTransition := flags.Bool("next-transition", false, "include the optional canonical native next transition in negotiated output")
-	lineage := flags.String("lineage", "", "optional explicit lineage selector for negotiated target status")
+	lineage := flags.String("lineage", "", "optional explicit lineage selector for negotiated target status; target selectors require --contract")
 	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "negotiated target projection: workspace or staged")
 	baseRef := flags.String("base-ref", "", "optional negotiated immutable base-to-HEAD target")
 	baseTree := flags.String("base-tree", "", "optional negotiated resolved immutable overlay base tree")
@@ -887,6 +888,13 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		native, liveSnapshot, err := reviewtransaction.AssessTargetStatusWithSnapshot(ctx, root, reviewtransaction.TargetStatusRequest{
 			Target: target, LineageID: *lineage, PrePR: prePR,
+			// Issue #1997: a pure status query with an explicit --lineage
+			// selector must fail when that lineage does not exist, instead of
+			// returning the same fresh-target envelope as selector-free status
+			// and exiting 0. A negotiated --next-transition legitimately names
+			// a proposed lineage that has not been created yet (the start
+			// consent flow), so only the pure query demands existence.
+			RequireLineageExists: strings.TrimSpace(*lineage) != "" && !*nextTransition,
 		})
 		if err != nil {
 			return fmt.Errorf("assess negotiated review target: %w", err)

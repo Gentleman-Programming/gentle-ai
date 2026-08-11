@@ -52,6 +52,15 @@ type TargetStatusRequest struct {
 	Target    Target
 	LineageID string
 	PrePR     *PrePRRequest
+
+	// RequireLineageExists makes an explicit lineage selector a hard refusal
+	// when it names no stored authority. It is opt-in because --lineage is
+	// legitimately used in two ways: a pure status query ("where is THIS
+	// review?") must fail when the lineage does not exist (issue #1997), while
+	// a negotiated next-transition may name a proposed lineage that has not
+	// been created yet and must keep routing to the start consent flow. Only
+	// the pure-query CLI surface sets this; the core stays conservative.
+	RequireLineageExists bool
 }
 
 type TargetProjectionStatus struct {
@@ -129,6 +138,22 @@ type targetStatusCandidate struct {
 	finalVerificationRetry *FinalVerificationRetryEligibility
 }
 
+// ReviewLineageNotFoundError identifies an explicit lineage selector that names
+// no stored review authority in the repository. It is deliberately narrower
+// than "the lineage does not govern the live target": a lineage that exists but
+// does not govern remains a legitimate recovery or scope-changed outcome, and
+// only this typed absence is a hard refusal.
+type ReviewLineageNotFoundError struct {
+	LineageID string
+}
+
+// Error implements error with a message that names the exact missing lineage
+// so a caller or operator can reproduce the same explicit selector instead of
+// guessing which identifier failed to resolve.
+func (e *ReviewLineageNotFoundError) Error() string {
+	return fmt.Sprintf("review lineage %q does not exist in this repository's review authority", e.LineageID)
+}
+
 // AssessTargetStatus classifies the selected live Git projection against
 // validated authority. It only reads Git objects and authority bytes.
 func AssessTargetStatus(ctx context.Context, repo string, request TargetStatusRequest) (TargetStatusResult, error) {
@@ -144,6 +169,21 @@ func AssessTargetStatusWithSnapshot(ctx context.Context, repo string, request Ta
 		request.LineageID = strings.TrimSpace(request.LineageID)
 		if err := validateLineageID(request.LineageID); err != nil {
 			return TargetStatusResult{}, Snapshot{}, err
+		}
+		if request.RequireLineageExists {
+			// The opt-in veto (see RequireLineageExists) makes a pure query's
+			// explicit selector a hard refusal when it names no stored
+			// authority, instead of falling through the empty candidate set
+			// into the same fresh-target envelope as selector-free discovery
+			// and exiting 0 (issue #1997: review status --lineage silently
+			// ignored).
+			exists, existsErr := targetStatusLineageExists(ctx, repo, request.LineageID)
+			if existsErr != nil {
+				return TargetStatusResult{}, Snapshot{}, existsErr
+			}
+			if !exists {
+				return TargetStatusResult{}, Snapshot{}, &ReviewLineageNotFoundError{LineageID: request.LineageID}
+			}
 		}
 	}
 	live, err := (SnapshotBuilder{Repo: repo}).BuildStoredSnapshot(ctx, request.Target)
