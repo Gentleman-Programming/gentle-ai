@@ -1844,6 +1844,14 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 				paths[path] = struct{}{}
 			}
 		}
+		if component == model.ComponentContext7 && scope == ScopeWorkspace {
+			for _, adapter := range adapters {
+				targetDir := componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentContext7)
+				if path := mcp.ClaudeWorkspaceInertSettingsPath(targetDir, adapter); path != "" {
+					paths[path] = struct{}{}
+				}
+			}
+		}
 	}
 	// Routing guidance is delivered per agent outside the component loop, so a
 	// selection whose components do not happen to cover the same file would be

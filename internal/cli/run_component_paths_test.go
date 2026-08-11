@@ -387,9 +387,34 @@ func TestComponentPathsContext7ClaudeRespectsWorkspaceScope(t *testing.T) {
 
 	paths := componentPathsWithWorkspaceScoped(home, workspace, ScopeWorkspace, model.Selection{}, adapters, model.ComponentContext7)
 
-	want := filepath.Join(workspace, ".claude", "settings.json")
+	want := filepath.Join(workspace, ".mcp.json")
 	if !containsPath(paths, want) {
 		t.Fatalf("componentPathsWithWorkspaceScoped(context7,claude) with ScopeWorkspace missing %q\npaths=%v", want, paths)
+	}
+	unwanted := filepath.Join(workspace, ".claude", "settings.json")
+	if containsPath(paths, unwanted) {
+		t.Fatalf("componentPathsWithWorkspaceScoped(context7,claude) must not require backup-only cleanup path %q\npaths=%v", unwanted, paths)
+	}
+}
+
+func TestBackupTargetsContext7ClaudeWorkspaceIncludesInertSettingsCleanup(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Components: []model.ComponentID{model.ComponentContext7}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+
+	targets, err := backupTargets(home, workspace, ScopeWorkspace, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
+
+	for _, want := range []string{
+		filepath.Join(workspace, ".mcp.json"),
+		filepath.Join(workspace, ".claude", "settings.json"),
+	} {
+		if !containsPath(targets, want) {
+			t.Fatalf("backupTargets(context7,claude,workspace) missing %q\ntargets=%v", want, targets)
+		}
 	}
 }
 

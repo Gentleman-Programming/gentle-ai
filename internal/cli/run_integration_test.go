@@ -2556,15 +2556,21 @@ func TestRunInstallWorkspaceScopeVerification(t *testing.T) {
 // TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace verifies that executing
 // a real workspace operation with --scope workspace and Context7 component:
 // 1. Returns a successful result with verification ready.
-// 2. Persists Context7 MCP configuration directly into the workspace-managed settings file.
+// 2. Persists Context7 MCP configuration directly into workspace .mcp.json.
 // 3. Leaves the user's home directory settings untouched.
 func TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace(t *testing.T) {
 	home := t.TempDir()
+	resolvedHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatalf("resolve temp home: %v", err)
+	}
+	home = resolvedHome
 	workspace := t.TempDir()
 
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	restoreBackupHome := backup.UserHomeDirFn
 	originalCwd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("failed to get current working directory: %v", err)
@@ -2574,12 +2580,14 @@ func TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace(t *testing.T) {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		backup.UserHomeDirFn = restoreBackupHome
 		if err := os.Chdir(originalCwd); err != nil {
 			t.Errorf("failed to restore working directory: %v", err)
 		}
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) {
 		return "/usr/local/bin/" + name, nil
@@ -2630,15 +2638,21 @@ func TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace(t *testing.T) {
 }
 
 // TestRunInstall_Context7WorkspaceScope_FailurePath verifies that executing
-// Context7 workspace installation when workspace target is unwriteable fails gracefully,
-// returning an error and reporting verification failure.
+// Context7 workspace installation when the workspace .mcp.json target is invalid
+// fails gracefully.
 func TestRunInstall_Context7WorkspaceScope_FailurePath(t *testing.T) {
 	home := t.TempDir()
+	resolvedHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatalf("resolve temp home: %v", err)
+	}
+	home = resolvedHome
 	workspace := t.TempDir()
 
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	restoreBackupHome := backup.UserHomeDirFn
 	originalCwd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("failed to get current working directory: %v", err)
@@ -2648,12 +2662,14 @@ func TestRunInstall_Context7WorkspaceScope_FailurePath(t *testing.T) {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		backup.UserHomeDirFn = restoreBackupHome
 		if err := os.Chdir(originalCwd); err != nil {
 			t.Errorf("failed to restore working directory: %v", err)
 		}
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) {
 		return "/usr/local/bin/" + name, nil
@@ -2663,10 +2679,10 @@ func TestRunInstall_Context7WorkspaceScope_FailurePath(t *testing.T) {
 		t.Fatalf("failed to change working directory to temp workspace: %v", err)
 	}
 
-	// Create .claude as a read-only file (not directory) so writing settings.json fails.
-	claudePath := filepath.Join(workspace, ".claude")
-	if err := os.WriteFile(claudePath, []byte("blocking directory creation"), 0o444); err != nil {
-		t.Fatalf("failed to block workspace .claude path: %v", err)
+	// Create .mcp.json as a directory so writing the workspace MCP config fails.
+	mcpPath := filepath.Join(workspace, ".mcp.json")
+	if err := os.Mkdir(mcpPath, 0o755); err != nil {
+		t.Fatalf("failed to block workspace .mcp.json path: %v", err)
 	}
 
 	args := []string{
@@ -2678,6 +2694,6 @@ func TestRunInstall_Context7WorkspaceScope_FailurePath(t *testing.T) {
 
 	_, err = RunInstall(args, system.DetectionResult{})
 	if err == nil {
-		t.Fatalf("RunInstall() with unwriteable workspace target expected error, got nil")
+		t.Fatalf("RunInstall() with invalid workspace .mcp.json target expected error, got nil")
 	}
 }

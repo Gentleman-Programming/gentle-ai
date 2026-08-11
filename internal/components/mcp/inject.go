@@ -300,13 +300,22 @@ func injectClaudeWorkspaceConfig(targetDir string, adapter agents.Adapter) (Inje
 	// Best-effort cleanup of the inert mcpServers block previously written to
 	// settings.json. A settings file that cannot be rewritten must not fail the
 	// .mcp.json injection that already succeeded above.
-	settingsPath := adapter.SettingsPath(targetDir)
+	settingsPath := ClaudeWorkspaceInertSettingsPath(targetDir, adapter)
 	if settingsChanged, cleanupErr := removeInertSettingsMCPServers(settingsPath); cleanupErr == nil && settingsChanged {
 		changed = true
 		files = append(files, settingsPath)
 	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+// ClaudeWorkspaceInertSettingsPath is the backup-only cleanup target for the
+// legacy workspace settings location that earlier Context7 injection wrote.
+func ClaudeWorkspaceInertSettingsPath(targetDir string, adapter agents.Adapter) string {
+	if adapter.Agent() != model.AgentClaudeCode || adapter.MCPStrategy() != model.StrategySeparateMCPFiles {
+		return ""
+	}
+	return adapter.SettingsPath(targetDir)
 }
 
 // removeInertSettingsMCPServers deletes the inert top-level mcpServers key
