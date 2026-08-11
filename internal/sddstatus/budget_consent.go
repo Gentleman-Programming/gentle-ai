@@ -1,6 +1,8 @@
 package sddstatus
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -63,7 +65,20 @@ type BudgetConsentResult struct {
 const (
 	sddBudgetConsentGranted  = "granted"
 	sddBudgetConsentDeclined = "declined"
+	sddBudgetConsentActor    = "gentle-ai-runtime"
 )
+
+// sddBudgetConsentResetRequestID binds the emitted reset to the exact ledger
+// head it can mutate. Re-rendering that status keeps replay idempotent; a moved
+// head necessarily gets a distinct command and leaves an old grant to CAS-fail.
+func sddBudgetConsentResetRequestID(change, expectedRevision string) string {
+	hash := sha256.New()
+	for _, part := range []string{"gentle-ai.sdd-budget-consent-reset-request/v1", "objective/reset", change, expectedRevision} {
+		hash.Write([]byte(part))
+		hash.Write([]byte{0})
+	}
+	return "reset-" + hex.EncodeToString(hash.Sum(nil))[:16]
+}
 
 // BudgetConsentEnvelope builds the question. It refuses to produce an
 // incomplete one: a question whose grant is not runnable verbatim is the exact
@@ -114,8 +129,8 @@ func BudgetConsentEnvelope(in BudgetConsentInput) (BudgetConsentResult, error) {
 				Label:  "Open a fresh budget and keep going",
 				Effect: "Resets this objective to a fresh bounded budget. Every attempt already recorded stays in the immutable chain, nothing is erased, and no verification, review or receipt is fabricated.",
 				Invocation: fmt.Sprintf(
-					"gentle-ai sdd-attempt reset --cwd %s --change %s --expected-revision %q --request-id \"<unique-request-id>\" --reason %q --actor \"<actor>\"",
-					pathquote.Quote(in.Repo), in.Change, in.Revision, sddBudgetConsentReason(in)),
+					"gentle-ai sdd-attempt reset --cwd %s --change %s --expected-revision %q --request-id %s --reason %q --actor %s",
+					pathquote.Quote(in.Repo), in.Change, in.Revision, sddBudgetConsentResetRequestID(in.Change, in.Revision), sddBudgetConsentReason(in), sddBudgetConsentActor),
 			},
 			{
 				Answer: sddBudgetConsentDeclined,

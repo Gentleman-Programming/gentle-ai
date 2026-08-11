@@ -67,10 +67,11 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// SDD status surfaces and preserves the same routing state.
 	//
 	// j96 proves #2891 blocks an off-path sibling in a nested same-repository workspace.
+	// j64 now also proves #3045's exhausted budget grant executes exactly as native status emitted it.
 	// Bump this deliberately when a journey is added OR removed, and name it
 	// here: the count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 94 {
-		t.Errorf("core journey count = %d, want 94", got)
+	if got := len(seen); got != 95 {
+		t.Errorf("core journey count = %d, want 95", got)
 	}
 	for id, found := range want {
 		if !found {

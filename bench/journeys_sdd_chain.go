@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -24,6 +25,15 @@ var sddChainVerifyObjective = []string{
 }
 
 const sddChainInterruptedEvidence = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+type sddBudgetConsentStatus struct {
+	Consent *struct {
+		Choices []struct {
+			Answer     string `json:"answer"`
+			Invocation string `json:"invocation"`
+		} `json:"choices"`
+	} `json:"consent"`
+}
 
 // sddChainFailedVerificationExhaustsBudget settles the admitted verification
 // failure and proves the runtime demands a maintainer decision.
@@ -54,23 +64,71 @@ func sddChainFailedVerificationExhaustsBudget(r *journeyRun) error {
 	return nil
 }
 
-// sddChainAuditedReset records the maintainer decision between the failed
-// settle and the correction acquire. The reset wipes the live evidence
-// pointer; only the immutable attempt chain remembers the failed evidence.
+// sddChainBudgetConsent remembers the provider-owned reset command rather than
+// assembling one in the benchmark. The next step must execute these exact bytes.
+func sddChainBudgetConsent(sandbox *Sandbox, observation Observation) error {
+	var status sddBudgetConsentStatus
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &status); err != nil {
+		return fmt.Errorf("parse exhausted budget consent: %w", err)
+	}
+	if status.Consent == nil {
+		return errors.New("exhausted budget status omitted its blocking consent")
+	}
+	for _, choice := range status.Consent.Choices {
+		if choice.Answer != "granted" {
+			continue
+		}
+		if strings.Contains(choice.Invocation, "<unique-request-id>") || strings.Contains(choice.Invocation, "<actor>") ||
+			!strings.Contains(choice.Invocation, "--actor gentle-ai-runtime") {
+			return fmt.Errorf("budget grant is not fully provider-owned: %q", choice.Invocation)
+		}
+		sandbox.Scratch["sdd-chain-budget-grant"] = choice.Invocation
+		return nil
+	}
+	return errors.New("exhausted budget consent omitted its granted invocation")
+}
+
+func sddChainBudgetConsentArgs(sandbox *Sandbox) ([]string, error) {
+	return printedCommandArguments(sandbox.Scratch["sdd-chain-budget-grant"])
+}
+
+// sddChainAuditedReset executes the exact status-emitted consent grant. The
+// reset wipes the live evidence pointer; only the immutable attempt chain
+// remembers the failed evidence.
 func sddChainAuditedReset(r *journeyRun) error {
-	status, err := readRuntimeStatus(r)
+	args, err := sddChainBudgetConsentArgs(r.sandbox)
 	if err != nil {
 		return err
 	}
-	r.run(sddAttemptArgs(r, "reset", status.Revision, "bench-chain-reset",
-		"--reason", "maintainer decision: remediate the admitted failure under a fresh objective",
-		"--actor", "bench"), false)
+	observation := r.run(args, false)
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("emitted budget grant exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
+	}
 	proved, err := proveRuntime(r.sandbox)
 	if err != nil {
 		return err
 	}
 	if proved.NextAction != "begin" || proved.EvidenceRevision != "" {
 		return fmt.Errorf("audited reset did not clear the live evidence pointer: %#v", proved)
+	}
+	return nil
+}
+
+func sddChainBudgetConsentReplay(r *journeyRun) error {
+	args, err := sddChainBudgetConsentArgs(r.sandbox)
+	if err != nil {
+		return err
+	}
+	observation := r.run(args, false)
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("emitted budget grant replay exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
+	}
+	status, err := proveRuntime(r.sandbox)
+	if err != nil {
+		return err
+	}
+	if status.NextAction != "begin" || status.EvidenceRevision != "" {
+		return fmt.Errorf("emitted budget grant replay changed reset state: %#v", status)
 	}
 	return nil
 }
@@ -156,7 +214,11 @@ func sddChainJourneys() []Journey {
 				{Name: "fixture: completed change with admitted failed verification", Fixture: sddPlanningArtifacts(sddFailedVerifyReport)},
 				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
 				{Name: "failed verification exhausts its objective budget", Requires: sddAttemptBeginCapability, Composite: sddChainFailedVerificationExhaustsBudget},
-				{Name: "audited reset records the maintainer decision", Requires: sddAttemptResetCapability, Composite: sddChainAuditedReset},
+				{Name: "exhausted status emits the fully executable budget grant", Requires: sddAttemptStatusCapability, Args: func(sandbox *Sandbox) ([]string, error) {
+					return append([]string{"sdd-attempt", "status", "--cwd", sandbox.Repo, "--change", sddChange}, sddChainVerifyObjective...), nil
+				}, After: sddChainBudgetConsent},
+				{Name: "the emitted budget grant records the maintainer decision", Requires: sddAttemptResetCapability, Composite: sddChainAuditedReset},
+				{Name: "the exact emitted budget grant replays without mutation", Requires: sddAttemptResetCapability, Composite: sddChainBudgetConsentReplay},
 				{Name: "acquire the one bounded correction after the reset", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedAcquireCorrection},
 				{Name: "fixture: correction changes the candidate", Fixture: sddBoundedCorrection},
 				{Name: "settle the evidence-bound correction across the reset", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedCorrectionCompletes},
@@ -180,7 +242,10 @@ func sddChainJourneys() []Journey {
 				{Name: "fixture: completed change with admitted failed verification", Fixture: sddPlanningArtifacts(sddFailedVerifyReport)},
 				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
 				{Name: "failed verification exhausts its objective budget", Requires: sddAttemptBeginCapability, Composite: sddChainFailedVerificationExhaustsBudget},
-				{Name: "audited reset records the maintainer decision", Requires: sddAttemptResetCapability, Composite: sddChainAuditedReset},
+				{Name: "exhausted status emits the fully executable budget grant", Requires: sddAttemptStatusCapability, Args: func(sandbox *Sandbox) ([]string, error) {
+					return append([]string{"sdd-attempt", "status", "--cwd", sandbox.Repo, "--change", sddChange}, sddChainVerifyObjective...), nil
+				}, After: sddChainBudgetConsent},
+				{Name: "the emitted budget grant records the maintainer decision", Requires: sddAttemptResetCapability, Composite: sddChainAuditedReset},
 				{Name: "later interruption records distinct live evidence", Requires: sddAttemptRemediationCapability, Composite: sddChainInterruptedAttempt},
 				{Name: "acquire the correction bound to the original failed evidence", Requires: sddAttemptRemediationCapability, Composite: sddUnmanagedAcquireCorrection},
 				{Name: "fixture: correction changes the candidate", Fixture: sddBoundedCorrection},

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -55,11 +57,113 @@ func TestExhaustedBudgetAsksInsteadOfDeadEnding(t *testing.T) {
 	if envelope.Choices[1].Invocation == "" {
 		t.Fatal("declining must also be a runnable answer, not an absence")
 	}
+	for _, placeholder := range []string{"<unique-request-id>", "<actor>"} {
+		if strings.Contains(grant, placeholder) {
+			t.Fatalf("the grant invocation leaves provider-owned %s as a placeholder:\n%s", placeholder, grant)
+		}
+	}
+	if !strings.Contains(grant, "--actor gentle-ai-runtime") {
+		t.Fatalf("grant audit actor = %q, want gentle-ai-runtime", grant)
+	}
 	// The accounting the human is deciding about has to be in front of them.
 	joined := strings.Join(envelope.Evidence, "\n")
 	if !strings.Contains(joined, "2") {
 		t.Fatalf("the evidence does not show the attempt accounting being decided:\n%s", joined)
 	}
+}
+
+func TestExhaustedBudgetConsentInvocationsExecuteAndPreserveAuthority(t *testing.T) {
+	t.Run("decline is read only", func(t *testing.T) {
+		repo, change, status := exhaustedBudgetConsentFixture(t, "budget-consent-decline")
+		before := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+		decline := status.Consent.Choices[1].Invocation
+		got := runBudgetConsentInvocation(t, decline)
+		if !reflect.DeepEqual(got, before) {
+			t.Fatalf("decline mutated the ledger:\nbefore: %#v\nafter:  %#v", before, got)
+		}
+	})
+
+	t.Run("exact grant and exact replay are idempotent", func(t *testing.T) {
+		_, _, status := exhaustedBudgetConsentFixture(t, "budget-consent-replay")
+		grant := status.Consent.Choices[0].Invocation
+		first := runBudgetConsentInvocation(t, grant)
+		if first.NextAction != sddstatus.RuntimeActionBegin || first.LastReset == nil ||
+			first.LastReset.Actor != "gentle-ai-runtime" ||
+			first.LastReset.Reason != "maintainer authorized a fresh budget after attempts that never ran the work" {
+			t.Fatalf("exact grant result = %#v", first)
+		}
+		if replay := runBudgetConsentInvocation(t, grant); !reflect.DeepEqual(replay, first) {
+			t.Fatalf("exact grant replay was not idempotent:\nfirst:  %#v\nreplay: %#v", first, replay)
+		}
+	})
+
+	t.Run("stale grant fails without mutation", func(t *testing.T) {
+		repo, change, status := exhaustedBudgetConsentFixture(t, "budget-consent-stale")
+		grant := status.Consent.Choices[0].Invocation
+		interloper := runSDDAttemptStatus(t, []string{
+			"reset", "--cwd", repo, "--change", change, "--expected-revision", status.Revision,
+			"--request-id", "budget-consent-interloper", "--reason", "another maintainer reset the budget", "--actor", "maintainer",
+		})
+		args := splitNamedCommand(t, grant)
+		var output bytes.Buffer
+		if err := RunSDDAttempt(args[2:], &output); err == nil {
+			t.Fatalf("stale granted command unexpectedly succeeded:\n%s", output.String())
+		}
+		after := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+		if !reflect.DeepEqual(after, interloper) {
+			t.Fatalf("stale grant mutated the ledger:\nbefore: %#v\nafter:  %#v", interloper, after)
+		}
+	})
+}
+
+func exhaustedBudgetConsentFixture(t *testing.T, change string) (string, string, sddstatus.RuntimeStatus) {
+	t.Helper()
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	disableReviewForClone(t, repo)
+
+	writeCLIAttemptFile(t, cliAttemptChangePath(repo, change, "proposal.md"), "# Proposal\n")
+	writeCLIAttemptFile(t, cliAttemptChangePath(repo, change, "tasks.md"), "- [x] 1.1 Work\n")
+	runReviewCLIGit(t, repo, "add", ".")
+	runReviewCLIGit(t, repo, "commit", "-qm", "seed change")
+	writeCLIAttemptFile(t, cliAttemptChangePath(repo, change, "tasks.md"), "- [x] 1.1 Work\n# harness\n")
+
+	acquired, _ := runCompactSDDAttempt(t, []string{
+		"acquire", "--cwd", repo, "--change", change, "--request-id", "budget-consent-acquire",
+		"--work-unit", "acceptance", "--evidence-goal", "postgres acceptance", "--max-attempts", "1", "--max-changed-lines", "400",
+	})
+	if acquired.State != "proceed" {
+		t.Fatalf("acquire = %#v", acquired)
+	}
+	runCompactSDDAttempt(t, []string{
+		"settle", "--cwd", repo, "--change", change, "--token", acquired.Token, "--request-id", "budget-consent-settle",
+		"--outcome", "failed", "--evidence-revision", cliAttemptHash('a'),
+		"--diagnosis", "the harness could not be constructed; no consumer command ran", "--harness-disposition", "invalidated",
+		"--cleanup-evidence", "container removed", "--process-evidence", "no descendants",
+	})
+	status := runSDDAttemptStatus(t, []string{
+		"status", "--cwd", repo, "--change", change,
+		"--work-unit", "acceptance", "--evidence-goal", "postgres acceptance", "--max-attempts", "1", "--max-changed-lines", "400",
+	})
+	if status.Consent == nil {
+		t.Fatal("exhausted budget did not emit a consent envelope")
+	}
+	return repo, change, status
+}
+
+func runBudgetConsentInvocation(t *testing.T, invocation string) sddstatus.RuntimeStatus {
+	t.Helper()
+	args := splitNamedCommand(t, invocation)
+	if len(args) < 3 || args[0] != "gentle-ai" || args[1] != "sdd-attempt" {
+		t.Fatalf("consent invocation is not an sdd-attempt command: %q", invocation)
+	}
+	var output bytes.Buffer
+	if err := RunSDDAttempt(args[2:], &output); err != nil {
+		t.Fatalf("exact consent invocation failed: %v\n%s", err, output.String())
+	}
+	var status sddstatus.RuntimeStatus
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	return status
 }
 
 // TestHarnessFailureIsTypedSoTheQuestionCanBeAnswered is the half that makes
