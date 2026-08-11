@@ -170,7 +170,7 @@ func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAg
 	if identity == "" {
 		identity = reviewUndeclaredRuntimeIdentitySlot
 	}
-	command := fmt.Sprintf("gentle-ai review start --contract %s --agent %s --target %s --projection %s",
+	command := fmt.Sprintf("gentle-ai review start --contract %s --agent %s --target %s --projection %s --consent relay",
 		ReviewIntegrationContractV2, identity, snapshot.Identity, facadeProjection(snapshot.Projection))
 	switch snapshot.Kind {
 	case reviewtransaction.TargetBaseDiff:
