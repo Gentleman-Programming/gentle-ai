@@ -232,6 +232,49 @@ func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
 	}
 }
 
+func TestCompactSettleUsesProviderOwnedSuccessfulRemediationRevision(t *testing.T) {
+	fixture := newRuntimeRemediationFixture(t, true)
+	evaluation := parseRemediationResult(remediationResultEvidence(fixture.failedEvidence), fixture.failedEvidence)
+	if !evaluation.Complete || evaluation.SuccessfulEvidenceRevision == "" {
+		t.Fatalf("remediation evaluation = %#v, want provider-owned success revision", evaluation)
+	}
+	request := fixture.finishRequest("compact-provider-owned-revision")
+	request.EvidenceRevision = evaluation.SuccessfulEvidenceRevision
+	result, err := fixture.store.Settle(context.Background(), CompactSettleRequest{
+		Token: request.ExpectedRevision, RequestID: request.RequestID, Outcome: request.Outcome,
+		EvidenceRevision: request.EvidenceRevision, Diagnosis: request.Diagnosis,
+		HarnessDisposition: request.HarnessDisposition, CleanupEvidence: request.CleanupEvidence,
+		ProcessEvidence: request.ProcessEvidence, SuccessorLineageID: request.SuccessorLineageID,
+		RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
+	})
+	if err != nil || result.State != CompactStateComplete {
+		t.Fatalf("provider-owned remediation settle = %#v err=%v", result, err)
+	}
+}
+
+func TestCompactSettleMissingSuccessfulRevisionPreservesActiveToken(t *testing.T) {
+	fixture := newRuntimeRemediationFixture(t, true)
+	request := fixture.finishRequest("compact-missing-success-revision")
+	request.EvidenceRevision = ""
+	_, err := fixture.store.Settle(context.Background(), CompactSettleRequest{
+		Token: request.ExpectedRevision, RequestID: request.RequestID, Outcome: request.Outcome,
+		EvidenceRevision: request.EvidenceRevision, Diagnosis: request.Diagnosis,
+		HarnessDisposition: request.HarnessDisposition, CleanupEvidence: request.CleanupEvidence,
+		ProcessEvidence: request.ProcessEvidence, SuccessorLineageID: request.SuccessorLineageID,
+		RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
+	})
+	if err == nil || !strings.Contains(err.Error(), "evidence_revision") {
+		t.Fatalf("missing successful revision error = %v, want actionable evidence_revision refusal", err)
+	}
+	status, statusErr := fixture.store.Status()
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if status.ActiveAttempt == nil || status.ActiveAttempt.Ordinal != fixture.active.ActiveAttempt.Ordinal {
+		t.Fatalf("missing successful revision changed active token state: %#v", status)
+	}
+}
+
 func TestCompactSettleReviewDisabledClosesOrdinaryWithoutAdvancingBinding(t *testing.T) {
 	fixture := newRuntimeRemediationFixture(t, true)
 	legacy := fixture.finishRequest("compact-review-disabled-settle")

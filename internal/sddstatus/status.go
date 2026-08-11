@@ -154,12 +154,13 @@ type PhaseInstructions struct {
 // "correctionBudget" on the wire, so a consumer reading both surfaces cannot
 // mistake a remaining-budget value for a frozen-total value or vice versa.
 type RemediationState struct {
-	Required               bool   `json:"required"`
-	Complete               bool   `json:"complete"`
-	FailedEvidenceRevision string `json:"failedEvidenceRevision"`
-	LineageID              string `json:"lineageId"`
-	Generation             int    `json:"generation"`
-	FixBatch               int    `json:"fixBatch"`
+	Required                   bool   `json:"required"`
+	Complete                   bool   `json:"complete"`
+	FailedEvidenceRevision     string `json:"failedEvidenceRevision"`
+	SuccessfulEvidenceRevision string `json:"successfulEvidenceRevision,omitempty"`
+	LineageID                  string `json:"lineageId"`
+	Generation                 int    `json:"generation"`
+	FixBatch                   int    `json:"fixBatch"`
 	// CorrectionBudgetRemaining is CorrectionBudgetTotal minus the compact
 	// review authority's CumulativeCorrectionLines already charged against
 	// it: the correction-line budget still available for this remediation
@@ -1979,6 +1980,9 @@ func nativeRuntimeInstructions(status Status, change string) []string {
 		"Launch only for state proceed and retain its opaque token. State blocked or complete stops the launch; full runtime status is a diagnostic escape hatch, not normal model context.",
 		fmt.Sprintf("After the external run, call `gentle-ai sdd-attempt settle --cwd %s --change %q --token \"<acquire-token>\" --request-id \"<unique-request-id>\" --outcome <passed|failed|interrupted> --evidence-revision <sha256> --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`; add --successor-lineage only for a distinct approved remediation successor.", pathquote.Quote(workspace), change),
 		"Treat settle state proceed as permission for another bounded acquire, blocked as a hard stop, and complete as terminal. Reset is exceptional, requires an explicit maintainer scope decision, and is never automatic.",
+	}
+	if status.RemediationState.SuccessfulEvidenceRevision != "" {
+		instructions = append(instructions, fmt.Sprintf("The native admission accepted the remediation evidence and derived revision %s; transport this exact revision unchanged as `--evidence-revision %s` when settling the active attempt.", status.RemediationState.SuccessfulEvidenceRevision, status.RemediationState.SuccessfulEvidenceRevision))
 	}
 	// #2564 status truthfulness: the bounded correction prescription renders
 	// only while its settlement can structurally succeed. Satisfiability

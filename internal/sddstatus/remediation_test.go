@@ -7,6 +7,27 @@ import (
 	"testing"
 )
 
+func TestAdmitRemediationEvidenceOwnsCanonicalRevision(t *testing.T) {
+	failed := "sha256:" + strings.Repeat("a", 64)
+	payload := remediationJSONPayload(failed)
+	first, err := AdmitRemediationEvidence(payload, failed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondFailed := "sha256:" + strings.Repeat("b", 64)
+	second, err := AdmitRemediationEvidence(remediationJSONPayload(secondFailed), secondFailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || first == failed || second == failed {
+		t.Fatalf("canonical revisions = %q, %q; want schema and failed revision in the identity", first, second)
+	}
+	unknown := append(append([]byte(nil), payload[:len(payload)-1]...), []byte(`,"unexpected":true}`)...)
+	if _, err := AdmitRemediationEvidence(unknown, failed); err == nil {
+		t.Fatal("unknown remediation evidence field was admitted")
+	}
+}
+
 func TestParseRemediationResultRejectsBareAndStaleEvidence(t *testing.T) {
 	failedRevision := "sha256:" + strings.Repeat("d", 64)
 	bare := remediationEnvelope(failedRevision)
@@ -18,6 +39,8 @@ func TestParseRemediationResultRejectsBareAndStaleEvidence(t *testing.T) {
 	}
 	if got := parseRemediationResult(remediationResultEvidence(failedRevision), failedRevision); !got.Complete {
 		t.Fatal("complete remediation evidence did not pass")
+	} else if got.EvidenceRevision != failedRevision || got.SuccessfulEvidenceRevision == "" || got.SuccessfulEvidenceRevision == failedRevision {
+		t.Fatalf("remediation revisions = %#v, want failed revision preserved and distinct provider-owned success revision", got)
 	}
 }
 
@@ -49,7 +72,17 @@ func remediationEnvelope(revision string) string {
 }
 
 func remediationResultEvidence(revision string) string {
-	payload := map[string]any{
+	raw, _ := json.Marshal(remediationJSONPayloadObject(revision))
+	return remediationEnvelope(revision) + "\n```json\n" + string(raw) + "\n```"
+}
+
+func remediationJSONPayload(revision string) []byte {
+	raw, _ := json.Marshal(remediationJSONPayloadObject(revision))
+	return raw
+}
+
+func remediationJSONPayloadObject(revision string) map[string]any {
+	return map[string]any{
 		"schema":                   "gentle-ai.remediation-evidence/v1",
 		"failed_evidence_revision": revision,
 		"commands":                 []map[string]any{{"command": "go test ./internal/example", "exit_code": 0, "result": "1 test passed"}},
@@ -62,8 +95,6 @@ func remediationResultEvidence(revision string) string {
 			"evidence": "Revert those files without changing unrelated status behavior.",
 		},
 	}
-	raw, _ := json.Marshal(payload)
-	return remediationEnvelope(revision) + "\n```json\n" + string(raw) + "\n```"
 }
 
 func remediationResultEvidenceWithBinding(revision string, binding RemediationBinding) string {

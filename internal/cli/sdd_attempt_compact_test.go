@@ -298,6 +298,51 @@ func TestRunSDDAttemptCompactPreservesTokenCASAndIdempotentReplay(t *testing.T) 
 	}
 }
 
+// TestRunSDDAttemptTransportsAdmittedEvidenceRevisionToSettle is the real
+// actor-to-settle regression for #2896. The actor admits the structured object
+// through the native boundary, transports only the returned identity, and
+// settles through the same CLI dispatch used by the orchestrator.
+func TestRunSDDAttemptTransportsAdmittedEvidenceRevisionToSettle(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	const change = "admitted-evidence-handoff"
+	failed := cliAttemptHash('a')
+	payload, err := json.Marshal(map[string]any{
+		"schema":                   "gentle-ai.remediation-evidence/v1",
+		"failed_evidence_revision": failed,
+		"commands":                 []map[string]any{{"command": "go test ./internal/example", "exit_code": 0, "result": "1 test passed"}},
+		"runtime_harness":          map[string]any{"status": "not_applicable", "command": "", "result": "", "na_reason": "No runtime boundary exists because this change only tightens a report parser."},
+		"rollback":                 map[string]any{"boundary": "runtime handoff", "evidence": "The active attempt remains the rollback boundary."},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := sddstatus.AdmitRemediationEvidence(payload, failed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquired, _ := runCompactSDDAttempt(t, compactAcquireArgs(repo, change, "admitted-acquire", 2))
+	settled, _ := runCompactSDDAttempt(t, []string{
+		"settle", "--cwd", repo, "--change", change, "--token", acquired.Token,
+		"--request-id", "admitted-settle", "--outcome", "passed", "--evidence-revision", admitted,
+		"--diagnosis", "admitted remediation evidence transported unchanged", "--harness-disposition", "reused",
+		"--cleanup-evidence", "process group exited", "--process-evidence", "no descendants remained",
+	})
+	if settled.State != "complete" {
+		t.Fatalf("settle = %#v, want complete", settled)
+	}
+	var output bytes.Buffer
+	if err := RunSDDAttempt([]string{"status", "--cwd", repo, "--change", change}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var status sddstatus.RuntimeStatus
+	if err := json.Unmarshal(output.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.ActiveAttempt != nil || status.EvidenceRevision != admitted || status.Attempts[len(status.Attempts)-1].EvidenceRevision != admitted {
+		t.Fatalf("settled runtime status = %#v, want admitted revision %s and no active attempt", status, admitted)
+	}
+}
+
 // TestRunSDDAttemptAcquireTokenBreaksParentActorDeadlock reproduces #2291's
 // exact CLI-level deadlock: a parent process runs `sdd-attempt acquire` and
 // gets back proceed + a token, then launches an actor as a distinct process

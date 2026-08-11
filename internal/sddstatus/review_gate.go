@@ -282,6 +282,7 @@ func resolveBoundedRemediation(required, reviewDisabled bool, verify verifyResul
 		binding := RemediationBinding{LineageID: state.LineageID, Generation: state.Generation, FixBatch: state.FixBatch}
 		evaluation := parseRemediationResult(applyProgress, verify.EvidenceRevision, binding)
 		state.Complete = evaluation.Complete
+		state.SuccessfulEvidenceRevision = evaluation.SuccessfulEvidenceRevision
 		state.Required = !evaluation.Complete
 		if evaluation.Complete {
 			state.Reason = ""
@@ -324,6 +325,7 @@ func resolveBoundedRemediation(required, reviewDisabled bool, verify verifyResul
 		state.Reason = "fix evidence exists but scoped fix-delta validation is still pending"
 	case reviewtransaction.StateReadyFinalVerification:
 		state.Complete = evaluation.Complete
+		state.SuccessfulEvidenceRevision = evaluation.SuccessfulEvidenceRevision
 		state.Required = !evaluation.Complete
 		if !evaluation.Complete {
 			state.Reason = "scoped fix validation passed but concrete remediation evidence is missing, stale, or not transaction-bound"

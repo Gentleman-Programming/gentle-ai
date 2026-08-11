@@ -1,7 +1,11 @@
 package sddstatus
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -341,8 +345,9 @@ func parseVerifyCompletion(value string) (verifyCompletion, bool) {
 }
 
 type remediationResultEvaluation struct {
-	Complete         bool
-	EvidenceRevision string
+	Complete                   bool
+	EvidenceRevision           string
+	SuccessfulEvidenceRevision string
 }
 
 type remediationEvidence struct {
@@ -417,40 +422,88 @@ func parseRemediationResult(text, expectedRevision string, bindings ...Remediati
 		return evaluation
 	}
 	evidence, ok := parseRemediationEvidence(lines[end+1:])
-	if !ok || evidence.FailedEvidenceRevision != expectedRevision || len(evidence.Commands) == 0 {
+	if !ok {
 		return evaluation
 	}
-	if len(bindings) == 1 {
-		binding := bindings[0]
-		if evidence.LineageID != binding.LineageID || evidence.Generation != binding.Generation || evidence.FixBatch != binding.FixBatch {
-			return evaluation
-		}
-	}
-	for _, command := range evidence.Commands {
-		if command.ExitCode != 0 || !isConcreteEvidence(command.Command) || !isConcreteEvidence(command.Result) {
-			return evaluation
-		}
+	successfulRevision, ok := admitRemediationEvidence(evidence, expectedRevision, bindings...)
+	if !ok {
+		return evaluation
 	}
 	if evidence.RuntimeHarness.Status != fields["runtime_harness"] {
 		return evaluation
 	}
+	evaluation.Complete = true
+	evaluation.SuccessfulEvidenceRevision = successfulRevision
+	return evaluation
+}
+
+// AdmitRemediationEvidence is the native admission boundary for the sole
+// successful-remediation evidence identity source.
+func AdmitRemediationEvidence(payload []byte, expectedRevision string, bindings ...RemediationBinding) (string, error) {
+	if !runtimeRevisionPattern.MatchString(expectedRevision) {
+		return "", errors.New("expected failed evidence revision must be sha256:<64-lowercase-hex>") // refusal:by-design world-action: the provider must supply the current failed evidence revision; no CLI can repair this provider-owned value
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var evidence remediationEvidence
+	if err := decoder.Decode(&evidence); err != nil {
+		return "", fmt.Errorf("decode remediation evidence: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return "", errors.New("remediation evidence contains trailing JSON") // refusal:by-design world-action: the remediation provider must emit exactly one JSON object; no CLI can repair its payload
+	}
+	revision, ok := admitRemediationEvidence(evidence, expectedRevision, bindings...)
+	if !ok {
+		return "", errors.New("remediation evidence is missing, stale, malformed, or not transaction-bound") // refusal:by-design world-action: the provider must regenerate evidence for the active transaction; no CLI can repair or rebind rejected bytes
+	}
+	return revision, nil
+}
+
+func admitRemediationEvidence(evidence remediationEvidence, expectedRevision string, bindings ...RemediationBinding) (string, bool) {
+	if evidence.Schema != "gentle-ai.remediation-evidence/v1" ||
+		evidence.FailedEvidenceRevision != expectedRevision || len(evidence.Commands) == 0 || len(bindings) > 1 {
+		return "", false
+	}
+	if len(bindings) == 1 {
+		binding := bindings[0]
+		if evidence.LineageID != binding.LineageID || evidence.Generation != binding.Generation || evidence.FixBatch != binding.FixBatch {
+			return "", false
+		}
+	}
+	for _, command := range evidence.Commands {
+		if command.ExitCode != 0 || !isConcreteEvidence(command.Command) || !isConcreteEvidence(command.Result) {
+			return "", false
+		}
+	}
 	switch evidence.RuntimeHarness.Status {
 	case "passed":
 		if !isConcreteEvidence(evidence.RuntimeHarness.Command) || !isConcreteEvidence(evidence.RuntimeHarness.Result) || strings.TrimSpace(evidence.RuntimeHarness.NAReason) != "" {
-			return evaluation
+			return "", false
 		}
 	case "not_applicable":
 		if evidence.RuntimeHarness.Command != "" || evidence.RuntimeHarness.Result != "" || !isConcreteNAReason(evidence.RuntimeHarness.NAReason) {
-			return evaluation
+			return "", false
 		}
 	default:
-		return evaluation
+		return "", false
 	}
 	if !isConcreteEvidence(evidence.Rollback.Boundary) || !isConcreteEvidence(evidence.Rollback.Evidence) {
-		return evaluation
+		return "", false
 	}
-	evaluation.Complete = true
-	return evaluation
+	revision := remediationEvidenceRevision(evidence)
+	if revision == evidence.FailedEvidenceRevision {
+		return "", false
+	}
+	return revision, true
+}
+
+// remediationEvidenceRevision is provider-owned: it hashes only the strictly
+// admitted native evidence object, never the actor's raw result text.
+func remediationEvidenceRevision(evidence remediationEvidence) string {
+	payload, _ := json.Marshal(evidence)
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func parseRemediationEvidence(lines []string) (remediationEvidence, bool) {
