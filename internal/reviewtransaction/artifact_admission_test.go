@@ -98,9 +98,25 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 			r.Result.Findings = []Finding{}
 			r.Result.Evidence = []string{"Inspection blocked: read access denied; no candidate contents were available."}
 		}, decision: ArtifactAdmissionIncomplete},
+		{name: "read denied", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Findings = []Finding{}
+			r.Result.Evidence = []string{"Read denied before candidate inspection."}
+		}, decision: ArtifactAdmissionIncomplete},
+		{name: "read permission denied", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Findings = []Finding{}
+			r.Result.Evidence = []string{"Read permission denied before candidate inspection."}
+		}, decision: ArtifactAdmissionIncomplete},
+		{name: "denied by filesystem", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Findings = []Finding{}
+			r.Result.Evidence = []string{"Candidate input was denied by filesystem policy."}
+		}, decision: ArtifactAdmissionIncomplete},
 		{name: "read denied by filesystem", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings = []Finding{}
 			r.Result.Evidence = []string{"The immutable diff and manifest were denied by its filesystem environment."}
+		}, decision: ArtifactAdmissionIncomplete},
+		{name: "cannot read diff", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Findings = []Finding{}
+			r.Result.Evidence = []string{"Cannot read diff before candidate inspection."}
 		}, decision: ArtifactAdmissionIncomplete},
 		{name: "file access denied", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings = []Finding{}
@@ -113,6 +129,14 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 		{name: "filesystem access denied", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings = []Finding{}
 			r.Result.Evidence = []string{"Filesystem access denied during candidate inspection."}
+		}, decision: ArtifactAdmissionIncomplete},
+		{name: "unable to read diff", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Findings = []Finding{}
+			r.Result.Evidence = []string{"Unable to read diff before candidate inspection."}
+		}, decision: ArtifactAdmissionIncomplete},
+		{name: "unable to read manifest", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Findings = []Finding{}
+			r.Result.Evidence = []string{"Unable to read manifest before candidate inspection."}
 		}, decision: ArtifactAdmissionIncomplete},
 		{name: "read capability denied", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings = []Finding{}
@@ -148,6 +172,22 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 				t.Fatalf("AdmitArtifact() decision = %q, error = %v; want %q", admission.Decision, err, tc.decision)
 			}
 		})
+	}
+}
+
+func TestAdmitArtifactClassifiesUnavailableScope(t *testing.T) {
+	_, _, request := admittedArtifactFixture(t)
+	request.Inspection.Status = ArtifactInspectionScopeUnavailable
+	request.Inspection.Paths = nil
+	_, admission, err := AdmitArtifact(t.Context(), request)
+	if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
+		t.Fatalf("scope-unavailable admission = %q, %v; want incomplete", admission.Decision, err)
+	}
+	var admissionErr *ArtifactAdmissionError
+	if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil ||
+		admissionErr.Diagnostic.Code != ArtifactAdmissionDiagnosticCandidateInputUnreadable ||
+		admissionErr.Diagnostic.Reason != "scope_unavailable" {
+		t.Fatalf("scope-unavailable diagnostic = %#v, error = %v", admissionErr, err)
 	}
 }
 

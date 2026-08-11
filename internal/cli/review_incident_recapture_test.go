@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -133,6 +134,51 @@ func TestReviewCaptureResultRecapturesSameLensAfterRejectedAdmission(t *testing.
 	// The recaptured lineage completes normally.
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact", strings.TrimSpace(captured.String())}, io.Discard); err != nil {
 		t.Fatalf("finalize after same-lineage recapture failed: %v", err)
+	}
+}
+
+func TestReviewCaptureResultTruncatedCaptureIsAtomicAndRecoverable(t *testing.T) {
+	repo, started, store, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+	valid := admittedReviewerPayloadForTest(t, repo, record, lens, 0)
+	if len(valid) < 2 || valid[len(valid)-1] != '}' {
+		t.Fatalf("test payload does not end in a JSON object: %q", valid)
+	}
+	truncated := valid[:len(valid)-1]
+	withFacadeStdin(t, truncated)
+	err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", lens, "--order", "0", "--input", "-",
+	}, io.Discard)
+	var payloadErr *ReviewerResultPayloadError
+	if err == nil || !errors.As(err, &payloadErr) || payloadErr.Code != string(reviewtransaction.ResultIncidentTruncatedCapture) {
+		t.Fatalf("truncated capture error = %v; want typed truncated_capture", err)
+	}
+	assertArtifactRevision(t, store, record.Revision)
+	if _, statErr := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir)); !os.IsNotExist(statErr) {
+		t.Fatalf("truncated capture published a reviewer result: %v", statErr)
+	}
+	incidents, err := reviewtransaction.CompactIncidentsDir(t.Context(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := filepath.Glob(filepath.Join(incidents, "*truncated_capture*.raw"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("truncated capture incident matches = %v, %v; want one", matches, err)
+	}
+	if preserved, readErr := os.ReadFile(matches[0]); readErr != nil || !bytes.Equal(preserved, truncated) {
+		t.Fatalf("truncated incident bytes = %v, %q; want original prefix", readErr, preserved)
+	}
+
+	corrected := filepath.Join(t.TempDir(), "corrected.json")
+	if err := os.WriteFile(corrected, valid, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", lens, "--order", "0", "--input", corrected,
+	}, io.Discard); err != nil {
+		t.Fatalf("same-lineage corrected capture failed: %v", err)
 	}
 }
 

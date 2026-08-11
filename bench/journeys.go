@@ -629,6 +629,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, frozenLineageResumeJourneys()...)
 	journeys = append(journeys, issue1800Journeys()...)
 	journeys = append(journeys, managedAssetJourneys()...)
+	journeys = append(journeys, unreadableCaptureJourneys()...)
 	return append(journeys, handoffJourneys()...)
 }
 

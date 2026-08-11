@@ -246,7 +246,7 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 	order := flags.Int("order", -1, "zero-based selected lens order from the capture binding")
 	revision := flags.String("expected-revision", "", "exact reviewing authority revision")
 	input := flags.String("input", "", "raw reviewer result file or - for stdin")
-	class := flags.String("class", "", "extraction-failure classification: empty_result or nested_envelope")
+	class := flags.String("class", "", "capture-failure classification: empty_result, nested_envelope, scope_unavailable, or truncated_capture")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}

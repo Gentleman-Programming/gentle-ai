@@ -28,7 +28,10 @@ const (
 
 type ArtifactInspectionStatus string
 
-const ArtifactInspectionCompleted ArtifactInspectionStatus = "completed"
+const (
+	ArtifactInspectionCompleted        ArtifactInspectionStatus = "completed"
+	ArtifactInspectionScopeUnavailable ArtifactInspectionStatus = "scope_unavailable"
+)
 
 // ArtifactInspection is the reviewer's structured assertion that every path
 // in the immutable manifest was actually inspected.
@@ -92,6 +95,11 @@ type ArtifactAdmissionDiagnostic struct {
 	MissingPathCount int    `json:"missing_path_count,omitempty"`
 	ForeignPathCount int    `json:"foreign_path_count,omitempty"`
 }
+
+const (
+	ArtifactAdmissionDiagnosticInspectionIncomplete     = "inspection_incomplete"
+	ArtifactAdmissionDiagnosticCandidateInputUnreadable = "candidate_input_unreadable"
+)
 
 func safeAdmissionLocation(code, value, reason string) string {
 	value = strings.TrimSpace(value)
@@ -325,7 +333,15 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 		wantPaths[index] = entry.Path
 	}
 	if request.Inspection.Status != ArtifactInspectionCompleted {
-		return fail(ArtifactAdmissionIncomplete, "reviewer did not report completed candidate inspection")
+		diagnostic := &ArtifactAdmissionDiagnostic{
+			Code:   ArtifactAdmissionDiagnosticInspectionIncomplete,
+			Reason: "reviewer_did_not_complete_candidate_inspection",
+		}
+		if request.Inspection.Status == ArtifactInspectionScopeUnavailable {
+			diagnostic.Code = ArtifactAdmissionDiagnosticCandidateInputUnreadable
+			diagnostic.Reason = "scope_unavailable"
+		}
+		return failFinding(ArtifactAdmissionIncomplete, "reviewer did not report completed candidate inspection", diagnostic, nil)
 	}
 	coverage, coverageErr := validateCompleteInspectionCoverage(request.Inspection.Paths, request.FrozenContext.ChangedPathManifest)
 	if coverageErr != nil {
@@ -357,7 +373,8 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 	wantCandidateCausalIDs := make([]string, 0)
 	for _, evidence := range canonical.Evidence {
 		if evidenceReportsUnavailableInspection(evidence) {
-			return fail(ArtifactAdmissionIncomplete, "reviewer evidence reports that candidate inspection was unavailable")
+			return failFinding(ArtifactAdmissionIncomplete, "reviewer evidence reports that candidate inspection was unavailable",
+				&ArtifactAdmissionDiagnostic{Code: ArtifactAdmissionDiagnosticCandidateInputUnreadable, Reason: "scope_unavailable"}, nil)
 		}
 		outside, lookupErr := referenceOutsideRepository(evidence, repository.contains)
 		if lookupErr != nil {

@@ -195,15 +195,17 @@ const (
 type ResultIncidentClass string
 
 const (
-	ResultIncidentEmptyResult    ResultIncidentClass = "empty_result"
-	ResultIncidentNestedEnvelope ResultIncidentClass = "nested_envelope"
+	ResultIncidentEmptyResult      ResultIncidentClass = "empty_result"
+	ResultIncidentNestedEnvelope   ResultIncidentClass = "nested_envelope"
+	ResultIncidentScopeUnavailable ResultIncidentClass = "scope_unavailable"
+	ResultIncidentTruncatedCapture ResultIncidentClass = "truncated_capture"
 )
 
 // ValidResultIncidentClass reports whether c is a known incident class or the
 // empty string (backward-compatible: omitting --class remains valid).
 func ValidResultIncidentClass(c ResultIncidentClass) bool {
 	switch c {
-	case "", ResultIncidentEmptyResult, ResultIncidentNestedEnvelope:
+	case "", ResultIncidentEmptyResult, ResultIncidentNestedEnvelope, ResultIncidentScopeUnavailable, ResultIncidentTruncatedCapture:
 		return true
 	default:
 		return false

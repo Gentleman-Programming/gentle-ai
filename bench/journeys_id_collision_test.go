@@ -46,6 +46,7 @@ func journeySources() []journeySource {
 		{"journeys_frozen_lineage_resume.go", frozenLineageResumeJourneys()},
 		{"journeys_issue1800.go", issue1800Journeys()},
 		{"journeys_managed_assets.go", managedAssetJourneys()},
+		{"journeys_unreadable_capture.go", unreadableCaptureJourneys()},
 	}
 }
 

@@ -188,15 +188,123 @@ type admittedReviewerResult struct {
 }
 
 // ReviewerResultPayloadError is returned when a raw reviewer result payload is
-// structurally invalid before JSON decoding is attempted. Code is
-// machine-readable: "empty_result" for empty/whitespace-only payloads and
-// "nested_envelope" for payloads that still contain an XML task envelope.
+// structurally invalid before admission or publication. Code is machine-
+// readable and maps to the incident class that can be retained for audit.
 type ReviewerResultPayloadError struct {
 	Code    string
 	Message string
 }
 
-func (e *ReviewerResultPayloadError) Error() string { return e.Message }
+func (e *ReviewerResultPayloadError) Error() string {
+	if e.Code == "" {
+		return e.Message
+	}
+	return e.Message + " [" + e.Code + "]"
+}
+
+func reviewerResultPayloadError(code, message string) error {
+	return &ReviewerResultPayloadError{Code: code, Message: message}
+}
+
+// readReviewerResultPayload bounds both file and stdin capture before any
+// decoder or store code sees the bytes. A provider that ends a stream early or
+// exceeds the native bound therefore cannot publish a partial artifact.
+func readReviewerResultPayload(path string) ([]byte, error) {
+	var reader io.Reader = os.Stdin
+	var file *os.File
+	if path != "-" {
+		var err error
+		file, err = os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		reader = file
+	}
+	payload, err := io.ReadAll(io.LimitReader(reader, reviewResultArtifactLimit+1))
+	if err != nil {
+		if len(payload) > reviewResultArtifactLimit {
+			return nil, reviewerResultPayloadError(string(reviewtransaction.ResultIncidentTruncatedCapture),
+				"reviewer artifact admission incomplete: reviewer result capture exceeded the native size bound before atomic publication")
+		}
+		if len(payload) > 0 {
+			return payload, reviewerResultPayloadError(string(reviewtransaction.ResultIncidentTruncatedCapture),
+				"reviewer artifact admission incomplete: reviewer result capture ended during a read before atomic publication")
+		}
+		return payload, err
+	}
+	if len(payload) > reviewResultArtifactLimit {
+		return nil, reviewerResultPayloadError(string(reviewtransaction.ResultIncidentTruncatedCapture),
+			"reviewer artifact admission incomplete: reviewer result capture exceeded the native size bound before atomic publication")
+	}
+	return payload, nil
+}
+
+func reviewerResultPayloadLooksTruncated(payload []byte) bool {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 || json.Valid(trimmed) || !bytes.Contains(trimmed, []byte("{")) {
+		return false
+	}
+	var value any
+	err := json.Unmarshal(trimmed, &value)
+	return strings.Contains(err.Error(), "unexpected end of JSON input") || strings.Contains(err.Error(), "unexpected EOF")
+}
+
+func reviewerResultExtractionError(payload []byte, decision reviewtransaction.ArtifactAdmissionDecision, cause error) error {
+	if decision == reviewtransaction.ArtifactAdmissionIncomplete && reviewerResultPayloadLooksTruncated(payload) {
+		return reviewerResultPayloadError(string(reviewtransaction.ResultIncidentTruncatedCapture),
+			"reviewer artifact admission incomplete: reviewer result capture ended before a complete JSON object was available; no partial result was published")
+	}
+	return fmt.Errorf("reviewer artifact admission %s: %w", decision, cause)
+}
+
+func reviewerResultIncidentClass(err error) (reviewtransaction.ResultIncidentClass, bool) {
+	var payloadErr *ReviewerResultPayloadError
+	if errors.As(err, &payloadErr) {
+		switch reviewtransaction.ResultIncidentClass(payloadErr.Code) {
+		case reviewtransaction.ResultIncidentEmptyResult, reviewtransaction.ResultIncidentNestedEnvelope, reviewtransaction.ResultIncidentTruncatedCapture:
+			return reviewtransaction.ResultIncidentClass(payloadErr.Code), true
+		}
+	}
+	var admissionErr *reviewtransaction.ArtifactAdmissionError
+	if errors.As(err, &admissionErr) && admissionErr.Diagnostic != nil {
+		switch admissionErr.Diagnostic.Code {
+		case reviewtransaction.ArtifactAdmissionDiagnosticCandidateInputUnreadable, reviewtransaction.ArtifactAdmissionDiagnosticInspectionIncomplete:
+			return reviewtransaction.ResultIncidentScopeUnavailable, true
+		}
+	}
+	return "", false
+}
+
+func reviewCaptureResultPreflightError(err error) error {
+	class, ok := reviewerResultIncidentClass(err)
+	if !ok {
+		return reviewPreflightError(err)
+	}
+	code := string(class)
+	message := "The reviewer result was not admissible and no artifact or receipt was published."
+	if class == reviewtransaction.ResultIncidentScopeUnavailable {
+		code = reviewtransaction.ArtifactAdmissionDiagnosticCandidateInputUnreadable
+		message = "The reviewer could not establish complete candidate inspection; the same-lineage capture must be retried after access is restored."
+	}
+	return reviewPreflightRefusal(reviewPreflightReason{
+		Code: code, Message: message, RequiredInputs: []string{"incident"}, NextAction: "review.status",
+	}, err)
+}
+
+func preserveCaptureFailure(ctx context.Context, repo, lineage, target, lens string, order int, raw []byte, preflight, opaque bool, err error) error {
+	class, ok := reviewerResultIncidentClass(err)
+	if !ok || preflight || len(raw) == 0 {
+		return reviewCaptureResultPreflightError(err)
+	}
+	if _, preserveErr := preserveIncidentArtifact(ctx, repo, lineage, target, lens, order, raw, class); preserveErr != nil {
+		if opaque {
+			return reviewCaptureResultPreflightError(fmt.Errorf("%w; invalid reviewer result could not be retained for audit", err))
+		}
+		return reviewCaptureResultPreflightError(fmt.Errorf("%w; invalid reviewer result could not be retained for audit: %v", err, preserveErr))
+	}
+	return reviewCaptureResultPreflightError(fmt.Errorf("%w; invalid reviewer result was retained as a non-admitted audit incident; retry the same lineage after correcting the provider input", err))
+}
 
 // validateReviewerResultPayload inspects the raw bytes of a reviewer result
 // before JSON decoding. It rejects two structurally distinct failure modes
@@ -206,17 +314,11 @@ func (e *ReviewerResultPayloadError) Error() string { return e.Message }
 //     task wrapper before being passed as the strict JSON payload.
 func validateReviewerResultPayload(payload []byte) error {
 	if len(bytes.TrimSpace(payload)) == 0 {
-		return &ReviewerResultPayloadError{
-			Code:    "empty_result",
-			Message: "reviewer result payload is empty or whitespace-only: the task may have completed without producing output",
-		}
+		return reviewerResultPayloadError(string(reviewtransaction.ResultIncidentEmptyResult), "reviewer result payload is empty or whitespace-only: the task may have completed without producing output")
 	}
 	if bytes.Contains(payload, []byte("<task_result>")) || bytes.Contains(payload, []byte("</task_result>")) {
 		if !json.Valid(payload) {
-			return &ReviewerResultPayloadError{
-				Code:    "nested_envelope",
-				Message: "reviewer result payload contains a raw XML task envelope: extract the strict JSON reviewer output from <task_result> before capture",
-			}
+			return reviewerResultPayloadError(string(reviewtransaction.ResultIncidentNestedEnvelope), "reviewer result payload contains a raw XML task envelope: extract the strict JSON reviewer output from <task_result> before capture")
 		}
 	}
 	return nil
@@ -359,23 +461,26 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 			ChangedPathManifest: append([]reviewtransaction.ChangedPathManifestEntry{}, frozen.ChangedPathManifest...),
 		})
 	}
-	rawPayload, err := readFacadeBytes(*input)
+	rawPayload, err := readReviewerResultPayload(*input)
 	if err != nil {
-		return reviewPreflightError(fmt.Errorf("read reviewer result: %w", err))
+		return preserveCaptureFailure(ctx, root, *lineage, *target, *lens, *order, rawPayload, *preflight, contextHandle != "", fmt.Errorf("read reviewer result: %w", err))
+	}
+	captureFailure := func(cause error) error {
+		return preserveCaptureFailure(ctx, root, *lineage, *target, *lens, *order, rawPayload, *preflight, contextHandle != "", cause)
 	}
 	if err := validateReviewerResultPayload(rawPayload); err != nil {
-		return reviewPreflightError(err)
+		return captureFailure(err)
 	}
 	payload, decision, err := reviewtransaction.ExtractBoundedSingleJSONObject(rawPayload, reviewResultArtifactLimit)
 	if err != nil {
-		return reviewPreflightError(fmt.Errorf("reviewer artifact admission %s: %w", decision, err))
+		return captureFailure(reviewerResultExtractionError(rawPayload, decision, err))
 	}
 	var result facadeReviewerResult
 	if err := decodeFacadeJSONBytes(payload, &result); err != nil {
-		return reviewPreflightError(fmt.Errorf("decode reviewer result: %w", err))
+		return captureFailure(fmt.Errorf("decode reviewer result: %w", err))
 	}
 	if result.Findings == nil || result.Evidence == nil {
-		return reviewPreflightError(errors.New("reviewer result requires explicit findings and evidence arrays"))
+		return captureFailure(errors.New("reviewer result requires explicit findings and evidence arrays"))
 	}
 	if result.SubjectHash != subject.SubjectHash {
 		legacyFrozen, legacyErr := (reviewtransaction.SnapshotBuilder{Repo: root}).WithLegacyCandidateDiff(ctx, state.InitialSnapshot, frozen)
@@ -391,7 +496,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	}
 	canonicalReviewerResult, err := reviewtransaction.CanonicalizeReviewerResult(payload, subject.Lens)
 	if err != nil {
-		return reviewPreflightError(err)
+		return captureFailure(err)
 	}
 	canonicalResult, err := json.Marshal(canonicalReviewerResult)
 	if err != nil {
@@ -411,11 +516,11 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	// issue-1699, confirmed unresolved by the earlier Group A fix).
 	canonicalForCausality, err := reviewtransaction.CanonicalCompactLensResult(nativeResult)
 	if err != nil {
-		return reviewPreflightError(fmt.Errorf("canonicalize reviewer result: %w", err))
+		return captureFailure(fmt.Errorf("canonicalize reviewer result: %w", err))
 	}
 	candidateCausalIDs, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, canonicalForCausality)
 	if err != nil {
-		return reviewPreflightError(err)
+		return captureFailure(err)
 	}
 	_, admission, err := reviewtransaction.AdmitArtifact(ctx, reviewtransaction.ArtifactAdmissionRequest{
 		ExpectedSubject: subject, FrozenContext: frozen, EchoedSubjectHash: result.SubjectHash,
@@ -423,7 +528,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		RawPayload: rawPayload, CanonicalPayload: canonicalResult,
 	})
 	if err != nil {
-		return reviewPreflightError(err)
+		return captureFailure(err)
 	}
 	if *preflight {
 		return encodeReviewJSON(stdout, reviewResultDryRun{

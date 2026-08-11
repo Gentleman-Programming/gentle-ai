@@ -19,8 +19,10 @@ import (
 
 func TestValidResultIncidentClass(t *testing.T) {
 	cases := map[reviewtransaction.ResultIncidentClass]bool{
-		reviewtransaction.ResultIncidentEmptyResult:    true,
-		reviewtransaction.ResultIncidentNestedEnvelope: true,
+		reviewtransaction.ResultIncidentEmptyResult:      true,
+		reviewtransaction.ResultIncidentNestedEnvelope:   true,
+		reviewtransaction.ResultIncidentScopeUnavailable: true,
+		reviewtransaction.ResultIncidentTruncatedCapture: true,
 		"":                          true,
 		"wrong_target":              false,
 		"transport_syntax":          false,
