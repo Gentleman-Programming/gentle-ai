@@ -1,0 +1,75 @@
+name: Label Automated Provider Reports
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label recognized automated provider report
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const marker = '<!-- gentle-ai-provider-report:v1 -->';
+            const sections = [
+              'Automated Provider Defect Report',
+              'Gentle AI Version / Build',
+              'Environment',
+              'Operation',
+              'Observed Evidence',
+              'Expected Behavior',
+              'Actual Behavior',
+              'Minimal Reproduction',
+              'Preserved State',
+            ];
+
+            const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const isAutomatedProviderReport = (body) => {
+              if (typeof body !== 'string' || body.length > 16000) {
+                return false;
+              }
+              const markerCount = (body.match(new RegExp(escapeRegExp(marker), 'g')) || []).length;
+              if (markerCount !== 1) {
+                return false;
+              }
+
+              const headings = sections.map((section) => {
+                const pattern = new RegExp(`^## ${escapeRegExp(section)}\\s*$`, 'gm');
+                return [...body.matchAll(pattern)];
+              });
+              if (headings.some((matches) => matches.length !== 1)) {
+                return false;
+              }
+
+              const positions = headings.map((matches) => matches[0].index);
+              if (positions.some((position, index) => index > 0 && position <= positions[index - 1])) {
+                return false;
+              }
+              return headings.every((matches, index) => {
+                const start = matches[0].index + matches[0][0].length;
+                const end = index + 1 < headings.length ? headings[index + 1][0].index : body.length;
+                const value = body.slice(start, end).trim();
+                return value.length > 0 && value.length <= 4000;
+              });
+            };
+
+            const issue = context.payload.issue;
+            if (!isAutomatedProviderReport(issue.body)) {
+              return;
+            }
+            const labels = (issue.labels || []).map((label) => label.name);
+            if (labels.includes('gentle-report')) {
+              return;
+            }
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: ['gentle-report'],
+            });

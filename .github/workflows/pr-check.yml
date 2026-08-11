@@ -49,7 +49,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
       - name: Run workflow script tests
-        run: node --test .github/scripts/parse-linked-issues.test.cjs
+        run: node --test .github/scripts/parse-linked-issues.test.cjs .github/scripts/label-gentle-report.test.cjs
 
   check-issue-reference:
     name: Check Issue Reference
