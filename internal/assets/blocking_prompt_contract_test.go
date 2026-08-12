@@ -286,6 +286,11 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 			if count := strings.Count(contract, "<!-- gentle-ai-provider-report:v1 -->"); count != 1 {
 				t.Errorf("provider-defect handoff mentions the automated-report marker %d times; want exactly one", count)
 			}
+			markerIndex := strings.Index(contract, "<!-- gentle-ai-provider-report:v1 -->")
+			headingIndex := strings.Index(contract, "## Automated Provider Defect Report")
+			if markerIndex < 0 || headingIndex < 0 || markerIndex >= headingIndex {
+				t.Errorf("provider-defect handoff must place its report marker before its first heading")
+			}
 			for _, invariant := range []struct {
 				name   string
 				prefix string

@@ -70,6 +70,11 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 			if got := strings.Count(rendered, reportMarker); got != 1 {
 				t.Fatalf("rendered %s orchestrator has %d report markers, want exactly one", tc.agent, got)
 			}
+			markerIndex := strings.Index(rendered, reportMarker)
+			firstHeadingIndex := strings.Index(rendered, "## Automated Provider Defect Report")
+			if markerIndex < 0 || firstHeadingIndex < 0 || markerIndex >= firstHeadingIndex {
+				t.Fatalf("rendered %s orchestrator must place report marker before its first heading", tc.agent)
+			}
 			lastHeading := -1
 			for _, section := range []string{
 				"Automated Provider Defect Report",
