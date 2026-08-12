@@ -317,12 +317,11 @@ func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequ
 	}, io.Discard); err != nil {
 		t.Fatalf("finalize recaptured results: %v", err)
 	}
-	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
-	if err := os.WriteFile(evidencePath, []byte("go test ./... passed on the unchanged candidate\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// High-risk approval is the typed-evidence gate (issue 1843): capture the
+	// verification output out of band, then finalize with --captured-evidence.
+	captureVerificationEvidenceForTest(t, repo, started.LineageID, []byte("go test ./... passed on the unchanged candidate\n"), reviewtransaction.VerificationOutcomePassed)
 	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--lineage", started.LineageID, "--evidence", evidencePath,
+		"--cwd", repo, "--lineage", started.LineageID, "--captured-evidence",
 	}, io.Discard); err != nil {
 		t.Fatalf("finalize verification evidence: %v", err)
 	}

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,128 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
+
+// startHighRiskValidatingCLIReview drives a high-risk lineage to the
+// StateValidating gate with all four lens results admitted, so the typed
+// evidence rules below guard a real gate rather than a synthetic state.
+func startHighRiskValidatingCLIReview(t *testing.T, repo string) ReviewFacadeStartResult {
+	t.Helper()
+	started := startHighRiskCLIReview(t, repo)
+	for order := range started.SelectedLenses {
+		captureCLIReviewerResult(t, repo, started, order)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-results=true"}, io.Discard); err != nil {
+		t.Fatalf("finalize high-risk captured results: %v", err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil || record.State.State != reviewtransaction.StateValidating {
+		t.Fatalf("high-risk fixture authority = %#v, %v", record.State, err)
+	}
+	return started
+}
+
+// captureVerificationEvidenceForTest publishes a typed captured evidence record
+// bound to the current validating snapshot of a lineage, mirroring the exact
+// STATUS-emitted capture transition.
+func captureVerificationEvidenceForTest(t *testing.T, repo, lineage string, payload []byte, outcome reviewtransaction.VerificationOutcome) {
+	t.Helper()
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(evidencePath, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewCaptureEvidence([]string{
+		"--cwd", repo, "--lineage", lineage, "--target", record.State.CurrentSnapshot.Identity,
+		"--expected-revision", record.Revision, "--outcome", string(outcome), "--input", evidencePath,
+	}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestHighRiskFinalizeFailsClosedOnRawEvidence proves the raw --evidence path
+// can never approve a high-risk candidate: even substantive prose bytes must be
+// carried by a typed captured record before they authorize the gate, so the
+// authority must stay at StateValidating after the refusal.
+func TestHighRiskFinalizeFailsClosedOnRawEvidence(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	started := startHighRiskValidatingCLIReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(evidencePath, []byte("focused and full repository verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--evidence", evidencePath}, &bytes.Buffer{}); err == nil {
+		t.Fatal("high-risk finalize approved through the raw --evidence path")
+	}
+	after, err := store.Load()
+	if err != nil || after.State.State != reviewtransaction.StateValidating || after.Revision != before.Revision {
+		t.Fatalf("raw-evidence refusal advanced authority: before=%#v after=%#v, %v", before.State, after.State, err)
+	}
+}
+
+// TestHighRiskFinalizeFailsClosedOnSentinelCapturedEvidence proves a typed
+// captured record whose outcome is "passed" still cannot authorize a high-risk
+// approval when its payload is opaque sentinel-only bytes ("PASS"): the gate
+// needs substantive content it can inspect, so the authority must stay at
+// StateValidating after the refusal.
+func TestHighRiskFinalizeFailsClosedOnSentinelCapturedEvidence(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	started := startHighRiskValidatingCLIReview(t, repo)
+	captureVerificationEvidenceForTest(t, repo, started.LineageID, []byte("PASS"), reviewtransaction.VerificationOutcomePassed)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-evidence=true"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("high-risk finalize approved sentinel-only captured evidence")
+	}
+	after, err := store.Load()
+	if err != nil || after.State.State != reviewtransaction.StateValidating || after.Revision != before.Revision {
+		t.Fatalf("sentinel refusal advanced authority: before=%#v after=%#v, %v", before.State, after.State, err)
+	}
+}
+
+// TestHighRiskFinalizeApprovesOnSubstantiveCapturedEvidence proves the typed
+// path still reaches approval when the captured payload is real verification
+// content, so the fail-closed gate does not lock out legitimate evidence.
+func TestHighRiskFinalizeApprovesOnSubstantiveCapturedEvidence(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	started := startHighRiskValidatingCLIReview(t, repo)
+	captureVerificationEvidenceForTest(t, repo, started.LineageID, []byte("go build ./... ok\ngo test ./... ok\n"), reviewtransaction.VerificationOutcomePassed)
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-evidence=true"}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("high-risk finalize with substantive captured evidence: %v", err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil || record.State.State != reviewtransaction.StateApproved || record.State.EvidenceOutcome != reviewtransaction.VerificationOutcomePassed {
+		t.Fatalf("high-risk substantive approval = %#v, %v", record.State, err)
+	}
+}
 
 func TestFailedCapturedEvidenceDrivesNegotiatedEscalationWithoutCallerBoolean(t *testing.T) {
 	repo, started, _, _, _ := capturedArtifact(t)

@@ -330,3 +330,34 @@ func PublishCapturedVerificationEvidence(request CaptureVerificationEvidenceRequ
 	}
 	return captured, nil
 }
+
+// sentinelVerificationWords is the closed set of single-word verdicts a caller
+// could paste as verification evidence with no substantive content. Membership
+// is decided only on the exact trim-and-lowercase form: any surrounding prose,
+// extra tokens, punctuation, or line breaks keep a payload out of the set.
+var sentinelVerificationWords = map[string]struct{}{
+	"pass": {}, "passed": {}, "ok": {}, "fail": {}, "failed": {},
+	"error": {}, "success": {}, "failure": {},
+}
+
+// SentinelOnlyVerificationPayload reports whether the payload carries only an
+// opaque sentinel verdict and no substantive verification content. After
+// trimming surrounding whitespace and lowercasing, the text must be exactly one
+// short word from the closed set {pass, passed, ok, fail, failed, error,
+// success, failure}; a single trailing newline ("PASS\n") still matches. Any
+// longer text — real command output, go test output, logs, or prose sentences —
+// is never sentinel, even when it contains one of those words ("tests pass",
+// "repository verification failed").
+//
+// The predicate exists so the high-risk approval gate fails closed: a captured
+// record whose outcome is "passed" but whose payload is only "PASS" proves
+// nothing an operator or downstream gate could inspect, so it must not
+// authorize the transition. The match is deliberately conservative: a false
+// negative (real prose rejected) only withholds a transition the caller can
+// redo with better evidence, while a false positive would let an opaque token
+// stand in for evidence.
+func SentinelOnlyVerificationPayload(payload []byte) bool {
+	normalized := strings.ToLower(strings.TrimSpace(string(payload)))
+	_, sentinel := sentinelVerificationWords[normalized]
+	return sentinel
+}

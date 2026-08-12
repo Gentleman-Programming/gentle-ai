@@ -156,13 +156,13 @@ func TestReviewFinalizeNamedContinuationReachesApproval(t *testing.T) {
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-results=true"}, io.Discard); err != nil {
 		t.Fatalf("finalize with captured results: %v", err)
 	}
-	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
-	if err := os.WriteFile(evidencePath, []byte("go build ./... ok\ngo test ./... ok\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// High-risk approval is the typed-evidence gate (issue 1843): capture the
+	// verification output out of band, then finalize with --captured-evidence.
+	// The raw --evidence path can no longer authorize a high-risk gate.
+	captureVerificationEvidenceForTest(t, repo, started.LineageID, []byte("go build ./... ok\ngo test ./... ok\n"), reviewtransaction.VerificationOutcomePassed)
 	var finalized bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--evidence", evidencePath}, &finalized); err != nil {
-		t.Fatalf("finalize with verification evidence: %v", err)
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-evidence=true"}, &finalized); err != nil {
+		t.Fatalf("finalize with captured verification evidence: %v\n%s", err, finalized.String())
 	}
 	var gate bytes.Buffer
 	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-commit"}, &gate); err != nil {

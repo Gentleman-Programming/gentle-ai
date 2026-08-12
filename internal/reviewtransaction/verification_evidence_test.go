@@ -11,6 +11,40 @@ import (
 	"testing"
 )
 
+// TestSentinelOnlyVerificationPayload pins the closed set of opaque verdict
+// tokens so the high-risk approval gate never treats a bare PASS/FAIL word as
+// substantive verification evidence, while real command output and prose pass.
+func TestSentinelOnlyVerificationPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    bool
+	}{
+		{name: "exact PASS", payload: "PASS", want: true},
+		{name: "exact FAIL", payload: "FAIL", want: true},
+		{name: "exact OK", payload: "OK", want: true},
+		{name: "lowercase passed with trailing newline", payload: "passed\n", want: true},
+		{name: "error verdict", payload: "error", want: true},
+		{name: "success verdict with surrounding whitespace", payload: "  SUCCESS  ", want: true},
+		{name: "failure verdict", payload: "failure", want: true},
+		{name: "empty payload", payload: "", want: false},
+		{name: "whitespace only", payload: "\n  \n", want: false},
+		{name: "go test output", payload: "ok  github.com/example/pkg  0.5s\n", want: false},
+		{name: "focused verification prose", payload: "focused and full repository verification passed\n", want: false},
+		{name: "failed verification prose", payload: "repository verification failed\n", want: false},
+		{name: "multiple sentinel tokens", payload: "PASS PASS", want: false},
+		{name: "multi-line sentinel tokens", payload: "pass\nfail", want: false},
+		{name: "punctuated verdict", payload: "PASS!", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SentinelOnlyVerificationPayload([]byte(tt.payload)); got != tt.want {
+				t.Fatalf("SentinelOnlyVerificationPayload(%q) = %v, want %v", tt.payload, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCapturedVerificationEvidencePersistsOutcomeAndRejectsConflictingReplay(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	state := newCompactTestState(t, repo, "captured-outcome-binding")

@@ -607,11 +607,26 @@ func finalizeApprovedFacadeReview(t *testing.T, repo, lineage string) {
 	started := reviewFacadeStartResultFor(compactStarted.Action, compactStarted.LensesRequired, compactStarted.Record.State)
 	args := []string{"--cwd", repo, "--lineage", started.LineageID}
 	if len(started.SelectedLenses) != 0 {
+		args = append(args, facadeReviewerResultArgs(t, repo, started)...)
+		// High-risk approval is the typed-evidence gate (issue 1843): the
+		// reviewer results first move the lineage into validating, then a typed
+		// captured record with substantive content authorizes the gate. The raw
+		// --evidence path can no longer approve high-risk.
+		if started.RiskLevel == reviewtransaction.RiskHigh {
+			if err := RunReviewFacadeFinalize(args, io.Discard); err != nil {
+				t.Fatalf("finalize facade review %q reviewer results: %v", lineage, err)
+			}
+			captureVerificationEvidenceForTest(t, repo, lineage, []byte("focused and full repository review verification passed\n"), reviewtransaction.VerificationOutcomePassed)
+			args = append(args, "--captured-evidence=true")
+			if err := RunReviewFacadeFinalize(args, io.Discard); err != nil {
+				t.Fatalf("finalize facade review %q captured evidence: %v", lineage, err)
+			}
+			return
+		}
 		evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
 		if err := os.WriteFile(evidencePath, []byte("focused tests pass\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		args = append(args, facadeReviewerResultArgs(t, repo, started)...)
 		args = append(args, "--evidence", evidencePath)
 	}
 	if err := RunReviewFacadeFinalize(args, io.Discard); err != nil {

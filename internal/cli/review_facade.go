@@ -2920,7 +2920,11 @@ type facadeFinalizePlan struct {
 
 // prepareFacadeFinalizePlan performs every deterministic validation before the
 // attempt journal exists. Its states are the only states later admitted and
-// written through the write-ahead journal.
+// written through the write-ahead journal. For high-risk candidates it also
+// enforces the typed-evidence gate: only a captured record whose payload is
+// substantive verification content can authorize approval, so raw evidence and
+// sentinel-only typed payloads fail closed while every escalated outcome keeps
+// its ordinary path.
 func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state reviewtransaction.CompactState, results []facadeReviewerResult, refuter facadeRefuterResult, validation *facadeValidationResult, evidence []byte, correctionLines int, failed bool, captured *reviewtransaction.CapturedVerificationEvidence) (facadeFinalizePlan, error) {
 	entryState, entryProposed := state.State, state.ProposedCorrectionLines != nil
 	plan := facadeFinalizePlan{Transitions: []facadeFinalizeTransition{}, Candidate: state.CurrentSnapshot, Evidence: evidence, CapturedEvidence: captured}
@@ -2997,6 +3001,16 @@ func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state
 			plan.Evidence = generated
 		}
 		if len(plan.Evidence) > 0 {
+			if state.RiskLevel == reviewtransaction.RiskHigh {
+				if captured == nil {
+					if !failed {
+						return plan, errors.New("high-risk review approval requires captured typed verification evidence; the raw --evidence path cannot authorize a high-risk gate") // refusal:by-design operator-knowledge: high-risk approval is bound to immutable typed evidence captured through STATUS/capture-evidence, so an unbound --evidence byte string cannot authorize it
+					}
+				} else if captured.Record.Outcome == reviewtransaction.VerificationOutcomePassed &&
+					reviewtransaction.SentinelOnlyVerificationPayload(captured.Payload) {
+					return plan, errors.New("high-risk review approval requires substantive verification evidence; a sentinel-only payload cannot authorize a high-risk gate") // refusal:by-design world-action: opaque sentinel payload bytes carry no semantic verification content a high-risk approval gate can trust
+				}
+			}
 			if captured != nil {
 				if err := state.CompleteVerificationRecord(captured.Record, captured.Payload); err != nil {
 					return plan, err
