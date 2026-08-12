@@ -355,7 +355,10 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// shipped stop-reason table, so the invariant guard can cross-check the
 	// contract consumers receive instead of only the docs copy. Kilocode
 	// embeds that contract, so the hash moved. Deliberate, not drift.
-	const want = "16cdb2d2e890cb5e19281e93fd2a3b80c68651d05c9752c4be3ec794f9882874"
+	// #3070 adds the "Strictly-Closed Single-Select Domain (MANDATORY)" clause
+	// to the shared orchestrator contract. Kilocode embeds that contract, so
+	// the hash moved. Deliberate, not drift.
+	const want = "ddcb40cd0df95e06e653e393a8a9fca240a566e61aa60fed84f5b7ddc457acbb"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

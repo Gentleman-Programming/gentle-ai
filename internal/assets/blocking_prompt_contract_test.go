@@ -374,6 +374,109 @@ func TestCoordinatorOrchestratorsCarrySDDEditAuthorityConsentRelay(t *testing.T)
 	}
 }
 
+// TestStrictlyClosedSingleSelectDomainEnforced guards #3070's R1/R4/R5/R7:
+// every orchestrator variant teaches the strictly-closed single-select envelope
+// domain rule (the classified native question UI on representable closed
+// envelopes; free-text MUST NOT be admitted; lossless preservation of labels,
+// descriptions, effects, and order). Native-capable variants byte-identical
+// mirror the canonical block in generic/sdd-orchestrator.md; fallback-only
+// variants append the strict-closed qualifier to the first paragraph and keep
+// the bullet list byte-identical.
+func TestStrictlyClosedSingleSelectDomainEnforced(t *testing.T) {
+	canonical := strictlyClosedSection(t, providerDefectHandoffCanonicalPath)
+	for path, route := range blockingPromptRoutes {
+		t.Run(path, func(t *testing.T) {
+			contract := strictlyClosedSection(t, path)
+			for _, required := range []string{
+				"Strictly-Closed Single-Select Domain",
+				"Free text MUST NOT be admitted",
+				"case-insensitive",
+				"preserved as in the original envelope",
+			} {
+				if !strings.Contains(contract, required) {
+					t.Errorf("strictly-closed domain missing %q", required)
+				}
+			}
+
+			if route.nativeTool != "" {
+				if contract != canonical {
+					t.Error("native strictly-closed domain differs from the canonical cross-variant block")
+				}
+				if !strings.Contains(contract, "exactly representable in one grouped interaction") {
+					t.Errorf("native strictly-closed domain missing %q", "exactly representable in one grouped interaction")
+				}
+				return
+			}
+
+			if path == providerDefectHandoffCanonicalPath {
+				return
+			}
+			for _, required := range []string{
+				"this variant cannot guarantee a classified strictly-closed native UI",
+				"actionable compatibility limitation",
+			} {
+				if !strings.Contains(contract, required) {
+					t.Errorf("fallback-only strictly-closed domain missing %q", required)
+				}
+			}
+		})
+	}
+}
+
+// TestStrictlyClosedFallbackNamesActionableCompatLimitation guards #3070's R6:
+// when the classified interactive runtime can render options but cannot
+// guarantee the closed-domain answer gate, the orchestrator surfaces ONE
+// actionable compatibility limitation naming the strict-closed gap (not a
+// generic "fall back" disclaimer) and MUST NOT repeat the exact-token prompt.
+// The bullet is byte-identical across all 12 variants, so the assertion
+// applies uniformly.
+func TestStrictlyClosedFallbackNamesActionableCompatLimitation(t *testing.T) {
+	for _, path := range allSDDOrchestratorAssetPaths(t) {
+		t.Run(path, func(t *testing.T) {
+			contract := strictlyClosedSection(t, path)
+			for _, required := range []string{
+				"ONE actionable compatibility limitation",
+				"strict-closed gap",
+			} {
+				if !strings.Contains(contract, required) {
+					t.Errorf("strictly-closed fallback missing %q", required)
+				}
+			}
+		})
+	}
+}
+
+// TestStrictlyClosedCanonicalTokenNormalizationRules guards #3070's R2/R3:
+// R3 normalizes equivalent semantic selections (case-insensitive, ordinal,
+// locale-agnostic trim) and maps them to the canonical internal token. The
+// line 16 answer-validation invariant — "Accept an answer only when each
+// response belongs to the exact allowed-answer domain" — MUST still appear
+// exactly once per orchestrator variant, proving R3 extends the strict-equal
+// rule rather than replacing it with permissive matching.
+func TestStrictlyClosedCanonicalTokenNormalizationRules(t *testing.T) {
+	const answerValidationInvariant = "Accept an answer only when each response belongs to the exact allowed-answer domain"
+	for _, path := range allSDDOrchestratorAssetPaths(t) {
+		t.Run(path, func(t *testing.T) {
+			contract := strictlyClosedSection(t, path)
+			for _, required := range []string{
+				"case-insensitive",
+				"ordinal",
+				"trim",
+				"locale-agnostic",
+				"la 1",
+			} {
+				if !strings.Contains(contract, required) {
+					t.Errorf("strictly-closed canonical-token normalization missing %q", required)
+				}
+			}
+			content := MustRead(path)
+			if got := strings.Count(content, answerValidationInvariant); got != 1 {
+				t.Errorf("line 16 answer-validation invariant must appear exactly once (count=%d): %s", got, path)
+			}
+		})
+	}
+}
+
 func sddConsentRelaySection(t *testing.T, path string) string {
 	t.Helper()
 	const heading = "#### SDD Edit-Authority Consent Relay (MANDATORY)"
@@ -417,6 +520,23 @@ func providerDefectHandoffSection(t *testing.T, path string) string {
 	end := strings.Index(contract, endMarker)
 	if end == -1 {
 		t.Fatalf("%s provider-defect handoff missing terminal release boundary", path)
+	}
+	return strings.TrimSpace(contract[:end+len(endMarker)])
+}
+
+func strictlyClosedSection(t *testing.T, path string) string {
+	t.Helper()
+	const heading = "#### Strictly-Closed Single-Select Domain (MANDATORY)"
+	content := MustRead(path)
+	start := strings.Index(content, heading)
+	if start == -1 {
+		t.Fatalf("%s missing %q", path, heading)
+	}
+	contract := content[start:]
+	const endMarker = "the existing token discipline and exact-machine-token rules still apply."
+	end := strings.Index(contract, endMarker)
+	if end == -1 {
+		t.Fatalf("%s strictly-closed single-select domain missing terminal boundary", path)
 	}
 	return strings.TrimSpace(contract[:end+len(endMarker)])
 }
