@@ -70,33 +70,6 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 			if got := strings.Count(rendered, reportMarker); got != 1 {
 				t.Fatalf("rendered %s orchestrator has %d report markers, want exactly one", tc.agent, got)
 			}
-			markerIndex := strings.Index(rendered, reportMarker)
-			firstHeadingIndex := strings.Index(rendered, "## Automated Provider Defect Report")
-			if markerIndex < 0 || firstHeadingIndex < 0 || markerIndex >= firstHeadingIndex {
-				t.Fatalf("rendered %s orchestrator must place report marker before its first heading", tc.agent)
-			}
-			lastHeading := -1
-			for _, section := range []string{
-				"Automated Provider Defect Report",
-				"Gentle AI Version / Build",
-				"Environment",
-				"Operation",
-				"Observed Evidence",
-				"Expected Behavior",
-				"Actual Behavior",
-				"Minimal Reproduction",
-				"Preserved State",
-			} {
-				heading := "## " + section
-				if got := strings.Count(rendered, heading); got != 1 {
-					t.Fatalf("rendered %s orchestrator has %d occurrences of report heading %q, want exactly one", tc.agent, got, heading)
-				}
-				index := strings.Index(rendered, heading)
-				if index <= lastHeading {
-					t.Fatalf("rendered %s orchestrator places report heading %q out of canonical order", tc.agent, heading)
-				}
-				lastHeading = index
-			}
 			for _, required := range []string{
 				"exactly three semantic choices in this order",
 				"`report_and_continue`, `continue_without_reporting`, `stop_here`",
@@ -111,7 +84,7 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				"Until that identity is definitively resolved, perform no GitHub mutation and do not retry creation",
 				"After exact successful creation identity is proven",
 				"<!-- gentle-ai-provider-report:v1 -->",
-				"## Automated Provider Defect Report",
+				"Keep its diagnostics useful and privacy-scrubbed as specified below",
 				"Only a completed duplicate lookup with a definitive result may branch to a write",
 				"Do not create, comment, update, or label any issue",
 				"do not add, remove, or change any labels on it",

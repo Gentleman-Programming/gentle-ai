@@ -159,9 +159,7 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "open and closed duplicate search", text: "search open and closed issues"},
 		{name: "create new automated report", text: "create a new automated provider-defect report"},
 		{name: "versioned report marker", text: "<!-- gentle-ai-provider-report:v1 -->"},
-		{name: "bounded report shape", text: "non-empty `## Automated Provider Defect Report`, `## Gentle AI Version / Build`, `## Environment`, `## Operation`, `## Observed Evidence`, `## Expected Behavior`, `## Actual Behavior`, `## Minimal Reproduction`, and `## Preserved State` sections"},
-		{name: "report body limit", text: "total body length must be no greater than 16,000 characters"},
-		{name: "report section limit", text: "every section must be no greater than 4,000 characters"},
+		{name: "useful privacy-scrubbed diagnostics", text: "Keep its diagnostics useful and privacy-scrubbed as specified below."},
 		{name: "confirmed creation report precondition", text: "Confirmed creation is a HARD precondition for report success: confirm the newly-created issue identity/URL"},
 		{name: "no output-only creation inference", text: "never infer creation from output text alone."},
 		{name: "definitive duplicate lookup", text: "Only a completed duplicate lookup with a definitive result may branch to a write."},
@@ -286,20 +284,15 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 			if count := strings.Count(contract, "<!-- gentle-ai-provider-report:v1 -->"); count != 1 {
 				t.Errorf("provider-defect handoff mentions the automated-report marker %d times; want exactly one", count)
 			}
-			markerIndex := strings.Index(contract, "<!-- gentle-ai-provider-report:v1 -->")
-			headingIndex := strings.Index(contract, "## Automated Provider Defect Report")
-			if markerIndex < 0 || headingIndex < 0 || markerIndex >= headingIndex {
-				t.Errorf("provider-defect handoff must place its report marker before its first heading")
-			}
 			for _, invariant := range []struct {
 				name   string
 				prefix string
 				must   []string
 			}{
 				{
-					name:   "new reports are marked and shaped",
+					name:   "new reports are marked and label-neutral",
 					prefix: "If an equivalent issue exists",
-					must:   []string{"add exactly one new occurrence comment", "do not add, remove, or change any labels on it", "<!-- gentle-ai-provider-report:v1 -->", "in this order", "non-empty", "Keep each section privacy-scrubbed and bounded", "total body length must be no greater than 16,000 characters", "every section must be no greater than 4,000 characters"},
+					must:   []string{"add exactly one new occurrence comment", "do not add, remove, or change any labels on it", "<!-- gentle-ai-provider-report:v1 -->", "without requesting, supplying, or applying any label during creation", "Keep its diagnostics useful and privacy-scrubbed", "only writer of `gentle-report`"},
 				},
 				{
 					name:   "occurrence comment uncertainty fails closed without a duplicate",

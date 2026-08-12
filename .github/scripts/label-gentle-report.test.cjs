@@ -20,26 +20,7 @@ function workflowScript() {
     .join('\n');
 }
 
-function reportBody({ marker = true, omit = '', blank = '', reorder = false } = {}) {
-  const sections = [
-    'Automated Provider Defect Report',
-    'Gentle AI Version / Build',
-    'Environment',
-    'Operation',
-    'Observed Evidence',
-    'Expected Behavior',
-    'Actual Behavior',
-    'Minimal Reproduction',
-    'Preserved State',
-  ].filter((section) => section !== omit);
-  if (reorder) {
-    [sections[1], sections[2]] = [sections[2], sections[1]];
-  }
-  return [
-    marker ? '<!-- gentle-ai-provider-report:v1 -->' : '',
-    ...sections.flatMap((section) => [`## ${section}`, section === blank ? '' : `safe ${section} evidence`]),
-  ].join('\n');
-}
+const reportMarker = '<!-- gentle-ai-provider-report:v1 -->';
 
 async function runGuard(body, labels = []) {
   const mutations = [];
@@ -52,27 +33,29 @@ async function runGuard(body, labels = []) {
   return JSON.parse(JSON.stringify(mutations));
 }
 
-test('a marked complete automated provider report receives exactly one label mutation', async () => {
-  assert.deepEqual(await runGuard(reportBody()), [{
+test('a body with exactly one marker receives exactly one label mutation', async () => {
+  assert.deepEqual(await runGuard(`arbitrary content\n${reportMarker}\nmore arbitrary content`), [{
     owner: 'Gentleman-Programming', repo: 'gentle-ai', issue_number: 2211, labels: ['gentle-report'],
   }]);
 });
 
-test('an unmarked manual issue is ignored even when it has the automated shape', async () => {
-  assert.deepEqual(await runGuard(reportBody({ marker: false })), []);
+test('a body without the marker is ignored', async () => {
+  assert.deepEqual(await runGuard('ordinary manual issue body'), []);
 });
 
-test('marker-only, malformed, and missing-section reports are ignored', async () => {
+test('a duplicate marker is ignored', async () => {
   assert.deepEqual(await runGuard(null), []);
-  assert.deepEqual(await runGuard('<!-- gentle-ai-provider-report:v1 -->'), []);
-  assert.deepEqual(await runGuard(`${reportBody()}\n<!-- gentle-ai-provider-report:v1 -->`), []);
-  assert.deepEqual(await runGuard(reportBody({ blank: 'Actual Behavior' })), []);
-  assert.deepEqual(await runGuard(reportBody({ omit: 'Preserved State' })), []);
-  assert.deepEqual(await runGuard(reportBody({ reorder: true })), []);
+  assert.deepEqual(await runGuard(`${reportMarker}\n${reportMarker}`), []);
 });
 
 test('an existing gentle-report label produces no duplicate mutation', async () => {
-  assert.deepEqual(await runGuard(reportBody(), [{ name: 'gentle-report' }]), []);
+  assert.deepEqual(await runGuard(reportMarker, [{ name: 'gentle-report' }]), []);
+});
+
+test('arbitrary content around one marker needs no report schema', async () => {
+  assert.deepEqual(await runGuard(`not a report\n${reportMarker}\n$() <>`), [{
+    owner: 'Gentleman-Programming', repo: 'gentle-ai', issue_number: 2211, labels: ['gentle-report'],
+  }]);
 });
 
 test('the workflow is opened-only, least-privilege, no-checkout, and never reads issue titles or shells', () => {

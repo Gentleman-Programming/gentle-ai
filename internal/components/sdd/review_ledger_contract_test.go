@@ -347,17 +347,12 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// phase result never dispatches, so the orchestrator must not read the
 	// replayed envelope as a fresh attempt. Kilocode embeds that orchestrator
 	// contract, so the hash moved. Deliberate, not drift.
-	// #2211 moves automated-report labeling to repository-side authority and
-	// adds the versioned, privacy-safe report marker and required shape.
-	// Kilocode embeds this shared orchestrator contract, so the hash moved.
-	// Deliberate, not drift.
+	// #2211 moves automated-report labeling to repository-side authority with a
+	// versioned marker only. Kilocode embeds this shared orchestrator contract,
+	// so the hash moved. Deliberate, not drift.
 	// #3076 makes the non-idempotent occurrence-comment write fail closed when
 	// its exact outcome is unknown. Kilocode embeds the shared orchestrator
 	// contract, so the hash moved. Deliberate, not drift.
-	// #3076 aligns the rendered report instructions with the workflow's exact
-	// body and section limits and normalizes nested list indentation. Kilocode
-	// embeds this shared orchestrator contract, so the hash moved. Deliberate,
-	// not drift.
 	// #3076 permits only a narrowly scoped read-only lookup after an ambiguous
 	// creation outcome, avoiding both a deadlock and duplicate issue creation.
 	// Kilocode embeds the shared orchestrator contract, so the hash moved.
@@ -365,7 +360,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// #3076 keeps automated provider-report creation label-free; the validated
 	// repository workflow is the sole gentle-report writer. Kilocode embeds the
 	// shared orchestrator contract, so the hash moved. Deliberate, not drift.
-	const want = "c786b872799b12fe4e94d8bc393b7f8a348bc10c37c9bb30b9db4fff689273c9"
+	const want = "03db31509a35b080fdca0000d252b08707b00492655e972d64966c7815435020"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
