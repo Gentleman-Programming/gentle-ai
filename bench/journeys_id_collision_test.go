@@ -41,6 +41,7 @@ func journeySources() []journeySource {
 		{"journeys_intended_untracked.go", intendedUntrackedJourneys()},
 		{"journeys_capture_result_dry_run.go", captureResultDryRunJourneys()},
 		{"journeys_issue_2031.go", issue2031Journeys()},
+		{"journeys_issue_3065.go", issue3065Journeys()},
 		{"journeys_finding_id_prefix.go", findingIDPrefixJourneys()},
 		{"journeys_rescope_write_guard.go", rescopeWriteGuardJourneys()},
 		{"journeys_rescope_evidence_retry.go", rescopeEvidenceOnlyRetryJourneys()},

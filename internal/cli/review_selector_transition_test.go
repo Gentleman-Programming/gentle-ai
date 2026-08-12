@@ -15,6 +15,35 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
+func TestRecoveryArgumentsRejectsDefaultWorkspaceOverlay(t *testing.T) {
+	base := "origin/main"
+	for _, tt := range []struct {
+		name       string
+		projection reviewtransaction.Projection
+		want       bool
+		arguments  []ReviewTransitionArgument
+	}{
+		{name: "default workspace projection", projection: reviewtransaction.ProjectionWorkspace},
+		{name: "staged workspace projection", projection: reviewtransaction.ProjectionStaged, want: true,
+			arguments: []ReviewTransitionArgument{
+				{Name: "base-ref", Value: base},
+				{Name: "projection", Value: string(reviewtransaction.ProjectionStaged)},
+				{Name: "workspace-overlay", Value: "true"},
+			}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, representable := (reviewTransitionSelector{
+				Recovery: &reviewtransaction.Target{
+					Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: base, Projection: tt.projection,
+				},
+			}).recoveryArguments()
+			if representable != tt.want || !reflect.DeepEqual(got, tt.arguments) {
+				t.Fatalf("recovery arguments = %#v, representable=%t; want %#v, %t", got, representable, tt.arguments, tt.want)
+			}
+		})
+	}
+}
+
 func TestStatusValidateTransitionPreservesCustomPublicationBase(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	remote := filepath.Join(t.TempDir(), "origin.git")
@@ -624,6 +653,95 @@ func TestStatusRecoverTransitionExecutesCorrectionRequiredStagedScopeExpansion(t
 	stateAfter, _ := os.ReadFile(predecessorStore.StatePath())
 	if !bytes.Equal(stateBefore, stateAfter) || strings.TrimSpace(runReviewCLIGit(t, repo, "write-tree")) != wantTree {
 		t.Fatal("staged correction recovery mutated predecessor authority or index")
+	}
+
+	// Issue #3065: the staged successor can reach escalation through the public
+	// CLI, then a default workspace-overlay selector must be rejected as
+	// unrepresentable before STATUS asks for maintainer authorization.
+	finalizeArgs = []string{"--cwd", repo, "--lineage", successor}
+	for _, lens := range state.SelectedLenses {
+		result := filepath.Join(t.TempDir(), lens+"-successor.json")
+		writeReviewCLIJSON(t, result, facadeReviewerResult{Lens: lens, Findings: []facadeFinding{}, Evidence: []string{"reviewed recovered staged candidate"}})
+		finalizeArgs = append(finalizeArgs, "--result", result)
+	}
+	if err := finalizeReviewCLIArgs(t, repo, finalizeArgs, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	evidence := filepath.Join(t.TempDir(), "failed-verification.txt")
+	writeCLIAttemptFile(t, evidence, "go test ./... FAIL\n")
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", successor, "--evidence", evidence, "--failed=true"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	escalated, err := successorStore.Load()
+	if err != nil || escalated.State.State != reviewtransaction.StateEscalated {
+		t.Fatalf("staged successor did not escalate: %#v, %v", escalated.State, err)
+	}
+	if err := os.Remove(filepath.Join(repo, "scratch.txt")); err != nil {
+		t.Fatal(err)
+	}
+	escalatedStateBefore, err := os.ReadFile(successorStore.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptBefore, receiptErr := os.ReadFile(successorStore.ReceiptPath())
+	storesBefore, err := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 3 }\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "candidate.go")
+	candidateTreeBefore := strings.TrimSpace(runReviewCLIGit(t, repo, "write-tree"))
+	candidateBytesBefore := runReviewCLIGit(t, repo, "show", ":candidate.go")
+	_, untrackedInventory, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).IntendedUntrackedInventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultSelectors := []string{"--lineage", successor, "--base-ref", base, "--workspace-overlay", "--untracked-scope", "exclude", "--expected-untracked-inventory", untrackedInventory}
+	defaultProbe := selectorTransitionStatus(t, repo, defaultSelectors...)
+	assertUnrepresentable := func(name string, status ReviewTargetStatusResult) {
+		t.Helper()
+		if status.Action != reviewtransaction.TargetStatusActionRecover || status.ActionDisposition != reviewtransaction.RecoveryEscalated ||
+			status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+			status.NextTransition.ReasonCode != "recovery_target_unrepresentable" || status.NextTransition.Execute != nil ||
+			status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 ||
+			status.NextTransition.Collect.Inputs[0].Name != "recovery_target_selector" ||
+			status.NextTransition.Collect.Inputs[0].CaptureOperation != "external.select_recovery_target" {
+			t.Fatalf("%s transition = %#v, want selector collection before authorization", name, status.NextTransition)
+		}
+	}
+	assertUnrepresentable("selector-only", defaultProbe)
+	defaultReason, defaultActor, defaultNext := "recover staged candidate after failed verification", "maintainer", "issue-3065-successor"
+	defaultAuthorization := strings.Join([]string{
+		"gentle-ai.review-recovery-authorization/v1",
+		"predecessor_lineage=" + successor, "predecessor_revision=" + defaultProbe.Authority.Revision,
+		"target_identity=" + defaultProbe.TargetIdentity, "successor_lineage=" + defaultNext,
+		"actor=" + defaultActor, "reason=" + defaultReason,
+	}, "\n")
+	authorized := selectorTransitionStatus(t, repo, append(defaultSelectors,
+		"--recovery-successor-lineage", defaultNext, "--recovery-reason", defaultReason,
+		"--recovery-actor", defaultActor, "--recovery-authorization", defaultAuthorization)...)
+	assertUnrepresentable("authorized", authorized)
+	if authorized.NextTransition.Collect.Inputs[0].Name == "recovery_authorization" {
+		t.Fatal("default workspace-overlay STATUS collected authorization before representability")
+	}
+	escalatedStateAfter, err := os.ReadFile(successorStore.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptAfter, receiptAfterErr := os.ReadFile(successorStore.ReceiptPath())
+	storesAfter, err := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(escalatedStateBefore, escalatedStateAfter) || (receiptErr == nil) != (receiptAfterErr == nil) ||
+		receiptErr == nil && !bytes.Equal(receiptBefore, receiptAfter) || len(storesBefore) != len(storesAfter) ||
+		strings.TrimSpace(runReviewCLIGit(t, repo, "write-tree")) != candidateTreeBefore ||
+		runReviewCLIGit(t, repo, "show", ":candidate.go") != candidateBytesBefore ||
+		func() bool {
+			after, loadErr := successorStore.Load()
+			return loadErr != nil || after.State.CorrectionBudget != escalated.State.CorrectionBudget
+		}() {
+		t.Fatal("unrepresentable STATUS mutated predecessor, receipt, store inventory, candidate, index, or correction budget")
 	}
 }
 

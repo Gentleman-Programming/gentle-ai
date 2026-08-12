@@ -15,7 +15,7 @@ import (
 // `gentle-ai review start` remains compatibility-supported for
 // explicit/manual non-negotiated callers" -- were never in the corpus at
 // all. A direct `review start --base-ref ... --committed-only` could create a
-// lineage no reviewer lens could ever complete, and NOTHING in ~57 journeys
+// lineage no reviewer lens could ever complete, and NOTHING in ~101 journeys
 // and 4 prior axes would have noticed, because none of them ever drove that
 // surface. This axis is the standing fix for that blind spot, not a one-off
 // regression test for #2447 alone: it is where the next compatibility-surface

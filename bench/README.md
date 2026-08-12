@@ -33,7 +33,7 @@ go vet ./...
 go test ./...
 ```
 
-The portable core contains 57 journeys. `j57` is deliberately excluded because
+The portable core contains 101 journeys. `j57` is deliberately excluded because
 it requires the product's `bench_fixture` seam; it is an explicit
 `source-coupled` axis, not a portable black-box measurement.
 
@@ -334,10 +334,10 @@ invents a metric is worse than one that admits a gap.
    classifier reads a field other than exit code and denial shape, and widening
    it would let the product talk its way out of a denial.
 
-7. **The corpus is honest, not exhaustive.** Fifty-seven mandatory portable
+7. **The corpus is honest, not exhaustive.** One hundred and one mandatory portable
    black-box journeys run end to end, weighted toward failure paths because that
    is where friction lives. `j57` is one explicit source-coupled journey that
-   requires a `bench_fixture`-tagged product binary, for 58 registered journey
+   requires a `bench_fixture`-tagged product binary, for 102 registered journey
    IDs total. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts)
    are inspection steps rather than review-lifecycle friction and are not
    modelled.
@@ -419,7 +419,7 @@ invents a metric is worse than one that admits a gap.
     (cluttered repositories, interleaved lifecycles) governed by a different
     growth rule: community-reported shapes become journeys, so its size tracks
     community reports, not releases, and folding it into the core would make
-    "57 core journeys" a moving claim. Two of its numbers need careful reading.
+    "101 core journeys" a moving claim. Two of its numbers need careful reading.
     `rw01` pins issue #1881 while a product fix is in flight: a block there is
     the truth about today's build, not a permanent verdict, and the journey is
     kept precisely so the fix has a permanent pin. And the no-echo assertions
@@ -462,7 +462,7 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 
 Those numbers are the **14-journey** corpus against the binary named above,
 kept as-is because they belong to that named build. The portable core has since
-grown to 57 journeys; the source-coupled `j57` receipt-drift proof is opt-in.
+grown to 101 journeys; the source-coupled `j57` receipt-drift proof is opt-in.
 Re-run `run` against your own binary rather than reading the block above as
 current totals. The row labels moved too: `by_design` did not exist when this
 was recorded and is now printed as `4d`, next to the number it carves out of,
@@ -610,6 +610,7 @@ and every native authority state is reached through the measured binary.
 | `j48-recovered-workspace-preserves-full-candidate-scope` | two-path workspace candidate, strict-subset correction, complete terminal and recovered scope, immediate pre-commit allow, byte/path drift controls | issue #2090 |
 | `j49-status-without-cwd-honors-kill-switch` | clone-local mode disabled, explicit-CWD control, omitted-CWD status using the same repository identity, disabled/unmanaged archive without approval | issue #2129 |
 | `j50-candidate-decline-preserves-frozen-delivery-identity` | status-derived v2 consent relay and decline, exact non-authorizing delivery identity, clean authority inventory, release and byte/path drift controls | issue #2045 |
+| `j101-unrepresentable-workspace-recovery-collects-selector` | default workspace-overlay STATUS collects a replacement selector before authorization and preserves the staged predecessor | issue #3065 |
 | `j51-unrelated-noop-authority-keeps-composed-delivery` | two approved delivered segments, recorded composed pre-PR span, unrelated clean approved no-op, identical composed span afterward | issue #2125 |
 
 `j44` proves the linked checkout/common-dir topology and remote baseline before
@@ -675,7 +676,7 @@ its own declaration.
 
 - **Nothing runs unless you name it.** Default is the core alone. `--axis all`
   takes everything registered. An unknown name is a hard error, because
-  "57 core journeys" and "57 core journeys plus an axis" are different
+  "101 core journeys" and "101 core journeys plus an axis" are different
   measurements and a typo must never silently produce the first.
 - **The core does not depend on any axis.** `rm bench/axis_damaged_store*.go`
   leaves the corpus compiling, testing and reporting exactly the numbers it

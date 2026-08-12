@@ -817,7 +817,7 @@ func (selector reviewTransitionSelector) recoveryArguments() ([]ReviewTransition
 		}
 		arguments = append(arguments, ReviewTransitionArgument{Name: "base-ref", Value: target.BaseRef}, ReviewTransitionArgument{Name: "committed-only", Value: "true"})
 	case reviewtransaction.TargetBaseWorkspaceOverlay:
-		if target.BaseRef == "" {
+		if target.BaseRef == "" || target.Projection != reviewtransaction.ProjectionStaged {
 			return nil, false
 		}
 		arguments = append(arguments, ReviewTransitionArgument{Name: "base-ref", Value: target.BaseRef})

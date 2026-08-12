@@ -22,8 +22,16 @@ type statusEnvelope struct {
 		State     string `json:"state"`
 		Revision  string `json:"revision"`
 	} `json:"authority"`
-	TargetIdentity string `json:"target_identity"`
-	Projection     struct {
+	Receipt struct {
+		Status   string `json:"status"`
+		Identity string `json:"identity"`
+	} `json:"receipt"`
+	Frozen struct {
+		CorrectionBudget int `json:"correction_budget"`
+	} `json:"frozen"`
+	TargetIdentity    string `json:"target_identity"`
+	ActionDisposition string `json:"action_disposition"`
+	Projection        struct {
 		BaseTree             string   `json:"base_tree"`
 		CurrentCandidateTree string   `json:"current_candidate_tree"`
 		PathsDigest          string   `json:"paths_digest"`
@@ -656,6 +664,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, intendedUntrackedJourneys()...)
 	journeys = append(journeys, captureResultDryRunJourneys()...)
 	journeys = append(journeys, issue2031Journeys()...)
+	journeys = append(journeys, issue3065Journeys()...)
 	journeys = append(journeys, findingIDPrefixJourneys()...)
 	journeys = append(journeys, rescopeWriteGuardJourneys()...)
 	journeys = append(journeys, rescopeEvidenceOnlyRetryJourneys()...)

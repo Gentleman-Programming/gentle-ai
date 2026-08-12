@@ -19,7 +19,7 @@ func init() {
 		BlackBox: false,
 		Properties: []string{
 			"j57 requires the product's `bench_fixture` build tag to mutate a sandbox receipt between authority discovery reads; ordinary product binaries do not expose that seam.",
-			"The portable black-box core excludes j57 and contains 57 journeys. Select this axis explicitly and build the product with `-tags bench_fixture` to run the proof.",
+			"The portable black-box core excludes j57 and contains 101 journeys. Select this axis explicitly and build the product with `-tags bench_fixture` to run the proof.",
 			"The fixture changes only its fresh sandbox receipt and asserts the product ignores the drift pre-verify (corrective verify cycle 3: the pre-verify `compact authority changed during discovery` consultation was superseded by Wave 4's post-verify-only review consultation).",
 		},
 		Journeys: sourceCoupledJourneys,

@@ -62,6 +62,8 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// Merge note: this branch narrated its journey as "j97" while #1890 took that
 	// number on main. Its registered ID is j2138-opencode-native-fallback-boundary,
 	// so only the prose collided, never the identifier.
+	// j101 proves #3065 collects an unrepresentable default workspace-overlay
+	// selector before authorization and preserves the staged predecessor.
 	// #1993 REMOVED two: j38 (the bound-passing-finish refusal routing to the
 	// review router) and j39 (the stranded-successor exit it named). Review
 	// acts after implementation and verification, so that refusal is gone and
@@ -88,8 +90,10 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// stop that must replace an otherwise unexecutable START transition. 99 ->
 	// 100: #2773 adds j102, which drives the immutable reviewer-context capacity
 	// terminal instead of accepting an impossible reviewer slot.
-	if got := len(seen); got != 100 {
-		t.Errorf("core journey count = %d, want 100", got)
+	// 100 -> 101 for issue #3065. Keep this explicit so a journey cannot appear
+	// or vanish unnoticed when independently-owned benchmark work lands.
+	if got := len(seen); got != 101 {
+		t.Errorf("core journey count = %d, want 101", got)
 	}
 	for id, found := range want {
 		if !found {
