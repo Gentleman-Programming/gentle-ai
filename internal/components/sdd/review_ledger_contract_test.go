@@ -362,7 +362,10 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// creation outcome, avoiding both a deadlock and duplicate issue creation.
 	// Kilocode embeds the shared orchestrator contract, so the hash moved.
 	// Deliberate, not drift.
-	const want = "c85db0efc051cf9288fce36ca611ce81c210cdd5675f5dc80df7365778ca60ae"
+	// #3076 keeps automated provider-report creation label-free; the validated
+	// repository workflow is the sole gentle-report writer. Kilocode embeds the
+	// shared orchestrator contract, so the hash moved. Deliberate, not drift.
+	const want = "c786b872799b12fe4e94d8bc393b7f8a348bc10c37c9bb30b9db4fff689273c9"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

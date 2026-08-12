@@ -169,11 +169,14 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "duplicate lookup failure no writes", text: "Do not create, comment, update, or label any issue."},
 		{name: "comment duplicate", text: "add exactly one new occurrence comment with the observed evidence only on that exact issue"},
 		{name: "duplicate labels unchanged", text: "do not add, remove, or change any labels on it"},
+		{name: "no-label automated creation", text: "without requesting, supplying, or applying any label during creation"},
+		{name: "repository workflow sole writer", text: "The repository-side `issues: opened` workflow is the only writer of `gentle-report`."},
 		{name: "occurrence comment failure stop", text: "If the occurrence-comment write fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome, STOP with all consumer state preserved. Do not retry that comment or perform another GitHub mutation until the exact comment outcome on that exact canonical issue is definitively resolved."},
 		{name: "definitive creation failure stop", text: "If creation definitively fails or lacks permission, STOP with all consumer state preserved. Do not comment, update, label, or retry creation."},
 		{name: "ambiguous creation read-only resolution", text: "If creation is ambiguous, incomplete, times out, or has an unknown outcome, permit only a read-only GitHub lookup narrowly scoped to resolving the exact issue identity from that original creation attempt."},
 		{name: "ambiguous creation mutation stop", text: "Until that identity is definitively resolved, perform no GitHub mutation and do not retry creation. If it cannot be resolved, remain stopped."},
-		{name: "confirmed creation continues", text: "After exact successful creation identity is proven, surface the confirmed created issue identity/URL and continue with the shared candidate-scoped continuation below. Do not create, comment, or label again."},
+		{name: "confirmed creation continues", text: "After exact successful creation identity is proven, surface the confirmed created issue identity/URL and continue with the shared candidate-scoped continuation below. Do not create, comment, update, or label that new issue."},
+		{name: "confirmed creation remains label-neutral", text: "Do not create, comment, update, or label that new issue. The repository-side `issues: opened` workflow alone may apply `gentle-report`."},
 		{name: "informational label boundary", text: "`gentle-report` never authorizes closure, deduplication, trust, privilege, consent, or evidence admission, and is not a report-success precondition."},
 		{name: "report ambiguity prevents decline", text: "Any report ambiguity or failure is a hard stop: preserve all consumer state and do not execute the decline invocation."},
 		{name: "report success gates continuation", text: "Only after a definitive successful report outcome, execute the shared candidate-scoped continuation below."},
@@ -270,6 +273,8 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 				"label application fails",
 				"apply only a missing label",
 				"Never search and label an arbitrary equivalent/pre-existing issue",
+				"--label",
+				"LABEL_ARGS",
 			} {
 				if strings.Contains(contract, prohibited) {
 					t.Errorf("provider-defect handoff contains prohibited wording: %q", prohibited)
