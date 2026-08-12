@@ -344,16 +344,17 @@ var sentinelVerificationWords = map[string]struct{}{
 // SubstantiveVerificationPayload reports whether the payload carries auditable,
 // substantive verification content a high-risk gate can trust. After trimming
 // surrounding whitespace, every whitespace-separated token is stripped of
-// decorative enclosing punctuation (!.,:;=()[]{}*+-_"'`|/\<>#@$%^&) and, when
+// decorative enclosing punctuation (!?,.:;=()[]{}*+-_"'`|/\<>#@$%^&) and, when
 // it survives, compared against the closed sentinel verdict set {pass, passed,
 // ok, fail, failed, error, success, failure}. Payloads with fewer than two
-// surviving non-sentinel tokens are refused: a bare or decorated verdict word
-// ("PASS", "PASS!", "===PASS==="), a repetition of verdict words ("PASS PASS",
-// "pass\nfail"), a single opaque token ("x"), and whitespace-only bytes all
-// fail. Real command output, go test summaries, and prose sentences that name
-// at least two distinct content words pass even when they embed a sentinel
-// verdict ("go build ./... ok\ngo test ./... ok", "repository verification
-// failed").
+// distinct surviving non-sentinel tokens are refused: a bare or decorated
+// verdict word ("PASS", "PASS!", "===PASS==="), a repetition of verdict words
+// ("PASS PASS", "pass\nfail"), a single or repeated opaque token ("x", "x x",
+// "x X"), a question-mark-wrapped verdict pair ("PASS? FAIL?"), and
+// whitespace-only bytes all fail. Real command output, go test summaries, and
+// prose sentences that name at least two distinct content words pass even when
+// they embed a sentinel verdict ("go build ./... ok\ngo test ./... ok",
+// "repository verification failed").
 //
 // The predicate lets the high-risk approval and correction gates fail closed on
 // captured records whose outcome is "passed" but whose payload is opaque or
@@ -367,16 +368,17 @@ func SubstantiveVerificationPayload(payload []byte) bool {
 	if trimmed == "" {
 		return false
 	}
-	contentTokens := 0
+	contentTokens := map[string]struct{}{}
 	for _, token := range strings.Fields(trimmed) {
-		clean := strings.Trim(token, "!.,:;=()[]{}*+-_\"'`|/\\<>#@$%^&")
+		clean := strings.Trim(token, "!?,.:;=()[]{}*+-_\"'`|/\\<>#@$%^&")
 		if clean == "" {
 			continue
 		}
-		if _, sentinel := sentinelVerificationWords[strings.ToLower(clean)]; sentinel {
+		normalized := strings.ToLower(clean)
+		if _, sentinel := sentinelVerificationWords[normalized]; sentinel {
 			continue
 		}
-		contentTokens++
+		contentTokens[normalized] = struct{}{}
 	}
-	return contentTokens >= 2
+	return len(contentTokens) >= 2
 }
