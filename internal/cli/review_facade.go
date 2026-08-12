@@ -947,6 +947,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		var compactAuthority *reviewStatusCompactAuthority
 		if *nextTransition {
 			artifacts := []ReviewTransitionArtifact{}
+			var refuterClaims []reviewtransaction.RefuterClaim
 			var capturedEvidence *reviewtransaction.VerificationEvidenceRecord
 			var evidenceErr error
 			repositoryContext := ""
@@ -1032,6 +1033,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 						if artifactErr == nil && record.State.State != reviewtransaction.StateReviewing {
 							artifacts, artifactErr = discoverCapturedReviewerArtifacts(ctx, root, store.Dir, record.State, record.Revision)
 						}
+						if artifactErr == nil && record.State.State == reviewtransaction.StateReviewing && len(artifacts) == len(record.State.SelectedLenses) {
+							refuterClaims, artifactErr = discoverPendingRefuterClaims(ctx, root, store.Dir, record.State, record.Revision)
+						}
 						if artifactErr == nil {
 							evidenceTarget := record.State.CurrentSnapshot
 							if validationRequest != nil {
@@ -1064,7 +1068,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					result.Eligibility = newReviewActionEligibility(result)
 				}
 			}
-			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, PreCommitDeliveryAssessment: preCommitDeliveryAssessment}
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, PreCommitDeliveryAssessment: preCommitDeliveryAssessment, RefuterClaims: refuterClaims}
 			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, input)
 			result.NextTransition = &transition
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&
@@ -4208,12 +4212,16 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 	var transition *ReviewNextTransition
 	if nextTransition {
 		artifacts := []ReviewTransitionArtifact{}
+		var refuterClaims []reviewtransaction.RefuterClaim
 		var artifactErr error
 		if state.State == reviewtransaction.StateReviewing {
 			if len(contexts) == 0 || contexts[0].Context == nil || strings.TrimSpace(contexts[0].Repo) == "" {
 				artifactErr = errors.New("reviewer artifact context is unavailable")
 			} else {
 				artifacts, artifactErr = discoverCapturedReviewerArtifacts(contexts[0].Context, contexts[0].Repo, store.Dir, state, revision)
+				if artifactErr == nil && len(artifacts) == len(state.SelectedLenses) {
+					refuterClaims, artifactErr = discoverPendingRefuterClaims(contexts[0].Context, contexts[0].Repo, store.Dir, state, revision)
+				}
 			}
 		}
 		if transitionErr != nil {
@@ -4221,7 +4229,7 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 		}
 		value := reviewFinalizeNextTransition(state, revision, artifacts, artifactErr, reviewFinalizeTransitionContext{
 			Contract: contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CaptureContext: captureContext,
-			CapturedEvidence: capturedEvidence, EvidenceErr: evidenceErr,
+			CapturedEvidence: capturedEvidence, EvidenceErr: evidenceErr, RefuterClaims: refuterClaims,
 		})
 		transition = &value
 		if reviewTransitionValidationRequest(&value) == nil && value.ReasonCode != "correction_repository_verification_required" &&

@@ -23,6 +23,7 @@ import { isAbsolute, join } from "node:path"
 // user-visible session, and no OPENCODE_DISABLE_* variable, because the
 // runtime's output is advisory and cannot mint authority until Go admits it.
 const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-readability", "review-reliability"])
+const REFUTER_AGENT = "review-refuter"
 const BINDING = /^GENTLE_AI_REVIEW_BINDING (\{[^\n]+\})(?:\n|$)/
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
@@ -509,7 +510,7 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
       }
       return
     }
-    if (!REVIEW_AGENTS.has(subagent)) return
+    if (!REVIEW_AGENTS.has(subagent) && subagent !== REFUTER_AGENT) return
     if (typeof output.args.prompt !== "string") {
       throw new Error("review task is missing GENTLE_AI_REVIEW_BINDING")
     }
@@ -535,7 +536,7 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
       }
       return
     }
-    if (!REVIEW_AGENTS.has(subagent)) return
+    if (!REVIEW_AGENTS.has(subagent) && subagent !== REFUTER_AGENT) return
     if (typeof input.args.prompt !== "string" || !BINDING.test(input.args.prompt)) return
     output.output = reviewerResult(output.output)
   },

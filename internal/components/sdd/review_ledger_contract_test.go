@@ -154,6 +154,7 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 			}
 			agentsMap := root["agent"].(map[string]any)
 			expandOpenCodeBoundedReviewAgents(agentsMap)
+			bindOpenCodeRefuter(agentsMap)
 			for _, name := range []string{"review-risk", "review-readability", "review-reliability", "review-resilience"} {
 				agent := agentsMap[name].(map[string]any)
 				prompt := agent["prompt"].(string)
@@ -173,11 +174,13 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 			}
 			refuter := agentsMap[opencode.ReviewRefuterAgent].(map[string]any)
 			refuterPrompt := refuter["prompt"].(string)
-			if !strings.Contains(refuterPrompt, "exactly ONE transaction-wide inferential batch") || !strings.Contains(refuterPrompt, "terminate") {
-				t.Errorf("%s refuter prompt is not bounded: %s", path, refuterPrompt)
+			for _, want := range []string{"provider-bound refuter batch", "finding_id", "outcome", "proof_refs"} {
+				if !strings.Contains(refuterPrompt, want) {
+					t.Errorf("%s refuter prompt misses %q: %s", path, want, refuterPrompt)
+				}
 			}
 			assertNoReviewerLifecycleInstructions(t, path+" refuter", refuterPrompt)
-			assertOpenCodeReadOnlyTools(t, path+" refuter", refuter["tools"].(map[string]any), true, false)
+			assertOpenCodeReadOnlyTools(t, path+" refuter", refuter["tools"].(map[string]any), false, false)
 		})
 	}
 }
@@ -586,8 +589,9 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// characters per row). The ceilings preserve the required 15% headroom.
 		// #2773 adds one lens-context-budget terminal continuation (379 rendered
 		// characters per row). The ceilings preserve the required 15% headroom.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_088, maxCharacters: 26_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_433, maxCharacters: 41_000},
+		// The provider-bound refuter contract adds 370 rendered characters per row.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_458, maxCharacters: 26_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_803, maxCharacters: 41_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -682,5 +686,5 @@ func readGentleOrchestratorPrompt(t *testing.T, settingsPath string) string {
 
 func assertOpenCodeRefuterToolsReadOnly(t *testing.T, label string, tools map[string]any) {
 	t.Helper()
-	assertOpenCodeReadOnlyTools(t, label, tools, true, false)
+	assertOpenCodeReadOnlyTools(t, label, tools, false, false)
 }

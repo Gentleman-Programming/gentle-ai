@@ -44,6 +44,7 @@ const bindingPrompt = (binding: Record<string, unknown>) =>
   ` + "`" + `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(binding)}\nreview the frozen candidate\n` + "`" + `
 
 let prompt = bindingPrompt(opaque)
+if (scenario.includes("refuter")) prompt = bindingPrompt({ ...opaque, lens: "review-refuter" })
 if (scenario === "before-legacy") prompt = bindingPrompt(legacy)
 if (scenario === "before-missing") prompt = "review the frozen candidate\n"
 if (scenario === "before-equals") prompt = ` + "`" + `GENTLE_AI_REVIEW_BINDING=${JSON.stringify(opaque)}\nreview the frozen candidate\n` + "`" + `
@@ -60,8 +61,8 @@ const runBefore = async (subagentType = "review-risk", background = false) => {
   }
 }
 
-const runAfter = async (outputText: string) => {
-  const input = { tool: "task", sessionID: "session-a", callID: "call-after", args: { subagent_type: "review-risk", prompt } }
+const runAfter = async (outputText: string, subagentType = "review-risk") => {
+  const input = { tool: "task", sessionID: "session-a", callID: "call-after", args: { subagent_type: subagentType, prompt } }
   const output = { title: "", output: outputText, metadata: {} }
   try {
     await hooks["tool.execute.after"](input, output)
@@ -116,7 +117,9 @@ try {
       console.log(cause instanceof Error ? cause.message : String(cause))
     }
   } else if (scenario.startsWith("before")) {
-    console.log(await runBefore())
+    console.log(await runBefore(scenario === "before-refuter" ? "review-refuter" : "review-risk"))
+  } else if (scenario === "after-refuter-envelope") {
+    console.log(await runAfter("<task id=\"x\" state=\"completed\">\n<task_result>\n` + reviewPluginPayloadMarker + `\n</task_result>\n</task>", "review-refuter"))
   } else if (scenario === "after-empty") {
     console.log(await runAfter(""))
   } else if (scenario === "after-malformed") {
@@ -529,6 +532,25 @@ func TestReviewPluginInjectsProviderOwnedLensContextWithoutIsolationEnvironment(
 	}
 	if strings.Contains(prompt, "review the frozen candidate") {
 		t.Fatalf("provider injection retained caller-authored prose: %q", prompt)
+	}
+}
+
+func TestOpenCodeRefuterUsesProviderOwnedContextAndReturnsRawCanonicalArtifact(t *testing.T) {
+	block := strings.Replace(reviewPluginLensContextBlock("internal/example.go"), `"lens":"review-risk"`, `"lens":"review-refuter"`, 1)
+	argvLog := filepath.Join(t.TempDir(), "argv.log")
+	prompt := runReviewPluginScenarioStub(t, "before-refuter", reviewPluginStub{lensContext: block, argvLog: argvLog})
+	if strings.TrimSpace(prompt) != strings.TrimSpace(block) {
+		t.Fatalf("refuter prompt is not provider-owned context:\n%s", prompt)
+	}
+	logged, err := os.ReadFile(argvLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), "review lens-context") || !strings.Contains(string(logged), "--lens review-refuter") {
+		t.Fatalf("refuter did not use the existing bound provider verb: %s", logged)
+	}
+	if output := runReviewPluginScenarioStub(t, "after-refuter-envelope", reviewPluginStub{}); output != reviewPluginPayloadMarker {
+		t.Fatalf("refuter output = %q, want raw canonical payload", output)
 	}
 }
 

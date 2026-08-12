@@ -835,6 +835,9 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 		return overlayBytes, nil
 	}
 	expandOpenCodeBoundedReviewAgents(agentsMap)
+	if agent == model.AgentOpenCode {
+		bindOpenCodeRefuter(agentsMap)
+	}
 
 	// Inline the orchestrator prompt (always inlined, not a file reference),
 	// unless an external strategy requested preserving the existing prompt.
@@ -1010,6 +1013,13 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 	if refuter, ok := agentsMap[opencode.ReviewRefuterAgent].(map[string]any); ok {
 		refuter["prompt"] = "You are the detached read-only refuter for exactly ONE transaction-wide inferential batch. Receive every inferential severe neutral claim and proof reference, return one corroborated | refuted | inconclusive result per finding, add no findings, modify nothing, return one complete result, and terminate. Missing or malformed entries are inconclusive."
 		refuter["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+	}
+}
+
+func bindOpenCodeRefuter(agentsMap map[string]any) {
+	if refuter, ok := agentsMap[opencode.ReviewRefuterAgent].(map[string]any); ok {
+		refuter["prompt"] = "Execute exactly one provider-bound refuter batch. The provider supplies the complete immutable candidate context and canonical result schema. Return only the requested JSON object with results containing finding_id, outcome, and proof_refs."
+		refuter["tools"] = map[string]any{"*": false, "read": false, "write": false, "edit": false, "bash": false, "task": false}
 	}
 }
 

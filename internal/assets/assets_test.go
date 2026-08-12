@@ -496,6 +496,8 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		// merely relayed. Declaring the relayed level from here would
 		// permanently record a weaker claim than what actually happened.
 		`const LENS_CONTEXT_DELIVERY = "runtime_interception"`,
+		`const REFUTER_AGENT = "review-refuter"`,
+		`subagent !== REFUTER_AGENT`,
 		`"--delivery", LENS_CONTEXT_DELIVERY`,
 		`GENTLE_AI_REVIEW_CONTEXT_END`,
 		`partial provider context is never injected`,

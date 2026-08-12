@@ -52,10 +52,11 @@ func reviewerRoleFor(lens string) (reviewerRole, bool) {
 }
 
 const (
-	authorityFirstProcedurePlaceholder = "{{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}"
-	authorityFirstProcedureStart       = "<!-- authority-first-terminal-procedure:start -->"
-	authorityFirstProcedureEnd         = "<!-- authority-first-terminal-procedure:end -->"
-	runtimeAgentIDPlaceholder          = "{{GENTLE_AI_RUNTIME_AGENT_ID}}"
+	authorityFirstProcedurePlaceholder  = "{{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}"
+	authorityFirstProcedureStart        = "<!-- authority-first-terminal-procedure:start -->"
+	authorityFirstProcedureEnd          = "<!-- authority-first-terminal-procedure:end -->"
+	runtimeAgentIDPlaceholder           = "{{GENTLE_AI_RUNTIME_AGENT_ID}}"
+	openCodeRefuterTransportPlaceholder = "{{GENTLE_AI_OPENCODE_REFUTER_TRANSPORT}}"
 )
 
 func boundedReviewContract() string {
@@ -81,7 +82,12 @@ func renderBoundedReviewAsset(agent model.AgentID, path string) string {
 // asset passes through, so no branch added to renderBoundedReviewAssetBody can
 // leak an unbound placeholder or an unspecialized identity.
 func bindRuntimeAgentIdentity(content string, agent model.AgentID) string {
-	return strings.ReplaceAll(content, runtimeAgentIDPlaceholder, string(agent))
+	content = strings.ReplaceAll(content, runtimeAgentIDPlaceholder, string(agent))
+	refuterTransport := ""
+	if agent == model.AgentOpenCode {
+		refuterTransport = " When STATUS returns `external.run_refuter`, run `review-refuter` once in the foreground with the same binding prefix assembled only from its `lineage`, `target`, `expected-revision`, and `repository-context` arguments plus `lens: review-refuter`; pipe its raw canonical `results` object directly to `review finalize --refuter -`, never through a candidate scratch file."
+	}
+	return strings.ReplaceAll(content, openCodeRefuterTransportPlaceholder, refuterTransport)
 }
 
 func renderBoundedReviewAssetBody(path string) string {

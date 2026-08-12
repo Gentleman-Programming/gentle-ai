@@ -215,6 +215,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		if len(artifacts) != len(selectedLenses) {
 			return reviewMissingCaptureTransition(binding, selectedLenses, artifacts, input.CaptureContext)
 		}
+		if len(input.RefuterClaims) > 0 {
+			return reviewRefuterCollection(binding)
+		}
 		return reviewExecuteTransition("captured_results_ready", "review.finalize", []ReviewTransitionArgument{
 			{Name: "lineage", Value: binding.LineageID}, {Name: "captured_results", Value: "true"},
 		}, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, binding, artifacts)
@@ -377,6 +380,7 @@ type reviewFinalizeTransitionContext struct {
 	CaptureContext    *reviewCaptureContext
 	CapturedEvidence  *reviewtransaction.VerificationEvidenceRecord
 	EvidenceErr       error
+	RefuterClaims     []reviewtransaction.RefuterClaim
 }
 
 func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision string, artifacts []ReviewTransitionArtifact, artifactErr error, contexts ...reviewFinalizeTransitionContext) ReviewNextTransition {
@@ -404,6 +408,9 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 	}
 	if state.State == reviewtransaction.StateReviewing && artifactErr == nil && len(artifacts) != len(state.SelectedLenses) {
 		return reviewMissingCaptureTransition(reviewTransitionBinding(status.Authority, status.TargetIdentity, transitionContext.RepositoryContext), state.SelectedLenses, artifacts, transitionContext.CaptureContext)
+	}
+	if state.State == reviewtransaction.StateReviewing && artifactErr == nil && len(transitionContext.RefuterClaims) > 0 {
+		return reviewRefuterCollection(reviewTransitionBinding(status.Authority, status.TargetIdentity, transitionContext.RepositoryContext))
 	}
 	if state.State == reviewtransaction.StateReviewing && artifactErr == nil {
 		return reviewExecuteTransition("captured_results_ready", "review.finalize", []ReviewTransitionArgument{{Name: "lineage", Value: state.LineageID}, {Name: "captured_results", Value: "true"}}, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, reviewTransitionBinding(status.Authority, status.TargetIdentity), artifacts)
@@ -517,6 +524,7 @@ type reviewNextTransitionInput struct {
 	RDDModeResolved                                bool
 	LensContextBudgetExceeded                      bool
 	PreCommitDeliveryAssessment                    *reviewtransaction.CompactGateTargetApplicability
+	RefuterClaims                                  []reviewtransaction.RefuterClaim
 }
 
 const reviewSubmissionValuePlaceholder = "{{value}}"
@@ -555,6 +563,13 @@ func reviewTargetedValidationSubmission(contract string, binding ReviewTransitio
 	}, ReviewTransitionSubmissionValue{
 		Slot: "validation", Domain: "artifact_path_or_stdin", Schema: reviewValidatorSchemaID,
 		SubstitutionLocation: 6,
+	})
+}
+
+func reviewRefuterCollection(binding ReviewTransitionBinding) ReviewNextTransition {
+	arguments := append(reviewBindingArguments(binding), ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext})
+	return reviewCollectTransition("refuter_outcomes_required", ReviewTransitionInput{
+		Name: "refuter_outcomes", Schema: reviewRefuterSchemaID, CaptureOperation: "external.run_refuter", Arguments: arguments,
 	})
 }
 
@@ -1035,6 +1050,8 @@ func reviewReasonDescription(reason string) string {
 		return "Multiple lineages match target; select an explicit lineage"
 	case "reviewer_results_required":
 		return "Reviewer lens artifacts required for current revision"
+	case "refuter_outcomes_required":
+		return "One read-only refuter batch required for inferential severe findings"
 	case "targeted_validation_required":
 		return "Targeted validation run required for correction plan"
 	case "correction_plan_required":
