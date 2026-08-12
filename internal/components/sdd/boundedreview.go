@@ -66,6 +66,84 @@ func renderSDDOrchestratorAsset(agent model.AgentID) string {
 	return renderBoundedReviewAsset(agent, sddOrchestratorAsset(agent))
 }
 
+// opencodeBackgroundPolicyAddendumAsset is the embedded asset that carries the
+// OpenCode-native background-subagent policy. It is the OpenCode-only
+// addendum the seam composes on top of the canonical shared orchestrator; no
+// other runtime reads it. The asset is consumed by the seam and never
+// inlined into the overlay or AGENTS.md by any other path.
+const opencodeBackgroundPolicyAddendumAsset = "opencode/sdd-orchestrator-background-policy.md"
+
+// opencodeBackgroundPolicyMarkerStart and opencodeBackgroundPolicyMarkerEnd
+// bracket the exact section the seam owns in the OpenCode orchestrator. The
+// same marker pair makes the injection idempotent and trivially observable
+// in the final bytes: any consumer that wants to confirm the addendum is
+// present can search for the start marker, and the seam is a no-op when the
+// start marker is already in the content.
+const (
+	opencodeBackgroundPolicyMarkerStart = "<!-- gentle-ai:opencode-background-policy -->"
+	opencodeBackgroundPolicyMarkerEnd   = "<!-- /gentle-ai:opencode-background-policy -->"
+)
+
+// composeSDDOrchestrator is the canonical composition/rendering seam every
+// SDD orchestrator install flows through (issue #3043). It returns the
+// runtime-specific orchestrator content the legacy renderSDDOrchestratorAsset
+// produced, then layers runtime-owned additive sections on top:
+//
+//   - The shared canonical orchestrator is preserved byte-for-byte for every
+//     runtime that does not opt into a runtime-specific addendum. Non-OpenCode
+//     runtimes see the same bytes they saw before the seam existed; that is
+//     the contract that lets an incremental migration land without rewriting
+//     any other adapter.
+//   - OpenCode receives the shared orchestrator plus the additive
+//     background-policy addendum, injected exactly once per render. Kilocode
+//     historically shared the OpenCode asset path, but it is not OpenCode and
+//     must not inherit the OpenCode-native background policy: the seam
+//     applies the addendum to AgentOpenCode and to nothing else.
+//
+// Callers that want the canonical shared orchestrator with no addenda should
+// keep calling renderSDDOrchestratorAsset directly. Callers that render the
+// OpenCode orchestrator for a default or named-profile install must call
+// this seam, so the addendum lands in every OpenCode-flavored render
+// (overlay, profile, Jinja) through one place.
+func composeSDDOrchestrator(agent model.AgentID) string {
+	content := renderSDDOrchestratorAsset(agent)
+	if agent != model.AgentOpenCode {
+		return content
+	}
+	return injectOpenCodeBackgroundPolicyAddendum(content)
+}
+
+// injectOpenCodeBackgroundPolicyAddendum appends the OpenCode-only
+// background-policy addendum to the supplied orchestrator content. It is
+// idempotent: when the start marker is already present the function returns
+// the content unchanged, so repeated renders of the same asset (overlay,
+// profile, reinstall) never duplicate the section. When the embed of the
+// addendum asset is missing the function returns the content unchanged
+// rather than panic, because the orchestrator asset is the production
+// deliverable and a missing embed should not be allowed to break the
+// install. The asset is registered in the embed at build time, so a
+// missing read is a build error worth a loud fix, not a soft one.
+func injectOpenCodeBackgroundPolicyAddendum(content string) string {
+	if strings.Contains(content, opencodeBackgroundPolicyMarkerStart) {
+		return content
+	}
+	addendum, err := assets.Read(opencodeBackgroundPolicyAddendumAsset)
+	if err != nil {
+		return content
+	}
+	body := strings.TrimRight(addendum, "\n")
+	separator := "\n\n"
+	if !strings.HasSuffix(content, "\n") {
+		separator = "\n\n"
+	}
+	if strings.HasSuffix(content, "\n\n") {
+		separator = ""
+	} else if strings.HasSuffix(content, "\n") {
+		separator = "\n"
+	}
+	return content + separator + opencodeBackgroundPolicyMarkerStart + "\n" + body + "\n" + opencodeBackgroundPolicyMarkerEnd + "\n"
+}
+
 // renderBoundedReviewAsset resolves one embedded asset into the exact bytes a
 // single runtime installs. The agent is required, not optional: the shared
 // review ledger contract states the runtime identity every negotiated STATUS

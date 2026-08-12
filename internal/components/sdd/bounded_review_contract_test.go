@@ -421,3 +421,116 @@ func parseAuthorityFirstRows(t *testing.T, content string) []authorityFirstRow {
 	}
 	return rows
 }
+
+// TestComposeSDDOrchestratorSeamAddsBackgroundPolicyToOpenCodeOnly pins the
+// issue #3043 contract: the composition seam applies the OpenCode-only
+// background-policy addendum to AgentOpenCode and to nothing else. Every
+// other runtime, including Kilocode (which historically shared the OpenCode
+// asset path), must keep receiving the same bytes the legacy renderer
+// produced, so the migration is byte-for-byte lossless outside OpenCode.
+func TestComposeSDDOrchestratorSeamAddsBackgroundPolicyToOpenCodeOnly(t *testing.T) {
+	t.Parallel()
+
+	runtimesPreserved := []model.AgentID{
+		model.AgentClaudeCode,
+		model.AgentGeminiCLI,
+		model.AgentCodex,
+		model.AgentAntigravity,
+		model.AgentWindsurf,
+		model.AgentCursor,
+		model.AgentKimi,
+		model.AgentQwenCode,
+		model.AgentKiroIDE,
+		model.AgentHermes,
+		model.AgentKilocode,
+		model.AgentVSCodeCopilot,
+		model.AgentOpenClaw,
+		model.AgentPi,
+		model.AgentTrae,
+	}
+	for _, agent := range runtimesPreserved {
+		t.Run(string(agent), func(t *testing.T) {
+			legacy := renderSDDOrchestratorAsset(agent)
+			seam := composeSDDOrchestrator(agent)
+			if seam != legacy {
+				t.Fatalf("composeSDDOrchestrator(%q) changed bytes for a non-OpenCode runtime; legacy length=%d seam length=%d", agent, len(legacy), len(seam))
+			}
+			if strings.Contains(seam, opencodeBackgroundPolicyMarkerStart) {
+				t.Fatalf("composeSDDOrchestrator(%q) leaked the OpenCode background-policy marker to a non-OpenCode runtime", agent)
+			}
+		})
+	}
+
+	opencode := composeSDDOrchestrator(model.AgentOpenCode)
+	if !strings.Contains(opencode, opencodeBackgroundPolicyMarkerStart) {
+		t.Fatalf("composeSDDOrchestrator(opencode) missing the start marker; addendum was not applied to OpenCode")
+	}
+	if !strings.Contains(opencode, opencodeBackgroundPolicyMarkerEnd) {
+		t.Fatalf("composeSDDOrchestrator(opencode) missing the end marker; addendum was not applied to OpenCode")
+	}
+	for _, required := range []string{
+		"OpenCode Background Subagent Policy",
+		"native `task(..., background: true)`",
+		"Foreground fallback",
+		"process-local, non-durable",
+		"Kilocode",
+	} {
+		if !strings.Contains(opencode, required) {
+			t.Fatalf("composeSDDOrchestrator(opencode) missing required addendum clause %q", required)
+		}
+	}
+}
+
+// TestInjectOpenCodeBackgroundPolicyAddendumIsIdempotent pins the exactly-once
+// contract from issue #3043: re-rendering the OpenCode orchestrator through
+// the seam any number of times must produce one addendum, not N. The seam
+// detects an already-applied addendum by the start marker and returns the
+// content unchanged in that case.
+func TestInjectOpenCodeBackgroundPolicyAddendumIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	once := injectOpenCodeBackgroundPolicyAddendum("alpha\n")
+	if strings.Count(once, opencodeBackgroundPolicyMarkerStart) != 1 {
+		t.Fatalf("first render: start marker count = %d, want 1", strings.Count(once, opencodeBackgroundPolicyMarkerStart))
+	}
+	twice := injectOpenCodeBackgroundPolicyAddendum(once)
+	if twice != once {
+		t.Fatalf("second render mutated content; expected the addendum to be detected and skipped")
+	}
+	if strings.Count(twice, opencodeBackgroundPolicyMarkerStart) != 1 {
+		t.Fatalf("repeated render: start marker count = %d, want 1", strings.Count(twice, opencodeBackgroundPolicyMarkerStart))
+	}
+	thrice := injectOpenCodeBackgroundPolicyAddendum(twice)
+	if strings.Count(thrice, opencodeBackgroundPolicyMarkerStart) != 1 {
+		t.Fatalf("third render: start marker count = %d, want 1", strings.Count(thrice, opencodeBackgroundPolicyMarkerStart))
+	}
+}
+
+// TestInjectOpenCodeBackgroundPolicyAddendumKeepsSurroundingContent pins the
+// composition contract: the seam must not eat, reorder, or rewrite the host
+// orchestrator content. The host orchestrator's own bytes come first, and the
+// addendum section is appended after them inside the marker pair.
+func TestInjectOpenCodeBackgroundPolicyAddendumKeepsSurroundingContent(t *testing.T) {
+	t.Parallel()
+
+	host := "first line of orchestrator\nlast line of orchestrator\n"
+	composed := injectOpenCodeBackgroundPolicyAddendum(host)
+	startIdx := strings.Index(composed, opencodeBackgroundPolicyMarkerStart)
+	endIdx := strings.Index(composed, opencodeBackgroundPolicyMarkerEnd)
+	if startIdx < 0 || endIdx < 0 || endIdx <= startIdx {
+		t.Fatalf("composed content missing the addendum markers: start=%d end=%d", startIdx, endIdx)
+	}
+	prefix := composed[:startIdx]
+	if !strings.HasPrefix(strings.TrimRight(prefix, "\n"), "first line of orchestrator") {
+		t.Fatalf("host prefix was mutated: %q", prefix)
+	}
+	if !strings.Contains(prefix, "last line of orchestrator") {
+		t.Fatalf("host prefix lost the orchestrator's last line: %q", prefix)
+	}
+	if !strings.Contains(composed, "OpenCode Background Subagent Policy") {
+		t.Fatalf("composed content missing the addendum body")
+	}
+	if !strings.HasSuffix(composed, opencodeBackgroundPolicyMarkerEnd+"\n") {
+		t.Fatalf("composed content does not terminate with the end marker")
+	}
+}

@@ -866,10 +866,10 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 		if existingPrompt != "" {
 			orchestratorMap["prompt"] = renderPreservedOpenCodeOrchestratorPrompt(existingPrompt, agent)
 		} else {
-			orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent)
+			orchestratorMap["prompt"] = composeSDDOrchestrator(agent)
 		}
 	} else {
-		orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent)
+		orchestratorMap["prompt"] = composeSDDOrchestrator(agent)
 	}
 
 	// Carry the organic routing guidance across the wholesale prompt assignment
