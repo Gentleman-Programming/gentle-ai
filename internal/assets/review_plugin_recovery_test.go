@@ -323,12 +323,19 @@ func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 			if tt.wantPhase != "" && !strings.Contains(parts[0], tt.wantPhase) {
 				t.Fatalf("failure = %q, want phase %q", parts[0], tt.wantPhase)
 			}
-			if tt.wantBlocked && (!strings.Contains(parts[1], tt.wantCode) || !strings.Contains(parts[1], "Do not retry or advance SDD")) {
+			// The downstream launch must still be refused -- failing closed on
+			// an empty or malformed result is the point. What it must NOT do is
+			// repeat the original envelope: that launch never dispatched, so it
+			// carries the latched code and names both the phase it requested
+			// and the earlier phase that actually failed. The truthfulness of
+			// that envelope is pinned in
+			// TestLatchedSDDDispatchTellsTheTruthAndNamesAnExit.
+			if tt.wantBlocked && (!strings.Contains(parts[1], "sdd_task_dispatch_latched") ||
+				!strings.Contains(parts[1], tt.wantCode) || !strings.Contains(parts[1], "was not dispatched")) {
 				t.Fatalf("downstream SDD launch was not terminally blocked: %q", parts[1])
 			}
 			if tt.wantBlocked {
 				assertSDDTaskResultHandoff(t, parts[0], tt.wantCode, tt.wantPhase, tt.wantSummary, tt.wantModel)
-				assertSDDTaskResultHandoff(t, parts[1], tt.wantCode, tt.wantPhase, tt.wantSummary, tt.wantModel)
 			}
 			for _, leaked := range tt.forbid {
 				if strings.Contains(parts[0], leaked) || strings.Contains(parts[1], leaked) {
@@ -383,6 +390,68 @@ func assertSDDTaskResultHandoff(t *testing.T, message, code, phase, summary, mod
 	}
 	if !strings.HasPrefix(handoff.Continuation, "gentle-ai sdd-status --cwd '") || !strings.HasSuffix(handoff.Continuation, "' --json") {
 		t.Fatalf("failure handoff names no runnable sdd-status continuation: %#v", handoff)
+	}
+}
+
+// TestLatchedSDDDispatchTellsTheTruthAndNamesAnExit covers the second half of
+// the empty-result cluster (#2948, #2853, #2855, #2117).
+//
+// Failing closed after an empty task result is correct and stays. What was
+// wrong is what the latch SAYS. `tool.execute.before` replayed the stored
+// handoff byte for byte, so a later launch of a DIFFERENT phase received an
+// envelope that named the ORIGINAL phase and asserted it "produced no task
+// output at all". Nothing ran for that launch, so the assertion was a false
+// statement of observed fact — #2948's reporter saw no session creation, no
+// permission evaluation, and no streams for attempts 2 through 5. The envelope
+// also named no exit, leaving deleting the session as the only escape nobody
+// had been told about.
+func TestLatchedSDDDispatchTellsTheTruthAndNamesAnExit(t *testing.T) {
+	parts := strings.Split(runReviewPluginScenario(t, "sdd-empty", "unused"), "\n---\n")
+	if len(parts) != 3 {
+		t.Fatalf("scenario output = %q", parts)
+	}
+	latched := parts[1]
+
+	const prefix = "GENTLE_AI_SDD_FAILURE "
+	if !strings.HasPrefix(latched, prefix) {
+		t.Fatalf("latched dispatch lacks a machine-readable handoff: %q", latched)
+	}
+	var handoff struct {
+		Code         string `json:"code"`
+		Phase        string `json:"phase"`
+		LatchedPhase string `json:"latchedPhase"`
+		LatchedCode  string `json:"latchedCode"`
+		Summary      string `json:"summary"`
+		Continuation string `json:"continuation"`
+		Exit         string `json:"exit"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(latched, prefix)), &handoff); err != nil {
+		t.Fatalf("latched handoff is not JSON: %v: %q", err, latched)
+	}
+
+	if handoff.Code != "sdd_task_dispatch_latched" {
+		t.Fatalf("latched code = %q, want sdd_task_dispatch_latched; replaying the original code claims this launch failed the way the first one did", handoff.Code)
+	}
+	// The requested phase is the one the caller actually asked for, and the
+	// failed phase is named separately. Collapsing them is how one phase's
+	// failure got attributed to another.
+	if handoff.Phase != "sdd-apply" {
+		t.Fatalf("latched phase = %q, want the phase this launch requested (sdd-apply)", handoff.Phase)
+	}
+	if handoff.LatchedPhase != "sdd-propose" || handoff.LatchedCode != "sdd_task_result_empty" {
+		t.Fatalf("latched handoff does not name what actually failed: %#v", handoff)
+	}
+	if strings.Contains(handoff.Summary, sddEmptySummaryFragment) {
+		t.Fatalf("latched summary repeats %q for a launch that never dispatched: %q", sddEmptySummaryFragment, handoff.Summary)
+	}
+	if !strings.Contains(handoff.Summary, "was not dispatched") {
+		t.Fatalf("latched summary does not say the launch never ran: %q", handoff.Summary)
+	}
+	if !strings.HasPrefix(handoff.Continuation, "gentle-ai sdd-status --cwd '") {
+		t.Fatalf("latched handoff names no runnable continuation: %#v", handoff)
+	}
+	if !strings.Contains(handoff.Exit, "new session") {
+		t.Fatalf("latched handoff names no exit; deleting the session was the only escape and it was never stated: %#v", handoff)
 	}
 }
 
@@ -592,6 +661,58 @@ func TestReviewPluginSurfacesNativeGitTrustRefusal(t *testing.T) {
 	}
 	if !strings.Contains(message, "The reviewer was not launched") {
 		t.Fatalf("plugin lost its pre-launch exactly-once guarantee: %s", message)
+	}
+}
+
+// reviewPluginNativeSkewFailure is what an OLDER gentle-ai on the runtime
+// PATH emits when it is handed a repository context whose authority a NEWER
+// build wrote. The wording is the pre-#3025 one on purpose: the process that
+// fails here is the old binary, so #3025's improved native message is exactly
+// the text that cannot appear.
+const reviewPluginNativeSkewFailure = "repository_context_unavailable: provider-issued review repository context operation failed; " +
+	`cause: json: unknown field "correction_budget_policy"; refresh the exact native next_transition before retrying`
+
+// TestReviewPluginNamesTheBinaryConflictItCanSee is #3049.
+//
+// The plugin resolves the CLI by bare name, so whatever `gentle-ai` PATH finds
+// first services reviewer calls -- including a build older than the one that
+// wrote the authority. #3025 made that failure legible natively and cannot
+// help here: its code ships in the new binary while the failing process is the
+// old one, so the caller keeps getting "refresh the exact native
+// next_transition", follows it, and loops. #2461's reporter did exactly that
+// across four reoffered reviewer slots.
+//
+// This plugin ships from the NEW build even when PATH resolves an old binary,
+// which makes it the only component in the loop that can still tell the truth.
+// It does not compare versions -- it has no reference to compare against, and
+// inventing one would be a guess. It states the fact the failure proves: the
+// binary that answered cannot read this authority, two builds are involved,
+// and PATH order is what decides which one answers.
+func TestReviewPluginNamesTheBinaryConflictItCanSee(t *testing.T) {
+	message := runReviewPluginScenario(t, "before-valid", reviewPluginNativeSkewFailure)
+	if message == "NO_ERROR" {
+		t.Fatal("preflight did not fail despite an always-failing native binary")
+	}
+	if strings.Contains(message, "next_transition") {
+		t.Fatalf("plugin forwarded the advice that loops the caller: %s", message)
+	}
+	if !strings.Contains(message, "which -a gentle-ai") {
+		t.Fatalf("plugin names no way to find the conflicting binaries: %s", message)
+	}
+	// The whole point is that two builds are in play. A message that does not
+	// say so reads as a corrupt repository.
+	for _, want := range []string{"older", "PATH"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("plugin does not name the version conflict (%q missing): %s", want, message)
+		}
+	}
+	if !strings.Contains(message, "The reviewer was not launched") {
+		t.Fatalf("plugin lost its pre-launch exactly-once guarantee: %s", message)
+	}
+	// Native text can embed local paths, so this classification is authored
+	// here like the Git trust refusal is, never forwarded.
+	if strings.Contains(message, "correction_budget_policy") {
+		t.Fatalf("plugin forwarded raw native cause text: %s", message)
 	}
 }
 

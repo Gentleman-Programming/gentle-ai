@@ -1,6 +1,6 @@
 # Guard population declarations
 
-Guard population declarations make the accepted input set of selected production guards explicit at the check itself. The v2.2.1 contract covers eight evidenced guard families in `internal/cli`, `internal/reviewtransaction`, and `internal/sddstatus`.
+Guard population declarations make the accepted input set of selected production guards explicit at the check itself. The v2.2.1 contract covers ten evidenced guard families in `internal/cli`, `internal/reviewtransaction`, and `internal/sddstatus`.
 
 ## Review rule
 
@@ -22,6 +22,7 @@ Arbitrary control flow does not qualify. Shell and workflow guards are out of sc
 | `convergent-lock-contention` | Lock contenders allowed to wait rather than fail immediately |
 | `finalize-result-admission` | Reviewer-result sources allowed to govern finalization |
 | `receipt-content-governance` | Terminal receipts allowed to govern delivered content |
+| `persisted-sync-state-integrity` | Persisted sync state admitted before persona mutation |
 
 Reviewers own identification of a new or omitted qualifying guard. The mechanism cannot derive the real-world population from source and MUST NOT be described as semantic completeness.
 

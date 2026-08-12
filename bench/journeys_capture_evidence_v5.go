@@ -10,6 +10,7 @@ import (
 const (
 	captureEvidenceDescriptorNormalLineage     = "capture-evidence-v5-normal"
 	captureEvidenceDescriptorCorrectionLineage = "capture-evidence-v5-correction"
+	targetedInspectionLineage                  = "targeted-validator-inspection"
 	statusSchemaV5                             = "gentle-ai.review-integration.status/v5"
 	verificationEvidenceSchemaV1               = "https://gentle-ai.dev/schema/review/verification-evidence/v1"
 	verificationEvidenceRecordSchemaV2         = "gentle-ai.review-verification-evidence/v2"
@@ -17,6 +18,8 @@ const (
 
 var captureEvidenceDescriptorCapability = &Capability{Verb: []string{"review", "capture-evidence"},
 	Flags: []string{"--repository-context", "--lineage", "--target", "--expected-revision", "--outcome", "--input"}}
+var targetedInspectionCapability = &Capability{Verb: []string{"review", "inspect-candidate"},
+	Flags: []string{"--repository-context", "--lineage", "--target", "--expected-revision", "--purpose", "--request-hash", "--operation", "--path-index", "--side"}}
 
 // captureEvidenceDescriptorJourneys proves issue #2248's V5 contract at the
 // built-binary boundary. The runner executes only tokens published by STATUS;
@@ -62,6 +65,23 @@ func captureEvidenceDescriptorJourneys() []Journey {
 				{Name: "execute the advanced targeted-validation finalize descriptor", Requires: finalizeValidationCapability, Composite: completeV5DescriptorCorrection},
 			},
 		},
+		{
+			ID:     "j95-targeted-validator-inspects-provider-bound-corrected-tree",
+			Title:  "Targeted validator inspects STATUS-bound corrected trees through live worktree drift",
+			Source: "issue #2945: corrected targeted validation must inspect only the provider-bound immutable candidate",
+			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
+				{Name: "fixture: stage correction candidate", Fixture: stageCaptureEvidenceDescriptorCorrection},
+				{Name: "start correction review", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", targetedInspectionLineage)},
+				{Name: "capture correction finding and complete lenses", Requires: captureResultCapability, Composite: captureCorrectableFinding},
+				{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability, Args: productArgs("review", "finalize", "--lineage", targetedInspectionLineage, "--captured-results=true")},
+				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability, Args: productArgs("review", "finalize", "--lineage", targetedInspectionLineage, "--correction-lines", "2")},
+				{Name: "fixture: correct the reviewed candidate", Fixture: writeCorrectedCandidate},
+				{Name: "execute the correction STATUS v5 capture-evidence descriptor", Requires: captureEvidenceDescriptorCapability, Composite: captureJ95Evidence},
+				{Name: "inspect frozen correction after live drift and refuse drifted FINALIZE", Requires: targetedInspectionCapability, Composite: inspectJ95CorrectedCandidate},
+				{Name: "finalize after restoring the corrected candidate", Requires: finalizeValidationCapability, Composite: completeJ95Correction},
+			},
+		},
 	}
 }
 
@@ -93,7 +113,15 @@ func captureV5NormalEvidenceDescriptor(r *journeyRun) error {
 }
 
 func captureV5CorrectionEvidenceDescriptor(r *journeyRun) error {
-	after, err := executeV5CaptureEvidenceDescriptor(r, captureEvidenceDescriptorCorrectionLineage, "correction-v5-evidence.txt")
+	return captureV5CorrectionEvidenceDescriptorFor(r, captureEvidenceDescriptorCorrectionLineage)
+}
+
+func captureJ95Evidence(r *journeyRun) error {
+	return captureV5CorrectionEvidenceDescriptorFor(r, targetedInspectionLineage)
+}
+
+func captureV5CorrectionEvidenceDescriptorFor(r *journeyRun, lineage string) error {
+	after, err := executeV5CaptureEvidenceDescriptor(r, lineage, "correction-v5-evidence.txt")
 	if err != nil {
 		return err
 	}
@@ -189,7 +217,15 @@ func captureEvidenceDescriptorArguments(status waveCorrectionStatus, outcome, in
 }
 
 func completeV5DescriptorCorrection(r *journeyRun) error {
-	status, err := readCorrectionStatusForContract(r, captureEvidenceDescriptorCorrectionLineage, reviewContractV2)
+	return completeV5DescriptorCorrectionFor(r, captureEvidenceDescriptorCorrectionLineage)
+}
+
+func completeJ95Correction(r *journeyRun) error {
+	return completeV5DescriptorCorrectionFor(r, targetedInspectionLineage)
+}
+
+func completeV5DescriptorCorrectionFor(r *journeyRun, lineage string) error {
+	status, err := readCorrectionStatusForContract(r, lineage, reviewContractV2)
 	if err != nil {
 		return err
 	}
@@ -215,8 +251,49 @@ func completeV5DescriptorCorrection(r *journeyRun) error {
 		return err
 	}
 	result, err := decodeWaveOperation(r.runAt(r.sandbox.Root, arguments, false), "v5 correction finalize descriptor")
-	if err != nil || result.State != "approved" || result.LineageID != captureEvidenceDescriptorCorrectionLineage {
+	if err != nil || result.State != "approved" || result.LineageID != lineage {
 		return fmt.Errorf("v5 correction finalize descriptor result = %+v, %v", result, err)
 	}
 	return nil
+}
+
+func inspectJ95CorrectedCandidate(r *journeyRun) error {
+	status, err := readCorrectionStatusForContract(r, targetedInspectionLineage, reviewContractV2)
+	if err != nil || status.ValidationRequest == nil || status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		return fmt.Errorf("targeted inspection status = %+v, %v", status, err)
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	if input.CaptureOperation != "external.run_targeted_validation" || len(input.Arguments) != 6 {
+		return fmt.Errorf("targeted inspection binding = %+v", input)
+	}
+	inspection := []string{"review", "inspect-candidate"}
+	for _, argument := range input.Arguments {
+		inspection = append(inspection, "--"+argument.Name, argument.Value)
+	}
+	inspection = append(inspection, "--operation", "object", "--path-index", "0", "--side", "candidate")
+	if err := r.sandbox.write(filepath.Join(r.sandbox.Repo, "candidate.go"), "package candidate\n\nfunc value() int { return 3 }\n"); err != nil {
+		return err
+	}
+	inspectionResult := r.runAt(r.sandbox.Root, inspection, false)
+	if inspectionResult.ExitCode != 0 || !strings.Contains(inspectionResult.Stdout, "func value() int { return 2 }") {
+		return fmt.Errorf("provider-bound corrected inspection = %q: %s", inspectionResult.Stdout, firstLine(inspectionResult.Stderr))
+	}
+	payload, err := json.Marshal(map[string]any{"targeted_validation_request_hash": status.ValidationRequest.RequestHash,
+		"correction_target_identity": status.ValidationRequest.CorrectionTargetIdentity, "original_criteria": map[string]any{"passed": true, "evidence": []string{"acceptance passed"}},
+		"correction_regression": map[string]any{"passed": true, "evidence": []string{"regression passed"}}, "follow_ups": []any{}})
+	if err != nil {
+		return err
+	}
+	path, err := writeScratch(r.sandbox, "j95-validation.json", payload)
+	if err != nil {
+		return err
+	}
+	arguments, err := correctionSubmissionArguments(r, status, "targeted_validation_required", "validation", path)
+	if err != nil {
+		return err
+	}
+	if observation := r.runAt(r.sandbox.Root, arguments, false); observation.ExitCode == 0 {
+		return fmt.Errorf("drifted FINALIZE consumed the correction: %s", observation.Stdout)
+	}
+	return writeCorrectedCandidate(r.sandbox)
 }

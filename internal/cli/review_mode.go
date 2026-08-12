@@ -202,9 +202,11 @@ func (err *reviewModeUnsafePathError) repairCommand() string {
 	}
 	securityType := "FileSecurity"
 	inheritance := "'None'"
+	setAccessControl := "[System.IO.File]::SetAccessControl($p, $acl)"
 	if err.Directory {
 		securityType = "DirectorySecurity"
 		inheritance = "'ContainerInherit, ObjectInherit'"
+		setAccessControl = "[System.IO.Directory]::SetAccessControl($p, $acl)"
 	}
 	return strings.Join([]string{
 		"$p = " + quotePowerShellLiteral(err.Path),
@@ -214,7 +216,7 @@ func (err *reviewModeUnsafePathError) repairCommand() string {
 		"$acl.SetAccessRuleProtection($true, $false)",
 		"$rule = New-Object -TypeName System.Security.AccessControl.FileSystemAccessRule -ArgumentList @($sid, 'FullControl', " + inheritance + ", 'None', 'Allow')",
 		"$acl.SetAccessRule($rule)",
-		"Set-Acl -LiteralPath $p -AclObject $acl",
+		setAccessControl,
 	}, "; ")
 }
 
@@ -640,7 +642,7 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		return reviewModeUnreadable(ctx, repo, global, err)
 	}
 	if err := authorizeManagedReviewerAssets(); err != nil {
-		return err
+		return reviewPreflightRefusal(reviewPreflightManagedAssetsReason, err)
 	}
 	if assessment.Level == reviewtransaction.RiskLow {
 		// Tier 0 is silent structural readback. Asking here would reintroduce

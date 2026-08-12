@@ -245,7 +245,7 @@ func TestRunSDDAttemptHelpContractsCoverEveryOperation(t *testing.T) {
 		flags     []string
 		contracts []string
 	}{
-		{"status", []string{"cwd", "change", "change-instance"}, []string{"optional", "128 bytes"}},
+		{"status", []string{"cwd", "change", "change-instance", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"}, []string{"optional", "128 bytes"}},
 		{"begin", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "task-id", "requirement-id", "scenario-id"}, []string{"default 2", "default 200", "1..100", "1..1000000", "provider-owned"}},
 		{"finish", []string{"cwd", "change", "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "expected-binding-revision", "successor-lineage", "remediates-evidence-revision"}, []string{"failed, interrupted, or passed", "reused or invalidated", "never none", "500 bytes"}},
 		{"handoff", []string{"cwd", "change", "expected-revision", "request-id", "destination-worktree"}, []string{"registered linked worktree", "Git common directory"}},

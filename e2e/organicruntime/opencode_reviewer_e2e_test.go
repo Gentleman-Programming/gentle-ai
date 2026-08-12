@@ -17,6 +17,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 // openCodePoisonedReviewSetup is the shared fixture for the ordinary-session
@@ -293,18 +294,90 @@ func TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutp
 	}
 }
 
-// organicCommandArguments splits one negotiated transition's literally
-// runnable command string into the argv this test hands to harness.gentle,
-// dropping only the leading "gentle-ai" binary token. Every value in these
-// commands (hashes, lineage names, opaque handles) is a single
-// whitespace-free token, so a plain field split is exact.
+// organicCommandArguments removes POSIX shell quoting before passing Windows CWDs to Go flags.
 func organicCommandArguments(t *testing.T, command string) []string {
 	t.Helper()
-	fields := strings.Fields(command)
+	fields, err := organicCommandWords(command)
+	if err != nil {
+		t.Fatalf("parse negotiated transition command %q: %v", command, err)
+	}
 	if len(fields) == 0 || fields[0] != "gentle-ai" {
 		t.Fatalf("negotiated transition command does not start with gentle-ai: %q", command)
 	}
 	return append([]string(nil), fields[1:]...)
+}
+func organicCommandWords(command string) ([]string, error) {
+	words := []string{}
+	var word strings.Builder
+	inQuote := false
+	for index := 0; index < len(command); index++ {
+		char := command[index]
+		switch {
+		case char == '\'':
+			inQuote = !inQuote
+		case char == '\\' && !inQuote && index+1 < len(command):
+			index++
+			word.WriteByte(command[index])
+		case (char == ' ' || char == '\t') && !inQuote:
+			if word.Len() != 0 {
+				words = append(words, word.String())
+				word.Reset()
+			}
+		default:
+			word.WriteByte(char)
+		}
+	}
+	if inQuote {
+		return nil, errors.New("unterminated shell quote")
+	}
+	if word.Len() != 0 {
+		words = append(words, word.String())
+	}
+	return words, nil
+}
+func TestOrganicCommandArgumentsPreservesQuotedWindowsCWD(t *testing.T) {
+	arguments := organicCommandArguments(t, "gentle-ai review start --cwd='C:\\Users\\reviewer name\\repo' --contract=gentle-ai.review-integration/v2")
+	want := []string{"review", "start", "--cwd=C:\\Users\\reviewer name\\repo", "--contract=gentle-ai.review-integration/v2"}
+	if len(arguments) != len(want) {
+		t.Fatalf("argv = %#v, want %#v", arguments, want)
+	}
+	for index, value := range want {
+		if got := arguments[index]; got != value || strings.ContainsAny(got, "'\"") {
+			t.Fatalf("argv[%d] = %q, want unquoted %q", index, got, value)
+		}
+	}
+}
+func TestOrganicCommandArgumentsExecuteStartWithWindowsCWD(t *testing.T) {
+	harness := newOrganicHarness(t)
+	spacedWorktree := harness.repo.worktree + " space"
+	if err := os.Rename(harness.repo.worktree, spacedWorktree); err != nil {
+		t.Fatal(err)
+	}
+	harness.repo.worktree = spacedWorktree
+	harness.writeFiles(map[string]string{"docs/candidate.md": "candidate\n"})
+	harness.git("commit", "-qm", "test: spaced cwd candidate")
+	status := organicNegotiatedStatus(t, harness, "windows-cwd-start")
+	if status.NextTransition == nil || status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("STATUS transition = %#v", status.NextTransition)
+	}
+	publishedCWD := ""
+	for _, argument := range status.NextTransition.Execute.Arguments {
+		if argument.Name == "cwd" {
+			publishedCWD = argument.Value
+			break
+		}
+	}
+	if !strings.Contains(status.NextTransition.Execute.Command, pathquote.ShellWord("--cwd="+publishedCWD)) {
+		t.Fatalf("START command does not safely render the spaced cwd: %q", status.NextTransition.Execute.Command)
+	}
+	arguments := organicCommandArguments(t, status.NextTransition.Execute.Command)
+	if got := organicArgumentValue(arguments, "--cwd"); got != publishedCWD || strings.ContainsAny(got, "'\"") {
+		t.Fatalf("START argv cwd = %q, want unquoted %q (argv %#v)", got, publishedCWD, arguments)
+	}
+	if !sameOrganicDirectory(publishedCWD, spacedWorktree) {
+		t.Fatalf("START cwd %q does not identify worktree %q", publishedCWD, spacedWorktree)
+	}
+	harness.gentle(arguments...)
 }
 
 func organicArgumentValue(arguments []string, flag string) string {
@@ -349,8 +422,9 @@ type organicNegotiatedCollection struct {
 }
 
 type organicNegotiatedExecute struct {
-	Operation string `json:"operation"`
-	Command   string `json:"command"`
+	Operation string                      `json:"operation"`
+	Command   string                      `json:"command"`
+	Arguments []organicNegotiatedArgument `json:"arguments"`
 }
 
 type organicNegotiatedTransition struct {

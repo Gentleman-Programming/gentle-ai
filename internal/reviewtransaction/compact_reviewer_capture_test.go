@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -244,6 +245,137 @@ func TestCompactStoreCaptureAdmittedReviewerResultPublishesDurableExactReplay(
 		record.State.State != StateReviewing {
 		t.Fatalf("capture mutated compact authority = %#v", record)
 	}
+}
+
+func TestReadCompactReviewerResultSlot(t *testing.T) {
+	t.Run("complete reads each canonical member once", func(t *testing.T) {
+		fixture := newCompactReviewerCaptureFixture(t, "read-complete")
+		if _, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), fixture.request); err != nil {
+			t.Fatal(err)
+		}
+		original := readCompactReviewerResultSlotFile
+		reads := map[string]int{}
+		readCompactReviewerResultSlotFile = func(path string, limit int64) ([]byte, error) {
+			reads[path]++
+			return original(path, limit)
+		}
+		t.Cleanup(func() { readCompactReviewerResultSlotFile = original })
+		slot, err := ReadCompactReviewerResultSlot(fixture.store.Dir, 0, LensReliability)
+		if err != nil || !slot.Occupied || reads[fixture.path] != 1 || reads[fixture.path+".sha256"] != 1 {
+			t.Fatalf("slot = %#v, reads = %#v, err = %v", slot, reads, err)
+		}
+		if slot.Digest != compactPreservedPayloadDigest(slot.Payload) {
+			t.Fatalf("slot digest = %q", slot.Digest)
+		}
+	})
+
+	t.Run("pending ignores alternate unrelated and wrong selected names", func(t *testing.T) {
+		fixture := newCompactReviewerCaptureFixture(t, "read-pending")
+		dir := filepath.Dir(fixture.path)
+		if _, err := createPrivateRARDirectory(dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fixture.path+".alternate", []byte("alternate\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for index := 0; index < 33; index++ {
+			if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("unrelated-%02d", index)), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, selected := range []struct {
+			order int
+			lens  string
+		}{{0, LensReliability}, {1, LensReliability}, {0, LensRisk}} {
+			slot, err := ReadCompactReviewerResultSlot(fixture.store.Dir, selected.order, selected.lens)
+			if err != nil || slot.Occupied {
+				t.Fatalf("slot %d/%s = %#v, %v", selected.order, selected.lens, slot, err)
+			}
+		}
+	})
+
+	t.Run("partial pairs fail closed", func(t *testing.T) {
+		for _, member := range []string{"payload", "digest"} {
+			t.Run(member, func(t *testing.T) {
+				fixture := newCompactReviewerCaptureFixture(t, "read-partial-"+member)
+				if _, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), fixture.request); err != nil {
+					t.Fatal(err)
+				}
+				path := fixture.path
+				if member == "digest" {
+					path += ".sha256"
+				}
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				slot, err := ReadCompactReviewerResultSlot(fixture.store.Dir, 0, LensReliability)
+				if err == nil || slot.Occupied || !strings.Contains(err.Error(), "partially published") {
+					t.Fatalf("partial slot = %#v, %v", slot, err)
+				}
+			})
+		}
+	})
+
+	t.Run("unsafe members and read failures fail closed", func(t *testing.T) {
+		for _, test := range []struct {
+			name string
+			make func(*testing.T, string)
+		}{
+			{"directory", func(t *testing.T, path string) {
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}},
+			{"symlink", func(t *testing.T, path string) {
+				if runtime.GOOS == "windows" {
+					t.Skip("symlink creation requires optional Windows privileges")
+				}
+				target := filepath.Join(t.TempDir(), "target")
+				if err := os.WriteFile(target, []byte("outside\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Skipf("symlink unavailable: %v", err)
+				}
+			}},
+			{"hardlink", func(t *testing.T, path string) {
+				target := filepath.Join(t.TempDir(), "target")
+				if err := os.WriteFile(target, []byte("outside\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(target, path); err != nil {
+					t.Skipf("hardlink unavailable: %v", err)
+				}
+			}},
+			{"group readable", func(t *testing.T, path string) {
+				if runtime.GOOS == "windows" {
+					t.Skip("Windows ACLs do not map to Unix mode bits")
+				}
+				if err := os.WriteFile(path, []byte("unsafe\n"), 0o640); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				fixture := newCompactReviewerCaptureFixture(t, "read-unsafe-"+strings.ReplaceAll(test.name, " ", "-"))
+				if _, err := createPrivateRARDirectory(filepath.Dir(fixture.path)); err != nil {
+					t.Fatal(err)
+				}
+				test.make(t, fixture.path)
+				if _, err := ReadCompactReviewerResultSlot(fixture.store.Dir, 0, LensReliability); !errors.Is(err, errUnsafeRARAuthorityPath) {
+					t.Fatalf("unsafe slot error = %v", err)
+				}
+			})
+		}
+		fixture := newCompactReviewerCaptureFixture(t, "read-operational")
+		injected := errors.New("injected read failure")
+		original := readCompactReviewerResultSlotFile
+		readCompactReviewerResultSlotFile = func(string, int64) ([]byte, error) { return nil, injected }
+		t.Cleanup(func() { readCompactReviewerResultSlotFile = original })
+		if _, err := ReadCompactReviewerResultSlot(fixture.store.Dir, 0, LensReliability); !errors.Is(err, injected) {
+			t.Fatalf("operational slot error = %v", err)
+		}
+	})
 }
 
 func TestCompactStoreCaptureAdmittedReviewerResultNormalizesInspectionPathsBeforePersisting(t *testing.T) {

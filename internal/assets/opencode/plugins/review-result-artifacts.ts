@@ -200,6 +200,43 @@ function sddTaskFailure(phase: string, cwd: string, cause: unknown, metadata?: u
   ) as SDDTaskFailureError
 }
 
+// sddDispatchLatched builds the refusal for a launch that never reached the
+// provider, which is a different fact from the launch that failed.
+//
+// Failing closed after an empty result is deliberate and stays: one failed
+// phase must not be silently retried, and no later phase may advance on top of
+// it. What the latch used to do is replay the stored handoff byte for byte, so
+// a caller launching sdd-apply after sdd-propose came back empty received an
+// envelope naming sdd-propose and asserting it "produced no task output at
+// all". Nothing ran, so that assertion described an attempt that did not
+// happen -- #2948's reporter confirmed no session creation, no permission
+// evaluation, and no streams for the replayed attempts, while a model change
+// and a reworded prompt both appeared to fail identically because neither was
+// ever exercised.
+//
+// This names three things the replay never did: which phase THIS launch asked
+// for, which earlier phase actually failed and how, and the exit. The exit is
+// a new session because the latch is per-session state cleared on
+// session.deleted and dispose; without saying so, deleting the session was an
+// escape nobody had been told about.
+function sddDispatchLatched(requested: string, failure: SDDTaskFailure, cwd: string): Error {
+  return new Error(SDD_TASK_FAILURE_PREFIX + JSON.stringify({
+    schemaName: "gentle-ai.sdd-task-result-failure/v1",
+    status: "blocked",
+    code: "sdd_task_dispatch_latched",
+    phase: requested,
+    latchedPhase: failure.phase,
+    latchedCode: failure.code,
+    summary: `${requested} was not dispatched. Earlier in this session ${failure.phase} returned ` +
+      `${failure.code}, and SDD launches stay latched afterwards so a failed phase is never silently ` +
+      "retried and no later phase advances on top of it. No provider call, no subagent, and no artifact " +
+      "write happened for this launch, so it produced no new evidence about the original failure.",
+    continuation: `gentle-ai sdd-status --cwd ${shellQuote(cwd)} --json`,
+    exit: "Inspect the artifact state the original failure left, surface it to the user, and start a " +
+      "new session to launch SDD phases again. Relaunching in this session cannot dispatch.",
+  }))
+}
+
 function captureCwd(worktree: string | undefined, directory: string): string {
   return worktree || directory
 }
@@ -276,6 +313,41 @@ function gitTrustRefusal(cause: unknown): boolean {
   return new RegExp(`\\b${GIT_TRUST_REFUSAL_CODE}\\b`).test(errorMessage(cause))
 }
 
+// AUTHORITY_SKEW_SIGNATURE recognises the one failure that proves two
+// different gentle-ai builds are in play: a repository-context resolution that
+// died decoding a persisted authority field the answering binary has never
+// heard of. Persisted authority is decoded with DisallowUnknownFields, so any
+// release that adds a state field writes bytes an older build cannot read.
+//
+// Both codes are matched. `review_authority_newer_release` is what a build
+// carrying #3025 says; `repository_context_unavailable` is what every build
+// before it says, and that is the one that actually reaches users here --
+// the process that fails is the OLD binary, so the newer native wording is
+// precisely the text that cannot appear. The `unknown field` clause is
+// required alongside the code so an ordinary unavailable context is never
+// mistaken for a version conflict.
+const AUTHORITY_SKEW_SIGNATURE =
+  /\b(?:repository_context_unavailable|review_authority_newer_release)\b[\s\S]*\bunknown field\b/
+
+// AUTHORITY_SKEW_MESSAGE is authored here, never forwarded, for the same
+// reason GIT_TRUST_REFUSAL_MESSAGE is: native failure text can embed local
+// paths, and the raw cause names a field that means nothing to the operator.
+//
+// This plugin is shipped by `gentle-ai sync`, so it comes from the NEWER
+// build even when PATH resolves an older one. That makes it the only
+// component in this loop still able to describe the situation. It deliberately
+// claims no version comparison: it has no reference build to compare against,
+// and the fact the failure already proves is enough.
+const AUTHORITY_SKEW_MESSAGE =
+  "the gentle-ai this OpenCode process resolved is older than the build that wrote this review's authority, " +
+  "so it cannot read it. Two builds are involved and PATH order decides which one answers: run `which -a gentle-ai` " +
+  "and make the newer build the one resolved first, then refresh status and relaunch the reoffered reviewer slots. " +
+  "Refreshing the transition alone cannot help, because the binary answering will not change."
+
+function authorityVersionSkew(cause: unknown): boolean {
+  return AUTHORITY_SKEW_SIGNATURE.test(errorMessage(cause))
+}
+
 // lensContextRefusal forwards the provider's typed refusal code and this
 // plugin's own recovery text for it, or undefined when the failure is not a
 // typed lens-context refusal at all (a Git trust refusal, a missing binary, a
@@ -294,6 +366,10 @@ function lensContextRefusal(cause: unknown): string | undefined {
 // failures can quote reviewer payload fragments.
 function lensContextFailureMessage(cause: unknown): string {
   if (gitTrustRefusal(cause)) return GIT_TRUST_REFUSAL_MESSAGE
+  // Checked before the typed-refusal branch: the skew arrives wearing
+  // repository_context_unavailable, whose generic recovery text tells the
+  // caller to refresh a transition that cannot change which binary answers.
+  if (authorityVersionSkew(cause)) return AUTHORITY_SKEW_MESSAGE
   return lensContextRefusal(cause) ?? scrubbedCause(cause)
 }
 
@@ -357,7 +433,7 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
     if (isSDDPhase(subagent)) {
       const failure = failedSDDSessions.get(input.sessionID)
       if (failure) {
-        throw new Error(failure.handoff)
+        throw sddDispatchLatched(subagent, failure, captureCwd(worktree, directory))
       }
       return
     }

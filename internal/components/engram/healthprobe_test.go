@@ -160,7 +160,7 @@ func TestStdioHandshake_TerminatesDescendantHoldingStdout(t *testing.T) {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		result <- stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent")
+		result <- stdioHandshake(context.Background(), stdioProbeTimeout, "engram", "mcp", "--tools=agent")
 	}()
 
 	pid := waitForHelperPID(t, pidPath)
@@ -226,7 +226,7 @@ func TestStdioHandshake_TerminatesDescendantOnContextEnd(t *testing.T) {
 			finished := make(chan struct{})
 			go func() {
 				defer close(finished)
-				result <- stdioHandshake(ctx, "engram", "mcp", "--tools=agent")
+				result <- stdioHandshake(ctx, stdioProbeTimeout, "engram", "mcp", "--tools=agent")
 			}()
 
 			pid := waitForHelperPID(t, pidPath)
@@ -390,7 +390,7 @@ func terminateTestProcess(pid int) {
 func TestStdioHandshake_Healthy(t *testing.T) {
 	setStdioHelperProcess(t, "healthy")
 
-	if err := stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent"); err != nil {
+	if err := stdioHandshake(context.Background(), stdioProbeTimeout, "engram", "mcp", "--tools=agent"); err != nil {
 		t.Fatalf("stdioHandshake() error = %v, want nil for a healthy MCP server", err)
 	}
 }
@@ -398,7 +398,7 @@ func TestStdioHandshake_Healthy(t *testing.T) {
 func TestStdioHandshake_RPCError(t *testing.T) {
 	setStdioHelperProcess(t, "rpc-error")
 
-	err := stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent")
+	err := stdioHandshake(context.Background(), stdioProbeTimeout, "engram", "mcp", "--tools=agent")
 	if err == nil || !strings.Contains(err.Error(), "initialize returned error") {
 		t.Fatalf("stdioHandshake() error = %v, want initialize error", err)
 	}
@@ -422,7 +422,7 @@ func TestStdioHandshake_RejectsInvalidInitializeResult(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			setStdioHelperProcess(t, tt.mode)
 
-			err := stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent")
+			err := stdioHandshake(context.Background(), stdioProbeTimeout, "engram", "mcp", "--tools=agent")
 			if err == nil || !strings.Contains(err.Error(), "initialize returned invalid result") {
 				t.Fatalf("stdioHandshake() error = %v, want invalid initialize result", err)
 			}
@@ -433,7 +433,7 @@ func TestStdioHandshake_RejectsInvalidInitializeResult(t *testing.T) {
 func TestStdioHandshake_EarlyExit(t *testing.T) {
 	setStdioHelperProcess(t, "early-exit")
 
-	err := stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent")
+	err := stdioHandshake(context.Background(), stdioProbeTimeout, "engram", "mcp", "--tools=agent")
 	if err == nil || !strings.Contains(err.Error(), "exited without answering initialize") {
 		t.Fatalf("stdioHandshake() error = %v, want early-exit error", err)
 	}
@@ -442,7 +442,7 @@ func TestStdioHandshake_EarlyExit(t *testing.T) {
 func TestStdioHandshake_GarbageOutput(t *testing.T) {
 	setStdioHelperProcess(t, "garbage")
 
-	err := stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent")
+	err := stdioHandshake(context.Background(), stdioProbeTimeout, "engram", "mcp", "--tools=agent")
 	if err == nil || !strings.Contains(err.Error(), "invalid MCP stdout") {
 		t.Fatalf("stdioHandshake() error = %v, want invalid stdout error", err)
 	}
@@ -467,7 +467,7 @@ func TestStdioHandshake_RejectsInvalidResponseEnvelope(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			setStdioHelperProcess(t, tt.mode)
 
-			err := stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent")
+			err := stdioHandshake(context.Background(), stdioProbeTimeout, "engram", "mcp", "--tools=agent")
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("stdioHandshake() error = %v, want %q", err, tt.want)
 			}
@@ -478,7 +478,7 @@ func TestStdioHandshake_RejectsInvalidResponseEnvelope(t *testing.T) {
 func TestStdioHandshake_TerminatesThenDrainsBufferedStdout(t *testing.T) {
 	setStdioHelperProcess(t, "trailing-stdout-after-healthy")
 
-	err := stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent")
+	err := stdioHandshake(context.Background(), stdioProbeTimeout, "engram", "mcp", "--tools=agent")
 	if err == nil || !strings.Contains(err.Error(), "invalid MCP stdout") {
 		t.Fatalf("stdioHandshake() error = %v, want buffered trailing stdout error", err)
 	}
@@ -490,7 +490,7 @@ func TestStdioHandshake_PreservesEarlierDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	err := stdioHandshake(ctx, "engram", "mcp", "--tools=agent")
+	err := stdioHandshake(ctx, stdioProbeTimeout, "engram", "mcp", "--tools=agent")
 	if err != context.DeadlineExceeded {
 		t.Fatalf("stdioHandshake() error = %v, want earlier caller deadline", err)
 	}
@@ -505,7 +505,7 @@ func TestStdioHandshake_PreservesCallerCancellation(t *testing.T) {
 	defer timer.Stop()
 	defer cancel(nil)
 
-	err := stdioHandshake(ctx, "engram", "mcp", "--tools=agent")
+	err := stdioHandshake(ctx, stdioProbeTimeout, "engram", "mcp", "--tools=agent")
 	if err != cause {
 		t.Fatalf("stdioHandshake() error = %v, want caller cancellation", err)
 	}
@@ -570,7 +570,7 @@ func TestStdioHandshake_TerminalOutcomes(t *testing.T) {
 				timer := time.AfterFunc(tt.cancelAfter, cancel)
 				defer timer.Stop()
 			}
-			err := stdioHandshake(ctx, "engram", "mcp", "--tools=agent")
+			err := stdioHandshake(ctx, stdioProbeTimeout, "engram", "mcp", "--tools=agent")
 			if tt.want != nil && err != tt.want {
 				t.Fatalf("stdioHandshake() error = %v, want %v", err, tt.want)
 			}
@@ -585,27 +585,27 @@ func TestStdioHandshake_TerminalOutcomes(t *testing.T) {
 }
 
 func TestStdioHandshake_MissingBinary(t *testing.T) {
-	if err := stdioHandshake(context.Background(), "gentle-ai-test-no-such-binary"); err == nil {
+	if err := stdioHandshake(context.Background(), stdioProbeTimeout, "gentle-ai-test-no-such-binary"); err == nil {
 		t.Fatal("stdioHandshake() expected error for a missing binary")
 	}
 }
 
 func TestProbeStdio_NotInstalled(t *testing.T) {
 	orig := stdioHandshakeFn
-	stdioHandshakeFn = func(context.Context, string, ...string) error { return exec.ErrNotFound }
+	stdioHandshakeFn = func(context.Context, time.Duration, string, ...string) error { return exec.ErrNotFound }
 	t.Cleanup(func() { stdioHandshakeFn = orig })
 
-	if err := ProbeStdio(context.Background(), "engram", "mcp", "--tools=agent"); !errors.Is(err, ErrNotInstalled) {
+	if err := ProbeStdio(context.Background(), 0, "engram", "mcp", "--tools=agent"); !errors.Is(err, ErrNotInstalled) {
 		t.Fatalf("ProbeStdio() error = %v, want ErrNotInstalled", err)
 	}
 }
 
 func TestProbeStdio_MissingAbsoluteConfiguredCommandFails(t *testing.T) {
 	orig := stdioHandshakeFn
-	stdioHandshakeFn = func(context.Context, string, ...string) error { return exec.ErrNotFound }
+	stdioHandshakeFn = func(context.Context, time.Duration, string, ...string) error { return exec.ErrNotFound }
 	t.Cleanup(func() { stdioHandshakeFn = orig })
 
-	err := ProbeStdio(context.Background(), "/configured/engram", "mcp", "--tools=agent")
+	err := ProbeStdio(context.Background(), 0, "/configured/engram", "mcp", "--tools=agent")
 	if !errors.Is(err, exec.ErrNotFound) {
 		t.Fatalf("ProbeStdio() error = %v, want missing configured command", err)
 	}
@@ -616,7 +616,7 @@ func TestProbeStdio_MissingAbsoluteConfiguredCommandFails(t *testing.T) {
 
 func TestProbeStdio_ClassifiesCommandNotFound(t *testing.T) {
 	orig := stdioHandshakeFn
-	stdioHandshakeFn = func(context.Context, string, ...string) error { return exec.ErrNotFound }
+	stdioHandshakeFn = func(context.Context, time.Duration, string, ...string) error { return exec.ErrNotFound }
 	t.Cleanup(func() { stdioHandshakeFn = orig })
 
 	tests := []struct {
@@ -637,7 +637,7 @@ func TestProbeStdio_ClassifiesCommandNotFound(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ProbeStdio(context.Background(), tt.command, "mcp", "--tools=agent")
+			err := ProbeStdio(context.Background(), 0, tt.command, "mcp", "--tools=agent")
 			if tt.wantNotInstalled {
 				if !errors.Is(err, ErrNotInstalled) {
 					t.Fatalf("ProbeStdio() error = %v, want ErrNotInstalled", err)
@@ -658,14 +658,14 @@ func TestProbeStdio_UsesExactPersistedCommand(t *testing.T) {
 	var gotName string
 	var gotArgs []string
 	orig := stdioHandshakeFn
-	stdioHandshakeFn = func(_ context.Context, name string, args ...string) error {
+	stdioHandshakeFn = func(_ context.Context, _ time.Duration, name string, args ...string) error {
 		gotName = name
 		gotArgs = args
 		return nil
 	}
 	t.Cleanup(func() { stdioHandshakeFn = orig })
 
-	if err := ProbeStdio(context.Background(), "/opt/gentle-engram/bin/engram", "mcp", "--tools=custom"); err != nil {
+	if err := ProbeStdio(context.Background(), 0, "/opt/gentle-engram/bin/engram", "mcp", "--tools=custom"); err != nil {
 		t.Fatalf("ProbeStdio() error = %v", err)
 	}
 	if gotName != "/opt/gentle-engram/bin/engram" {

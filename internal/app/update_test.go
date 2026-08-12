@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -47,9 +48,11 @@ func TestRunUpdate_ReturnsErrorWhenChecksFail(t *testing.T) {
 func TestRunUpgrade_ReturnsErrorBeforeExecutingWhenChecksFail(t *testing.T) {
 	origCheckFiltered := updateCheckFiltered
 	origUpgradeExecute := upgradeExecute
+	origUpgradeExecuteWithOptions := upgradeExecuteWithOptions
 	t.Cleanup(func() {
 		updateCheckFiltered = origCheckFiltered
 		upgradeExecute = origUpgradeExecute
+		upgradeExecuteWithOptions = origUpgradeExecuteWithOptions
 	})
 
 	called := false
@@ -71,9 +74,16 @@ func TestRunUpgrade_ReturnsErrorBeforeExecutingWhenChecksFail(t *testing.T) {
 		called = true
 		return upgrade.UpgradeReport{}
 	}
+	upgradeExecuteWithOptions = func(context.Context, []update.UpdateResult, system.PlatformProfile, string, bool, upgrade.ExecuteOptions) upgrade.UpgradeReport {
+		called = true
+		return upgrade.UpgradeReport{}
+	}
 
+	// Issue #535: runUpgrade now consumes a structured upgradeArgs value
+	// parsed once in RunArgs, not raw CLI args. The check must run with the
+	// forwarded tool filter, and execution must be skipped on check failure.
 	var buf bytes.Buffer
-	err := runUpgrade(context.Background(), []string{"--no-backup"}, system.DetectionResult{System: system.SystemInfo{Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, &buf)
+	err := runUpgrade(context.Background(), upgradeArgs{noBackup: true}, system.DetectionResult{System: system.SystemInfo{Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, &buf)
 	if err == nil {
 		t.Fatal("runUpgrade() error = nil, want non-nil")
 	}
@@ -127,7 +137,7 @@ func TestRunUpgrade_RestartsAfterGentleAIUpgrade(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := runUpgrade(context.Background(), []string{"--no-backup"}, system.DetectionResult{System: system.SystemInfo{Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, &buf)
+	err := runUpgrade(context.Background(), upgradeArgs{noBackup: true}, system.DetectionResult{System: system.SystemInfo{Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, &buf)
 	if err != nil {
 		t.Fatalf("runUpgrade() error = %v", err)
 	}
@@ -187,7 +197,7 @@ func TestRunUpgrade_DryRunDoesNotRestartAfterGentleAIUpgrade(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := runUpgrade(context.Background(), []string{"--dry-run"}, system.DetectionResult{System: system.SystemInfo{Profile: system.PlatformProfile{OS: "darwin", Supported: true}}}, &buf)
+	err := runUpgrade(context.Background(), upgradeArgs{dryRun: true}, system.DetectionResult{System: system.SystemInfo{Profile: system.PlatformProfile{OS: "darwin", Supported: true}}}, &buf)
 	if err != nil {
 		t.Fatalf("runUpgrade() error = %v", err)
 	}
@@ -213,5 +223,60 @@ func TestTUIUpgrade_DoesNotRestartBeforeModelCanRenderReport(t *testing.T) {
 	report := tuiUpgrade(system.PlatformProfile{OS: "darwin", PackageManager: "brew"}, os.TempDir())(context.Background(), nil)
 	if len(report.Results) != 1 || report.Results[0].ToolName != "gentle-ai" {
 		t.Fatalf("tuiUpgrade() report = %#v", report)
+	}
+}
+
+// TestRunUpgrade_ForwardsParsedArgsOnceWithoutReparsing verifies the issue #535
+// contract: runUpgrade consumes the structured upgradeArgs (parsed once in
+// RunArgs) and forwards the flags/filters to updateCheckFiltered and
+// upgradeExecuteWithOptions exactly once. It must NOT reparse raw CLI args
+// (there are none to reparse), and unsupported flags can never reach it.
+func TestRunUpgrade_ForwardsParsedArgsOnceWithoutReparsing(t *testing.T) {
+	origCheckFiltered := updateCheckFiltered
+	origUpgradeExecuteWithOptions := upgradeExecuteWithOptions
+	t.Cleanup(func() {
+		updateCheckFiltered = origCheckFiltered
+		upgradeExecuteWithOptions = origUpgradeExecuteWithOptions
+	})
+
+	var checkFilters []string
+	checkCalls := 0
+	updateCheckFiltered = func(_ context.Context, _ string, _ system.PlatformProfile, filters []string) []update.UpdateResult {
+		checkCalls++
+		checkFilters = filters
+		return []update.UpdateResult{{Tool: update.ToolInfo{Name: "gentle-ai"}, Status: update.UpToDate}}
+	}
+
+	var execDryRun, execSkipBackup bool
+	execCalls := 0
+	upgradeExecuteWithOptions = func(_ context.Context, _ []update.UpdateResult, _ system.PlatformProfile, _ string, dryRun bool, opts upgrade.ExecuteOptions) upgrade.UpgradeReport {
+		execCalls++
+		execDryRun = dryRun
+		execSkipBackup = opts.SkipBackup
+		return upgrade.UpgradeReport{}
+	}
+
+	home := t.TempDir()
+	setupMockHome(t, home)
+
+	var buf bytes.Buffer
+	err := runUpgrade(context.Background(), upgradeArgs{dryRun: true, noBackup: true, toolFilter: []string{"engram", "gga"}}, system.DetectionResult{System: system.SystemInfo{Profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}}}, &buf)
+	if err != nil {
+		t.Fatalf("runUpgrade() error = %v, want nil", err)
+	}
+	if checkCalls != 1 {
+		t.Fatalf("updateCheckFiltered called %d times, want exactly 1", checkCalls)
+	}
+	if !reflect.DeepEqual(checkFilters, []string{"engram", "gga"}) {
+		t.Fatalf("updateCheckFiltered filters = %#v, want [engram gga] forwarded once", checkFilters)
+	}
+	if execCalls != 1 {
+		t.Fatalf("upgradeExecuteWithOptions called %d times, want exactly 1", execCalls)
+	}
+	if !execDryRun {
+		t.Errorf("upgradeExecuteWithOptions dryRun = false, want true (forwarded once)")
+	}
+	if !execSkipBackup {
+		t.Errorf("upgradeExecuteWithOptions SkipBackup = false, want true (forwarded once)")
 	}
 }

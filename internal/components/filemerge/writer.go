@@ -320,6 +320,15 @@ func ensureAtomicParentDir(dir, path string) error {
 			return fmt.Errorf("stat symlink target %q for %q: %w", resolved, path, err)
 		}
 		dir = resolved
+	} else {
+		resolved, resolvedInfo, handled, err := resolveAtomicParentJunction(dir, info)
+		if err != nil {
+			return fmt.Errorf("resolve parent directory for %q: %w", path, err)
+		}
+		if handled {
+			dir = resolved
+			info = resolvedInfo
+		}
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("parent path %q for %q is not a directory", dir, path)

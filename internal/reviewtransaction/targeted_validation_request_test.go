@@ -2,7 +2,9 @@ package reviewtransaction
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -108,6 +110,124 @@ func TestTargetedValidationRequestFromSnapshotIgnoresLaterWorkspaceChanges(t *te
 	if got := gitSnapshot(t, repo, "show", request.CorrectionCandidateTree+":tracked.txt"); got != "base\nfixed\n" {
 		t.Fatalf("request candidate content = %q, want captured content", got)
 	}
+}
+
+func TestResolveCorrectedCandidateInspectionUsesCapturedEvidenceAfterLiveDrift(t *testing.T) {
+	passed := VerificationOutcomePassed
+	repo, request, correction, handle, binding, store := correctedInspectionFixture(t, "corrected-inspection-immutable", &passed)
+	ctx := context.Background()
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The old context resolver reconstructs TargetFixDiff from this mutable file.
+	writeSnapshotFile(t, repo, "tracked.txt", "base\ndecoy drift\n")
+	if _, err := ResolveReviewRepositoryContext(ctx, handle, binding); err == nil {
+		t.Fatal("live repository-context resolver accepted drifted correction")
+	}
+
+	resolved, err := ResolveCorrectedCandidateInspection(ctx, handle, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshotsEqual(resolved, correction) || !reflect.DeepEqual(after, before) {
+		t.Fatalf("resolved=%#v authority changed=%t", resolved, !reflect.DeepEqual(after, before))
+	}
+	payload, err := (SnapshotBuilder{Repo: repo}).InspectCandidate(ctx, resolved, "object", 0, "candidate")
+	if err != nil || string(payload) != "base\nfixed\n" {
+		t.Fatalf("immutable corrected inspection = %q, %v", payload, err)
+	}
+}
+
+func TestResolveCorrectedCandidateInspectionFailsClosed(t *testing.T) {
+	passed := VerificationOutcomePassed
+	t.Run("forged request hash", func(t *testing.T) {
+		_, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-forged-hash", &passed)
+		request.RequestHash = hash("forged-request")
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+			t.Fatal("forged request hash resolved")
+		}
+	})
+	t.Run("locator target mismatch", func(t *testing.T) {
+		_, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-target-mismatch", &passed)
+		request.CorrectionTargetIdentity = hash("other-correction")
+		request.RequestHash = targetedValidationRequestHash(request)
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+			t.Fatal("locator target mismatch resolved")
+		}
+	})
+	t.Run("missing correction tree", func(t *testing.T) {
+		_, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-missing-tree", &passed)
+		request.CorrectionCandidateTree = strings.Repeat("a", 40)
+		request.RequestHash = targetedValidationRequestHash(request)
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+			t.Fatal("missing correction tree resolved")
+		}
+	})
+	t.Run("altered correction evidence tree", func(t *testing.T) {
+		_, request, correction, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-altered-tree", &passed)
+		request.CorrectionCandidateTree = correction.BaseTree
+		request.RequestHash = targetedValidationRequestHash(request)
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+			t.Fatal("altered correction tree resolved")
+		}
+	})
+	t.Run("altered correction evidence path digest", func(t *testing.T) {
+		_, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-altered-paths", &passed)
+		request.CorrectionPathsDigest = hash("altered-paths")
+		request.RequestHash = targetedValidationRequestHash(request)
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+			t.Fatal("altered correction paths resolved")
+		}
+	})
+	t.Run("propagates authority load error", func(t *testing.T) {
+		_, request, _, handle, binding, store := correctedInspectionFixture(t, "corrected-inspection-load-error", &passed)
+		if err := os.Remove(store.StatePath()); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := ResolveCorrectedCandidateInspectionBinding(context.Background(), handle, binding, request.RequestHash); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("binding load error = %v, want %v", err, os.ErrNotExist)
+		}
+	})
+	t.Run("missing evidence", func(t *testing.T) {
+		_, request, _, handle, _, _ := correctedInspectionFixture(t, "corrected-inspection-missing-evidence", nil)
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+			t.Fatal("missing repository evidence resolved")
+		}
+	})
+	t.Run("stale authority", func(t *testing.T) {
+		repo, request, correction, handle, _, store := correctedInspectionFixture(t, "corrected-inspection-stale-authority", &passed)
+		current, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		next := current.State
+		fixHash := FixDeltaHashForSnapshot(correction)
+		validation := bindTargetedValidationForTest(ScopedValidationResult{
+			LedgerIDs: next.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
+			OriginalCriteria:     ValidationCheck{Passed: true, EvidenceHash: hash("1"), FixDeltaHash: fixHash},
+			CorrectionRegression: ValidationCheck{Passed: true, EvidenceHash: hash("2"), FixDeltaHash: fixHash},
+		}, correction)
+		payload := []byte("repository verification passed\n")
+		evidence, err := NewVerificationEvidenceRecord(next.LineageID, current.Revision, correction, payload, passed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := next.CompleteCorrectionVerification(correction, 2, validation, evidence, payload); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Replace(current.Revision, "review/complete-correction-verification", next); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ResolveCorrectedCandidateInspection(context.Background(), handle, request); err == nil {
+			t.Fatalf("stale authority for %q resolved", repo)
+		}
+	})
 }
 
 func TestTargetedValidationRequestCountsOnlyPartialCorrectionAcrossIntendedUntracked(t *testing.T) {
@@ -225,4 +345,41 @@ func targetedValidationRequestFixture(t *testing.T, lineage string, correct bool
 		writeSnapshotFile(t, repo, "tracked.txt", "base\nfixed\n")
 	}
 	return repo, state, revision, store
+}
+
+func correctedInspectionFixture(t *testing.T, lineage string, outcome *VerificationOutcome) (string, TargetedValidationRequest, Snapshot, string, ReviewRepositoryContextBinding, CompactStore) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	repo, state, revision, store := targetedValidationRequestFixture(t, lineage, true)
+	request, err := BuildTargetedValidationRequest(context.Background(), repo, state, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	correction, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetFixDiff, Projection: state.InitialSnapshot.Projection,
+		BaseRef: state.CurrentSnapshot.CandidateTree, IntendedUntracked: state.InitialSnapshot.IntendedUntracked,
+		LedgerIDs: state.FixFindingIDs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if correction.Identity != request.CorrectionTargetIdentity {
+		t.Fatalf("correction identity = %s, want request target %s", correction.Identity, request.CorrectionTargetIdentity)
+	}
+	binding := ReviewRepositoryContextBinding{LineageID: state.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: revision}
+	handle, err := PublishReviewRepositoryContext(context.Background(), repo, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != nil {
+		if _, err := PublishCapturedVerificationEvidence(CaptureVerificationEvidenceRequest{
+			StoreDir: store.Dir, LineageID: state.LineageID, AuthorityRevision: revision,
+			Target: correction, Payload: []byte("repository verification passed\n"), Outcome: *outcome,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return repo, request, correction, handle, binding, store
 }

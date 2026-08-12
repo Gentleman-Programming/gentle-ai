@@ -96,6 +96,34 @@ func TestIntendedUntrackedPreflightRequiresExplicitIntentBeforeAuthority(t *test
 	assertNoUntrackedSelectionAuthority(t, repo)
 }
 
+func TestNegotiatedStatusUnbornUntrackedRequiresSelectionBeforeSnapshot(t *testing.T) {
+	reviewModeHome(t)
+	repo := initUnbornReviewCLIRepo(t)
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "global"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	const path = "scripts/unborn-candidate.sh"
+	writeUndeclaredWorkspaceFile(t, repo, path, "#!/bin/sh\necho candidate\n", 0o755)
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2,
+		"--agent", "opencode", "--next-transition",
+	}, &output); err != nil {
+		t.Fatalf("unborn negotiated STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	digest, inventory := intendedUntrackedSelection(t, status)
+	if digest == "" || !reflect.DeepEqual(inventory, []string{path}) {
+		t.Fatalf("selection inventory = digest %q paths %v, want only %q", digest, inventory, path)
+	}
+	if status.Authority != nil {
+		t.Fatalf("selection STATUS created authority: %#v", status.Authority)
+	}
+	assertNoUntrackedSelectionAuthority(t, repo)
+}
+
 func TestIntendedUntrackedSelectionUsesCanonicalPathsAndPrintedStart(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeUndeclaredWorkspaceFile(t, repo, "docs/chosen, file.md", "# Chosen\n", 0o644)
@@ -202,5 +230,45 @@ func TestIntendedUntrackedConsentFollowUpPreservesSelectedScope(t *testing.T) {
 	started := decodeNegotiatedReviewStart(t, executePrintedReview(t, repo, invocation))
 	if negotiatedStartTarget(started) != status.TargetIdentity {
 		t.Fatalf("consent START target = %s, selected status target = %s", negotiatedStartTarget(started), status.TargetIdentity)
+	}
+}
+
+func TestConsentFollowUpPrintedPathFlagsRoundTripWindowsNativePaths(t *testing.T) {
+	for _, test := range []struct {
+		name, cwd, policy, trace string
+	}{
+		{name: "cwd", cwd: `C:\Users\reviewer\gentle ai`},
+		{name: "policy", cwd: "/repo", policy: `C:\Users\reviewer\policy files\review policy.json`},
+		{name: "trace", cwd: "/repo", trace: `C:\Users\reviewer\traces\operation trace.json`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			command := reviewConsentFollowUpBase(
+				test.cwd, "sha256:target", reviewtransaction.ProjectionWorkspace,
+				"windows-path-roundtrip", "", test.policy, "reliability", test.trace, false, false,
+				ReviewIntegrationContractV2, "", "", reviewIntendedUntrackedScope{},
+			)
+
+			words, err := SplitPrintedCommandWords(command)
+			if err != nil {
+				t.Fatalf("split printed consent follow-up: %v", err)
+			}
+			want := []string{
+				"gentle-ai", "review", "start",
+				"--contract", ReviewIntegrationContractV2,
+				"--cwd", test.cwd,
+				"--target", "sha256:target",
+				"--projection", string(reviewtransaction.ProjectionWorkspace),
+				"--lineage", "windows-path-roundtrip",
+			}
+			if test.policy != "" {
+				want = append(want, "--policy", test.policy)
+			}
+			if test.trace != "" {
+				want = append(want, "--trace", test.trace)
+			}
+			if !reflect.DeepEqual(words, want) {
+				t.Fatalf("printed consent follow-up words = %#v, want %#v\ncommand: %q", words, want, command)
+			}
+		})
 	}
 }

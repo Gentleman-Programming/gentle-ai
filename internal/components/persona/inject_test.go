@@ -434,6 +434,66 @@ func TestInjectCustomOpenCodeDoesNothing(t *testing.T) {
 	}
 }
 
+func TestInjectPiPersonaWritesSelectedModeAndIsIdempotent(t *testing.T) {
+	root := t.TempDir()
+	path := PiPersonaConfigPath(root)
+
+	result, err := InjectPiPersona(root, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("InjectPiPersona() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("first Pi persona injection changed = false, want true")
+	}
+	if len(result.Files) != 1 || result.Files[0] != path {
+		t.Fatalf("first Pi persona injection files = %v, want [%q]", result.Files, path)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if got, want := string(content), "{\n  \"mode\": \"neutral\"\n}\n"; got != want {
+		t.Fatalf("Pi persona config = %q, want %q", got, want)
+	}
+
+	second, err := InjectPiPersona(root, model.PersonaNeutral)
+	if err != nil {
+		t.Fatalf("second InjectPiPersona() error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("second Pi persona injection changed = true, want false")
+	}
+}
+
+func TestInjectPiPersonaCustomPreservesExistingConfig(t *testing.T) {
+	root := t.TempDir()
+	path := PiPersonaConfigPath(root)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	const existing = "{\n  \"mode\": \"user-defined\"\n}\n"
+	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	result, err := InjectPiPersona(root, model.PersonaCustom)
+	if err != nil {
+		t.Fatalf("InjectPiPersona(custom) error = %v", err)
+	}
+	if result.Changed || len(result.Files) != 0 {
+		t.Fatalf("InjectPiPersona(custom) result = %#v, want no-op", result)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if string(content) != existing {
+		t.Fatalf("custom Pi persona config = %q, want existing content %q", content, existing)
+	}
+}
+
 func TestInjectOpenCodeGentlemanWritesAgentsFile(t *testing.T) {
 	home := t.TempDir()
 

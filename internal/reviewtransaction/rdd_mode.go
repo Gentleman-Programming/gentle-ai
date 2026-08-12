@@ -519,31 +519,32 @@ func cloneLocalRDDOverrideValue(mode RDDMode) (string, error) {
 	}
 }
 
+// rddModeSwitchDirectory is the kill switch's own root, a SIBLING of
+// review-transactions rather than a descendant of it.
+//
+// The override used to nest inside the review authority tree, deliberately, so
+// path safety, permissions, and private IO could reuse that tree's helpers
+// instead of inventing a second path policy. The reuse was fine; the nesting
+// was not. It made the switch inherit every failure mode of the thing the
+// switch exists to turn off, and #2882 is the consequence: with authority
+// failing RAR path safety, the documented clone-scoped exit refused, persisted
+// nothing, and left reviews on. That exit is what the stop-reason table names
+// for most unrecoverable review states, so those codes were pointing at a door
+// that was locked exactly when they pointed at it.
+//
+// Sitting beside review-transactions keeps every helper and every permission
+// rule, and drops only the dependency that had no reason to exist.
+const rddModeSwitchDirectory = "review-mode"
+
 // cloneLocalRDDModeRoot derives the override directory from the exact Git
-// common directory. It nests inside the already-validated owner-only review
-// authority root so that path safety, permissions, and private IO reuse the
-// existing helpers instead of inventing a second path policy.
+// common directory, under the switch's own root.
 func cloneLocalRDDModeRoot(ctx context.Context, repo string, create bool) (string, error) {
-	lease, err := OpenRepositoryIdentityLease(ctx, repo)
+	identity, err := cloneLocalRDDModeIdentity(ctx, repo)
 	if err != nil {
-		// A bare repository already states its own refusal and names its own
-		// recovery. Wrapping it in this internal concern would misattribute the
-		// failure to a kill switch the operator never touched.
-		var bare *BareRepositoryError
-		if errors.As(err, &bare) {
-			return "", err
-		}
-		return "", fmt.Errorf("resolve review mode repository identity: %w", err)
+		return "", err
 	}
-	identity := reviewRepositoryIdentityRecordFromLease(lease)
-	base := filepath.Join(
-		identity.GitCommonDir,
-		"gentle-ai",
-		"review-transactions",
-		rarAuthorityDirectory,
-		rarAuthorityVersion,
-	)
-	if err := ensureRARRepositoryRoot(identity.GitCommonDir, base, create); err != nil {
+	base := filepath.Join(identity.GitCommonDir, "gentle-ai", rddModeSwitchDirectory, rarAuthorityDirectory, rarAuthorityVersion)
+	if err := ensureRARSwitchRoot(identity.GitCommonDir, base, create); err != nil {
 		return "", err
 	}
 	dir := filepath.Join(base, rddModeDirectory)
@@ -553,13 +554,92 @@ func cloneLocalRDDModeRoot(ctx context.Context, repo string, create bool) (strin
 	return dir, nil
 }
 
-func readCloneLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrideRecord, bool, error) {
+// cloneLocalRDDModeLegacyRoot is the pre-#2882 location inside the review
+// authority tree. It is read-only and best-effort: overrides written before
+// this change must keep deciding, and a clone that never disabled has nothing
+// here.
+func cloneLocalRDDModeLegacyRoot(ctx context.Context, repo string) (string, error) {
+	identity, err := cloneLocalRDDModeIdentity(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	base := filepath.Join(
+		identity.GitCommonDir,
+		"gentle-ai",
+		"review-transactions",
+		rarAuthorityDirectory,
+		rarAuthorityVersion,
+	)
+	if err := ensureRARRepositoryRoot(identity.GitCommonDir, base, false); err != nil {
+		return "", err
+	}
+	dir := filepath.Join(base, rddModeDirectory)
+	if err := ensurePrivateRARDirectoryTree(base, dir, false); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func cloneLocalRDDModeIdentity(ctx context.Context, repo string) (reviewRepositoryIdentityRecord, error) {
+	lease, err := OpenRepositoryIdentityLease(ctx, repo)
+	if err != nil {
+		// A bare repository already states its own refusal and names its own
+		// recovery. Wrapping it in this internal concern would misattribute the
+		// failure to a kill switch the operator never touched.
+		var bare *BareRepositoryError
+		if errors.As(err, &bare) {
+			return reviewRepositoryIdentityRecord{}, err
+		}
+		return reviewRepositoryIdentityRecord{}, fmt.Errorf("resolve review mode repository identity: %w", err)
+	}
+	return reviewRepositoryIdentityRecordFromLease(lease), nil
+}
+
+// cloneLocalRDDModeReadRoot reports the directory that currently decides this
+// clone's override: the switch's own root when it holds a generation, and
+// otherwise the legacy location so a disable written before #2882 keeps
+// deciding.
+//
+// A legacy root this build cannot reach resolves to "no override" rather than
+// an error, and that never relaxes anything. Before this change an unreachable
+// authority tree already failed the whole resolution closed, which resolves to
+// managed and keeps reviews on; reporting no clone-local override reaches the
+// same effective mode by the same default, and unlike the old behavior it
+// leaves the operator able to write one.
+func cloneLocalRDDModeReadRoot(ctx context.Context, repo string) (string, error) {
 	dir, err := cloneLocalRDDModeRoot(ctx, repo, false)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	if err == nil {
+		head, headErr := cloneLocalRDDOverrideHeadGeneration(dir)
+		if headErr != nil {
+			return "", headErr
+		}
+		if head > 0 {
+			return dir, nil
+		}
+	}
+	legacy, legacyErr := cloneLocalRDDModeLegacyRoot(ctx, repo)
+	if legacyErr != nil {
+		return "", nil
+	}
+	if head, headErr := cloneLocalRDDOverrideHeadGeneration(legacy); headErr != nil || head == 0 {
+		return "", nil
+	}
+	return legacy, nil
+}
+
+func readCloneLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrideRecord, bool, error) {
+	dir, err := cloneLocalRDDModeReadRoot(ctx, repo)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return rddModeOverrideRecord{}, false, nil
 		}
 		return rddModeOverrideRecord{}, false, err
+	}
+	if dir == "" {
+		return rddModeOverrideRecord{}, false, nil
 	}
 	return readCloneLocalRDDOverrideHead(dir)
 }
@@ -570,12 +650,15 @@ func readCloneLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrid
 // read-only, never creates state, and reports "" when this clone holds no
 // override at all.
 func CloneLocalRDDModeRecordPath(ctx context.Context, repo string) (string, error) {
-	dir, err := cloneLocalRDDModeRoot(ctx, repo, false)
+	dir, err := cloneLocalRDDModeReadRoot(ctx, repo)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", nil
 		}
 		return "", err
+	}
+	if dir == "" {
+		return "", nil
 	}
 	head, err := cloneLocalRDDOverrideHeadGeneration(dir)
 	if err != nil || head == 0 {

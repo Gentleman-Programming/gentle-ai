@@ -54,6 +54,57 @@ func TestNegotiatedReviewFailuresUseOneEnvelopeAcrossRoutes(t *testing.T) {
 	}
 }
 
+func TestFinalizeActionEligibilityWithoutContractIsPreflightAndNonMutating(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags []string
+	}{
+		{name: "action eligibility only", flags: []string{"--action-eligibility"}},
+		{name: "next transition only", flags: []string{"--next-transition"}},
+		{name: "both outputs", flags: []string{"--action-eligibility", "--next-transition"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			beforeStatus := runReviewCLIGit(t, repo, "status", "--porcelain")
+			args := append([]string{"finalize", "--cwd", repo}, tt.flags...)
+			var output bytes.Buffer
+			err := RunReview(args, &output)
+			if err == nil {
+				t.Fatal("missing contract request succeeded")
+			}
+			var preflight *reviewIntegrationPreflightError
+			if !errors.As(err, &preflight) {
+				t.Fatalf("error = %T, want reviewIntegrationPreflightError: %v", err, err)
+			}
+			if err.Error() != reviewContractRequiredForActionEligibilityReason {
+				t.Fatalf("error = %q, want %q", err.Error(), reviewContractRequiredForActionEligibilityReason)
+			}
+			failure := newReviewIntegrationFailure(ReviewIntegrationOperationFinalize, args[1:], err)
+			if failure.Phase != "preflight" || failure.Code != "invalid_request" ||
+				failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe {
+				t.Fatalf("failure = %#v", failure)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("unnegotiated preflight wrote output: %q", output.String())
+			}
+			if afterStatus := runReviewCLIGit(t, repo, "status", "--porcelain"); afterStatus != beforeStatus {
+				t.Fatalf("working tree changed: before=%q after=%q", beforeStatus, afterStatus)
+			}
+			if _, statErr := os.Stat(reviewCLIAuthorityRoot(t, repo)); !os.IsNotExist(statErr) {
+				t.Fatalf("preflight created review authority: %v", statErr)
+			}
+			reportDir := reviewDefectReportDir(t, repo)
+			entries, readErr := os.ReadDir(reportDir)
+			if readErr == nil && len(entries) != 0 {
+				t.Fatalf("preflight generated defect reports: %v", entries)
+			} else if readErr != nil && !os.IsNotExist(readErr) {
+				t.Fatalf("inspect defect reports: %v", readErr)
+			}
+		})
+	}
+}
+
 func TestNegotiatedReviewContractFailuresArePreMutationAndLegacyErrorsStayCompatible(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1143,6 +1194,50 @@ func TestNewReviewIntegrationFailureCause(t *testing.T) {
 	readOnly := newReviewIntegrationFailure("review.status", nil, runErr)
 	if readOnly.Cause != "" {
 		t.Fatalf("read-only catch-all leaked cause = %q", readOnly.Cause)
+	}
+}
+
+func TestEscalatedRecoveryAuthorizationInexactUsesCurrentRepairRoute(t *testing.T) {
+	tests := []struct {
+		name           string
+		repairable     bool
+		wantNextAction string
+		wantMessage    string
+	}{
+		{
+			name:           "schema-prefixed content mismatch",
+			repairable:     true,
+			wantNextAction: "review.repair",
+			wantMessage:    "run review repair",
+		},
+		{
+			name:           "pre-contract authorization",
+			repairable:     false,
+			wantNextAction: "stop",
+			wantMessage:    "no advertised repair operation",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runErr := fmt.Errorf("invalid compact authority graph: %w", &reviewtransaction.CompactRecoveryAuthorizationInexactError{
+				Projection: reviewtransaction.ProjectionWorkspace, TargetIdentity: "sha256:" + strings.Repeat("a", 64), Repairable: tt.repairable,
+			})
+			failure := newReviewIntegrationFailure(
+				ReviewIntegrationOperationFinalize,
+				[]string{"--lineage", "review-authorization-route"},
+				runErr,
+			)
+			if failure.Code != "escalated_recovery_authorization_inexact" || failure.Phase != "pre_native" ||
+				failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "current_target" ||
+				failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
+				failure.NextAction != tt.wantNextAction || !strings.Contains(failure.Message, tt.wantMessage) ||
+				failure.NextAction == "reconcile-authority" || failure.Cause == "" {
+				t.Fatalf("authorization failure = %#v", failure)
+			}
+			if err := failure.Validate(); err != nil {
+				t.Fatalf("authorization failure validation = %v", err)
+			}
+		})
 	}
 }
 

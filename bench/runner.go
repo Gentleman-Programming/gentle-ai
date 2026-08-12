@@ -15,7 +15,10 @@ import (
 // repository, and (when the journey needs one) a local bare remote. Nothing
 // here ever touches the user's real config or repositories.
 type Sandbox struct {
-	Binary                   string
+	Binary string
+	// PathOverride is prepended to PATH for journeys that need a deterministic
+	// local runtime probe without depending on the host installation.
+	PathOverride             string
 	Root                     string
 	Home                     string
 	Repo                     string
@@ -76,8 +79,12 @@ func newSandbox(binary, root string) (*Sandbox, error) {
 // env is a closed environment: only what the product legitimately needs.
 // PATH is inherited because the product shells out to git.
 func (s *Sandbox) env() []string {
+	path := os.Getenv("PATH")
+	if s.PathOverride != "" {
+		path = s.PathOverride + string(os.PathListSeparator) + path
+	}
 	env := []string{
-		"PATH=" + os.Getenv("PATH"),
+		"PATH=" + path,
 		"HOME=" + s.Home,
 		"USERPROFILE=" + s.Home,
 		"XDG_CONFIG_HOME=" + filepath.Join(s.Home, ".config"),

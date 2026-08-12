@@ -29,6 +29,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -149,6 +150,8 @@ func TestClassifyCompactRecoveryEdgeAnomalies(t *testing.T) {
 		wantRefusal             string
 		wantAuthorizationDigest bool
 		wantDispositionClass    string
+		checkRepairability      bool
+		wantRepairable          bool
 	}{
 		{name: "valid edge", wantValid: true},
 		{
@@ -164,6 +167,7 @@ func TestClassifyCompactRecoveryEdgeAnomalies(t *testing.T) {
 				successor.State.Recovery.MaintainerAuthorization = preContractFixtureAuthorization
 			},
 			wantAnomalies: compactRecoveryEdgeMalformedAuthorization, wantAuthorizationDigest: true,
+			checkRepairability: true,
 		},
 		{
 			name: "dual anomaly in canonical order",
@@ -193,7 +197,7 @@ func TestClassifyCompactRecoveryEdgeAnomalies(t *testing.T) {
 		},
 		{
 			// The other content-mismatch branch:
-			// errCompactRecoveryAuthorizationInexact with a schema-prefixed but
+			// ErrCompactRecoveryAuthorizationInexact with a schema-prefixed but
 			// wrong-content authorization.
 			name: "schema-prefixed different-content authorization is non-reconcilable corruption",
 			mutate: func(_ CompactRecord, successor *CompactRecord) {
@@ -204,6 +208,8 @@ func TestClassifyCompactRecoveryEdgeAnomalies(t *testing.T) {
 			},
 			wantRefusal:          "corruption, not a pre-contract authorization",
 			wantDispositionClass: compactContentMismatchedRecoveryAuthorizationClass,
+			checkRepairability:   true,
+			wantRepairable:       true,
 		},
 	}
 
@@ -237,6 +243,15 @@ func TestClassifyCompactRecoveryEdgeAnomalies(t *testing.T) {
 			}
 			if got.DispositionClass != tt.wantDispositionClass {
 				t.Fatalf("disposition class = %q, want %q", got.DispositionClass, tt.wantDispositionClass)
+			}
+			if tt.checkRepairability {
+				var authorizationErr *CompactRecoveryAuthorizationInexactError
+				if !errors.As(got.ValidationError, &authorizationErr) {
+					t.Fatalf("validation error = %T %v, want authorization error", got.ValidationError, got.ValidationError)
+				}
+				if authorizationErr.Repairable != tt.wantRepairable {
+					t.Fatalf("authorization repairable = %t, want %t", authorizationErr.Repairable, tt.wantRepairable)
+				}
 			}
 			wantDigest := ""
 			if tt.wantAuthorizationDigest {

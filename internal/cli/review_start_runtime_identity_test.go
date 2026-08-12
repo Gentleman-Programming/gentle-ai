@@ -50,16 +50,14 @@ func initLensSelectingReviewCLIRepo(t *testing.T) (repo, baseRef string) {
 }
 
 // TestDirectReviewStartRefusalInventsNoRuntimeIdentity is the RED-first proof
-// for the compiled half of issue #2440, reproduced against the real CLI.
+// for issue #2885, reproduced against the real CLI.
 //
 // The direct route refuses `--agent` outright ("review start --agent requires
 // a negotiated --contract", verified by execution below), so on this path no
 // runtime has declared itself and the CLI does not know who is calling. It
-// nonetheless printed an exact runnable continuation carrying a constant
-// `--agent claude-code`, at the exact moment a reader is most likely to copy
-// the command verbatim. A Codex or OpenCode caller who did so declared a false
-// identity and passed the transport admission check in
-// review_transport_capability.go under Claude Code's capability profile.
+// must therefore omit --agent entirely. The test runs the exact printed command
+// from the repository where it was emitted so executability is proved without
+// filling a placeholder or guessing a transport identity.
 func TestDirectReviewStartRefusalInventsNoRuntimeIdentity(t *testing.T) {
 	repo, baseRef := initLensSelectingReviewCLIRepo(t)
 
@@ -77,18 +75,26 @@ func TestDirectReviewStartRefusalInventsNoRuntimeIdentity(t *testing.T) {
 		t.Fatalf("did not reach the direct-route refusal that names a continuation: %s", message)
 	}
 
-	identities := compiledRuntimeIdentities()
-	named := reviewPrintedIdentityRegexp.FindAllStringSubmatch(message, -1)
-	if len(named) == 0 {
-		t.Fatalf("printed continuation names no --agent binding at all: %s", message)
+	opening := strings.Index(message, "`gentle-ai review start ")
+	if opening < 0 {
+		t.Fatalf("refusal has no negotiated start command: %s", message)
 	}
-	for _, match := range named {
-		if identities[match[1]] {
-			t.Errorf("printed continuation tells an undeclared caller to declare %q; copying this command verbatim passes a false identity to the review transport gate: %s", match[1], message)
-		}
+	closing := strings.IndexByte(message[opening+1:], '`')
+	if closing < 0 {
+		t.Fatalf("refusal command has no closing backtick: %s", message)
 	}
-	if !strings.Contains(message, "--agent "+reviewUndeclaredRuntimeIdentitySlot) {
-		t.Errorf("printed continuation does not leave the runtime identity to be filled in: %s", message)
+	command := message[opening+1 : opening+1+closing]
+	words := reviewShellWords(t, command)
+	if strings.Contains(command, "--agent") || strings.Contains(command, reviewUndeclaredRuntimeIdentitySlot) {
+		t.Fatalf("unbound recovery command guesses a runtime identity: %s", command)
+	}
+	if len(words) < 3 || words[0] != "gentle-ai" || words[1] != "review" || words[2] != "start" {
+		t.Fatalf("recovery command = %#v, want gentle-ai review start", words)
+	}
+	t.Chdir(repo)
+	var recovered bytes.Buffer
+	if err := RunReview(words[2:], &recovered); err != nil {
+		t.Fatalf("exact unbound recovery command is not executable: %v\n%s", err, recovered.String())
 	}
 }
 
@@ -120,10 +126,9 @@ func TestDirectRouteStillRefusesADeclaredRuntime(t *testing.T) {
 
 // TestNegotiatedStartCommandEchoesTheCallersOwnRuntime pins the builder every
 // printed continuation goes through. The negotiated hint sites pass the
-// caller's declared identity, and today only claude-code clears the transport
-// gate, so a constant and an echo are observationally identical on this build.
-// That is exactly why the property needs its own test: the moment a second
-// runtime becomes eligible, a constant would start lying again.
+// caller's declared identity. Every runtime with immutable transport must be
+// echoed exactly; a fixed identity would lie for the rest of the supported
+// set, which is why this property has its own test.
 func TestNegotiatedStartCommandEchoesTheCallersOwnRuntime(t *testing.T) {
 	t.Parallel()
 
@@ -131,25 +136,45 @@ func TestNegotiatedStartCommandEchoesTheCallersOwnRuntime(t *testing.T) {
 		Identity:   "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		Projection: reviewtransaction.ProjectionWorkspace,
 	}
-	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentCodex, model.AgentOpenCode, model.AgentKilocode} {
+	for _, agent := range []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentCodex} {
 		t.Run(string(agent), func(t *testing.T) {
 			command := reviewNegotiatedStartCommand(snapshot, string(agent))
-			if !strings.Contains(command, "--agent "+string(agent)+" ") {
-				t.Errorf("negotiated start command does not name the caller %q: %s", agent, command)
-			}
-			for other := range compiledRuntimeIdentities() {
-				if other == string(agent) {
-					continue
-				}
-				if strings.Contains(command, "--agent "+other+" ") {
-					t.Errorf("negotiated start command for %q names %q instead: %s", agent, other, command)
-				}
+			if strings.Count(command, "--agent ") != 1 || !strings.Contains(command, "--agent "+string(agent)+" ") {
+				t.Errorf("negotiated start command does not contain exactly one exact caller identity %q: %s", agent, command)
 			}
 		})
 	}
 
-	if slot := reviewNegotiatedStartCommand(snapshot, "   "); !strings.Contains(slot, "--agent "+reviewUndeclaredRuntimeIdentitySlot+" ") {
-		t.Errorf("a blank runtime identity did not fall back to the fill-in slot: %s", slot)
+	if unbound := reviewNegotiatedStartCommand(snapshot, "   "); strings.Contains(unbound, "--agent") || strings.Contains(unbound, reviewUndeclaredRuntimeIdentitySlot) {
+		t.Errorf("a blank runtime identity emitted an agent segment: %s", unbound)
+	}
+}
+
+func TestTierCRecoveryNarrationBindsOnlyDeclaredRuntimeIdentity(t *testing.T) {
+	t.Parallel()
+
+	for _, reason := range []string{"corrected_candidate_unavailable", "correction_repository_verification_failed"} {
+		statement, ok := reviewStopReasonStatement(reason)
+		if !ok {
+			t.Fatalf("Tier C reason %q has no narration", reason)
+		}
+		for _, runtime := range []model.AgentID{"", model.AgentClaudeCode, model.AgentOpenCode, model.AgentCodex} {
+			t.Run(reason+"/"+string(runtime), func(t *testing.T) {
+				rendered := bindNarrationRuntimeIdentity(statement, runtime)
+				if strings.Contains(rendered, reviewUndeclaredRuntimeIdentitySlot) {
+					t.Fatalf("Tier C narration retained the runtime placeholder: %s", rendered)
+				}
+				if runtime == "" {
+					if strings.Contains(rendered, "--agent") {
+						t.Fatalf("unbound Tier C narration emitted an agent segment: %s", rendered)
+					}
+					return
+				}
+				if strings.Count(rendered, "--agent "+string(runtime)) != 1 {
+					t.Fatalf("bound Tier C narration does not contain one exact runtime identity: %s", rendered)
+				}
+			})
+		}
 	}
 }
 
@@ -353,59 +378,15 @@ func compiledRuntimeIdentityExpression(expression ast.Expr, identities map[strin
 	return "", false
 }
 
-// substituteReplayRuntimeIdentity prepares a printed continuation for verbatim
-// replay by supplying the one token the CLI could not know: the caller's own
-// runtime identity.
-//
-// This is the honest resolution of a real tension between two contracts. Issue
-// #2447 requires every refusal to name a command that actually runs. Issue
-// #2440 requires that no printed command assert an identity the CLI never
-// learned from the caller, because the direct route refuses `--agent` and a
-// reader who copies a constant declares a false runtime to the transport gate.
-// Both cannot hold in one fixed string, so the printed command leaves exactly
-// one slot and this helper fills it the way a human would. The replay still
-// proves everything #2447 cares about: the helper fails if ANY other token is
-// a fill-in slot, so a hint that quietly stopped resolving the frozen selector
-// would be caught here, not excused.
-func substituteReplayRuntimeIdentity(t *testing.T, arguments []string, caller model.AgentID) []string {
-	t.Helper()
-
-	substituted := make([]string, len(arguments))
-	filled := false
-	for index, argument := range arguments {
-		if argument == reviewUndeclaredRuntimeIdentitySlot {
-			substituted[index] = string(caller)
-			filled = true
-			continue
-		}
-		if strings.HasPrefix(argument, "<") && strings.HasSuffix(argument, ">") {
-			t.Fatalf("printed command leaves %q unresolved; only the caller's own runtime identity may need filling in", argument)
-		}
-		substituted[index] = argument
-	}
-	if !filled {
-		t.Fatalf("printed command carried no runtime-identity slot to fill: %v", arguments)
-	}
-	return substituted
-}
-
-// withoutReplayRuntimeIdentity exercises the manual compatibility route while
-// retaining every frozen selector emitted by a direct-route continuation.
+// withoutReplayRuntimeIdentity verifies that an unbound continuation is already
+// executable while retaining every frozen selector the direct route emitted.
 func withoutReplayRuntimeIdentity(t *testing.T, arguments []string) []string {
 	t.Helper()
 
-	without := make([]string, 0, len(arguments)-2)
-	removed := false
-	for index := 0; index < len(arguments); index++ {
-		if arguments[index] == "--agent" && index+1 < len(arguments) && arguments[index+1] == reviewUndeclaredRuntimeIdentitySlot {
-			removed = true
-			index++
-			continue
+	for _, argument := range arguments {
+		if argument == "--agent" || strings.Contains(argument, reviewUndeclaredRuntimeIdentitySlot) {
+			t.Fatalf("unbound printed command contains a runtime identity segment: %v", arguments)
 		}
-		without = append(without, arguments[index])
 	}
-	if !removed {
-		t.Fatalf("printed command carried no removable runtime-identity slot: %v", arguments)
-	}
-	return without
+	return append([]string(nil), arguments...)
 }

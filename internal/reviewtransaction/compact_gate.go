@@ -80,6 +80,26 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 		return assessment, fmt.Errorf("build compact gate target: %w", err)
 	}
 	assessment.Actual = snapshot
+	var compatibility *BaseAdvanceCompatibility
+	if (request.Gate == GatePreCommit || request.Gate == GatePrePush) && state.CurrentSnapshot.Kind == TargetBaseDiff && state.Recovery == nil && strings.TrimSpace(input.BaseRef) != "" {
+		if receipt, receiptErr := state.Receipt(); receiptErr == nil {
+			proof, proofErr := deriveExplicitBaseAdvanceCompatibility(ctx, repo, Receipt{
+				BaseTree: receipt.BaseTree, FinalCandidateTree: receipt.FinalCandidateTree, PathsDigest: receipt.PathsDigest,
+			}, request, snapshot, gateArtifactPreimages{})
+			if proofErr == nil {
+				compatibility = &proof
+			}
+		}
+	}
+	if compatibility != nil {
+		proofExpected := state.CurrentSnapshot
+		proofExpected.Projection = snapshot.Projection
+		if classifyCompactTargetRelation(proofExpected, snapshot, state.GenesisPaths,
+			compactTargetRelationEvidence{CompatibleAdvance: compatibility}).Kind == compactTargetCompatibleAdvance {
+			assessment.Applicability = CompactGateTargetExact
+			return assessment, nil
+		}
+	}
 	subsetProof, err := proveCompactPrePushMonotonicSubset(ctx, repo, state, state.CurrentSnapshot.CandidateTree, state.InitialSnapshot.BaseTree, input, snapshot, resolvedPrePR)
 	if err != nil {
 		return assessment, fmt.Errorf("prove compact pre-push monotonic subset: %w", err)
@@ -345,6 +365,7 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		return invalid("compact recovery binding cannot be derived during authorization")
 	}
 	recoveryAdvance := request.Gate == GatePrePR && recoveryBound && snapshot.BaseTree != recoveryBinding.BaseTree
+	localAdvance := (request.Gate == GatePreCommit || request.Gate == GatePrePush) && record.State.CurrentSnapshot.Kind == TargetBaseDiff && record.State.Recovery == nil && strings.TrimSpace(input.BaseRef) != ""
 	compatibleAdvance := false
 	var compatibility *BaseAdvanceCompatibility
 	var recoveryCompatibility *BaseAdvanceCompatibility
@@ -356,6 +377,15 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		}
 		compatibility = &proof
 		recoveryCompatibility = &proof
+		compatibleAdvance = proof.Compatible
+	} else if localAdvance {
+		legacyShape := Receipt{BaseTree: receipt.BaseTree, FinalCandidateTree: receipt.FinalCandidateTree, PathsDigest: receipt.PathsDigest}
+		proof, proofErr := deriveExplicitBaseAdvanceCompatibility(ctx, repo, legacyShape, request, snapshot, preimages)
+		if proofErr != nil {
+			denialContext.Denial = &GateDenial{Stage: "base-advance", Code: "unproven"}
+			return NativeGateEvaluation{Result: GateInvalidated, Reason: "compatible local base advance cannot be proven: " + proofErr.Error(), Context: denialContext}
+		}
+		compatibility = &proof
 		compatibleAdvance = proof.Compatible
 	} else if request.Gate == GatePrePR && prePRBoundaryAdvanced(resolvedPrePR) && snapshot.CandidateTree == receipt.FinalCandidateTree && snapshot.PathsDigest == receipt.PathsDigest {
 		if record.State.InitialSnapshot.Kind == TargetCurrentChanges {
@@ -387,6 +417,9 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if subsetProof.Allowed {
 		baseRelationshipValid = true
 	}
+	if compatibleAdvance {
+		baseRelationshipValid = true
+	}
 	gateContext := GateContext{
 		Gate: request.Gate, LineageID: receipt.LineageID, Generation: receipt.Generation,
 		StoreRevision: record.Revision, GenesisRevision: record.Revision, ChainIdentity: record.Revision, BundleDigest: record.Revision,
@@ -409,7 +442,7 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	}
 	pathsMismatch := pathsAreSubset(snapshot.Paths, record.State.GenesisPaths) != nil && !compatibleAdvance
 	if strictBinding {
-		pathsMismatch = snapshot.PathsDigest != binding.PathsDigest && !squashedFixDelivery
+		pathsMismatch = snapshot.PathsDigest != binding.PathsDigest && !squashedFixDelivery && !compatibleAdvance
 	}
 	// expectedBaseTree is the single comparand the base check below uses, so
 	// the value published in the denial is by construction the value the gate
@@ -423,7 +456,7 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	}
 	baseMismatch := snapshot.BaseTree != expectedBaseTree && request.Target.Kind != TargetFixDiff && !compatibleAdvance
 	if strictBinding {
-		baseMismatch = snapshot.BaseTree != expectedBaseTree && !squashedFixDelivery
+		baseMismatch = snapshot.BaseTree != expectedBaseTree && !squashedFixDelivery && !compatibleAdvance
 	}
 	// A scope_changed recovery successor freezes only its own pristine scope,
 	// so a delivery already covered by its receipt-bound predecessors would be
@@ -449,7 +482,7 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		return NativeGateEvaluation{Result: GateInvalidated, Reason: "advanced recovery delivery requires trusted compatibility and full-chain verification", Context: gateContext}
 	}
 	// guard:population reviewed-subset-delivery too-tight: legitimate pre-push deliveries are strict immutable receipt-scope subsets with a proven monotonic reviewed base-to-final history
-	if !subsetProof.Allowed && (snapshot.CandidateTree != receipt.FinalCandidateTree || pathsMismatch) {
+	if !subsetProof.Allowed && ((snapshot.CandidateTree != receipt.FinalCandidateTree && !compatibleAdvance) || pathsMismatch) {
 		gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: "candidate-or-paths-mismatch"}
 		diagnostics, diagnosticsErr := CompactScopeChangeDiagnostics(ctx, repo, record.State, record.Revision, snapshot, request.Gate)
 		if diagnosticsErr != nil {
@@ -534,6 +567,9 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		if compatibilityErr == nil {
 			if recoveryAdvance {
 				finalCompatibility, compatibilityErr = deriveCompactRecoveryAdvanceCompatibility(ctx, repo, finalRecoveryBinding, request, finalSnapshot, finalRefs, finalPreimages)
+			} else if localAdvance {
+				legacyShape := Receipt{BaseTree: receipt.BaseTree, FinalCandidateTree: receipt.FinalCandidateTree, PathsDigest: receipt.PathsDigest}
+				finalCompatibility, compatibilityErr = deriveExplicitBaseAdvanceCompatibility(ctx, repo, legacyShape, request, finalSnapshot, finalPreimages)
 			} else if record.State.InitialSnapshot.Kind == TargetCurrentChanges {
 				finalCompatibility, compatibilityErr = deriveCurrentChangesBoundaryCompatibility(ctx, repo, finalRecord.State, request, finalSnapshot, finalRefs)
 			} else {
@@ -596,7 +632,7 @@ func compactGateInfrastructureFailure(err error) bool {
 	}
 	var command *GitCommandError
 	var processControl *GitProcessControlError
-	return errors.As(err, &command) || errors.As(err, &processControl)
+	return errors.As(err, &command) || errors.As(err, &processControl) || errors.Is(err, ErrMalformedAdvertisedRemoteOutput)
 }
 
 func buildCompactScopeChangeDiagnostics(ctx context.Context, repo string, state CompactState, revision string, actual Snapshot) (GateScopeChangeDiagnostics, error) {
@@ -800,6 +836,10 @@ func buildCompactGateRequestWithPushBase(ctx context.Context, repo string, state
 		projection := current.Projection
 		if input.Gate == GatePreCommit {
 			projection = ProjectionStaged
+		}
+		if input.Gate == GatePreCommit && strings.TrimSpace(input.BaseRef) != "" && current.Kind == TargetBaseDiff {
+			request.Target = Target{Kind: TargetBaseWorkspaceOverlay, Projection: projection, BaseRef: input.BaseRef, IntendedUntracked: []string{}}
+			break
 		}
 		if current.Kind == TargetFixDiff {
 			request.Target = Target{

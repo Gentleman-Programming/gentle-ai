@@ -77,9 +77,10 @@ type waveCorrectionStatus struct {
 		ReasonCode string `json:"reason_code"`
 		Collect    *struct {
 			Inputs []struct {
-				Name             string                    `json:"name"`
-				CaptureOperation string                    `json:"capture_operation"`
-				Submission       *waveSubmissionDescriptor `json:"submission"`
+				Name             string                         `json:"name"`
+				CaptureOperation string                         `json:"capture_operation"`
+				Arguments        []struct{ Name, Value string } `json:"arguments"`
+				Submission       *waveSubmissionDescriptor      `json:"submission"`
 			} `json:"inputs"`
 		} `json:"collect"`
 		Execute *struct {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -63,6 +64,49 @@ func TestRunSDDStatusPrintsJSONWithInstructions(t *testing.T) {
 	}
 	if status.NextRecommended != "apply" {
 		t.Fatalf("NextRecommended = %q, want apply", status.NextRecommended)
+	}
+}
+
+func TestRunSDDStatusAndContinueReportFlatSpecConsistently(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := filepath.Join(root, "openspec", "changes", "flat-spec")
+	writeSDDStatusFile(t, filepath.Join(changeRoot, "proposal.md"), "# Proposal\n")
+	writeSDDStatusFile(t, filepath.Join(changeRoot, "spec.md"), "### Requirement: flat\n#### Scenario: present\n")
+	writeSDDStatusFile(t, filepath.Join(changeRoot, "design.md"), "# Design\n")
+	writeSDDStatusFile(t, filepath.Join(changeRoot, "tasks.md"), "- [ ] 1.1 Work\n")
+
+	tests := []struct {
+		name string
+		run  func([]string, io.Writer) error
+	}{
+		{name: "sdd-status", run: RunSDDStatus},
+		{name: "sdd-continue", run: RunSDDContinue},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			if err := tt.run([]string{"flat-spec", "--cwd", root, "--json"}, &stdout); err != nil {
+				t.Fatalf("command error = %v", err)
+			}
+
+			var status sddstatus.Status
+			if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
+				t.Fatalf("JSON decode error = %v\n%s", err, stdout.String())
+			}
+			wantSpec := filepath.Join(changeRoot, "spec.md")
+			if !reflect.DeepEqual(status.ArtifactPaths.Specs, []string{wantSpec}) {
+				t.Fatalf("ArtifactPaths.Specs = %v, want [%s]", status.ArtifactPaths.Specs, wantSpec)
+			}
+			if status.Artifacts["specs"] != sddstatus.ArtifactDone {
+				t.Fatalf("Artifacts[specs] = %q, want done", status.Artifacts["specs"])
+			}
+			if status.Dependencies.Specs != sddstatus.DependencyAllDone || status.Dependencies.Apply != sddstatus.DependencyReady {
+				t.Fatalf("dependencies = %#v, want specs all_done and apply ready", status.Dependencies)
+			}
+			if status.NextRecommended != "apply" {
+				t.Fatalf("NextRecommended = %q, want apply", status.NextRecommended)
+			}
+		})
 	}
 }
 

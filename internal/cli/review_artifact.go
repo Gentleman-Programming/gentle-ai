@@ -676,27 +676,21 @@ func discoverCapturedReviewerArtifacts(ctx context.Context, repo, storeDir strin
 	}
 	artifacts := make([]ReviewTransitionArtifact, 0, len(state.SelectedLenses))
 	for order, lens := range state.SelectedLenses {
-		path := filepath.Join(storeDir, reviewtransaction.CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", order, lens))
-		digest, err := os.ReadFile(path + ".sha256")
-		if errors.Is(err, os.ErrNotExist) {
+		slot, err := reviewtransaction.ReadCompactReviewerResultSlot(storeDir, order, lens)
+		if err != nil {
+			return nil, fmt.Errorf("read captured reviewer result %d: %w", order, err)
+		}
+		if !slot.Occupied {
 			continue
 		}
-		if err != nil {
-			return nil, fmt.Errorf("read captured reviewer result digest %d: %w", order, err)
-		}
-		digestValue := strings.TrimSpace(string(digest))
-		if reviewtransaction.ReviewerResultDigestIsQuarantined(state, order, digestValue) {
+		if reviewtransaction.ReviewerResultDigestIsQuarantined(state, order, slot.Digest) {
 			continue
 		}
 		artifact := reviewResultArtifact{
-			Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, Path: path, SHA256: digestValue,
+			Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, SHA256: slot.Digest,
 			LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Lens: lens, SelectedOrder: order,
 		}
-		payload, err := readVerifiedReviewerArtifact(artifact, storeDir, state)
-		if err != nil {
-			return nil, fmt.Errorf("verify captured reviewer result %d: %w", order, err)
-		}
-		_, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, payload, artifact.SHA256, state, revision, order, frozen)
+		_, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, slot.Payload, slot.Digest, state, revision, order, frozen)
 		if err != nil {
 			return nil, fmt.Errorf("verify captured reviewer admission %d: %w", order, err)
 		}

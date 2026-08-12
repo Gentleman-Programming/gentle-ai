@@ -135,6 +135,14 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		// correction attempt is the designed limit), not a code defect.
 		ToolFault: reviewStopToolFault(false),
 	},
+	"rdd_disabled": {
+		Terminal:      false,
+		Justification: "caller-continuable: receipt-driven development is disabled; run `gentle-ai review mode enable` to turn it back on, then re-run the exact `review status --next-transition --contract <contract> <selector-args>` command that produced this stop — a concrete, flag-driven continuation; the same typed error the start gate already names",
+	},
+	"staged_delivery_candidate_required": {
+		Terminal:      false,
+		Justification: "caller-continuable: stage every reviewed path to restore the exact pre-commit candidate, then re-run explicit-lineage STATUS with `--projection staged`; the documented command is concrete and the index change neither mutates nor extends approval",
+	},
 }
 
 type reviewStopDisposition struct {

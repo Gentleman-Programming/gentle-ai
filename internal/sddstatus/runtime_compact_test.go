@@ -178,11 +178,7 @@ func TestCompactAcquireForeignTokenStaysBlockedWithoutMutation(t *testing.T) {
 }
 
 func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
-	legacyFixture := newRuntimeUnchangedBindingFixture(t, "compact-legacy-evidence")
-	write(t, filepath.Join(legacyFixture.store.Repo, "openspec", "changes", "compact-legacy-evidence", "tasks.md"), "- [x] 1.1 Done\n# candidate-changing remediation\n")
-	fixture := runtimeRemediationFixture{repo: legacyFixture.store.Repo, store: legacyFixture.store, predecessorBinding: legacyFixture.binding,
-		failedEvidence: runtimeTestHash('b'), active: legacyFixture.active,
-		successor: createRuntimeRecoverySuccessor(t, legacyFixture.store.Repo, legacyFixture.binding.Lineage, "compact-legacy-successor", true)}
+	fixture := newRuntimeRemediationFixture(t, true)
 	failNextCompactStoreSync(t, fixture.store)
 	before := countRuntimeRecords(t, fixture.store.Dir)
 	legacy := fixture.finishRequest("compact-remediation-settle")

@@ -436,7 +436,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 		case 1:
 			changeName = activeChanges[0]
 		default:
-			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", []string{fmt.Sprintf("Change selection is ambiguous: %s.", strings.Join(activeChanges, ", "))}, options.IncludeInstructions), nil
+			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", ambiguousChangeSelectionReasons("Change", workspaceRoot, activeChanges), options.IncludeInstructions), nil
 		}
 	}
 
@@ -850,12 +850,35 @@ func applyNativeRuntimeRouting(status *Status) {
 		"native SDD runtime execution is blocked(%s) for %q in %s; compact acquire reports the same: %s",
 		readiness.Reason, change, pathquote.Quote(status.ActionContext.WorkspaceRoot), readiness.Exit,
 	)
+	// The attempt ledger governs exactly one question: may a bounded
+	// implementation work unit OPEN. A blocked answer is a true and permanent
+	// answer to that, so Apply is blocked.
+	//
+	// It is not an answer about anything else. Projecting it onto Verify and
+	// Archive stranded #2902's reporter: every task complete, the merged
+	// candidate green on repository CI, receipt-driven review off both
+	// globally and clone-locally, and one historical objective sitting at
+	// maintainer_decision from accounting on work that had already landed.
+	// The change could never be verified and never be archived.
+	//
+	// Nothing is laundered by letting the later phases answer for themselves.
+	// A change whose budget was exhausted mid-flight still has incomplete
+	// tasks and no passing verification, so its own Verify and Archive
+	// dependencies keep it exactly where it was. Those dependencies are the
+	// ones entitled to speak for those phases. The blocker stays in
+	// BlockedReasons either way, so it remains auditable.
 	status.Dependencies.Apply = DependencyBlocked
-	status.Dependencies.Verify = DependencyBlocked
-	status.Dependencies.Archive = DependencyBlocked
-	status.NextRecommended = "resolve-blockers"
 	if !contains(status.BlockedReasons, reason) {
 		status.BlockedReasons = append(status.BlockedReasons, reason)
+	}
+	// resolve-blockers is the right next step only while this block is
+	// actually in the change's way. Once implementation is done and verified,
+	// the change's next step is its own remaining phase, not a reset of an
+	// objective nobody needs to reopen.
+	if status.Dependencies.Verify != DependencyAllDone || status.Dependencies.Archive == DependencyBlocked {
+		status.Dependencies.Verify = DependencyBlocked
+		status.Dependencies.Archive = DependencyBlocked
+		status.NextRecommended = "resolve-blockers"
 	}
 }
 
@@ -896,7 +919,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		case 1:
 			changeName = changes[0]
 		default:
-			return blockedEngramStatus(workspaceRoot, nil, "select-change", []string{fmt.Sprintf("Engram change selection is ambiguous: %s.", strings.Join(changes, ", "))}, includeInstructions), true, nil
+			return blockedEngramStatus(workspaceRoot, nil, "select-change", ambiguousChangeSelectionReasons("Engram change", workspaceRoot, changes), includeInstructions), true, nil
 		}
 	}
 
@@ -1231,22 +1254,48 @@ func projectFromGitConfig(content string) string {
 	return ""
 }
 
-var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress|verify-report|review/(?:transaction|policy|ledger|receipt|chain-bundle|gate-context)|state)$`)
+var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress|verify-report|review/(?:transaction|policy|ledger|receipt|chain-bundle|gate-context)|state|archive-report)$`)
 
 func collectEngramChanges(observations []engramObservation, project string) []string {
+	// An Engram-backed change has no directory to move, so nothing about the
+	// store itself says a change is finished. OpenSpec derives "active" from
+	// what stays out of openspec/changes/archive/; Engram has no equivalent, so
+	// before this every change that ever persisted an artifact was reported
+	// active forever — thirty of them on one real project, seven of those
+	// archived weeks earlier (#3008).
+	//
+	// The archive phase already writes sdd/{change}/archive-report and calls it
+	// the audit trail. That report is the closure signal; it was simply not in
+	// the title pattern, so the one artifact proving a change is done was the
+	// one this never read.
+	archived := map[string]bool{}
 	seen := map[string]bool{}
 	for _, observation := range observations {
 		if !engramObservationMatchesProject(observation, project) {
 			continue
 		}
 		matches := engramTitlePattern.FindStringSubmatch(strings.TrimSpace(observation.Title))
-		if len(matches) != 3 || matches[2] == "state" {
+		if len(matches) != 3 {
 			continue
 		}
-		seen[matches[1]] = true
+		switch matches[2] {
+		case "archive-report":
+			archived[matches[1]] = true
+		case "state":
+			// Progress metadata, not evidence that work exists.
+		default:
+			seen[matches[1]] = true
+		}
 	}
 	changes := make([]string, 0, len(seen))
 	for change := range seen {
+		// Excluded from DISCOVERY only. Naming an archived change still
+		// resolves it through engramArtifactsForChange, because "which changes
+		// are in flight" and "show me this change" are different questions and
+		// the artifacts remain the audit trail.
+		if archived[change] {
+			continue
+		}
 		changes = append(changes, change)
 	}
 	sort.Strings(changes)
@@ -1481,6 +1530,17 @@ func resolveWorkspaceRoot(options ResolveOptions) (string, error) {
 	if !info.IsDir() {
 		return "", fmt.Errorf("workspace root is not a directory: %s", root)
 	}
+	// A filesystem root is never a workspace, and answering as if it might be
+	// is worse than refusing (#2790). A failure continuation that resolved its
+	// working directory to the drive root used to get a successful, empty,
+	// entirely plausible status back, so the operator read "SDD lost my
+	// project" instead of "that command was pointed at the wrong directory".
+	//
+	// Nothing legitimate is rejected: no project lives at `/` or at `C:\`, so
+	// there is no false positive to weigh against the confusion this prevents.
+	if filepath.Dir(root) == root {
+		return "", fmt.Errorf("workspace root %q is a filesystem root, which never holds an SDD project: whatever produced this call passed the wrong --cwd. Rerun it against the project: `gentle-ai sdd-status --cwd \"<project-directory>\" --json`. If the change is Engram-backed, this dispatcher is blind to it and should not be called at all", root)
+	}
 	return root, nil
 }
 
@@ -1489,6 +1549,29 @@ func absOrCWD(path string) (string, error) {
 		return os.Getwd()
 	}
 	return filepath.Abs(path)
+}
+
+// ambiguousChangeSelectionReasons names one runnable command per candidate
+// change instead of listing names and stopping there.
+//
+// The markdown dispatcher already spelled these commands out, but --json never
+// reaches it, and --json is what machine consumers read. #2117 step 5 is the
+// cost: the SDD task-failure envelope hands back
+// `gentle-ai sdd-status --cwd <cwd> --json` as its continuation, which lands
+// here whenever more than one change is active, and the caller found a reason
+// that listed options and named no command. The list stays first because it is
+// what a human scanning the refusal wants; the commands follow because that is
+// what makes the refusal runnable.
+func ambiguousChangeSelectionReasons(subject, workspaceRoot string, changes []string) []string {
+	reasons := make([]string, 0, len(changes)+1)
+	reasons = append(reasons, fmt.Sprintf("%s selection is ambiguous: %s.", subject, strings.Join(changes, ", ")))
+	for _, change := range changes {
+		reasons = append(reasons, fmt.Sprintf(
+			"Run `gentle-ai sdd-status --cwd %s --change %s` to continue with %s.",
+			workspaceRoot, change, change,
+		))
+	}
+	return reasons
 }
 
 func blockedStatus(store ArtifactStore, workspaceRoot string, changeName *string, changeRoot *string, next string, reasons []string, includeInstructions bool) Status {
@@ -1571,6 +1654,12 @@ func resolveArtifactPaths(changeRoot string) (ArtifactPaths, error) {
 	specFiles, err := findSpecFiles(filepath.Join(changeRoot, "specs"))
 	if err != nil {
 		return ArtifactPaths{}, err
+	}
+	if len(specFiles) == 0 {
+		flatSpec := filepath.Join(changeRoot, "spec.md")
+		if hasContent(flatSpec) {
+			specFiles = []string{flatSpec}
+		}
 	}
 	paths.Specs = specFiles
 	return paths, nil
@@ -1810,7 +1899,7 @@ func artifactBlockedReasons(artifacts map[string]ArtifactState, taskProgress Tas
 		reasons.expectedPlanning = append(reasons.expectedPlanning, "proposal.md is missing or partial.")
 	}
 	if artifacts["specs"] != ArtifactDone {
-		reasons.expectedPlanning = append(reasons.expectedPlanning, "specs/**/spec.md is missing or partial.")
+		reasons.expectedPlanning = append(reasons.expectedPlanning, "spec.md or specs/**/spec.md is missing or partial.")
 	}
 	if artifacts["design"] != ArtifactDone {
 		reasons.expectedPlanning = append(reasons.expectedPlanning, "design.md is missing or partial.")
@@ -2119,7 +2208,7 @@ func planningInstructionsForPhase(status Status, phase Phase) []string {
 		return []string{
 			fmt.Sprintf("Change: %s", change),
 			"Read proposal.md before writing specs.",
-			"Create specs/<domain>/spec.md with requirements and scenarios.",
+			"Create spec.md or specs/<domain>/spec.md with requirements and scenarios.",
 		}
 	case PhaseDesign:
 		return []string{

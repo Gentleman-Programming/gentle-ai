@@ -30,9 +30,61 @@ import (
 // tool:engram check.
 var ErrNotInstalled = errors.New("engram binary not found on PATH")
 
-// stdioProbeTimeout is the hard deadline for the whole stdio probe: spawning
-// the engram MCP process plus the initialize handshake round-trip.
-var stdioProbeTimeout = 5 * time.Second
+// stdioProbeTimeout is the DEFAULT deadline for the whole stdio probe:
+// spawning the engram MCP process plus the initialize handshake round-trip. A
+// timeout persisted in the agent's own MCP configuration overrides it.
+//
+// It was 5 seconds, and #3068 showed that is under the line rather than over
+// it: a healthy store's handshake ALONE measured 4.87 to 5.16 seconds, on top
+// of which this budget also pays process spawn. The reporter's check flapped,
+// passing and failing the same store in one session. The value below clears
+// the slowest measurement with real headroom, because a default that merely
+// beats it reproduces the same flap on a slower machine.
+var stdioProbeTimeout = 15 * time.Second
+
+// stdioProbeDeadline chooses between the operator's configured timeout and the
+// default. A configured value wins in both directions: asking for a tighter
+// bound is as legitimate as asking for a looser one, and silently applying a
+// floor would repeat the defect where a configured timeout changed nothing.
+// StdioProbeDeadline exposes the resolved deadline so a caller reporting a
+// timeout can name the exact budget that elapsed instead of a number the
+// operator has to guess at.
+func StdioProbeDeadline(configured time.Duration) time.Duration {
+	return stdioProbeDeadline(configured)
+}
+
+func stdioProbeDeadline(configured time.Duration) time.Duration {
+	if configured > 0 {
+		return configured
+	}
+	return stdioProbeTimeout
+}
+
+// stdioTimeoutFromConfig reads an MCP server's timeout. A bare number is
+// seconds, which is how the OpenCode MCP configuration expresses it and what
+// #3068's reporter set; a string is a Go duration.
+//
+// Anything unparseable, zero, or negative yields 0 and falls back to the
+// default rather than failing the read. A malformed timeout must not make an
+// otherwise valid Engram configuration unreadable: that consequence is worse
+// than the defect this fixes.
+func stdioTimeoutFromConfig(value any) time.Duration {
+	switch typed := value.(type) {
+	case float64:
+		if typed > 0 {
+			return time.Duration(typed * float64(time.Second))
+		}
+	case int:
+		if typed > 0 {
+			return time.Duration(typed) * time.Second
+		}
+	case string:
+		if parsed, err := time.ParseDuration(strings.TrimSpace(typed)); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return 0
+}
 
 // stdioHandshakeFn is a package-level seam over the real handshake (built on
 // the execCommandContext precedent) so internal/cli doctor tests can pin the
@@ -45,6 +97,12 @@ type StdioCommand struct {
 	Command string
 	Args    []string
 	Source  string
+
+	// Timeout is the deadline persisted alongside this command in the agent's
+	// own MCP configuration, or zero when it declares none. #3068: this used
+	// to be absent, so an operator who raised their MCP timeout saw no effect
+	// and reasonably concluded they had misconfigured something.
+	Timeout time.Duration
 }
 
 // ProbeStdio verifies the exact command and arguments persisted in an agent
@@ -52,8 +110,10 @@ type StdioCommand struct {
 // doctor's PATH: an absolute command in the config must be the process that is
 // checked. Only a bare Engram command maps to ErrNotInstalled; a missing path
 // or custom command is a broken configured transport.
-func ProbeStdio(ctx context.Context, command string, args ...string) error {
-	err := stdioHandshakeFn(ctx, command, args...)
+// The timeout is the one persisted alongside the command in the agent's own
+// MCP configuration; zero falls back to the package default.
+func ProbeStdio(ctx context.Context, timeout time.Duration, command string, args ...string) error {
+	err := stdioHandshakeFn(ctx, stdioProbeDeadline(timeout), command, args...)
 	if isBareEngramCommand(command) && errors.Is(err, exec.ErrNotFound) {
 		return ErrNotInstalled
 	}
@@ -74,8 +134,8 @@ func isBareEngramCommand(command string) bool {
 // handshake over the newline-delimited JSON-RPC stdio transport. A successful
 // probe proves only the bounded initialize exchange: it terminates the child,
 // drains all stdout already produced to EOF, and rejects any extra frame.
-func stdioHandshake(ctx context.Context, name string, args ...string) error {
-	probeCtx, cancel := context.WithTimeout(ctx, stdioProbeTimeout)
+func stdioHandshake(ctx context.Context, timeout time.Duration, name string, args ...string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := execCommandContext(context.Background(), name, args...)
@@ -453,6 +513,7 @@ func stdioCommandFromServer(server map[string]any) (StdioCommand, error) {
 	if !ok {
 		return StdioCommand{}, errors.New("command is required")
 	}
+	timeout := stdioTimeoutFromConfig(server["timeout"])
 
 	command, commandArgs, commandIsArray, err := splitCommand(commandValue)
 	if err != nil {
@@ -463,16 +524,16 @@ func stdioCommandFromServer(server map[string]any) (StdioCommand, error) {
 		return StdioCommand{}, errors.New("command array must not also define args")
 	}
 	if commandIsArray {
-		return StdioCommand{Command: command, Args: commandArgs}, nil
+		return StdioCommand{Command: command, Args: commandArgs, Timeout: timeout}, nil
 	}
 	if !hasArgs {
-		return StdioCommand{Command: command}, nil
+		return StdioCommand{Command: command, Timeout: timeout}, nil
 	}
 	args, err := stringSlice(argsValue)
 	if err != nil {
 		return StdioCommand{}, fmt.Errorf("args: %w", err)
 	}
-	return StdioCommand{Command: command, Args: args}, nil
+	return StdioCommand{Command: command, Args: args, Timeout: timeout}, nil
 }
 
 func splitCommand(value any) (string, []string, bool, error) {

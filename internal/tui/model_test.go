@@ -280,6 +280,25 @@ func TestProfileCreateSeparatorIsIgnoredAndSkipped(t *testing.T) {
 	}
 }
 
+func TestProfileCreateCustomAgentsDoNotChangeNavigation(t *testing.T) {
+	m := profileModelStep(true)
+	m.ModelPicker.CustomAgents = []string{"custom-profile-agent"}
+	rows := screens.ModelPickerRowsForProfile()
+	m.Cursor = len(rows) - 1
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	state := updated.(Model)
+	if state.Cursor != len(rows) {
+		t.Fatalf("cursor after last profile row = %d, want Continue at %d", state.Cursor, len(rows))
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.ProfileCreateStep != 2 || state.Cursor != 0 {
+		t.Fatalf("step/cursor after profile Continue = %d/%d, want 2/0", state.ProfileCreateStep, state.Cursor)
+	}
+}
+
 func TestModelPickerNavigationSkipsReviewSeparator(t *testing.T) {
 	rows := screens.ModelPickerRows()
 	separator := -1

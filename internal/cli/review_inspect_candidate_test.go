@@ -150,12 +150,12 @@ func TestReviewInspectCandidateRejectsUnboundInput(t *testing.T) {
 		{name: "object without side", argv: append(slices.Clone(valid), "--operation", "object", "--path-index", pathIndex), want: "object candidate inspection"},
 		{name: "invalid side", argv: append(slices.Clone(valid), "--operation", "object", "--path-index", pathIndex, "--side", "worktree"), want: "object candidate inspection"},
 		{name: "out of range selector", argv: append(slices.Clone(valid), "--operation", "patch", "--path-index", "99"), want: "exact canonical path index"},
-		{name: "wrong context", argv: replaceInspectionArg(valid, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), want: "repository_context_"},
-		{name: "stale binding", argv: replaceInspectionArg(valid, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
-		{name: "wrong lineage", argv: replaceInspectionArg(valid, "--lineage", "wrong-lineage"), want: "repository_context_"},
-		{name: "wrong target", argv: replaceInspectionArg(valid, "--target", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
-		{name: "wrong binding", argv: replaceInspectionArg(valid, "--lens", "review-risk"), want: "binding does not match"},
-		{name: "wrong order", argv: replaceInspectionArg(valid, "--order", "99"), want: "binding does not match"},
+		{name: "wrong context", argv: replaceInspectionArg(t, valid, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "stale binding", argv: replaceInspectionArg(t, valid, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "wrong lineage", argv: replaceInspectionArg(t, valid, "--lineage", "wrong-lineage"), want: "repository_context_"},
+		{name: "wrong target", argv: replaceInspectionArg(t, valid, "--target", "sha256:"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "wrong binding", argv: replaceInspectionArg(t, valid, "--lens", "review-risk"), want: "binding does not match"},
+		{name: "wrong order", argv: replaceInspectionArg(t, valid, "--order", "99"), want: "binding does not match"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -171,6 +171,89 @@ func TestReviewInspectCandidateRejectsOversizedObject(t *testing.T) {
 	args = append(args, "--operation", "object", "--path-index", fmt.Sprint(index), "--side", "candidate")
 	if err := RunReviewInspectCandidate(args, io.Discard); err == nil || !strings.Contains(err.Error(), "byte limit") {
 		t.Fatalf("oversized object error = %v", err)
+	}
+}
+
+func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) {
+	repo, args, ready, store, index := newTargetedCandidateInspectionReview(t)
+	before := readReviewOperationFile(t, store.StatePath())
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 3 }\n", 0o644)
+	t.Chdir(t.TempDir())
+	var output bytes.Buffer
+	if err := RunReviewInspectCandidate(append(args, "--operation", "object", "--path-index", fmt.Sprint(index), "--side", "candidate"), &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "package candidate\n\nfunc value() int { return 2 }\n" {
+		t.Fatalf("corrected immutable inspection = %q", output.String())
+	}
+	if after := readReviewOperationFile(t, store.StatePath()); !bytes.Equal(after, before) {
+		t.Fatal("inspection changed authority bytes")
+	}
+
+	validation := filepath.Join(t.TempDir(), "validation.json")
+	writeReviewCLIJSON(t, validation, facadeValidationResult{
+		TargetedValidationRequestHash: ready.ValidationRequest.RequestHash,
+		CorrectionTargetIdentity:      ready.ValidationRequest.CorrectionTargetIdentity,
+		OriginalCriteria:              facadeValidationCheck{Passed: true, Evidence: []string{"acceptance passed"}},
+		CorrectionRegression:          facadeValidationCheck{Passed: true, Evidence: []string{"regression passed"}},
+		FollowUps:                     []reviewtransaction.FollowUp{},
+	})
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", ready.Authority.LineageID, "--validation", validation, "--captured-evidence=true"}, io.Discard); err == nil {
+		t.Fatal("FINALIZE accepted live correction drift")
+	}
+	stillOpen, err := store.Load()
+	if err != nil || stillOpen.State.State != reviewtransaction.StateCorrectionRequired || len(stillOpen.State.CorrectionAttempts) != 0 {
+		t.Fatalf("drifted FINALIZE changed correction authority: %#v, %v", stillOpen.State, err)
+	}
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", ready.Authority.LineageID, "--validation", validation, "--captured-evidence=true"}, io.Discard); err != nil {
+		t.Fatalf("FINALIZE after restoring corrected candidate: %v", err)
+	}
+	terminal, err := store.Load()
+	if err != nil || terminal.State.State != reviewtransaction.StateApproved || len(terminal.State.CorrectionAttempts) != 1 {
+		t.Fatalf("restored FINALIZE state = %#v, %v", terminal.State, err)
+	}
+	if err := RunReviewInspectCandidate(append(args, "--operation", "name-status"), io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "requires current unconsumed correction authority") || strings.Contains(err.Error(), "repository_context_") {
+		t.Fatalf("terminal corrected inspection error = %v", err)
+	}
+}
+
+func TestReviewInspectCandidatePreservesCorrectedEvidenceError(t *testing.T) {
+	_, args, ready, store, _ := newTargetedCandidateInspectionReview(t)
+	evidenceDir := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir,
+		strings.TrimPrefix(ready.ValidationRequest.CorrectionTargetIdentity, "sha256:"))
+	if err := os.RemoveAll(evidenceDir); err != nil {
+		t.Fatal(err)
+	}
+	err := RunReviewInspectCandidate(append(args, "--operation", "name-status"), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "requires passed repository verification evidence") || strings.Contains(err.Error(), "repository_context_") {
+		t.Fatalf("missing corrected evidence error = %v", err)
+	}
+}
+
+func TestReviewInspectCandidateRejectsTargetedBindingDecoys(t *testing.T) {
+	_, lens, _, _ := newCandidateInspectionReview(t, "candidate\n", false)
+	_, targeted, ready, _, _ := newTargetedCandidateInspectionReview(t)
+	targeted = append(targeted, "--operation", "name-status")
+	lens = append(lens, "--operation", "name-status", "--request-hash", ready.ValidationRequest.RequestHash)
+	tests := []inspectionCase{
+		{name: "missing context", argv: removeInspectionArg(targeted, "--repository-context"), want: "requires the exact provider-issued"},
+		{name: "forged context", argv: replaceInspectionArg(t, targeted, "--repository-context", "rctx1_"+strings.Repeat("0", 64)), want: "repository_context_"},
+		{name: "original lens context", argv: replaceInspectionArg(t, targeted, "--repository-context", lens[slices.Index(lens, "--repository-context")+1]), want: "repository_context_"},
+		{name: "stale revision", argv: replaceInspectionArg(t, targeted, "--expected-revision", "sha256:"+strings.Repeat("0", 64)), want: "context does not match binding"},
+		{name: "forged target", argv: replaceInspectionArg(t, targeted, "--target", "sha256:"+strings.Repeat("0", 64)), want: "context does not match binding"},
+		{name: "forged request hash", argv: replaceInspectionArg(t, targeted, "--request-hash", "sha256:"+strings.Repeat("0", 64)), want: "request hash does not match authority"},
+		{name: "lens supplied", argv: append(slices.Clone(targeted), "--lens", "review-risk"), want: "does not accept --lens or --order"},
+		{name: "order supplied", argv: append(slices.Clone(targeted), "--order", "0"), want: "does not accept --lens or --order"},
+		{name: "targeted-only hash on lens mode", argv: lens, want: "request hash is valid only"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := RunReviewInspectCandidate(test.argv, io.Discard); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("targeted inspection error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -205,8 +288,65 @@ func newCandidateInspectionReview(t *testing.T, tracked string, hostile bool) (s
 	return repo, args, record, index
 }
 
-func replaceInspectionArg(args []string, name, value string) []string {
+func newTargetedCandidateInspectionReview(t *testing.T) (string, []string, ReviewTargetStatusResult, reviewtransaction.CompactStore, int) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	repo, started, store := submissionDescriptorCorrectionFixture(t)
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
+	waiting := submissionDescriptorStatus(t, repo, started.LineageID)
+	evidence := filepath.Join(t.TempDir(), "correction-evidence.txt")
+	if err := os.WriteFile(evidence, []byte("repository verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewCaptureEvidence([]string{"--cwd", repo, "--lineage", started.LineageID,
+		"--target", waiting.ValidationRequest.CorrectionTargetIdentity, "--expected-revision", waiting.Authority.Revision,
+		"--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidence}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	ready := submissionDescriptorStatus(t, repo, started.LineageID)
+	input := submissionDescriptorInput(t, ready)
+	arguments := requiredReviewTransitionArguments(t, input.Arguments, "repository-context", "expected-revision", "lineage", "target", "purpose", "request-hash")
+	index := slices.Index(ready.Projection.Paths, "candidate.go")
+	if index < 0 {
+		t.Fatalf("corrected target manifest omits candidate.go: %v", ready.Projection.Paths)
+	}
+	return repo, []string{"--repository-context", arguments["repository-context"], "--expected-revision", arguments["expected-revision"],
+		"--lineage", arguments["lineage"], "--target", arguments["target"], "--purpose", arguments["purpose"], "--request-hash", arguments["request-hash"]}, ready, store, index
+}
+
+func requiredReviewTransitionArguments(t *testing.T, arguments []ReviewTransitionArgument, names ...string) map[string]string {
+	t.Helper()
+	values, err := reviewTransitionArgumentMap(arguments)
+	if err != nil {
+		t.Fatalf("transition arguments = %#v: %v", arguments, err)
+	}
+	for _, name := range names {
+		if value, found := values[name]; !found || strings.TrimSpace(value) == "" {
+			t.Fatalf("transition arguments omit required %q: %#v", name, arguments)
+		}
+	}
+	return values
+}
+
+func replaceInspectionArg(t *testing.T, args []string, name, value string) []string {
+	t.Helper()
 	result := slices.Clone(args)
-	result[slices.Index(result, name)+1] = value
-	return result
+	for index, argument := range result {
+		if argument == name && index+1 < len(result) {
+			result[index+1] = value
+			return result
+		}
+	}
+	t.Fatalf("inspection arguments omit %q: %v", name, args)
+	return nil
+}
+
+func removeInspectionArg(args []string, name string) []string {
+	result := slices.Clone(args)
+	index := slices.Index(result, name)
+	return append(result[:index], result[index+2:]...)
 }

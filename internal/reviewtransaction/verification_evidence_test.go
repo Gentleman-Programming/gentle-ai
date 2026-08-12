@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -63,6 +64,9 @@ func TestCapturedVerificationEvidenceAttachesOnlyToByteIdenticalLegacyRawPayload
 	if _, err := ReadCapturedVerificationEvidence(store.Dir, state.LineageID, revision, state.CurrentSnapshot); !errors.Is(err, ErrCapturedVerificationEvidenceMetadataMissing) {
 		t.Fatalf("legacy raw read error = %v", err)
 	}
+	if _, err := ReadCapturedVerificationEvidenceByIdentity(store.Dir, state.LineageID, revision, state.CurrentSnapshot.Identity); !errors.Is(err, ErrCapturedVerificationEvidenceMetadataMissing) {
+		t.Fatalf("legacy raw identity read error = %v", err)
+	}
 	request := CaptureVerificationEvidenceRequest{
 		StoreDir: store.Dir, LineageID: state.LineageID, AuthorityRevision: revision,
 		Target: state.CurrentSnapshot, Payload: []byte("different evidence\n"), Outcome: VerificationOutcomePassed,
@@ -78,6 +82,59 @@ func TestCapturedVerificationEvidenceAttachesOnlyToByteIdenticalLegacyRawPayload
 	if !bytes.Equal(captured.Payload, legacyPayload) || captured.Record.TargetIdentity != state.CurrentSnapshot.Identity {
 		t.Fatalf("legacy attachment = %#v", captured)
 	}
+}
+
+func TestCapturedVerificationEvidenceReadersClassifyMissingUnsafeAndCorruptArtifacts(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "captured-evidence-reader-classification")
+	store := storeCompactStartAuthority(t, repo, state)
+	revision := mustLoadCompactRecord(t, store).Revision
+	assertReaders := func(want error) {
+		t.Helper()
+		if _, err := ReadCapturedVerificationEvidence(store.Dir, state.LineageID, revision, state.CurrentSnapshot); !errors.Is(err, want) {
+			t.Fatalf("bound evidence error = %v, want %v", err, want)
+		}
+		if _, err := ReadCapturedVerificationEvidenceByIdentity(store.Dir, state.LineageID, revision, state.CurrentSnapshot.Identity); !errors.Is(err, want) {
+			t.Fatalf("identity evidence error = %v, want %v", err, want)
+		}
+	}
+	assertReaders(ErrCapturedVerificationEvidenceMissing)
+	dir, err := compactFinalEvidenceCandidateDir(store.Dir, state.CurrentSnapshot.Identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rawPath := filepath.Join(dir, CompactFinalEvidenceFile)
+	if err := os.WriteFile(rawPath, []byte("legacy candidate evidence\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertReaders(ErrCapturedVerificationEvidenceMetadataMissing)
+	if err := os.Remove(rawPath); err != nil {
+		t.Fatal(err)
+	}
+	assertReaders(ErrCapturedVerificationEvidenceMissing)
+	captured, err := PublishCapturedVerificationEvidence(CaptureVerificationEvidenceRequest{
+		StoreDir: store.Dir, LineageID: state.LineageID, AuthorityRevision: revision,
+		Target: state.CurrentSnapshot, Payload: []byte("repository verification passed\n"), Outcome: VerificationOutcomePassed,
+	})
+	if err != nil || captured.Record.TargetIdentity != state.CurrentSnapshot.Identity {
+		t.Fatalf("publish evidence = %#v, %v", captured, err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(rawPath, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		assertReaders(ErrCapturedVerificationEvidenceInvalid)
+		if err := os.Chmod(rawPath, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(rawPath, []byte("corrupt evidence\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertReaders(ErrCapturedVerificationEvidenceInvalid)
 }
 
 func TestCompleteCorrectionVerificationIsAtomicAndCandidateBound(t *testing.T) {

@@ -265,6 +265,16 @@ var reviewPreflightUntrackedScopeReason = reviewPreflightReason{
 	NextAction: "stop",
 }
 
+// reviewPreflightManagedAssetsReason classifies a START that is refused before
+// any authority can be created because this binary's managed reviewer assets
+// differ from the recorded installation state. The exact sync remediation stays
+// in the cause because it is the existing operator-facing source of truth.
+var reviewPreflightManagedAssetsReason = reviewPreflightReason{
+	Code:       "managed_assets_outdated",
+	Message:    "Managed reviewer assets are outdated; synchronize them before starting review.",
+	NextAction: "stop",
+}
+
 // reviewPreflightDirectRouteUncompletableReason classifies a direct
 // (non-negotiated) `review start` that would select at least one lens.
 // Issue #2447: the direct route's own response type cannot carry
@@ -484,6 +494,23 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		// STATUS already re-derives retry eligibility for this lineage; the
 		// denial itself named nothing to look at next.
 		failure.NextAction = "review.status"
+		return failure
+	}
+	var authorizationInexact *reviewtransaction.CompactRecoveryAuthorizationInexactError
+	if errors.As(runErr, &authorizationInexact) {
+		failure.Phase = "pre_native"
+		failure.Code = "escalated_recovery_authorization_inexact"
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.AuthorityApplicability = "current_target"
+		failure.RetrySafe = false
+		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
+		if authorizationInexact.Repairable {
+			failure.Message = "The escalated recovery authority carries a schema-prefixed authorization that does not match the exact binding; run review repair to derive the provider-owned disposition."
+			failure.NextAction = "review.repair"
+		} else {
+			failure.Message = "The escalated recovery authority carries an authorization that does not match the exact binding; no advertised repair operation admits this shape."
+			failure.NextAction = "stop"
+		}
 		return failure
 	}
 	var bindingConflict *sddstatus.BindingRevisionConflictError

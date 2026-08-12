@@ -121,6 +121,16 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 				return fmt.Errorf("sdd-attempt status: %w", err)
 			}
 		}
+		// Given the work-unit scope, status answers with the verdict acquire
+		// would reach for that exact request instead of the ledger-only view
+		// that reported next_action: "begin" while acquire blocked (#2114).
+		if presentSDDAttemptFlags(args[1:], "work-unit", "evidence-goal", "max-attempts", "max-changed-lines") != 0 {
+			result, err = store.AdmissionStatus(ctx, sddstatus.BeginAttemptRequest{
+				RequestID: "sdd-attempt-status-probe", WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
+				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
+			})
+			break
+		}
 		result, err = store.Status()
 	case "begin":
 		result, err = store.Begin(ctx, sddstatus.BeginAttemptRequest{
@@ -237,6 +247,15 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 	{name: "status", purpose: "Read the native runtime state", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
 		{name: "change-instance", usage: "optional; caller-owned token, at most 128 bytes; scopes granted_roots"},
+		// Naming acquire's work-unit scope turns status from "what does the
+		// ledger hold" into "would this exact acquire be admitted" (#2114),
+		// which is the question consumers were already asking it. All four
+		// stay optional; without them status answers the request-blind ledger
+		// question exactly as before.
+		{name: "work-unit", usage: "optional; single-line label, at most 160 bytes; reports the verdict acquire would return"},
+		{name: "evidence-goal", usage: "optional; single-line objective, at most 240 bytes; reports the verdict acquire would return"},
+		{name: "max-attempts", kind: sddAttemptIntFlag, usage: "optional; default 2, limit 1..100"},
+		{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "optional; default 200, limit 1..1000000"},
 	}},
 	{name: "begin", purpose: "Start a bounded runtime attempt", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,

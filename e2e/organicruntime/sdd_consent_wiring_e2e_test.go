@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -228,6 +229,54 @@ func TestSDDEditAuthorityConsentGrantLoop(t *testing.T) {
 	}
 	if granted.Consent != nil {
 		t.Fatalf("post-grant status still carries a consent envelope: %s", grantedPayload)
+	}
+}
+
+func TestSDDSameParentRepositoryConsentGrantLoop(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	home := t.TempDir()
+	environment := consentShellEnvironment(t, home)
+	parent := filepath.Join(workspace, "repository")
+	planning := filepath.Join(parent, "subproject")
+	service := filepath.Join(parent, "service-dir")
+	initConsentGitRepo(t, parent, true)
+	if err := os.MkdirAll(planning, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(service, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planning = consentRealPath(t, planning)
+	service = consentRealPath(t, service)
+	const change = "same-repo-rollout"
+	seedConsentChange(t, planning, change, strings.Join([]string{
+		"- [ ] 1.1 Update `../service-dir/internal/api/handler.go` to accept the new header",
+		"",
+	}, "\n"))
+
+	blocked, blockedPayload := consentStatus(t, environment, planning, change)
+	if blocked.ApplyState != "blocked" ||
+		!strings.Contains(strings.Join(blocked.BlockedReasons, "\n"), "blocked(edit_authority_missing)") {
+		t.Fatalf("same-parent fixture is not blocked on edit authority: %s", blockedPayload)
+	}
+	if blocked.Consent == nil || blocked.Consent.Schema != "gentle-ai.sdd-integration.consent/v1" ||
+		blocked.Consent.Change != change || len(blocked.Consent.MissingRoots) != 1 ||
+		blocked.Consent.MissingRoots[0] != service {
+		t.Fatalf("same-parent consent envelope = %#v, want one missing root %s: %s", blocked.Consent, service, blockedPayload)
+	}
+	if len(blocked.ActionContext.AllowedEditRoots) != 1 || blocked.ActionContext.AllowedEditRoots[0] != planning {
+		t.Fatalf("blocked allowedEditRoots = %v, want [%s]", blocked.ActionContext.AllowedEditRoots, planning)
+	}
+
+	runConsentInvocation(t, environment, planning, blocked.Consent.Choices[0].Invocation)
+	granted, grantedPayload := consentStatus(t, environment, planning, change)
+	if granted.ApplyState != "ready" || granted.NextRecommended != "apply" || granted.Consent != nil {
+		t.Fatalf("same-parent post-grant status = %s", grantedPayload)
+	}
+	wantRoots := []string{planning, service}
+	if !reflect.DeepEqual(granted.ActionContext.AllowedEditRoots, wantRoots) {
+		t.Fatalf("same-parent allowedEditRoots = %v, want %v", granted.ActionContext.AllowedEditRoots, wantRoots)
 	}
 }
 

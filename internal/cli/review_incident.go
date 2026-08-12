@@ -180,8 +180,31 @@ func reviewRepositoryContextResolutionFailure(err error) error {
 	if reviewGitOwnershipRefusal(err) {
 		return reviewOpaqueContextFailure(reviewGitTrustRefusalCode, reviewGitTrustRefusalAction)
 	}
+	// Authority written by a newer release is not a stale context, and the
+	// generic instruction is actively wrong for it: refreshing a transition
+	// cannot make this binary parse those bytes. #2461's reporter followed
+	// that instruction across four reoffered reviewer slots and got an
+	// identical failure every time.
+	if errors.Is(err, reviewtransaction.ErrCompactAuthorityFromNewerRelease) {
+		return reviewOpaqueContextCause(reviewAuthorityNewerReleaseCode, reviewAuthorityNewerReleaseAction, err)
+	}
 	return reviewOpaqueContextCause("repository_context_unavailable", "refresh the exact native next_transition before retrying", err)
 }
+
+const (
+	// reviewAuthorityNewerReleaseCode is the typed code for "the authority
+	// exists and is intact, but this build predates the release that wrote
+	// it". It is deliberately distinct from repository_context_unavailable:
+	// that code's whole instruction is to refresh the transition, which is
+	// unreachable here.
+	reviewAuthorityNewerReleaseCode = "review_authority_newer_release"
+	// reviewAuthorityNewerReleaseAction names the only two things that
+	// resolve it, and the PATH shape, because a bare-name spawn from an
+	// editor plugin is how the stale binary gets invoked: the caller
+	// installed the newer build but an older one answers first.
+	reviewAuthorityNewerReleaseAction = "upgrade this gentle-ai, or invoke the newer build directly; " +
+		"an editor plugin resolves gentle-ai from PATH, so run `which -a gentle-ai` and make the newer build the one it finds first"
+)
 
 // reviewGitOwnershipRefusal reports whether err was caused by Git refusing a
 // repository for ownership reasons.

@@ -25,6 +25,8 @@ func journeySources() []journeySource {
 		{"journeys.go", coreJourneys()},
 		{"journeys_edge.go", edgeJourneys()},
 		{"journeys_sdd.go", sddJourneys()},
+		{"journeys_issue_2891.go", issue2891Journeys()},
+		{"journeys_issue2696.go", issue2696Journeys()},
 		{"journeys_sdd_chain.go", sddChainJourneys()},
 		{"journeys_handoff.go", handoffJourneys()},
 		{"journeys_capture_evidence_v5.go", captureEvidenceDescriptorJourneys()},
@@ -37,11 +39,19 @@ func journeySources() []journeySource {
 		{"journeys_local_gate_advance.go", localGateBaseAdvanceJourneys()},
 		{"journeys_intended_untracked.go", intendedUntrackedJourneys()},
 		{"journeys_capture_result_dry_run.go", captureResultDryRunJourneys()},
+		{"journeys_issue_2031.go", issue2031Journeys()},
 		{"journeys_finding_id_prefix.go", findingIDPrefixJourneys()},
 		{"journeys_rescope_write_guard.go", rescopeWriteGuardJourneys()},
 		{"journeys_rescope_evidence_retry.go", rescopeEvidenceOnlyRetryJourneys()},
 		{"journeys_consecutive_rescope_repair.go", consecutiveRescopeRepairJourneys()},
 		{"journeys_reviewed_superset.go", reviewedSupersetJourneys()},
+		{"journeys_staged_delivery.go", stagedDeliveryJourneys()},
+		{"journeys_frozen_lineage_resume.go", frozenLineageResumeJourneys()},
+		{"journeys_issue1800.go", issue1800Journeys()},
+		{"journeys_issue2879.go", issue2879Journeys()},
+		{"journeys_managed_assets.go", managedAssetJourneys()},
+		{"journeys_issue2906.go", issue2906Journeys()},
+		{"journeys_issue_2138.go", issue2138Journeys()},
 	}
 }
 
