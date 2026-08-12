@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -90,27 +91,41 @@ func TestHighRiskFinalizeFailsClosedOnRawEvidence(t *testing.T) {
 
 // TestHighRiskFinalizeFailsClosedOnSentinelCapturedEvidence proves a typed
 // captured record whose outcome is "passed" still cannot authorize a high-risk
-// approval when its payload is opaque sentinel-only bytes ("PASS"): the gate
-// needs substantive content it can inspect, so the authority must stay at
-// StateValidating after the refusal.
+// approval when its payload carries no substantive verification content — a
+// bare verdict word with a trailing newline, a decorated verdict, whitespace-
+// only bytes, or a single opaque token. The gate needs auditable content it can
+// inspect, so the authority must stay at StateValidating after every refusal.
 func TestHighRiskFinalizeFailsClosedOnSentinelCapturedEvidence(t *testing.T) {
-	repo := initReviewCLIRepo(t)
-	started := startHighRiskValidatingCLIReview(t, repo)
-	captureVerificationEvidenceForTest(t, repo, started.LineageID, []byte("PASS"), reviewtransaction.VerificationOutcomePassed)
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	before, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-evidence=true"}, &bytes.Buffer{}); err == nil {
-		t.Fatal("high-risk finalize approved sentinel-only captured evidence")
-	}
-	after, err := store.Load()
-	if err != nil || after.State.State != reviewtransaction.StateValidating || after.Revision != before.Revision {
-		t.Fatalf("sentinel refusal advanced authority: before=%#v after=%#v, %v", before.State, after.State, err)
+	for _, tt := range []struct {
+		name    string
+		payload string
+	}{
+		{name: "exact PASS newline", payload: "PASS\n"},
+		{name: "decorated PASS bang", payload: "PASS!"},
+		{name: "whitespace only", payload: "\n  \n"},
+		{name: "opaque single token", payload: "x"},
+		{name: "bare PASS", payload: "PASS"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			started := startHighRiskValidatingCLIReview(t, repo)
+			captureVerificationEvidenceForTest(t, repo, started.LineageID, []byte(tt.payload), reviewtransaction.VerificationOutcomePassed)
+			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-evidence=true"}, &bytes.Buffer{}); err == nil {
+				t.Fatal("high-risk finalize approved sentinel-only captured evidence")
+			}
+			after, err := store.Load()
+			if err != nil || after.State.State != reviewtransaction.StateValidating || after.Revision != before.Revision {
+				t.Fatalf("sentinel refusal advanced authority: before=%#v after=%#v, %v", before.State, after.State, err)
+			}
+		})
 	}
 }
 
@@ -354,6 +369,94 @@ func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing
 	}
 	if _, err := os.Stat(firstRaw); err != nil {
 		t.Fatalf("accepted candidate replaced prior failed evidence: %v", err)
+	}
+}
+
+// TestHighRiskCorrectionAcceptanceFailsClosedOnSentinelEvidence proves a
+// high-risk correction cannot be accepted on sentinel-only captured evidence:
+// a passed captured record whose payload is bare verdict bytes ("PASS\n")
+// carries no auditable substantive content, so the correction gate must refuse
+// and leave the authority at StateCorrectionRequired with the revision intact.
+func TestHighRiskCorrectionAcceptanceFailsClosedOnSentinelEvidence(t *testing.T) {
+	t.Parallel()
+
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startHighRiskCLIReview(t, repo)
+	resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
+	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
+		Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
+			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "terminal value is incorrect",
+			ProofRefs: []string{"tracked.txt:5 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+			CausalDisposition: reviewtransaction.CausalIntroduced,
+		}}, Evidence: []string{"inspected correction target"},
+	})
+	args := []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}
+	for order := 1; order < len(started.SelectedLenses); order++ {
+		cleanPath := filepath.Join(t.TempDir(), "clean-"+strconv.Itoa(order)+".json")
+		writeReviewCLIJSON(t, cleanPath, facadeReviewerResult{
+			Lens: started.SelectedLenses[order], Findings: []facadeFinding{},
+			Evidence: []string{"inspected the complete frozen candidate scope named by the capture binding"},
+		})
+		args = append(args, "--result", cleanPath)
+	}
+	if err := finalizeReviewCLIArgs(t, repo, args, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusArgs := []string{"status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", started.LineageID}
+	status := readCorrectionEvidenceStatus(t, statusArgs)
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "correction_repository_verification_required" {
+		t.Fatalf("pre-validation correction status = %#v", status.NextTransition)
+	}
+	target := transitionArgumentValue(t, status.NextTransition, "target")
+	sentinelPath := filepath.Join(t.TempDir(), "sentinel.txt")
+	if err := os.WriteFile(sentinelPath, []byte("PASS\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewCaptureEvidence([]string{"--cwd", repo, "--lineage", started.LineageID,
+		"--target", target, "--expected-revision", before.Revision,
+		"--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", sentinelPath}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	ready := readCorrectionEvidenceStatus(t, statusArgs)
+	if ready.NextTransition == nil || ready.NextTransition.Kind != reviewNextTransitionCollect ||
+		ready.NextTransition.ReasonCode != "targeted_validation_required" || ready.ValidationRequest == nil ||
+		ready.ValidationRequest.CorrectionTargetIdentity != target {
+		t.Fatalf("passed sentinel evidence did not unlock targeted validation: %#v", ready)
+	}
+	validationPath := filepath.Join(t.TempDir(), "validation.json")
+	writeReviewCLIJSON(t, validationPath, facadeValidationResult{
+		TargetedValidationRequestHash: ready.ValidationRequest.RequestHash,
+		CorrectionTargetIdentity:      ready.ValidationRequest.CorrectionTargetIdentity,
+		OriginalCriteria:              facadeValidationCheck{Passed: true, Evidence: []string{"original criteria passed"}},
+		CorrectionRegression:          facadeValidationCheck{Passed: true, Evidence: []string{"repository policy passed"}},
+		FollowUps:                     []reviewtransaction.FollowUp{},
+	})
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID,
+		"--validation", validationPath, "--captured-evidence"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("high-risk correction accepted sentinel-only captured evidence")
+	}
+	terminal, err := store.Load()
+	if err != nil || terminal.State.State != reviewtransaction.StateCorrectionRequired ||
+		terminal.Revision != before.Revision || len(terminal.State.CorrectionAttempts) != 0 {
+		t.Fatalf("high-risk correction refusal advanced authority: before=%#v after=%#v, %v", before.State, terminal.State, err)
 	}
 }
 

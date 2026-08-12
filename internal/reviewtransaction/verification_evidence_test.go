@@ -11,35 +11,38 @@ import (
 	"testing"
 )
 
-// TestSentinelOnlyVerificationPayload pins the closed set of opaque verdict
-// tokens so the high-risk approval gate never treats a bare PASS/FAIL word as
-// substantive verification evidence, while real command output and prose pass.
-func TestSentinelOnlyVerificationPayload(t *testing.T) {
+// TestSubstantiveVerificationPayload pins the positive substantive-content
+// validator so the high-risk approval and correction gates fail closed on bare,
+// decorated, repeated, or whitespace-only verdict bytes while real command
+// output and prose pass. Only payloads carrying at least two distinct
+// non-sentinel content tokens are auditable evidence.
+func TestSubstantiveVerificationPayload(t *testing.T) {
 	tests := []struct {
 		name    string
 		payload string
 		want    bool
 	}{
-		{name: "exact PASS", payload: "PASS", want: true},
-		{name: "exact FAIL", payload: "FAIL", want: true},
-		{name: "exact OK", payload: "OK", want: true},
-		{name: "lowercase passed with trailing newline", payload: "passed\n", want: true},
-		{name: "error verdict", payload: "error", want: true},
-		{name: "success verdict with surrounding whitespace", payload: "  SUCCESS  ", want: true},
-		{name: "failure verdict", payload: "failure", want: true},
-		{name: "empty payload", payload: "", want: false},
+		{name: "exact PASS", payload: "PASS", want: false},
+		{name: "exact PASS newline", payload: "PASS\n", want: false},
+		{name: "decorated PASS bang", payload: "PASS!", want: false},
+		{name: "decorated PASS equals", payload: "===PASS===", want: false},
+		{name: "decorated brackets", payload: "[PASS]", want: false},
+		{name: "repeated sentinel", payload: "PASS PASS", want: false},
+		{name: "multi-line sentinels", payload: "pass\nfail", want: false},
+		{name: "opaque single token", payload: "x", want: false},
 		{name: "whitespace only", payload: "\n  \n", want: false},
-		{name: "go test output", payload: "ok  github.com/example/pkg  0.5s\n", want: false},
-		{name: "focused verification prose", payload: "focused and full repository verification passed\n", want: false},
-		{name: "failed verification prose", payload: "repository verification failed\n", want: false},
-		{name: "multiple sentinel tokens", payload: "PASS PASS", want: false},
-		{name: "multi-line sentinel tokens", payload: "pass\nfail", want: false},
-		{name: "punctuated verdict", payload: "PASS!", want: false},
+		{name: "empty", payload: "", want: false},
+		{name: "sentinel plus single content word", payload: "tests pass", want: false},
+		{name: "go test output", payload: "ok  github.com/example/pkg  0.5s\n", want: true},
+		{name: "focused prose", payload: "focused and full repository verification passed\n", want: true},
+		{name: "failed prose", payload: "repository verification failed\n", want: true},
+		{name: "go build and test", payload: "go build ./... ok\ngo test ./... ok\n", want: true},
+		{name: "two content words plus sentinel", payload: "all tests passed", want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := SentinelOnlyVerificationPayload([]byte(tt.payload)); got != tt.want {
-				t.Fatalf("SentinelOnlyVerificationPayload(%q) = %v, want %v", tt.payload, got, tt.want)
+			if got := SubstantiveVerificationPayload([]byte(tt.payload)); got != tt.want {
+				t.Fatalf("SubstantiveVerificationPayload(%q) = %v, want %v", tt.payload, got, tt.want)
 			}
 		})
 	}

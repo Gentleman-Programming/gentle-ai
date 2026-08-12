@@ -2966,6 +2966,10 @@ func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state
 		if captured.Record.Outcome != reviewtransaction.VerificationOutcomePassed || failed {
 			return plan, errors.New("compact correction repository verification must pass before acceptance") // refusal:by-design world-action: the candidate must change and pass repository verification before the open correction can be accepted
 		}
+		if state.RiskLevel == reviewtransaction.RiskHigh && captured.Record.Outcome == reviewtransaction.VerificationOutcomePassed &&
+			!reviewtransaction.SubstantiveVerificationPayload(captured.Payload) {
+			return plan, errors.New("high-risk correction acceptance requires auditable substantive verification evidence; an opaque or sentinel-only payload cannot authorize a correction") // refusal:by-design world-action: opaque or sentinel payload bytes carry no semantic verification content a high-risk correction gate can trust
+		}
 		fix, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(ctx, reviewtransaction.Target{Kind: reviewtransaction.TargetFixDiff, Projection: state.InitialSnapshot.Projection, BaseRef: state.CurrentSnapshot.CandidateTree, IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs})
 		if err != nil {
 			return plan, err
@@ -3007,8 +3011,8 @@ func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state
 						return plan, errors.New("high-risk review approval requires captured typed verification evidence; the raw --evidence path cannot authorize a high-risk gate") // refusal:by-design operator-knowledge: high-risk approval is bound to immutable typed evidence captured through STATUS/capture-evidence, so an unbound --evidence byte string cannot authorize it
 					}
 				} else if captured.Record.Outcome == reviewtransaction.VerificationOutcomePassed &&
-					reviewtransaction.SentinelOnlyVerificationPayload(captured.Payload) {
-					return plan, errors.New("high-risk review approval requires substantive verification evidence; a sentinel-only payload cannot authorize a high-risk gate") // refusal:by-design world-action: opaque sentinel payload bytes carry no semantic verification content a high-risk approval gate can trust
+					!reviewtransaction.SubstantiveVerificationPayload(captured.Payload) {
+					return plan, errors.New("high-risk review approval requires auditable substantive verification evidence; an opaque or sentinel-only payload cannot authorize a high-risk gate") // refusal:by-design world-action: opaque or sentinel payload bytes carry no semantic verification content a high-risk approval gate can trust
 				}
 			}
 			if captured != nil {

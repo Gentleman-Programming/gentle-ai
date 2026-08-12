@@ -333,31 +333,50 @@ func PublishCapturedVerificationEvidence(request CaptureVerificationEvidenceRequ
 
 // sentinelVerificationWords is the closed set of single-word verdicts a caller
 // could paste as verification evidence with no substantive content. Membership
-// is decided only on the exact trim-and-lowercase form: any surrounding prose,
-// extra tokens, punctuation, or line breaks keep a payload out of the set.
+// is decided on the trim-and-lowercase form of a single cleaned token: the
+// substantive payload validator skips these tokens entirely, so only distinct
+// non-sentinel content tokens count toward its auditable-content threshold.
 var sentinelVerificationWords = map[string]struct{}{
 	"pass": {}, "passed": {}, "ok": {}, "fail": {}, "failed": {},
 	"error": {}, "success": {}, "failure": {},
 }
 
-// SentinelOnlyVerificationPayload reports whether the payload carries only an
-// opaque sentinel verdict and no substantive verification content. After
-// trimming surrounding whitespace and lowercasing, the text must be exactly one
-// short word from the closed set {pass, passed, ok, fail, failed, error,
-// success, failure}; a single trailing newline ("PASS\n") still matches. Any
-// longer text — real command output, go test output, logs, or prose sentences —
-// is never sentinel, even when it contains one of those words ("tests pass",
-// "repository verification failed").
+// SubstantiveVerificationPayload reports whether the payload carries auditable,
+// substantive verification content a high-risk gate can trust. After trimming
+// surrounding whitespace, every whitespace-separated token is stripped of
+// decorative enclosing punctuation (!.,:;=()[]{}*+-_"'`|/\<>#@$%^&) and, when
+// it survives, compared against the closed sentinel verdict set {pass, passed,
+// ok, fail, failed, error, success, failure}. Payloads with fewer than two
+// surviving non-sentinel tokens are refused: a bare or decorated verdict word
+// ("PASS", "PASS!", "===PASS==="), a repetition of verdict words ("PASS PASS",
+// "pass\nfail"), a single opaque token ("x"), and whitespace-only bytes all
+// fail. Real command output, go test summaries, and prose sentences that name
+// at least two distinct content words pass even when they embed a sentinel
+// verdict ("go build ./... ok\ngo test ./... ok", "repository verification
+// failed").
 //
-// The predicate exists so the high-risk approval gate fails closed: a captured
-// record whose outcome is "passed" but whose payload is only "PASS" proves
-// nothing an operator or downstream gate could inspect, so it must not
-// authorize the transition. The match is deliberately conservative: a false
-// negative (real prose rejected) only withholds a transition the caller can
-// redo with better evidence, while a false positive would let an opaque token
-// stand in for evidence.
-func SentinelOnlyVerificationPayload(payload []byte) bool {
-	normalized := strings.ToLower(strings.TrimSpace(string(payload)))
-	_, sentinel := sentinelVerificationWords[normalized]
-	return sentinel
+// The predicate lets the high-risk approval and correction gates fail closed on
+// captured records whose outcome is "passed" but whose payload is opaque or
+// sentinel-only: such bytes prove nothing an operator or downstream gate could
+// inspect, so they must not authorize the transition. The threshold is
+// deliberately conservative: a false negative only withholds a transition the
+// caller can redo with better evidence, while a false positive would let an
+// opaque token stand in for evidence.
+func SubstantiveVerificationPayload(payload []byte) bool {
+	trimmed := strings.TrimSpace(string(payload))
+	if trimmed == "" {
+		return false
+	}
+	contentTokens := 0
+	for _, token := range strings.Fields(trimmed) {
+		clean := strings.Trim(token, "!.,:;=()[]{}*+-_\"'`|/\\<>#@$%^&")
+		if clean == "" {
+			continue
+		}
+		if _, sentinel := sentinelVerificationWords[strings.ToLower(clean)]; sentinel {
+			continue
+		}
+		contentTokens++
+	}
+	return contentTokens >= 2
 }
