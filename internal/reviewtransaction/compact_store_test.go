@@ -3,6 +3,8 @@ package reviewtransaction
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
@@ -1465,6 +1467,117 @@ func TestCompactStoreReplaceContextRejectsCancelledMutation(t *testing.T) {
 	}
 	if _, err := os.Stat(store.StatePath()); !os.IsNotExist(err) {
 		t.Fatalf("cancelled replacement published authority: %v", err)
+	}
+}
+
+func TestCompactRecordEffectIntentIdentity(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "effect-intent-identity")
+	intents := []CompactEffectIntent{
+		{Class: "repository_context", Destination: "native-reviewer", PayloadHash: hash("c")},
+		{Class: "requested_trace", Destination: "requested-output", PayloadHash: hash("d")},
+	}
+	record, payload, err := makeCompactRecordWithIntents(state, intents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reordered, reorderedPayload, err := makeCompactRecordWithIntents(state, []CompactEffectIntent{intents[1], intents[0]})
+	if err != nil || reordered.Revision != record.Revision || !bytes.Equal(reorderedPayload, payload) {
+		t.Fatalf("reordered intent set = %q, %v; want canonical revision %q and identical bytes", reordered.Revision, err, record.Revision)
+	}
+	if _, _, err := makeCompactRecordWithIntents(state, append(intents, intents[0])); err == nil {
+		t.Fatal("creation accepted duplicate semantic intent")
+	}
+	parsed, err := parseCompactRecord(payload, state.LineageID)
+	if err != nil || parsed.Revision != record.Revision || !reflect.DeepEqual(parsed.EffectIntents, record.EffectIntents) {
+		t.Fatalf("parse intent record = %#v, %v; want revision/intents %#v", parsed, err, record)
+	}
+	legacy, _, err := makeCompactRecord(state)
+	if err != nil || legacy.Revision == record.Revision {
+		t.Fatalf("legacy revision = %q, intent revision = %q, err = %v", legacy.Revision, record.Revision, err)
+	}
+
+	for _, tt := range []struct {
+		name   string
+		mutate func(*CompactRecord)
+	}{
+		{"unknown class", func(candidate *CompactRecord) { candidate.EffectIntents[0].Class = "unknown" }},
+		{"invalid payload hash", func(candidate *CompactRecord) { candidate.EffectIntents[0].PayloadHash = "invalid" }},
+		{"invalid event hash", func(candidate *CompactRecord) { candidate.EffectIntents[0].EventID = "invalid" }},
+		{"forged authority revision", func(candidate *CompactRecord) { candidate.EffectIntents[0].AuthorityRevision = hash("forged") }},
+		{"coordinated authority and event forgery", func(candidate *CompactRecord) {
+			intent := &candidate.EffectIntents[0]
+			intent.AuthorityRevision = hash("forged")
+			eventPayload, _ := json.Marshal([]string{intent.AuthorityRevision, intent.Class, intent.Destination, intent.PayloadHash})
+			eventSum := sha256.Sum256(append([]byte("gentle-ai.review-effect-event/v1\x00"), eventPayload...))
+			intent.EventID = "sha256:" + hex.EncodeToString(eventSum[:])
+		}},
+		{"forged event identity", func(candidate *CompactRecord) { candidate.EffectIntents[0].EventID = hash("forged") }},
+		{"noncanonical order", func(candidate *CompactRecord) {
+			candidate.EffectIntents[0], candidate.EffectIntents[1] = candidate.EffectIntents[1], candidate.EffectIntents[0]
+		}},
+		{"duplicate", func(candidate *CompactRecord) { candidate.EffectIntents[1] = candidate.EffectIntents[0] }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := record
+			candidate.EffectIntents = append([]CompactEffectIntent(nil), record.EffectIntents...)
+			tt.mutate(&candidate)
+			candidatePayload, _ := json.Marshal(candidate)
+			if _, err := parseCompactRecord(candidatePayload, state.LineageID); err == nil {
+				t.Fatalf("accepted invalid intents: %#v", candidate.EffectIntents)
+			}
+		})
+	}
+}
+
+func TestCompactRecordWithoutIntentsRetainsHistoricalIdentityAndBytes(t *testing.T) {
+	state := newCompactTestState(t, initSnapshotRepo(t), "intent-free-history")
+	statePayload, _ := json.Marshal(state)
+	sum := sha256.Sum256(append([]byte("gentle-ai.review-state/v2\x00"), statePayload...))
+	wantRevision := "sha256:" + hex.EncodeToString(sum[:])
+	wantBytes, _ := json.MarshalIndent(struct {
+		Schema   string       `json:"schema"`
+		Revision string       `json:"revision"`
+		State    CompactState `json:"state"`
+	}{compactRecordSchema, wantRevision, state}, "", "  ")
+	record, payload, err := makeCompactRecord(state)
+	if err != nil || record.Revision != wantRevision || !bytes.Equal(payload, append(wantBytes, '\n')) {
+		t.Fatalf("intent-free compatibility = %q, %v, bytes equal %t", record.Revision, err, bytes.Equal(payload, append(wantBytes, '\n')))
+	}
+}
+
+func TestCompactEffectIntentsRemainSchemaOnly(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "effect-intent-schema-only")
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, payload, err := makeCompactRecordWithIntents(state, []CompactEffectIntent{{
+		Class: "repository_context", Destination: "native-reviewer", PayloadHash: hash("c"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	next := state
+	results := make([]LensResult, len(next.SelectedLenses))
+	for index, lens := range next.SelectedLenses {
+		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"review completed"}}
+	}
+	if err := next.CompleteReview(CompactReviewInput{
+		LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(record.Revision, "review/complete-review", next); err != nil {
+		t.Fatalf("schema-only intents blocked successor: %v", err)
+	}
+	loaded, err := store.Load()
+	if err != nil || len(loaded.EffectIntents) != 0 {
+		t.Fatalf("successor intents = %#v, %v; want no premature propagation", loaded.EffectIntents, err)
 	}
 }
 
