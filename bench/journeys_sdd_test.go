@@ -72,6 +72,8 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// SDD status surfaces and preserves the same routing state.
 	//
 	// j96 proves #2891 blocks an off-path sibling in a nested same-repository workspace.
+	// j103 proves #3092 preserves a symbolic upstream review base through pre-push
+	// while origin remains the independent tracking and push destination.
 	// Bump this deliberately when a journey is added OR removed, and name it
 	// here: the count exists so a journey cannot appear or vanish unnoticed.
 	//
@@ -88,8 +90,10 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// stop that must replace an otherwise unexecutable START transition. 99 ->
 	// 100: #2773 adds j102, which drives the immutable reviewer-context capacity
 	// terminal instead of accepting an impossible reviewer slot.
-	if got := len(seen); got != 100 {
-		t.Errorf("core journey count = %d, want 100", got)
+	// 100 -> 101: #3092 adds j103, which preserves a symbolic upstream review
+	// base through pre-push while origin remains the independent tracking remote.
+	if got := len(seen); got != 101 {
+		t.Errorf("core journey count = %d, want 101", got)
 	}
 	for id, found := range want {
 		if !found {

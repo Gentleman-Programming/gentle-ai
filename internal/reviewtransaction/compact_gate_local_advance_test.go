@@ -2,6 +2,7 @@ package reviewtransaction
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -57,5 +58,46 @@ func TestCompactLocalBaseAdvanceRejectsUnadvertisedExplicitParent(t *testing.T) 
 	})
 	if got.Result == GateAllow || !strings.Contains(got.Reason, "advertised tracking branch") {
 		t.Fatalf("unadvertised explicit local parent = %#v, want fail-closed tracking-boundary denial", got)
+	}
+}
+
+func TestCompactPrePushForkSelectorStaysSymbolicDuringBaseAdvanceProof(t *testing.T) {
+	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
+	state, receipt := approvedCompactPrePRFixture(t, fixture)
+
+	// The feature branch publishes to origin/feature, while the reviewed base
+	// is advertised by a distinct upstream remote. Keep origin/feature behind
+	// HEAD so the raw-commit control has a different tracking boundary.
+	gitSnapshot(t, fixture.repo, "--git-dir", fixture.remote, "update-ref", "refs/heads/feature", fixture.originalBaseCommit)
+	gitSnapshot(t, fixture.repo, "config", "branch.feature.merge", "refs/heads/feature")
+	upstream := filepath.Join(t.TempDir(), "upstream.git")
+	gitSnapshot(t, fixture.repo, "clone", "--bare", fixture.remote, upstream)
+	gitSnapshot(t, fixture.repo, "remote", "add", "upstream", upstream)
+
+	got := EvaluateCompactGate(context.Background(), fixture.repo, receipt, NativeGateRequestInput{
+		Gate: GatePrePush, LineageID: state.LineageID, BaseRef: "upstream/main",
+	})
+	if got.Result != GateAllow || got.Context.BaseAdvance == nil || !got.Context.BaseAdvance.Compatible {
+		t.Fatalf("symbolic fork base = %#v, want allow with compatible base proof", got)
+	}
+
+	rawUpstream := trimGit(gitSnapshot(t, fixture.repo, "rev-parse", "main"))
+	raw := EvaluateCompactGate(context.Background(), fixture.repo, receipt, NativeGateRequestInput{
+		Gate: GatePrePush, LineageID: state.LineageID, BaseRef: rawUpstream,
+	})
+	if raw.Result == GateAllow || !strings.Contains(raw.Reason, "advertised tracking branch") {
+		t.Fatalf("raw nontracking base = %#v, want tracking-boundary denial", raw)
+	}
+
+	for _, selector := range []string{"upstream/missing", "main", "local-only"} {
+		if selector == "local-only" {
+			gitSnapshot(t, fixture.repo, "branch", selector, "HEAD")
+		}
+		denied := EvaluateCompactGate(context.Background(), fixture.repo, receipt, NativeGateRequestInput{
+			Gate: GatePrePush, LineageID: state.LineageID, BaseRef: selector,
+		})
+		if denied.Result == GateAllow {
+			t.Fatalf("selector %q was accepted", selector)
+		}
 	}
 }

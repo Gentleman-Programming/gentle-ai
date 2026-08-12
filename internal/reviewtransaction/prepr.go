@@ -231,6 +231,11 @@ func reviewedBaseAdvanceHead(ctx context.Context, repo, reviewedTree, head strin
 
 func deriveExplicitBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Receipt, request GateRequest, snapshot Snapshot, preimages gateArtifactPreimages) (BaseAdvanceCompatibility, error) {
 	selector := strings.TrimSpace(request.Target.BaseRef)
+	if request.Gate == GatePrePush && request.Push != nil && request.Push.Boundary.Source == PrePRBoundaryExplicit {
+		// Target.BaseRef is the resolved merge base; retain the caller's
+		// symbolic selector for the advertised-remote check.
+		selector = strings.TrimSpace(request.Push.Boundary.Selector)
+	}
 	if selector == "" {
 		return BaseAdvanceCompatibility{}, errors.New("compatible local base advance requires an explicit base ref") // refusal:by-design operator-knowledge: only the caller can choose the intended reviewed base
 	}
