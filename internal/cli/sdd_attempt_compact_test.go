@@ -316,16 +316,52 @@ func TestRunSDDAttemptTransportsAdmittedEvidenceRevisionToSettle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	changeRoot := filepath.Join(repo, "openspec", "changes", change)
+	if err := os.MkdirAll(changeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(changeRoot, "proposal.md"), []byte("# Proposal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(changeRoot, "tasks.md"), []byte("- [x] 1.1 Done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", ".")
+	runReviewCLIGit(t, repo, "commit", "-qm", "seed remediation change")
 	admitted, err := sddstatus.AdmitRemediationEvidence(payload, failed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	acquired, _ := runCompactSDDAttempt(t, compactAcquireArgs(repo, change, "admitted-acquire", 2))
+	failedAcquire, _ := runCompactSDDAttempt(t, compactAcquireArgs(repo, change, "admitted-failed-acquire", 2))
+	_, _ = runCompactSDDAttempt(t, []string{
+		"settle", "--cwd", repo, "--change", change, "--token", failedAcquire.Token,
+		"--request-id", "admitted-failed-settle", "--outcome", "failed", "--evidence-revision", failed,
+		"--diagnosis", "admitted predecessor failed verification", "--harness-disposition", "reused",
+		"--cleanup-evidence", "process group exited", "--process-evidence", "no descendants remained",
+	})
+	acquired, _ := runCompactSDDAttempt(t, append(compactAcquireArgs(repo, change, "admitted-remediation-acquire", 2), "--remediates-evidence-revision", failed))
+	if acquired.State != "proceed" || acquired.Token == "" {
+		t.Fatalf("remediation acquire = %#v, want proceed with a live token", acquired)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\nremediated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const lineage = "admitted-remediation-lineage"
+	writeCLIApprovedCompactAuthority(t, repo, lineage)
+	if _, err := sddstatus.BindApprovedReview(context.Background(), repo, change, lineage, ""); err != nil {
+		t.Fatal(err)
+	}
+	evidenceFile := filepath.Join(repo, "remediation-evidence.json")
+	if err := os.WriteFile(evidenceFile, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	settled, _ := runCompactSDDAttempt(t, []string{
 		"settle", "--cwd", repo, "--change", change, "--token", acquired.Token,
 		"--request-id", "admitted-settle", "--outcome", "passed", "--evidence-revision", admitted,
 		"--diagnosis", "admitted remediation evidence transported unchanged", "--harness-disposition", "reused",
 		"--cleanup-evidence", "process group exited", "--process-evidence", "no descendants remained",
+		"--remediates-evidence-revision", failed, "--successor-lineage", lineage,
+		"--remediation-evidence-file", evidenceFile,
 	})
 	if settled.State != "complete" {
 		t.Fatalf("settle = %#v, want complete", settled)

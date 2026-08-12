@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 type CompactAttemptState string
@@ -107,6 +108,9 @@ type CompactSettleRequest struct {
 	SuccessorLineageID string
 
 	RemediatesEvidenceRevision string
+	// RemediationEvidence is the sole canonical evidence object admitted by
+	// native settlement before a successful remediation can close the attempt.
+	RemediationEvidence []byte
 }
 
 type CompactHandoffRequest struct {
@@ -267,6 +271,31 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 	if err != nil {
 		return compactBlockedByUnreadableAuthority(err), nil
 	}
+	status := replay.Status
+	failedEvidence, _ := runtimeChainFailedEvidence(status.Attempts)
+	if failedEvidence == "" {
+		if receipt, exists := replay.Requests[request.RequestID]; exists {
+			if record, loadErr := store.loadRecord(receipt.Revision); loadErr == nil && record.Finish != nil {
+				failedEvidence = record.Finish.RemediatesEvidenceRevision
+			}
+		}
+	}
+	explicitSuccessor := request.SuccessorLineageID != ""
+	remediation := request.RemediatesEvidenceRevision != "" ||
+		(request.Outcome == AttemptPassed && status.Binding != nil && failedEvidence != "" &&
+			(!store.ReviewDisabled || explicitSuccessor || request.RemediatesEvidenceRevision != ""))
+	if remediation {
+		if len(request.RemediationEvidence) == 0 {
+			return CompactAttemptResult{}, errors.New("remediation evidence is required; rerun `gentle-ai sdd-attempt settle` with --remediation-evidence-file <path-to-the-exact-gentle-ai.remediation-evidence-v1-json>")
+		}
+		admittedRevision, admissionErr := AdmitRemediationEvidence(request.RemediationEvidence, failedEvidence)
+		if admissionErr != nil {
+			return CompactAttemptResult{}, fmt.Errorf("remediation evidence admission failed before settlement: %w", admissionErr)
+		}
+		if admittedRevision != request.EvidenceRevision {
+			return CompactAttemptResult{}, fmt.Errorf("successful evidence revision %q does not match native admission revision %q; active attempt preserved; rerun `gentle-ai sdd-attempt settle` with --evidence-revision %s", request.EvidenceRevision, admittedRevision, admittedRevision)
+		}
+	}
 	if receipt, exists := replay.Requests[request.RequestID]; exists {
 		record, loadErr := store.loadRecord(receipt.Revision)
 		if loadErr != nil {
@@ -296,15 +325,12 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		return readiness, nil
 	}
 
-	status := replay.Status
 	finish := FinishAttemptRequest{
 		ExpectedRevision: status.Revision, RequestID: request.RequestID, Outcome: request.Outcome,
 		EvidenceRevision: request.EvidenceRevision, Diagnosis: request.Diagnosis,
 		HarnessDisposition: request.HarnessDisposition, CleanupEvidence: request.CleanupEvidence,
 		ProcessEvidence: request.ProcessEvidence,
 	}
-	explicitSuccessor := request.SuccessorLineageID != ""
-	failedEvidence, _ := runtimeChainFailedEvidence(status.Attempts)
 	if request.RemediatesEvidenceRevision != "" && failedEvidence != request.RemediatesEvidenceRevision {
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}

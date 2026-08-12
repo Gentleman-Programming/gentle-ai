@@ -425,8 +425,12 @@ func parseRemediationResult(text, expectedRevision string, bindings ...Remediati
 	if !ok {
 		return evaluation
 	}
-	successfulRevision, ok := admitRemediationEvidence(evidence, expectedRevision, bindings...)
-	if !ok {
+	payload, err := json.Marshal(evidence)
+	if err != nil {
+		return evaluation
+	}
+	successfulRevision, err := AdmitRemediationEvidence(payload, expectedRevision, bindings...)
+	if err != nil {
 		return evaluation
 	}
 	if evidence.RuntimeHarness.Status != fields["runtime_harness"] {
@@ -461,6 +465,9 @@ func AdmitRemediationEvidence(payload []byte, expectedRevision string, bindings 
 }
 
 func admitRemediationEvidence(evidence remediationEvidence, expectedRevision string, bindings ...RemediationBinding) (string, bool) {
+	if !runtimeRevisionPattern.MatchString(expectedRevision) {
+		return "", false
+	}
 	if evidence.Schema != "gentle-ai.remediation-evidence/v1" ||
 		evidence.FailedEvidenceRevision != expectedRevision || len(evidence.Commands) == 0 || len(bindings) > 1 {
 		return "", false

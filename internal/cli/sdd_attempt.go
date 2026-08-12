@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
@@ -55,6 +56,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	expectedBindingRevision := registerSDDAttemptStringFlag(flags, operation, "expected-binding-revision")
 	successorLineage := registerSDDAttemptStringFlag(flags, operation, "successor-lineage")
 	remediatesEvidenceRevision := registerSDDAttemptStringFlag(flags, operation, "remediates-evidence-revision")
+	remediationEvidenceFile := registerSDDAttemptStringFlag(flags, operation, "remediation-evidence-file")
 	reason := registerSDDAttemptStringFlag(flags, operation, "reason")
 	actor := registerSDDAttemptStringFlag(flags, operation, "actor")
 	var roots sddAttemptRootList
@@ -78,6 +80,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	*evidenceRevision = strings.TrimSpace(*evidenceRevision)
 	*expectedBindingRevision = strings.TrimSpace(*expectedBindingRevision)
 	*remediatesEvidenceRevision = strings.TrimSpace(*remediatesEvidenceRevision)
+	*remediationEvidenceFile = strings.TrimSpace(*remediationEvidenceFile)
 	if strings.TrimSpace(*cwd) == "" {
 		return errors.New("sdd-attempt requires --cwd")
 	}
@@ -172,12 +175,20 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
 		})
 	case "settle":
+		var remediationEvidence []byte
+		if *remediationEvidenceFile != "" {
+			remediationEvidence, err = os.ReadFile(*remediationEvidenceFile)
+			if err != nil {
+				return fmt.Errorf("read remediation evidence: %w", err)
+			}
+		}
 		result, err = store.Settle(ctx, sddstatus.CompactSettleRequest{
 			Token: *token, RequestID: *requestID, Outcome: sddstatus.AttemptOutcome(*outcome),
 			EvidenceRevision: *evidenceRevision, Diagnosis: *diagnosis,
 			HarnessDisposition: sddstatus.HarnessDisposition(*harnessDisposition),
 			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
 			SuccessorLineageID: *successorLineage, RemediatesEvidenceRevision: *remediatesEvidenceRevision,
+			RemediationEvidence: remediationEvidence,
 		})
 	case "grant":
 		// --expected-revision stays optional, unlike begin/finish/reset: the
@@ -325,6 +336,7 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "process-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "successor-lineage", usage: "optional; lowercase distinct approved lineage, at most 128 bytes"},
 		{name: "remediates-evidence-revision", usage: "optional; repaired sha256:<64 lowercase hex> failed evidence"},
+		{name: "remediation-evidence-file", usage: "optional; exact native gentle-ai.remediation-evidence/v1 JSON object for settlement"},
 	}},
 	{name: "grant", purpose: "Record per-change edit authority for roots", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,

@@ -44,6 +44,12 @@ func TestParseRemediationResultRejectsBareAndStaleEvidence(t *testing.T) {
 	}
 }
 
+func TestParseRemediationResultRejectsMalformedExpectedRevision(t *testing.T) {
+	if got := parseRemediationResult(remediationResultEvidence("not-a-revision"), "not-a-revision"); got.Complete {
+		t.Fatal("remediation evidence passed with malformed expected revision")
+	}
+}
+
 func TestParseRemediationResultRequiresExactTransactionBinding(t *testing.T) {
 	revision := "sha256:" + strings.Repeat("d", 64)
 	binding := RemediationBinding{LineageID: "lineage-1", Generation: 2, FixBatch: 1}
