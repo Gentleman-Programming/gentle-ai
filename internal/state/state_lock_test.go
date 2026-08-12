@@ -69,10 +69,11 @@ func TestConcurrentUpdatesDoNotLoseWrites(t *testing.T) {
 
 	const writers = 10
 	done := make(chan error, writers)
-	for i := range writers {
+	for i := 0; i < writers; i++ {
+		agent := fmt.Sprintf("agent-%d", i)
 		go func() {
 			done <- Update(homeDir, func(s *InstallState) error {
-				s.InstalledAgents = append(s.InstalledAgents, fmt.Sprintf("agent-%d", i))
+				s.InstalledAgents = append(s.InstalledAgents, agent)
 				return nil
 			})
 		}()
@@ -91,7 +92,7 @@ func TestConcurrentUpdatesDoNotLoseWrites(t *testing.T) {
 	for _, agent := range final.InstalledAgents {
 		seen[agent] = true
 	}
-	for i := range writers {
+	for i := 0; i < writers; i++ {
 		if want := fmt.Sprintf("agent-%d", i); !seen[want] {
 			t.Errorf("missing %s: %d of %d writers survived", want, len(seen), writers)
 		}
