@@ -12,7 +12,10 @@ func TestOrdinaryTransactionIsOneBoundedNonIterativeFlow(t *testing.T) {
 	if err := tx.StartReview(); err != nil {
 		t.Fatalf("StartReview() error = %v", err)
 	}
-	if err := freezeTestFindings(tx, []Finding{{ID: "R1-DET", Severity: "CRITICAL"}, {ID: "R2-INF", Severity: "CRITICAL"}}); err != nil {
+	if err := freezeTestFindings(tx, []Finding{
+		{ID: "R1-DET", Severity: "CRITICAL"},
+		{ID: "R2-INF", Location: "internal/example.go:1", Severity: "CRITICAL", Claim: "shared state can race"},
+	}); err != nil {
 		t.Fatalf("FreezeFindings() error = %v", err)
 	}
 
@@ -25,6 +28,9 @@ func TestOrdinaryTransactionIsOneBoundedNonIterativeFlow(t *testing.T) {
 	}
 	if len(route.RefuterClaims) != 1 || route.RefuterClaims[0].FindingID != "R2-INF" {
 		t.Fatalf("RefuterClaims = %#v, want only inferential finding", route.RefuterClaims)
+	}
+	if route.RefuterClaims[0].Claim != "shared state can race" || route.RefuterClaims[0].Location != "internal/example.go:1" {
+		t.Fatalf("RefuterClaims[0] = %#v, want finding claim and location", route.RefuterClaims[0])
 	}
 	if got := tx.Outcomes["R1-DET"]; got != OutcomeCorroborated {
 		t.Fatalf("deterministic outcome = %q, want corroborated", got)

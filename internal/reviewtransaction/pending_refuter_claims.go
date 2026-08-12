@@ -28,7 +28,10 @@ func PendingRefuterClaims(state CompactState, input CompactReviewInput) []Refute
 			}
 			switch effectiveCompactCausality(finding, item.Causality, state.GenesisPaths) {
 			case CausalIntroduced, CausalBehaviorActivated, CausalWorsened:
-				claims = append(claims, RefuterClaim{FindingID: finding.ID, SnapshotIdentity: state.InitialSnapshot.Identity, Proof: item.Proof})
+				claims = append(claims, RefuterClaim{
+					FindingID: finding.ID, SnapshotIdentity: state.InitialSnapshot.Identity,
+					Claim: finding.Claim, Location: finding.Location, Proof: item.Proof,
+				})
 			}
 		}
 	}

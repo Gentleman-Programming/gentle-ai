@@ -69,6 +69,7 @@ func TestStatusOffersBoundRefuterBeforeFinalizeForInferentialFinding(t *testing.
 	findingID := reviewtransaction.FindingIDPrefixForLens(record.State.SelectedLenses[0]) + "001"
 	for _, want := range []string{
 		`"finding_id":"` + findingID + `"`, `"snapshot_identity":"` + record.State.InitialSnapshot.Identity + `"`,
+		`"claim":"the candidate depends on an external contract"`, `"location":"tracked.txt:1"`,
 		`"required":["results"]`, `"proof_refs"`, "+candidate\n", "GENTLE_AI_REVIEW_CONTEXT_END\n",
 	} {
 		if !strings.Contains(context.String(), want) {

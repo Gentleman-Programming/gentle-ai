@@ -166,6 +166,8 @@ type FindingEvidence struct {
 type RefuterClaim struct {
 	FindingID        string `json:"finding_id"`
 	SnapshotIdentity string `json:"snapshot_identity"`
+	Claim            string `json:"claim"`
+	Location         string `json:"location"`
 	Proof            string `json:"proof"`
 }
 
@@ -562,7 +564,8 @@ func (transaction *Transaction) ClassifyEvidence(evidence []FindingEvidence) (Ev
 		case EvidenceInferential:
 			pendingRefuterIDs = append(pendingRefuterIDs, finding.ID)
 			route.RefuterClaims = append(route.RefuterClaims, RefuterClaim{
-				FindingID: finding.ID, SnapshotIdentity: transaction.Snapshot.Identity, Proof: item.Proof,
+				FindingID: finding.ID, SnapshotIdentity: transaction.Snapshot.Identity,
+				Claim: finding.Claim, Location: finding.Location, Proof: item.Proof,
 			})
 		case EvidenceInsufficient:
 			outcomes[finding.ID] = OutcomeInconclusive
