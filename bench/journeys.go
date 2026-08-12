@@ -668,6 +668,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, managedAssetJourneys()...)
 	journeys = append(journeys, issue2906Journeys()...)
 	journeys = append(journeys, issue2138Journeys()...)
+	journeys = append(journeys, opencodeBackgroundSubagentJourneys()...)
 	return append(journeys, handoffJourneys()...)
 }
 
