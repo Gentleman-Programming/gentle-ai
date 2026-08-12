@@ -1232,6 +1232,11 @@ func (harness *organicHarness) startReview(lineage string, extra ...string) (org
 // approveReview runs the proportional plan the tier selected: zero reviewers for
 // passive content, and one result per selected lens plus final evidence
 // otherwise. The suite never selects lenses itself.
+//
+// High-risk approval is bound to captured typed verification evidence (1843):
+// the raw --evidence path can no longer authorize a high-risk gate, so the
+// harness routes high-risk candidates through review capture-evidence the way
+// a real operator does, then finalizes. Medium/low keep the raw path.
 func (harness *organicHarness) approveReview(lineage string, started organicStartResult) organicFinalizeResult {
 	harness.t.Helper()
 	if len(started.SelectedLenses) == 0 {
@@ -1247,7 +1252,16 @@ func (harness *organicHarness) approveReview(lineage string, started organicStar
 	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
 		harness.t.Fatalf("reviewer results did not reach validation: %#v", result)
 	}
-	return harness.finalize(lineage, "--evidence", harness.writeEvidence())
+	if started.RiskLevel != organicRiskHigh {
+		return harness.finalize(lineage, "--evidence", harness.writeEvidence())
+	}
+	status := harnessStatus(harness.t, harness, lineage)
+	evidencePath := harness.writeEvidence()
+	harness.gentle(
+		"review", "capture-evidence", "--cwd", harness.repo.worktree, "--lineage", lineage,
+		"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--outcome", "passed", "--input", evidencePath,
+	)
+	return harness.finalize(lineage)
 }
 
 // captureReviewerResult admits one reviewer result through the native route.
