@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
@@ -139,6 +140,61 @@ func TestManagedReviewerAssetProvenanceRefusesOnlyRecordedSkew(t *testing.T) {
 		staleManagedReviewerAssets(t, home)
 		requireManagedAssetProvenanceError(t, authorizeManagedReviewerAssets(), managedAssetProvenanceRefusal)
 	})
+}
+
+func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *testing.T) {
+	home, repo := reviewModeHome(t), initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/stale-assets.md", "# Candidate\n", 0o644)
+	staleManagedReviewerAssets(t, home)
+
+	var output bytes.Buffer
+	err := RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--agent", "opencode", "--consent", "granted",
+	}), &output)
+	if err == nil {
+		t.Fatalf("stale managed assets START succeeded: %s", output.String())
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Operation != "review.start" || failure.Phase != "preflight" ||
+		failure.Code != "managed_assets_outdated" || failure.MutationOutcome != ReviewMutationNotStarted ||
+		failure.NextAction != "stop" {
+		t.Fatalf("stale managed assets failure = %#v", failure)
+	}
+	if failure.Cause != managedAssetProvenanceRefusal {
+		t.Fatalf("stale managed assets cause = %q, want %q", failure.Cause, managedAssetProvenanceRefusal)
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatalf("stale managed assets failure does not satisfy its published contract: %v", err)
+	}
+}
+
+func TestNegotiatedReviewStartWithCurrentManagedAssetsStillStarts(t *testing.T) {
+	home, repo := reviewModeHome(t), initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/current-assets.md", "# Candidate\n", 0o644)
+	digest, err := managedAssetDigest()
+	requireManagedAssetProvenanceNoError(t, err)
+	requireManagedAssetProvenanceNoError(t, state.Write(home, state.InstallState{ManagedAssetDigest: digest}))
+
+	var output bytes.Buffer
+	err = RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--agent", "opencode", "--consent", "granted",
+	}), &output)
+	if err != nil {
+		t.Fatalf("current managed assets START refused: %v\n%s", err, output.String())
+	}
+	started := decodeNegotiatedReviewStart(t, output.Bytes())
+	if err := started.Validate(); err != nil || started.LineageID == "" {
+		t.Fatalf("current managed assets START = %#v, validate = %v", started, err)
+	}
+}
+
+func TestManagedAssetsPreflightDoesNotClassifyUnrelatedRuntimeRefusal(t *testing.T) {
+	failure := newReviewIntegrationFailure("review.start", nil, errors.New("unrelated runtime refusal"))
+	if failure.Code != "operation_outcome_unknown" || failure.Phase != "native_running" ||
+		failure.MutationOutcome != ReviewMutationUnknown || failure.NextAction != "review.status" ||
+		!strings.Contains(failure.Cause, "unrelated runtime refusal") {
+		t.Fatalf("unrelated runtime failure = %#v", failure)
+	}
 }
 
 // TestManagedAssetDigestIsStableAndAssetBound proves the digest is a property

@@ -80,10 +80,32 @@ func RecoveryPredecessorNotInvalidated(err error) bool {
 	return errors.Is(err, errCompactRecoveryPredecessorNotInvalidated)
 }
 
-// errCompactRecoveryAuthorizationInexact identifies the escalated-recovery
-// authorization-binding anomaly so reconcile-authority can gate quarantine of
-// historical pre-contract free-form authorizations to exactly this class.
-var errCompactRecoveryAuthorizationInexact = errors.New("escalated recovery requires an exact maintainer authorization binding")
+// ErrCompactRecoveryAuthorizationInexact identifies the escalated-recovery
+// authorization-binding anomaly. The typed error below preserves whether the
+// current disposition planner admits the recorded authorization shape.
+var ErrCompactRecoveryAuthorizationInexact = errors.New("escalated recovery requires an exact maintainer authorization binding")
+
+// CompactRecoveryAuthorizationInexactError identifies a recovery edge whose
+// authorization does not bind the exact predecessor, successor, actor, and
+// reason. Repairable is true only for the schema-prefixed content-mismatch
+// class admitted by the current provider-owned disposition plan.
+type CompactRecoveryAuthorizationInexactError struct {
+	Projection     Projection
+	TargetIdentity string
+	Repairable     bool
+}
+
+func (err *CompactRecoveryAuthorizationInexactError) Error() string {
+	projection := err.Projection
+	if projection == "" {
+		projection = ProjectionWorkspace
+	}
+	return fmt.Sprintf("%s (projection=%s target_identity=%s)", ErrCompactRecoveryAuthorizationInexact, projection, err.TargetIdentity)
+}
+
+func (err *CompactRecoveryAuthorizationInexactError) Unwrap() error {
+	return ErrCompactRecoveryAuthorizationInexact
+}
 
 // compactRecoveryAuthorizationSchema is the first line of the exact six-line
 // escalated-recovery maintainer authorization binding.
@@ -141,6 +163,9 @@ type CompactRecord struct {
 	// compatibility path; such authority is read-only.
 	HistoricalCompat bool `json:"-"`
 }
+
+// historicalCompactForensicRecord is raw-byte identity, never authority.
+type historicalCompactForensicRecord struct{ RawDigest string }
 
 type CompactStore struct {
 	Dir                 string
@@ -307,7 +332,7 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	if !sameRecoveryProjection(predecessor.State.InitialSnapshot.Projection, request.Successor.InitialSnapshot.Projection) &&
 		!stagedScopeRecovery &&
 		request.MaintainerAuthorization != compactRecoveryAuthorizationBinding(request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason) {
-		return CompactRecord{}, compactRecoveryAuthorizationError(request.Successor.InitialSnapshot)
+		return CompactRecord{}, compactRecoveryAuthorizationError(request.Successor.InitialSnapshot, request.MaintainerAuthorization)
 	}
 	// Every shape the three comparisons above do not cover still records the
 	// caller's authorization verbatim in the provenance below, so a supplied
@@ -318,7 +343,7 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 		!compactRecoverySuppliedAuthorizationBinds(request.MaintainerAuthorization, request.PredecessorLineageID,
 			predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Successor.LineageID,
 			request.Actor, request.Reason) {
-		return CompactRecord{}, compactRecoveryAuthorizationError(request.Successor.InitialSnapshot)
+		return CompactRecord{}, compactRecoveryAuthorizationError(request.Successor.InitialSnapshot, request.MaintainerAuthorization)
 	}
 	existing, existingErr := successorStore.Load()
 	if existingErr != nil && !os.IsNotExist(existingErr) {
@@ -581,7 +606,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 				return errCompactApprovedRecoveryScopeUnchanged
 			}
 			if forgedSchemaAuthorization() {
-				return compactRecoveryAuthorizationError(next)
+				return compactRecoveryAuthorizationError(next, recovery.MaintainerAuthorization)
 			}
 		case StateCorrectionRequired:
 			if strings.TrimSpace(recovery.MaintainerAuthorization) == "" {
@@ -600,7 +625,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 				}
 			}
 			if forgedSchemaAuthorization() {
-				return compactRecoveryAuthorizationError(successor.InitialSnapshot)
+				return compactRecoveryAuthorizationError(successor.InitialSnapshot, recovery.MaintainerAuthorization)
 			}
 			if !compactRecoveryAddsGenesisPath(predecessor.State, successor.InitialSnapshot) &&
 				!compactRecoveryContractsGenesisPaths(predecessor.State, successor.InitialSnapshot) {
@@ -614,12 +639,12 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 			return errCompactRecoveryPredecessorNotInvalidated
 		}
 		if forgedSchemaAuthorization() {
-			return compactRecoveryAuthorizationError(successor.InitialSnapshot)
+			return compactRecoveryAuthorizationError(successor.InitialSnapshot, recovery.MaintainerAuthorization)
 		}
 	case RecoveryEscalated:
 		if recovery.Evidence != nil {
 			if recovery.MaintainerAuthorization != compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
-				return compactRecoveryAuthorizationError(successor.InitialSnapshot)
+				return compactRecoveryAuthorizationError(successor.InitialSnapshot, recovery.MaintainerAuthorization)
 			}
 			if err := validateCompactRecoveredEvidenceEdge(predecessor, successor); err != nil {
 				return err
@@ -634,7 +659,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 			return errCompactRecoveryTargetUnchanged
 		}
 		if recovery.MaintainerAuthorization != compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
-			return compactRecoveryAuthorizationError(successor.InitialSnapshot)
+			return compactRecoveryAuthorizationError(successor.InitialSnapshot, recovery.MaintainerAuthorization)
 		}
 	case RecoveryFinalVerificationRetry:
 		return validateCompactFinalVerificationRetryEdge(predecessor, successor)
@@ -703,12 +728,15 @@ func sameRecoveryProjection(left, right Projection) bool {
 	return left == right
 }
 
-func compactRecoveryAuthorizationError(snapshot Snapshot) error {
+func compactRecoveryAuthorizationError(snapshot Snapshot, authorization string) error {
 	projection := snapshot.Projection
 	if projection == "" {
 		projection = ProjectionWorkspace
 	}
-	return fmt.Errorf("%w (projection=%s target_identity=%s)", errCompactRecoveryAuthorizationInexact, projection, snapshot.Identity)
+	return &CompactRecoveryAuthorizationInexactError{
+		Projection: projection, TargetIdentity: snapshot.Identity,
+		Repairable: strings.HasPrefix(authorization, compactRecoveryAuthorizationSchema),
+	}
 }
 
 func compactRecoveryAddsGenesisPath(predecessor CompactState, live Snapshot) bool {
@@ -1476,7 +1504,7 @@ func compactApprovedScopeChangedRecovery(existing CompactState, live Snapshot) b
 func compactApprovedRebasedScopeRecovery(ctx context.Context, repo string, existing CompactState, live Snapshot) (bool, error) {
 	original, approved := existing.InitialSnapshot, existing.CurrentSnapshot
 	if existing.State != StateApproved || original.Kind != TargetCurrentChanges || approved.Kind != TargetCurrentChanges ||
-		live.Kind != TargetBaseDiff || !sameRecoveryProjection(original.Projection, live.Projection) ||
+		live.Kind != TargetBaseDiff || !sameApprovedRebasedRecoveryProjection(original.Projection, live.Projection) ||
 		original.BaseTree != approved.BaseTree || original.BaseTree == live.BaseTree ||
 		approved.CandidateTree == live.CandidateTree || approved.Identity == live.Identity ||
 		len(existing.GenesisPaths) == 0 || !equalStrings(approved.Paths, existing.GenesisPaths) ||
@@ -1519,6 +1547,17 @@ func compactApprovedRebasedScopeRecovery(ctx context.Context, repo string, exist
 		return false, fmt.Errorf("derive live rebased patch identity: %w", err)
 	}
 	return originalPatch == livePatch, nil
+}
+
+// A base-diff has no index-backed staged execution mode. STATUS therefore
+// projects this narrow approved staged-current-changes rebase to its executable
+// committed-only base-diff form before identity derivation. No other mixed
+// projection is admitted here.
+func sameApprovedRebasedRecoveryProjection(original, live Projection) bool {
+	if live == "" {
+		live = ProjectionWorkspace
+	}
+	return sameRecoveryProjection(original, live) || original == ProjectionStaged && live == ProjectionWorkspace
 }
 
 // compactStartDeliveryScopeMatches compares the immutable delivery boundary
@@ -2226,6 +2265,12 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 	var record CompactRecord
 	if strictErr := decoder.Decode(&record); strictErr != nil {
 		if !retiredCompactFieldError(strictErr) {
+			if compactAuthorityFromNewerRelease(strictErr) {
+				// The decoder error names the exact unknown field, which is
+				// the one piece of evidence identifying which release wrote
+				// this authority. It is preserved, not swallowed.
+				return CompactRecord{}, fmt.Errorf("%w: %v", ErrCompactAuthorityFromNewerRelease, strictErr)
+			}
 			return CompactRecord{}, strictErr
 		}
 		historical, historicalErr := parseHistoricalCompactRecord(payload)
@@ -2244,8 +2289,9 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 		return CompactRecord{}, errors.New("invalid compact review state record")
 	}
 	if err := record.State.Validate(); err != nil {
+		_, historical := forensicHistoricalCompactRecord(payload, lineageID)
 		return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error(),
-			OutdatedIdentity: errors.Is(err, errCompactSnapshotIdentityMismatch)}
+			OutdatedIdentity: historical}
 	}
 	if lineageID != "" && record.State.LineageID != lineageID {
 		return CompactRecord{}, errors.New("compact state lineage does not match its directory")
@@ -2259,10 +2305,85 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 	return record, nil
 }
 
+func forensicHistoricalCompactRecord(payload []byte, lineageID string) (historicalCompactForensicRecord, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var record CompactRecord
+	if err := decoder.Decode(&record); err != nil {
+		return historicalCompactForensicRecord{}, false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF || record.Schema != compactRecordSchema || !validSHA256(record.Revision) || record.State.LineageID != lineageID {
+		return historicalCompactForensicRecord{}, false
+	}
+	want, _, err := makeCompactRecord(record.State)
+	if err != nil || want.Revision != record.Revision || !errors.Is(record.State.Validate(), errCompactSnapshotIdentityMismatch) {
+		return historicalCompactForensicRecord{}, false
+	}
+	state := record.State
+	for _, snapshot := range []*Snapshot{&state.InitialSnapshot, &state.CurrentSnapshot} {
+		if snapshot.Identity != retiredCompactSnapshotIdentity(*snapshot) {
+			return historicalCompactForensicRecord{}, false
+		}
+		snapshot.Identity = snapshotIdentityForProjection(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
+	}
+	if state.Validate() != nil {
+		return historicalCompactForensicRecord{}, false
+	}
+	sum := sha256.Sum256(payload)
+	return historicalCompactForensicRecord{RawDigest: "sha256:" + hex.EncodeToString(sum[:])}, true
+}
+
+func retiredCompactSnapshotIdentity(snapshot Snapshot) string {
+	hash := sha256.New()
+	if snapshot.Kind == TargetBaseWorkspaceOverlay {
+		hash.Write([]byte("gentle-ai.review-snapshot/base-workspace-overlay/v1\x00"))
+	} else if snapshot.Projection == ProjectionStaged {
+		hash.Write([]byte("gentle-ai.review-snapshot/v2\x00"))
+	} else {
+		hash.Write([]byte("gentle-ai.review-snapshot/v1\x00"))
+	}
+	values := []string{string(snapshot.Kind), snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof}
+	if snapshot.Projection == ProjectionStaged {
+		values = []string{string(snapshot.Kind), string(snapshot.Projection), snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof}
+	}
+	for _, value := range append(values, append(snapshot.IntendedUntracked, snapshot.LedgerIDs...)...) {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
 // retiredCompactFieldError reports whether a strict decode failure names a
 // retired compatibility field, so only genuine historical records pay the
 // tolerant second parse. The decoder error only carries the leaf field name;
 // the tolerant parse then enforces the exact nesting level of each path.
+// ErrCompactAuthorityFromNewerRelease marks persisted authority that carries a
+// state field this build has never heard of. Strict decoding is the tamper
+// guard and stays, which makes authority non-forward-compatible by
+// construction: every release adding a state field writes bytes an older
+// binary can never read. The binary that would need the fix is the old one, so
+// no compatibility path can exist here the way retiredCompactFieldError exists
+// for the mirror case.
+//
+// What this sentinel buys is an honest refusal. #2461's reporter got
+// `json: unknown field "correction_budget_policy"` wrapped in "refresh the
+// exact native next_transition before retrying", followed that exactly, and
+// hit an identical failure, because refreshing a transition cannot make an
+// older binary parse newer bytes. The message therefore names the only thing
+// that does resolve it: run a build at least as new as the writer.
+var ErrCompactAuthorityFromNewerRelease = errors.New(
+	"this compact review authority was written by a newer gentle-ai than the one reading it, which cannot parse it; " +
+		"upgrade the reading gentle-ai to at least the build that wrote this authority",
+)
+
+// compactAuthorityFromNewerRelease reports whether a strict-decode failure is
+// an unknown state field rather than a retired one. Retired fields are checked
+// first by the caller and take the tolerant historical parse, so reaching here
+// means the field belongs to a release this build predates.
+func compactAuthorityFromNewerRelease(err error) bool {
+	return strings.Contains(err.Error(), "unknown field") && !retiredCompactFieldError(err)
+}
+
 func retiredCompactFieldError(err error) bool {
 	message := err.Error()
 	if !strings.Contains(message, "unknown field") {

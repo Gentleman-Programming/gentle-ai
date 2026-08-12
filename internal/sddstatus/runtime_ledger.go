@@ -104,16 +104,8 @@ var (
 	// CumulativeChangedLines==0" fallback specifically as attempt-count
 	// laundering; an unguarded widen here would be the same defect wearing a
 	// new operation name.
-	ErrRuntimeRescopeWidened = errors.New("SDD runtime objective rescope may only narrow or hold max_attempts and max_changed_lines, never widen them; " + runtimeLedgerStatusPointer)
-	// ErrRuntimeRemediationSuccessorRequired never travels alone. Every return
-	// site wraps it with runtimeRemediationExitRefusal, which names the exact
-	// runnable continuation for the state the caller is actually in. The
-	// sentinel text deliberately avoids the word "recovery": it sent the first
-	// reporter of this block to `review recover`, which refuses a same-lineage
-	// successor and refuses an unchanged approved scope, and is therefore the
-	// first step of a cycle with no exit.
-	ErrRuntimeRemediationSuccessorRequired = errors.New("a bound passing SDD runtime attempt must also bind the approved review of its corrected candidate")
-	ErrBindingRevisionConflict             = errors.New("SDD review binding revision conflict")
+	ErrRuntimeRescopeWidened   = errors.New("SDD runtime objective rescope may only narrow or hold max_attempts and max_changed_lines, never widen them; " + runtimeLedgerStatusPointer)
+	ErrBindingRevisionConflict = errors.New("SDD review binding revision conflict")
 	// ErrRuntimeWorktreeMismatch never travels alone either. Every return site
 	// wraps it with runtimeWorktreeMismatchRefusal, which names the exact
 	// --cwd that reproduces the binding Begin actually recorded (#2296 part
@@ -121,7 +113,19 @@ var (
 	// under would diff a pinned base tree against an unrelated working tree —
 	// changed_lines: 0 when real work happened, or a wildly inflated delta —
 	// so this refuses before any candidate capture, not after.
-	ErrRuntimeWorktreeMismatch          = errors.New("SDD runtime attempt began in a different linked worktree than this finish is running from")
+	ErrRuntimeWorktreeMismatch = errors.New("SDD runtime attempt began in a different linked worktree than this finish is running from")
+	// ErrRuntimeCandidateUnavailable classifies the one Begin/Finish failure
+	// class that is NOT an authority failure: the attempt ledger loaded,
+	// replayed, and stayed unmutated, but the REPOSITORY candidate the
+	// mutation must capture first could not be built. Left unclassified it
+	// fell through to compactMutationFailure's opaque authority_failure
+	// default on the very first acquire a consumer ever issues (#2114).
+	//
+	// It never travels alone: every wrap keeps the snapshot builder's own
+	// refusal as the cause, because that cause is the only thing that knows
+	// the runnable repository exit. This sentinel classifies; the cause
+	// continues.
+	ErrRuntimeCandidateUnavailable      = errors.New("SDD runtime candidate could not be captured from the repository")                        // refusal:by-design world-action: the exit is a repository-state change (stage the candidate, gitignore an untracked nested checkout, restore a pruned object), which no command of this product can decide or perform; every wrap keeps the snapshot builder's own refusal as the cause and that cause names the exact action
 	ErrRuntimeHandoffSource             = errors.New("SDD runtime handoff source does not equal the active attempt's effective worktree")      // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
 	ErrRuntimeHandoffDestination        = errors.New("SDD runtime handoff destination is not a registered linked worktree of this repository") // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
 	ErrRuntimeHandoffAlreadyPerformed   = errors.New("SDD runtime attempt has already been handed off")                                        // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
@@ -354,6 +358,22 @@ type RuntimeStatus struct {
 	// recorded additively alongside Binding/BindingRevision — see
 	// runtime_receipt.go.
 	Receipt *reviewtransaction.SDDReceiptRef `json:"receipt,omitempty"`
+	// BlockedReason and BlockedExit carry the verdict acquire would reach for
+	// the caller's own request, so the read-only surface stops answering a
+	// narrower question than the one consumers were asking it (#2114). Only
+	// AdmissionStatus populates them; the request-blind Status() leaves them
+	// empty and every existing consumer reads exactly what it always read.
+	BlockedReason CompactBlockReason `json:"blocked_reason,omitempty"`
+	BlockedExit   string             `json:"blocked_exit,omitempty"`
+	// SettleObligation mirrors the compact acquire field exactly, from the
+	// same derivation, so the read-only surface and the operation that spends
+	// the attempt cannot disagree about what the settle will owe (#2912).
+	SettleObligation string `json:"settle_obligation,omitempty"`
+	// Consent carries the blocking question an exhausted attempt budget asks
+	// instead of dead-ending in prose (#2588, and the same dead end #2902 and
+	// #2913 died in). Populated only by AdmissionStatus, and only while the
+	// ledger actually requires that decision.
+	Consent *BudgetConsentResult `json:"consent,omitempty"`
 }
 
 type BeginAttemptRequest struct {
@@ -525,7 +545,7 @@ type runtimeRecord struct {
 
 // runtimeGrantEvent is the persisted per-change edit-authority grant (#2540
 // S2): a maintainer-authorized record that this change's apply actor may edit
-// the named repository roots, recorded as canonical absolute symlink-evaluated
+// the named edit roots, recorded as canonical absolute symlink-evaluated
 // paths following BeginWorktree's canonicalization precedent. GrantedAt is
 // the ledger's FIRST wall-clock field: digest-safe (the content-addressed
 // record revision binds it immutably) but excluded from the request digest
@@ -759,84 +779,18 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
-		if status.ActiveAttempt != nil {
-			return runtimeRecord{}, ErrRuntimeAttemptActive
-		}
-		// A passed objective terminates its own scope, not the change. When the
-		// request names a distinct work unit, the ordinary continuation is the
-		// successor objective, not a maintainer reset that would discard the
-		// completed apply authority along with its evidence.
-		advancing := false
-		if status.Complete {
-			if !runtimeObjectiveAdvanceAdmissible(status, request) {
-				return runtimeRecord{}, store.runtimeObjectiveCompleteRefusal(status)
-			}
-			advancing = true
-		}
-		if status.DecisionRequired {
-			return runtimeRecord{}, ErrRuntimeBudgetExhausted
-		}
-		if (status.Objective == nil || advancing) && runtimeScopeOverlaps(replay.Scopes, request.Scope) {
-			return runtimeRecord{}, errors.New("scoped objective assignment overlaps an existing runtime objective") // refusal:by-design world-action: provider-owned authority construction must assign a non-overlapping scope
-		}
-
-		generation := status.ObjectiveGeneration + 1
-		var snapshot reviewtransaction.Snapshot
-		var err error
-		switch {
-		case status.Objective != nil && !advancing && runtimeObjectiveHasRecordedAttempt(status):
-			// The ordinary continuing-objective path: at least one attempt is
-			// already recorded under this exact objective ID, so its terminal
-			// Finish is the candidate provenance to chase.
-			generation = status.Objective.Generation
-			if request.WorkUnit != status.Objective.WorkUnit || request.EvidenceGoal != status.Objective.EvidenceGoal ||
-				request.MaxAttempts != status.Objective.MaxAttempts ||
-				request.MaxChangedLines != status.Objective.MaxChangedLines || !runtimeScopeEqual(request.Scope, status.Objective.Scope) {
-				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
-			}
-			last := status.Attempts[len(status.Attempts)-1]
-			if last.Outcome == AttemptRunning || last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
-				return runtimeRecord{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
-			}
-			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
-			if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
-				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
-			}
-		case status.Objective != nil && !advancing:
-			// A freshly opened objective (Rescope) with no attempt recorded
-			// under its own ID yet: there is no terminal Finish belonging to
-			// THIS objective to chase, so capture a fresh candidate the same
-			// way a brand-new objective's first attempt does, and validate it
-			// against the candidate the objective itself opened with
-			// (RuntimeObjective.InitialCandidate*, set by Rescope to the exact
-			// zero-drift candidate it verified) instead of a prior attempt's
-			// Finish record. Chasing the LAST recorded attempt here would find
-			// one that belongs to the objective THIS one superseded (#2298,
-			// #2296 part 2's landmine) and wrongly refuse.
-			generation = status.Objective.Generation
-			if request.WorkUnit != status.Objective.WorkUnit || request.EvidenceGoal != status.Objective.EvidenceGoal ||
-				request.MaxAttempts != status.Objective.MaxAttempts ||
-				request.MaxChangedLines != status.Objective.MaxChangedLines || !runtimeScopeEqual(request.Scope, status.Objective.Scope) {
-				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
-			}
-			snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
-			if err == nil && (snapshot.Identity != status.Objective.InitialCandidateIdentity || snapshot.CandidateTree != status.Objective.InitialCandidateTree) {
-				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
-			}
-		default:
-			snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
-		}
+		// Every precondition, ledger-side and repository-side, is evaluated by
+		// the one predicate the read-only surfaces evaluate too, under this
+		// lock and against this exact replay, so a read that said "admitted"
+		// a moment ago cannot let a stale verdict through here.
+		admission, err := store.runtimeBeginAdmission(ctx, status, replay.Scopes, request)
 		if err != nil {
-			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate before launch: %w", err)
+			return runtimeRecord{}, err
 		}
+		advancing, generation, snapshot := admission.Advancing, admission.Generation, admission.Snapshot
 		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, snapshot.Identity, generation, request.Scope)
 		if status.Objective != nil && !advancing {
 			objectiveID = status.Objective.ID
-		}
-		// The successor opens a fresh per-objective budget, so the charges the
-		// completed scope accrued cannot exhaust it before its first attempt.
-		if !advancing && (status.CumulativeAttempts >= request.MaxAttempts || status.CumulativeChangedLines >= request.MaxChangedLines) {
-			return runtimeRecord{}, ErrRuntimeBudgetExhausted
 		}
 		event := &runtimeBeginEvent{
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
@@ -905,13 +859,31 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		chainFailedAttempt, chainHasFailedEvidence := runtimeChainFailedAttempt(status.Attempts)
 		chainFailedEvidence := chainFailedAttempt.EvidenceRevision
 		if unmanagedRemediation {
-			if !store.ReviewDisabled || currentBinding != nil {
-				// refusal:by-design human-authority: unmanaged remediation is valid only while receipt authority is absent and explicitly disabled.
-				return runtimeRecord{}, errors.New("unmanaged remediation requires disabled delivery without a review binding")
+			if !store.ReviewDisabled {
+				// No by-design marker: this names a runnable continuation inline.
+				return runtimeRecord{}, errors.New("unmanaged remediation requires disabled delivery; enable it or run `gentle-ai review mode disable --scope clone --cwd <repo>` for this repository only")
 			}
-			if !chainHasFailedEvidence || chainFailedEvidence != request.RemediatesEvidenceRevision {
-				// refusal:by-design operator-knowledge: the native ledger admits one final correction only for the chain's unremediated failed evidence.
-				return runtimeRecord{}, errors.New("unmanaged remediation requires the current failed evidence and a direct correction attempt")
+			// A binding that predates the switch does NOT block this. The
+			// contract on ReviewDisabled says that while review is off it "does
+			// not exist, so it must have no implications", and a leftover
+			// binding is an implication: it made the switch inert only for
+			// changes that had never used review, so turning it off after the
+			// fact bought nothing. The binding stays recorded and re-enabling
+			// re-validates from the current state.
+			if !chainHasFailedEvidence {
+				// #2881: the caller named a real failure, and their own earlier
+				// slice already repaired it. Blaming their input sent the
+				// reporter looking for authority to guess at; the state is what
+				// changed, and the exit is to stop claiming a remediation.
+				if discharged, ordinal, ok := runtimeDischargedFailure(status.Attempts, request.RemediatesEvidenceRevision); ok {
+					return runtimeRecord{}, runtimeDischargedFailureRefusal(discharged, ordinal)
+				}
+				// No by-design marker: this names a runnable continuation inline.
+				return runtimeRecord{}, errors.New("this correction names failed verification " + request.RemediatesEvidenceRevision + ", but the attempt chain records no failed verification at all; run `gentle-ai sdd-attempt status --cwd <repo> --change <change>` to read the chain, then settle without --remediates-evidence-revision if nothing is being repaired")
+			}
+			if chainFailedEvidence != request.RemediatesEvidenceRevision {
+				// No by-design marker: this names a runnable continuation inline.
+				return runtimeRecord{}, errors.New("this correction names failed verification " + request.RemediatesEvidenceRevision + ", but the chain's unremediated failure is " + chainFailedEvidence + "; settle with --remediates-evidence-revision \"" + chainFailedEvidence + "\", or without the flag if this work unit repairs nothing")
 			}
 		}
 		// Issue #2394: the runtime candidate is the same declared candidate
@@ -923,29 +895,31 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
 		})
 		if err != nil {
-			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate after attempt: %w", err)
+			return runtimeRecord{}, wrapRuntimeCandidateUnavailable("after attempt", err)
 		}
 		changedLines, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).ChangedLines(ctx, snapshot)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("measure native SDD runtime line charge: %w", err)
 		}
-		// While the kill switch is off the bound review has no say in whether
-		// this attempt may close: it would demand an approved recovery successor
-		// that review/start is refused from producing, which is a deadlock, not
-		// a safeguard. Re-enabling re-validates from the current state, because
-		// the binding still refers to the candidate it was approved for and the
-		// next enforcement point rediscovers that on its own.
-		if request.Outcome == AttemptPassed && currentBinding != nil && !remediation && !store.ReviewDisabled {
-			if snapshot.CandidateTree != active.BeginCandidateTree {
-				return runtimeRecord{}, store.runtimeRemediationExitRefusal(ctx, status, *currentBinding, active.Ordinal, snapshot.CandidateTree)
-			}
-			if currentBinding.Change != store.Change {
-				return runtimeRecord{}, errors.New("bound SDD review change does not match the runtime objective")
-			}
-			if validateErr := validateRuntimeBoundCandidate(ctx, store.Repo, *currentBinding, snapshot.CandidateTree); validateErr != nil {
-				return runtimeRecord{}, fmt.Errorf("validate unchanged bound SDD candidate: %w", validateErr)
-			}
-		}
+		// Review acts AFTER implementation and verification, on the finished
+		// result. This package already implements that twice: applyReviewOfferRouting
+		// fires only once verify has passed, and resolveNextRecommended never
+		// routes to review before verify.
+		//
+		// A third rule used to disagree with both. A passing IMPLEMENTATION
+		// attempt was refused whenever the review binding covered the
+		// pre-attempt bytes — which it always does, because changing the
+		// candidate is what an attempt is for. That is review deciding whether
+		// implementation may finish, before any verification has run, and it is
+		// #1993: a maintainer-authorized correction passed every gate and could
+		// not be closed, while the only named exit required a review the review
+		// side was structurally unable to produce.
+		//
+		// Nothing is given up. The delivery gates (post-apply, pre-commit,
+		// pre-push, pre-pr, release) re-derive their verdict from the candidate
+		// actually being delivered, so an unreviewed candidate is still refused
+		// there. The binding and receipt stay recorded on the ledger as
+		// metadata: review stops deciding, it does not stop being tracked.
 		if store.ReviewDisabled && currentBinding == nil && request.Outcome == AttemptPassed && chainHasFailedEvidence && !unmanagedRemediation {
 			return runtimeRecord{}, fmt.Errorf("disabled failed verification requires --remediates-evidence-revision %q on the correction settle; rerun `gentle-ai sdd-attempt settle` with that flag", chainFailedEvidence)
 		}
@@ -1000,7 +974,8 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				return runtimeRecord{}, relationErr
 			}
 			if finalPrepared.GateContext.CandidateTree != snapshot.CandidateTree {
-				return runtimeRecord{}, errors.New("approved SDD remediation successor does not bind the natively charged candidate")
+				return runtimeRecord{}, runtimeChargedCandidateRefusal(
+					finalPrepared.GateContext.CandidateTree, snapshot.CandidateTree, finalPrepared.Lineage)
 			}
 			prepared = finalPrepared
 			bindingEvent := &runtimeBindingEvent{ExpectedRevision: request.ExpectedBindingRevision, Current: prepared}
@@ -1053,91 +1028,10 @@ func (store RuntimeStore) Handoff(ctx context.Context, request HandoffAttemptReq
 	})
 }
 
-// runtimeRemediationExitRefusal turns the bound-passing-finish demand into a
-// refusal that names the continuation that actually clears it.
-//
-// The demand itself is correct: the candidate moved after the attempt began,
-// so closing the attempt as passed while keeping a binding approved for the
-// OLD bytes would launder unreviewed content into a passing runtime record.
-// What was missing is the exit. Since b37aa8e4 the bound lineage itself is a
-// legal --successor-lineage once the corrected candidate is approved on it, so
-// the ordinary way out is one re-run of this same finish with the remediation
-// trio — no `review recover`, no invalidation of healthy approved authority,
-// and no distinct recovery lineage that could never legally exist.
-//
-// The two states are distinguished rather than merged, because a message may
-// name a command only when running it resolves the block. When the bound
-// lineage does not currently hold the approved review of this candidate — it
-// was superseded by a real recovery successor, the live post-apply gate no
-// longer allows, or the approved bytes are not these bytes — the trio naming
-// that lineage is refused further in, so the refusal names the review router
-// instead and says which lineage the trio must eventually name.
-func (store RuntimeStore) runtimeRemediationExitRefusal(
-	ctx context.Context, status RuntimeStatus, binding ReviewBinding, ordinal int, candidateTree string,
-) error {
-	// The sentinel stays in the %w position in both branches: callers that
-	// route on errors.Is must keep working no matter which exit is named.
-	const provenance = "`sdd-attempt status` publishes those three as binding_revision, binding.lineage, and evidence_revision"
-	if !runtimeSelfSuccessorAvailable(ctx, store.Repo, store.Workspace, store.Change, binding, candidateTree) {
-		if stranded, ok := runtimeStrandedSuccessor(ctx, store.Repo, binding, candidateTree); ok {
-			return store.runtimeStrandedSuccessorRefusal(binding, stranded, ordinal)
-		}
-		return fmt.Errorf(
-			"%w: the candidate changed after attempt %d began, and lineage %q does not currently hold the approved review of this candidate, so it cannot be its own successor: get this candidate approved first with `gentle-ai review status --cwd %s --contract %s --next-transition`, which names the next review action, then re-run this finish adding --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision for the lineage that then holds it; %s",
-			ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage,
-			pathquote.Quote(store.Workspace), runtimeReviewIntegrationContract, provenance,
-		)
-	}
-	// An objective with no recorded failed evidence still needs a repaired
-	// revision, and only the caller knows which one that is.
-	remediates := status.EvidenceRevision
-	if remediates == "" {
-		remediates = "<repaired-evidence-sha256>"
-	}
-	return fmt.Errorf(
-		"%w: the candidate changed after attempt %d began, and lineage %q already holds the approved review of the corrected candidate, so that same lineage IS the successor — re-run this finish with the remediation trio: `gentle-ai sdd-attempt finish --cwd %s --change %q --expected-revision %q --request-id \"<unique-request-id>\" --outcome passed --evidence-revision \"<corrected-evidence-sha256>\" --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<cleanup-evidence>\" --process-evidence \"<process-evidence>\" --expected-binding-revision %q --successor-lineage %q --remediates-evidence-revision %s`; %s, and --evidence-revision must differ from --remediates-evidence-revision",
-		ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage,
-		pathquote.Quote(store.Workspace), store.Change, status.Revision,
-		binding.Revision, binding.Lineage, runtimeRemediatesArgument(remediates), provenance,
-	)
-}
-
-// runtimeStrandedSuccessorRefusal names the one operation that clears a
-// stranded recovery successor, and prints the maintainer authorization that
-// operation demands as a filled-in template.
-//
-// The review router is deliberately NOT named here. For this state its printed
-// transition is `review start` on a target no leaf governs, which runs, exits
-// zero and changes nothing; and even a fresh review started under a free
-// lineage is refused by the runtime one layer deeper, because a lineage that is
-// not a scope-changed recovery descendant of the populated binding can never be
-// its successor. Naming a command that runs and leaves the block in place is
-// the most expensive refusal this product can emit, because the operator then
-// trusts it.
-//
-// The authorization template is rendered by the same function the abandon gate
-// verifies against (reviewtransaction.RenderCompactAbandonAuthorization), over
-// the exact summary the eligibility probe accepted. Only the actor remains an
-// operator value, so the bytes a reader assembles are the bytes the gate accepts.
-func (store RuntimeStore) runtimeStrandedSuccessorRefusal(binding ReviewBinding, stranded RuntimeStrandedSuccessor, ordinal int) error {
-	// The sentinel stays in the %w position in every branch: callers that
-	// route on errors.Is must keep working no matter which exit is named.
-	return fmt.Errorf(
-		"%w: the candidate changed after attempt %d began, and lineage %q cannot hold the approved review of this candidate because recovery successor %q supersedes it and froze a target this candidate no longer has, so that successor can never be finalized — quarantine it, then re-run this finish: `gentle-ai review abandon --cwd %s --lineage %q --expected-revision %q --reason %q --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`; the abandonment quarantines the stranded successor and records its discarded work, because %q keeps the approved review of the corrected candidate. --maintainer-authorization is exactly these nine lines, joined by LF, with no trailing newline, using the same --actor:\n%s",
-		ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage, stranded.Lineage,
-		pathquote.Quote(store.Workspace), stranded.Lineage, stranded.Revision, reviewtransaction.CompactAbandonReasonOperatorDisposition, binding.Lineage,
-		reviewtransaction.RenderCompactAbandonAuthorization(
-			stranded.Lineage, stranded.Revision, stranded.SnapshotIdentity, "<actor>", reviewtransaction.CompactAbandonReasonOperatorDisposition, stranded.DiscardedWork))
-}
-
-// runtimeRemediatesArgument quotes a concrete revision and leaves an operator
-// placeholder bare, so the printed command tokenizes the same way either way.
-func runtimeRemediatesArgument(remediates string) string {
-	if strings.HasPrefix(remediates, "<") {
-		return remediates
-	}
-	return fmt.Sprintf("%q", remediates)
-}
+// runtimeRemediationExitRefusal, runtimeStrandedSuccessorRefusal and
+// runtimeRemediatesArgument are deleted with the demand they served. They
+// existed to tell an operator which review exit would clear a gate that no
+// longer exists, and leaving them uncalled is how the coupling grows back.
 
 // runtimeWorktreeMismatchRefusal turns a cross-worktree finish into a refusal
 // that names the exact --cwd the ledger's candidate/diff math is pinned to.
@@ -2402,7 +2296,12 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(replay.Status.LastReset, replay.Status.LastRescope, chainFailedAttempt, event.FinishCandidateTree)
 		unchangedCandidate := event.FinishCandidateIdentity == active.BeginCandidateIdentity ||
 			event.FinishCandidateTree == active.BeginCandidateTree
-		if replay.Status.Binding != nil || event.Outcome != AttemptPassed ||
+		// A binding is deliberately NOT checked here. The write path stopped
+		// treating a leftover binding as a blocker (the kill switch must have
+		// no implications while it is off), and this replay mirror has to agree
+		// with it or a legitimately committed record makes the whole chain
+		// unreplayable.
+		if event.Outcome != AttemptPassed ||
 			!chainHasFailedEvidence || chainFailedAttempt.EvidenceRevision != event.RemediatesEvidenceRevision ||
 			(unchangedCandidate && !evidenceOnly) ||
 			event.EvidenceRevision == event.RemediatesEvidenceRevision {
@@ -3022,7 +2921,7 @@ func normalizeGrantRootsRequest(request GrantRootsRequest) (GrantRootsRequest, e
 		return GrantRootsRequest{}, errors.New("request_id must be a canonical lowercase identifier")
 	}
 	if len(request.Roots) < 1 || len(request.Roots) > maximumRuntimeGrantRoots {
-		return GrantRootsRequest{}, fmt.Errorf("grant requires between 1 and %d roots", maximumRuntimeGrantRoots) // refusal:by-design operator-knowledge: only the caller knows which repository roots this change needs; retry with a bounded non-empty root list
+		return GrantRootsRequest{}, fmt.Errorf("grant requires between 1 and %d roots", maximumRuntimeGrantRoots) // refusal:by-design operator-knowledge: only the caller knows which edit roots this change needs; retry with a bounded non-empty root list
 	}
 	canonical := make([]string, 0, len(request.Roots))
 	seen := make(map[string]struct{}, len(request.Roots))
@@ -3162,6 +3061,13 @@ func validTerminalAttemptOutcome(outcome AttemptOutcome) bool {
 
 func validHarnessDisposition(disposition HarnessDisposition) bool {
 	return disposition == HarnessReused || disposition == HarnessInvalidated
+}
+
+// wrapRuntimeCandidateUnavailable is the single wrap for every candidate
+// capture the attempt ledger performs, so no capture site can reach the
+// compact boundary unclassified the way both of them did before #2114.
+func wrapRuntimeCandidateUnavailable(stage string, cause error) error {
+	return fmt.Errorf("%w %s: %w", ErrRuntimeCandidateUnavailable, stage, cause)
 }
 
 func captureRuntimeCandidate(ctx context.Context, repo string) (reviewtransaction.Snapshot, error) {

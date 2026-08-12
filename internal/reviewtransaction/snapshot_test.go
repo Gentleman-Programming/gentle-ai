@@ -49,6 +49,19 @@ func TestCanonicalPathsRejectsDuplicateInput(t *testing.T) {
 	}
 }
 
+func TestCanonicalTargetProjectsStagedBaseDiffToCommittedOnly(t *testing.T) {
+	requested := Target{
+		Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: "HEAD~1", IntendedUntracked: []string{},
+	}
+	got := CanonicalTarget(requested)
+	if got.Projection != ProjectionWorkspace {
+		t.Fatalf("canonical base-diff projection = %q, want committed-only workspace", got.Projection)
+	}
+	if got.Kind != requested.Kind || got.BaseRef != requested.BaseRef || !reflect.DeepEqual(got.IntendedUntracked, requested.IntendedUntracked) {
+		t.Fatalf("canonical target = %#v, want only the executable projection changed", got)
+	}
+}
+
 func TestSnapshotBuilderCurrentChangesIsCompleteAndPreservesRealIndex(t *testing.T) {
 	if testing.Short() {
 		t.Skip("uses real git commands")
@@ -305,8 +318,9 @@ func TestSnapshotProjectionValidationAndIdentity(t *testing.T) {
 		t.Fatalf("unknown projection error = %v", err)
 	}
 	stagedBaseDiff, err := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: "HEAD", IntendedUntracked: []string{}})
-	if err != nil || stagedBaseDiff.Projection != ProjectionStaged || stagedBaseDiff.CandidateTree != strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}")) {
-		t.Fatalf("staged base-diff snapshot = %#v, err=%v", stagedBaseDiff, err)
+	committedOnlyBaseDiff, committedOnlyErr := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, Projection: ProjectionWorkspace, BaseRef: "HEAD", IntendedUntracked: []string{}})
+	if err != nil || committedOnlyErr != nil || !reflect.DeepEqual(stagedBaseDiff, committedOnlyBaseDiff) {
+		t.Fatalf("staged base-diff did not canonicalize to committed-only: staged=%#v err=%v committed-only=%#v err=%v", stagedBaseDiff, err, committedOnlyBaseDiff, committedOnlyErr)
 	}
 	if _, err := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: "HEAD", IntendedUntracked: []string{"untracked.txt"}}); err == nil || !strings.Contains(err.Error(), "does not accept intended-untracked") {
 		t.Fatalf("staged base-diff intended-untracked error = %v", err)
@@ -1498,6 +1512,13 @@ func TestSnapshotBuilderRealGitFailuresAreNotTreatedAsUnborn(t *testing.T) {
 
 func TestSnapshotRepoTemplateContracts(t *testing.T) {
 	requireSnapshotGit(t)
+	template, err := snapshotRepoTemplate()
+	if err != nil {
+		t.Fatalf("snapshot repo template: %v", err)
+	}
+	if got := strings.TrimSpace(gitSnapshot(t, template, "config", "--local", "--get", "maintenance.auto")); got != "false" {
+		t.Fatalf("template maintenance.auto = %q, want false", got)
+	}
 	first := initSnapshotRepo(t)
 	second := initSnapshotRepo(t)
 	base := strings.TrimSpace(gitSnapshot(t, first, "rev-parse", "HEAD"))
@@ -1778,7 +1799,7 @@ func snapshotRepoTemplate() (string, error) {
 			snapshotRepoTemplateErr = fmt.Errorf("create template directory: %w", err)
 			return
 		}
-		for _, args := range [][]string{{"init"}, {"config", "user.email", "snapshot@example.com"}, {"config", "user.name", "Snapshot Test"}, {"config", "core.autocrlf", "false"}} {
+		for _, args := range [][]string{{"init"}, {"config", "--local", "maintenance.auto", "false"}, {"config", "user.email", "snapshot@example.com"}, {"config", "user.name", "Snapshot Test"}, {"config", "core.autocrlf", "false"}} {
 			if snapshotRepoTemplateErr = runSnapshotGit(template, args...); snapshotRepoTemplateErr != nil {
 				_ = os.RemoveAll(template)
 				return

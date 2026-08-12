@@ -83,11 +83,90 @@ func TestMultiRepoTaskTargetsBlockApplyWithoutEditAuthority(t *testing.T) {
 	}
 }
 
+func TestNestedPlanningWorkspaceBlocksSiblingDirectoryWithinParentRepository(t *testing.T) {
+	parent := initRuntimeLedgerRepo(t)
+	planning := filepath.Join(parent, "subproject")
+	service := filepath.Join(parent, "service-dir")
+	mkdir(t, planning)
+	mkdir(t, service)
+
+	seedReadyChange(t, planning, "same-repo-rollout", strings.Join([]string{
+		"- [ ] 1.1 Update `../service-dir/internal/api/handler.go` to accept the new header",
+		"",
+	}, "\n"))
+
+	status, err := Resolve(ResolveOptions{CWD: planning, ChangeName: "same-repo-rollout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantService := realPath(t, service)
+	reasons := strings.Join(status.BlockedReasons, "\n")
+	if status.ApplyState != ApplyBlocked {
+		t.Fatalf("nested planning workspace reported applyState = %q, nextRecommended = %q, blockedReasons = %v; want blocked(edit_authority_missing) naming %s",
+			status.ApplyState, status.NextRecommended, status.BlockedReasons, wantService)
+	}
+	if !strings.Contains(reasons, "blocked(edit_authority_missing)") || !strings.Contains(reasons, wantService) {
+		t.Fatalf("blocked reasons must carry the reason code and name %q: %s", wantService, reasons)
+	}
+}
+
+func TestDeletedAllowedRootDoesNotBroadenSiblingAuthorization(t *testing.T) {
+	parent := initRuntimeLedgerRepo(t)
+	planning := filepath.Join(parent, "subproject")
+	granted := filepath.Join(parent, "service-dir")
+	sibling := filepath.Join(parent, "other-service")
+	for _, path := range []string{planning, granted, sibling} {
+		mkdir(t, path)
+	}
+	if err := os.RemoveAll(granted); err != nil {
+		t.Fatal(err)
+	}
+	tasks := "- [ ] 1.1 Update `../other-service/internal/api/handler.go`\n"
+	flagged := detectUnauthorizedEditRoots(tasks, planning, []string{planning, granted})
+	want := realPath(t, sibling)
+	if len(flagged) != 1 || flagged[0] != want {
+		t.Fatalf("deleted granted root broadened authorization: got %v, want [%s]", flagged, want)
+	}
+}
+
+func TestSameRepositoryEditRootUsesCanonicalDirectory(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "service-dir")
+	mkdir(t, directory)
+	file := filepath.Join(directory, "handler.go")
+	write(t, file, "package service\n")
+	want := realPath(t, directory)
+
+	tests := []struct {
+		name string
+		path func(*testing.T) string
+	}{
+		{name: "existing file", path: func(*testing.T) string { return file }},
+		{name: "existing directory", path: func(*testing.T) string { return directory }},
+		{name: "symlink canonical path", path: func(t *testing.T) string {
+			link := filepath.Join(root, "service-link")
+			if err := os.Symlink(directory, link); err != nil {
+				t.Skipf("symlink fixture unavailable: %v", err)
+			}
+			return filepath.Join(link, "missing.go")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved := resolveExistingPath(tt.path(t))
+			if got := sameRepositoryEditRoot(resolved); got != want {
+				t.Fatalf("sameRepositoryEditRoot(%q) = %q, want %q", resolved, got, want)
+			}
+		})
+	}
+}
+
 // TestSingleRepoTasksKeepStatusByteIdentical pins the no-false-positive
 // contract: for an ordinary single-repository change, detection matches
 // nothing and the wiring mutates nothing, so the status an operator sees is
 // byte-identical to the pre-#2547 status. The wiring only touches applyState
-// and blockedReasons when at least one unauthorized root is found, so an
+// and blockedReasons when at least one unauthorized edit root is found, so an
 // empty JSON footprint here proves the whole fixture is untouched.
 func TestSingleRepoTasksKeepStatusByteIdentical(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)

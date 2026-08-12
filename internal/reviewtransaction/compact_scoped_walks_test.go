@@ -73,17 +73,22 @@ func outdateCompactSnapshotIdentity(t *testing.T, store CompactStore) {
 		t.Fatal(err)
 	}
 	outdated := payload
-	for _, snapshot := range []Snapshot{record.State.InitialSnapshot, record.State.CurrentSnapshot} {
-		retired := retiredSnapshotIdentity(snapshot)
+	for _, snapshot := range []*Snapshot{&record.State.InitialSnapshot, &record.State.CurrentSnapshot} {
+		retired := retiredSnapshotIdentity(*snapshot)
 		if retired == snapshot.Identity {
 			t.Fatalf("retired identity formula reproduced the current identity %q; the fixture would prove nothing", snapshot.Identity)
 		}
 		outdated = bytes.ReplaceAll(outdated, []byte(`"identity": "`+snapshot.Identity+`"`), []byte(`"identity": "`+retired+`"`))
+		snapshot.Identity = retired
 	}
 	if bytes.Equal(outdated, payload) {
 		t.Fatal("fixture did not contain the expected snapshot identity markers")
 	}
-	if err := os.WriteFile(store.StatePath(), outdated, 0o644); err != nil {
+	_, payload, err = makeCompactRecord(record.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, loadErr := store.Load()

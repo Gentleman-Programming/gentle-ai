@@ -111,6 +111,13 @@ jobs:
               | ($matches | length == 1) and ($matches[0].status == "unsupported");
             unsupported_once("j57-sdd-authority-drift-during-discovery-fails-closed")
           ' "$RUNNER_TEMP/bench-source-coupled-untagged.json"
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis model-picker --only j97-opencode-custom-agent-model-picker-runtime --out "$RUNNER_TEMP/bench-model-picker-untagged.json"
+          jq -e '
+            def unsupported_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "unsupported");
+            unsupported_once("j97-opencode-custom-agent-model-picker-runtime")
+          ' "$RUNNER_TEMP/bench-model-picker-untagged.json"
           go build -tags bench_fixture -trimpath -o "$RUNNER_TEMP/gentle-ai-bench-fixture" ./cmd/gentle-ai
           "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai-bench-fixture" --axis source-coupled --only j57-sdd-authority-drift-during-discovery-fails-closed --out "$RUNNER_TEMP/bench-source-coupled.json"
           jq -e '
@@ -119,6 +126,13 @@ jobs:
               | ($matches | length == 1) and ($matches[0].status == "completed");
             completed_once("j57-sdd-authority-drift-during-discovery-fails-closed")
           ' "$RUNNER_TEMP/bench-source-coupled.json"
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai-bench-fixture" --axis model-picker --only j97-opencode-custom-agent-model-picker-runtime --out "$RUNNER_TEMP/bench-model-picker.json"
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            completed_once("j97-opencode-custom-agent-model-picker-runtime")
+          ' "$RUNNER_TEMP/bench-model-picker.json"
 
       # Lives in this job, not the format job, because only Unit Tests is a
       # required status check on main. A guard that cannot block a merge is
@@ -199,6 +213,23 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      - name: Run native Windows junction parent tests
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $selector = '^(TestWriteFileAtomicFollowsDirectoryJunction|TestEnsureAtomicParentDirRejectsUnsafeDirectoryJunctionTargets|TestWriteFileAtomicRejectsJunctionLoop)$'
+          $expected = @(
+            'TestWriteFileAtomicFollowsDirectoryJunction'
+            'TestEnsureAtomicParentDirRejectsUnsafeDirectoryJunctionTargets'
+            'TestWriteFileAtomicRejectsJunctionLoop'
+          )
+          $selected = @(go test ./internal/components/filemerge -list $selector | Where-Object { $_ -match '^Test' })
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list native Windows junction parent tests' }
+          $missing = @($expected | Where-Object { $_ -notin $selected })
+          if ($missing.Count -gt 0) { throw "Missing native Windows junction parent tests: $($missing -join ', ')" }
+          go test -v ./internal/components/filemerge -count=1 -run $selector
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build native test binary
         shell: pwsh
         run: go build -trimpath -ldflags="-s -w -X main.version=ci" -o "$env:RUNNER_TEMP\gentle-ai.exe" ./cmd/gentle-ai
@@ -210,6 +241,10 @@ jobs:
           GENTLE_AI_TEST_BINARY: ${{ runner.temp }}\gentle-ai.exe
           GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER: "1"
         run: go test -v ./internal/cli ./internal/reviewtransaction ./internal/sddstatus ./internal/components/engram -run '^(TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals|TestRARPrivateOwnerRemainsTokenUserOnly|TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags|TestWindowsSecureOpenDriveFallbackFailsClosed|TestWindowsSecureOpenDoesNotRetryOtherErrors|TestWindowsStoreLockUsesExistingInodeAdvisoryTruth|TestRunGitBoundsLocalAndRemoteCommands|TestRunGitDistinguishesAggregateDeadlineAndTypedExit|TestStoreLockReportsLiveOwnerAndCannotBeStolen|TestStoreLockRecoversCrashAndCorruptOwnerRecords|TestStoreLockIsReleasedWhenOwnerProcessExits|TestConcurrentStoreLockRecoverersCannotBothWin|TestCompactStoresShareRepositoryWriteLock|TestCompactStoreRejectsConcurrentLockedWriter|TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline|TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance|TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays|TestRepairClassifiedAuthorityResumesEachDurablePhase|TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState|TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath|TestRejectFacadeCorrectionUntrackedRespectsStagedProjection|TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree|TestWindowsPowerShell51ArtifactManifestFileFinalize|TestNegotiatedStatusUnderUnavailableProcessTempOffersFreshStartOnBothContracts|TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBaseRef|TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection|TestNegotiatedStatusLeavesNoTemporaryGitArtifactsAfterFailure|TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart|TestFrozenCandidateReviewerDiffUsesRegularAttributesFileAndIgnoresMutableSources|TestStdioHandshake_TerminatesDescendantOnContextEnd|TestStdioHandshake_PreservesEarlierDeadline|TestStdioHandshake_PreservesCallerCancellation|TestProbeStdio_MissingAbsoluteConfiguredCommandFails|TestProbeStdio_MissingRelativeWindowsExecutableIsNotInstalled)$' -count=1 -timeout=8m
+
+      - name: Stress repository-context sharing retry
+        shell: pwsh
+        run: go test ./internal/reviewtransaction -count=100 -timeout=10m -run '^(TestReadReviewRepositoryContextRetriesTransientWindowsSharingViolation|TestReviewRepositoryContextPublicationConvergesAndRejectsUnsafeEntries)$'
 
       # PR runs the release-blocker subset only; the full Windows suite runs
       # in the separate, honestly-named "Windows Full Suite" workflow.

@@ -869,6 +869,72 @@ func capturedArtifact(t *testing.T) (string, ReviewFacadeStartResult, reviewtran
 	return repo, started, store, record, artifact
 }
 
+func TestReviewStatusClassifiesCapturedReviewerSlots(t *testing.T) {
+	tests := []struct {
+		name, wantKind, wantReason string
+		capture                    bool
+		mutate                     func(*testing.T, string)
+	}{
+		{"clean pending", "collect", "reviewer_results_required", false, nil},
+		{"complete", "execute", "captured_results_ready", true, nil},
+		{"missing payload", "stop", "captured_artifacts_unverifiable", true, func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"missing digest sidecar", "stop", "captured_artifacts_unverifiable", true, func(t *testing.T, path string) {
+			if err := os.Remove(path + ".sha256"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"alternate names ignored", "collect", "reviewer_results_required", false, func(t *testing.T, path string) {
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path+".alternate", []byte("unrelated\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"unrelated entries ignored", "collect", "reviewer_results_required", false, func(t *testing.T, path string) {
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for index := 0; index < 33; index++ {
+				if err := os.WriteFile(filepath.Join(filepath.Dir(path), fmt.Sprintf("unrelated-%02d", index)), []byte("x"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo, started, store, record := newArtifactReview(t, false)
+			path := filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir, fmt.Sprintf("00-%s.json", record.State.SelectedLenses[0]))
+			if test.capture {
+				input := filepath.Join(t.TempDir(), "result.json")
+				if err := os.WriteFile(input, admittedReviewerPayloadForTest(t, repo, record, record.State.SelectedLenses[0], 0), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := RunReviewCaptureResult([]string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input}, io.Discard); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.mutate != nil {
+				test.mutate(t, path)
+			}
+			var output bytes.Buffer
+			if err := RunReviewStatus([]string{"--cwd", repo, "--lineage", started.LineageID, "--contract", ReviewIntegrationContractV1, "--next-transition"}, &output); err != nil {
+				t.Fatal(err)
+			}
+			var status ReviewTargetStatusResult
+			decodeStrictReviewJSON(t, output.Bytes(), &status)
+			if status.NextTransition == nil || string(status.NextTransition.Kind) != test.wantKind || status.NextTransition.ReasonCode != test.wantReason {
+				t.Fatalf("slot status = %#v", status.NextTransition)
+			}
+		})
+	}
+}
+
 func capturedArtifacts(t *testing.T, high bool) (string, ReviewFacadeStartResult, reviewtransaction.CompactStore, reviewtransaction.CompactRecord, []reviewResultArtifact) {
 	t.Helper()
 	repo, started, store, record := newArtifactReview(t, high)

@@ -262,6 +262,19 @@ func ResolveReviewRepositoryContextBinding(ctx context.Context, handle string) (
 }
 
 func resolveReviewRepositoryContext(ctx context.Context, handle string) (string, ReviewRepositoryContextBinding, error) {
+	root, binding, err := resolveOpaqueReviewRepositoryContext(ctx, handle)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
+	}
+	if err := validateLiveReviewRepositoryContext(ctx, root, binding); err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
+	}
+	return root, binding, nil
+}
+
+// resolveOpaqueReviewRepositoryContext proves the private locator still names
+// its original Git worktree without reading compact authority or Git content.
+func resolveOpaqueReviewRepositoryContext(ctx context.Context, handle string) (string, ReviewRepositoryContextBinding, error) {
 	if err := ctx.Err(); err != nil {
 		return "", ReviewRepositoryContextBinding{}, err
 	}
@@ -323,9 +336,6 @@ func resolveReviewRepositoryContext(ctx context.Context, handle string) (string,
 		!sameLocatorDirectory(stored.GitCommonDir, live.GitCommonDir) ||
 		!sameLocatorDirectory(stored.GitDir, live.GitDir) || live.RepositoryIdentity != stored.RepositoryIdentity {
 		return "", empty, errors.New("review repository context identity changed") // refusal:by-design world-action: the bound Git worktree was replaced outside this product and only restoring or re-creating that exact repository resolves it
-	}
-	if err := validateLiveReviewRepositoryContext(ctx, live.RepositoryRoot, binding); err != nil {
-		return "", empty, err
 	}
 	return live.RepositoryRoot, binding, nil
 }
@@ -521,7 +531,7 @@ func readReviewRepositoryContext(path string) ([]byte, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || !privateLocatorFileModeSafe(info.Mode()) {
 		return nil, errors.New("review repository context is not a private regular file")
 	}
-	file, err := os.Open(path)
+	file, err := openReviewRepositoryContext(path)
 	if err != nil {
 		return nil, err
 	}

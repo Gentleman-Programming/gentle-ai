@@ -92,21 +92,33 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 	if requireAttestation && (request.PrePR == nil || strings.TrimSpace(request.PrePR.CIAttestationArtifact) == "") {
 		return BaseAdvanceCompatibility{}, errors.New("trusted CI attestation is required")
 	}
-	mergeBaseTree, err := (SnapshotBuilder{Repo: repo}).resolveTree(ctx, refs.Selection.MergeBase)
-	if err != nil || mergeBaseTree != receipt.BaseTree || snapshot.BaseTree != mergeBaseTree {
+	builder := SnapshotBuilder{Repo: repo}
+	reviewedHead, err := reviewedBaseAdvanceHead(ctx, repo, receipt.FinalCandidateTree, refs.HeadCommit)
+	if err != nil {
+		return BaseAdvanceCompatibility{}, err
+	}
+	mergeBase, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", refs.Selection.Commit, reviewedHead)
+	if err != nil || len(strings.Fields(string(mergeBase))) != 1 {
+		return BaseAdvanceCompatibility{}, errors.New("reviewed base is not the unique merge-base of the advanced parent and candidate") // refusal:by-design world-action: only a new merge or reviewed candidate can establish one unambiguous ancestry proof
+	}
+	mergeBaseTree, err := builder.resolveTree(ctx, strings.TrimSpace(string(mergeBase)))
+	if err != nil || mergeBaseTree != receipt.BaseTree {
 		return BaseAdvanceCompatibility{}, errors.New("original reviewed merge-base tree is not preserved")
 	}
-	advertisedBaseTree, err := (SnapshotBuilder{Repo: repo}).resolveTree(ctx, refs.Selection.Commit)
+	advertisedBaseTree, err := builder.resolveTree(ctx, refs.Selection.Commit)
 	if err != nil {
 		return BaseAdvanceCompatibility{}, errors.New("advertised pre-PR base tree cannot be derived") // refusal:by-design world-action: only Git object recovery can restore a missing advertised base tree
 	}
 
-	builder := SnapshotBuilder{Repo: repo}
 	originalPaths, err := builder.changedPaths(ctx, receipt.BaseTree, receipt.FinalCandidateTree)
 	if err != nil {
 		return BaseAdvanceCompatibility{}, err
 	}
-	currentPaths, err := builder.changedPaths(ctx, receipt.BaseTree, snapshot.CandidateTree)
+	deliveredBaseTree := snapshot.BaseTree
+	if deliveredBaseTree != receipt.BaseTree && deliveredBaseTree != advertisedBaseTree {
+		return BaseAdvanceCompatibility{}, errors.New("delivered target base is neither the reviewed nor advanced parent base") // refusal:by-design world-action: only changing the delivery target or reviewing a new candidate can establish an allowed base
+	}
+	currentPaths, err := builder.changedPaths(ctx, deliveredBaseTree, snapshot.CandidateTree)
 	if err != nil {
 		return BaseAdvanceCompatibility{}, err
 	}
@@ -117,7 +129,7 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 	if err != nil {
 		return BaseAdvanceCompatibility{}, err
 	}
-	currentPatch, err := patchIdentity(ctx, repo, receipt.BaseTree, snapshot.CandidateTree)
+	currentPatch, err := patchIdentity(ctx, repo, deliveredBaseTree, snapshot.CandidateTree)
 	if err != nil || originalPatch != currentPatch {
 		return BaseAdvanceCompatibility{}, errors.New("delivered patch identity changed")
 	}
@@ -128,7 +140,7 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 	if !disjointPaths(originalPaths, basePaths) {
 		return BaseAdvanceCompatibility{}, errors.New("base advance overlaps delivered paths")
 	}
-	mergedOutput, err := runGit(ctx, repo, nil, nil, "merge-tree", "--write-tree", refs.Selection.Commit, refs.HeadCommit)
+	mergedOutput, err := runGit(ctx, repo, nil, nil, "merge-tree", "--write-tree", refs.Selection.Commit, reviewedHead)
 	if err != nil {
 		return BaseAdvanceCompatibility{}, errors.New("merge against new base is not conflict-free")
 	}
@@ -162,7 +174,12 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 	if refs.Selection.Source == PrePRBoundaryExplicit {
 		selector = refs.Selection.Selector
 	}
-	selectionNow, err := reselectBoundaryForGate(ctx, repo, request.Gate, selector)
+	var selectionNow PrePRBoundarySelection
+	if request.Gate == GatePreCommit || request.Gate == GatePrePush {
+		selectionNow, err = selectExplicitBaseAdvanceBoundary(ctx, repo, selector)
+	} else {
+		selectionNow, err = reselectBoundaryForGate(ctx, repo, request.Gate, selector)
+	}
 	if err != nil || selectionNow != refs.Selection {
 		return BaseAdvanceCompatibility{}, errors.New("pre-PR base ref advanced during validation")
 	}
@@ -185,6 +202,55 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 		return BaseAdvanceCompatibility{}, errors.New("compatible base advance proof is incomplete")
 	}
 	return proof, nil
+}
+
+// reviewedBaseAdvanceHead binds a committed merge back to its reviewed parent
+// without consulting MERGE_HEAD. A staged merge still has HEAD at C0; a
+// committed merge must retain a parent with C0's exact tree.
+func reviewedBaseAdvanceHead(ctx context.Context, repo, reviewedTree, head string) (string, error) {
+	builder := SnapshotBuilder{Repo: repo}
+	headTree, err := builder.resolveTree(ctx, head)
+	if err != nil {
+		return "", err
+	}
+	if headTree == reviewedTree {
+		return head, nil
+	}
+	parents, err := runGit(ctx, repo, nil, nil, "rev-list", "--parents", "-n", "1", head)
+	if err != nil {
+		return "", err
+	}
+	for _, parent := range strings.Fields(string(parents))[1:] {
+		tree, treeErr := builder.resolveTree(ctx, parent)
+		if treeErr == nil && tree == reviewedTree {
+			return parent, nil
+		}
+	}
+	return "", errors.New("committed merge does not retain the reviewed candidate parent") // refusal:by-design world-action: only recreating the merge with the reviewed parent can restore the proof
+}
+
+func deriveExplicitBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Receipt, request GateRequest, snapshot Snapshot, preimages gateArtifactPreimages) (BaseAdvanceCompatibility, error) {
+	selector := strings.TrimSpace(request.Target.BaseRef)
+	if selector == "" {
+		return BaseAdvanceCompatibility{}, errors.New("compatible local base advance requires an explicit base ref") // refusal:by-design operator-knowledge: only the caller can choose the intended reviewed base
+	}
+	selection, err := selectExplicitBaseAdvanceBoundary(ctx, repo, selector)
+	if err != nil {
+		return BaseAdvanceCompatibility{}, err
+	}
+	head, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		return BaseAdvanceCompatibility{}, err
+	}
+	return deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot,
+		&resolvedPrePRRefs{Selection: selection, HeadCommit: head}, preimages, false)
+}
+
+func selectExplicitBaseAdvanceBoundary(ctx context.Context, repo, selector string) (PrePRBoundarySelection, error) {
+	if strings.TrimSpace(selector) == "" {
+		return PrePRBoundarySelection{}, errors.New("compatible local base advance requires an explicit base ref") // refusal:by-design operator-knowledge: only the caller can choose the intended reviewed base
+	}
+	return selectPrePushBoundary(ctx, repo, selector)
 }
 
 // reselectBoundaryForGate re-derives the boundary selector using exactly the

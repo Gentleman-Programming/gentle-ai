@@ -142,6 +142,36 @@ func TestResolveSelectionStates(t *testing.T) {
 	}
 }
 
+// TestAmbiguousChangeSelectionNamesARunnableCommandPerChange pins the machine
+// surface, not the markdown one. #2117 step 5: the SDD task-failure envelope
+// hands the caller `gentle-ai sdd-status --cwd <cwd> --json` as its
+// continuation. With more than one active change that lands here, and the
+// blocked reason used to be the entire guidance: it listed the change names and
+// named no command, so an automated consumer following our own continuation had
+// nowhere to go. RenderDispatcherMarkdown already spelled the commands out, but
+// --json never reaches it.
+func TestAmbiguousChangeSelectionNamesARunnableCommandPerChange(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, "openspec", "changes", "first"))
+	mkdir(t, filepath.Join(root, "openspec", "changes", "second"))
+
+	status, err := Resolve(ResolveOptions{CWD: root})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended != "select-change" {
+		t.Fatalf("NextRecommended = %q, want select-change", status.NextRecommended)
+	}
+
+	reasons := strings.Join(status.BlockedReasons, "\n")
+	for _, change := range []string{"first", "second"} {
+		want := "gentle-ai sdd-status --cwd " + root + " --change " + change
+		if !strings.Contains(reasons, want) {
+			t.Fatalf("blocked reasons named no runnable command for %q; a refusal that lists options and no command is the shape this project does not ship.\ngot:\n%s", change, reasons)
+		}
+	}
+}
+
 func TestDispatcherMarkdownRendersSelectChangeInstructions(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, filepath.Join(root, "openspec", "changes", "first"))
@@ -225,7 +255,7 @@ func TestResolveStatusJSONUsesEmptyBlockedReasonsArray(t *testing.T) {
 func TestBlockerReasonsForRoute(t *testing.T) {
 	expected := []string{
 		"proposal.md is missing or partial.",
-		"specs/**/spec.md is missing or partial.",
+		"spec.md or specs/**/spec.md is missing or partial.",
 		"design.md is missing or partial.",
 		"tasks.md is missing or partial.",
 	}

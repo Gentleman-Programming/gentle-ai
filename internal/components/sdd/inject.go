@@ -459,6 +459,12 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// NOT contain model fields — otherwise the deep merge overwrites
 			// whatever the user already has in opencode.json.
 			overlayBytes := []byte(overlayContent)
+			if adapter.Agent() == model.AgentKilocode {
+				overlayBytes, err = stripOpenCodeNativeFallbackAgents(overlayBytes)
+				if err != nil {
+					return InjectionResult{}, fmt.Errorf("strip OpenCode-only fallback agents: %w", err)
+				}
+			}
 			// For multi-mode, write shared prompt files before inlining references.
 			if sddMode == model.SDDModeMulti {
 				// Build phase → capability map from model assignments.
@@ -1674,6 +1680,24 @@ func AgentReceivesManagedOpenCodePlugins(agent model.AgentID) bool {
 	return agent == model.AgentOpenCode || agent == model.AgentKilocode
 }
 
+func stripOpenCodeNativeFallbackAgents(overlayBytes []byte) ([]byte, error) {
+	var overlay map[string]any
+	if err := json.Unmarshal(overlayBytes, &overlay); err != nil {
+		return nil, fmt.Errorf("unmarshal overlay: %w", err)
+	}
+	agents, ok := overlay["agent"].(map[string]any)
+	if !ok {
+		return overlayBytes, nil
+	}
+	delete(agents, "general")
+	delete(agents, "explore")
+	result, err := json.MarshalIndent(overlay, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal overlay: %w", err)
+	}
+	return append(result, '\n'), nil
+}
+
 // RefreshInstalledOpenCodePlugins rewrites managed OpenCode plugins that are
 // already installed on disk so they track the embedded assets of the running
 // binary. It never creates a plugin that was not previously installed — users
@@ -2643,6 +2667,22 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 				agentMap["model"] = rootModelID
 				agentMap["variant"] = ""
 			}
+		}
+	}
+
+	// Explicit assignments for existing custom agents are not present in the
+	// managed overlay. Add a minimal overlay definition so the deep merge updates
+	// only the model fields while preserving the user's custom agent settings.
+	for agent, assignment := range assignments {
+		if !existingAgentKeys[agent] || assignment.ProviderID == "" || assignment.ModelID == "" {
+			continue
+		}
+		if _, managed := agents[agent]; managed {
+			continue
+		}
+		agents[agent] = map[string]any{
+			"model":   assignment.FullID(),
+			"variant": assignment.Effort,
 		}
 	}
 

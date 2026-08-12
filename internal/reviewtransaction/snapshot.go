@@ -44,6 +44,17 @@ type Target struct {
 	LedgerIDs         []string   `json:"ledger_ids,omitempty"`
 }
 
+// CanonicalTarget projects a requested selector onto the executable target
+// vocabulary before any snapshot identity is derived. A base diff is always a
+// committed-only comparison, so its staged spelling cannot name distinct
+// authority.
+func CanonicalTarget(target Target) Target {
+	if target.Kind == TargetBaseDiff && target.Projection == ProjectionStaged {
+		target.Projection = ProjectionWorkspace
+	}
+	return target
+}
+
 type Snapshot struct {
 	Kind                   TargetKind `json:"kind"`
 	Projection             Projection `json:"projection,omitempty"`
@@ -66,7 +77,12 @@ type SnapshotBuilder struct {
 var exactObjectPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
 
 func (builder SnapshotBuilder) Build(ctx context.Context, target Target) (Snapshot, error) {
-	return builder.build(ctx, target, false)
+	// Canonicalization makes a staged base diff committed-only. Validate the
+	// incompatible staged-only untracked form before that projection is erased.
+	if target.Kind == TargetBaseDiff && target.Projection == ProjectionStaged && len(target.IntendedUntracked) != 0 {
+		return Snapshot{}, errors.New("staged projection does not accept intended-untracked paths")
+	}
+	return builder.build(ctx, CanonicalTarget(target), false)
 }
 
 // BuildStagedWorkspaceOverlayRecovery freezes the exact real index for the
@@ -1147,7 +1163,7 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 		return "", "", "", err
 	}
 	candidateTree := strings.TrimSpace(string(candidateOutput))
-	if unborn && candidateTree == baseTree {
+	if unborn && projection == ProjectionStaged && candidateTree == baseTree {
 		return "", "", "", errors.New("unborn repository has no staged changes; stage the review candidate with git add")
 	}
 	if allowStagedIntended && projection != ProjectionStaged {

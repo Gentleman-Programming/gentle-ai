@@ -1477,7 +1477,7 @@ func (harness *organicHarness) seedOrganicSDDChange(change string) {
 // records. Their count is how a rejected operation proves it wrote nothing.
 func (harness *organicHarness) reviewModeGenerations() []string {
 	harness.t.Helper()
-	root := filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	root := filepath.Join(harness.commonDir(), "gentle-ai", "review-mode", "rar-authority", "v1", "rdd-mode")
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return nil

@@ -378,7 +378,7 @@ func TestCheckStateJSON_OK(t *testing.T) {
 func setStdioProbeForTest(t *testing.T, err error) {
 	t.Helper()
 	orig := engramProbeStdioFn
-	engramProbeStdioFn = func(context.Context, string, ...string) error { return err }
+	engramProbeStdioFn = func(context.Context, time.Duration, string, ...string) error { return err }
 	t.Cleanup(func() { engramProbeStdioFn = orig })
 }
 
@@ -561,7 +561,7 @@ func TestCheckEngramReachable_StdioUsesPersistedConfiguration(t *testing.T) {
 	var gotCommand string
 	var gotArgs []string
 	orig := engramProbeStdioFn
-	engramProbeStdioFn = func(_ context.Context, command string, args ...string) error {
+	engramProbeStdioFn = func(_ context.Context, _ time.Duration, command string, args ...string) error {
 		gotCommand = command
 		gotArgs = args
 		return nil

@@ -71,6 +71,7 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		{name: "Kilo", runtime: string(model.AgentKilocode), startCode: reviewImmutableTransportUnsupportedCode},
 		{name: "Pi", runtime: string(model.AgentPi), startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "unknown", runtime: "unknown-runtime", startCode: reviewTransportCapabilityUnsupportedCode},
+		{name: "logical orchestrator role", runtime: "gentle-orchestrator", startCode: reviewTransportCapabilityUnsupportedCode},
 		// OpenCode used to stand here, refused for lacking its host isolation
 		// controls. The shared advisory transport (rdd-advisory-transport
 		// SKILL.md) retired that requirement: OpenCode's output is advisory
@@ -140,6 +141,9 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 	for _, args := range [][]string{
 		{"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentKilocode), "--next-transition", "--cwd", repo},
 		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentPi), "--target", target, "--projection", "workspace", "--cwd", repo},
+		{"start", "--contract", ReviewIntegrationContractV2, "--agent", "unknown-runtime", "--target", target, "--projection", "workspace", "--cwd", repo},
+		{"start", "--contract", ReviewIntegrationContractV2, "--agent", "gentle-orchestrator", "--target", target, "--projection", "workspace", "--cwd", repo},
+		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentClaudeCode), "--agent", string(model.AgentClaudeCode), "--target", target, "--projection", "workspace", "--cwd", repo},
 	} {
 		if err := RunReview(args, &bytes.Buffer{}); err == nil {
 			t.Fatalf("unsupported invocation succeeded: %v", args)
