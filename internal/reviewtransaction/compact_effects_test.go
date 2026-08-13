@@ -118,6 +118,10 @@ func TestCompactEffectMarkerRejectsUnsafeStorageAndIdentity(t *testing.T) {
 
 func TestCompactEffectMarkerIsPrivateSeparateAndStable(t *testing.T) {
 	repository, marker := newCompactEffectMarkerFixture(t, "private-stable")
+	sharedRoot := filepath.Dir(filepath.Dir(repository.root))
+	if err := os.MkdirAll(sharedRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	authority := filepath.Join(filepath.Dir(filepath.Dir(repository.root)), "v2", "authority.json")
 	if err := os.MkdirAll(filepath.Dir(authority), 0o700); err != nil || os.WriteFile(authority, []byte("authority\n"), 0o600) != nil {
 		t.Fatal(err)

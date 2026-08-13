@@ -131,7 +131,7 @@ func (repository compactEffectMarkerRepository) path(lineageID, revision, eventI
 		if err := os.MkdirAll(base, 0o700); err != nil {
 			return "", err
 		}
-		for _, dir := range []string{base, filepath.Dir(repository.root), repository.root} {
+		for _, dir := range []string{filepath.Dir(repository.root), repository.root} {
 			if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 				return "", err
 			}

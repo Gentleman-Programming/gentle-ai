@@ -2773,7 +2773,7 @@ func (store CompactStore) installTransportRecordLocked(ctx context.Context, reco
 	if err := validateCompactTransportDelivery(ctx, store.repo, record.State); err != nil {
 		return err
 	}
-	want, payload, err := makeCompactRecord(record.State)
+	want, payload, err := makeCompactRecordWithIntents(record.State, record.EffectIntents)
 	if err != nil || want.Revision != record.Revision {
 		return errors.New("imported compact record checksum changed")
 	}
