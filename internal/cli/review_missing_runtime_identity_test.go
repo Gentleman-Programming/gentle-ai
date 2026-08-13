@@ -135,9 +135,10 @@ func TestDeclaredUnsupportedRuntimeStillRefusesNegotiatedStatus(t *testing.T) {
 // declaration from drifting from the supported fresh reviewer paths. Claude
 // and OpenCode use their tool-free fresh agent in an ordinary session, neither
 // depending on OPENCODE_DISABLE_PROJECT_CONFIG or OPENCODE_DISABLE_EXTERNAL_SKILLS
-// (deliberately left unset); Codex uses CodexAdapter's empty scratch-directory
-// process, proven organically by
-// TestRealCodexReviewerOrdinarySessionAdmitsRawOutput (e2e/organicruntime).
+// (deliberately left unset). Codex is deliberately absent here: since the
+// #3138 slice-8 flip it is wired but UNADVERTISED (REQ-RTC-5), so it no
+// longer belongs to the supported fresh reviewer path and its refusal is
+// pinned by TestUnadvertisedCodexRuntimeIsRefusedBeforeRepositoryValidation.
 func TestDeclaredBuiltInRuntimeUsesProvenExecutorBoundary(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	for _, test := range []struct {
@@ -145,7 +146,6 @@ func TestDeclaredBuiltInRuntimeUsesProvenExecutorBoundary(t *testing.T) {
 	}{
 		{runtime: string(model.AgentClaudeCode)},
 		{runtime: string(model.AgentOpenCode)},
-		{runtime: string(model.AgentCodex)},
 	} {
 		t.Run(test.runtime, func(t *testing.T) {
 			var output bytes.Buffer

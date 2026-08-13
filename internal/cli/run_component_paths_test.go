@@ -71,7 +71,7 @@ func TestComponentPathsSDDMultiIncludesOpenCodePlugins(t *testing.T) {
 
 	paths := componentPaths(home, model.Selection{SDDMode: model.SDDModeMulti}, adapters, model.ComponentSDD)
 
-	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
+	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "reviewer-shim.ts", "skill-registry.ts"} {
 		path := filepath.Join(home, ".config", "opencode", "plugins", plugin)
 		if !containsPath(paths, path) {
 			t.Fatalf("componentPaths(sdd multi) missing OpenCode plugin path %q\npaths=%v", path, paths)
@@ -85,7 +85,7 @@ func TestComponentPathsSDDSingleIncludesOpenCodePlugins(t *testing.T) {
 
 	paths := componentPaths(home, model.Selection{SDDMode: model.SDDModeSingle}, adapters, model.ComponentSDD)
 
-	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
+	for _, plugin := range []string{"background-agents.ts", "model-variants.ts", "reviewer-shim.ts", "skill-registry.ts"} {
 		path := filepath.Join(home, ".config", "opencode", "plugins", plugin)
 		if !containsPath(paths, path) {
 			t.Fatalf("componentPaths(sdd single) missing OpenCode plugin path %q\npaths=%v", path, paths)

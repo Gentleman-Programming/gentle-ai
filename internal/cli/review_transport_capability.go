@@ -24,33 +24,29 @@ const (
 	reviewImmutableTransportUnsupported         reviewImmutableTransport = "unsupported"
 	reviewImmutableTransportClaudePromptCarried reviewImmutableTransport = "claude_prompt_carried"
 	// reviewImmutableTransportOpenCodeProviderInjected is the shared advisory
-	// transport (rdd-advisory-transport SKILL.md): the OpenCode plugin
-	// (review-result-artifacts.ts) asks `review lens-context` for the
-	// finished reviewer context through its shell-less runNative channel and
-	// injects those exact bytes into the reviewer task's prompt before the
-	// reviewer ever launches. The provider materializes the evidence, applies
-	// the budget, and resolves every refusal; the plugin assembles nothing,
-	// interprets no binding field, and captures no result -- it hands the
-	// model's raw final text back for native admission. The generated lens
-	// holds no bash and no read tool. An ordinary already-running OpenCode
-	// session is sufficient: no restart, no child process, no special
-	// user-visible session, and no OPENCODE_DISABLE_* variable, because the
-	// runtime's output is advisory and cannot mint authority until Go admits
-	// it.
+	// transport (rdd-advisory-transport SKILL.md). Change #3138 retired the
+	// in-session OpenCode plugin (review-result-artifacts.ts, slice 6) whose
+	// SDD half is native Go (sdd_task_result.go) and whose review half moved
+	// into the Go-backed shim: the finished reviewer context is rendered
+	// natively by advisoryreview.PromptFor, the OpenCode reviewer runs on an
+	// opaque canonical prompt, and the reviewer-shim.ts glue (hook-free until
+	// dispatch activation) is the managed seam that would deliver it inside
+	// an ordinary already-running session. An ordinary session remains
+	// sufficient: no restart, no child isolation, no OPENCODE_DISABLE_*
+	// variable, because the runtime's output is advisory and cannot mint
+	// authority until Go admits it.
 	reviewImmutableTransportOpenCodeProviderInjected reviewImmutableTransport = "opencode_provider_injected"
-	// reviewImmutableTransportCodexAdvisoryScratchProcess is the shared
+	// reviewImmutableTransportCodexAdvisoryScratchProcess names the shared
 	// advisory transport's Codex boundary (rdd-advisory-transport SKILL.md):
 	// internal/advisoryreview's CodexAdapter launches a brand-new `codex
 	// exec` process in an empty scratch directory it creates and deletes
-	// itself, handing it only the canonical provider-rendered prompt
-	// (advisoryreview.PromptFor). Codex's own shell tool stays permitted even
-	// under --sandbox read-only (that flag bounds writes and network, not
-	// reads), so the enforced boundary is the empty directory, not a
-	// no-tool agent config this CLI does not have for Codex. Proven
-	// organically by TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and
-	// its fail-closed companions in e2e/organicruntime: the reviewer's raw
-	// output reached native admission and a terminal receipt while a
-	// poisoned live worktree never did.
+	// itself, handing it only the canonical provider-rendered prompt. Since
+	// the advertisement flip (#3138 slice 8) this transport is WIRED BUT
+	// UNADVERTISED: CodexAdapter remains a live transport code path, but no
+	// surface advertises Codex for immutable receipt review (product
+	// decision, REQ-RTC-5). The constant stays as honest history of that
+	// code path; it is never assigned to a policy and never appears in the
+	// supported runtime projection.
 	reviewImmutableTransportCodexAdvisoryScratchProcess reviewImmutableTransport = "codex_advisory_scratch_process"
 )
 
@@ -65,8 +61,6 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 	policy := reviewImmutableRuntimePolicy{Transport: reviewImmutableTransportUnsupported}
 	switch agent {
 	case model.AgentClaudeCode:
-		policy.Eligible = true
-	case model.AgentCodex:
 		policy.Eligible = true
 	case model.AgentKilocode:
 		policy.Eligible = true
@@ -84,16 +78,13 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 		policy.Transport = reviewImmutableTransportClaudePromptCarried
 	case model.AgentOpenCode:
 		policy.Transport = reviewImmutableTransportOpenCodeProviderInjected
-	case model.AgentCodex:
-		policy.Transport = reviewImmutableTransportCodexAdvisoryScratchProcess
 	}
 	return policy
 }
 
 func (capability reviewImmutableRuntimePolicy) supportsImmutableReceiptReview() bool {
 	return capability.Transport == reviewImmutableTransportClaudePromptCarried ||
-		capability.Transport == reviewImmutableTransportOpenCodeProviderInjected ||
-		capability.Transport == reviewImmutableTransportCodexAdvisoryScratchProcess
+		capability.Transport == reviewImmutableTransportOpenCodeProviderInjected
 }
 
 // reviewTransportSupportedRuntimeIDs derives the actionable runtime list from

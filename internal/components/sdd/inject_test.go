@@ -4302,6 +4302,10 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 	if err := os.WriteFile(reviewPluginPath, []byte("stale OpenCode-only review plugin"), 0o644); err != nil {
 		t.Fatalf("WriteFile(review-result-artifacts.ts) error = %v", err)
 	}
+	shimPluginPath := filepath.Join(pluginsDir, "reviewer-shim.ts")
+	if err := os.WriteFile(shimPluginPath, []byte("stale OpenCode-only reviewer shim"), 0o644); err != nil {
+		t.Fatalf("WriteFile(reviewer-shim.ts) error = %v", err)
+	}
 
 	result, err := Inject(home, kilocodeAdapter(), "multi")
 	if err != nil {
@@ -4327,8 +4331,10 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 			t.Fatalf("%s plugin should still be installed for Kilo: %v", plugin, err)
 		}
 	}
-	if _, err := os.Stat(reviewPluginPath); !os.IsNotExist(err) {
-		t.Fatalf("OpenCode-only review plugin remains installed for Kilo: %v", err)
+	for _, retired := range []string{reviewPluginPath, shimPluginPath} {
+		if _, err := os.Stat(retired); !os.IsNotExist(err) {
+			t.Fatalf("OpenCode-only review plugin remains installed for Kilo: %v", err)
+		}
 	}
 	settings, err := os.ReadFile(filepath.Join(home, ".config", "kilo", "opencode.json"))
 	if err != nil {
@@ -7071,7 +7077,7 @@ func TestRefreshInstalledOpenCodePluginsSkipsSymlinksAndDirectories(t *testing.T
 	if err := os.WriteFile(userFile, userContent, 0o644); err != nil {
 		t.Fatalf("WriteFile(user file) error = %v", err)
 	}
-	symlinkPath := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+	symlinkPath := filepath.Join(pluginsDir, "reviewer-shim.ts")
 	if err := os.Symlink(userFile, symlinkPath); err != nil {
 		t.Skipf("symlinks not supported on this platform: %v", err)
 	}

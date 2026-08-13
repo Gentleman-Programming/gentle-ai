@@ -1664,12 +1664,31 @@ func ManagedOpenCodePluginNames() []string {
 func managedOpenCodePluginNames(agent model.AgentID) []string {
 	switch agent {
 	case model.AgentOpenCode:
-		return []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"}
+		// reviewer-shim.ts (slice 4, #3138) is the Go-backed native shim
+		// dispatcher glue. It stays hook-free until the dispatch-activation
+		// slice and is OpenCode-only -- Kilocode never receives it
+		// (decision (a)). review-result-artifacts.ts was retired in slice 6:
+		// its SDD half is native Go (sdd_task_result.go) and its review half
+		// is gone, so it is no longer managed and stale copies are scrubbed
+		// (see RetiredOpenCodePluginNames).
+		return []string{"model-variants.ts", "reviewer-shim.ts", "skill-registry.ts"}
 	case model.AgentKilocode:
 		return []string{"model-variants.ts", "skill-registry.ts"}
 	default:
 		return nil
 	}
+}
+
+// RetiredOpenCodePluginNames lists the OpenCode-only review plugins gentle-ai
+// no longer manages (change #3138 slice 6): review-result-artifacts.ts is the
+// retired legacy plugin (its SDD half is native Go, its review half is gone),
+// and reviewer-shim.ts is the slice-4 dispatcher glue that is managed for
+// OpenCode but must never reach Kilocode. Sync and inject scrub every retired
+// name that the receiving agent does not manage, and the sync backup contract
+// keeps covering the retired paths so a failed sync can restore a removed
+// stale copy (transactional removal, REQ-RPC-10).
+func RetiredOpenCodePluginNames() []string {
+	return []string{"review-result-artifacts.ts", "reviewer-shim.ts"}
 }
 
 // AgentReceivesManagedOpenCodePlugins reports whether the SDD injector
@@ -1709,15 +1728,18 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 
 	var files []string
 	var changed bool
-	if adapter.Agent() == model.AgentKilocode {
-		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
-		if err != nil {
-			return InjectionResult{}, err
-		}
-		if removed {
-			changed = true
-			files = append(files, path)
-		}
+	// Scrub retired OpenCode-only review plugins before refreshing: a stale
+	// copy that outlived the change that retired it must never keep
+	// intercepting (single injection source, SEN-RPC-15/16). Kilo dirs that
+	// received reviewer-shim.ts from an older binary are scrubbed the same
+	// way (decision (a): the shim is OpenCode-only).
+	retiredPaths, removed, err := scrubRetiredOpenCodePlugins(pluginsDir, adapter.Agent())
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	if removed {
+		changed = true
+		files = append(files, retiredPaths...)
 	}
 
 	for _, name := range managedOpenCodePluginNames(adapter.Agent()) {
@@ -1747,22 +1769,45 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 	return InjectionResult{Changed: changed, Files: files}, nil
 }
 
-func removeOpenCodeOnlyReviewPlugin(pluginsDir string) (string, bool, error) {
-	path := filepath.Join(pluginsDir, "review-result-artifacts.ts")
-	info, err := os.Lstat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return path, false, nil
+// scrubRetiredOpenCodePlugins removes every retired OpenCode-only review
+// plugin (RetiredOpenCodePluginNames) that the given agent does not manage.
+// The retired review-result-artifacts.ts must never survive next to the
+// managed reviewer-shim.ts glue, or the runtime would intercept every hook
+// twice (single injection source, SEN-RPC-15/16); and reviewer-shim.ts itself
+// is OpenCode-only (decision (a)), so any Kilo dir that received it from an
+// earlier selection must be scrubbed too. Removal follows the Lstat-skip
+// rule used for managed refreshes: non-regular entries (symlinks,
+// directories) are left alone, so a user-owned file planted at a retired
+// path is never followed or replaced.
+func scrubRetiredOpenCodePlugins(pluginsDir string, agent model.AgentID) ([]string, bool, error) {
+	managed := map[string]bool{}
+	for _, name := range managedOpenCodePluginNames(agent) {
+		managed[name] = true
+	}
+	var files []string
+	var changed bool
+	for _, name := range RetiredOpenCodePluginNames() {
+		if managed[name] {
+			continue
 		}
-		return path, false, fmt.Errorf("stat OpenCode-only review plugin %s: %w", path, err)
+		path := filepath.Join(pluginsDir, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return files, changed, fmt.Errorf("stat retired OpenCode plugin %s: %w", path, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return files, changed, fmt.Errorf("remove retired OpenCode plugin %s: %w", path, err)
+		}
+		changed = true
+		files = append(files, path)
 	}
-	if !info.Mode().IsRegular() {
-		return path, false, nil
-	}
-	if err := os.Remove(path); err != nil {
-		return path, false, fmt.Errorf("remove OpenCode-only review plugin %s: %w", path, err)
-	}
-	return path, true, nil
+	return files, changed, nil
 }
 
 // installOpenCodePlugins copies the OpenCode-compatible plugins that gentle-ai
@@ -1791,15 +1836,17 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 		}
 	}
 
-	if adapter.Agent() == model.AgentKilocode {
-		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
-		if err != nil {
-			return InjectionResult{}, err
-		}
-		if removed {
-			changed = true
-			files = append(files, path)
-		}
+	// Retired OpenCode-only review plugins are scrubbed for every
+	// plugin-receiving agent: OpenCode must not keep a stale
+	// review-result-artifacts.ts, and Kilo must not keep either retired file
+	// (single injection source, SEN-RPC-15/16).
+	scrubbedPaths, removed, err := scrubRetiredOpenCodePlugins(pluginsDir, adapter.Agent())
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	if removed {
+		changed = true
+		files = append(files, scrubbedPaths...)
 	}
 
 	for _, name := range managedOpenCodePluginNames(adapter.Agent()) {

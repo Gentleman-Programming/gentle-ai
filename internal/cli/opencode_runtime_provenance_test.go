@@ -14,11 +14,11 @@ import (
 
 func TestRunSyncRecordsOpenCodeRuntimeProvenanceWhenReviewPluginIsCurrent(t *testing.T) {
 	home := t.TempDir()
-	plugin := filepath.Join(home, ".config", "opencode", "plugins", "review-result-artifacts.ts")
+	plugin := filepath.Join(home, ".config", "opencode", "plugins", "reviewer-shim.ts")
 	if err := os.MkdirAll(filepath.Dir(plugin), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	wantPlugin := []byte(assets.MustRead("opencode/plugins/review-result-artifacts.ts"))
+	wantPlugin := []byte(assets.MustRead("opencode/plugins/reviewer-shim.ts"))
 	if err := os.WriteFile(plugin, wantPlugin, 0o644); err != nil {
 		t.Fatal(err)
 	}

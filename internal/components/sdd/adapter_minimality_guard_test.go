@@ -34,6 +34,21 @@ package sdd
 //  5. Exactly one function renders the shared provider-injected reviewer
 //     prompt wording, and it is runtimeReviewerPrompt.
 //
+// TestAdapterMinimalityGuardExtendsToProviderAdapters below extends the same
+// ratchet to the thin Claude/OpenCode transport adapters that live in
+// internal/advisoryreview (change #3138, slice 3): those files may only hold
+// LookPath/PromptFor seams, one executor call, and an env-allowlist helper --
+// never a second implementation of rendering, admission, or transport policy.
+//
+// TestAdapterMinimalityGuardExtendsToOpenCodeShim extends it one step further
+// to the slice-4 native shim (change #3138): opencode_shim.go may own exactly
+// the dispatcher contract -- provenance admission, legacy deferral, and the
+// one binding route parse -- and nothing else. In particular it must never
+// render prompt text, re-declare the result envelope, apply budgets, admit a
+// review, or reach into review authority; its one sanctioned JSON decode is
+// the opaque binding route, and the glue asset stays hook-free (pinned
+// separately by assets_test.go's TestReviewerShimPluginContract).
+//
 // Scope is intentionally the package's production sources only (excluding
 // _test.go): test files legitimately declare their own local decode structs
 // (see claude_review_network_none_e2e_test.go's subject_hash-tagged struct)
@@ -285,4 +300,339 @@ func adapterMinimalityCountMatches(values, candidates []string) int {
 		}
 	}
 	return count
+}
+
+// adapterMinimalityAdapterAllowlists records, per thin transport adapter, the
+// only environment variables its child runtime may receive. This mirrors the
+// CodexAdapter allowlist (PATH + CODEX_HOME) one-to-one: each runtime gets
+// PATH so the process can start, plus its own config-home override so it can
+// read its own auth/config without inheriting the caller's ambient state.
+var adapterMinimalityAdapterAllowlists = map[string][]string{
+	"claude_adapter.go":   {"PATH", "CLAUDE_CONFIG_DIR"},
+	"opencode_adapter.go": {"PATH", "OPENCODE_CONFIG_DIR"},
+}
+
+// adapterMinimalityAdapterNames is the deterministic order the adapter files
+// are checked in (map iteration order is not).
+var adapterMinimalityAdapterNames = []string{"claude_adapter.go", "opencode_adapter.go"}
+
+// TestAdapterMinimalityGuardExtendsToProviderAdapters is the slice-3 ratchet
+// (SEN-RPC-4, tasks 3.1): the same "adapters only invoke the reviewer and
+// return raw bytes plus a transport error" invariant that TestAdapterMinimalityGuard
+// holds for this package's production sources must also hold for the thin
+// Claude/OpenCode transport adapters in internal/advisoryreview, and it must
+// not drift as those files evolve. The new adapter files are the RED target:
+// they did not exist until task 3.3, so this test failed by construction the
+// moment it was written (missing file), exactly like the slice-2 provider
+// RED.
+func TestAdapterMinimalityGuardExtendsToProviderAdapters(t *testing.T) {
+	for _, name := range adapterMinimalityAdapterNames {
+		name := name
+		t.Run(name, func(t *testing.T) {
+			source := adapterMinimalityAdapterSource(t, name)
+			adapterMinimalityEnforceAdapterShape(t, name, source, adapterMinimalityAdapterAllowlists[name])
+		})
+	}
+}
+
+// adapterMinimalityAdapterSource reads one thin transport adapter from
+// internal/advisoryreview (two levels above this package's directory: sdd/
+// lives under internal/components/, the adapters live under internal/). The
+// file is a slice-3 artifact, so reading it is the RED half of the cycle: a
+// missing file is a failing test, not a silent skip.
+func adapterMinimalityAdapterSource(t *testing.T, name string) string {
+	t.Helper()
+	path := filepath.Join("..", "..", "advisoryreview", name)
+	source, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read thin adapter %s: %v (slice-3 RED: %s is created by task 3.3)", path, err, name)
+	}
+	return string(source)
+}
+
+// adapterMinimalityEnforceAdapterShape holds every thinness rule against one
+// adapter's production source. Rules 1-4 reuse the exact composite-literal,
+// struct-tag, and severity checks the package guard applies to this
+// package's own sources; rules 5-8 are adapter-specific and forbid the
+// constructs the shared advisory contract assigns to Prompt/Validate alone:
+//
+//  1. no []string literal re-declares the reviewer result's top-level fields
+//  2. no struct re-declares a binding or result envelope shape via json tags
+//  3. no const block re-declares the severity enum
+//  4. no second copy of the shared provider-injected prompt wording
+//  5. no schema/budget/parser/admission identifiers (OutputSchema, budgets,
+//     json, Validate/Unmarshal/...) and no prompt renderers
+//  6. no capture/preserve/retry/blocking identifiers (SEN-RPC-19/20:
+//     strand-nothing, no budget or correction consumption)
+//  7. argv pin: no "-C"/"--dir"/git-selector string literal a child runtime
+//     could receive (threat matrix, Git repository selection)
+//  8. env allowlist: the child process reads exactly this adapter's
+//     allowlist from the parent via os.LookupEnv, nothing else (threat
+//     matrix, PR commands / env-leak)
+func adapterMinimalityEnforceAdapterShape(t *testing.T, name, source string, envAllowlist []string) {
+	t.Helper()
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, name, source, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+
+	var idents, literals, imports []string
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		if node == nil {
+			return true
+		}
+		position := fset.Position(node.Pos())
+		switch decl := node.(type) {
+		case *ast.CompositeLit:
+			if values, ok := adapterMinimalityStringSliceElements(decl); ok &&
+				adapterMinimalityContainsAll(values, adapterMinimalityRequiredFields) {
+				t.Errorf("%s:%d hardcodes the reviewer result's required top-level fields as a literal slice; reference reviewtransaction.NewReviewerResultEnvelope().RequiredTopLevelFields instead",
+					name, position.Line)
+			}
+		case *ast.StructType:
+			if tags := adapterMinimalityJSONTags(decl); adapterMinimalityContainsAll(tags, adapterMinimalityRequiredFields) {
+				t.Errorf("%s:%d declares a struct whose json tags re-implement the reviewer result envelope; an adapter must never decode or re-declare it",
+					name, position.Line)
+			}
+		case *ast.GenDecl:
+			if decl.Tok == token.CONST {
+				values := adapterMinimalityConstStringValues(decl)
+				if adapterMinimalityCountMatches(values, adapterMinimalitySeverities) >= 3 {
+					t.Errorf("%s:%d re-declares the BLOCKER/CRITICAL/WARNING/SUGGESTION severity enum as Go constants; severity meaning has exactly one canonical source outside the adapters",
+						name, position.Line)
+				}
+			}
+		case *ast.Ident:
+			idents = append(idents, decl.Name)
+		case *ast.BasicLit:
+			if decl.Kind == token.STRING {
+				if value, err := strconv.Unquote(decl.Value); err == nil {
+					literals = append(literals, value)
+				}
+			}
+		case *ast.ImportSpec:
+			if decl.Path != nil {
+				if path, err := strconv.Unquote(decl.Path.Value); err == nil {
+					imports = append(imports, path)
+				}
+			}
+		}
+		return true
+	})
+
+	if strings.Contains(source, adapterMinimalitySharedWordingMarker) {
+		t.Errorf("%s carries a second copy of the shared provider-injected reviewer prompt wording; adapters must never render prompt text (marker %q)",
+			name, adapterMinimalitySharedWordingMarker)
+	}
+	for _, value := range idents {
+		lower := strings.ToLower(value)
+		for _, forbidden := range []string{"capture", "preserve", "retry", "blocking"} {
+			if strings.Contains(lower, forbidden) {
+				t.Errorf("%s names identifier %q; adapters must strand nothing and consume no budget or correction state (%s)", name, value, forbidden)
+			}
+		}
+		switch value {
+		case "OutputSchema", "ReviewerResultSchema", "MaxEvidenceEntries", "maxResultBytes", "maxEvidenceBytes",
+			"Validate", "Unmarshal", "Marshal", "NewDecoder", "Prompt", "LensMandate":
+			t.Errorf("%s references %q; schema, budgets, admission, and prompt rendering belong to the provider, never an adapter", name, value)
+		}
+	}
+	for _, value := range idents {
+		if strings.HasPrefix(value, "runtimeReviewerPrompt") || value == "advisoryPrompt" {
+			t.Errorf("%s references prompt renderer %q; adapters must never render prompt text", name, value)
+		}
+	}
+	for _, path := range imports {
+		if strings.Contains(path, "encoding/json") || strings.Contains(path, "reviewtransaction") {
+			t.Errorf("%s imports %q; adapters must never parse child output or reach into review authority", name, path)
+		}
+	}
+	for _, value := range literals {
+		if value == "-C" || value == "--dir" || strings.Contains(strings.ToLower(value), "git") {
+			t.Errorf("%s carries argv literal %q; an adapter child process must never receive a git/repository selector", name, value)
+		}
+	}
+
+	lookedUp := adapterMinimalityLookupEnvKeys(parsed)
+	if len(lookedUp) == 0 {
+		t.Errorf("%s never reads the parent environment via os.LookupEnv; the child process must receive this adapter's explicit env allowlist", name)
+	}
+	for _, key := range lookedUp {
+		if !adapterMinimalityContains(envAllowlist, key) {
+			t.Errorf("%s looks up environment variable %q outside its allowlist %v; the child process may only receive PATH plus this runtime's config home", name, key, envAllowlist)
+		}
+	}
+}
+
+// adapterMinimalityLookupEnvKeys returns every literal key name passed to
+// os.LookupEnv in the parsed file.
+func adapterMinimalityLookupEnvKeys(parsed *ast.File) []string {
+	var keys []string
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "LookupEnv" || len(call.Args) != 1 {
+			return true
+		}
+		argument, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || argument.Kind != token.STRING {
+			return true
+		}
+		if key, err := strconv.Unquote(argument.Value); err == nil {
+			keys = append(keys, key)
+		}
+		return true
+	})
+	return keys
+}
+
+// adapterMinimalityContains reports whether values contains target.
+func adapterMinimalityContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+// TestAdapterMinimalityGuardExtendsToOpenCodeShim is the slice-4 ratchet
+// (change #3138): the native OpenCode shim (internal/advisoryreview/
+// opencode_shim.go) may own provenance admission, legacy deferral, and the
+// one binding route parse -- never a second prompt renderer, never envelope
+// or severity re-declaration, never budgets or admission, never a reach into
+// review authority. The seam type and the refusal constant are the sanctioned
+// shim surface; the single encoding/json decode is the opaque binding route,
+// the exact one-field parse the legacy plugin performed with JSON.parse. The
+// file is a slice-4 artifact, so reading it is the RED half of the cycle: a
+// missing or overgrown file fails here, exactly like the slice-3 adapter
+// guard.
+func TestAdapterMinimalityGuardExtendsToOpenCodeShim(t *testing.T) {
+	name := "opencode_shim.go"
+	path := filepath.Join("..", "..", "advisoryreview", name)
+	source, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read native OpenCode shim %s: %v (slice-4 RED: %s is created by task 4.2)", path, err, name)
+	}
+	adapterMinimalityEnforceShimShape(t, name, string(source))
+}
+
+// adapterMinimalityEnforceShimShape holds every thinness rule against the
+// native shim's production source. Rules 1-4 reuse the exact composite-
+// literal, struct-tag, severity, and shared-wording checks the package guard
+// and the adapter guard apply; rules 5-9 are shim-specific:
+//
+//  1. no []string literal re-declares the reviewer result's top-level fields
+//  2. no struct re-declares a binding or result envelope shape via json tags
+//  3. no const block re-declares the severity enum
+//  4. no second copy of the shared provider-injected prompt wording
+//  5. no schema/budget/admission identifiers (OutputSchema, budgets,
+//     Validate, NewDecoder, Prompt renderers, ...) -- deliberately without
+//     Unmarshal/Marshal, which the one binding route parse may use
+//  6. no capture/preserve/retry/blocking identifiers (SEN-RPC-19/20:
+//     strand-nothing, no budget or correction consumption)
+//  7. no runtimeReviewerPrompt/advisoryPrompt references -- the shim never
+//     renders prompt text
+//  8. no reviewtransaction import: authority stays in reviewtransaction, the
+//     shim never reaches into it
+//  9. encoding/json is allowed for exactly one job, the opaque binding route
+//     parse: exactly one import and exactly one json.Unmarshal call site, so
+//     no second decode (in particular never a child-output parse) can appear
+//     unnoticed
+func adapterMinimalityEnforceShimShape(t *testing.T, name, source string) {
+	t.Helper()
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, name, source, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+
+	var idents, imports []string
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		if node == nil {
+			return true
+		}
+		position := fset.Position(node.Pos())
+		switch decl := node.(type) {
+		case *ast.CompositeLit:
+			if values, ok := adapterMinimalityStringSliceElements(decl); ok &&
+				adapterMinimalityContainsAll(values, adapterMinimalityRequiredFields) {
+				t.Errorf("%s:%d hardcodes the reviewer result's required top-level fields as a literal slice; reference reviewtransaction.NewReviewerResultEnvelope().RequiredTopLevelFields instead",
+					name, position.Line)
+			}
+		case *ast.StructType:
+			if tags := adapterMinimalityJSONTags(decl); adapterMinimalityContainsAll(tags, adapterMinimalityRequiredFields) {
+				t.Errorf("%s:%d declares a struct whose json tags re-implement the reviewer result envelope; the shim must never decode or re-declare it",
+					name, position.Line)
+			}
+		case *ast.GenDecl:
+			if decl.Tok == token.CONST {
+				values := adapterMinimalityConstStringValues(decl)
+				if adapterMinimalityCountMatches(values, adapterMinimalitySeverities) >= 3 {
+					t.Errorf("%s:%d re-declares the BLOCKER/CRITICAL/WARNING/SUGGESTION severity enum as Go constants; severity meaning has exactly one canonical source outside the shim",
+						name, position.Line)
+				}
+			}
+		case *ast.Ident:
+			idents = append(idents, decl.Name)
+		case *ast.ImportSpec:
+			if decl.Path != nil {
+				if path, err := strconv.Unquote(decl.Path.Value); err == nil {
+					imports = append(imports, path)
+				}
+			}
+		}
+		return true
+	})
+
+	if strings.Contains(source, adapterMinimalitySharedWordingMarker) {
+		t.Errorf("%s carries the shared provider-injected reviewer prompt wording; the shim must never render prompt text (marker %q)",
+			name, adapterMinimalitySharedWordingMarker)
+	}
+	for _, value := range idents {
+		lower := strings.ToLower(value)
+		for _, forbidden := range []string{"capture", "preserve", "retry", "blocking"} {
+			if strings.Contains(lower, forbidden) {
+				t.Errorf("%s names identifier %q; the shim must strand nothing and consume no budget or correction state (%s)", name, value, forbidden)
+			}
+		}
+		switch value {
+		case "OutputSchema", "ReviewerResultSchema", "MaxEvidenceEntries", "maxResultBytes", "maxEvidenceBytes",
+			"Validate", "NewDecoder", "Prompt", "LensMandate":
+			t.Errorf("%s references %q; schema, budgets, admission, and prompt rendering belong to the provider, never the shim", name, value)
+		}
+	}
+	for _, value := range idents {
+		if strings.HasPrefix(value, "runtimeReviewerPrompt") || value == "advisoryPrompt" {
+			t.Errorf("%s references prompt renderer %q; the shim must never render prompt text", name, value)
+		}
+	}
+	for _, path := range imports {
+		if strings.Contains(path, "reviewtransaction") {
+			t.Errorf("%s imports %q; the shim must never reach into review authority", name, path)
+		}
+	}
+
+	// The single sanctioned decode: the opaque binding route parse. A second
+	// encoding/json import or a second json.Unmarshal call site would mean the
+	// shim started parsing something else (child output above all) and must
+	// fail here before it ever ships.
+	jsonImports := 0
+	unmarshalCalls := 0
+	for _, path := range imports {
+		if path == "encoding/json" {
+			jsonImports++
+		}
+	}
+	unmarshalCalls = strings.Count(source, "json.Unmarshal")
+	if jsonImports != 1 {
+		t.Errorf("%s must import encoding/json exactly once (the binding route parse); got %d import(s)", name, jsonImports)
+	}
+	if unmarshalCalls != 1 {
+		t.Errorf("%s must decode exactly one JSON document (the opaque binding route); got %d json.Unmarshal call site(s)", name, unmarshalCalls)
+	}
 }

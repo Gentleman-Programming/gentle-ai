@@ -91,31 +91,26 @@ func TestReviewAdvisoryPromptDerivesRequestFromFrozenAuthority(t *testing.T) {
 	}
 }
 
-// TestReviewAdvisoryPromptSupportsCodexRuntime proves Codex reached the same
-// generic prompt/text seam as Claude Code and OpenCode at the CLI surface,
-// once its organic runtime proof
-// (TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and its fail-closed
-// companions, e2e/organicruntime) passed: the exact same closed form that
-// used to return "unavailable for runtime" for codex now returns the
-// canonical advisory prompt, byte-identical to the one every other supported
-// runtime receives.
-func TestReviewAdvisoryPromptSupportsCodexRuntime(t *testing.T) {
+// TestReviewAdvisoryPromptRefusesUnadvertisedCodexRuntime pins the CLI half
+// of the #3138 slice-8 advertisement flip (REQ-RTC-5): Codex is wired but
+// UNADVERTISED. Its organic transport proof history
+// (TestRealCodexReviewerOrdinarySessionAdmitsRawOutput, e2e/organicruntime)
+// remains, but the generic prompt/text seam no longer serves a codex runtime
+// name -- the exact closed form that used to return the canonical advisory
+// prompt for codex now returns the same typed unavailable refusal any
+// unrecognized runtime receives.
+func TestReviewAdvisoryPromptRefusesUnadvertisedCodexRuntime(t *testing.T) {
 	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
 
-	var codex, claude bytes.Buffer
-	if err := RunReview([]string{"advisory", "prompt", "--repository-context", handle, "--lens", lens, "--runtime", "codex"}, &codex); err != nil {
-		t.Fatal(err)
+	var output bytes.Buffer
+	err := RunReview([]string{"advisory", "prompt", "--repository-context", handle, "--lens", lens, "--runtime", "codex"}, &output)
+	if err == nil || !strings.Contains(err.Error(), "unavailable for runtime") {
+		t.Fatalf("review advisory prompt for unadvertised codex = %v, want the typed unavailable refusal", err)
 	}
-	if err := RunReview([]string{"advisory", "prompt", "--repository-context", handle, "--lens", lens, "--runtime", "claude-code"}, &claude); err != nil {
-		t.Fatal(err)
-	}
-	if codex.String() != claude.String() {
-		t.Fatalf("codex received a runtime-specific prompt:\ncodex:\n%s\nclaude-code:\n%s", codex.String(), claude.String())
-	}
-	if !strings.Contains(codex.String(), "advisory model output for native Go admission") {
-		t.Fatalf("codex advisory prompt = %q", codex.String())
+	if output.Len() != 0 {
+		t.Fatalf("refused codex advisory prompt emitted %d bytes to stdout", output.Len())
 	}
 }
 

@@ -460,7 +460,7 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if len(pluginEntries) != 3 {
 		t.Fatalf("opencode plugins count = %d, want 3", len(pluginEntries))
 	}
-	wantPlugins := map[string]bool{"model-variants.ts": true, "review-result-artifacts.ts": true, "skill-registry.ts": true}
+	wantPlugins := map[string]bool{"model-variants.ts": true, "reviewer-shim.ts": true, "skill-registry.ts": true}
 	for _, entry := range pluginEntries {
 		if !wantPlugins[entry.Name()] {
 			t.Fatalf("unexpected plugin entry = %q", entry.Name())
@@ -468,109 +468,44 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	}
 }
 
-// TestReviewResultArtifactsPluginContract pins the reduced transport-only
-// contract (rdd-advisory-transport SKILL.md): the plugin's only job is to
-// detect a reviewer task launch carrying the opaque binding, fetch the
-// finished provider context via `gentle-ai review lens-context`, inject that
-// block as the task prompt, and hand the model's raw final text back
-// unmodified. It never parses a binding field beyond the one it needs to
-// route the call, never rebuilds a prompt, never applies a local budget,
-// never captures or preserves a result, and never decides admission.
-func TestReviewResultArtifactsPluginContract(t *testing.T) {
-	source, err := Read("opencode/plugins/review-result-artifacts.ts")
+// TestReviewerShimPluginContract pins the slice-4 native OpenCode shim glue
+// (change #3138): reviewer-shim.ts is a zero-logic dispatcher seam. Its ONLY
+// behavior is the migration-window deferral -- it registers no hooks and
+// takes over nothing. Slice 6 retired the legacy review-result-artifacts.ts
+// review half (its SDD half is native Go, its review half is gone), so the
+// shim is the sole managed OpenCode review asset and must still defer.
+// The Go shim (internal/advisoryreview/opencode_shim.go) owns provenance
+// admission, legacy deferral, and binding routing; the glue must never grow
+// its own parsing, rendering, invocation, or hook registration. The pins
+// below are the ratchet: activating the glue is a deliberate, reviewed
+// change that removes these bans together with that activation.
+func TestReviewerShimPluginContract(t *testing.T) {
+	source, err := Read("opencode/plugins/reviewer-shim.ts")
 	if err != nil {
-		t.Fatalf("Read(review-result-artifacts.ts) error = %v", err)
+		t.Fatalf("Read(reviewer-shim.ts) error = %v", err)
 	}
+	src := string(source)
+
 	for _, want := range []string{
-		`const RUNTIME_PROVENANCE`,
-		`opencode_runtime_provenance`,
-		`async function pinnedRuntime(`,
-		`return runNativeProcess(await pinnedRuntime(cwd), cwd, args, stdin)`,
-		`spawn(executable, args`,
-		`"review", "lens-context",`,
-		`"--repository-context", repositoryContext`,
-		// `--delivery runtime_interception` is not cosmetic: it is the
-		// mechanism the provider records on the receipt beside the captured
-		// results, and it is what distinguishes a block a runtime adapter
-		// substituted for whatever the caller produced from one a caller
-		// merely relayed. Declaring the relayed level from here would
-		// permanently record a weaker claim than what actually happened.
-		`const LENS_CONTEXT_DELIVERY = "runtime_interception"`,
-		`"--delivery", LENS_CONTEXT_DELIVERY`,
-		`GENTLE_AI_REVIEW_CONTEXT_END`,
-		`partial provider context is never injected`,
-		`Split this candidate into smaller reviewable commits`,
-		`function bindingRepositoryContext(`,
-		`output.args.prompt = await injectReviewerContext(`,
-		`"tool.execute.before"`,
-		`output.args.background === true`,
-		`!BINDING.test(input.args.prompt)`,
-		// The lens routed to the native call is always the launched
-		// subagent_type, never a field parsed out of the binding: the binding
-		// is opaque provider data the plugin passes through, never
-		// interprets (#2442's resolution under the shared contract).
-		`async function injectReviewerContext(prompt: string, lens: string, cwd: string)`,
-		"output.args.prompt,\n      subagent,",
-		`output.output = reviewerResult(output.output)`,
-		`function taskResult(output: unknown, subject: string, classification?: string)`,
-		"function reviewerResult(output: unknown): string {\n  return taskResult(output, \"reviewer\")\n}",
-		"`${subject} task result is empty`",
-		"`${subject} task result contains a nested task envelope`",
-		`const SDD_PHASES`,
-		`const SDD_TASK_FAILURE_PREFIX`,
-		`"gentle-ai.sdd-task-result-failure/v1"`,
-		`"sdd_task_result_empty"`,
-		`"sdd_task_result_malformed"`,
-		`failedSDDSessions`,
-		`extractionClass(cause, "sddClass")`,
-		// #2677: an empty result means the child produced no output at all
-		// (for example a provider rejection before generation), and the
-		// handoff must say so and carry the one causal fact the hook
-		// receives -- the child's provider/model route -- after validation.
-		`function taskRouteModel(`,
-		`produced no task output at all`,
-		`provider rejected the request before generation (authentication, region, or model access)`,
-		`taskRouteModel(metadata)`,
-		`export default ReviewResultArtifactsPlugin`,
+		`import type { Plugin } from "@opencode-ai/plugin"`,
+		`export const ReviewerShimPlugin: Plugin`,
+		`return {}`,
+		`export default ReviewerShimPlugin`,
 	} {
-		if !strings.Contains(source, want) {
-			t.Fatalf("review-result-artifacts.ts missing %q", want)
+		if !strings.Contains(src, want) {
+			t.Fatalf("reviewer-shim.ts missing %q", want)
 		}
 	}
-	// The obsolete isolation/session claim, the field-by-field binding
-	// parser, and native result capture/preservation/retry are gone, not
-	// merely unused: an ordinary already-running OpenCode session is
-	// sufficient under the advisory boundary (SKILL.md), the binding is
-	// opaque provider data the plugin never interprets, and raw text goes
-	// back to Go, which owns validation and capture policy.
-	for _, superseded := range []string{
-		"REQUIRED_ISOLATION_ENVIRONMENT", "missingIsolationEnvironment", "OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS",
-		"remoteInstructionsEntries", "client.config.get",
-		"type ReviewBinding", "function parseBinding(", "function bindingRefusal(", "function verifiedLensContext(",
-		"function captureResult(", "function preserveResult(", "function repositoryBindingArgs(",
-		"admissionRecoveries", "AdmissionRecoveryStore", "claimAdmissionRecovery", "clearAdmissionRecovery",
-		"MAX_ADMISSION_RECOVERY_SESSIONS", "MAX_ADMISSION_RECOVERIES_PER_SESSION",
-		"function sessionErrorMessage(", "admissionRejection(", "ADMISSION_DIAGNOSTIC",
-		"function preservedCaptureFailure(", "function preservedReference(", "PRESERVE_EMBED_LIMIT",
-		"GENTLE_AI_REVIEW_CWD", "GENTLE_AI_FROZEN_CANDIDATE_CONTEXT", "candidate_diff",
-		"inspect-candidate", "materializeReviewEvidence", "inspectionArgs",
-		"REVIEW_CONTEXT_BYTE_BUDGET", "preflightCapture", "validManifest", "--preflight",
+
+	// Zero logic, zero hooks: the deferral is an empty hook set by
+	// construction, so the glue cannot double-inject (SEN-RPC-17).
+	for _, forbidden := range []string{
+		`"tool.execute.before"`, `"tool.execute.after"`, `dispose`, `"event"`,
+		"GENTLE_AI_REVIEW_BINDING", "task_result", "subagent_type",
+		"spawn(", "execFile", "lens-context", "GENTLE_AI_REVIEW_CONTEXT", "REVIEW_AGENTS",
 	} {
-		if strings.Contains(source, superseded) {
-			t.Fatalf("review-result-artifacts.ts still carries the superseded mechanism %q", superseded)
-		}
-	}
-	if strings.Contains(source, `.slice("review-".length)`) {
-		t.Fatal("review-result-artifacts.ts must preserve the exact full selected lens; found review- prefix stripping")
-	}
-	// Pin the split: the previously conflated empty/nested-envelope message
-	// must never regress back into one indistinguishable free-text throw.
-	if strings.Contains(source, `reviewer task result is empty or contains a nested envelope`) {
-		t.Fatal("review-result-artifacts.ts regressed to the conflated empty/nested-envelope error message")
-	}
-	for _, forbidden := range []string{"spawn(\"gentle-ai\"", "writeFile", "link(", "chmod(", "export {", "export const"} {
-		if strings.Contains(source, forbidden) {
-			t.Fatalf("review-result-artifacts.ts must delegate native persistence; found %q", forbidden)
+		if strings.Contains(src, forbidden) {
+			t.Fatalf("reviewer-shim.ts carries logic the zero-logic dispatcher glue must not hold (B7 deferral): %q", forbidden)
 		}
 	}
 }

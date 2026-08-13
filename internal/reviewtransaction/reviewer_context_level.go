@@ -34,6 +34,13 @@ const (
 	// whatever the caller produced with the provider's own output before the
 	// reviewer ran, so relaying is not trusted at all.
 	ReviewerContextLevelRuntimeInterception ReviewerContextLevel = "runtime_interception"
+	// ReviewerContextLevelProviderContract: the review was admitted through the
+	// one shared provider contract, where the provider itself owns prompt
+	// rendering, admission validation, and invocation, and every runtime is a
+	// minimal transport adapter. This is the descriptor new emissions record
+	// during and after the shim migration; the legacy descriptors above remain
+	// readable and are never rewritten.
+	ReviewerContextLevelProviderContract ReviewerContextLevel = "provider_contract"
 )
 
 // reviewerContextLevelShape bounds what may be persisted and read back. It
@@ -47,7 +54,7 @@ var reviewerContextLevelShape = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}[a-z0-9
 // release does not implement would record a claim nothing produced.
 func ReviewerContextLevelAccepted(level ReviewerContextLevel) bool {
 	switch level {
-	case ReviewerContextLevelProviderCommand, ReviewerContextLevelRuntimeInterception:
+	case ReviewerContextLevelProviderCommand, ReviewerContextLevelRuntimeInterception, ReviewerContextLevelProviderContract:
 		return true
 	default:
 		return false

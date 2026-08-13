@@ -1804,6 +1804,12 @@ func TestRunInstallDryRunMatchesActualInstallOpenCodeSDDMulti(t *testing.T) {
 			}
 			continue
 		}
+		if isRetiredOpenCodeReviewPlugin(path) {
+			if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+				t.Fatalf("expected retired OpenCode review plugin %q to be removed after install; stat err = %v", path, statErr)
+			}
+			continue
+		}
 		if _, statErr := os.Stat(path); statErr != nil {
 			t.Fatalf("expected dry-run path %q to exist after install: %v", path, statErr)
 		}

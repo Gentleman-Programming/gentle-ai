@@ -2360,6 +2360,12 @@ func openCodeSDDPluginPaths(targetDir string) []string {
 	for _, name := range sdd.ManagedOpenCodePluginNames() {
 		paths = append(paths, filepath.Join(targetDir, ".config", "opencode", "plugins", name))
 	}
+	// Retired OpenCode-only review plugins stay inside the backup/path
+	// contract (change #3138 slice 6): install and sync scrub them from
+	// OpenCode dirs, so verification and rollback must keep covering them.
+	for _, name := range sdd.RetiredOpenCodePluginNames() {
+		paths = append(paths, filepath.Join(targetDir, ".config", "opencode", "plugins", name))
+	}
 	return paths
 }
 
@@ -2409,6 +2415,22 @@ func runPostApplyVerification(input postApplyVerificationInput) verify.Report {
 			})
 			continue
 		}
+		if isRetiredOpenCodeReviewPlugin(path) {
+			checks = append(checks, verify.Check{
+				ID:          "verify:file:" + path,
+				Description: "retired OpenCode review plugin removed",
+				Run: func(context.Context) error {
+					if _, err := os.Stat(path); err != nil {
+						if os.IsNotExist(err) {
+							return nil
+						}
+						return err
+					}
+					return fmt.Errorf("retired OpenCode review plugin still exists; run `gentle-ai sync` to resync the managed plugins")
+				},
+			})
+			continue
+		}
 		checks = append(checks, verify.Check{
 			ID:          "verify:file:" + path,
 			Description: "required file exists",
@@ -2438,6 +2460,34 @@ func isLegacyOpenCodeBackgroundAgentsPlugin(path string) bool {
 		filepath.Base(pluginsDir) == "plugins" &&
 		filepath.Base(opencodeDir) == "opencode" &&
 		filepath.Base(configDir) == ".config"
+}
+
+// isRetiredOpenCodeReviewPlugin reports whether a path is a retired
+// OpenCode-only review plugin that the OpenCode agent no longer manages
+// (change #3138 slice 6). reviewer-shim.ts is deliberately excluded: it is
+// still managed for OpenCode, so it keeps the exists check like every other
+// managed plugin. The path-shape guard mirrors isLegacyOpenCodeBackgroundAgentsPlugin.
+func isRetiredOpenCodeReviewPlugin(path string) bool {
+	path = filepath.Clean(path)
+	pluginsDir := filepath.Dir(path)
+	opencodeDir := filepath.Dir(pluginsDir)
+	configDir := filepath.Dir(opencodeDir)
+	if filepath.Base(pluginsDir) != "plugins" ||
+		filepath.Base(opencodeDir) != "opencode" ||
+		filepath.Base(configDir) != ".config" {
+		return false
+	}
+	for _, name := range sdd.ManagedOpenCodePluginNames() {
+		if filepath.Base(path) == name {
+			return false
+		}
+	}
+	for _, name := range sdd.RetiredOpenCodePluginNames() {
+		if filepath.Base(path) == name {
+			return true
+		}
+	}
+	return false
 }
 
 func hasComponent(components []model.ComponentID, target model.ComponentID) bool {

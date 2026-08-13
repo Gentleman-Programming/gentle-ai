@@ -265,7 +265,11 @@ func TestRenderedReviewersAreReadOnlyAndSingleResult(t *testing.T) {
 					// identical wording and differ only in which process
 					// supplies the block, so the reviewer input contract no
 					// longer names a Claude-specific nature for the context.
-					for _, want := range []string{"GENTLE_AI_CLAUDE_REVIEW_CONTEXT", "provider-injected context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
+					// The context marker is likewise one canonical constant for
+					// every runtime (change #3138 slice 5, #2777): Claude
+					// prompts must carry GENTLE_AI_REVIEW_CONTEXT, never the
+					// legacy GENTLE_AI_CLAUDE_REVIEW_CONTEXT string.
+					for _, want := range []string{"GENTLE_AI_REVIEW_CONTEXT", "provider-injected context", "path evidence for every manifest index", "Missing, partial, reordered, mismatched, or unavailable evidence", "no execution tools"} {
 						if !strings.Contains(content, want) {
 							t.Errorf("%s missing Claude transport clause %q", path, want)
 						}

@@ -24,7 +24,11 @@ func TestImmutableReviewRuntimeMatrix(t *testing.T) {
 	}{
 		{name: "Claude prompt carried fresh executor", runtime: string(model.AgentClaudeCode), eligible: true, transport: reviewImmutableTransportClaudePromptCarried, supported: true},
 		{name: "OpenCode provider injected fresh executor", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportOpenCodeProviderInjected, supported: true},
-		{name: "Codex advisory scratch process", runtime: string(model.AgentCodex), eligible: true, transport: reviewImmutableTransportCodexAdvisoryScratchProcess, supported: true},
+		// Codex is wired but UNADVERTISED since the #3138 slice-8 product
+		// flip (REQ-RTC-5): CodexAdapter stays a live transport code path,
+		// but codex no longer appears in the eligible switch or the supported
+		// runtime projection.
+		{name: "Codex advisory scratch process unadvertised", runtime: string(model.AgentCodex), transport: reviewImmutableTransportUnsupported, supported: false},
 		{name: "Kilo has no native executor", runtime: string(model.AgentKilocode), eligible: true, transport: reviewImmutableTransportUnsupported},
 		{name: "Pi", runtime: string(model.AgentPi), transport: reviewImmutableTransportUnsupported},
 		{name: "unknown", runtime: "unknown-runtime", transport: reviewImmutableTransportUnsupported},
@@ -80,12 +84,13 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		// exercised instead by TestSupportedImmutableReviewTransportReachesRepositoryValidation.
 		//
 		// Codex used to stand here too, refused for lacking an enforceable
-		// fresh-reviewer boundary (#2208). The shared advisory transport's
-		// CodexAdapter (internal/advisoryreview) supplies that boundary --
-		// organically proven by TestRealCodexReviewerOrdinarySessionAdmitsRawOutput
-		// in e2e/organicruntime -- so Codex is a genuinely supported runtime
-		// now too, exercised by the same
-		// TestSupportedImmutableReviewTransportReachesRepositoryValidation.
+		// fresh-reviewer boundary (#2208), then gained the shared advisory
+		// transport's CodexAdapter (internal/advisoryreview) as that boundary
+		// and was advertised. The #3138 slice-8 product flip (REQ-RTC-5)
+		// unadvertised it again while keeping the transport wired: codex now
+		// refuses here again, this time as a subject of the advertisement
+		// decision rather than a missing boundary, and it is exercised by the
+		// codex row of TestImmutableReviewRuntimeMatrix.
 		//
 		// An undeclared runtime identity is deliberately absent from this
 		// matrix: it makes no transport claim to refuse, so it stays on the
@@ -169,7 +174,6 @@ func TestSupportedImmutableReviewTransportReachesRepositoryValidation(t *testing
 	}{
 		{name: "Claude", runtime: string(model.AgentClaudeCode)},
 		{name: "OpenCode", runtime: string(model.AgentOpenCode)},
-		{name: "Codex", runtime: string(model.AgentCodex)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
@@ -185,6 +189,28 @@ func TestSupportedImmutableReviewTransportReachesRepositoryValidation(t *testing
 				t.Fatalf("supported runtime was rejected before repository validation: %#v", failure)
 			}
 		})
+	}
+}
+
+// TestUnadvertisedCodexRuntimeIsRefusedBeforeRepositoryValidation pins the
+// post-flip admission truth for Codex: wired but UNADVERTISED (REQ-RTC-5),
+// so a negotiated status/start with --agent codex is refused at the
+// immutable-transport gate before any repository, target, authority, or
+// collection work -- no review state is ever created. The CodexAdapter
+// transport code path remains compiled and tested (internal/advisoryreview),
+// it just no longer admits reviews.
+func TestUnadvertisedCodexRuntimeIsRefusedBeforeRepositoryValidation(t *testing.T) {
+	var output bytes.Buffer
+	err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentCodex),
+		"--next-transition", "--cwd", t.TempDir() + "/missing",
+	}, &output)
+	if err == nil {
+		t.Fatal("unadvertised codex runtime unexpectedly reached repository validation")
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Code != reviewImmutableTransportUnsupportedCode || failure.NextAction != "stop" {
+		t.Fatalf("unadvertised codex refusal = %#v, want immutable_transport_unsupported / stop", failure)
 	}
 }
 

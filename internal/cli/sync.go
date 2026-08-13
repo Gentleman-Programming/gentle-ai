@@ -627,6 +627,13 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 		for _, name := range sdd.ManagedOpenCodePluginNames() {
 			paths[filepath.Join(pluginsDir, name)] = struct{}{}
 		}
+		// Retired OpenCode-only review plugins stay inside the backup
+		// contract for every plugin-receiving agent (change #3138 slice 6):
+		// a stale copy is removable on re-sync, so the transaction must be
+		// able to restore it byte-for-byte if that sync fails (REQ-RPC-10).
+		for _, name := range sdd.RetiredOpenCodePluginNames() {
+			paths[filepath.Join(pluginsDir, name)] = struct{}{}
+		}
 	}
 	adapterSkillPaths, err := syncAdapterSkillBackupTargets(homeDir, workspaceDir, selection, adapters)
 	if err != nil {
@@ -1946,6 +1953,22 @@ func runPostSyncVerification(homeDir, workspaceDir string, selection model.Selec
 							return err
 						}
 						return fmt.Errorf("legacy OpenCode plugin still exists")
+					},
+				})
+				continue
+			}
+			if isRetiredOpenCodeReviewPlugin(currentPath) {
+				checks = append(checks, verify.Check{
+					ID:          "verify:sync:file:" + currentPath,
+					Description: "retired OpenCode review plugin removed",
+					Run: func(context.Context) error {
+						if _, err := os.Stat(currentPath); err != nil {
+							if os.IsNotExist(err) {
+								return nil
+							}
+							return err
+						}
+						return fmt.Errorf("retired OpenCode review plugin still exists; run `gentle-ai sync` to resync the managed plugins")
 					},
 				})
 				continue

@@ -62,7 +62,10 @@ func (emission LensContextEmission) Validate() error {
 // lens context. Re-emitting the identical context for the same slot converges;
 // recording a different mechanism for the same frozen slot is a conflict rather
 // than an overwrite, because audit history that can be rewritten records
-// nothing.
+// nothing. The one exception is the migration window: a provider_contract
+// emission is accepted for a slot that already holds a legacy-mechanism record
+// for the exact same review (see lensContextEmissionMigrationWindowAccepts),
+// and that legacy record is never rewritten.
 func PublishLensContextEmission(storeDir string, emission LensContextEmission) error {
 	if err := emission.Validate(); err != nil {
 		return err
@@ -78,11 +81,40 @@ func PublishLensContextEmission(storeDir string, emission LensContextEmission) e
 	if err := publishImmutable(path, append(payload, '\n'), 0o600); err != nil {
 		var conflict *ImmutablePublicationConflictError
 		if errors.As(err, &conflict) {
+			if lensContextEmissionMigrationWindowAccepts(storeDir, emission) {
+				return nil
+			}
 			return ErrLensContextEmissionConflict
 		}
 		return err
 	}
 	return nil
+}
+
+// lensContextEmissionMigrationWindowAccepts reports whether a slot that
+// already recorded a different mechanism may adopt this emission without
+// rewriting the frozen audit note.
+//
+// The guard is keyed on (binding, schema) presence, never on level mismatch
+// alone: it accepts a provider_contract emission only when the same exact
+// review — the same lineage, target, revision, lens, order, and subject hash —
+// already recorded an emission under the same schema, and that record names a
+// legacy mechanism. That is the migration window: a review negotiated
+// pre-shim, still in flight, completes under the shared contract while the
+// legacy descriptor it was negotiated under stays the slot's immutable record.
+// Any other difference — a different review occupying the slot, or an emission
+// that is not the shared-contract one — remains a genuine conflict, because
+// audit history that can be rewritten records nothing.
+func lensContextEmissionMigrationWindowAccepts(storeDir string, emission LensContextEmission) bool {
+	if emission.Level != ReviewerContextLevelProviderContract {
+		return false
+	}
+	existing, found := ReadLensContextEmission(storeDir, emission.LineageID, emission.TargetIdentity,
+		emission.AuthorityRevision, emission.Lens, emission.SelectedOrder, emission.SubjectHash)
+	if !found || existing.Schema != emission.Schema {
+		return false
+	}
+	return existing.Level == ReviewerContextLevelProviderCommand || existing.Level == ReviewerContextLevelRuntimeInterception
 }
 
 // ReadLensContextEmission returns the recorded emission for one lens slot, or

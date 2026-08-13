@@ -100,6 +100,11 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDAttempt(cli.CanonicalizeSDDAttemptRevisionArgs(args[1:]), stdout)
 		case "sdd-verify-validate":
 			return cli.RunSDDVerifyValidate(args[1:], stdout)
+		case "sdd-task-result":
+			// Native SDD half of the OpenCode task-result contract
+			// (#3138 slice 6): spawned by the reviewer-shim glue, never
+			// by a human. Guard/result/clear/clear-all verbs.
+			return cli.RunSDDTaskResult(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
 		case "review":

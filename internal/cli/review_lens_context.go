@@ -365,7 +365,10 @@ func reviewLensContextBlock(
 	if err := consume(reviewLensContextInstruction, reviewLensContextInstruction+"_END", []byte(instruction)); err != nil {
 		return nil, err
 	}
-	if err := consume(reviewLensContextResultSchema, reviewLensContextResultSchema+"_END", []byte(reviewtransaction.ReviewerResultSchema)); err != nil {
+	// The result schema is read from the provider-published contract
+	// (advisoryreview.OutputSchema == reviewtransaction.ReviewerResultSchema):
+	// the CLI stays a thin wrapper and never owns schema content itself.
+	if err := consume(reviewLensContextResultSchema, reviewLensContextResultSchema+"_END", []byte(advisoryreview.OutputSchema)); err != nil {
 		return nil, err
 	}
 	for _, discovery := range []struct{ header, operation string }{

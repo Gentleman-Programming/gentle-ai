@@ -145,17 +145,20 @@ func ForAgent(agent model.AgentID) (AgentCapabilityManifest, error) {
 // capability to carry the review protocol at all (design.md decision 5's
 // Wave-0 trace citation: "Pi declares only AutoInstall|SystemPrompt|MCP
 // today (no FileSubAgents, no Skills), so its lens transport is genuinely
-// unavailable"). Every other in-repo adapter advertises it; a map miss
-// (an agent with no entry) defaults to the Go zero value of
-// ContractExposure (""), which Advertises treats as not advertised —
-// the same fail-closed default the map's absence of a Pi override would
-// otherwise silently paper over.
+// unavailable"). The advertisement flip (#3138 slice 8, REQ-RTC-5) made Codex
+// unadvertised too: its CodexAdapter invocation path stays wired, but review
+// advertisement excludes codex per product decision, so only claude and
+// opencode advertise review transport. A map miss (an agent with no entry)
+// defaults to the Go zero value of ContractExposure (""), which Advertises
+// treats as not advertised — the same fail-closed default the map's absence
+// of a Pi or Codex override would otherwise silently paper over.
 var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
 	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
 	for agent := range featureClaimsByAgent {
 		exposure[agent] = ContractExposureAdvertised
 	}
 	exposure[model.AgentPi] = ContractExposureDormant
+	exposure[model.AgentCodex] = ContractExposureDormant
 	return exposure
 }()
 
@@ -165,14 +168,13 @@ var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
 // OpenCode replaces the task prompt through its provider plugin from an
 // ordinary already-running session -- no restart, child process, special
 // user-visible session, or `OPENCODE_DISABLE_*` variable (rdd-advisory-
-// transport SKILL.md). Codex's boundary is the shared advisory transport's
-// CodexAdapter
-// (internal/advisoryreview): a brand-new `codex exec` process, launched in an
-// empty scratch directory the adapter creates and deletes itself, receiving
-// only the canonical provider-rendered prompt -- proven organically by
-// TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and its fail-closed
-// companions in e2e/organicruntime. Kilo and every other runtime remain
-// explicitly dormant until they own an equivalent native boundary.
+// transport SKILL.md). Codex no longer advertises the immutable-review
+// executor (#3138 slice 8, REQ-RTC-5): its CodexAdapter
+// (internal/advisoryreview) still owns an enforceable fresh-process boundary
+// (a brand-new `codex exec` in an empty scratch directory), but review
+// advertisement excludes codex per product decision -- wired but
+// unadvertised. Kilo and every other runtime remain explicitly dormant until
+// they own an equivalent native boundary.
 var immutableReviewExecutorExposureByAgent = func() map[model.AgentID]ContractExposure {
 	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
 	for agent := range featureClaimsByAgent {
@@ -180,7 +182,6 @@ var immutableReviewExecutorExposureByAgent = func() map[model.AgentID]ContractEx
 	}
 	exposure[model.AgentClaudeCode] = ContractExposureAdvertised
 	exposure[model.AgentOpenCode] = ContractExposureAdvertised
-	exposure[model.AgentCodex] = ContractExposureAdvertised
 	return exposure
 }()
 

@@ -121,18 +121,18 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 	t.Parallel()
 
 	const wantRoutingDigest = "sha256:ed03b86f20c9449a6e4c018f51d1e05619e1070b1076287a0792a74c458762b2"
-	// Digests pin the three providers with an enforceable fresh-reviewer
-	// boundary: Claude Code's generated reviewer has no live tools, OpenCode
-	// replaces the task prompt with provider-bound evidence from an ordinary
-	// already-running session (no restart, child process, special session,
-	// or OPENCODE_DISABLE_* variable), and Codex's CodexAdapter launches a
-	// brand-new `codex exec` process in an empty scratch directory (organic
-	// proof: TestRealCodexReviewerOrdinarySessionAdmitsRawOutput,
-	// e2e/organicruntime).
+	// Digests pin the two providers with an enforceable fresh-reviewer
+	// boundary: Claude Code's generated reviewer has no live tools and
+	// OpenCode replaces the task prompt with provider-bound evidence from an
+	// ordinary already-running session (no restart, child process, special
+	// session, or OPENCODE_DISABLE_* variable). Codex is wired but
+	// UNADVERTISED since the #3138 slice-8 advertisement flip (REQ-RTC-5):
+	// CodexAdapter remains a live transport code path, but its manifest
+	// exposes both review contracts as dormant.
 	wantManifestDigests := map[model.AgentID]string{
 		model.AgentAntigravity:   "sha256:962eb63dc7f59a0b4c9c011dbb890aca1b40ecbfd3800c3e69b08f8b1639332c",
 		model.AgentClaudeCode:    "sha256:132b9219b222d35b0e4eafce3dae965c56eb8d79f07dff6d45c42c137e36fd9b",
-		model.AgentCodex:         "sha256:dbf94a3b7815cf68ccd6299c634f3e17be9abc305b3849adee382c65055c5ed9",
+		model.AgentCodex:         "sha256:c87957870d843dcbd37b285bc6ed4b007cce8cdae7a52ac177d976f338c454f0",
 		model.AgentCursor:        "sha256:2cf80b9bd4cdc9a9d3586e6d02dc2207f326841bba935c6f11f257a20756d821",
 		model.AgentGeminiCLI:     "sha256:463fdc93ad387c9b107c5f031f806dece9da3e2d47300b88d7640174bcb22a1e",
 		model.AgentHermes:        "sha256:ec03506bc4cb0d4850542412630ada103c882d61fa372075f5f8db209a301127",
@@ -164,9 +164,20 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 			if manifest.Advertises(ContractWorkRoutingV1) {
 				t.Fatal("work-routing must remain unadvertised before final activation")
 			}
-			wantImmutableExecutor := agent == model.AgentClaudeCode || agent == model.AgentOpenCode || agent == model.AgentCodex
+			wantImmutableExecutor := agent == model.AgentClaudeCode || agent == model.AgentOpenCode
 			if got := manifest.Advertises(ContractImmutableReviewExecutorV1); got != wantImmutableExecutor {
 				t.Fatalf("immutable reviewer execution advertised = %t, want %t", got, wantImmutableExecutor)
+			}
+			if agent == model.AgentCodex {
+				// Codex is wired but unadvertised (#3138 slice 8, REQ-RTC-5):
+				// neither review contract may be exposed as advertised, while
+				// the adapter's transport code path stays compiled.
+				if manifest.Contracts.ReviewTransportV1.Exposure != ContractExposureDormant {
+					t.Fatalf("codex review transport exposure = %q, want %q (wired but unadvertised)", manifest.Contracts.ReviewTransportV1.Exposure, ContractExposureDormant)
+				}
+				if manifest.Advertises(ContractReviewTransportV1) {
+					t.Fatal("codex must not advertise review transport after the flip")
+				}
 			}
 			wantExposure := ContractExposureDormant
 			if wantImmutableExecutor {

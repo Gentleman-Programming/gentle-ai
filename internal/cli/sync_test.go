@@ -1000,8 +1000,8 @@ func TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent(t *tes
 
 	pluginsDir := filepath.Join(home, ".config", "opencode", "plugins")
 	stalePlugins := map[string]string{
-		"review-result-artifacts.ts": filepath.Join(pluginsDir, "review-result-artifacts.ts"),
-		"model-variants.ts":          filepath.Join(pluginsDir, "model-variants.ts"),
+		"reviewer-shim.ts":  filepath.Join(pluginsDir, "reviewer-shim.ts"),
+		"model-variants.ts": filepath.Join(pluginsDir, "model-variants.ts"),
 	}
 	for name, path := range stalePlugins {
 		mustWriteFile(t, path, []byte("// stale v2.1.7 managed plugin "+name))
@@ -1136,7 +1136,11 @@ func TestSyncBackupTargetsIncludeManagedOpenCodePluginsWithoutSDD(t *testing.T) 
 	}
 
 	for _, configDir := range []string{"opencode", "kilo"} {
-		for _, plugin := range []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
+		// ManagedOpenCodePluginNames is the OpenCode set applied to every
+		// plugin-receiving agent: Kilo also backs up OpenCode-only plugin
+		// paths (review-result-artifacts.ts, reviewer-shim.ts) so a stale
+		// copy is removable from a previous selection.
+		for _, plugin := range []string{"model-variants.ts", "review-result-artifacts.ts", "reviewer-shim.ts", "skill-registry.ts"} {
 			want := filepath.Join(home, ".config", configDir, "plugins", plugin)
 			if !containsPath(targets, want) {
 				t.Errorf("syncBackupTargets missing managed plugin path %q\ntargets = %v", want, targets)

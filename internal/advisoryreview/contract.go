@@ -61,17 +61,15 @@ type ValidatedResult struct {
 const OutputSchema = reviewtransaction.ReviewerResultSchema
 
 // Supports reports whether an adapter can use the generic prompt/text result
-// seam today. Codex was activated once its organic positive and negative
-// runtime proof passed (SKILL.md: "Capability advertisement requires
-// shared-contract conformance plus organic runtime proof."):
-// TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and its fail-closed
-// companions in e2e/organicruntime drove a real `codex exec` process through
-// CodexAdapter, receiving only the canonical Prompt() text in a directory it
-// could prove was empty, and its raw output reached native admission and a
-// terminal receipt.
+// seam today. Claude and OpenCode are advertised. Codex's CodexAdapter
+// invocation path stays wired (its organic positive and negative runtime
+// proof passed once — TestRealCodexReviewerOrdinarySessionAdmitsRawOutput
+// and its fail-closed companions drove a real `codex exec` process through
+// CodexAdapter to native admission), but the advertisement flip (#3138 slice
+// 8) made Codex unadvertised per product decision: wired but UNADVERTISED.
 func (runtime Runtime) Supports() bool {
 	switch runtime {
-	case RuntimeClaudeCode, RuntimeOpenCode, RuntimeCodex:
+	case RuntimeClaudeCode, RuntimeOpenCode:
 		return true
 	default:
 		return false
@@ -79,15 +77,16 @@ func (runtime Runtime) Supports() bool {
 }
 
 func SupportedRuntimes() []Runtime {
-	return []Runtime{RuntimeClaudeCode, RuntimeOpenCode, RuntimeCodex}
+	return []Runtime{RuntimeClaudeCode, RuntimeOpenCode}
 }
 
 // PromptFor returns the same canonical prompt for every supported runtime.
 // Runtime adapters transport this string and return text; they do not own
-// evidence assembly, result schema, or validation policy. Claude Code,
-// OpenCode, and Codex are all advertised (Runtime.Supports()); any other
-// runtime name always receives a typed unavailable error here, never a
-// prompt.
+// evidence assembly, result schema, or validation policy. Claude Code and
+// OpenCode are advertised (Runtime.Supports()); Codex is wired but
+// unadvertised since the #3138 slice-8 flip, so its runtime name receives a
+// typed unavailable error here just like any unrecognized name — never a
+// prompt, never a probing path.
 func PromptFor(runtime Runtime, request Request) (string, error) {
 	if !runtime.Supports() {
 		// refusal:by-design operator-knowledge: unsupported adapters have no advertised prompt/text transport yet

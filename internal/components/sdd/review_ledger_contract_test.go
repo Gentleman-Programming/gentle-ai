@@ -243,8 +243,8 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	if _, err := Inject(home, kilocodeAdapter(), model.SDDModeMulti); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".config", "kilo", "plugins", "review-result-artifacts.ts")); !os.IsNotExist(err) {
-		t.Fatalf("Kilo installed OpenCode-only review plugin: %v", err)
+	if _, err := os.Stat(filepath.Join(home, ".config", "kilo", "plugins", "reviewer-shim.ts")); !os.IsNotExist(err) {
+		t.Fatalf("Kilo installed OpenCode-only reviewer shim plugin: %v", err)
 	}
 	settings, err := os.ReadFile(filepath.Join(home, ".config", "kilo", "opencode.json"))
 	if err != nil {

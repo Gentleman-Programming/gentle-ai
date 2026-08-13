@@ -16,8 +16,14 @@ const boundedReviewContractAsset = "skills/_shared/review-ledger-contract.md"
 // prompt is what lets a reviewer resolve subject_hash from its own instructions
 // instead of depending on whatever context the orchestrator happened to carry.
 const reviewerBindingEnvironmentVariable = "GENTLE_AI_REVIEW_BINDING"
-const claudeReviewerContextMarker = "GENTLE_AI_CLAUDE_REVIEW_CONTEXT"
-const openCodeReviewContextMarker = "GENTLE_AI_REVIEW_CONTEXT"
+
+// reviewerContextMarker is the ONE canonical review context marker for every
+// runtime (change #3138 slice 5, issue #2777). Every generated reviewer that
+// receives a provider-injected context block — Claude Code via the parent,
+// OpenCode via the host process — names this exact marker and its _END
+// terminator; the legacy GENTLE_AI_CLAUDE_REVIEW_CONTEXT string is gone and
+// must never return.
+const reviewerContextMarker = "GENTLE_AI_REVIEW_CONTEXT"
 
 const nativeReviewerResultSchema = `{"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
 const providerReviewerResultSchema = `{"subject_hash":"<artifact_subject.subject_hash>","inspection":{"status":"completed","paths":["<complete unique unordered set>"]},"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
@@ -174,13 +180,14 @@ Repeat the selective shape per literal path; never pass --binary or render the w
 }
 
 // reviewerTransportInvocation is the only runtime-specific input to
-// runtimeReviewerPrompt: the marker name that scopes the immutable context
-// block a no-shell runtime adapter delivers, and which process supplies that
-// block. Every other word of the reviewer input contract -- scope,
-// candidate-causal admission, severity, evidence rules, and the published
-// output schema -- is the one shared template rendered by
-// runtimeReviewerPrompt, never a second copy per runtime (see
-// shared-advisory-transport-proposal.md's deletion-candidates row for
+// runtimeReviewerPrompt: which process supplies the immutable context block a
+// no-shell runtime adapter delivers. The marker itself is the one canonical
+// constant (reviewerContextMarker) for every runtime (#2777) — runtimes never
+// differ in the marker, only in who supplies the block. Every other word of
+// the reviewer input contract -- scope, candidate-causal admission, severity,
+// evidence rules, and the published output schema -- is the one shared
+// template rendered by runtimeReviewerPrompt, never a second copy per runtime
+// (see shared-advisory-transport-proposal.md's deletion-candidates row for
 // claudeReviewerPrompt/openCodeProviderInjectedReviewerPrompt).
 type reviewerTransportInvocation struct {
 	contextMarker string
@@ -188,28 +195,28 @@ type reviewerTransportInvocation struct {
 }
 
 var claudeReviewerInvocation = reviewerTransportInvocation{
-	contextMarker: claudeReviewerContextMarker,
+	contextMarker: reviewerContextMarker,
 	supplier:      "the parent",
 }
 
-// openCodeReviewerInvocation names the OpenCode transport: the OpenCode
-// plugin (review-result-artifacts.ts) asks `review lens-context` for the
-// finished reviewer context through its shell-less native channel before the
-// reviewer task ever launches, then replaces the task prompt wholesale with
-// the binding and context block runtimeReviewerPrompt names. The generated
-// agent holds no bash and no read tool, so that provider-injected block is
+// openCodeReviewerInvocation names the OpenCode transport. Change #3138
+// retired the in-session plugin (review-result-artifacts.ts, slice 6): the
+// finished reviewer context is produced natively by the Go shim/adapter, and
+// the managed reviewer-shim.ts glue is the hook-free seam that would deliver
+// it once dispatch activation lands. The generated agent holds no bash and no
+// read tool, so the provider-injected block runtimeReviewerPrompt names is
 // its only byte source for the reviewer's own turn.
 var openCodeReviewerInvocation = reviewerTransportInvocation{
-	contextMarker: openCodeReviewContextMarker,
+	contextMarker: reviewerContextMarker,
 	supplier:      "the OpenCode host process",
 }
 
 // claudeReviewerPrompt and openCodeProviderInjectedReviewerPrompt are thin
 // entry points: both render through the one shared template in
-// runtimeReviewerPrompt and differ only in reviewerTransportInvocation. A
-// runtime difference in scope, admission, severity, evidence, or output
-// schema belongs in the shared template, never in a runtime-specific
-// duplicate of it.
+// runtimeReviewerPrompt, both name the same canonical context marker (#2777),
+// and differ only in which process supplies the block. A runtime difference
+// in scope, admission, severity, evidence, output schema, or marker belongs
+// in the shared template, never in a runtime-specific duplicate of it.
 func claudeReviewerPrompt(name string) (string, bool) {
 	return runtimeReviewerPrompt(name, claudeReviewerInvocation)
 }

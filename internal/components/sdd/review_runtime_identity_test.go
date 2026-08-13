@@ -18,10 +18,11 @@ var reviewRuntimeIdentityBindingRegexp = regexp.MustCompile(`(?:--agent|agent:) 
 // knownRuntimeIdentities is every compiled runtime identity the review
 // transport gate can be handed. A generated instruction that names one of
 // these while a DIFFERENT runtime is executing is a gate bypass, not a
-// cosmetic defect: internal/cli/review_transport_capability.go admits
-// claude-code alone, so a Codex or OpenCode orchestrator that follows its own
-// installed instructions passes a false identity straight through the
-// admission check built to refuse it (issue #2440).
+// cosmetic defect: internal/cli/review_transport_capability.go admits only
+// the advertised runtime identities (claude-code, opencode) and refuses the
+// unadvertised ones, so a Codex or OpenCode orchestrator that follows another
+// runtime's installed instructions passes a false identity straight through
+// the admission check built to refuse it (issue #2440).
 func knownRuntimeIdentities() map[string]bool {
 	identities := map[string]bool{}
 	for _, agent := range catalog.AllAgents() {
