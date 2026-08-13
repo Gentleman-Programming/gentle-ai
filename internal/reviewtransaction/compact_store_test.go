@@ -1578,7 +1578,7 @@ func TestCompactRecordWithoutIntentsRetainsHistoricalIdentityAndBytes(t *testing
 	}
 }
 
-func TestCompactEffectIntentsRemainSchemaOnly(t *testing.T) {
+func TestCompactEffectIntentMismatchBlocksSuccessor(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	state := newCompactTestState(t, repo, "effect-intent-schema-only")
 	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
@@ -1604,12 +1604,12 @@ func TestCompactEffectIntentsRemainSchemaOnly(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Replace(record.Revision, "review/complete-review", next); err != nil {
-		t.Fatalf("schema-only intents blocked successor: %v", err)
+	if _, err := store.Replace(record.Revision, "review/complete-review", next); err == nil || !strings.Contains(err.Error(), "binding or payload does not match") {
+		t.Fatalf("successor mismatch error = %v", err)
 	}
 	loaded, err := store.Load()
-	if err != nil || len(loaded.EffectIntents) != 0 {
-		t.Fatalf("successor intents = %#v, %v; want no premature propagation", loaded.EffectIntents, err)
+	if err != nil || loaded.Revision != record.Revision {
+		t.Fatalf("authority after refusal = %#v, %v", loaded, err)
 	}
 }
 

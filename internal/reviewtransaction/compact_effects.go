@@ -17,12 +17,14 @@ type compactEffectMarkerState string
 type compactEffectObservation string
 
 const (
-	compactEffectPending          compactEffectMarkerState = "pending"
-	compactEffectBlocked          compactEffectMarkerState = "blocked_conflict"
-	compactEffectApplied          compactEffectMarkerState = "applied"
-	compactEffectPendingTransient compactEffectObservation = "pending_transient"
-	compactEffectBlockedConflict  compactEffectObservation = "blocked_conflict"
-	compactEffectPlatformLimited  compactEffectObservation = "platform_durability_limited"
+	compactEffectPending           compactEffectMarkerState = "pending"
+	compactEffectBlocked           compactEffectMarkerState = "blocked_conflict"
+	compactEffectApplied           compactEffectMarkerState = "applied"
+	compactEffectDurabilityLimited compactEffectMarkerState = "durability_limited"
+	compactEffectPendingTransient  compactEffectObservation = "pending_transient"
+	compactEffectBlockedConflict   compactEffectObservation = "blocked_conflict"
+	compactEffectPlatformLimited   compactEffectObservation = "platform_durability_limited"
+	compactEffectAppliedDurable    compactEffectObservation = "applied_durable"
 )
 
 type compactEffectMarker struct {
@@ -66,6 +68,9 @@ func (repository compactEffectMarkerRepository) write(marker compactEffectMarker
 			}
 			return compactEffectPublication{}, errors.New("applied compact effect marker is immutable") // refusal:by-design operator-knowledge: a caller may only replay the exact applied value
 		}
+		if old.State == compactEffectDurabilityLimited && marker.State != compactEffectApplied {
+			return compactEffectPublication{}, errors.New("compact effect marker transition regressed")
+		}
 		if old.State == compactEffectBlocked && marker.State == compactEffectPending {
 			return compactEffectPublication{}, errors.New("compact effect marker transition regressed") // refusal:by-design operator-knowledge: callers must submit a monotonic state
 		}
@@ -80,6 +85,21 @@ func (repository compactEffectMarkerRepository) write(marker compactEffectMarker
 			return publication, err
 		}
 		publication.DurabilityLimited = true
+		if marker.State == compactEffectApplied {
+			marker.State = compactEffectDurabilityLimited
+			marker.Observation = compactEffectPlatformLimited
+			payload, _ = json.Marshal(marker)
+			if rewriteErr := writeAtomic(path, append(payload, '\n'), 0o600); rewriteErr != nil {
+				var limitedSyncErr *directorySyncError
+				if !errors.As(rewriteErr, &limitedSyncErr) {
+					return publication, rewriteErr
+				}
+				got, readErr := repository.read(marker.LineageID, marker.AuthorityRevision, marker.EventID)
+				if readErr != nil || got != marker {
+					return publication, errors.New("compact effect marker durability-state rewrite failed")
+				}
+			}
+		}
 	}
 	got, err := repository.read(marker.LineageID, marker.AuthorityRevision, marker.EventID)
 	if err != nil || got != marker {
@@ -114,8 +134,8 @@ func (repository compactEffectMarkerRepository) read(lineageID, revision, eventI
 }
 
 func validateCompactEffectMarker(marker compactEffectMarker, lineageID, revision, eventID string) error {
-	validState := marker.State == compactEffectPending || marker.State == compactEffectBlocked || marker.State == compactEffectApplied
-	validObservation := marker.Observation == compactEffectPendingTransient || marker.Observation == compactEffectBlockedConflict || marker.Observation == compactEffectPlatformLimited
+	validState := marker.State == compactEffectPending || marker.State == compactEffectBlocked || marker.State == compactEffectApplied || marker.State == compactEffectDurabilityLimited
+	validObservation := marker.Observation == compactEffectPendingTransient || marker.Observation == compactEffectBlockedConflict || marker.Observation == compactEffectPlatformLimited || marker.Observation == compactEffectAppliedDurable
 	if marker.Schema != compactEffectMarkerSchema || marker.LineageID != lineageID || marker.AuthorityRevision != revision || marker.EventID != eventID || !validState || !validObservation {
 		return errors.New("invalid compact effect marker") // refusal:by-design operator-knowledge: marker schema, binding, state, and observation are closed
 	}
@@ -136,8 +156,11 @@ func (repository compactEffectMarkerRepository) path(lineageID, revision, eventI
 				return "", err
 			}
 			info, err := os.Lstat(dir)
-			if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+			if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 				return "", errors.New("unsafe compact effect marker root") // refusal:by-design world-action: private marker storage was substituted or made unsafe
+			}
+			if err := os.Chmod(dir, 0o700); err != nil {
+				return "", err
 			}
 			if err := SyncReviewDirectory(filepath.Dir(dir)); err != nil {
 				return "", err

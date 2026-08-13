@@ -34,9 +34,6 @@ func TestCompactEffectMarkerTransitionsAreMonotonic(t *testing.T) {
 				path, _ := repository.path(marker.LineageID, marker.AuthorityRevision, marker.EventID, false)
 				before, _ := os.ReadFile(path)
 				marker.State, marker.Observation = to, observationFor(to)
-				if from == compactEffectApplied && to == compactEffectApplied {
-					marker.Observation = compactEffectPlatformLimited
-				}
 				_, err := repository.write(marker)
 				wantAllowed := from == "" || allowed[[2]compactEffectMarkerState{from, to}]
 				if (err == nil) != wantAllowed {
@@ -123,7 +120,7 @@ func TestCompactEffectMarkerIsPrivateSeparateAndStable(t *testing.T) {
 		t.Fatal(err)
 	}
 	beforeAuthority, _ := os.ReadFile(authority)
-	marker.State, marker.Observation = compactEffectApplied, compactEffectPlatformLimited
+	marker.State, marker.Observation = compactEffectApplied, compactEffectAppliedDurable
 	if _, err := repository.write(marker); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +162,7 @@ func TestCompactEffectMarkerConcurrentWritersConverge(t *testing.T) {
 		}()
 	}
 	wait.Wait()
-	marker.State, marker.Observation = compactEffectApplied, compactEffectPlatformLimited
+	marker.State, marker.Observation = compactEffectApplied, compactEffectAppliedDurable
 	if _, err := repository.write(marker); err != nil {
 		t.Fatal(err)
 	}
@@ -206,6 +203,181 @@ func TestCompactEffectMarkerRejectsCallerBeforeMutationAndReportsLimitedDurabili
 	}
 }
 
+func TestCompactRepositoryContextReconciliationPublishesExactIntentOnce(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "repository-context-reconcile")
+	record, payload := compactRepositoryContextIntentFixture(t, repo, state)
+	store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err := writeAtomic(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileCompactRepositoryContext(context.Background(), store, record); err != nil {
+		t.Fatal(err)
+	}
+	intent := record.EffectIntents[0]
+	path, _ := reviewRepositoryContextPath(intent.Destination)
+	before, err := os.ReadFile(path)
+	if err != nil || hashPayloadBytes(bytes.TrimSuffix(before, []byte{'\n'})) != intent.PayloadHash {
+		t.Fatalf("published payload mismatch: %v", err)
+	}
+	info, _ := os.Stat(path)
+	time.Sleep(20 * time.Millisecond)
+	if err := reconcileCompactRepositoryContext(context.Background(), store, record); err != nil {
+		t.Fatal(err)
+	}
+	afterInfo, _ := os.Stat(path)
+	if !info.ModTime().Equal(afterInfo.ModTime()) {
+		t.Fatal("applied retry rewrote repository context")
+	}
+	markers, _ := openCompactEffectMarkerRepository(context.Background(), repo)
+	marker, err := markers.read(state.LineageID, record.Revision, intent.EventID)
+	if err != nil || marker.State != compactEffectApplied {
+		t.Fatalf("marker = %#v, %v", marker, err)
+	}
+}
+
+func TestCompactRepositoryContextReconciliationCompletesEveryIntent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "repository-context-multiple")
+	record, _ := compactRepositoryContextIntentFixture(t, repo, state)
+	second := record.EffectIntents[0]
+	second.EventID = "sha256:" + identityHash("second-repository-context-intent")
+	record.EffectIntents = append(record.EffectIntents, second)
+	store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err := reconcileCompactRepositoryContext(context.Background(), store, record); err != nil {
+		t.Fatal(err)
+	}
+	markers, _ := openCompactEffectMarkerRepository(context.Background(), repo)
+	for _, intent := range record.EffectIntents {
+		marker, readErr := markers.read(state.LineageID, record.Revision, intent.EventID)
+		if readErr != nil || marker.State != compactEffectApplied {
+			t.Fatalf("intent %s marker = %#v, %v", intent.EventID, marker, readErr)
+		}
+	}
+}
+
+func TestCompactRepositoryContextLimitedDurabilityPromotesOnRetry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "repository-context-limited")
+	record, _ := compactRepositoryContextIntentFixture(t, repo, state)
+	markers, _ := openCompactEffectMarkerRepository(context.Background(), repo)
+	path, _ := markers.path(state.LineageID, record.Revision, record.EffectIntents[0].EventID, true)
+	original := syncReviewDirectory
+	syncReviewDirectory = func(dir string) error {
+		if dir == filepath.Dir(path) {
+			return errors.New("injected")
+		}
+		return original(dir)
+	}
+	if err := reconcileCompactRepositoryContext(context.Background(), CompactStore{repo: repo}, record); err == nil {
+		t.Fatal("limited durability reconciled")
+	}
+	syncReviewDirectory = original
+	t.Cleanup(func() { syncReviewDirectory = original })
+	marker, err := markers.read(state.LineageID, record.Revision, record.EffectIntents[0].EventID)
+	if err != nil || marker.State != compactEffectDurabilityLimited || marker.Observation != compactEffectPlatformLimited {
+		t.Fatalf("marker = %#v, %v", marker, err)
+	}
+	if err := reconcileCompactRepositoryContext(context.Background(), CompactStore{repo: repo}, record); err != nil {
+		t.Fatalf("retry did not promote limited marker: %v", err)
+	}
+	marker, err = markers.read(state.LineageID, record.Revision, record.EffectIntents[0].EventID)
+	if err != nil || marker.State != compactEffectApplied || marker.Observation != compactEffectAppliedDurable {
+		t.Fatalf("promoted marker = %#v, %v", marker, err)
+	}
+}
+
+func TestCompactRepositoryContextReconciliationFailsClosedOnIntentMismatch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "repository-context-conflict")
+	record, _ := compactRepositoryContextIntentFixture(t, repo, state)
+	record.EffectIntents[0].PayloadHash = hash("different")
+	store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err := reconcileCompactRepositoryContext(context.Background(), store, record); err == nil {
+		t.Fatal("mismatched intent reconciled")
+	}
+	intent := record.EffectIntents[0]
+	if path, _ := reviewRepositoryContextPath(intent.Destination); func() bool { _, err := os.Stat(path); return !os.IsNotExist(err) }() {
+		t.Fatal("mismatched intent published repository context")
+	}
+	markers, _ := openCompactEffectMarkerRepository(context.Background(), repo)
+	marker, err := markers.read(state.LineageID, record.Revision, intent.EventID)
+	if err != nil || marker.State != compactEffectBlocked {
+		t.Fatalf("marker = %#v, %v", marker, err)
+	}
+}
+
+func TestCompactRepositoryContextMustReconcileBeforeSuccessor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "repository-context-successor")
+	record, payload := compactRepositoryContextIntentFixture(t, repo, state)
+	store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err := writeAtomic(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	intent := record.EffectIntents[0]
+	markers, _ := openCompactEffectMarkerRepository(context.Background(), repo)
+	if _, err := markers.write(compactEffectMarker{Schema: compactEffectMarkerSchema, LineageID: state.LineageID,
+		AuthorityRevision: record.Revision, EventID: intent.EventID, State: compactEffectBlocked, Observation: compactEffectBlockedConflict}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(record.Revision, "review/test", state); err == nil || !strings.Contains(err.Error(), "reconcile compact predecessor effects") {
+		t.Fatalf("successor error = %v", err)
+	}
+}
+
+func TestCompactRepositoryContextMustReconcileBeforeRecovery(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "repository-context-recovery")
+	record, payload := compactRepositoryContextIntentFixture(t, repo, state)
+	store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err := writeAtomic(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	intent := record.EffectIntents[0]
+	markers, _ := openCompactEffectMarkerRepository(context.Background(), repo)
+	if _, err := markers.write(compactEffectMarker{Schema: compactEffectMarkerSchema, LineageID: state.LineageID,
+		AuthorityRevision: record.Revision, EventID: intent.EventID, State: compactEffectBlocked, Observation: compactEffectBlockedConflict}); err != nil {
+		t.Fatal(err)
+	}
+	successor := state
+	successor.LineageID = "repository-context-recovery-successor"
+	_, err := RecoverCompactAuthority(context.Background(), repo, CompactRecoveryRequest{
+		PredecessorLineageID: state.LineageID, ExpectedPredecessorRevision: record.Revision, Successor: successor,
+	})
+	if err == nil || !strings.Contains(err.Error(), "reconcile recovery predecessor effects") {
+		t.Fatalf("recovery error = %v", err)
+	}
+}
+
+func compactRepositoryContextIntentFixture(t *testing.T, repo string, state CompactState) (CompactRecord, []byte) {
+	t.Helper()
+	statePayload, _ := json.Marshal(state)
+	binding := ReviewRepositoryContextBinding{LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Revision: compactStateRevision(statePayload)}
+	identity, err := reviewRepositoryIdentity(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := reviewRepositoryContextHandle(binding, identity)
+	contextPayload, _ := json.Marshal(reviewRepositoryContextFile{
+		Schema: ReviewRepositoryContextSchema, Handle: handle, LineageID: binding.LineageID,
+		TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
+		RepositoryIdentity: identity.RepositoryIdentity, RepositoryRoot: identity.RepositoryRoot,
+		GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir,
+	})
+	record, payload, err := makeCompactRecordWithIntents(state, []CompactEffectIntent{{Class: "repository_context", Destination: handle, PayloadHash: hashPayloadBytes(contextPayload)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record, payload
+}
+
 func newCompactEffectMarkerFixture(t *testing.T, lineage string) (compactEffectMarkerRepository, compactEffectMarker) {
 	t.Helper()
 	repo := initSnapshotRepo(t)
@@ -221,7 +393,7 @@ func observationFor(state compactEffectMarkerState) compactEffectObservation {
 		return compactEffectBlockedConflict
 	}
 	if state == compactEffectApplied {
-		return compactEffectPlatformLimited
+		return compactEffectAppliedDurable
 	}
 	return compactEffectPendingTransient
 }

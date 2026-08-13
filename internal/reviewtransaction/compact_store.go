@@ -289,6 +289,9 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	if err != nil {
 		return CompactRecord{}, fmt.Errorf("load recovery predecessor: %w", err)
 	}
+	if err := reconcileCompactRepositoryContext(ctx, predecessorStore, predecessor); err != nil {
+		return CompactRecord{}, fmt.Errorf("reconcile recovery predecessor effects: %w", err)
+	}
 	if predecessor.Revision != request.ExpectedPredecessorRevision {
 		return CompactRecord{}, fmt.Errorf("%w: expected predecessor revision %q, current %q", ErrConcurrentUpdate, request.ExpectedPredecessorRevision, predecessor.Revision)
 	}
@@ -1929,6 +1932,11 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 		current = &loaded
 	} else if !os.IsNotExist(err) {
 		return "", err
+	}
+	if current != nil {
+		if err := reconcileCompactRepositoryContext(ctx, store, *current); err != nil {
+			return "", fmt.Errorf("reconcile compact predecessor effects: %w", err)
+		}
 	}
 	record, payload, err := makeCompactRecord(next)
 	if err != nil {
