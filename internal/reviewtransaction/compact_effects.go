@@ -45,7 +45,7 @@ func openCompactEffectMarkerRepository(ctx context.Context, repo string) (compac
 	return compactEffectMarkerRepository{root: filepath.Join(base, "effect-markers", "v1")}, nil
 }
 
-func (repository compactEffectMarkerRepository) write(marker compactEffectMarker) (compactEffectPublication, error) {
+func (repository compactEffectMarkerRepository) write(ctx context.Context, marker compactEffectMarker) (compactEffectPublication, error) {
 	if err := validateCompactEffectMarker(marker, marker.LineageID, marker.AuthorityRevision, marker.EventID); err != nil {
 		return compactEffectPublication{}, err
 	}
@@ -53,7 +53,7 @@ func (repository compactEffectMarkerRepository) write(marker compactEffectMarker
 	if err != nil {
 		return compactEffectPublication{}, err
 	}
-	lock, err := acquireStoreLockForConvergentCompletion(context.Background(), path+".lock")
+	lock, err := acquireStoreLockForConvergentCompletion(ctx, path+".lock")
 	if err != nil {
 		return compactEffectPublication{}, err
 	}
@@ -74,16 +74,18 @@ func (repository compactEffectMarkerRepository) write(marker compactEffectMarker
 	}
 	payload, _ := json.Marshal(marker)
 	publication := compactEffectPublication{}
+	var publicationErr error
 	if err := writeAtomic(path, append(payload, '\n'), 0o600); err != nil {
 		var syncErr *directorySyncError
 		if !errors.As(err, &syncErr) {
 			return publication, err
 		}
 		publication.DurabilityLimited = true
+		publicationErr = err
 	}
 	got, err := repository.read(marker.LineageID, marker.AuthorityRevision, marker.EventID)
 	if err != nil || got != marker {
-		return publication, errors.New("compact effect marker read-back mismatch") // refusal:by-design world-action: storage did not retain the exact atomic replacement
+		return publication, errors.Join(publicationErr, err, errors.New("compact effect marker read-back mismatch")) // refusal:by-design world-action: storage did not retain the exact atomic replacement
 	}
 	return publication, nil
 }

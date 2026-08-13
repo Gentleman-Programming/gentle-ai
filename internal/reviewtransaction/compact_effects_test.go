@@ -27,7 +27,7 @@ func TestCompactEffectMarkerTransitionsAreMonotonic(t *testing.T) {
 				repository, marker := newCompactEffectMarkerFixture(t, "case"+strings.ReplaceAll(name, "_", "-"))
 				if from != "" {
 					marker.State, marker.Observation = from, observationFor(from)
-					if _, err := repository.write(marker); err != nil {
+					if _, err := repository.write(context.Background(), marker); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -37,7 +37,7 @@ func TestCompactEffectMarkerTransitionsAreMonotonic(t *testing.T) {
 				if from == compactEffectApplied && to == compactEffectApplied {
 					marker.Observation = compactEffectPlatformLimited
 				}
-				_, err := repository.write(marker)
+				_, err := repository.write(context.Background(), marker)
 				wantAllowed := from == "" || allowed[[2]compactEffectMarkerState{from, to}]
 				if (err == nil) != wantAllowed {
 					t.Fatalf("write error = %v; allowed = %v", err, wantAllowed)
@@ -55,7 +55,7 @@ func TestCompactEffectMarkerTransitionsAreMonotonic(t *testing.T) {
 
 func TestCompactEffectMarkerStrictValidation(t *testing.T) {
 	repository, marker := newCompactEffectMarkerFixture(t, "strict-validation")
-	if _, err := repository.write(marker); err != nil {
+	if _, err := repository.write(context.Background(), marker); err != nil {
 		t.Fatal(err)
 	}
 	path, _ := repository.path(marker.LineageID, marker.AuthorityRevision, marker.EventID, false)
@@ -96,11 +96,12 @@ func TestCompactEffectMarkerRejectsUnsafeStorageAndIdentity(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(repository.root), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(t.TempDir(), repository.root); err != nil {
+	if err := os.Symlink(t.TempDir(), repository.root); err == nil {
+		if _, err := repository.write(context.Background(), marker); err == nil {
+			t.Fatal("accepted symlink root")
+		}
+	} else if !errors.Is(err, os.ErrPermission) && !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatal(err)
-	}
-	if _, err := repository.write(marker); err == nil {
-		t.Fatal("accepted symlink root")
 	}
 
 	repository, marker = newCompactEffectMarkerFixture(t, "non-regular")
@@ -128,14 +129,14 @@ func TestCompactEffectMarkerIsPrivateSeparateAndStable(t *testing.T) {
 	}
 	beforeAuthority, _ := os.ReadFile(authority)
 	marker.State, marker.Observation = compactEffectApplied, compactEffectPlatformLimited
-	if _, err := repository.write(marker); err != nil {
+	if _, err := repository.write(context.Background(), marker); err != nil {
 		t.Fatal(err)
 	}
 	path, _ := repository.path(marker.LineageID, marker.AuthorityRevision, marker.EventID, false)
 	before, _ := os.ReadFile(path)
 	info, _ := os.Stat(path)
 	time.Sleep(20 * time.Millisecond)
-	if _, err := repository.write(marker); err != nil {
+	if _, err := repository.write(context.Background(), marker); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := os.ReadFile(path)
@@ -165,12 +166,12 @@ func TestCompactEffectMarkerConcurrentWritersConverge(t *testing.T) {
 			candidate := marker
 			candidate.State = []compactEffectMarkerState{compactEffectPending, compactEffectBlocked, compactEffectApplied}[i%3]
 			candidate.Observation = observationFor(candidate.State)
-			_, _ = repository.write(candidate)
+			_, _ = repository.write(context.Background(), candidate)
 		}()
 	}
 	wait.Wait()
 	marker.State, marker.Observation = compactEffectApplied, compactEffectPlatformLimited
-	if _, err := repository.write(marker); err != nil {
+	if _, err := repository.write(context.Background(), marker); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := repository.read(marker.LineageID, marker.AuthorityRevision, marker.EventID); err != nil || got != marker {
@@ -181,14 +182,14 @@ func TestCompactEffectMarkerConcurrentWritersConverge(t *testing.T) {
 func TestCompactEffectMarkerRejectsCallerBeforeMutationAndReportsLimitedDurability(t *testing.T) {
 	repository, marker := newCompactEffectMarkerFixture(t, "publication")
 	marker.Observation = "unknown"
-	if _, err := repository.write(marker); err == nil {
+	if _, err := repository.write(context.Background(), marker); err == nil {
 		t.Fatal("accepted invalid caller marker")
 	}
 	if _, err := os.Stat(filepath.Dir(filepath.Dir(repository.root))); !os.IsNotExist(err) {
 		t.Fatalf("storage mutated: %v", err)
 	}
 	marker.Observation = compactEffectPendingTransient
-	if _, err := repository.write(marker); err != nil {
+	if _, err := repository.write(context.Background(), marker); err != nil {
 		t.Fatal(err)
 	}
 	marker.State, marker.Observation = compactEffectBlocked, compactEffectBlockedConflict
@@ -201,12 +202,49 @@ func TestCompactEffectMarkerRejectsCallerBeforeMutationAndReportsLimitedDurabili
 		return original(dir)
 	}
 	t.Cleanup(func() { syncReviewDirectory = original })
-	result, err := repository.write(marker)
+	result, err := repository.write(context.Background(), marker)
 	if err != nil || !result.DurabilityLimited {
 		t.Fatalf("publication = %#v, %v", result, err)
 	}
 	if got, readErr := repository.read(marker.LineageID, marker.AuthorityRevision, marker.EventID); readErr != nil || got != marker {
 		t.Fatalf("published marker = %#v, %v", got, readErr)
+	}
+}
+
+func TestCompactEffectMarkerWriteHonorsCancellationAndPreservesPublicationCause(t *testing.T) {
+	repository, marker := newCompactEffectMarkerFixture(t, "write-failures")
+	path, err := repository.path(marker.LineageID, marker.AuthorityRevision, marker.EventID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireStoreLock(path + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := repository.write(ctx, marker); !errors.Is(err, context.Canceled) {
+		t.Fatalf("write error = %v", err)
+	}
+	if err := lock.release(); err != nil {
+		t.Fatal(err)
+	}
+
+	injected := errors.New("injected publication failure")
+	original := syncReviewDirectory
+	syncReviewDirectory = func(dir string) error {
+		if dir == filepath.Dir(path) {
+			if err := os.WriteFile(path, []byte("corrupt\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return injected
+		}
+		return original(dir)
+	}
+	t.Cleanup(func() { syncReviewDirectory = original })
+	result, err := repository.write(context.Background(), marker)
+	if !result.DurabilityLimited || !errors.Is(err, injected) || !strings.Contains(err.Error(), "read-back mismatch") {
+		t.Fatalf("publication = %#v, %v", result, err)
 	}
 }
 
