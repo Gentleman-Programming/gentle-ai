@@ -3,7 +3,6 @@ package model
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -205,17 +204,4 @@ func containsValue(slice []string, want string) string {
 		}
 	}
 	return ""
-}
-
-// sortCopy returns a lowercased, sorted copy of the input. The exported
-// surface does not need ordering, but the helper exists so future
-// fingerprinting (e.g. dedup or equality checks across runs) can lean on a
-// canonical form. Kept unexported for now.
-func sortCopy(s []string) []string {
-	out := make([]string, len(s))
-	for i, v := range s {
-		out[i] = strings.ToLower(v)
-	}
-	sort.Strings(out)
-	return out
 }
