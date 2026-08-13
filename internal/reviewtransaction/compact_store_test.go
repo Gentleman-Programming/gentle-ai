@@ -1491,7 +1491,7 @@ func TestCompactRecordEffectIntentIdentity(t *testing.T) {
 		GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir,
 	})
 	intents := []CompactEffectIntent{
-		{Class: "repository_context", Destination: destination, PayloadHash: hashPayload(contextPayload)},
+		{Class: "repository_context", Destination: destination, PayloadHash: hashPayloadBytes(contextPayload)},
 		{Class: "requested_trace", Destination: "requested-output", PayloadHash: hash("d")},
 	}
 	record, payload, err := makeCompactRecordWithIntents(state, intents)
@@ -1525,6 +1525,7 @@ func TestCompactRecordEffectIntentIdentity(t *testing.T) {
 		{"unknown class", func(candidate *CompactRecord) { candidate.EffectIntents[0].Class = "unknown" }},
 		{"invalid payload hash", func(candidate *CompactRecord) { candidate.EffectIntents[0].PayloadHash = "invalid" }},
 		{"invalid event hash", func(candidate *CompactRecord) { candidate.EffectIntents[0].EventID = "invalid" }},
+		{"forged record revision", func(candidate *CompactRecord) { candidate.Revision = hash("forged") }},
 		{"forged binding revision", func(candidate *CompactRecord) { candidate.EffectIntents[0].BindingRevision = hash("forged") }},
 		{"coordinated binding and event forgery", func(candidate *CompactRecord) {
 			intent := &candidate.EffectIntents[0]
@@ -1551,15 +1552,10 @@ func TestCompactRecordEffectIntentIdentity(t *testing.T) {
 	}
 	otherState := state
 	otherState.LineageID = "effect-intent-other-lineage"
-	other, _, err := makeCompactRecordWithIntents(otherState, []CompactEffectIntent{{Class: "repository_context", Destination: destination, PayloadHash: hashPayload(contextPayload)}, intents[1]})
+	other, _, err := makeCompactRecordWithIntents(otherState, []CompactEffectIntent{{Class: "repository_context", Destination: destination, PayloadHash: hashPayloadBytes(contextPayload)}, intents[1]})
 	if err != nil || other.EffectIntents[0].EventID == record.EffectIntents[0].EventID {
 		t.Fatalf("lineage-bound event identity = %q, %v; want different from %q", other.EffectIntents[0].EventID, err, record.EffectIntents[0].EventID)
 	}
-}
-
-func hashPayload(payload []byte) string {
-	sum := sha256.Sum256(payload)
-	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func TestCompactRecordWithoutIntentsRetainsHistoricalIdentityAndBytes(t *testing.T) {
@@ -1579,6 +1575,7 @@ func TestCompactRecordWithoutIntentsRetainsHistoricalIdentityAndBytes(t *testing
 }
 
 func TestCompactEffectIntentMismatchBlocksSuccessor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	repo := initSnapshotRepo(t)
 	state := newCompactTestState(t, repo, "effect-intent-schema-only")
 	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)

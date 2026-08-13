@@ -63,7 +63,7 @@ func TestCompactEffectMarkerStrictValidation(t *testing.T) {
 	}{
 		{"malformed", []byte("{")},
 		{"trailing JSON", append(append([]byte(nil), valid...), []byte("{}")...)},
-		{"unknown field", []byte(`{"schema":"gentle-ai.review-effect-marker/v1","lineage_id":"strict-validation","authority_revision":"` + hash("a") + `","event_id":"` + hash("b") + `","state":"pending","observation":"bounded","extra":true}`)},
+		{"unknown field", []byte(`{"schema":"gentle-ai.review-effect-marker/v1","lineage_id":"strict-validation","authority_revision":"` + hash("a") + `","event_id":"` + hash("b") + `","state":"pending","observation":"pending_transient","extra":true}`)},
 		{"wrong schema", markerPayload(marker, func(value *compactEffectMarker) { value.Schema = "wrong" })},
 		{"wrong lineage", markerPayload(marker, func(value *compactEffectMarker) { value.LineageID = "wrong" })},
 		{"wrong revision", markerPayload(marker, func(value *compactEffectMarker) { value.AuthorityRevision = hash("c") })},
@@ -116,7 +116,10 @@ func TestCompactEffectMarkerRejectsUnsafeStorageAndIdentity(t *testing.T) {
 func TestCompactEffectMarkerIsPrivateSeparateAndStable(t *testing.T) {
 	repository, marker := newCompactEffectMarkerFixture(t, "private-stable")
 	authority := filepath.Join(filepath.Dir(filepath.Dir(repository.root)), "v2", "authority.json")
-	if err := os.MkdirAll(filepath.Dir(authority), 0o700); err != nil || os.WriteFile(authority, []byte("authority\n"), 0o600) != nil {
+	if err := os.MkdirAll(filepath.Dir(authority), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authority, []byte("authority\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	beforeAuthority, _ := os.ReadFile(authority)
@@ -234,27 +237,6 @@ func TestCompactRepositoryContextReconciliationPublishesExactIntentOnce(t *testi
 	marker, err := markers.read(state.LineageID, record.Revision, intent.EventID)
 	if err != nil || marker.State != compactEffectApplied {
 		t.Fatalf("marker = %#v, %v", marker, err)
-	}
-}
-
-func TestCompactRepositoryContextReconciliationCompletesEveryIntent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	repo := initSnapshotRepo(t)
-	state := newCompactTestState(t, repo, "repository-context-multiple")
-	record, _ := compactRepositoryContextIntentFixture(t, repo, state)
-	second := record.EffectIntents[0]
-	second.EventID = "sha256:" + identityHash("second-repository-context-intent")
-	record.EffectIntents = append(record.EffectIntents, second)
-	store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
-	if err := reconcileCompactRepositoryContext(context.Background(), store, record); err != nil {
-		t.Fatal(err)
-	}
-	markers, _ := openCompactEffectMarkerRepository(context.Background(), repo)
-	for _, intent := range record.EffectIntents {
-		marker, readErr := markers.read(state.LineageID, record.Revision, intent.EventID)
-		if readErr != nil || marker.State != compactEffectApplied {
-			t.Fatalf("intent %s marker = %#v, %v", intent.EventID, marker, readErr)
-		}
 	}
 }
 

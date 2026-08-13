@@ -64,15 +64,28 @@ func TestReviewRepositoryContextValidatesAndReturnsOneRecordSnapshot(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	advanced := false
+	var advanceErr error
 	resolveReviewRepositoryContextLoadedHook = func() {
 		resolveReviewRepositoryContextLoadedHook = func() {}
-		current, _ := store.Load()
+		current, err := store.Load()
+		if err != nil {
+			advanceErr = err
+			return
+		}
 		next := current.State
-		_ = next.Invalidate("advance after snapshot")
-		_, _ = store.Replace(current.Revision, "review/invalidate", next)
+		if err := next.Invalidate("advance after snapshot"); err != nil {
+			advanceErr = err
+			return
+		}
+		_, advanceErr = store.Replace(current.Revision, "review/invalidate", next)
+		advanced = advanceErr == nil
 	}
 	t.Cleanup(func() { resolveReviewRepositoryContextLoadedHook = func() {} })
 	_, resolved, err := ResolveReviewRepositoryContextBinding(context.Background(), handle)
+	if advanceErr != nil || !advanced {
+		t.Fatalf("concurrent authority advance occurred = %t, error = %v", advanced, advanceErr)
+	}
 	binding.Revision = loaded.Revision
 	if err != nil || resolved != binding {
 		t.Fatalf("resolved binding = %#v, %v; want validated snapshot %#v", resolved, err, binding)

@@ -42,13 +42,13 @@ func compactRepositoryContextIntent(ctx context.Context, repo string, state Comp
 	if err != nil {
 		return CompactEffectIntent{}, err
 	}
-	return CompactEffectIntent{Class: "repository_context", Destination: handle, PayloadHash: hashPayloadBytes(payload)}, nil
+	return CompactEffectIntent{Class: CompactEffectClassRepositoryContext, Destination: handle, PayloadHash: hashPayloadBytes(payload)}, nil
 }
 
 func ReconcileCompactRepositoryContext(ctx context.Context, store CompactStore, record CompactRecord) (CompactRepositoryContextResult, error) {
 	var selected *CompactEffectIntent
 	for index := range record.EffectIntents {
-		if record.EffectIntents[index].Class == "repository_context" {
+		if record.EffectIntents[index].Class == CompactEffectClassRepositoryContext {
 			if selected != nil {
 				return CompactRepositoryContextResult{}, errors.New("compact authority has multiple repository context effects") // refusal:by-design world-action: persisted authority violates the one-event schema and no operator command may rewrite it
 			}
@@ -71,13 +71,16 @@ func ReconcileCompactRepositoryContext(ctx context.Context, store CompactStore, 
 }
 
 func reconcileCompactRepositoryContext(ctx context.Context, store CompactStore, record CompactRecord) error {
+	var markers compactEffectMarkerRepository
 	for _, intent := range record.EffectIntents {
-		if intent.Class != "repository_context" {
+		if intent.Class != CompactEffectClassRepositoryContext {
 			continue
 		}
-		markers, err := openCompactEffectMarkerRepository(ctx, store.repo)
-		if err != nil {
-			return err
+		if markers.root == "" {
+			var err error
+			if markers, err = openCompactEffectMarkerRepository(ctx, store.repo); err != nil {
+				return err
+			}
 		}
 		marker := compactEffectMarker{Schema: compactEffectMarkerSchema, LineageID: record.State.LineageID,
 			AuthorityRevision: record.Revision, EventID: intent.EventID}

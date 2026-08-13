@@ -17,7 +17,11 @@ import (
 	"time"
 )
 
-const compactRecordSchema = "gentle-ai.review-state-record/v2"
+const (
+	compactRecordSchema                 = "gentle-ai.review-state-record/v2"
+	CompactEffectClassRepositoryContext = "repository_context"
+	compactEffectClassRequestedTrace    = "requested_trace"
+)
 
 // Compact store entry artifact names. Every file the compact store writes
 // under a lineage directory must be named here so the reclaim authority
@@ -2295,8 +2299,7 @@ func makeCompactRecordWithIntents(state CompactState, intents []CompactEffectInt
 	}
 	bindingRevision := compactStateRevision(statePayload)
 	revision := bindingRevision
-	if len(intents) == 0 {
-	} else {
+	if len(intents) > 0 {
 		semantic := make([]struct {
 			Class       string `json:"class"`
 			Destination string `json:"destination"`
@@ -2401,7 +2404,7 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 
 func validateCompactEffectIntents(record CompactRecord) error {
 	for index, intent := range record.EffectIntents {
-		if (intent.Class != "repository_context" && intent.Class != "requested_trace") || strings.TrimSpace(intent.Destination) == "" || !validSHA256(intent.PayloadHash) {
+		if (intent.Class != CompactEffectClassRepositoryContext && intent.Class != compactEffectClassRequestedTrace) || strings.TrimSpace(intent.Destination) == "" || !validSHA256(intent.PayloadHash) {
 			// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
 			return errors.New("invalid compact required effect intent")
 		}

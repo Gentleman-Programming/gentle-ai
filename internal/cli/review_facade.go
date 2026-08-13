@@ -1015,16 +1015,24 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								if hasRepositoryContextIntent(record.EffectIntents) {
 									var reconciled reviewtransaction.CompactRepositoryContextResult
 									reconciled, artifactErr = reviewtransaction.ReconcileCompactRepositoryContext(ctx, store, record)
-									repositoryContext = reconciled.Handle
-									result.RepositoryContext = &ReviewRepositoryContextReference{
-										Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: reconciled.Handle,
-										Revision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity,
-										EventID: reconciled.EventID, Outcome: reconciled.Outcome,
+									if artifactErr == nil {
+										repositoryContext = reconciled.Handle
+										result.RepositoryContext = &ReviewRepositoryContextReference{
+											Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: reconciled.Handle,
+											Revision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity,
+											EventID: reconciled.EventID, Outcome: reconciled.Outcome,
+										}
 									}
 								} else {
 									repositoryContext, artifactErr = reviewtransaction.PublishReviewRepositoryContext(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
 										LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
 									})
+									if artifactErr == nil && *contract == ReviewIntegrationContractV2 {
+										result.RepositoryContext = &ReviewRepositoryContextReference{
+											Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: repositoryContext,
+											Revision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity,
+										}
+									}
 								}
 							}
 							if artifactErr == nil && !lensContextBudgetExceeded {
@@ -1133,7 +1141,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 
 func hasRepositoryContextIntent(intents []reviewtransaction.CompactEffectIntent) bool {
 	for _, intent := range intents {
-		if intent.Class == "repository_context" {
+		if intent.Class == reviewtransaction.CompactEffectClassRepositoryContext {
 			return true
 		}
 	}

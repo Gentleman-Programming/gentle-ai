@@ -383,7 +383,7 @@ func validateReviewRepositoryContextRecord(ctx context.Context, repo string, bin
 	if record.Revision != binding.Revision {
 		matched := false
 		for _, intent := range record.EffectIntents {
-			matched = matched || intent.Class == "repository_context" && intent.BindingRevision == binding.Revision
+			matched = matched || intent.Class == CompactEffectClassRepositoryContext && intent.BindingRevision == binding.Revision
 		}
 		if !matched {
 			return errors.New("review repository context is stale or has no live matching authority")

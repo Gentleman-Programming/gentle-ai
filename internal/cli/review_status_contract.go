@@ -381,6 +381,17 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	if !validReviewCapabilitySHA256(result.TargetIdentity) || result.Candidates == nil {
 		return errors.New("invalid negotiated review target identity")
 	}
+	if result.RepositoryContext != nil {
+		if result.RepositoryContext.Capability != reviewtransaction.ReviewRepositoryContextCapability ||
+			reviewtransaction.ValidateReviewRepositoryContextHandle(result.RepositoryContext.Handle) != nil ||
+			!validReviewCapabilitySHA256(result.RepositoryContext.Revision) ||
+			!validReviewCapabilitySHA256(result.RepositoryContext.TargetIdentity) ||
+			validateReviewRepositoryContextReference(*result.RepositoryContext) != nil ||
+			result.Authority == nil || result.RepositoryContext.Revision != result.Authority.Revision ||
+			result.RepositoryContext.TargetIdentity != reviewAuthorityTargetIdentity(result) {
+			return errors.New("negotiated STATUS repository context is invalid") // refusal:by-design world-action: the provider-built envelope is internally inconsistent and requires a code fix
+		}
+	}
 	if err := result.Repair.Validate(); err != nil {
 		return err
 	}

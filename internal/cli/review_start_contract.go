@@ -236,6 +236,9 @@ func (result ReviewIntegrationStartResult) Validate() error {
 			result.TargetIdentity != "" && result.RepositoryContext.TargetIdentity != result.TargetIdentity {
 			return errors.New("negotiated START repository context is invalid")
 		}
+		if err := validateReviewRepositoryContextReference(*result.RepositoryContext); err != nil {
+			return fmt.Errorf("negotiated START repository context is invalid: %w", err)
+		}
 	}
 	if hasManifest {
 		if hasDiff {
@@ -269,6 +272,25 @@ func (result ReviewIntegrationStartResult) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validateReviewRepositoryContextReference(reference ReviewRepositoryContextReference) error {
+	if (reference.EventID == "") != (reference.Outcome == "") {
+		return errors.New("event identity and outcome must be present together") // refusal:by-design world-action: the provider-built envelope is internally inconsistent and requires a code fix
+	}
+	if reference.EventID == "" {
+		return nil
+	}
+	if !validReviewCapabilitySHA256(reference.EventID) {
+		return errors.New("event identity is invalid") // refusal:by-design world-action: the provider-built envelope is internally inconsistent and requires a code fix
+	}
+	switch reference.Outcome {
+	case reviewtransaction.CompactRepositoryContextApplied, reviewtransaction.CompactRepositoryContextPending,
+		reviewtransaction.CompactRepositoryContextBlocked, reviewtransaction.CompactRepositoryContextDurabilityLimited:
+		return nil
+	default:
+		return errors.New("event outcome is invalid") // refusal:by-design world-action: the provider-built envelope is internally inconsistent and requires a code fix
+	}
 }
 
 func reviewContractCorrectionBudgetValid(originalChangedLines, correctionBudget int) bool {
