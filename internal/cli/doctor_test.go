@@ -785,7 +785,7 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [!!]  controller:reachable           review-ledger controller contract is not installed; review status reports enforcement=available
        Remedy: Re-run the installer to materialise the review-ledger contract
   [!!]  routing:sync-required          routing digest comparison is not implemented in slice 1; slice 2 will bind the install SHA
-  [ok]  enforcement:state              enforcement=off controller=absent delivery_gate=absent mode=off
+  [ok]  enforcement:state              enforcement=available controller=absent delivery_gate=absent mode=on
 
 Summary: 9 passed, 0 failed, 2 warnings
 Status:  degraded
