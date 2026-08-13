@@ -1473,13 +1473,34 @@ func TestCompactStoreReplaceContextRejectsCancelledMutation(t *testing.T) {
 func TestCompactRecordEffectIntentIdentity(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	state := newCompactTestState(t, repo, "effect-intent-identity")
+	statePayload, _ := json.Marshal(state)
+	bindingRevision := compactStateRevision(statePayload)
+	binding := ReviewRepositoryContextBinding{LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Revision: bindingRevision}
+	destination, err := DeriveReviewRepositoryContextHandle(context.Background(), repo, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := reviewRepositoryIdentity(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextPayload, _ := json.Marshal(reviewRepositoryContextFile{
+		Schema: ReviewRepositoryContextSchema, Handle: destination,
+		LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
+		RepositoryIdentity: identity.RepositoryIdentity, RepositoryRoot: identity.RepositoryRoot,
+		GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir,
+	})
 	intents := []CompactEffectIntent{
-		{Class: "repository_context", Destination: "native-reviewer", PayloadHash: hash("c")},
+		{Class: "repository_context", Destination: destination, PayloadHash: hashPayload(contextPayload)},
 		{Class: "requested_trace", Destination: "requested-output", PayloadHash: hash("d")},
 	}
 	record, payload, err := makeCompactRecordWithIntents(state, intents)
 	if err != nil {
 		t.Fatal(err)
+	}
+	retry, retryPayload, retryErr := makeCompactRecordWithIntents(state, intents)
+	if retryErr != nil || !reflect.DeepEqual(retry, record) || !bytes.Equal(retryPayload, payload) || intents[0].BindingRevision != "" || intents[0].EventID != "" {
+		t.Fatalf("same-slice retry mutated input or drifted: record = %#v, err = %v, intents = %#v", retry, retryErr, intents)
 	}
 	reordered, reorderedPayload, err := makeCompactRecordWithIntents(state, []CompactEffectIntent{intents[1], intents[0]})
 	if err != nil || reordered.Revision != record.Revision || !bytes.Equal(reorderedPayload, payload) {
@@ -1493,7 +1514,7 @@ func TestCompactRecordEffectIntentIdentity(t *testing.T) {
 		t.Fatalf("parse intent record = %#v, %v; want revision/intents %#v", parsed, err, record)
 	}
 	legacy, _, err := makeCompactRecord(state)
-	if err != nil || legacy.Revision == record.Revision {
+	if err != nil || legacy.Revision != bindingRevision || legacy.Revision == record.Revision || record.EffectIntents[0].BindingRevision != bindingRevision {
 		t.Fatalf("legacy revision = %q, intent revision = %q, err = %v", legacy.Revision, record.Revision, err)
 	}
 
@@ -1504,11 +1525,11 @@ func TestCompactRecordEffectIntentIdentity(t *testing.T) {
 		{"unknown class", func(candidate *CompactRecord) { candidate.EffectIntents[0].Class = "unknown" }},
 		{"invalid payload hash", func(candidate *CompactRecord) { candidate.EffectIntents[0].PayloadHash = "invalid" }},
 		{"invalid event hash", func(candidate *CompactRecord) { candidate.EffectIntents[0].EventID = "invalid" }},
-		{"forged authority revision", func(candidate *CompactRecord) { candidate.EffectIntents[0].AuthorityRevision = hash("forged") }},
-		{"coordinated authority and event forgery", func(candidate *CompactRecord) {
+		{"forged binding revision", func(candidate *CompactRecord) { candidate.EffectIntents[0].BindingRevision = hash("forged") }},
+		{"coordinated binding and event forgery", func(candidate *CompactRecord) {
 			intent := &candidate.EffectIntents[0]
-			intent.AuthorityRevision = hash("forged")
-			eventPayload, _ := json.Marshal([]string{intent.AuthorityRevision, intent.Class, intent.Destination, intent.PayloadHash})
+			intent.BindingRevision = hash("forged")
+			eventPayload, _ := json.Marshal([]string{candidate.State.LineageID, intent.BindingRevision, intent.Class, intent.Destination, intent.PayloadHash})
 			eventSum := sha256.Sum256(append([]byte("gentle-ai.review-effect-event/v1\x00"), eventPayload...))
 			intent.EventID = "sha256:" + hex.EncodeToString(eventSum[:])
 		}},
@@ -1528,6 +1549,17 @@ func TestCompactRecordEffectIntentIdentity(t *testing.T) {
 			}
 		})
 	}
+	otherState := state
+	otherState.LineageID = "effect-intent-other-lineage"
+	other, _, err := makeCompactRecordWithIntents(otherState, []CompactEffectIntent{{Class: "repository_context", Destination: destination, PayloadHash: hashPayload(contextPayload)}, intents[1]})
+	if err != nil || other.EffectIntents[0].EventID == record.EffectIntents[0].EventID {
+		t.Fatalf("lineage-bound event identity = %q, %v; want different from %q", other.EffectIntents[0].EventID, err, record.EffectIntents[0].EventID)
+	}
+}
+
+func hashPayload(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func TestCompactRecordWithoutIntentsRetainsHistoricalIdentityAndBytes(t *testing.T) {

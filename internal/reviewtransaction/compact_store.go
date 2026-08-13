@@ -178,11 +178,11 @@ type CompactStore struct {
 }
 
 type CompactEffectIntent struct {
-	Class             string `json:"class"`
-	Destination       string `json:"destination"`
-	PayloadHash       string `json:"payload_hash"`
-	AuthorityRevision string `json:"authority_revision"`
-	EventID           string `json:"event_id"`
+	Class           string `json:"class"`
+	Destination     string `json:"destination"`
+	PayloadHash     string `json:"payload_hash"`
+	BindingRevision string `json:"binding_revision"`
+	EventID         string `json:"event_id"`
 }
 
 type CompactStartAction string
@@ -2271,14 +2271,19 @@ func makeCompactRecordWithIntents(state CompactState, intents []CompactEffectInt
 	if err != nil {
 		return CompactRecord{}, nil, err
 	}
-	revision := ""
+	bindingRevision := compactStateRevision(statePayload)
+	revision := bindingRevision
 	if len(intents) == 0 {
-		sum := sha256.Sum256(append([]byte("gentle-ai.review-state/v2\x00"), statePayload...))
-		revision = "sha256:" + hex.EncodeToString(sum[:])
 	} else {
-		semantic := make([]CompactEffectIntent, len(intents))
+		semantic := make([]struct {
+			Class       string `json:"class"`
+			Destination string `json:"destination"`
+			PayloadHash string `json:"payload_hash"`
+		}, len(intents))
 		for index, intent := range intents {
-			semantic[index] = CompactEffectIntent{Class: intent.Class, Destination: intent.Destination, PayloadHash: intent.PayloadHash}
+			semantic[index].Class = intent.Class
+			semantic[index].Destination = intent.Destination
+			semantic[index].PayloadHash = intent.PayloadHash
 		}
 		semanticPayload, marshalErr := json.Marshal(semantic)
 		if marshalErr != nil {
@@ -2287,12 +2292,12 @@ func makeCompactRecordWithIntents(state CompactState, intents []CompactEffectInt
 		sum := sha256.Sum256(bytes.Join([][]byte{[]byte("gentle-ai.review-state-effects/v1\x00"), statePayload, semanticPayload}, []byte{0}))
 		revision = "sha256:" + hex.EncodeToString(sum[:])
 		for index := range intents {
-			if intents[index].AuthorityRevision == "" {
-				intents[index].AuthorityRevision = revision
-			} else if intents[index].AuthorityRevision != revision {
-				return CompactRecord{}, nil, errors.New("invalid compact required effect authority") // refusal:by-design operator-knowledge: caller-supplied authority cannot override the enclosing record revision
+			if intents[index].BindingRevision == "" {
+				intents[index].BindingRevision = bindingRevision
+			} else if intents[index].BindingRevision != bindingRevision {
+				return CompactRecord{}, nil, errors.New("invalid compact required effect binding") // refusal:by-design operator-knowledge: caller-supplied binding cannot override the enclosing state identity
 			}
-			eventPayload, _ := json.Marshal([]string{intents[index].AuthorityRevision, intents[index].Class, intents[index].Destination, intents[index].PayloadHash})
+			eventPayload, _ := json.Marshal([]string{state.LineageID, intents[index].BindingRevision, intents[index].Class, intents[index].Destination, intents[index].PayloadHash})
 			eventSum := sha256.Sum256(append([]byte("gentle-ai.review-effect-event/v1\x00"), eventPayload...))
 			wantEventID := "sha256:" + hex.EncodeToString(eventSum[:])
 			if intents[index].EventID == "" {
@@ -2309,6 +2314,11 @@ func makeCompactRecordWithIntents(state CompactState, intents []CompactEffectInt
 		return CompactRecord{}, nil, err
 	}
 	return record, append(payload, '\n'), nil
+}
+
+func compactStateRevision(statePayload []byte) string {
+	sum := sha256.Sum256(append([]byte("gentle-ai.review-state/v2\x00"), statePayload...))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // CompactRevisionForState derives the exact content-addressed revision without
