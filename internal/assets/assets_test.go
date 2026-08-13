@@ -822,6 +822,40 @@ func TestFourRReviewAgentAssets(t *testing.T) {
 	}
 }
 
+// TestClaudeSDDPhaseAgentsCarryEngramReadTools guards the SDD Context Protocol:
+// phase agents resolve artifact references against the active backend instead of
+// consuming paraphrased artifact bodies. An agent that can write to Engram but
+// never read from it cannot comply, and the failure is silent — it still returns
+// a confident report built only from what the orchestrator inlined.
+func TestClaudeSDDPhaseAgentsCarryEngramReadTools(t *testing.T) {
+	phaseAgents := []string{"sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks"}
+	readTools := []string{
+		"mcp__plugin_engram_engram__mem_search",
+		"mcp__plugin_engram_engram__mem_get_observation",
+	}
+
+	toolsLine := func(content string) string {
+		for _, line := range strings.Split(content, "\n") {
+			if strings.HasPrefix(line, "tools:") {
+				return line
+			}
+		}
+		return ""
+	}
+
+	for _, agent := range phaseAgents {
+		tools := toolsLine(MustRead("claude/agents/" + agent + ".md"))
+		if tools == "" {
+			t.Fatalf("claude/agents/%s.md declares no tools allowlist", agent)
+		}
+		for _, want := range readTools {
+			if !strings.Contains(tools, want) {
+				t.Fatalf("claude/agents/%s.md grants no %s: it can write to Engram but never read from it", agent, want)
+			}
+		}
+	}
+}
+
 func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 	content := MustRead("opencode/sdd-orchestrator.md")
 
