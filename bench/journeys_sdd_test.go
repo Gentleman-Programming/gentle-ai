@@ -87,9 +87,11 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// 98 -> 99: #3102 adds j101, which drives the root-commit base-diff STATUS
 	// stop that must replace an otherwise unexecutable START transition. 99 ->
 	// 100: #2773 adds j102, which drives the immutable reviewer-context capacity
-	// terminal instead of accepting an impossible reviewer slot.
-	if got := len(seen); got != 100 {
-		t.Errorf("core journey count = %d, want 100", got)
+	// terminal instead of accepting an impossible reviewer slot. 100 -> 101:
+	// #1875 adds j103, which drives repository-context reconciliation across
+	// fresh native START and STATUS processes.
+	if got := len(seen); got != 101 {
+		t.Errorf("core journey count = %d, want 101", got)
 	}
 	for id, found := range want {
 		if !found {
