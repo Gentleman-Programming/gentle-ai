@@ -45,6 +45,7 @@ const (
 	runtimeOperationHandoff                  = "attempt/handoff"
 	runtimeOperationBind                     = "binding/set"
 	runtimeOperationGrant                    = "authority/grant"
+	runtimeOperationSliceProof               = "slice/proof"
 	maximumRuntimeGrantRoots                 = 32
 	runtimeLockAcquireAttempts               = 3
 
@@ -124,10 +125,11 @@ var (
 	// refusal as the cause, because that cause is the only thing that knows
 	// the runnable repository exit. This sentinel classifies; the cause
 	// continues.
-	ErrRuntimeCandidateUnavailable    = errors.New("SDD runtime candidate could not be captured from the repository")                        // refusal:by-design world-action: the exit is a repository-state change (stage the candidate, gitignore an untracked nested checkout, restore a pruned object), which no command of this product can decide or perform; every wrap keeps the snapshot builder's own refusal as the cause and that cause names the exact action
-	ErrRuntimeHandoffSource           = errors.New("SDD runtime handoff source does not equal the active attempt's effective worktree")      // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
-	ErrRuntimeHandoffDestination      = errors.New("SDD runtime handoff destination is not a registered linked worktree of this repository") // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
-	ErrRuntimeHandoffAlreadyPerformed = errors.New("SDD runtime attempt has already been handed off")                                        // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
+	ErrRuntimeCandidateUnavailable      = errors.New("SDD runtime candidate could not be captured from the repository")                        // refusal:by-design world-action: the exit is a repository-state change (stage the candidate, gitignore an untracked nested checkout, restore a pruned object), which no command of this product can decide or perform; every wrap keeps the snapshot builder's own refusal as the cause and that cause names the exact action
+	ErrRuntimeHandoffSource             = errors.New("SDD runtime handoff source does not equal the active attempt's effective worktree")      // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
+	ErrRuntimeHandoffDestination        = errors.New("SDD runtime handoff destination is not a registered linked worktree of this repository") // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
+	ErrRuntimeHandoffAlreadyPerformed   = errors.New("SDD runtime attempt has already been handed off")                                        // refusal:by-design operator-knowledge: the RuntimeStore wrapper names the active attempt's actual status command
+	errRuntimeSliceProofAlreadyRecorded = errors.New("runtime slice proof already recorded")
 
 	runtimeRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	runtimeRevisionPattern  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -199,14 +201,15 @@ const (
 )
 
 type RuntimeObjective struct {
-	ID                       string `json:"id"`
-	Generation               int    `json:"generation"`
-	WorkUnit                 string `json:"work_unit"`
-	EvidenceGoal             string `json:"evidence_goal"`
-	InitialCandidateIdentity string `json:"initial_candidate_identity"`
-	InitialCandidateTree     string `json:"initial_candidate_tree"`
-	MaxAttempts              int    `json:"max_attempts"`
-	MaxChangedLines          int    `json:"max_changed_lines"`
+	ID                       string        `json:"id"`
+	Generation               int           `json:"generation"`
+	WorkUnit                 string        `json:"work_unit"`
+	EvidenceGoal             string        `json:"evidence_goal"`
+	InitialCandidateIdentity string        `json:"initial_candidate_identity"`
+	InitialCandidateTree     string        `json:"initial_candidate_tree"`
+	MaxAttempts              int           `json:"max_attempts"`
+	MaxChangedLines          int           `json:"max_changed_lines"`
+	Scope                    *RuntimeScope `json:"scope,omitempty"`
 }
 
 type RuntimeAttempt struct {
@@ -271,6 +274,22 @@ type RuntimeAdvance struct {
 	PreviousEvidenceRevision string `json:"previous_evidence_revision"`
 }
 
+// SliceProof is a persisted evidence projection. It carries no assignments:
+// RuntimeObjective.Scope remains their sole authority.
+type SliceProof struct {
+	ObjectiveID      string `json:"objective_id"`
+	SliceID          string `json:"slice_id"`
+	EvidenceRevision string `json:"evidence_revision"`
+	ReportDigest     string `json:"report_digest"`
+}
+
+type runtimeSliceProofEvent struct {
+	ObjectiveID      string `json:"objective_id"`
+	SliceID          string `json:"slice_id"`
+	EvidenceRevision string `json:"evidence_revision"`
+	Report           string `json:"report"`
+}
+
 // RuntimeRescope records AUDITED NARROWING RESCOPE (#2298, #2296 part 2): a
 // terminal, non-complete objective whose candidate has NOT drifted since its
 // last Finish may be narrowed to a maintainer-authorized successor scope
@@ -326,6 +345,7 @@ type RuntimeStatus struct {
 	LastAdvance            *RuntimeAdvance   `json:"last_advance,omitempty"`
 	LastRescope            *RuntimeRescope   `json:"last_rescope,omitempty"`
 	LastRepair             *RuntimeRepair    `json:"last_repair,omitempty"`
+	SliceProofs            []SliceProof      `json:"slice_proofs,omitempty"`
 	// GrantedRoots is the per-change edit-authority projection (#2540 S2):
 	// canonical absolute symlink-evaluated roots accumulated from grant
 	// records in chain order. AllowedEditRoots consumption is a later slice.
@@ -357,12 +377,13 @@ type RuntimeStatus struct {
 }
 
 type BeginAttemptRequest struct {
-	ExpectedRevision string `json:"expected_revision"`
-	RequestID        string `json:"request_id"`
-	WorkUnit         string `json:"work_unit"`
-	EvidenceGoal     string `json:"evidence_goal"`
-	MaxAttempts      int    `json:"max_attempts"`
-	MaxChangedLines  int    `json:"max_changed_lines"`
+	ExpectedRevision string        `json:"expected_revision"`
+	RequestID        string        `json:"request_id"`
+	WorkUnit         string        `json:"work_unit"`
+	EvidenceGoal     string        `json:"evidence_goal"`
+	MaxAttempts      int           `json:"max_attempts"`
+	MaxChangedLines  int           `json:"max_changed_lines"`
+	Scope            *RuntimeScope `json:"scope,omitempty"`
 }
 
 type FinishAttemptRequest struct {
@@ -503,22 +524,23 @@ func (store RuntimeStore) ForInstance(instance string) (RuntimeStore, error) {
 }
 
 type runtimeRecord struct {
-	Schema           string               `json:"schema"`
-	Change           string               `json:"change"`
-	PreviousRevision string               `json:"previous_revision"`
-	Operation        string               `json:"operation"`
-	RequestID        string               `json:"request_id"`
-	RequestDigest    string               `json:"request_digest"`
-	Begin            *runtimeBeginEvent   `json:"begin,omitempty"`
-	Finish           *runtimeFinishEvent  `json:"finish,omitempty"`
-	Reset            *runtimeResetEvent   `json:"reset,omitempty"`
-	Rescope          *runtimeRescopeEvent `json:"rescope,omitempty"`
-	Repair           *runtimeRepairEvent  `json:"repair,omitempty"`
-	Advance          *runtimeAdvanceEvent `json:"advance,omitempty"`
-	Handoff          *RuntimeHandoff      `json:"handoff,omitempty"`
-	Binding          *runtimeBindingEvent `json:"binding,omitempty"`
-	Receipt          *runtimeReceiptEvent `json:"receipt,omitempty"`
-	Grant            *runtimeGrantEvent   `json:"grant,omitempty"`
+	Schema           string                  `json:"schema"`
+	Change           string                  `json:"change"`
+	PreviousRevision string                  `json:"previous_revision"`
+	Operation        string                  `json:"operation"`
+	RequestID        string                  `json:"request_id"`
+	RequestDigest    string                  `json:"request_digest"`
+	Begin            *runtimeBeginEvent      `json:"begin,omitempty"`
+	Finish           *runtimeFinishEvent     `json:"finish,omitempty"`
+	Reset            *runtimeResetEvent      `json:"reset,omitempty"`
+	Rescope          *runtimeRescopeEvent    `json:"rescope,omitempty"`
+	Repair           *runtimeRepairEvent     `json:"repair,omitempty"`
+	Advance          *runtimeAdvanceEvent    `json:"advance,omitempty"`
+	Handoff          *RuntimeHandoff         `json:"handoff,omitempty"`
+	Binding          *runtimeBindingEvent    `json:"binding,omitempty"`
+	Receipt          *runtimeReceiptEvent    `json:"receipt,omitempty"`
+	Grant            *runtimeGrantEvent      `json:"grant,omitempty"`
+	SliceProof       *runtimeSliceProofEvent `json:"slice_proof,omitempty"`
 }
 
 // runtimeGrantEvent is the persisted per-change edit-authority grant (#2540
@@ -574,8 +596,9 @@ type runtimeBeginEvent struct {
 	// ran under. omitempty is load-bearing — every record predating this field
 	// deserializes it as "", which Finish and replay both treat as "no binding
 	// recorded" rather than as a mismatch, so legacy chains replay unchanged.
-	BeginWorktree     string `json:"begin_worktree,omitempty"`
-	EffectiveWorktree string `json:"effective_worktree,omitempty"`
+	BeginWorktree     string        `json:"begin_worktree,omitempty"`
+	EffectiveWorktree string        `json:"effective_worktree,omitempty"`
+	Scope             *RuntimeScope `json:"scope,omitempty"`
 }
 
 type runtimeResetEvent struct {
@@ -595,20 +618,21 @@ type runtimeResetEvent struct {
 // narrow, because replay recomputes the previous ceiling from the actual
 // replayed objective, never from the record's own claim.
 type runtimeRescopeEvent struct {
-	PreviousObjectiveID      string `json:"previous_objective_id"`
-	PreviousGeneration       int    `json:"previous_generation"`
-	PreviousMaxAttempts      int    `json:"previous_max_attempts"`
-	PreviousMaxChangedLines  int    `json:"previous_max_changed_lines"`
-	RescopeCandidateIdentity string `json:"rescope_candidate_identity"`
-	RescopeCandidateTree     string `json:"rescope_candidate_tree"`
-	ObjectiveID              string `json:"objective_id"`
-	ObjectiveGeneration      int    `json:"objective_generation"`
-	WorkUnit                 string `json:"work_unit"`
-	EvidenceGoal             string `json:"evidence_goal"`
-	MaxAttempts              int    `json:"max_attempts"`
-	MaxChangedLines          int    `json:"max_changed_lines"`
-	Reason                   string `json:"reason"`
-	Actor                    string `json:"actor"`
+	PreviousObjectiveID      string        `json:"previous_objective_id"`
+	PreviousGeneration       int           `json:"previous_generation"`
+	PreviousMaxAttempts      int           `json:"previous_max_attempts"`
+	PreviousMaxChangedLines  int           `json:"previous_max_changed_lines"`
+	RescopeCandidateIdentity string        `json:"rescope_candidate_identity"`
+	RescopeCandidateTree     string        `json:"rescope_candidate_tree"`
+	ObjectiveID              string        `json:"objective_id"`
+	ObjectiveGeneration      int           `json:"objective_generation"`
+	WorkUnit                 string        `json:"work_unit"`
+	EvidenceGoal             string        `json:"evidence_goal"`
+	MaxAttempts              int           `json:"max_attempts"`
+	MaxChangedLines          int           `json:"max_changed_lines"`
+	Scope                    *RuntimeScope `json:"scope,omitempty"`
+	Reason                   string        `json:"reason"`
+	Actor                    string        `json:"actor"`
 }
 
 type runtimeRepairEvent struct {
@@ -654,6 +678,7 @@ type runtimeReplay struct {
 	Status        RuntimeStatus
 	Requests      map[string]runtimeRequestReceipt
 	AttemptTokens map[int]string
+	Scopes        []RuntimeScope
 	// Instance carries the store's ForInstance identity into replay (#2540
 	// S5): applyRuntimeGrantEvent projects a grant into GrantedRoots only
 	// when the record's identity equals this one. Empty projects nothing.
@@ -758,12 +783,12 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		// the one predicate the read-only surfaces evaluate too, under this
 		// lock and against this exact replay, so a read that said "admitted"
 		// a moment ago cannot let a stale verdict through here.
-		admission, err := store.runtimeBeginAdmission(ctx, status, request)
+		admission, err := store.runtimeBeginAdmission(ctx, status, replay.Scopes, request)
 		if err != nil {
 			return runtimeRecord{}, err
 		}
 		advancing, generation, snapshot := admission.Advancing, admission.Generation, admission.Snapshot
-		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, snapshot.Identity, generation)
+		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, snapshot.Identity, generation, request.Scope)
 		if status.Objective != nil && !advancing {
 			objectiveID = status.Objective.ID
 		}
@@ -771,7 +796,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
-			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace,
+			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace, Scope: request.Scope,
 		}
 		if advancing {
 			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
@@ -1215,9 +1240,107 @@ func runtimeObjectiveAdvanceAdmissible(status RuntimeStatus, request BeginAttemp
 	if request.WorkUnit == status.Objective.WorkUnit {
 		return false
 	}
+	if status.Objective.Scope != nil && !runtimeHasSliceProof(status.SliceProofs, status.Objective.ID) {
+		return false
+	}
 	last := status.Attempts[len(status.Attempts)-1]
 	return last.ObjectiveID == status.Objective.ID && last.Outcome == AttemptPassed &&
 		!last.ChangedLineBudgetExceeded && last.FinishCandidateIdentity != "" && last.FinishCandidateTree != ""
+}
+
+func runtimeHasSliceProof(proofs []SliceProof, objectiveID string) bool {
+	for _, proof := range proofs {
+		if proof.ObjectiveID == objectiveID {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeSliceProofDuplicateError(proofs []SliceProof, objectiveID, evidenceRevision, reportDigest string) error {
+	for _, proof := range proofs {
+		if proof.ObjectiveID != objectiveID {
+			continue
+		}
+		if proof.ReportDigest == reportDigest && proof.EvidenceRevision == evidenceRevision {
+			return errRuntimeSliceProofAlreadyRecorded
+		}
+		return errors.New("slice proof conflicts with the completed runtime objective") // refusal:by-design world-action: immutable authority permits one exact proof for the completed objective
+	}
+	return nil
+}
+
+// AdmitSliceProof records an admitted scoped report after verifying that the
+// current completed objective is the provider authority the report names.
+func (store RuntimeStore) AdmitSliceProof(ctx context.Context, report, scope, sliceID string) (VerifyReportAdmission, error) {
+	if scope != "slice" || !runtimeRevisionPattern.MatchString(sliceID) {
+		return VerifyReportAdmission{}, errors.New("slice proof requires scope slice and an exact slice_id") // refusal:by-design operator-knowledge: only the caller can select slice scope and the exact provider-owned slice identity
+	}
+	requestDigest := runtimeValueHash("gentle-ai.sdd-runtime-slice-proof-request/v1", struct {
+		Scope, SliceID, Report string
+	}{scope, sliceID, report})
+	requestID := "slice-proof-" + strings.TrimPrefix(requestDigest, "sha256:")[:32]
+	replay, err := store.load()
+	if err != nil {
+		return VerifyReportAdmission{}, err
+	}
+	objective := replay.Status.Objective
+	if objective == nil || objective.Scope == nil || !replay.Status.Complete || replay.Status.ActiveAttempt != nil {
+		return VerifyReportAdmission{}, errors.New("slice proof requires a completed scoped runtime objective") // refusal:by-design world-action: a proof can be admitted only after the provider records the completed scoped objective
+	}
+	if sliceID != objective.ID {
+		return VerifyReportAdmission{}, errors.New("slice proof does not match the completed scoped runtime objective") // refusal:by-design operator-knowledge: the caller must name the provider-owned completed objective it is proving
+	}
+	admitted := ValidateVerifyReportAdmission(report, SpecCounts{}, *objective)
+	if !admitted.Valid {
+		return admitted, nil
+	}
+	if !IsPassingVerifyReportVerdict(admitted.Verdict) {
+		admitted.Valid = false
+		admitted.Reason = "slice proof requires a complete passing report"
+		return admitted, nil
+	}
+	if admitted.EvidenceRevision != replay.Status.EvidenceRevision {
+		return VerifyReportAdmission{}, errors.New("slice proof evidence revision does not match the completed runtime objective") // refusal:by-design world-action: the report must be regenerated from the objective's current recorded evidence
+	}
+	reportDigest := runtimeValueHash("gentle-ai.sdd-runtime-slice-proof-report/v1", report)
+	if err := runtimeSliceProofDuplicateError(replay.Status.SliceProofs, objective.ID, admitted.EvidenceRevision, reportDigest); err != nil {
+		if errors.Is(err, errRuntimeSliceProofAlreadyRecorded) {
+			return admitted, nil
+		}
+		return VerifyReportAdmission{}, err
+	}
+	build := func(replay runtimeReplay) (runtimeRecord, error) {
+		status := replay.Status
+		objective := status.Objective
+		if objective == nil || objective.Scope == nil || !status.Complete || status.ActiveAttempt != nil {
+			return runtimeRecord{}, errors.New("slice proof requires a completed scoped runtime objective") // refusal:by-design world-action: a proof can be admitted only after the provider records the completed scoped objective
+		}
+		currentAdmission := ValidateVerifyReportAdmission(report, SpecCounts{}, *objective)
+		if !currentAdmission.Valid {
+			return runtimeRecord{}, errors.New(currentAdmission.Reason)
+		}
+		if !IsPassingVerifyReportVerdict(currentAdmission.Verdict) {
+			return runtimeRecord{}, errors.New("slice proof requires a complete passing report") // refusal:by-design world-action: only a successful completed verification report can become advancement authority
+		}
+		if currentAdmission.EvidenceRevision != status.EvidenceRevision {
+			return runtimeRecord{}, errors.New("slice proof evidence revision does not match the completed runtime objective") // refusal:by-design world-action: the report must be regenerated from the objective's current recorded evidence
+		}
+		if sliceID != objective.ID {
+			return runtimeRecord{}, errors.New("slice proof does not match the completed scoped runtime objective") // refusal:by-design operator-knowledge: the caller must name the provider-owned completed objective it is proving
+		}
+		if err := runtimeSliceProofDuplicateError(status.SliceProofs, objective.ID, currentAdmission.EvidenceRevision, reportDigest); err != nil {
+			return runtimeRecord{}, err
+		}
+		return runtimeRecord{Operation: runtimeOperationSliceProof, SliceProof: &runtimeSliceProofEvent{
+			ObjectiveID: objective.ID, SliceID: sliceID, EvidenceRevision: currentAdmission.EvidenceRevision, Report: report,
+		}}, nil
+	}
+	_, err = store.mutate(ctx, replay.Status.Revision, requestID, requestDigest, build)
+	if errors.Is(err, errRuntimeSliceProofAlreadyRecorded) {
+		return admitted, nil
+	}
+	return admitted, err
 }
 
 // runtimeGrantClock is the ledger's only wall-clock source (#2540 S2), a
@@ -1392,7 +1515,7 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
 		}
 		generation := status.ObjectiveGeneration + 1
-		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, fresh.Identity, generation)
+		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, fresh.Identity, generation, objective.Scope)
 		return runtimeRecord{Operation: runtimeOperationRescope, Rescope: &runtimeRescopeEvent{
 			PreviousObjectiveID: objective.ID, PreviousGeneration: objective.Generation,
 			PreviousMaxAttempts: objective.MaxAttempts, PreviousMaxChangedLines: objective.MaxChangedLines,
@@ -1400,6 +1523,7 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation,
 			WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
+			Scope:  objective.Scope,
 			Reason: request.Reason, Actor: request.Actor,
 		}}, nil
 	})
@@ -1864,6 +1988,10 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 		}
 	case runtimeOperationGrant:
 		applyRuntimeGrantEvent(replay, record.Grant)
+	case runtimeOperationSliceProof:
+		if err := applyRuntimeSliceProofEvent(replay, record.SliceProof); err != nil {
+			return err
+		}
 	default:
 		return errors.New("unsupported SDD runtime record operation")
 	}
@@ -1888,7 +2016,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 		return errors.New("begin record is not a valid successor")
 	}
 	if replay.Status.Objective == nil {
-		expectedObjectiveID := runtimeObjectiveID(record.Change, event.WorkUnit, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
+		expectedObjectiveID := runtimeObjectiveID(record.Change, event.WorkUnit, event.EvidenceGoal, event.BeginCandidateIdentity, generation, event.Scope)
 		if event.ObjectiveGeneration == 0 {
 			expectedObjectiveID = legacyRuntimeObjectiveID(record.Change, event.EvidenceGoal)
 		}
@@ -1901,14 +2029,20 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 		replay.Status.Objective = &RuntimeObjective{
 			ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 			InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree,
-			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines, Scope: event.Scope,
+		}
+		if event.Scope != nil {
+			if runtimeScopeOverlaps(replay.Scopes, event.Scope) {
+				return errors.New("begin record overlaps a prior scoped objective") // refusal:by-design world-action: overlapping scopes in replay are a mutated immutable record and require store restoration
+			}
+			replay.Scopes = append(replay.Scopes, *event.Scope)
 		}
 		replay.Status.ObjectiveGeneration = generation
 	} else {
 		objective := replay.Status.Objective
 		if event.ObjectiveID != objective.ID || generation != objective.Generation || event.EvidenceGoal != objective.EvidenceGoal ||
 			event.WorkUnit != objective.WorkUnit ||
-			event.MaxAttempts != objective.MaxAttempts || event.MaxChangedLines != objective.MaxChangedLines ||
+			event.MaxAttempts != objective.MaxAttempts || event.MaxChangedLines != objective.MaxChangedLines || !runtimeScopeEqual(event.Scope, objective.Scope) ||
 			event.Ordinal != replay.Status.NextOrdinal {
 			return errors.New("begin record changes the active objective or ordinal")
 		}
@@ -2006,14 +2140,26 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 		return errors.New("objective rescope candidate does not match the terminal zero-drift finish") // refusal:by-design world-action: the zero-drift candidate was verified before publication, so a mismatch is a mutated record and the exit is restoring the store
 	}
 	generation := event.ObjectiveGeneration
-	expectedObjectiveID := runtimeObjectiveID(record.Change, event.WorkUnit, event.EvidenceGoal, event.RescopeCandidateIdentity, generation)
+	if normalized, err := normalizeRuntimeScope(event.Scope); err != nil || !runtimeScopeEqual(normalized, event.Scope) {
+		return errors.New("objective rescope scope is invalid") // refusal:by-design world-action: an invalid persisted scope is an immutable-record violation and requires store restoration
+	}
+	if event.Scope != nil && !runtimeScopeEqual(event.Scope, objective.Scope) {
+		return errors.New("objective rescope scope does not match the terminal objective") // refusal:by-design world-action: rescope preserves the provider-owned assignment rather than accepting a new one
+	}
+	expectedObjectiveID := runtimeObjectiveID(record.Change, event.WorkUnit, event.EvidenceGoal, event.RescopeCandidateIdentity, generation, event.Scope)
 	if generation != replay.Status.ObjectiveGeneration+1 || event.ObjectiveID != expectedObjectiveID {
 		return errors.New("objective rescope identity is invalid") // refusal:by-design world-action: the successor identity is derived deterministically at publication, so a mismatch is a mutated record and the exit is restoring the store
+	}
+	scope := event.Scope
+	if scope == nil {
+		// Pre-scope records derived their identity without Scope. Their predecessor
+		// remains the only historical assignment authority, so retain it on replay.
+		scope = objective.Scope
 	}
 	replay.Status.Objective = &RuntimeObjective{
 		ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 		InitialCandidateIdentity: event.RescopeCandidateIdentity, InitialCandidateTree: event.RescopeCandidateTree,
-		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines, Scope: scope,
 	}
 	replay.Status.ObjectiveGeneration = generation
 	replay.Status.EvidenceRevision = ""
@@ -2057,7 +2203,7 @@ func validateConsecutiveRescopeRepairCandidate(replay runtimeReplay, poisoned ru
 		last.FinishCandidateTree != event.RescopeCandidateTree {
 		return errors.New("record does not match the historical writer preconditions") // refusal:by-design world-action: mismatched immutable evidence is not the released writer defect
 	}
-	expectedObjectiveID := runtimeObjectiveID(poisoned.Change, event.WorkUnit, event.EvidenceGoal, event.RescopeCandidateIdentity, event.ObjectiveGeneration)
+	expectedObjectiveID := runtimeObjectiveID(poisoned.Change, event.WorkUnit, event.EvidenceGoal, event.RescopeCandidateIdentity, event.ObjectiveGeneration, event.Scope)
 	if event.ObjectiveGeneration != replay.Status.ObjectiveGeneration+1 || event.ObjectiveID != expectedObjectiveID {
 		return errors.New("record has an invalid successor objective identity") // refusal:by-design world-action: a repair cannot reconstruct a forged successor identity
 	}
@@ -2192,6 +2338,26 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	return nil
 }
 
+func applyRuntimeSliceProofEvent(replay *runtimeReplay, event *runtimeSliceProofEvent) error {
+	objective := replay.Status.Objective
+	if event == nil || objective == nil || objective.Scope == nil || !replay.Status.Complete || replay.Status.ActiveAttempt != nil ||
+		event.ObjectiveID != objective.ID || event.SliceID != objective.ID || runtimeHasSliceProof(replay.Status.SliceProofs, objective.ID) {
+		return errors.New("slice proof does not match the completed scoped runtime objective") // refusal:by-design world-action: a replayed proof mismatch is an immutable-record violation and requires store restoration
+	}
+	admission := ValidateVerifyReportAdmission(event.Report, SpecCounts{}, *objective)
+	if !admission.Valid || admission.EvidenceRevision != event.EvidenceRevision || event.EvidenceRevision != replay.Status.EvidenceRevision {
+		return errors.New("slice proof report is not admitted current objective evidence") // refusal:by-design world-action: a replayed proof must retain the current provider-admitted evidence
+	}
+	if !IsPassingVerifyReportVerdict(admission.Verdict) {
+		return errors.New("slice proof report is not a passing advancement proof") // refusal:by-design world-action: a valid failure report is evidence, not advancement authority, so a forged proof requires store restoration
+	}
+	replay.Status.SliceProofs = append(replay.Status.SliceProofs, SliceProof{
+		ObjectiveID: event.ObjectiveID, SliceID: event.SliceID, EvidenceRevision: event.EvidenceRevision,
+		ReportDigest: runtimeValueHash("gentle-ai.sdd-runtime-slice-proof-report/v1", event.Report),
+	})
+	return nil
+}
+
 // applyRuntimeGrantEvent accumulates a grant's canonical roots into the
 // GrantedRoots projection in chain order, deduplicating already-granted
 // identities. It has no structural precondition and returns no error: every
@@ -2255,9 +2421,12 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 		(event.EffectiveWorktree != "" && (validateRuntimeText(event.EffectiveWorktree, 4096) != nil || event.EffectiveWorktree != event.BeginWorktree)) {
 		return errors.New("invalid SDD runtime begin event")
 	}
+	if normalized, err := normalizeRuntimeScope(event.Scope); err != nil || !runtimeScopeEqual(normalized, event.Scope) {
+		return errors.New("invalid SDD runtime objective scope") // refusal:by-design world-action: an invalid persisted scope is an immutable-record violation and requires store restoration
+	}
 	request := BeginAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
-		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines, Scope: event.Scope,
 	}
 	if runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request) != record.RequestDigest {
 		return errors.New("SDD runtime begin request digest does not match record")
@@ -2273,6 +2442,9 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 	}
 	if record.Operation != runtimeOperationRepairConsecutiveRescope && record.Repair != nil {
 		return errors.New("unexpected SDD runtime repair event") // refusal:by-design world-action: an immutable record may carry only the event its operation names
+	}
+	if record.SliceProof != nil && record.Operation != runtimeOperationSliceProof {
+		return errors.New("slice proof cannot be combined with another runtime operation") // refusal:by-design world-action: immutable records encode one authority operation at a time
 	}
 	switch record.Operation {
 	case runtimeOperationBegin:
@@ -2412,6 +2584,9 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
 			return errors.New("invalid SDD runtime rescope event") // refusal:by-design world-action: this shape (including narrowing) is enforced before publication, so a violation is a mutated record and the exit is restoring the store
 		}
+		if normalized, err := normalizeRuntimeScope(event.Scope); err != nil || !runtimeScopeEqual(normalized, event.Scope) {
+			return errors.New("invalid SDD runtime rescope scope") // refusal:by-design world-action: an invalid persisted scope is an immutable-record violation and requires store restoration
+		}
 		request := RescopeObjectiveRequest{
 			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID,
 			WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
@@ -2525,6 +2700,25 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		if runtimeValueHash("gentle-ai.sdd-runtime-grant-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime grant request digest does not match record") // refusal:by-design world-action: the digest binds the granted roots at write time, so a widened or altered record fails this recompute and the exit is restoring the store
 		}
+	case runtimeOperationSliceProof:
+		if record.SliceProof == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Handoff != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
+			return errors.New("invalid SDD runtime slice proof record shape") // refusal:by-design world-action: a slice proof record is provider-constructed and cannot carry a parallel authority mutation
+		}
+		event := record.SliceProof
+		if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || !runtimeRevisionPattern.MatchString(event.SliceID) ||
+			!runtimeRevisionPattern.MatchString(event.EvidenceRevision) || len(event.Report) == 0 || len(event.Report) > MaxVerifyReportBytes {
+			return errors.New("invalid SDD runtime slice proof event") // refusal:by-design world-action: malformed persisted proof fields are an immutable-record violation and require store restoration
+		}
+		report, reason := parseVerifyReport(event.Report)
+		if reason != "" || !IsPassingVerifyReportVerdict(report.Verdict) || report.Scope != "slice" || report.SliceID != event.SliceID || report.EvidenceRevision != event.EvidenceRevision {
+			return errors.New("invalid SDD runtime slice proof report") // refusal:by-design world-action: a persisted proof must retain the provider-admitted report it recorded
+		}
+		requestDigest := runtimeValueHash("gentle-ai.sdd-runtime-slice-proof-request/v1", struct {
+			Scope, SliceID, Report string
+		}{"slice", event.SliceID, event.Report})
+		if record.RequestDigest != requestDigest || record.RequestID != "slice-proof-"+strings.TrimPrefix(requestDigest, "sha256:")[:32] {
+			return errors.New("SDD runtime slice proof request digest does not match record") // refusal:by-design world-action: a digest mismatch is a mutated immutable record and requires store restoration
+		}
 	default:
 		return errors.New("invalid SDD runtime record operation")
 	}
@@ -2556,6 +2750,11 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	if request.MaxChangedLines < 1 || request.MaxChangedLines > maximumRuntimeChangedLines {
 		return BeginAttemptRequest{}, fmt.Errorf("max_changed_lines must be within 1..%d", maximumRuntimeChangedLines)
 	}
+	scope, err := normalizeRuntimeScope(request.Scope)
+	if err != nil {
+		return BeginAttemptRequest{}, err
+	}
+	request.Scope = scope
 	return request, nil
 }
 
@@ -3063,7 +3262,17 @@ func runtimeEvidenceOnlyRetryAuthorized(reset *RuntimeReset, rescope *RuntimeRes
 		rescope.RescopeCandidateTree == candidateTree
 }
 
-func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int) string {
+func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int, scope *RuntimeScope) string {
+	if scope != nil {
+		return runtimeValueHash(runtimeObjectiveSchemaV2, struct {
+			Change            string        `json:"change"`
+			WorkUnit          string        `json:"work_unit"`
+			EvidenceGoal      string        `json:"evidence_goal"`
+			CandidateIdentity string        `json:"candidate_identity"`
+			Generation        int           `json:"generation"`
+			Scope             *RuntimeScope `json:"scope"`
+		}{Change: change, WorkUnit: workUnit, EvidenceGoal: evidenceGoal, CandidateIdentity: candidateIdentity, Generation: generation, Scope: scope})
+	}
 	return runtimeValueHash(runtimeObjectiveSchemaV2, struct {
 		Change            string `json:"change"`
 		WorkUnit          string `json:"work_unit"`

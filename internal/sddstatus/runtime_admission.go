@@ -35,7 +35,7 @@ type runtimeBeginAdmissionResult struct {
 // repository-side precondition without every read-only surface inheriting it,
 // because there is only one place to put it.
 func (store RuntimeStore) runtimeBeginAdmission(
-	ctx context.Context, status RuntimeStatus, request BeginAttemptRequest,
+	ctx context.Context, status RuntimeStatus, scopes []RuntimeScope, request BeginAttemptRequest,
 ) (runtimeBeginAdmissionResult, error) {
 	if status.ActiveAttempt != nil {
 		return runtimeBeginAdmissionResult{}, ErrRuntimeAttemptActive
@@ -53,6 +53,9 @@ func (store RuntimeStore) runtimeBeginAdmission(
 	}
 	if status.DecisionRequired {
 		return runtimeBeginAdmissionResult{}, ErrRuntimeBudgetExhausted
+	}
+	if (status.Objective == nil || advancing) && runtimeScopeOverlaps(scopes, request.Scope) {
+		return runtimeBeginAdmissionResult{}, errors.New("scoped objective assignment overlaps an existing runtime objective") // refusal:by-design world-action: provider-owned authority construction must assign a non-overlapping scope
 	}
 
 	generation := status.ObjectiveGeneration + 1
@@ -115,7 +118,8 @@ func runtimeObjectiveScopeChanged(status RuntimeStatus, request BeginAttemptRequ
 	return request.WorkUnit != status.Objective.WorkUnit ||
 		request.EvidenceGoal != status.Objective.EvidenceGoal ||
 		request.MaxAttempts != status.Objective.MaxAttempts ||
-		request.MaxChangedLines != status.Objective.MaxChangedLines
+		request.MaxChangedLines != status.Objective.MaxChangedLines ||
+		!runtimeScopeEqual(request.Scope, status.Objective.Scope)
 }
 
 // AdmissionStatus is the read-only surface's answer to the question consumers
@@ -163,7 +167,7 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 		}
 		return status, nil
 	}
-	if _, admissionErr := store.runtimeBeginAdmission(ctx, status, normalized); admissionErr != nil {
+	if _, admissionErr := store.runtimeBeginAdmission(ctx, status, replay.Scopes, normalized); admissionErr != nil {
 		if blocked := store.compactMutationFailure(admissionErr, false, normalized); blocked.State == CompactStateBlocked {
 			status.BlockedReason, status.BlockedExit = blocked.Reason, blocked.Exit
 		}

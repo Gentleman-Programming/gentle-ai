@@ -404,7 +404,7 @@ func TestRuntimeLedgerRescopeReplayRefusesForgedWidenedRecord(t *testing.T) {
 	last := interrupted.Attempts[len(interrupted.Attempts)-1]
 
 	generation := interrupted.ObjectiveGeneration + 1
-	forgedObjectiveID := runtimeObjectiveID(store.Change, "forge-scope", "prove forged replay rejection", last.FinishCandidateIdentity, generation)
+	forgedObjectiveID := runtimeObjectiveID(store.Change, "forge-scope", "prove forged replay rejection", last.FinishCandidateIdentity, generation, nil)
 	request := RescopeObjectiveRequest{
 		ExpectedRevision: interrupted.Revision, RequestID: "forge-rescope-1",
 		WorkUnit: "forge-scope", EvidenceGoal: "prove forged replay rejection",
