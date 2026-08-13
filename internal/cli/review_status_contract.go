@@ -87,6 +87,7 @@ type ReviewTargetStatusResult struct {
 	Eligibility            *ReviewActionEligibility                             `json:"eligibility,omitempty"`
 	Forecast               *ReviewForecast                                      `json:"forecast,omitempty"`
 	NextTransition         *ReviewNextTransition                                `json:"next_transition,omitempty"`
+	RepositoryContext      *ReviewRepositoryContextReference                    `json:"repository_context,omitempty"`
 	ValidationRequest      *reviewtransaction.TargetedValidationRequest         `json:"validation_request,omitempty"`
 	FinalVerificationRetry *reviewtransaction.FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
 	decision               reviewtransaction.TargetStatusDecision               `json:"-"`

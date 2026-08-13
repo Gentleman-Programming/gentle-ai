@@ -48,6 +48,51 @@ func TestReviewRepositoryContextPublishesOpaquePrivateBinding(t *testing.T) {
 	}
 }
 
+func TestReviewRepositoryContextValidatesAndReturnsOneRecordSnapshot(t *testing.T) {
+	repo, binding := reviewRepositoryContextFixture(t, "repository-context-snapshot")
+	handle, err := PublishReviewRepositoryContext(context.Background(), repo, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := CompactAuthoritativeStore(context.Background(), repo, binding.LineageID)
+	initial, _ := store.Load()
+	loaded, payload := compactRepositoryContextIntentFixture(t, repo, initial.State)
+	if err := writeAtomic(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reconciled, err := ReconcileCompactRepositoryContext(context.Background(), store, loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolveReviewRepositoryContextLoadedHook = func() {
+		resolveReviewRepositoryContextLoadedHook = func() {}
+		current, _ := store.Load()
+		next := current.State
+		_ = next.Invalidate("advance after snapshot")
+		_, _ = store.Replace(current.Revision, "review/invalidate", next)
+	}
+	t.Cleanup(func() { resolveReviewRepositoryContextLoadedHook = func() {} })
+	_, resolved, err := ResolveReviewRepositoryContextBinding(context.Background(), handle)
+	binding.Revision = loaded.Revision
+	if err != nil || resolved != binding {
+		t.Fatalf("resolved binding = %#v, %v; want validated snapshot %#v", resolved, err, binding)
+	}
+	if reconciled.Handle != handle {
+		t.Fatalf("reconciled handle = %q, want %q", reconciled.Handle, handle)
+	}
+
+	staleRepo, staleBinding := reviewRepositoryContextFixture(t, "repository-context-stale-direct")
+	staleHandle, _ := PublishReviewRepositoryContext(context.Background(), staleRepo, staleBinding)
+	staleStore, _ := CompactAuthoritativeStore(context.Background(), staleRepo, staleBinding.LineageID)
+	staleRecord, _ := staleStore.Load()
+	staleNext := staleRecord.State
+	_ = staleNext.Invalidate("advance without intent")
+	_, _ = staleStore.Replace(staleRecord.Revision, "review/invalidate", staleNext)
+	if _, _, err := ResolveReviewRepositoryContextBinding(context.Background(), staleHandle); err == nil {
+		t.Fatal("stale direct-published handle jumped to a record without matching intent")
+	}
+}
+
 func TestReviewRepositoryContextRedactsTargetedValidationDerivationCause(t *testing.T) {
 	repo := t.TempDir()
 	cause := &GitCommandError{

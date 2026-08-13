@@ -46,10 +46,12 @@ type ReviewIntegrationStartResult struct {
 // ReviewRepositoryContextReference is the path-free provider context that a
 // capture transition can carry across process cwd boundaries.
 type ReviewRepositoryContextReference struct {
-	Capability     string `json:"capability"`
-	Handle         string `json:"handle"`
-	Revision       string `json:"revision"`
-	TargetIdentity string `json:"target_identity"`
+	Capability     string                                            `json:"capability"`
+	Handle         string                                            `json:"handle"`
+	Revision       string                                            `json:"revision"`
+	TargetIdentity string                                            `json:"target_identity"`
+	EventID        string                                            `json:"event_id,omitempty"`
+	Outcome        reviewtransaction.CompactRepositoryContextOutcome `json:"outcome,omitempty"`
 }
 
 func newReviewIntegrationStartResult(legacy ReviewFacadeStartResult, assessment reviewtransaction.RiskAssessment, targetMode reviewtransaction.TargetKind, frozenContext *reviewtransaction.FrozenCandidateContext, repositoryContext *ReviewRepositoryContextReference, contracts ...string) (ReviewIntegrationStartResult, error) {

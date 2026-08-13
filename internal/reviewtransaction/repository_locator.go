@@ -266,11 +266,23 @@ func resolveReviewRepositoryContext(ctx context.Context, handle string) (string,
 	if err != nil {
 		return "", ReviewRepositoryContextBinding{}, err
 	}
-	if err := validateLiveReviewRepositoryContext(ctx, root, binding); err != nil {
+	store, err := CompactAuthoritativeStore(ctx, root, binding.LineageID)
+	if err != nil {
 		return "", ReviewRepositoryContextBinding{}, err
 	}
+	record, err := store.LoadContext(ctx)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
+	}
+	resolveReviewRepositoryContextLoadedHook()
+	if err := validateReviewRepositoryContextRecord(ctx, root, binding, record); err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
+	}
+	binding.Revision = record.Revision
 	return root, binding, nil
 }
+
+var resolveReviewRepositoryContextLoadedHook = func() {}
 
 // resolveOpaqueReviewRepositoryContext proves the private locator still names
 // its original Git worktree without reading compact authority or Git content.
@@ -361,8 +373,21 @@ func validateLiveReviewRepositoryContext(ctx context.Context, repo string, bindi
 	if err != nil {
 		return err
 	}
-	if record.Revision != binding.Revision || record.State.LineageID != binding.LineageID {
+	return validateReviewRepositoryContextRecord(ctx, repo, binding, record)
+}
+
+func validateReviewRepositoryContextRecord(ctx context.Context, repo string, binding ReviewRepositoryContextBinding, record CompactRecord) error {
+	if record.State.LineageID != binding.LineageID {
 		return errors.New("review repository context is stale or has no live matching authority")
+	}
+	if record.Revision != binding.Revision {
+		matched := false
+		for _, intent := range record.EffectIntents {
+			matched = matched || intent.Class == "repository_context" && intent.BindingRevision == binding.Revision
+		}
+		if !matched {
+			return errors.New("review repository context is stale or has no live matching authority")
+		}
 	}
 	switch record.State.State {
 	case StateReviewing:

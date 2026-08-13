@@ -69,7 +69,7 @@ func (repository compactEffectMarkerRepository) write(marker compactEffectMarker
 			return compactEffectPublication{}, errors.New("applied compact effect marker is immutable") // refusal:by-design operator-knowledge: a caller may only replay the exact applied value
 		}
 		if old.State == compactEffectDurabilityLimited && marker.State != compactEffectApplied {
-			return compactEffectPublication{}, errors.New("compact effect marker transition regressed")
+			return compactEffectPublication{}, errors.New("compact effect marker transition regressed") // refusal:by-design operator-knowledge: only an applied retry can promote a durability-limited marker
 		}
 		if old.State == compactEffectBlocked && marker.State == compactEffectPending {
 			return compactEffectPublication{}, errors.New("compact effect marker transition regressed") // refusal:by-design operator-knowledge: callers must submit a monotonic state
@@ -96,7 +96,7 @@ func (repository compactEffectMarkerRepository) write(marker compactEffectMarker
 				}
 				got, readErr := repository.read(marker.LineageID, marker.AuthorityRevision, marker.EventID)
 				if readErr != nil || got != marker {
-					return publication, errors.New("compact effect marker durability-state rewrite failed")
+					return publication, errors.New("compact effect marker durability-state rewrite failed") // refusal:by-design world-action: storage did not retain the required fail-closed durability state
 				}
 			}
 		}

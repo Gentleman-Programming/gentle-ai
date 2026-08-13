@@ -196,9 +196,10 @@ const (
 )
 
 type CompactStartRequest struct {
-	State           CompactState
-	TracePath       string
-	ExplicitLineage bool
+	State             CompactState
+	TracePath         string
+	ExplicitLineage   bool
+	RepositoryContext bool
 	// BeforeCreate runs under the START lock only after existing-authority
 	// selection is exhausted and immediately before a new record is built. It
 	// may validate derived response material without running for resumes.
@@ -1360,12 +1361,25 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 			return CompactStartResult{}, err
 		}
 	}
-	record, payload, err := makeCompactRecord(request.State)
+	var intents []CompactEffectIntent
+	if request.RepositoryContext {
+		intent, intentErr := compactRepositoryContextIntent(ctx, requestedStore.repo, request.State)
+		if intentErr != nil {
+			return CompactStartResult{}, intentErr
+		}
+		intents = []CompactEffectIntent{intent}
+	}
+	record, payload, err := makeCompactRecordWithIntents(request.State, intents)
 	if err != nil {
 		return CompactStartResult{}, err
 	}
 	if err := writeAtomic(requestedStore.StatePath(), payload, 0o644); err != nil {
 		return CompactStartResult{}, err
+	}
+	if request.RepositoryContext {
+		if _, err := ReconcileCompactRepositoryContext(ctx, requestedStore, record); err != nil {
+			return CompactStartResult{}, fmt.Errorf("reconcile review start repository context: %w", err)
+		}
 	}
 	if request.TracePath != "" {
 		recordCompactTrace(request.TracePath, CompactTraceEntry{
