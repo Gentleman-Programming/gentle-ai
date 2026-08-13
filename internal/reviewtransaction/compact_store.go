@@ -2253,6 +2253,11 @@ func makeCompactRecord(state CompactState) (CompactRecord, []byte, error) {
 
 func makeCompactRecordWithIntents(state CompactState, intents []CompactEffectIntent) (CompactRecord, []byte, error) {
 	intents = append([]CompactEffectIntent(nil), intents...)
+	for _, intent := range intents {
+		if !validCompactEffectIntentFields(intent) {
+			return CompactRecord{}, nil, errors.New("invalid compact required effect intent") // refusal:by-design operator-knowledge: callers must supply a closed, persistable effect intent
+		}
+	}
 	sort.Slice(intents, func(i, j int) bool {
 		if intents[i].Class != intents[j].Class {
 			return intents[i].Class < intents[j].Class
@@ -2379,7 +2384,7 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 
 func validateCompactEffectIntents(record CompactRecord) error {
 	for index, intent := range record.EffectIntents {
-		if (intent.Class != "repository_context" && intent.Class != "requested_trace") || strings.TrimSpace(intent.Destination) == "" || !validSHA256(intent.PayloadHash) {
+		if !validCompactEffectIntentFields(intent) {
 			// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
 			return errors.New("invalid compact required effect intent")
 		}
@@ -2400,6 +2405,11 @@ func validateCompactEffectIntents(record CompactRecord) error {
 		return errors.New("invalid compact required effect identity")
 	}
 	return nil
+}
+
+func validCompactEffectIntentFields(intent CompactEffectIntent) bool {
+	return (intent.Class == "repository_context" || intent.Class == "requested_trace") &&
+		strings.TrimSpace(intent.Destination) != "" && validSHA256(intent.PayloadHash)
 }
 
 func forensicHistoricalCompactRecord(payload []byte, lineageID string) (historicalCompactForensicRecord, bool) {

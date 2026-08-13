@@ -1494,6 +1494,20 @@ func TestCompactRecordEffectIntentIdentity(t *testing.T) {
 		{Class: "repository_context", Destination: destination, PayloadHash: hashPayload(contextPayload)},
 		{Class: "requested_trace", Destination: "requested-output", PayloadHash: hash("d")},
 	}
+	for _, tt := range []struct {
+		name   string
+		intent CompactEffectIntent
+	}{
+		{"unsupported class", CompactEffectIntent{Class: "receipt", Destination: destination, PayloadHash: hashPayload(contextPayload)}},
+		{"blank destination", CompactEffectIntent{Class: "repository_context", Destination: " ", PayloadHash: hashPayload(contextPayload)}},
+		{"invalid payload hash", CompactEffectIntent{Class: "repository_context", Destination: destination, PayloadHash: "invalid"}},
+	} {
+		t.Run("constructor rejects "+tt.name, func(t *testing.T) {
+			if _, _, err := makeCompactRecordWithIntents(state, []CompactEffectIntent{tt.intent}); err == nil {
+				t.Fatal("malformed effect intent was accepted")
+			}
+		})
+	}
 	record, payload, err := makeCompactRecordWithIntents(state, intents)
 	if err != nil {
 		t.Fatal(err)
@@ -1523,7 +1537,12 @@ func TestCompactRecordEffectIntentIdentity(t *testing.T) {
 		mutate func(*CompactRecord)
 	}{
 		{"unknown class", func(candidate *CompactRecord) { candidate.EffectIntents[0].Class = "unknown" }},
+		{"blank destination", func(candidate *CompactRecord) { candidate.EffectIntents[0].Destination = " " }},
 		{"invalid payload hash", func(candidate *CompactRecord) { candidate.EffectIntents[0].PayloadHash = "invalid" }},
+		{"omitted identity", func(candidate *CompactRecord) {
+			candidate.EffectIntents[0].BindingRevision = ""
+			candidate.EffectIntents[0].EventID = ""
+		}},
 		{"invalid event hash", func(candidate *CompactRecord) { candidate.EffectIntents[0].EventID = "invalid" }},
 		{"forged binding revision", func(candidate *CompactRecord) { candidate.EffectIntents[0].BindingRevision = hash("forged") }},
 		{"coordinated binding and event forgery", func(candidate *CompactRecord) {
