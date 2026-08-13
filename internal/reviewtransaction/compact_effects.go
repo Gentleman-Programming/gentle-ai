@@ -35,7 +35,6 @@ type compactEffectMarker struct {
 }
 
 type compactEffectMarkerRepository struct{ root string }
-type compactEffectPublication struct{ DurabilityLimited bool }
 
 func openCompactEffectMarkerRepository(ctx context.Context, repo string) (compactEffectMarkerRepository, error) {
 	base, _, err := reviewAuthorityRoot(ctx, repo)
@@ -43,51 +42,6 @@ func openCompactEffectMarkerRepository(ctx context.Context, repo string) (compac
 		return compactEffectMarkerRepository{}, err
 	}
 	return compactEffectMarkerRepository{root: filepath.Join(base, "effect-markers", "v1")}, nil
-}
-
-func (repository compactEffectMarkerRepository) write(ctx context.Context, marker compactEffectMarker) (compactEffectPublication, error) {
-	if err := validateCompactEffectMarker(marker, marker.LineageID, marker.AuthorityRevision, marker.EventID); err != nil {
-		return compactEffectPublication{}, err
-	}
-	path, err := repository.path(marker.LineageID, marker.AuthorityRevision, marker.EventID, true)
-	if err != nil {
-		return compactEffectPublication{}, err
-	}
-	lock, err := acquireStoreLockForConvergentCompletion(ctx, path+".lock")
-	if err != nil {
-		return compactEffectPublication{}, err
-	}
-	defer lock.release()
-	old, err := repository.read(marker.LineageID, marker.AuthorityRevision, marker.EventID)
-	if err == nil {
-		if old.State == compactEffectApplied {
-			if old == marker {
-				return compactEffectPublication{}, nil
-			}
-			return compactEffectPublication{}, errors.New("applied compact effect marker is immutable") // refusal:by-design operator-knowledge: a caller may only replay the exact applied value
-		}
-		if old.State == compactEffectBlocked && marker.State == compactEffectPending {
-			return compactEffectPublication{}, errors.New("compact effect marker transition regressed") // refusal:by-design operator-knowledge: callers must submit a monotonic state
-		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return compactEffectPublication{}, err
-	}
-	payload, _ := json.Marshal(marker)
-	publication := compactEffectPublication{}
-	var publicationErr error
-	if err := writeAtomic(path, append(payload, '\n'), 0o600); err != nil {
-		var syncErr *directorySyncError
-		if !errors.As(err, &syncErr) {
-			return publication, err
-		}
-		publication.DurabilityLimited = true
-		publicationErr = err
-	}
-	got, err := repository.read(marker.LineageID, marker.AuthorityRevision, marker.EventID)
-	if err != nil || got != marker {
-		return publication, errors.Join(publicationErr, err, errors.New("compact effect marker read-back mismatch")) // refusal:by-design world-action: storage did not retain the exact atomic replacement
-	}
-	return publication, nil
 }
 
 func (repository compactEffectMarkerRepository) read(lineageID, revision, eventID string) (compactEffectMarker, error) {
