@@ -1568,6 +1568,13 @@ func TestCompactRecordEffectIntentIdentity(t *testing.T) {
 			}
 		})
 	}
+	invalidBuilder := record
+	invalidBuilder.EffectIntents = append([]CompactEffectIntent(nil), record.EffectIntents...)
+	invalidBuilder.EffectIntents[0].BindingRevision = hash("forged")
+	invalidPayload, _ := json.Marshal(invalidBuilder)
+	if _, err := parseCompactRecord(invalidPayload, state.LineageID); err == nil || !strings.Contains(err.Error(), "invalid compact required effect binding") {
+		t.Fatalf("builder error = %v; want exact effect-authority evidence", err)
+	}
 	otherState := state
 	otherState.LineageID = "effect-intent-other-lineage"
 	other, _, err := makeCompactRecordWithIntents(otherState, []CompactEffectIntent{{Class: "repository_context", Destination: destination, PayloadHash: hashPayload(contextPayload)}, intents[1]})
@@ -2475,6 +2482,36 @@ func TestCompactTransportRoundTripRecoversEquivalentCurrentAuthority(t *testing.
 	}
 	if _, err := os.Stat(filepath.Join(destinationStore.Dir, "events")); !os.IsNotExist(err) {
 		t.Fatalf("compact import reconstructed event history: %v", err)
+	}
+}
+
+func TestCompactTransportRoundTripPreservesIntentAuthorityIdentity(t *testing.T) {
+	source := initSnapshotRepo(t)
+	state := newCompactTestState(t, source, "compact-intent-transport")
+	record, recordPayload, err := makeCompactRecordWithIntents(state, []CompactEffectIntent{{
+		Class: "requested_trace", Destination: "requested-output", PayloadHash: hash("d"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := CompactAuthoritativeStore(context.Background(), source, state.LineageID)
+	if err := writeAtomic(store.StatePath(), recordPayload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	transport, err := store.ExportTransport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(t.TempDir(), "clone")
+	gitSnapshot(t, source, "clone", "--no-local", source, destination)
+	imported, err := ImportCompactTransport(context.Background(), destination, transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationStore, _ := CompactAuthoritativeStore(context.Background(), destination, state.LineageID)
+	importedPayload, err := os.ReadFile(destinationStore.StatePath())
+	if err != nil || imported.Revision != record.Revision || !bytes.Equal(importedPayload, recordPayload) {
+		t.Fatalf("intent transport changed revision/bytes: revision %q, bytes equal %t, err %v", imported.Revision, bytes.Equal(importedPayload, recordPayload), err)
 	}
 }
 

@@ -2400,7 +2400,10 @@ func validateCompactEffectIntents(record CompactRecord) error {
 		return nil
 	}
 	want, _, err := makeCompactRecordWithIntents(record.State, append([]CompactEffectIntent(nil), record.EffectIntents...))
-	if err != nil || want.Revision != record.Revision || !reflect.DeepEqual(want.EffectIntents, record.EffectIntents) {
+	if err != nil {
+		return fmt.Errorf("invalid compact required effect identity: %w", err)
+	}
+	if want.Revision != record.Revision || !reflect.DeepEqual(want.EffectIntents, record.EffectIntents) {
 		// refusal:by-design operator-knowledge: persisted authority is corrupt and cannot be repaired by an operator command
 		return errors.New("invalid compact required effect identity")
 	}
@@ -2773,7 +2776,7 @@ func (store CompactStore) installTransportRecordLocked(ctx context.Context, reco
 	if err := validateCompactTransportDelivery(ctx, store.repo, record.State); err != nil {
 		return err
 	}
-	want, payload, err := makeCompactRecord(record.State)
+	want, payload, err := makeCompactRecordWithIntents(record.State, record.EffectIntents)
 	if err != nil || want.Revision != record.Revision {
 		return errors.New("imported compact record checksum changed")
 	}
