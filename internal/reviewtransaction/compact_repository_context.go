@@ -27,6 +27,7 @@ func reconcileCompactRepositoryContext(ctx context.Context, store CompactStore, 
 				continue
 			}
 			if existing.State == compactEffectBlocked {
+				// refusal:by-design operator-knowledge: the operator must reconcile which repository identity should own the committed context effect
 				return errors.New("repository context effect is blocked by an identity conflict")
 			}
 		} else if !errors.Is(readErr, fs.ErrNotExist) {
@@ -52,6 +53,7 @@ func reconcileCompactRepositoryContext(ctx context.Context, store CompactStore, 
 		}
 		if handle != intent.Destination || hashPayloadBytes(payload) != intent.PayloadHash {
 			return writeCompactRepositoryContextMarker(markers, marker, compactEffectBlocked, compactEffectBlockedConflict,
+				// refusal:by-design operator-knowledge: persisted authority is inconsistent and no operator command may rewrite it
 				errors.New("repository context effect binding or payload does not match committed intent"))
 		}
 		path, err := reviewRepositoryContextPath(handle)
@@ -89,6 +91,7 @@ func writeCompactRepositoryContextMarker(repository compactEffectMarkerRepositor
 		return cause
 	}
 	if publication.DurabilityLimited {
+		// refusal:by-design world-action: durable filesystem persistence must be restored before the marker can be promoted
 		return errors.New("repository context marker durability is limited")
 	}
 	return nil
