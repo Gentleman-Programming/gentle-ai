@@ -1567,7 +1567,7 @@ func ensureCodexSkillRegistryHook(hooksPath string) (bool, error) {
 	// `command` fails. Codex exposes a Windows-only `commandWindows` override, so
 	// we ship the bash command plus a PowerShell-safe override and let Codex pick
 	// the right one per platform (issue #2124).
-	sessionStart, hasCurrent, migrated := pruneStaleSkillRegistryHooks(sessionStart, codexSkillRegistryBashCommand)
+	sessionStart, hasCurrent, migrated := pruneStaleSkillRegistryHooks(sessionStart, codexSkillRegistryBashCommand, codexSkillRegistryPowerShellCommand)
 	if hasCurrent && !migrated {
 		return false, nil
 	}
@@ -1641,7 +1641,7 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 		hookHandler["command"] = claudeSkillRegistryBashCommand
 	}
 
-	userPromptSubmit, hasCurrent, migrated := pruneStaleSkillRegistryHooks(userPromptSubmit, wantCommand)
+	userPromptSubmit, hasCurrent, migrated := pruneStaleSkillRegistryHooks(userPromptSubmit, wantCommand, "")
 	if hasCurrent && !migrated {
 		return false, nil
 	}
@@ -1669,9 +1669,12 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 // previous install when the current platform now needs the PowerShell variant)
 // from the given hook-event list. It reports whether the list still contains an
 // up-to-date hook with the exact wantCommand, and whether it removed anything.
+// When wantCommandWindows is non-empty (Codex), a hook is considered current
+// only when both command and commandWindows match, so a legacy bash-only hook
+// that lacks the Windows override is treated as stale and migrated (issue #2124).
 // Entries that end up with an empty inner hooks array are dropped so no empty
 // matcher groups linger.
-func pruneStaleSkillRegistryHooks(hookEntries []any, wantCommand string) (kept []any, hasCurrent bool, removed bool) {
+func pruneStaleSkillRegistryHooks(hookEntries []any, wantCommand, wantCommandWindows string) (kept []any, hasCurrent bool, removed bool) {
 	kept = make([]any, 0, len(hookEntries))
 	for _, item := range hookEntries {
 		itemMap, ok := item.(map[string]any)
@@ -1697,6 +1700,16 @@ func pruneStaleSkillRegistryHooks(hookEntries []any, wantCommand string) (kept [
 				continue
 			}
 			if command == wantCommand {
+				// For Codex (wantCommandWindows != ""), a legacy bash-only hook
+				// that lacks the Windows override is stale and must be replaced
+				// so Windows Codex gets the PowerShell command (issue #2124).
+				if wantCommandWindows != "" {
+					cw, _ := hookMap["commandWindows"].(string)
+					if cw != wantCommandWindows {
+						removed = true
+						continue
+					}
+				}
 				hasCurrent = true
 				filtered = append(filtered, hook)
 				continue

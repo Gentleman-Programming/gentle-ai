@@ -6424,6 +6424,72 @@ func TestEnsureCodexSkillRegistryHookWritesSessionStartHookIdempotently(t *testi
 	}
 }
 
+// TestEnsureCodexSkillRegistryHookMigratesBashOnlyLegacyHook verifies that a
+// legacy Codex hook with the correct bash command but no commandWindows
+// override is detected as stale and migrated so Windows Codex gets the
+// PowerShell-safe command (CodeRabbit finding, issue #2124).
+func TestEnsureCodexSkillRegistryHookMigratesBashOnlyLegacyHook(t *testing.T) {
+	home := t.TempDir()
+	hooksPath := filepath.Join(home, ".codex", "hooks.json")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Legacy hook: has the correct bash command but NO commandWindows override.
+	// Without the migration fix, pruneStaleSkillRegistryHooks would consider
+	// this "current" and skip writing the Windows override.
+	initial := `{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {"type": "command", "command": "gentle-ai skill-registry refresh --quiet --no-gitignore --cwd \"$PWD\" || true", "timeout": 30, "statusMessage": "Refreshing skill registry"}
+        ]
+      }
+    ]
+  }
+}`
+	if err := os.WriteFile(hooksPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := ensureCodexSkillRegistryHook(hooksPath)
+	if err != nil {
+		t.Fatalf("ensureCodexSkillRegistryHook() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected changed = true for legacy bash-only hook migration, got false")
+	}
+
+	data, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+
+	// The migrated hook must now have the commandWindows override.
+	if strings.Count(text, `"commandWindows"`) != 1 {
+		t.Fatalf("legacy hook should be migrated to include commandWindows:\n%s", text)
+	}
+	if !strings.Contains(text, "; exit 0") {
+		t.Fatalf("migrated commandWindows should be PowerShell-safe (exit 0):\n%s", text)
+	}
+	// There must be exactly one skill-registry hook entry (the stale one was
+	// replaced, not duplicated).
+	if strings.Count(text, `"statusMessage": "Refreshing skill registry"`) != 1 {
+		t.Fatalf("expected exactly one skill-registry hook entry after migration:\n%s", text)
+	}
+
+	// Second call must be idempotent — the now-complete hook is current.
+	changed, err = ensureCodexSkillRegistryHook(hooksPath)
+	if err != nil {
+		t.Fatalf("second ensureCodexSkillRegistryHook() error = %v", err)
+	}
+	if changed {
+		t.Fatal("second call changed = true, want false (idempotent after migration)")
+	}
+}
+
 // withSkillRegistryHookGOOS overrides the injected GOOS for the duration of a
 // test and restores it afterward, mirroring the runtimeGOOS pattern in
 // internal/components/filemerge (issue #2124).
