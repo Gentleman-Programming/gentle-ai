@@ -19,11 +19,13 @@ package main
 //     exactly what j68/j76 record — a journey that started naming a
 //     per-runtime lens-context marker would corrupt the byte-identical corpus
 //     the moment it landed.
-//  3. The live byte-identity proof survives: j68 must still drive the three
-//     runtimes (claude-code, opencode, codex) through the shared advisory
+//  3. The live byte-identity proof survives: j68 must still drive the
+//     advertised runtimes (claude-code, opencode) through the shared advisory
 //     prompt steps in order, with the final step still carrying its
 //     byte-identity assertion (assertAdvisoryPromptsMatch). If the corpus
-//     drops or reorders a runtime, this fails.
+//     drops or reorders a runtime, this fails. Codex's unavailable-runtime
+//     refusal lives in j69 (it is wired but unadvertised since the #3138
+//     slice-8 advertisement flip), never as a prompt-producing step here.
 //
 // STOP gate (SEN-RPC-10): if the recorded corpus ever diverges when a shared
 // prompt changes, the slice stops pending re-scope. A passing corpus run
@@ -128,14 +130,14 @@ func TestAdvisoryByteIdentityJourneyKeepsSharedPromptAssertion(t *testing.T) {
 			assertionStep = step
 		}
 	}
-	if joined := strings.Join(runtimes, ","); joined != "claude-code,opencode,codex" {
-		t.Fatalf("j68 advisory prompt steps = %q, want claude-code,opencode,codex in order", joined)
+	if joined := strings.Join(runtimes, ","); joined != "claude-code,opencode" {
+		t.Fatalf("j68 advisory prompt steps = %q, want claude-code,opencode in order", joined)
 	}
 	if assertionStep == nil {
 		t.Fatal("j68's final runtime prompt step no longer carries the byte-identity After assertion (assertAdvisoryPromptsMatch)")
 	}
-	if assertionStep.Name != "advisory prompt for codex" {
-		t.Fatalf("j68 byte-identity assertion is on step %q, want the codex step so all three prompts are compared", assertionStep.Name)
+	if assertionStep.Name != "advisory prompt for opencode" {
+		t.Fatalf("j68 byte-identity assertion is on step %q, want the opencode step so all advertised prompts are compared", assertionStep.Name)
 	}
 }
 

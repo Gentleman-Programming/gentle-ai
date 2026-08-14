@@ -222,16 +222,18 @@ func rememberAdvisoryPrompt(scratchKey string) func(*Sandbox, Observation) error
 
 // assertAdvisoryPromptsMatch proves the one canonical provider-rendered
 // prompt (runtimeReviewerPrompt / advisoryreview.Prompt) is genuinely shared:
-// Claude Code, OpenCode, and Codex must receive byte-identical text for the
-// same bound lens, never a runtime-specific duplicate.
+// every advertised runtime must receive byte-identical text for the same
+// bound lens, never a runtime-specific duplicate. Codex is deliberately not
+// among them: the #3138 slice-8 advertisement flip made Codex wired but
+// unadvertised, so `review advisory prompt --runtime codex` refuses before
+// emitting any prompt text (j69 pins that refusal).
 func assertAdvisoryPromptsMatch(sandbox *Sandbox, observation Observation) error {
-	sandbox.Scratch["advisory-prompt-codex"] = observation.Stdout
+	sandbox.Scratch["advisory-prompt-opencode"] = observation.Stdout
 	claude := sandbox.Scratch["advisory-prompt-claude-code"]
 	opencode := sandbox.Scratch["advisory-prompt-opencode"]
-	codex := sandbox.Scratch["advisory-prompt-codex"]
-	if claude == "" || claude != opencode || claude != codex {
-		return fmt.Errorf("advisory prompt diverged across runtimes: claude-code=%dB opencode=%dB codex=%dB",
-			len(claude), len(opencode), len(codex))
+	if claude == "" || claude != opencode {
+		return fmt.Errorf("advisory prompt diverged across runtimes: claude-code=%dB opencode=%dB",
+			len(claude), len(opencode))
 	}
 	if !strings.Contains(claude, "advisory model output for native Go admission") {
 		return fmt.Errorf("advisory prompt is missing its canonical advisory-boundary sentence: %s", claude)
@@ -278,7 +280,7 @@ func advisoryJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j68-review-advisory-prompt-shared-across-runtimes",
-			Title:  "Advisory prompt: Claude Code, OpenCode, and Codex receive the identical canonical prompt",
+			Title:  "Advisory prompt: the advertised runtimes receive the identical canonical prompt",
 			Source: "rdd-advisory-transport SKILL.md + shared-advisory-transport-proposal.md migration slice 6",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
@@ -288,15 +290,13 @@ func advisoryJourneys() []Journey {
 				{Name: "advisory prompt for claude-code", Requires: advisoryPromptCapability,
 					Args: advisoryPromptArgs("claude-code"), After: rememberAdvisoryPrompt("advisory-prompt-claude-code")},
 				{Name: "advisory prompt for opencode", Requires: advisoryPromptCapability,
-					Args: advisoryPromptArgs("opencode"), After: rememberAdvisoryPrompt("advisory-prompt-opencode")},
-				{Name: "advisory prompt for codex", Requires: advisoryPromptCapability,
-					Args: advisoryPromptArgs("codex"), After: assertAdvisoryPromptsMatch},
+					Args: advisoryPromptArgs("opencode"), After: assertAdvisoryPromptsMatch},
 				{Name: "finish the review", Requires: captureResultCapability, Composite: finishAdvisoryReview},
 			},
 		},
 		{
 			ID:     "j69-review-advisory-prompt-refuses-unselected-lens-and-unadvertised-runtime",
-			Title:  "Failure path: advisory prompt refuses an unselected lens and an unadvertised runtime, then the lifecycle still completes",
+			Title:  "Failure path: advisory prompt refuses an unselected lens and unadvertised runtimes, then the lifecycle still completes",
 			Source: "rdd-advisory-transport SKILL.md: \"Capability advertisement requires shared-contract conformance plus organic runtime proof\"",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
@@ -308,6 +308,9 @@ func advisoryJourneys() []Journey {
 					After: assertStderrContains("lens_context_lens_not_selected")},
 				{Name: "advisory prompt refuses an unadvertised runtime", Requires: advisoryPromptCapability,
 					Args:  advisoryPromptArgs("gemini"),
+					After: assertStderrContains("unavailable for runtime")},
+				{Name: "advisory prompt refuses the wired-but-unadvertised codex runtime", Requires: advisoryPromptCapability,
+					Args:  advisoryPromptArgs("codex"),
 					After: assertStderrContains("unavailable for runtime")},
 				{Name: "finish the review", Requires: captureResultCapability, Composite: finishAdvisoryReview},
 			},
