@@ -15,8 +15,19 @@ func TestRepositoryIssueTemplatesUseMarkdownContract(t *testing.T) {
 			t.Fatalf("legacy Issue Form %s must not exist: %v", name, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, "config.yml")); err != nil {
-		t.Fatalf("issue chooser config must remain present: %v", err)
+	config, err := os.ReadFile(filepath.Join(root, "config.yml"))
+	if err != nil {
+		t.Fatalf("read issue chooser config: %v", err)
+	}
+	for _, required := range []string{
+		"blank_issues_enabled: false",
+		"name: Questions & Discussions",
+		"url: https://github.com/Gentleman-Programming/gentle-ai/discussions",
+		"about: Use discussions for questions, not issues",
+	} {
+		if !strings.Contains(string(config), required) {
+			t.Fatalf("issue chooser config must preserve %q", required)
+		}
 	}
 
 	tests := []struct {
