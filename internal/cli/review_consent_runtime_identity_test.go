@@ -20,8 +20,12 @@ import (
 // runtime and asserts the consent envelope's top-level agent matches the
 // declared binding, exactly like its follow-up invocations already did. The
 // claude-code case is the regression check: it must stay exactly as today.
+// Codex is intentionally NOT in the list: the #3138 slice-8 advertisement
+// flip (REQ-RTC-5) left Codex wired but unadvertised, so a negotiated START
+// refuses it (review_transport_capability_unsupported) instead of producing
+// a consent envelope — see TestNegotiatedStartRefusesUnadvertisedRuntime.
 func TestNegotiatedConsentEnvelopeBindsTheDeclaredRuntimeIdentity(t *testing.T) {
-	for _, agent := range []string{"opencode", "codex", "claude-code"} {
+	for _, agent := range []string{"opencode", "claude-code"} {
 		t.Run(agent, func(t *testing.T) {
 			reviewModeHome(t)
 			repo := initReviewCLIRepo(t)

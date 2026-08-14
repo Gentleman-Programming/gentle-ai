@@ -225,6 +225,11 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 // Commit 2 flips SystemPrompt for Pi and updates the Pi digest, after which
 // both this test and TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically
 // pass together.
+//
+// The Codex row carries the post-#3138 slice-8 advertisement-flip digest
+// (wired but unadvertised, REQ-RTC-5): the row was updated deliberately by
+// that flip, so its digest is the post-flip value, matching
+// TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically.
 func TestEveryManifestDigestStaysByteStable(t *testing.T) {
 	t.Parallel()
 
@@ -233,7 +238,7 @@ func TestEveryManifestDigestStaysByteStable(t *testing.T) {
 	wantNonPiDigests := map[model.AgentID]string{
 		model.AgentAntigravity: "sha256:962eb63dc7f59a0b4c9c011dbb890aca1b40ecbfd3800c3e69b08f8b1639332c",
 		model.AgentClaudeCode:  "sha256:132b9219b222d35b0e4eafce3dae965c56eb8d79f07dff6d45c42c137e36fd9b",
-		model.AgentCodex:       "sha256:dbf94a3b7815cf68ccd6299c634f3e17be9abc305b3849adee382c65055c5ed9",
+		model.AgentCodex:       "sha256:c87957870d843dcbd37b285bc6ed4b007cce8cdae7a52ac177d976f338c454f0",
 		model.AgentCursor:      "sha256:2cf80b9bd4cdc9a9d3586e6d02dc2207f326841bba935c6f11f257a20756d821",
 		model.AgentGeminiCLI:   "sha256:463fdc93ad387c9b107c5f031f806dece9da3e2d47300b88d7640174bcb22a1e",
 		model.AgentHermes:      "sha256:ec03506bc4cb0d4850542412630ada103c882d61fa372075f5f8db209a301127",

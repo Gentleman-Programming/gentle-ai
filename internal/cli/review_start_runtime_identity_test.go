@@ -101,11 +101,15 @@ func TestDirectReviewStartRefusalInventsNoRuntimeIdentity(t *testing.T) {
 // TestDirectRouteStillRefusesADeclaredRuntime pins the precondition the test
 // above depends on. If the direct route ever starts accepting `--agent`, the
 // undeclared-caller reasoning stops being the whole story and the printed
-// command must echo the declared identity instead.
+// command must echo the declared identity instead. Only runtimes that still
+// advertise immutable review transport reach this refusal: the #3138 slice-8
+// advertisement flip left Codex wired but unadvertised, so it is refused
+// earlier (immutable_transport_unsupported) and is covered by
+// TestImmutableReviewRuntimeMatrix in review_transport_capability_test.go.
 func TestDirectRouteStillRefusesADeclaredRuntime(t *testing.T) {
 	repo, baseRef := initLensSelectingReviewCLIRepo(t)
 
-	for _, agent := range []model.AgentID{model.AgentCodex, model.AgentOpenCode} {
+	for _, agent := range []model.AgentID{model.AgentOpenCode} {
 		t.Run(string(agent), func(t *testing.T) {
 			var stdout bytes.Buffer
 			err := RunReviewFacadeStart([]string{
