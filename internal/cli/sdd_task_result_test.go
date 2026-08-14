@@ -39,6 +39,24 @@ func TestRunSDDTaskResultUnknownCommandIsRefused(t *testing.T) {
 	}
 }
 
+func TestRunSDDTaskResultAcceptsFlagEqualsForm(t *testing.T) {
+	// The generated glue emits separate --flag value tokens today, but a
+	// hand-run or future glue revision may use --flag=value; both must mean
+	// the same thing, or the drift message (re-run gentle-ai sync) would not
+	// fix the failure.
+	var out bytes.Buffer
+	err := runSDDTaskResult(
+		[]string{"guard", "--cwd=/repo", "--session=s1", "--phase=sdd-apply", "--latch-path=" + latchPath(t)},
+		bytes.NewReader(nil), &out,
+	)
+	if err != nil {
+		t.Fatalf("guard with --flag=value form: %v", err)
+	}
+	if out.String() != "" {
+		t.Fatalf("guard with --flag=value form printed %q, want empty stdout", out.String())
+	}
+}
+
 func TestRunSDDTaskResultGuardColdLatchPasses(t *testing.T) {
 	var out bytes.Buffer
 	err := runSDDTaskResult(

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 )
@@ -45,7 +46,7 @@ func runSDDTaskResult(args []string, stdin io.Reader, stdout io.Writer) error {
 	case "guard":
 		return sddTaskResultGuard(flags, latch, stdout)
 	case "result":
-		return sddTaskResultResult(flags, string(flags.cwd), stdin, latch, stdout)
+		return sddTaskResultResult(flags, stdin, latch, stdout)
 	case "clear":
 		return latch.Clear(flags.session)
 	case "clear-all":
@@ -70,30 +71,31 @@ func parseSDDTaskResultArgs(args []string) (string, sddTaskResultFlags, error) {
 	flags := sddTaskResultFlags{}
 	rest := args[1:]
 	for i := 0; i < len(rest); i++ {
-		switch rest[i] {
+		token, inlineValue, inline := sddTaskResultSplitFlag(rest[i])
+		switch token {
 		case "--cwd":
-			value, next, err := sddTaskResultFlagValue(rest, i, "--cwd")
+			value, next, err := sddTaskResultFlagValue(rest, i, inlineValue, inline, "--cwd")
 			if err != nil {
 				return "", flags, err
 			}
 			flags.cwd = value
 			i = next
 		case "--session":
-			value, next, err := sddTaskResultFlagValue(rest, i, "--session")
+			value, next, err := sddTaskResultFlagValue(rest, i, inlineValue, inline, "--session")
 			if err != nil {
 				return "", flags, err
 			}
 			flags.session = value
 			i = next
 		case "--phase":
-			value, next, err := sddTaskResultFlagValue(rest, i, "--phase")
+			value, next, err := sddTaskResultFlagValue(rest, i, inlineValue, inline, "--phase")
 			if err != nil {
 				return "", flags, err
 			}
 			flags.phase = value
 			i = next
 		case "--latch-path":
-			value, next, err := sddTaskResultFlagValue(rest, i, "--latch-path")
+			value, next, err := sddTaskResultFlagValue(rest, i, inlineValue, inline, "--latch-path")
 			if err != nil {
 				return "", flags, err
 			}
@@ -123,7 +125,23 @@ func parseSDDTaskResultArgs(args []string) (string, sddTaskResultFlags, error) {
 	return command, flags, nil
 }
 
-func sddTaskResultFlagValue(args []string, index int, flag string) (string, int, error) {
+// sddTaskResultSplitFlag splits a "--flag=value" token into ("--flag",
+// "value", true). A bare "--flag" returns ("--flag", "", false), leaving the
+// value to the next argument.
+func sddTaskResultSplitFlag(arg string) (string, string, bool) {
+	if name, value, ok := strings.Cut(arg, "="); ok {
+		return name, value, true
+	}
+	return arg, "", false
+}
+
+func sddTaskResultFlagValue(args []string, index int, inlineValue string, inline bool, flag string) (string, int, error) {
+	if inline {
+		if inlineValue == "" {
+			return "", index, fmt.Errorf("sdd task-result: %s requires a value; run \"gentle-ai sync\" to reinstall the matching glue", flag)
+		}
+		return inlineValue, index, nil
+	}
 	if index+1 >= len(args) {
 		return "", index, fmt.Errorf("sdd task-result: %s requires a value; run \"gentle-ai sync\" to reinstall the matching glue", flag)
 	}
@@ -156,7 +174,7 @@ func sddTaskResultGuard(flags sddTaskResultFlags, latch sdd.SDDLatchStore, stdou
 // prints the terminal handoff and records the latch for this session, so the
 // next SDD phase launch in this session is refused before it reaches the
 // provider (SEN-SOA-2).
-func sddTaskResultResult(flags sddTaskResultFlags, cwd string, stdin io.Reader, latch sdd.SDDLatchStore, stdout io.Writer) error {
+func sddTaskResultResult(flags sddTaskResultFlags, stdin io.Reader, latch sdd.SDDLatchStore, stdout io.Writer) error {
 	payload, err := io.ReadAll(io.LimitReader(stdin, maxSDDTaskResultPayloadBytes+1))
 	if err != nil {
 		return fmt.Errorf("sdd task-result result: read payload: %w", err)
@@ -182,7 +200,7 @@ func sddTaskResultResult(flags sddTaskResultFlags, cwd string, stdin io.Reader, 
 		}
 	}
 
-	handoff := sdd.SDDTaskFailureEnvelope(flags.phase, cwd, class, body.Metadata)
+	handoff := sdd.SDDTaskFailureEnvelope(flags.phase, flags.cwd, class, body.Metadata)
 	if err := latch.Record(flags.session, sdd.SDDTaskFailure{
 		Phase:   flags.phase,
 		Code:    sdd.SDDTaskResultCode(class),
