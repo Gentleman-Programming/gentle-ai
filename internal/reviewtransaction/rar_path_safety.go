@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -416,7 +417,7 @@ func acquireRARAuthorityLock(ctx context.Context, path string) (*storeLock, erro
 	if err := validatePrivateRARFile(path); err != nil {
 		return nil, err
 	}
-	lock, err := acquireBoundedRARLock(ctx, func() (*storeLock, error) {
+	lock, err := acquireBoundedRARLock(ctx, path, func() (*storeLock, error) {
 		return acquirePrivateRARLocalStoreLock(path)
 	})
 	if err != nil {
@@ -496,12 +497,32 @@ func acquirePrivateRARLocalStoreLock(path string) (*storeLock, error) {
 	return &storeLock{file: file, owner: owner}, nil
 }
 
+// rarLockProgress fingerprints the live lock owner record so the bounded
+// waiter can tell a rotating, healthy queue from a stuck holder. Every
+// acquisition rewrites and fsyncs the owner payload, so modification time
+// plus size changes exactly when ownership changes hands.
+func rarLockProgress(path string) string {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return ""
+	}
+	return info.ModTime().String() + "/" + strconv.FormatInt(info.Size(), 10)
+}
+
 func acquireBoundedRARLock(
 	ctx context.Context,
+	path string,
 	acquire func() (*storeLock, error),
 ) (*storeLock, error) {
+	// The timeout exists to detect a dead or stuck holder, not to bound the
+	// queue length: under full-shard load the fsync-heavy critical section
+	// legitimately serializes many waiters past any fixed total budget
+	// (issue #3239). The deadline therefore bounds time WITHOUT an ownership
+	// change; observed progress restarts it, and a genuinely stuck holder
+	// still fails in exactly maintenanceLockTimeout.
 	deadline := time.NewTimer(maintenanceLockTimeout)
 	defer deadline.Stop()
+	lastProgress := rarLockProgress(path)
 	for {
 		lock, err := acquire()
 		if err == nil {
@@ -516,6 +537,13 @@ func acquireBoundedRARLock(
 		case <-deadline.C:
 			return nil, &AuthorityLockTimeoutError{Timeout: maintenanceLockTimeout}
 		case <-time.After(10 * time.Millisecond):
+			if progress := rarLockProgress(path); progress != lastProgress && progress != "" {
+				lastProgress = progress
+				if !deadline.Stop() {
+					<-deadline.C
+				}
+				deadline.Reset(maintenanceLockTimeout)
+			}
 		}
 	}
 }
