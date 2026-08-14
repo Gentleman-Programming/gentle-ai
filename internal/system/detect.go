@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	overrideMu                    sync.Mutex
+	overrideMu                         sync.Mutex
 	codeGraphPlatformSupportedOverride *bool
 )
 
