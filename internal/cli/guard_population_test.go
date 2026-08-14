@@ -67,6 +67,30 @@ func allowed(value bool) bool {
 			wantDecls: 1,
 		},
 		{
+			name: "valid adjacent type switch marker",
+			source: `package synthetic
+func allowed(value any) bool {
+	// guard:population synthetic-family too-tight: legitimate values satisfy the external contract
+	switch value.(type) {
+	case string:
+		return true
+	default:
+		return false
+	}
+}`,
+			wantDecls: 1,
+		},
+		{
+			name: "one marker consumed once by same-line nodes",
+			source: `package synthetic
+func allowed(value bool) bool {
+	// guard:population synthetic-family too-tight: legitimate values satisfy the external contract
+	if value { return true }
+	return false
+}`,
+			wantDecls: 1,
+		},
+		{
 			name: "orphaned marker",
 			source: `package synthetic
 // guard:population synthetic-family too-tight: this marker is not adjacent to a guard
@@ -163,7 +187,7 @@ func guardPopulationAnalyzeSource(fileLabel, source string) (guardPopulationAnal
 		}
 		line := fset.Position(node.Pos()).Line
 		marker := markers[line-1]
-		if marker == nil {
+		if marker == nil || marker.consumed {
 			return true
 		}
 		marker.consumed = true
@@ -190,7 +214,7 @@ func guardPopulationAnalyzeSource(fileLabel, source string) (guardPopulationAnal
 
 func guardPopulationSupportedNode(node ast.Node) bool {
 	switch node.(type) {
-	case *ast.IfStmt, *ast.SwitchStmt, *ast.ReturnStmt:
+	case *ast.IfStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.ReturnStmt:
 		return true
 	default:
 		return false

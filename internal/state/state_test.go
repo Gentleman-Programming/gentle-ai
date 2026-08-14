@@ -320,6 +320,7 @@ func TestPersonaPresenceMatchesJSONFieldSemantics(t *testing.T) {
 		wantPersona string
 	}{
 		{name: "omitted", stateJSON: `{"installed_agents":["pi"]}`, wantPresent: false},
+		{name: "nested", stateJSON: `{"metadata":{"persona":"neutral"}}`, wantPresent: false},
 		{name: "explicit empty", stateJSON: `{"installed_agents":["pi"],"persona":""}`, wantPresent: true},
 		{name: "case variant empty", stateJSON: `{"installed_agents":["pi"],"Persona":""}`, wantPresent: true},
 		{name: "case variant null", stateJSON: `{"installed_agents":["pi"],"PERSONA":null}`, wantPresent: true},
@@ -346,7 +347,7 @@ func TestPersonaPresenceMatchesJSONFieldSemantics(t *testing.T) {
 	}
 }
 
-func TestInstallStateRejectsInvalidTopLevelAndDuplicatePersonaVariants(t *testing.T) {
+func TestInstallStateRejectsInvalidJSON(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		stateJSON string
@@ -354,6 +355,7 @@ func TestInstallStateRejectsInvalidTopLevelAndDuplicatePersonaVariants(t *testin
 	}{
 		{name: "top-level null", stateJSON: `null`, wantErr: "must be a JSON object"},
 		{name: "top-level array", stateJSON: `[]`, wantErr: "must be a JSON object"},
+		{name: "trailing JSON data", stateJSON: `{} {}`},
 		{name: "exact duplicate canonical values", stateJSON: `{"persona":"neutral","persona":"gentleman"}`, wantErr: "duplicate persona fields"},
 		{name: "exact duplicate invalid then valid", stateJSON: `{"persona":"unknown","persona":"neutral"}`, wantErr: "duplicate persona fields"},
 		{name: "exact duplicate valid then invalid", stateJSON: `{"persona":"neutral","persona":"unknown"}`, wantErr: "duplicate persona fields"},
@@ -367,7 +369,11 @@ func TestInstallStateRejectsInvalidTopLevelAndDuplicatePersonaVariants(t *testin
 			if err := os.WriteFile(Path(home), []byte(tc.stateJSON), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Read(home); err == nil || !contains(err.Error(), tc.wantErr) {
+			_, err := Read(home)
+			if err == nil {
+				t.Fatal("Read() error = nil, want invalid state rejection")
+			}
+			if tc.wantErr != "" && !contains(err.Error(), tc.wantErr) {
 				t.Fatalf("Read() error = %v, want %q", err, tc.wantErr)
 			}
 		})
