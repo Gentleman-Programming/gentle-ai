@@ -378,6 +378,16 @@ func adapterMinimalityEnforceAdapterShape(t *testing.T, name, source string, env
 	}
 
 	var idents, literals, imports []string
+	// ImportSpec.Path is a *ast.BasicLit of kind token.STRING, so every import
+	// path would otherwise enter `literals` and trip the argv scan below as a
+	// false "carries argv literal". Import policy already has its own rule;
+	// skip the path nodes here.
+	importPaths := map[ast.Node]bool{}
+	for _, spec := range parsed.Imports {
+		if spec.Path != nil {
+			importPaths[spec.Path] = true
+		}
+	}
 	ast.Inspect(parsed, func(node ast.Node) bool {
 		if node == nil {
 			return true
@@ -406,7 +416,7 @@ func adapterMinimalityEnforceAdapterShape(t *testing.T, name, source string, env
 		case *ast.Ident:
 			idents = append(idents, decl.Name)
 		case *ast.BasicLit:
-			if decl.Kind == token.STRING {
+			if decl.Kind == token.STRING && !importPaths[decl] {
 				if value, err := strconv.Unquote(decl.Value); err == nil {
 					literals = append(literals, value)
 				}
@@ -622,13 +632,27 @@ func adapterMinimalityEnforceShimShape(t *testing.T, name, source string) {
 	// shim started parsing something else (child output above all) and must
 	// fail here before it ever ships.
 	jsonImports := 0
-	unmarshalCalls := 0
 	for _, path := range imports {
 		if path == "encoding/json" {
 			jsonImports++
 		}
 	}
-	unmarshalCalls = strings.Count(source, "json.Unmarshal")
+	unmarshalCalls := 0
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "Unmarshal" {
+			return true
+		}
+		receiver, ok := selector.X.(*ast.Ident)
+		if ok && receiver.Name == "json" {
+			unmarshalCalls++
+		}
+		return true
+	})
 	if jsonImports != 1 {
 		t.Errorf("%s must import encoding/json exactly once (the binding route parse); got %d import(s)", name, jsonImports)
 	}

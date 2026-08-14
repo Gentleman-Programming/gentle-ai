@@ -74,7 +74,11 @@ func TestTaskRouteModelScrubsAndValidatesRouteTokens(t *testing.T) {
 		{name: "valid numeric model", metadata: metadata(map[string]any{"providerID": "openai", "modelID": "101010"}), want: "openai/101010"},
 		{name: "valid colon and at tokens", metadata: metadata(map[string]any{"providerID": "models:op", "modelID": "claude@latest"}), want: "models:op/claude@latest"},
 		{name: "valid underscore and dot", metadata: metadata(map[string]any{"providerID": "my_provider", "modelID": "model.v2"}), want: "my_provider/model.v2"},
-		{name: "max-length token", metadata: metadata(map[string]any{"providerID": "a", "modelID": strings.Repeat("b", 127)}), want: "a/" + strings.Repeat("b", 127)},
+		// The route token's model half admits exactly 128 characters total
+		// (`{0,127}` after the leading character); the boundary pair below
+		// pins both edges so a {0,126} or {0,128} regression fails here.
+		{name: "max-length token", metadata: metadata(map[string]any{"providerID": "a", "modelID": strings.Repeat("b", 128)}), want: "a/" + strings.Repeat("b", 128)},
+		{name: "one past max-length token", metadata: metadata(map[string]any{"providerID": "a", "modelID": strings.Repeat("b", 129)}), want: ""},
 		{name: "nil metadata", metadata: nil, want: ""},
 		{name: "empty metadata object", metadata: map[string]any{}, want: ""},
 		{name: "missing model", metadata: metadata(nil), want: ""},
@@ -92,7 +96,7 @@ func TestTaskRouteModelScrubsAndValidatesRouteTokens(t *testing.T) {
 		{name: "leading dot providerID", metadata: metadata(map[string]any{"providerID": ".hidden", "modelID": "m"}), want: ""},
 		{name: "leading dash modelID", metadata: metadata(map[string]any{"providerID": "p", "modelID": "-dash"}), want: ""},
 		{name: "newline inside modelID", metadata: metadata(map[string]any{"providerID": "p", "modelID": "a\nb"}), want: ""},
-		{name: "over-long token", metadata: metadata(map[string]any{"providerID": "a", "modelID": strings.Repeat("b", 129)}), want: ""},
+		{name: "over-long token", metadata: metadata(map[string]any{"providerID": "a", "modelID": strings.Repeat("b", 256)}), want: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := TaskRouteModel(tc.metadata); got != tc.want {
