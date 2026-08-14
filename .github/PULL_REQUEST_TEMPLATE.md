@@ -104,8 +104,9 @@ The following checks run automatically on this PR:
 
 <!-- Optional: anything you want reviewers to pay special attention to. -->
 
-For production Go changes in `internal/cli`, `internal/reviewtransaction`, or `internal/sddstatus`:
+For production Go changes to security, integrity, admission, repair, or governance boundaries:
 
 - [ ] Identify any qualifying security, integrity, admission, repair, or governance guard and challenge its legitimate input population against real-world evidence.
-- [ ] Confirm its `guard:population` direction and claim are adjacent and accurate, and that `.guard-population-baseline.txt` changed only when the guard contract intentionally changed.
-- [ ] Do not treat a passing declaration/registry check as proof that no qualifying guard was omitted or that the population claim is semantically complete.
+- [ ] Name the behavior tests that prove the accepted and rejected populations at the affected runtime boundary.
+- [ ] If a `guard:population` marker is present, confirm its grammar, adjacency, direction, and reviewer-context claim are accurate.
+- [ ] Do not treat a passing marker lint as semantic proof or as evidence that no qualifying guard was omitted.

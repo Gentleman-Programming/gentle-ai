@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -171,13 +173,15 @@ func TestOpenCodeBackgroundStateIsOptionalAndLossless(t *testing.T) {
 	want := state.InstallState{
 		InstalledAgents: []string{"opencode"}, ManagedAssetDigest: "sha256:asset", SelectionConfigured: true,
 		Components: []model.ComponentID{model.ComponentSDD}, CommunityTools: []string{"codegraph"}, CommunityToolsConfigured: true,
-		Persona: "neutral", PersonaPresent: true, PendingSync: true, RDDMode: "off", BackgroundIntent: model.OpenCodeBackgroundOn,
+		Persona: "neutral", PendingSync: true, RDDMode: "off", BackgroundIntent: model.OpenCodeBackgroundOn,
 	}
 	if err := state.Write(home, want); err != nil {
 		t.Fatal(err)
 	}
 	got, err := state.Read(home)
-	if err != nil || !reflect.DeepEqual(got, want) {
+	gotJSON, gotJSONErr := json.Marshal(got)
+	wantJSON, wantJSONErr := json.Marshal(want)
+	if err != nil || gotJSONErr != nil || wantJSONErr != nil || !got.PersonaWasPresent() || !bytes.Equal(gotJSON, wantJSON) {
 		t.Fatalf("state round-trip = %#v, error = %v, want %#v", got, err, want)
 	}
 
@@ -403,8 +407,9 @@ func TestPersistInstallStateFullInstallPreservesUnrelatedFields(t *testing.T) {
 	want.ManagedAssetDigest = "new"
 	want.LastUpdateCheck, want.PendingSync = existing.LastUpdateCheck, existing.PendingSync
 	want.RDDMode, want.RDDModeRecordedAt = existing.RDDMode, existing.RDDModeRecordedAt
-	want.PersonaPresent = true
-	if !reflect.DeepEqual(got, want) {
+	gotJSON, gotJSONErr := json.Marshal(got)
+	wantJSON, wantJSONErr := json.Marshal(want)
+	if gotJSONErr != nil || wantJSONErr != nil || !got.PersonaWasPresent() || !bytes.Equal(gotJSON, wantJSON) {
 		t.Fatalf("full install state = %#v, want %#v", got, want)
 	}
 }
@@ -673,7 +678,7 @@ func TestSyncBackgroundPublicationWaitsForVerification(t *testing.T) {
 				Persona:    model.PersonaNeutral,
 			}
 			background := OpenCodeBackgroundResolution{Intent: tt.intent, Effective: tt.intent, Persist: tt.intent}
-			result, err := runSyncWithSelection(home, selection, background)
+			result, err := runSyncWithSelection(home, selection, background, syncSnapshotForTest(t, home, selection.Persona))
 			if (err != nil) != (tt.wantErr != "") || (err != nil && !strings.Contains(err.Error(), tt.wantErr)) {
 				t.Fatalf("sync error = %v, want %q", err, tt.wantErr)
 			}
@@ -721,7 +726,7 @@ func TestSyncReportsManagedLauncherChanges(t *testing.T) {
 		SDDMode:    model.SDDModeSingle,
 		Persona:    model.PersonaNeutral,
 	}
-	result, err := runSyncWithSelection(home, selection, background)
+	result, err := runSyncWithSelection(home, selection, background, syncSnapshotForTest(t, home, selection.Persona))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -755,7 +760,7 @@ func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
 		Persona:    model.PersonaNeutral,
 	}
 	background := OpenCodeBackgroundResolution{Intent: model.OpenCodeBackgroundOn, Effective: model.OpenCodeBackgroundOn, Persist: model.OpenCodeBackgroundOn}
-	if _, err := runSyncWithSelection(home, selection, background); err != nil {
+	if _, err := runSyncWithSelection(home, selection, background, syncSnapshotForTest(t, home, selection.Persona)); err != nil {
 		t.Fatalf("initial sync error = %v", err)
 	}
 	persisted, err := state.Read(home)
@@ -766,7 +771,7 @@ func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
 	if err := state.Write(home, persisted); err != nil {
 		t.Fatal(err)
 	}
-	result, err := runSyncWithSelection(home, selection, background)
+	result, err := runSyncWithSelection(home, selection, background, syncSnapshotForTest(t, home, selection.Persona))
 	if err != nil {
 		t.Fatalf("no-op sync error = %v", err)
 	}
@@ -777,4 +782,13 @@ func TestSyncBackgroundNoOpStillPublishesExplicitIntent(t *testing.T) {
 	if err != nil || persisted.BackgroundIntent != model.OpenCodeBackgroundOn {
 		t.Fatalf("no-op published intent = %q, error = %v", persisted.BackgroundIntent, err)
 	}
+}
+
+func syncSnapshotForTest(t *testing.T, home string, explicit model.PersonaID) syncStateSnapshot {
+	t.Helper()
+	snapshot, err := readSyncStateSnapshot(home, explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }
