@@ -89,6 +89,30 @@ func TestProviderValidateAdmitsByteIdenticallyToPreExtractionPath(t *testing.T) 
 	if _, err := provider.Validate(ctx, []byte("{}"), overCount); err == nil {
 		t.Fatal("typed Validate admitted evidence past MaxEvidenceEntries")
 	}
+	// The `{}` body above would be refused on shape grounds alone, so it
+	// cannot prove the count budget is enforced. Marshal an otherwise
+	// admissible result for the same request: any refusal must come from the
+	// MaxEvidenceEntries gate, and a within-limit control with the same
+	// payload shape must still be admitted so the fixture cannot fail for the
+	// wrong reason in either direction.
+	admissible, err := json.Marshal(testResult(overCount))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if typedOver, overErr := provider.Validate(ctx, admissible, overCount); overErr == nil {
+		t.Fatalf("typed Validate admitted evidence past MaxEvidenceEntries: %#v", typedOver)
+	}
+	if _, currentErr := Validate(admissible, overCount); currentErr == nil {
+		t.Fatal("pre-extraction path stopped refusing the count budget (fixture drift)")
+	}
+	controlRequest := testRequest(t)
+	controlRaw, err := json.Marshal(testResult(controlRequest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Validate(ctx, controlRaw, controlRequest); err != nil {
+		t.Fatalf("typed Validate refused admissible within-limit evidence: %v", err)
+	}
 }
 
 // Pins the adapter seam (REQ-RPC-4/5): untouched raw bytes or transport error.
