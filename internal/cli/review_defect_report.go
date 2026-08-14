@@ -171,7 +171,7 @@ func reviewScrubDefectReportIdentifierValue(value string) string {
 }
 
 // render renders the Markdown body. Section headers match
-// .github/ISSUE_TEMPLATE/bug_report.yml's field labels (task 5.2) so a
+// .github/ISSUE_TEMPLATE/bug_report.md's section headings (task 5.2) so a
 // maintainer can paste this directly into a new issue.
 func (report reviewDefectReport) render() string {
 	var body strings.Builder

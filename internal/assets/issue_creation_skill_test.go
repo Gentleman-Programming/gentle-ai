@@ -11,8 +11,8 @@ func TestIssueCreationSkillDiscoversRepositoryPolicy(t *testing.T) {
 	for _, forbidden := range []string{
 		"Gentleman-Programming",
 		"agent-teams-lite",
-		"bug_report.yml",
-		"feature_request.yml",
+		"bug_report.md",
+		"feature_request.md",
 		"status:needs-review",
 		"status:approved",
 		"Blank issues are disabled",

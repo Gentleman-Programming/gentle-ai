@@ -7,7 +7,7 @@ import (
 
 // TestReviewDefectReportRendersTemplateShapedFields is the RED-first proof
 // for organic-dx Phase 5 task 5.2: reviewDefectReport renders Markdown whose
-// section headers match .github/ISSUE_TEMPLATE/bug_report.yml's field labels,
+// section headers match .github/ISSUE_TEMPLATE/bug_report.md's headings,
 // populated from gentle-ai version + commit, OS/arch, the failing operation
 // shape (not raw argv), the verbatim reason code, opaque state identifiers,
 // and the stop-code row's terminal precondition.
