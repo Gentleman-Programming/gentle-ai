@@ -220,6 +220,7 @@ internal/sddstatus/status.go	reportTextIsClearlyPassing
 internal/sddstatus/status.go	reportValueIsBenign
 internal/sddstatus/status.go	stripMarkdownSignal
 internal/storage/bytes.go	FormatBytes
+internal/system/detect.go	SetCodeGraphPlatformSupportedForTest
 internal/system/install_deps.go	InstallCommandsForDep
 internal/system/install_deps.go	installCommandsBrew
 internal/system/install_deps.go	installCommandsCurl
