@@ -1590,6 +1590,11 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	compatibilityChanged := rt.state.compatibilityChangedFiles()
 	rt.state.cleanupRollbackSnapshot()
 	if result.Execution.Err != nil {
+		// A fully rolled-back persona output-style removal is not a hard
+		// failure: warn and exit 0 (install/sync parity, REQ-PARITY).
+		if handleRolledBackPersonaTransition(result.Execution) {
+			return result, nil
+		}
 		return result, fmt.Errorf("execute sync pipeline: %w", result.Execution.Err)
 	}
 

@@ -221,6 +221,13 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	result.Execution = orchestrator.Execute(stagePlan)
 	runtime.state.cleanupRollbackSnapshot()
 	if result.Execution.Err != nil {
+		// A fully rolled-back persona output-style removal is not a hard
+		// failure: warn and exit 0. Returning before post-apply verification
+		// is required — rolled-back state is pre-transition, so verification
+		// would fail and trigger a second pointless rollback.
+		if handleRolledBackPersonaTransition(result.Execution) {
+			return result, nil
+		}
 		return result, fmt.Errorf("execute install pipeline: %w", result.Execution.Err)
 	}
 	result.PiCodeGraph = runtime.state.piCodeGraph
