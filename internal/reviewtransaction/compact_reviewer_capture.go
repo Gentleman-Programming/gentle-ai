@@ -13,6 +13,10 @@ import (
 	"reflect"
 )
 
+// ErrCapturedReviewerResultSlotConflict reports an immutable reviewer result
+// slot occupied by different canonical bytes.
+var ErrCapturedReviewerResultSlotConflict = errors.New("captured reviewer result slot conflicts with different canonical bytes") // refusal:by-design world-action: transaction-layer capture cannot alter an immutable occupied slot
+
 // CompactAdmittedReviewerResultRequest contains one provider-observed reviewer
 // result and the exact native authority preimages that result must bind.
 type CompactAdmittedReviewerResultRequest struct {
@@ -362,9 +366,7 @@ func requireCompactReviewerSlotCompatible(
 		return err
 	}
 	if !bytes.Equal(existing, payload) {
-		return errors.New(
-			"captured reviewer result already exists with different canonical bytes",
-		)
+		return fmt.Errorf("%w: existing bytes differ from the requested payload", ErrCapturedReviewerResultSlotConflict)
 	}
 	return nil
 }

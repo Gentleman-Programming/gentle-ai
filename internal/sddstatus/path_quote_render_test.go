@@ -55,8 +55,8 @@ func TestNativeRuntimeInstructionsRenderWindowsPathVerbatim(t *testing.T) {
 	status.ActionContext.WorkspaceRoot = `C:\Users\dev\repo`
 	got := strings.Join(nativeRuntimeInstructions(status, "my-change"), "\n")
 	want := `--cwd "C:\Users\dev\repo"`
-	if occurrences := strings.Count(got, want); occurrences != 3 {
-		t.Fatalf("acquire, settle, and correction-acquire instructions must all carry the verbatim path:\nwant 3 occurrences of %s, got %d\ngot: %s", want, occurrences, got)
+	if occurrences := strings.Count(got, want); occurrences != 4 {
+		t.Fatalf("runtime instructions must all carry the verbatim path:\nwant 4 occurrences of %s, got %d\ngot: %s", want, occurrences, got)
 	}
 }
 
@@ -85,18 +85,9 @@ func TestNonPhaseRoutingInstructionsRenderWindowsPathVerbatim(t *testing.T) {
 	}
 }
 
-func TestRuntimeStrandedSuccessorRefusalRendersWindowsPathVerbatim(t *testing.T) {
-	store := RuntimeStore{Workspace: `C:\Users\dev\repo`}
-	err := store.runtimeStrandedSuccessorRefusal(
-		ReviewBinding{Lineage: "lineage-1", Revision: "rev-1"},
-		RuntimeStrandedSuccessor{Lineage: "lineage-2", Revision: "rev-2", SnapshotIdentity: "snap-1"},
-		1,
-	)
-	want := `--cwd "C:\Users\dev\repo"`
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("stranded-successor abandon invocation does not contain the path as the filesystem knows it:\nwant substring: %s\ngot: %s", want, err)
-	}
-}
+// The stranded-successor refusal is gone with the gate it served. The Windows
+// path-quoting rule it guarded stays covered by the reset and
+// objective-change refusals above.
 
 func TestRuntimeWorktreeMismatchRefusalRendersWindowsPathVerbatim(t *testing.T) {
 	store := RuntimeStore{Workspace: `C:\Users\dev\elsewhere`}

@@ -233,6 +233,7 @@ internal/tui/router.go	NextScreen
 internal/tui/screens/claude_model_picker.go	NewClaudeModelPickerStateFromAssignments
 internal/tui/screens/codex_model_picker.go	CodexPresetDescription
 internal/tui/screens/codex_model_picker.go	HandleCodexCustomNav
+internal/tui/screens/model_picker.go	ModelPickerRows
 internal/tui/screens/model_picker.go	SeparatorRowIdx
 internal/tui/screens/upgrade.go	RenderUpgrade
 internal/tui/screens/upgrade_sync.go	RenderUpgradeSync

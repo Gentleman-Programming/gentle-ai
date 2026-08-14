@@ -22,6 +22,9 @@ var (
 	snapshotRepoTemplateOnce sync.Once
 	snapshotRepoTemplateDir  string
 	snapshotRepoTemplateErr  error
+	mergeTreeProbeOnce       sync.Once
+	mergeTreeWriteTree       bool
+	mergeTreeProbeErr        error
 )
 
 func TestMain(m *testing.M) {
@@ -46,6 +49,19 @@ func TestMain(m *testing.M) {
 func TestCanonicalPathsRejectsDuplicateInput(t *testing.T) {
 	if _, err := canonicalPaths([]string{"tracked.txt", "tracked.txt"}); err == nil {
 		t.Fatal("canonicalPaths duplicate input error = nil")
+	}
+}
+
+func TestCanonicalTargetProjectsStagedBaseDiffToCommittedOnly(t *testing.T) {
+	requested := Target{
+		Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: "HEAD~1", IntendedUntracked: []string{},
+	}
+	got := CanonicalTarget(requested)
+	if got.Projection != ProjectionWorkspace {
+		t.Fatalf("canonical base-diff projection = %q, want committed-only workspace", got.Projection)
+	}
+	if got.Kind != requested.Kind || got.BaseRef != requested.BaseRef || !reflect.DeepEqual(got.IntendedUntracked, requested.IntendedUntracked) {
+		t.Fatalf("canonical target = %#v, want only the executable projection changed", got)
 	}
 }
 
@@ -305,8 +321,9 @@ func TestSnapshotProjectionValidationAndIdentity(t *testing.T) {
 		t.Fatalf("unknown projection error = %v", err)
 	}
 	stagedBaseDiff, err := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: "HEAD", IntendedUntracked: []string{}})
-	if err != nil || stagedBaseDiff.Projection != ProjectionStaged || stagedBaseDiff.CandidateTree != strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}")) {
-		t.Fatalf("staged base-diff snapshot = %#v, err=%v", stagedBaseDiff, err)
+	committedOnlyBaseDiff, committedOnlyErr := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, Projection: ProjectionWorkspace, BaseRef: "HEAD", IntendedUntracked: []string{}})
+	if err != nil || committedOnlyErr != nil || !reflect.DeepEqual(stagedBaseDiff, committedOnlyBaseDiff) {
+		t.Fatalf("staged base-diff did not canonicalize to committed-only: staged=%#v err=%v committed-only=%#v err=%v", stagedBaseDiff, err, committedOnlyBaseDiff, committedOnlyErr)
 	}
 	if _, err := builder.Build(context.Background(), Target{Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: "HEAD", IntendedUntracked: []string{"untracked.txt"}}); err == nil || !strings.Contains(err.Error(), "does not accept intended-untracked") {
 		t.Fatalf("staged base-diff intended-untracked error = %v", err)
@@ -1498,6 +1515,13 @@ func TestSnapshotBuilderRealGitFailuresAreNotTreatedAsUnborn(t *testing.T) {
 
 func TestSnapshotRepoTemplateContracts(t *testing.T) {
 	requireSnapshotGit(t)
+	template, err := snapshotRepoTemplate()
+	if err != nil {
+		t.Fatalf("snapshot repo template: %v", err)
+	}
+	if got := strings.TrimSpace(gitSnapshot(t, template, "config", "--local", "--get", "maintenance.auto")); got != "false" {
+		t.Fatalf("template maintenance.auto = %q, want false", got)
+	}
 	first := initSnapshotRepo(t)
 	second := initSnapshotRepo(t)
 	base := strings.TrimSpace(gitSnapshot(t, first, "rev-parse", "HEAD"))
@@ -1778,7 +1802,7 @@ func snapshotRepoTemplate() (string, error) {
 			snapshotRepoTemplateErr = fmt.Errorf("create template directory: %w", err)
 			return
 		}
-		for _, args := range [][]string{{"init"}, {"config", "user.email", "snapshot@example.com"}, {"config", "user.name", "Snapshot Test"}, {"config", "core.autocrlf", "false"}} {
+		for _, args := range [][]string{{"init"}, {"config", "--local", "maintenance.auto", "false"}, {"config", "user.email", "snapshot@example.com"}, {"config", "user.name", "Snapshot Test"}, {"config", "core.autocrlf", "false"}} {
 			if snapshotRepoTemplateErr = runSnapshotGit(template, args...); snapshotRepoTemplateErr != nil {
 				_ = os.RemoveAll(template)
 				return
@@ -1835,6 +1859,77 @@ func requireSnapshotGit(t *testing.T) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("uses real git commands")
+	}
+}
+
+func requireMergeTreeWriteTree(t *testing.T) {
+	t.Helper()
+	requireSnapshotGit(t)
+	mergeTreeProbeOnce.Do(func() {
+		output, err := exec.Command("git", "merge-tree", "-h").CombinedOutput()
+		mergeTreeWriteTree, mergeTreeProbeErr = classifyMergeTreeWriteTreeProbe(output, err)
+	})
+	if mergeTreeProbeErr != nil {
+		t.Fatalf("probe git merge-tree --write-tree capability: %v", mergeTreeProbeErr)
+	}
+	if !mergeTreeWriteTree {
+		t.Skip("git does not support merge-tree --write-tree (needs Git 2.38+)")
+	}
+}
+
+func classifyMergeTreeWriteTreeProbe(output []byte, err error) (bool, error) {
+	validHelp := bytes.Contains(output, []byte("git merge-tree"))
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 129 || !validHelp {
+			return false, fmt.Errorf("git merge-tree -h: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+	}
+	if !validHelp {
+		return false, fmt.Errorf("git merge-tree -h returned unrecognized help output: %q", strings.TrimSpace(string(output)))
+	}
+	return bytes.Contains(output, []byte("--write-tree")), nil
+}
+
+func TestClassifyMergeTreeWriteTreeProbe(t *testing.T) {
+	tests := []struct {
+		name      string
+		output    string
+		err       error
+		exitCode  string
+		want      bool
+		wantError bool
+	}{
+		{name: "supported", output: "usage: git merge-tree [--write-tree] <branch1> <branch2>", want: true},
+		{name: "unsupported", output: "usage: git merge-tree <base-tree> <branch1> <branch2>"},
+		{name: "unexpected command failure", output: "fatal: cannot execute", err: errors.New("exec failed"), wantError: true},
+		{name: "unrecognized successful output", output: "unexpected", wantError: true},
+		{name: "supported help exit", output: "usage: git merge-tree [--write-tree] <branch1> <branch2>", exitCode: "129", want: true},
+		{name: "unsupported help exit", output: "usage: git merge-tree <base-tree> <branch1> <branch2>", exitCode: "129"},
+		{name: "unexpected help exit", output: "usage: git merge-tree [--write-tree] <branch1> <branch2>", exitCode: "23", wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.err
+			if tt.exitCode != "" {
+				cmd := exec.Command(os.Args[0], "-test.run=^TestMergeTreeProbeExitHelper$")
+				cmd.Env = append(os.Environ(), "GENTLE_AI_TEST_MERGE_TREE_EXIT="+tt.exitCode)
+				err = cmd.Run()
+			}
+			got, err := classifyMergeTreeWriteTreeProbe([]byte(tt.output), err)
+			if got != tt.want || (err != nil) != tt.wantError {
+				t.Fatalf("classifyMergeTreeWriteTreeProbe() = (%v, %v), want (%v, error=%v)", got, err, tt.want, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestMergeTreeProbeExitHelper(t *testing.T) {
+	switch os.Getenv("GENTLE_AI_TEST_MERGE_TREE_EXIT") {
+	case "129":
+		os.Exit(129)
+	case "23":
+		os.Exit(23)
 	}
 }
 

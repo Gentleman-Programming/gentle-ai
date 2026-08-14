@@ -26,7 +26,7 @@ func TestRunSDDAttemptSettleRefusesUnsafeDisabledRARModeWithoutMutation(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	privateRARDir := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1")
+	privateRARDir := filepath.Join(repo, ".git", "gentle-ai", "review-mode", "rar-authority", "v1")
 	if err := os.Chmod(privateRARDir, 0o755); err != nil {
 		t.Fatalf("make private RAR directory unsafe: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestUnsafeDisabledRARModeRefusesStatusAndValidationBeforeTheirReaders(t *te
 			reviewModeHome(t)
 			repo := initReviewCLIRepo(t)
 			disableReviewForClone(t, repo)
-			privateRARDir := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1")
+			privateRARDir := filepath.Join(repo, ".git", "gentle-ai", "review-mode", "rar-authority", "v1")
 			if err := os.Chmod(privateRARDir, 0o755); err != nil {
 				t.Fatalf("make private RAR directory unsafe: %v", err)
 			}

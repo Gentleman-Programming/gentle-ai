@@ -186,7 +186,31 @@ func ParseVerificationEvidenceRecord(payload []byte) (VerificationEvidenceRecord
 	return record, nil
 }
 
-func compactFinalEvidenceCandidateDir(storeDir, targetIdentity string) (string, error) {
+// compactFinalEvidenceCandidateDir resolves the immutable directory one
+// verification evidence record is published to.
+//
+// The authority revision joins the target identity in the key because the
+// record's own binding already carries it: ReadCapturedVerificationEvidence
+// rejects a record through ValidateBinding when the revision does not match, so
+// a directory keyed by target identity alone contradicted the reader. A
+// correction phase whose candidate did not change reuses the same target
+// identity under a new revision, and its evidence used to collide with the
+// pre-correction record permanently, because publication is immutable (issue
+// #2623). Directory names stay candidate-addressed; they are now
+// candidate-and-revision-addressed.
+func compactFinalEvidenceCandidateDir(storeDir, authorityRevision, targetIdentity string) (string, error) {
+	if !validSHA256(targetIdentity) || !validSHA256(authorityRevision) {
+		return "", errors.New("verification evidence target identity is invalid") // refusal:by-design world-action: an invalid identity cannot define a safe candidate-addressed storage directory
+	}
+	return filepath.Join(storeDir, CompactFinalEvidenceDir, strings.TrimPrefix(targetIdentity, "sha256:"),
+		strings.TrimPrefix(authorityRevision, "sha256:")), nil
+}
+
+// compactFinalEvidenceLegacyCandidateDir is the pre-#2623 candidate-only
+// directory. It is read from, never written to, so a store recorded by an older
+// binary keeps answering for the revision it was written under while
+// ValidateBinding still rejects it for every other revision.
+func compactFinalEvidenceLegacyCandidateDir(storeDir, targetIdentity string) (string, error) {
 	if !validSHA256(targetIdentity) {
 		return "", errors.New("verification evidence target identity is invalid") // refusal:by-design world-action: an invalid identity cannot define a safe candidate-addressed storage directory
 	}
@@ -237,11 +261,51 @@ func readCompactEvidenceFile(path string, limit int64) ([]byte, error) {
 }
 
 func ReadCapturedVerificationEvidence(storeDir, lineageID, authorityRevision string, target Snapshot) (CapturedVerificationEvidence, error) {
-	dir, err := compactFinalEvidenceCandidateDir(storeDir, target.Identity)
+	captured, err := readCapturedVerificationEvidenceArtifacts(storeDir, authorityRevision, target.Identity)
+	if err != nil {
+		return CapturedVerificationEvidence{}, err
+	}
+	if captured.Record.ValidateBinding(lineageID, authorityRevision, target) != nil {
+		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
+	}
+	return captured, nil
+}
+
+// ReadCapturedVerificationEvidenceByIdentity reads a passed evidence record
+// before its immutable tree can be reconstructed from the record itself.
+func ReadCapturedVerificationEvidenceByIdentity(storeDir, lineageID, authorityRevision, targetIdentity string) (CapturedVerificationEvidence, error) {
+	captured, err := readCapturedVerificationEvidenceArtifacts(storeDir, authorityRevision, targetIdentity)
+	if err != nil {
+		return CapturedVerificationEvidence{}, err
+	}
+	if captured.Record.LineageID != lineageID || captured.Record.AuthorityRevision != authorityRevision ||
+		captured.Record.TargetIdentity != targetIdentity {
+		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
+	}
+	return captured, nil
+}
+
+// readCapturedVerificationEvidenceArtifacts takes the revision as well as the
+// identity because #2623 made the directory key both. Merge note: main
+// extracted this helper while this branch changed the key, so the resolution
+// keeps main's structure and threads the revision through it rather than
+// choosing one side.
+func readCapturedVerificationEvidenceArtifacts(storeDir, authorityRevision, targetIdentity string) (CapturedVerificationEvidence, error) {
+	dir, err := compactFinalEvidenceCandidateDir(storeDir, authorityRevision, targetIdentity)
 	if err != nil {
 		return CapturedVerificationEvidence{}, fmt.Errorf("%w: %v", ErrCapturedVerificationEvidenceInvalid, err)
 	}
 	info, dirErr := os.Lstat(dir)
+	if errors.Is(dirErr, os.ErrNotExist) {
+		// A store written before the revision joined the key keeps answering
+		// here. ValidateBinding below still rejects it for any other revision,
+		// so this widens where a record may live, never which one is accepted.
+		if legacy, legacyErr := compactFinalEvidenceLegacyCandidateDir(storeDir, targetIdentity); legacyErr == nil {
+			if legacyInfo, legacyStatErr := os.Lstat(legacy); legacyStatErr == nil && legacyInfo.IsDir() {
+				dir, info, dirErr = legacy, legacyInfo, nil
+			}
+		}
+	}
 	if errors.Is(dirErr, os.ErrNotExist) {
 		legacyPath := filepath.Join(storeDir, CompactFinalEvidenceDir, CompactFinalEvidenceFile)
 		if _, legacyErr := os.Lstat(legacyPath); legacyErr == nil {
@@ -254,10 +318,8 @@ func ReadCapturedVerificationEvidence(storeDir, lineageID, authorityRevision str
 	if dirErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !compactPrivateArtifactMode(info.Mode(), true) {
 		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
 	}
-	rawPath := filepath.Join(dir, CompactFinalEvidenceFile)
-	recordPath := filepath.Join(dir, CompactFinalEvidenceRecordFile)
-	raw, rawErr := readCompactEvidenceFile(rawPath, verificationEvidencePayloadLimit)
-	recordPayload, recordErr := readCompactEvidenceFile(recordPath, verificationEvidenceRecordLimit)
+	raw, rawErr := readCompactEvidenceFile(filepath.Join(dir, CompactFinalEvidenceFile), verificationEvidencePayloadLimit)
+	recordPayload, recordErr := readCompactEvidenceFile(filepath.Join(dir, CompactFinalEvidenceRecordFile), verificationEvidenceRecordLimit)
 	if errors.Is(rawErr, os.ErrNotExist) && errors.Is(recordErr, os.ErrNotExist) {
 		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceMissing
 	}
@@ -268,7 +330,7 @@ func ReadCapturedVerificationEvidence(storeDir, lineageID, authorityRevision str
 		return CapturedVerificationEvidence{}, fmt.Errorf("%w: raw=%v metadata=%v", ErrCapturedVerificationEvidenceInvalid, rawErr, recordErr)
 	}
 	record, err := ParseVerificationEvidenceRecord(recordPayload)
-	if err != nil || record.ValidatePayload(raw) != nil || record.ValidateBinding(lineageID, authorityRevision, target) != nil {
+	if err != nil || record.ValidatePayload(raw) != nil {
 		return CapturedVerificationEvidence{}, ErrCapturedVerificationEvidenceInvalid
 	}
 	dirAfter, err := os.Lstat(dir)
@@ -284,7 +346,7 @@ func PublishCapturedVerificationEvidence(request CaptureVerificationEvidenceRequ
 	if err != nil {
 		return CapturedVerificationEvidence{}, err
 	}
-	dir, err := compactFinalEvidenceCandidateDir(request.StoreDir, request.Target.Identity)
+	dir, err := compactFinalEvidenceCandidateDir(request.StoreDir, request.AuthorityRevision, request.Target.Identity)
 	if err != nil {
 		return CapturedVerificationEvidence{}, err
 	}

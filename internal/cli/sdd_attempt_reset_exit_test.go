@@ -177,7 +177,7 @@ func newUndriftedObjectiveFixture(t *testing.T, change string) driftedObjectiveF
 	}, fixture.objective...))
 	runSDDAttemptStatus(t, []string{
 		"finish", "--cwd", repo, "--change", change, "--expected-revision", started.Revision,
-		"--request-id", "drifted-finish-1", "--outcome", "interrupted", "--evidence-revision", cliAttemptHash('a'),
+		"--request-id", "drifted-finish-1", "--outcome", "interrupted",
 		"--diagnosis", "the attempt was interrupted with budget to spare", "--harness-disposition", "reused",
 		"--cleanup-evidence", "cleanup completed", "--process-evidence", "process scan found no descendants",
 	})

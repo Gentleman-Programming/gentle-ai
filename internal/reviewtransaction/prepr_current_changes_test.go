@@ -96,8 +96,8 @@ func TestCompactPrePRGateFailsClosedForMultipleDeliveryCommits(t *testing.T) {
 	gitSnapshot(t, repo, "add", "tracked.txt")
 	gitSnapshot(t, repo, "commit", "-m", "restore approved candidate")
 	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePR, LineageID: state.LineageID, BaseRef: baseRef})
-	if got.Result != GateScopeChanged {
-		t.Fatalf("multiple delivery commits pre-PR = %#v, want scope changed", got)
+	if got.Result != GateInvalidated {
+		t.Fatalf("multiple delivery commits pre-PR = %#v, want invalidated", got)
 	}
 }
 
@@ -112,8 +112,8 @@ func TestCompactPrePRGateFailsClosedWhenPublicationRangeExceedsGenesis(t *testin
 	gitSnapshot(t, repo, "add", "-A")
 	gitSnapshot(t, repo, "commit", "-m", "remove intermediate secret")
 	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePrePR, LineageID: state.LineageID, BaseRef: baseRef})
-	if got.Result != GateScopeChanged {
-		t.Fatalf("hidden publication-range path pre-PR = %#v, want scope changed", got)
+	if got.Result != GateInvalidated {
+		t.Fatalf("hidden publication-range path pre-PR = %#v, want invalidated", got)
 	}
 }
 

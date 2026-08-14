@@ -14,6 +14,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -59,6 +60,9 @@ func TestNegotiatedReviewStartRefusesEmptyCandidateWithoutAuthority(t *testing.T
 	}
 	if len(stores) != 0 {
 		t.Fatalf("refused empty-candidate START created authority: %#v", stores)
+	}
+	if entries, readErr := os.ReadDir(reviewDefectReportDir(t, repo)); readErr == nil && len(entries) != 0 {
+		t.Fatalf("preflight refusal wrote defect reports: %v", entries)
 	}
 }
 

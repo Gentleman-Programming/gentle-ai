@@ -300,6 +300,7 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 						// provider cache parsing. CI may not have a real OpenCode cache, so
 						// force the picker into its normal row+Continue mode deterministically.
 						state.ModelPicker.AvailableIDs = []string{"opencode"}
+						state.ModelPicker.CustomAgents = nil
 						return state
 					},
 				},
@@ -458,6 +459,7 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 						// Force the picker into row+Continue mode deterministically;
 						// CI may lack a real OpenCode provider cache.
 						state.ModelPicker.AvailableIDs = []string{"opencode"}
+						state.ModelPicker.CustomAgents = nil
 						return state
 					},
 				}, // ModelPicker Continue → StrictTDD

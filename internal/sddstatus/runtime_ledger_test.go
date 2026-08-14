@@ -79,7 +79,7 @@ func TestRuntimeLedgerConsumesOrdinalBeforeLaunchAndChargesNativeLines(t *testin
 	appendRuntimeLedgerFile(t, repo, "attempt-two\n")
 	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: second.Revision, RequestID: "finish-2", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('2'), Diagnosis: "executor transport closed after bounded output capture",
+		Diagnosis:          "executor transport closed after bounded output capture",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "cleanup trap terminated the recorded process group",
 		ProcessEvidence: "post-interruption process scan found no matching descendants",
 	})

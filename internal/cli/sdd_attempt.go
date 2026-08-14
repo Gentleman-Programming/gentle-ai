@@ -78,6 +78,9 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	*evidenceRevision = strings.TrimSpace(*evidenceRevision)
 	*expectedBindingRevision = strings.TrimSpace(*expectedBindingRevision)
 	*remediatesEvidenceRevision = strings.TrimSpace(*remediatesEvidenceRevision)
+	if missing := missingSDDAttemptOperationFlags(args[1:], operation, *outcome); len(missing) != 0 {
+		return missingSDDAttemptOperationError(operation, missing)
+	}
 	if strings.TrimSpace(*cwd) == "" {
 		return errors.New("sdd-attempt requires --cwd")
 	}
@@ -98,9 +101,6 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	// attempt must not demand a review obligation the operator has no way to
 	// satisfy.
 	store.ReviewDisabled = reviewDisabled
-	if missing := missingSDDAttemptOperationFlags(args[1:], operation); len(missing) != 0 {
-		return missingSDDAttemptOperationError(operation, missing)
-	}
 	var result any
 	switch operation {
 	case "status":
@@ -112,6 +112,16 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			if store, err = store.ForInstance(*changeInstance); err != nil {
 				return fmt.Errorf("sdd-attempt status: %w", err)
 			}
+		}
+		// Given the work-unit scope, status answers with the verdict acquire
+		// would reach for that exact request instead of the ledger-only view
+		// that reported next_action: "begin" while acquire blocked (#2114).
+		if presentSDDAttemptFlags(args[1:], "work-unit", "evidence-goal", "max-attempts", "max-changed-lines") != 0 {
+			result, err = store.AdmissionStatus(ctx, sddstatus.BeginAttemptRequest{
+				RequestID: "sdd-attempt-status-probe", WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
+				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
+			})
+			break
 		}
 		result, err = store.Status()
 	case "begin":
@@ -147,6 +157,10 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		result, err = store.Rescope(ctx, sddstatus.RescopeObjectiveRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, Reason: *reason, Actor: *actor,
+		})
+	case "repair":
+		result, err = store.RepairConsecutiveRescope(ctx, sddstatus.RepairConsecutiveRescopeRequest{
+			ExpectedRevision: *expected, RequestID: *requestID, Reason: *reason, Actor: *actor,
 		})
 	case "acquire":
 		result, err = store.Acquire(ctx, sddstatus.CompactAcquireRequest{
@@ -225,6 +239,15 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 	{name: "status", purpose: "Read the native runtime state", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
 		{name: "change-instance", usage: "optional; caller-owned token, at most 128 bytes; scopes granted_roots"},
+		// Naming acquire's work-unit scope turns status from "what does the
+		// ledger hold" into "would this exact acquire be admitted" (#2114),
+		// which is the question consumers were already asking it. All four
+		// stay optional; without them status answers the request-blind ledger
+		// question exactly as before.
+		{name: "work-unit", usage: "optional; single-line label, at most 160 bytes; reports the verdict acquire would return"},
+		{name: "evidence-goal", usage: "optional; single-line objective, at most 240 bytes; reports the verdict acquire would return"},
+		{name: "max-attempts", kind: sddAttemptIntFlag, usage: "optional; default 2, limit 1..100"},
+		{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "optional; default 200, limit 1..1000000"},
 	}},
 	{name: "begin", purpose: "Start a bounded runtime attempt", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
@@ -240,7 +263,7 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "expected-revision", required: true, usage: "required; exact sha256:<64 lowercase hex> runtime revision"},
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
 		{name: "outcome", required: true, usage: "required; failed, interrupted, or passed"},
-		{name: "evidence-revision", required: true, usage: "required; sha256:<64 lowercase hex>, never none"},
+		{name: "evidence-revision", required: true, usage: "required for failed/passed; empty or canonical legacy sha256 revision for interrupted"},
 		{name: "diagnosis", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "harness-disposition", required: true, usage: "required; reused or invalidated"},
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
@@ -273,6 +296,13 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "reason", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "actor", required: true, usage: "required; trimmed single-line text, at most 128 bytes"},
 	}},
+	{name: "repair", purpose: "Repair the historical consecutive-rescope publication defect", flags: []sddAttemptFlagDefinition{
+		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "expected-revision", required: true, usage: "required; exact unreadable sha256:<64 lowercase hex> runtime HEAD"},
+		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
+		{name: "reason", required: true, usage: "required; trimmed single-line audit reason, at most 500 bytes"},
+		{name: "actor", required: true, usage: "required; trimmed single-line audit actor, at most 128 bytes"},
+	}},
 	{name: "acquire", purpose: "Claim a bounded attempt and return its token", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
 		{name: "token", usage: "optional; token from an earlier acquire to continue that active attempt"},
@@ -288,7 +318,7 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "token", required: true, usage: "required; opaque token returned by acquire"},
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
 		{name: "outcome", required: true, usage: "required; failed, interrupted, or passed"},
-		{name: "evidence-revision", required: true, usage: "required; sha256:<64 lowercase hex>, never none"},
+		{name: "evidence-revision", required: true, usage: "required for failed/passed; omit for interrupted"},
 		{name: "diagnosis", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "harness-disposition", required: true, usage: "required; reused or invalidated"},
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
@@ -499,13 +529,22 @@ func registerSDDAttemptRootFlag(flags *flag.FlagSet, operation string, roots *sd
 	}
 }
 
-func missingSDDAttemptOperationFlags(args []string, operation string) []string {
+func missingSDDAttemptOperationFlags(args []string, operation, parsedOutcome string) []string {
 	definition, _ := sddAttemptOperationDefinition(operation)
 	names := make([]string, 0, len(definition.flags))
 	for _, flagDefinition := range definition.flags {
 		if flagDefinition.required {
 			names = append(names, flagDefinition.name)
 		}
+	}
+	if (operation == "finish" || operation == "settle") && parsedOutcome == "interrupted" {
+		filtered := names[:0]
+		for _, name := range names {
+			if name != "evidence-revision" {
+				filtered = append(filtered, name)
+			}
+		}
+		names = filtered
 	}
 	return missingSDDAttemptFlags(args, names...)
 }

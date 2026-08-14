@@ -26,6 +26,15 @@ func RenderDryRun(result InstallResult) string {
 	_, _ = fmt.Fprintf(b, "Platform decision: %s\n", formatPlatformDecision(result.Review.PlatformDecision))
 	_, _ = fmt.Fprintf(b, "Prepare steps: %d\n", len(result.Plan.Prepare))
 	_, _ = fmt.Fprintf(b, "Apply steps: %d\n", len(result.Plan.Apply))
+	if containsAgent(result.Resolved.Agents, model.AgentOpenCode) {
+		_, _ = fmt.Fprintf(b, "OpenCode background intent: %s (policy effective: %s)\n", result.Background.Intent, result.Background.Effective)
+	}
+	if containsAgent(result.Resolved.Agents, model.AgentOpenCode) && result.Background.Activation.Action != "" {
+		if result.Background.Effective == model.OpenCodeBackgroundOn {
+			_, _ = fmt.Fprintf(b, "OpenCode background runtime ready: %t\n", result.BackgroundPolicyEnabled)
+		}
+		_, _ = fmt.Fprintln(b, renderOpenCodeBackgroundActivation(result.Background))
+	}
 
 	if len(result.Dependencies.Dependencies) > 0 {
 		_, _ = fmt.Fprintln(b, "")

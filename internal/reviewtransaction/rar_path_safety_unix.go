@@ -79,9 +79,13 @@ func rarRepositoryOpenDirectorySafe(_ *os.File, info fs.FileInfo) bool {
 	return rarRepositoryDirectorySafe("", info)
 }
 
-// rarRepositoryOwnerDescription renders the refused directory's owner for
-// operator-facing refusal messages. It is diagnostic only and never
-// participates in the trust decision itself.
+func formatRARAuthorityRefusal(path string) error {
+	return fmt.Errorf(
+		"RAR authority parent %q is owned by %s, which is neither the current user nor a trusted administrative authority: %w",
+		path, rarRepositoryOwnerDescription(path), errUnsafeRARAuthorityPath,
+	)
+}
+
 func rarRepositoryOwnerDescription(path string) string {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -99,9 +103,6 @@ func openRARPathNoFollow(path string, directory bool) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	// RAR path safety is a distinct security boundary from the store lock
-	// walk; it keeps the unconditional root-anchored walk verbatim by always
-	// passing the filesystem root as the anchor.
 	parentFD, err := secureOpenLockParent(string(filepath.Separator), filepath.Dir(absolute))
 	if err != nil {
 		return nil, err
@@ -116,4 +117,35 @@ func openRARPathNoFollow(path string, directory bool) (*os.File, error) {
 		return nil, err
 	}
 	return os.NewFile(uintptr(fd), path), nil
+}
+
+func validateRARRepositoryParent(path string) error {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if rarPathUnsafe(path, before) || !before.IsDir() {
+		return errUnsafeRARAuthorityPath
+	}
+	if !rarRepositoryDirectorySafe(path, before) {
+		return formatRARAuthorityRefusal(path)
+	}
+	file, err := openRARPathNoFollow(path, true)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	current, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(before, opened) || !os.SameFile(opened, current) ||
+		!rarRepositoryOpenDirectorySafe(file, opened) {
+		return errRARAuthorityPathReplaced
+	}
+	return nil
 }

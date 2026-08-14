@@ -228,6 +228,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 
 		// OpenCode agent files
 		"opencode/persona-gentleman.md",
+		"opencode/background-subagents.md",
 		"opencode/sdd-orchestrator.md",
 		"opencode/sdd-overlay-single.json",
 		"opencode/sdd-overlay-multi.json",
@@ -432,7 +433,7 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 		seen[entry.Name()] = true
 	}
 
-	for _, name := range []string{"commands", "plugins", "persona-gentleman.md", "sdd-orchestrator.md", "sdd-overlay-single.json", "sdd-overlay-multi.json"} {
+	for _, name := range []string{"commands", "plugins", "persona-gentleman.md", "background-subagents.md", "sdd-orchestrator.md", "sdd-overlay-single.json", "sdd-overlay-multi.json"} {
 		if !seen[name] {
 			t.Fatalf("opencode embedded assets missing %q", name)
 		}
@@ -468,6 +469,21 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	}
 }
 
+func TestOpenCodeBackgroundPolicyMarkersAreBalanced(t *testing.T) {
+	content := MustRead("opencode/background-subagents.md")
+	const (
+		start = "<!-- gentle-ai:opencode-background-subagents -->"
+		end   = "<!-- /gentle-ai:opencode-background-subagents -->"
+	)
+	trimmed := strings.TrimSpace(content)
+	if strings.Count(trimmed, start) != 1 || strings.Count(trimmed, end) != 1 {
+		t.Fatalf("background policy marker cardinality = (%d, %d), want (1, 1)", strings.Count(trimmed, start), strings.Count(trimmed, end))
+	}
+	if !strings.HasPrefix(trimmed, start+"\n") || !strings.HasSuffix(trimmed, "\n"+end) {
+		t.Fatalf("background policy markers are not balanced around the complete asset")
+	}
+}
+
 // TestReviewResultArtifactsPluginContract pins the reduced transport-only
 // contract (rdd-advisory-transport SKILL.md): the plugin's only job is to
 // detect a reviewer task launch carrying the opaque binding, fetch the
@@ -482,7 +498,11 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		t.Fatalf("Read(review-result-artifacts.ts) error = %v", err)
 	}
 	for _, want := range []string{
-		`spawn("gentle-ai"`,
+		`const RUNTIME_PROVENANCE`,
+		`opencode_runtime_provenance`,
+		`async function pinnedRuntime(`,
+		`return runNativeProcess(await pinnedRuntime(cwd), cwd, args, stdin)`,
+		`spawn(executable, args`,
 		`"review", "lens-context",`,
 		`"--repository-context", repositoryContext`,
 		// `--delivery runtime_interception` is not cosmetic: it is the
@@ -564,7 +584,7 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 	if strings.Contains(source, `reviewer task result is empty or contains a nested envelope`) {
 		t.Fatal("review-result-artifacts.ts regressed to the conflated empty/nested-envelope error message")
 	}
-	for _, forbidden := range []string{"writeFile", "link(", "chmod(", "createHash", "export {", "export const"} {
+	for _, forbidden := range []string{"spawn(\"gentle-ai\"", "writeFile", "link(", "chmod(", "export {", "export const"} {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("review-result-artifacts.ts must delegate native persistence; found %q", forbidden)
 		}
@@ -683,6 +703,14 @@ func TestSkillRegistryPluginContract(t *testing.T) {
 	}
 	if strings.Contains(src, "exec(") {
 		t.Fatal("skill-registry.ts must use execFile, not shell exec")
+	}
+	worktreeIdx := strings.Index(src, "input.worktree")
+	directoryIdx := strings.Index(src, "input.directory")
+	if worktreeIdx == -1 || directoryIdx == -1 {
+		t.Fatal("skill-registry.ts must contain both input.worktree and input.directory")
+	}
+	if worktreeIdx >= directoryIdx {
+		t.Errorf("skill-registry.ts must use input.worktree before input.directory; got worktree@%d >= directory@%d", worktreeIdx, directoryIdx)
 	}
 }
 

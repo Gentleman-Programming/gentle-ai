@@ -38,10 +38,11 @@ type compactRecoveryEdgeClassification struct {
 	// authorization bound to different content than the successor's own
 	// recorded fields. It is deliberately NOT surfaced on
 	// CompactRecoveryEdgeInspection.AnomalyClasses -- that would advertise a
-	// `review reconcile-authority` continuation this edge would then refuse
-	// (design decision 2) -- so CompactRecoveryEdgeInspection's JSON stays
-	// byte-identical. A caller that needs it re-derives classification
-	// directly from records, exactly as deriveAuthorityDispositionPlan does.
+	// continuation outside that inspection vocabulary (design decision 2) -- so
+	// CompactRecoveryEdgeInspection's JSON stays byte-identical. A caller that
+	// needs it re-derives classification directly from records, exactly as
+	// deriveAuthorityDispositionPlan does; the negotiated failure surface routes
+	// this closed class through `review.repair`.
 	DispositionClass string
 }
 
@@ -108,7 +109,7 @@ func classifyCompactRecoveryEdgeAnomalies(predecessor, successor CompactRecord) 
 		recorded := sha256.Sum256([]byte(recovery.MaintainerAuthorization))
 		classification.RecordedAuthorizationSHA256 = "sha256:" + hex.EncodeToString(recorded[:])
 		return classification
-	case errors.Is(edgeErr, errCompactRecoveryAuthorizationInexact):
+	case errors.Is(edgeErr, ErrCompactRecoveryAuthorizationInexact):
 		if strings.HasPrefix(recovery.MaintainerAuthorization, compactRecoveryAuthorizationSchema) {
 			classification.NonReconcilableError = fmt.Errorf("successor %q records a %s binding bound to different content; that is corruption, not a pre-contract authorization", successor.State.LineageID, compactRecoveryAuthorizationSchema)
 			classification.DispositionClass = compactContentMismatchedRecoveryAuthorizationClass

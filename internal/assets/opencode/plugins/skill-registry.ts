@@ -15,7 +15,7 @@ const execFileAsync = promisify(execFile)
 
 export const SkillRegistryPlugin: Plugin = async (input) => {
   async function refreshSkillRegistry() {
-    const cwd = input.directory || input.worktree || process.cwd()
+    const cwd = input.worktree || input.directory || process.cwd()
 
     try {
       await execFileAsync(

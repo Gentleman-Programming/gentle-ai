@@ -321,7 +321,7 @@ var featureClaimsByAgent = map[model.AgentID]AgentFeatureClaims{
 		SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentPi: {
-		SystemPrompt: true, MCP: true,
+		SystemPrompt: false, MCP: true,
 	},
 	model.AgentQwenCode: {
 		SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,

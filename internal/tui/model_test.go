@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodeplugin"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/v2/internal/components/uninstall"
@@ -24,8 +25,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
+	"github.com/muesli/termenv"
 )
 
 func TestNavigationWelcomeToDetection(t *testing.T) {
@@ -39,6 +42,285 @@ func TestNavigationWelcomeToDetection(t *testing.T) {
 	}
 	if !state.InstallFlowActive {
 		t.Fatal("expected Start installation to activate the install flow")
+	}
+}
+
+func TestCodexCustomDiscoveryStartsAsCommandWithFallback(t *testing.T) {
+	originalDiscover := discoverCodexModels
+	t.Cleanup(func() { discoverCodexModels = originalDiscover })
+
+	called := false
+	discoverCodexModels = func(context.Context) []string {
+		called = true
+		return []string{"discovered-model"}
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCodexModelPicker
+	m.CodexModelPicker = screens.NewCodexModelPickerState()
+	m.Cursor = 3 // Custom
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if called {
+		t.Fatal("Custom entry ran Codex discovery synchronously")
+	}
+	if cmd == nil {
+		t.Fatal("Custom entry command = nil")
+	}
+	if state.CodexModelPicker.CustomMode != screens.CodexCustomModePhaseList {
+		t.Fatalf("CustomMode = %v, want phase list", state.CodexModelPicker.CustomMode)
+	}
+	if !slices.Equal(state.CodexModelPicker.AvailableModels, model.CodexAvailableModels()) {
+		t.Fatalf("AvailableModels = %v, want curated fallback", state.CodexModelPicker.AvailableModels)
+	}
+
+	msg := cmd()
+	if !called {
+		t.Fatal("discovery command did not run discovery")
+	}
+	updated, _ = state.Update(msg)
+	state = updated.(Model)
+	if !slices.Equal(state.CodexModelPicker.AvailableModels, []string{"discovered-model"}) {
+		t.Fatalf("AvailableModels = %v, want discovery result", state.CodexModelPicker.AvailableModels)
+	}
+}
+
+func TestCodexCustomDiscoveryIgnoresStaleOrIrrelevantResults(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(*Model)
+		msg         CodexModelsDiscoveredMsg
+		wantApplied bool
+	}{
+		{
+			name: "after leaving Custom",
+			setup: func(m *Model) {
+				m.CodexModelPicker.CustomMode = screens.CodexCustomModeNone
+			},
+			msg: CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"late-model"}},
+		},
+		{
+			name: "after leaving picker",
+			setup: func(m *Model) {
+				m.Screen = ScreenWelcome
+			},
+			msg: CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"late-model"}},
+		},
+		{
+			name: "older request",
+			setup: func(m *Model) {
+				m.codexModelDiscoveryRequest = 2
+			},
+			msg: CodexModelsDiscoveredMsg{RequestID: 1, Models: []string{"old-model"}},
+		},
+		{
+			name: "current request",
+			setup: func(m *Model) {
+				m.codexModelDiscoveryRequest = 2
+			},
+			msg:         CodexModelsDiscoveredMsg{RequestID: 2, Models: []string{"new-model"}},
+			wantApplied: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenCodexModelPicker
+			m.CodexModelPicker = screens.NewCodexModelPickerState()
+			m.CodexModelPicker.CustomMode = screens.CodexCustomModePhaseList
+			m.codexModelDiscoveryRequest = 1
+			fallback := append([]string(nil), m.CodexModelPicker.AvailableModels...)
+			tt.setup(&m)
+
+			updated, _ := m.Update(tt.msg)
+			state := updated.(Model)
+			if tt.wantApplied {
+				if !slices.Equal(state.CodexModelPicker.AvailableModels, tt.msg.Models) {
+					t.Fatalf("AvailableModels = %v, want %v", state.CodexModelPicker.AvailableModels, tt.msg.Models)
+				}
+				return
+			}
+			if !slices.Equal(state.CodexModelPicker.AvailableModels, fallback) {
+				t.Fatalf("AvailableModels = %v, want unchanged %v", state.CodexModelPicker.AvailableModels, fallback)
+			}
+		})
+	}
+}
+
+func openCodeSDDReviewModel(background model.OpenCodeBackgroundIntent) Model {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenReview
+	m.Cursor = 0
+	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+	m.Selection.Components = []model.ComponentID{model.ComponentSDD}
+	m.BackgroundIntent = background
+	return m
+}
+
+func TestOpenCodeBackgroundPromptVisibility(t *testing.T) {
+	t.Setenv(cli.OpenCodeBackgroundSubagentsEnv, "")
+	m := openCodeSDDReviewModel("")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenOpenCodeBackground {
+		t.Fatalf("screen = %v, want ScreenOpenCodeBackground", state.Screen)
+	}
+	if !strings.Contains(state.View(), "Enable managed background subagents") {
+		t.Fatalf("background prompt missing enable choice:\n%s", state.View())
+	}
+}
+
+func TestOpenCodeBackgroundPriorStateSkipsPrompt(t *testing.T) {
+	t.Setenv(cli.OpenCodeBackgroundSubagentsEnv, "")
+	for _, want := range []model.OpenCodeBackgroundIntent{model.OpenCodeBackgroundOn, model.OpenCodeBackgroundOff} {
+		t.Run(string(want), func(t *testing.T) {
+			m := openCodeSDDReviewModel(want)
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			state := updated.(Model)
+			if state.Screen != ScreenInstalling {
+				t.Fatalf("screen = %v, want ScreenInstalling", state.Screen)
+			}
+			if state.BackgroundIntent != want || state.BackgroundPersist != "" {
+				t.Fatalf("background intent/persist = %q/%q, want %q/empty", state.BackgroundIntent, state.BackgroundPersist, want)
+			}
+			if cmd == nil {
+				t.Fatal("install command = nil")
+			}
+		})
+	}
+}
+
+func TestCodexCustomDiscoveryClampsModelSelectCursorBeforeEnter(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCodexModelPicker
+	m.CodexModelPicker = screens.NewCodexModelPickerState()
+	m.CodexModelPicker.CustomMode = screens.CodexCustomModeModelSelect
+	m.CodexModelPicker.CustomModelCursor = len(m.CodexModelPicker.AvailableModels) - 1
+	m.codexModelDiscoveryRequest = 1
+
+	updated, _ := m.Update(CodexModelsDiscoveredMsg{
+		RequestID: 1,
+		Models:    []string{"discovered-model-1", "discovered-model-2"},
+	})
+	state := updated.(Model)
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.CodexModelPicker.CustomMode != screens.CodexCustomModeEffortSelect {
+		t.Fatalf("CustomMode = %v, want %v", state.CodexModelPicker.CustomMode, screens.CodexCustomModeEffortSelect)
+	}
+	if state.CodexModelPicker.CustomPendingModel != "discovered-model-2" {
+		t.Fatalf("CustomPendingModel = %q, want %q", state.CodexModelPicker.CustomPendingModel, "discovered-model-2")
+	}
+}
+
+func TestCodexCustomDiscoveryNewestRequestWins(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCodexModelPicker
+	m.CodexModelPicker = screens.NewCodexModelPickerState()
+	m.Cursor = 3 // Custom
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	firstRequest := state.codexModelDiscoveryRequest
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state = updated.(Model)
+	state.Cursor = 3 // Custom
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	secondRequest := state.codexModelDiscoveryRequest
+	if secondRequest <= firstRequest {
+		t.Fatalf("second request = %d, want greater than first request %d", secondRequest, firstRequest)
+	}
+
+	updated, _ = state.Update(CodexModelsDiscoveredMsg{RequestID: firstRequest, Models: []string{"old-model"}})
+	state = updated.(Model)
+	if slices.Equal(state.CodexModelPicker.AvailableModels, []string{"old-model"}) {
+		t.Fatal("older discovery result replaced the current catalog")
+	}
+	updated, _ = state.Update(CodexModelsDiscoveredMsg{RequestID: secondRequest, Models: []string{"new-model"}})
+	state = updated.(Model)
+	if !slices.Equal(state.CodexModelPicker.AvailableModels, []string{"new-model"}) {
+		t.Fatalf("AvailableModels = %v, want newest result", state.CodexModelPicker.AvailableModels)
+	}
+}
+
+func TestOpenCodeBackgroundChoiceFeedsInstall(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		cursor int
+		want   model.OpenCodeBackgroundIntent
+	}{
+		{name: "enable managed background", cursor: 0, want: model.OpenCodeBackgroundOn},
+		{name: "keep foreground", cursor: 1, want: model.OpenCodeBackgroundOff},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := openCodeSDDReviewModel("")
+			m.Screen = ScreenOpenCodeBackground
+			m.Cursor = tt.cursor
+			var got model.OpenCodeBackgroundIntent
+			var gotPersist model.OpenCodeBackgroundIntent
+			m.ExecuteFn = func(_ model.Selection, _ planner.ResolvedPlan, _ system.DetectionResult, background, persist model.OpenCodeBackgroundIntent, _ pipeline.ProgressFunc) pipeline.ExecutionResult {
+				got = background
+				gotPersist = persist
+				return pipeline.ExecutionResult{}
+			}
+
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			state := updated.(Model)
+			if state.Screen != ScreenInstalling || state.BackgroundIntent != tt.want || state.BackgroundPersist != tt.want {
+				t.Fatalf("screen/background = %v/%q/%q, want installing/%q/%q", state.Screen, state.BackgroundIntent, state.BackgroundPersist, tt.want, tt.want)
+			}
+			if cmd == nil {
+				t.Fatal("install command = nil")
+			}
+			if result, ok := cmd().(tea.BatchMsg); ok {
+				for _, command := range result {
+					if command == nil {
+						continue
+					}
+					if _, ok := command().(PipelineDoneMsg); ok {
+						break
+					}
+				}
+			}
+			if got != tt.want || gotPersist != tt.want {
+				t.Fatalf("executor background/persist = %q/%q, want %q/%q", got, gotPersist, tt.want, tt.want)
+			}
+		})
+	}
+}
+
+func TestOpenCodeBackgroundCancellationLeavesChoiceUnchanged(t *testing.T) {
+	t.Setenv(cli.OpenCodeBackgroundSubagentsEnv, "")
+	for _, tt := range []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{name: "escape", key: tea.KeyMsg{Type: tea.KeyEsc}},
+		{name: "back option", key: tea.KeyMsg{Type: tea.KeyEnter}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := openCodeSDDReviewModel("")
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			state := updated.(Model)
+			if state.Screen != ScreenOpenCodeBackground {
+				t.Fatalf("screen = %v, want ScreenOpenCodeBackground", state.Screen)
+			}
+			if tt.name == "back option" {
+				state.Cursor = len(screens.OpenCodeBackgroundOptions())
+			}
+
+			updated, _ = state.Update(tt.key)
+			state = updated.(Model)
+			if state.Screen != ScreenReview || state.BackgroundIntent != "" || state.BackgroundPersist != "" {
+				t.Fatalf("cancelled state = %v/%q/%q, want review/empty/empty", state.Screen, state.BackgroundIntent, state.BackgroundPersist)
+			}
+		})
 	}
 }
 
@@ -278,6 +560,25 @@ func TestProfileCreateSeparatorIsIgnoredAndSkipped(t *testing.T) {
 	}
 }
 
+func TestProfileCreateCustomAgentsDoNotChangeNavigation(t *testing.T) {
+	m := profileModelStep(true)
+	m.ModelPicker.CustomAgents = []string{"custom-profile-agent"}
+	rows := screens.ModelPickerRowsForProfile()
+	m.Cursor = len(rows) - 1
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	state := updated.(Model)
+	if state.Cursor != len(rows) {
+		t.Fatalf("cursor after last profile row = %d, want Continue at %d", state.Cursor, len(rows))
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+	if state.ProfileCreateStep != 2 || state.Cursor != 0 {
+		t.Fatalf("step/cursor after profile Continue = %d/%d, want 2/0", state.ProfileCreateStep, state.Cursor)
+	}
+}
+
 func TestModelPickerNavigationSkipsReviewSeparator(t *testing.T) {
 	rows := screens.ModelPickerRows()
 	separator := -1
@@ -514,7 +815,7 @@ func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 
 	var gotSelection model.Selection
 	var gotPlan planner.ResolvedPlan
-	state.ExecuteFn = func(selection model.Selection, resolved planner.ResolvedPlan, _ system.DetectionResult, _ pipeline.ProgressFunc) pipeline.ExecutionResult {
+	state.ExecuteFn = func(selection model.Selection, resolved planner.ResolvedPlan, _ system.DetectionResult, _ model.OpenCodeBackgroundIntent, _ model.OpenCodeBackgroundIntent, _ pipeline.ProgressFunc) pipeline.ExecutionResult {
 		gotSelection = selection
 		gotPlan = resolved
 		return pipeline.ExecutionResult{
@@ -563,6 +864,7 @@ func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 func TestReviewToInstallingInitializesProgress(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenReview
+	m.BackgroundIntent = model.OpenCodeBackgroundOff
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
@@ -5751,6 +6053,120 @@ func TestWelcomeAdvisory_ResizeAndContentChangesClampScroll(t *testing.T) {
 	updated, _ = state.Update(AdvisoryMsg{Advisory: update.Advisory{Message: "Short notice."}})
 	if got := updated.(Model).AdvisoryScroll; got != 0 {
 		t.Fatalf("scroll after advisory content change = %d, want 0", got)
+	}
+}
+
+func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
+	cases := []struct {
+		name         string
+		width        int
+		height       int
+		withOptional bool
+		minimum      bool
+		wantPrimary  string
+		wantControl  string
+	}{
+		{name: "startup viewport", width: 120, height: 30},
+		{name: "narrow resize", width: 80, height: 24},
+		{name: "short viewport", width: 120, height: 19},
+		{name: "below compact height", width: 120, height: 2, minimum: true},
+		{name: "below compact width", width: 18, height: 20, minimum: true},
+		{name: "below frame border width", width: 2, height: 20, minimum: true, wantPrimary: "Go"},
+		{name: "tiny viewport uses atomic labels", width: 2, height: 2, minimum: true, wantPrimary: "Go", wantControl: "q"},
+		{name: "single column tiny viewport uses atomic labels", width: 1, height: 2, minimum: true, wantPrimary: ">", wantControl: "q"},
+		{name: "compact viewport with optional content", width: 120, height: 17, withOptional: true},
+		{name: "wide resize", width: 160, height: 50},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			if tc.withOptional {
+				m.UpdateCheckDone = true
+				m.UpdateResults = []update.UpdateResult{{
+					Tool:             update.ToolInfo{Name: "engram"},
+					InstalledVersion: "1.0.0",
+					LatestVersion:    "1.1.0",
+					Status:           update.UpdateAvailable,
+				}}
+				m.AdvisoryMessage = "Optional advisory content"
+			}
+			updated, _ := m.Update(tea.WindowSizeMsg{Width: tc.width, Height: tc.height})
+			state := updated.(Model)
+			view := state.View()
+
+			if state.Width != tc.width || state.Height != tc.height {
+				t.Fatalf("window size = %dx%d, want %dx%d", state.Width, state.Height, tc.width, tc.height)
+			}
+			if got := lipgloss.Width(view); got > tc.width {
+				t.Fatalf("welcome width = %d, want <= %d\nview:\n%s", got, tc.width, view)
+			}
+			if got := lipgloss.Height(view); got > tc.height {
+				t.Fatalf("welcome height = %d, want <= %d\nview:\n%s", got, tc.height, view)
+			}
+			content := view
+			if tc.minimum {
+				content = strings.ReplaceAll(view, "\n", "")
+			}
+			primary := tc.wantPrimary
+			if primary == "" {
+				primary = "Start installation"
+			}
+			if !strings.Contains(content, primary) {
+				t.Fatalf("welcome lost primary action %q after resize\nview:\n%s", primary, view)
+			}
+			if tc.minimum {
+				control := tc.wantControl
+				if control == "" {
+					control = "j/k"
+				}
+				for _, want := range []string{primary, control} {
+					if !strings.Contains(content, want) {
+						t.Fatalf("minimum welcome state lost %q\nview:\n%s", want, view)
+					}
+				}
+			} else {
+				for _, want := range []string{"Quit", "j/k: navigate • enter: select • q: quit"} {
+					if !strings.Contains(view, want) {
+						t.Fatalf("welcome lost %q after resize\nview:\n%s", want, view)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestWelcomeView_MinimumResizePreservesNonzeroCursor(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+
+	const (
+		cursor = 1
+		width  = 18
+		height = 20
+	)
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Cursor = cursor
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	state := updated.(Model)
+	view := state.View()
+
+	if state.Cursor != cursor {
+		t.Fatalf("cursor after resize = %d, want %d", state.Cursor, cursor)
+	}
+	if got := lipgloss.Width(view); got > width {
+		t.Fatalf("welcome width = %d, want <= %d\nview:\n%s", got, width, view)
+	}
+	if got := lipgloss.Height(view); got > height {
+		t.Fatalf("welcome height = %d, want <= %d\nview:\n%s", got, height, view)
+	}
+	if !strings.Contains(view, styles.UnselectedStyle.Render("Start installation")) {
+		t.Fatalf("minimum welcome state did not preserve the non-selected style\nview:\n%s", view)
+	}
+	if strings.Contains(view, styles.SelectedStyle.Render("Start installation")) {
+		t.Fatalf("minimum welcome state marked Start installation selected for cursor %d\nview:\n%s", cursor, view)
 	}
 }
 

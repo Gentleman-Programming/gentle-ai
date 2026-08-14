@@ -90,6 +90,23 @@ const (
 		reviewNextTransitionRefreshCommandV21
 )
 
+// reviewLensContextConflictActionFor names the mechanism the slot really
+// recorded, so the exit is runnable without guessing which one it was.
+//
+// The generic wording is kept for the case where the record cannot be read
+// back: naming a mechanism this code did not actually observe would be worse
+// than staying general, because an exit that does not work sends an operator in
+// circles blaming themselves.
+func reviewLensContextConflictActionFor(recorded reviewtransaction.ReviewerContextLevel) string {
+	if strings.TrimSpace(string(recorded)) == "" {
+		return reviewLensContextConflictAction
+	}
+	return "this frozen lens slot already recorded a reviewer context produced by " + string(recorded) +
+		", and audit history is never rewritten; re-run this operation with --delivery " + string(recorded) +
+		" to produce the same context by the mechanism the slot recorded, or start a review for a fresh candidate by running " +
+		reviewNextTransitionRefreshCommandV21
+}
+
 // RunReviewLensContext emits the finished reviewer lens context for one
 // selected lens: the provider-authored binding, the provider-authored capture
 // context, and the materialized immutable candidate evidence, budget already
@@ -184,11 +201,7 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	defer func() {
 		payload, err = reviewLensContextCleanup(ctx, payload, err, func() error { return deps.close(authority.Inspector) })
 	}()
-	if len(authority.Frozen.ChangedPathManifest) > advisoryreview.MaxEvidenceEntries {
-		return nil, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextCapacityAction(len(authority.Frozen.ChangedPathManifest)))
-	}
-
-	block, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen)
+	block, err := reviewLensContextAssemble(ctx, deps, authority.Binding, authority.Subject, authority.Frozen, authority.Inspector)
 	if err != nil {
 		return nil, err
 	}
@@ -205,11 +218,70 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 		Lens: authority.Binding.Lens, SelectedOrder: authority.Binding.Order, SubjectHash: authority.Binding.SubjectHash, Level: level,
 	}); err != nil {
 		if errors.Is(err, reviewtransaction.ErrLensContextEmissionConflict) {
-			return nil, reviewLensContextRefusal("lens_context_emission_conflict", reviewLensContextConflictAction)
+			// Read back what the slot really holds so the refusal names the
+			// mechanism to re-run with. The record is bound to this exact
+			// revision, so a hit here is genuinely a mechanism conflict and not
+			// the stale-revision collision this slot key used to produce.
+			recorded, _ := reviewtransaction.ReadLensContextEmission(authority.Store.Dir, authority.Binding.Lineage,
+				authority.Binding.Target, authority.Binding.Revision, authority.Binding.Lens,
+				authority.Binding.Order, authority.Binding.SubjectHash)
+			return nil, reviewLensContextRefusal("lens_context_emission_conflict", reviewLensContextConflictActionFor(recorded.Level))
 		}
 		return nil, reviewLensContextRefusal("lens_context_emission_unavailable", reviewLensContextRefreshAction)
 	}
 	return block, nil
+}
+
+// reviewLensContextAssemble is the one immutable evidence representability
+// check. STATUS reuses it before publishing a collection transition, while the
+// launch path records an emission only after this function returns a block.
+func reviewLensContextAssemble(
+	ctx context.Context, deps reviewLensContextDeps, binding reviewLensContextBinding,
+	subject reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext,
+	inspector reviewLensCandidateInspector,
+) ([]byte, error) {
+	if len(frozen.ChangedPathManifest) > advisoryreview.MaxEvidenceEntries {
+		return nil, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextCapacityAction(len(frozen.ChangedPathManifest)))
+	}
+	return reviewLensContextBlock(ctx, deps, inspector, binding, subject, frozen)
+}
+
+// reviewLensContextStatusBudgetExhausted proves only the deterministic budget
+// refusal for the frozen slots STATUS would otherwise reoffer. It derives the
+// same opaque handle without publishing it and never records an emission.
+// Every other assembly failure remains a launch-time failure so fresh STATUS
+// preserves the existing negotiated collection continuity.
+func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, state reviewtransaction.CompactState, revision string) bool {
+	assemblyContext, cancel := context.WithTimeout(ctx, reviewLensContextTimeout)
+	defer cancel()
+	deps := reviewLensContextDependencies()
+	inspector, err := deps.prepare(reviewtransaction.SnapshotBuilder{Repo: repo}, assemblyContext, state.InitialSnapshot)
+	if err != nil {
+		return false
+	}
+	defer deps.close(inspector)
+	frozen := inspector.FrozenCandidateContext()
+	repositoryContext, err := reviewtransaction.DeriveReviewRepositoryContextHandle(assemblyContext, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Revision: revision,
+	})
+	if err != nil {
+		return false
+	}
+	for order, lens := range state.SelectedLenses {
+		subject, subjectErr := reviewtransaction.NewArtifactSubject(state, revision, frozen, lens, order, "")
+		if subjectErr != nil {
+			continue
+		}
+		_, assemblyErr := reviewLensContextAssemble(assemblyContext, deps, reviewLensContextBinding{
+			Lineage: state.LineageID, Target: state.InitialSnapshot.Identity, Lens: lens, Order: order,
+			Revision: revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
+		}, subject, frozen, inspector)
+		var refusal *reviewLensContextError
+		if errors.As(assemblyErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
+			return true
+		}
+	}
+	return false
 }
 
 // reviewLensAuthority is the resolved provider-owned binding, subject, and

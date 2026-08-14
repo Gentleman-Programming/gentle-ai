@@ -362,6 +362,19 @@ type RemediationBinding struct {
 	FixBatch   int
 }
 
+type remediationIdentity struct {
+	Revision   string
+	LineageID  string
+	Generation int
+	FixBatch   int
+}
+
+type remediationFenceBlock struct {
+	start, end int
+	depth      int
+	token      string
+}
+
 type remediationCommandEvidence struct {
 	Command  string `json:"command"`
 	ExitCode int    `json:"exit_code"`
@@ -381,6 +394,283 @@ type remediationRollbackEvidence struct {
 }
 
 func parseRemediationResult(text, expectedRevision string, bindings ...RemediationBinding) remediationResultEvaluation {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	blocks, invalid := scanRemediationFences(lines)
+	blocksByStart := make(map[int]remediationFenceBlock, len(blocks))
+	for _, block := range blocks {
+		blocksByStart[block.start] = block
+	}
+	claims := 0
+	var candidate remediationResultEvaluation
+	candidateEnd := -1
+	var fallback remediationResultEvaluation
+
+	for _, block := range blocks {
+		if block.end < 0 {
+			continue
+		}
+		if block.token == "json" {
+			if identity, ok := remediationJSONIdentity(lines[block.start+1 : block.end]); ok && remediationIdentityMatches(identity, expectedRevision, bindings) {
+				claims++
+			}
+			continue
+		}
+		if block.token != "yaml" {
+			continue
+		}
+
+		if identity, ok := remediationYAMLIdentity(lines[block.start+1 : block.end]); ok && remediationIdentityMatches(identity, expectedRevision, bindings) {
+			claims++
+		}
+		envelope := parseRemediationResultEnvelope(strings.Join(lines[block.start:block.end+1], "\n"), expectedRevision, bindings...)
+		if fallback.EvidenceRevision == "" && envelope.EvidenceRevision != "" {
+			fallback = envelope
+		}
+
+		if block.depth != 0 {
+			continue
+		}
+
+		evidenceStart := nextNonemptyLine(lines, block.end+1)
+		if evidenceStart < 0 {
+			continue
+		}
+		evidenceBlock, evidenceOK := blocksByStart[evidenceStart]
+		if !evidenceOK || evidenceBlock.depth != 0 || evidenceBlock.token != "json" {
+			continue
+		}
+
+		pair := strings.Join(lines[block.start:evidenceBlock.end+1], "\n")
+		evaluation := parseRemediationResultEnvelope(pair, expectedRevision, bindings...)
+		if fallback.EvidenceRevision == "" && evaluation.EvidenceRevision != "" {
+			fallback = evaluation
+		}
+		if evaluation.Complete && len(bindings) <= 1 {
+			candidate = evaluation
+			candidateEnd = evidenceBlock.end
+		}
+	}
+
+	if invalid || candidateEnd < 0 || claims != 1 || !remediationTrailingContentValid(lines, candidateEnd, blocksByStart) {
+		fallback.Complete = false
+		return fallback
+	}
+	return candidate
+}
+
+func scanRemediationFences(lines []string) ([]remediationFenceBlock, bool) {
+	blocks := make([]remediationFenceBlock, 0)
+	var active remediationFenceBlock
+	open := false
+	for index, line := range lines {
+		depth, token, ok := remediationFence(line)
+		if !ok {
+			continue
+		}
+		if open {
+			if depth != active.depth || token != "bare" {
+				continue
+			}
+			active.end = index
+			blocks = append(blocks, active)
+			open = false
+			continue
+		}
+		active = remediationFenceBlock{start: index, end: -1, depth: depth, token: token}
+		open = true
+	}
+	if open {
+		blocks = append(blocks, active)
+	}
+	return blocks, open
+}
+
+func remediationFence(line string) (int, string, bool) {
+	depth := 0
+	for {
+		trimmed := strings.TrimLeft(line, " \t")
+		if !strings.HasPrefix(trimmed, ">") {
+			line = trimmed
+			break
+		}
+		depth++
+		line = strings.TrimLeft(trimmed[1:], " \t")
+	}
+
+	line = strings.TrimSpace(line)
+	switch line {
+	case "```":
+		return depth, "bare", true
+	case "```yaml":
+		return depth, "yaml", true
+	case "```json":
+		return depth, "json", true
+	}
+	if strings.HasPrefix(line, "```") && strings.TrimSpace(strings.TrimPrefix(line, "```")) != "" {
+		return depth, "other", true
+	}
+	return 0, "", false
+}
+
+func nextNonemptyLine(lines []string, start int) int {
+	for index := start; index < len(lines); index++ {
+		if strings.TrimSpace(lines[index]) != "" {
+			return index
+		}
+	}
+	return -1
+}
+
+func remediationYAMLIdentity(lines []string) (remediationIdentity, bool) {
+	fields := make(map[string]string)
+	for _, line := range lines {
+		if key, value, ok := strings.Cut(remediationFenceContent(line), ":"); ok {
+			fields[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		}
+	}
+	return remediationIdentityFromFields(fields)
+}
+
+func remediationJSONIdentity(lines []string) (remediationIdentity, bool) {
+	var fields map[string]any
+	decoder := json.NewDecoder(strings.NewReader(strings.Join(remediationFenceContents(lines), "\n")))
+	if err := decoder.Decode(&fields); err != nil {
+		return remediationIdentity{}, false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF || fields["schema"] != RemediationResultSchema {
+		return remediationIdentity{}, false
+	}
+
+	identity := remediationIdentity{
+		Revision:  firstStringFieldAny(fields, "failed_evidence_revision", "failed_verify_revision", "failedEvidenceRevision", "failedVerifyRevision"),
+		LineageID: firstStringFieldAny(fields, "lineage_id", "lineageId", "lineageID"),
+	}
+	identity.Generation, _ = firstIntField(fields, "generation")
+	identity.FixBatch, _ = firstIntField(fields, "fix_batch", "fixBatch")
+	return identity, identity.Revision != ""
+}
+
+func remediationIdentityFromFields(fields map[string]string) (remediationIdentity, bool) {
+	if fields["schema"] != RemediationResultSchema {
+		return remediationIdentity{}, false
+	}
+	identity := remediationIdentity{
+		Revision:  firstStringField(fields, "failed_evidence_revision", "failed_verify_revision", "failedEvidenceRevision", "failedVerifyRevision"),
+		LineageID: firstStringField(fields, "lineage_id", "lineageId", "lineageID"),
+	}
+	identity.Generation, _ = parseFirstIntField(fields, "generation")
+	identity.FixBatch, _ = parseFirstIntField(fields, "fix_batch", "fixBatch")
+	return identity, identity.Revision != ""
+}
+
+func firstStringField(fields map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := fields[key]; value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstStringFieldAny(fields map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := fields[key].(string); ok && value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstIntField(fields map[string]any, keys ...string) (int, bool) {
+	for _, key := range keys {
+		switch value := fields[key].(type) {
+		case float64:
+			if value >= 0 && value == float64(int(value)) {
+				return int(value), true
+			}
+		case string:
+			if parsed, ok := parseNonnegativeInt(value); ok {
+				return parsed, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func parseFirstIntField(fields map[string]string, keys ...string) (int, bool) {
+	for _, key := range keys {
+		if parsed, ok := parseNonnegativeInt(fields[key]); ok {
+			return parsed, true
+		}
+	}
+	return 0, false
+}
+
+func remediationIdentityMatches(identity remediationIdentity, expectedRevision string, bindings []RemediationBinding) bool {
+	if identity.Revision != expectedRevision || len(bindings) > 1 {
+		return false
+	}
+	if len(bindings) == 0 {
+		return true
+	}
+	binding := bindings[0]
+	return identity.LineageID == binding.LineageID && identity.Generation == binding.Generation && identity.FixBatch == binding.FixBatch
+}
+
+func remediationTrailingContentValid(lines []string, start int, blocksByStart map[int]remediationFenceBlock) bool {
+	for index := start + 1; index < len(lines); index++ {
+		if strings.TrimSpace(lines[index]) == "" {
+			continue
+		}
+		if block, ok := blocksByStart[index]; ok {
+			if block.end < 0 || remediationFenceContainsResult(lines[block.start+1:block.end]) {
+				return false
+			}
+			index = block.end
+		} else {
+			return false
+		}
+	}
+	return true
+}
+
+func remediationFenceContainsResult(lines []string) bool {
+	for _, line := range lines {
+		line = remediationFenceContent(line)
+		if strings.HasPrefix(line, "schema:") {
+			schema := strings.TrimSpace(strings.TrimPrefix(line, "schema:"))
+			if schema == RemediationResultSchema || schema == "gentle-ai.remediation-evidence/v1" {
+				return true
+			}
+		}
+	}
+	var fields map[string]any
+	if err := json.Unmarshal([]byte(strings.Join(remediationFenceContents(lines), "\n")), &fields); err == nil {
+		schema, _ := fields["schema"].(string)
+		return schema == RemediationResultSchema || schema == "gentle-ai.remediation-evidence/v1"
+	}
+	return false
+}
+
+func remediationFenceContent(line string) string {
+	for strings.HasPrefix(strings.TrimLeft(line, " \t"), ">") {
+		trimmed := strings.TrimLeft(line, " \t")
+		line = strings.TrimLeft(trimmed[1:], " \t")
+	}
+	return strings.TrimSpace(line)
+}
+
+func remediationFenceContents(lines []string) []string {
+	contents := make([]string, len(lines))
+	for index, line := range lines {
+		contents[index] = remediationFenceContent(line)
+	}
+	return contents
+}
+
+func parseRemediationResultEnvelope(text, expectedRevision string, bindings ...RemediationBinding) remediationResultEvaluation {
 	lines, end, reason := parseLeadingEnvelope(text)
 	if reason != "" {
 		return remediationResultEvaluation{}

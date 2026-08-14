@@ -629,8 +629,11 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 		base.Status = UpgradeSkipped
 		return base
 	}
+	if base.Method == update.InstallOpenCodePlugin {
+		base.NewVersion = ""
+	}
 
-	exitReq, err := runStrategy(ctx, r, profile, preflightDestination...)
+	outcome, err := runStrategyWithOutcome(ctx, r, profile, preflightDestination...)
 	if err != nil {
 		// Distinguish manual fallback (informational skip) from real failures.
 		if hint, ok := AsManualFallback(err); ok {
@@ -642,8 +645,12 @@ func executeOne(ctx context.Context, r update.UpdateResult, profile system.Platf
 			base.Err = err
 		}
 	} else {
+		base.NewVersion = r.LatestVersion
+		if outcome.observedVersion != "" {
+			base.NewVersion = outcome.observedVersion
+		}
 		base.Status = UpgradeSucceeded
-		base.ExitRequested = exitReq
+		base.ExitRequested = outcome.exitRequested
 	}
 
 	return base

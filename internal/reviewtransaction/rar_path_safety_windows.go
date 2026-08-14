@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -127,6 +128,12 @@ func rarRepositoryDirectorySafe(path string, info fs.FileInfo) bool {
 	if path == "" || info == nil || !info.IsDir() || rarPathUnsafe(path, info) {
 		return false
 	}
+	return rarWindowsAuthorityOwnerUnsafe(path, info)
+}
+
+var rarWindowsAuthorityOwnerUnsafe func(path string, info fs.FileInfo) bool = windowsRARAuthorityOwnerUnsafeDefault
+
+func windowsRARAuthorityOwnerUnsafeDefault(path string, info fs.FileInfo) bool {
 	descriptor, err := windows.GetNamedSecurityInfo(
 		path,
 		windows.SE_FILE_OBJECT,
@@ -476,4 +483,148 @@ func ownerOnlyRARWindowsAccessMask(mask windows.ACCESS_MASK) bool {
 	const fileAllAccess windows.ACCESS_MASK = windows.STANDARD_RIGHTS_REQUIRED |
 		windows.SYNCHRONIZE | windows.ACCESS_MASK(0x1ff)
 	return mask == windows.GENERIC_ALL || mask == fileAllAccess
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Windows filesystem classifier — injectable for testing.
+// ---------------------------------------------------------------------------------------------------------------------
+
+var rarWindowsAuthorityFilesystemClassifier = windowsRARAuthorityFilesystemTypeDefault
+
+var rarWindowsACLCapableFilesystems = map[string]struct{}{"NTFS": {}, "ReFS": {}}
+
+var rarWindowsUnsupportedFilesystems = map[string]struct{}{"exFAT": {}, "FAT32": {}}
+
+func windowsRARAuthorityFilesystemTypeDefault(path string) string {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return ""
+	}
+	var volSerial, maxCompLen, fsFlags uint32
+	var fsName [windows.MAX_PATH]uint16
+	err = windows.GetVolumeInformation(name, &fsName[0], uint32(len(fsName))*2, &volSerial, &maxCompLen, &fsFlags, nil, 0)
+	if err != nil {
+		return ""
+	}
+	for i, c := range fsName {
+		if c == 0 {
+			return windows.UTF16ToString(fsName[:i])
+		}
+	}
+	return windows.UTF16ToString(fsName[:])
+}
+
+func isWindowsAuthorityFilesystemSupported(fstype string) bool {
+	_, ok := rarWindowsACLCapableFilesystems[fstype]
+	return ok
+}
+
+func isUNCPath(path string) bool {
+	return strings.HasPrefix(path, `\\`) || strings.HasPrefix(path, `\\?\UNC\`)
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Typed sentinels for filesystem-specific errors.
+// ---------------------------------------------------------------------------------------------------------------------
+
+type errUnsupportedWindowsFilesystemType struct {
+	path     string
+	fstype   string
+	innerErr error
+}
+
+func (e errUnsupportedWindowsFilesystemType) Error() string {
+	return fmt.Sprintf(
+		"RAR authority parent %q is on filesystem %q, which does not support persistent Windows ownership semantics; move the Git common directory to NTFS or ReFS",
+		e.path, e.fstype,
+	)
+}
+func (e errUnsupportedWindowsFilesystemType) Unwrap() error { return e.innerErr }
+func (e errUnsupportedWindowsFilesystemType) Is(target error) bool {
+	if t, ok := target.(errUnsupportedWindowsFilesystemType); ok {
+		return e.innerErr == t.innerErr
+	}
+	return false
+}
+
+type errUnknownWindowsFilesystemType struct {
+	path     string
+	innerErr error
+}
+
+func (e errUnknownWindowsFilesystemType) Error() string {
+	return fmt.Sprintf(
+		"RAR authority parent %q is on an unknown or remote filesystem; cannot assume NTFS semantics; check the path and rerun",
+		e.path,
+	)
+}
+func (e errUnknownWindowsFilesystemType) Unwrap() error { return e.innerErr }
+func (e errUnknownWindowsFilesystemType) Is(target error) bool {
+	if t, ok := target.(errUnknownWindowsFilesystemType); ok {
+		return e.innerErr == t.innerErr
+	}
+	return false
+}
+
+var errUnsupportedWindowsFilesystem = errUnsupportedWindowsFilesystemType{innerErr: errUnsafeRARAuthorityPath}
+var errUnknownWindowsFilesystem = errUnknownWindowsFilesystemType{innerErr: errUnsafeRARAuthorityPath}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Refusal formatting.
+// ---------------------------------------------------------------------------------------------------------------------
+
+func formatWindowsRARAuthorityRefusal(path string) error {
+	if isUNCPath(path) {
+		return errUnknownWindowsFilesystemType{path: path, innerErr: errUnsafeRARAuthorityPath}
+	}
+	fstype := rarWindowsAuthorityFilesystemClassifier(path)
+	if isWindowsAuthorityFilesystemSupported(fstype) {
+		return fmt.Errorf(
+			"RAR authority parent %q is owned by %s, which is neither the current user nor a trusted administrative authority: %w",
+			path, rarRepositoryOwnerDescription(path), errUnsafeRARAuthorityPath,
+		)
+	}
+	if _, unsupported := rarWindowsUnsupportedFilesystems[fstype]; unsupported {
+		return errUnsupportedWindowsFilesystemType{path: path, fstype: fstype, innerErr: errUnsafeRARAuthorityPath}
+	}
+	return errUnknownWindowsFilesystemType{path: path, innerErr: errUnsafeRARAuthorityPath}
+}
+
+func formatRARAuthorityRefusal(path string) error { return formatWindowsRARAuthorityRefusal(path) }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Platform-specific validateRARRepositoryParent — adds UNC-path fail-closed handling.
+// ---------------------------------------------------------------------------------------------------------------------
+
+func validateRARRepositoryParent(path string) error {
+	if isUNCPath(path) {
+		return errUnknownWindowsFilesystemType{path: path, innerErr: errUnsafeRARAuthorityPath}
+	}
+	before, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if rarPathUnsafe(path, before) || !before.IsDir() {
+		return errUnsafeRARAuthorityPath
+	}
+	if !rarRepositoryDirectorySafe(path, before) {
+		return formatRARAuthorityRefusal(path)
+	}
+	file, err := openRARPathNoFollow(path, true)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	current, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(before, opened) || !os.SameFile(opened, current) || !rarRepositoryOpenDirectorySafe(file, opened) {
+		return errRARAuthorityPathReplaced
+	}
+	return nil
 }

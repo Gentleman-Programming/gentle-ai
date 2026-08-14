@@ -27,6 +27,14 @@ const (
 	historicalCompactCorrectionAttempts       = 3
 )
 
+// CorrectionBudgetPolicy names the persisted budget formula a compact state
+// uses. New states persist CorrectionBudgetPolicyFloorTwo so every positive
+// budget admits one atomic line replacement; historical states omit the field
+// and retain the legacy CorrectionBudget formula byte-for-byte (issue #2247).
+const (
+	CorrectionBudgetPolicyFloorTwo = "floor_two"
+)
+
 var ErrCompactCorrectionConsumed = errors.New("ordinary compact correction already consumed")
 
 // CompactSemanticStateError identifies a CompactState.Validate() failure with
@@ -88,6 +96,7 @@ type CompactState struct {
 	SelectedLenses               []string                     `json:"selected_lenses"`
 	OriginalChangedLines         int                          `json:"original_changed_lines"`
 	CorrectionBudget             int                          `json:"correction_budget"`
+	CorrectionBudgetPolicy       string                       `json:"correction_budget_policy,omitempty"`
 	LensResults                  []LensResult                 `json:"lens_results"`
 	Findings                     []Finding                    `json:"findings"`
 	Classifications              map[string]FindingEvidence   `json:"classifications"`
@@ -347,7 +356,7 @@ func NewCompactState(start Start) (CompactState, error) {
 	if err != nil {
 		return CompactState{}, err
 	}
-	budget, err := CorrectionBudget(*start.OriginalChangedLines)
+	budget, err := CompactCorrectionBudget(*start.OriginalChangedLines)
 	if err != nil {
 		return CompactState{}, err
 	}
@@ -356,11 +365,28 @@ func NewCompactState(start Start) (CompactState, error) {
 		State: StateReviewing, InitialSnapshot: start.Snapshot, CurrentSnapshot: start.Snapshot,
 		GenesisPaths: append([]string(nil), start.Snapshot.Paths...), PolicyHash: start.PolicyHash,
 		RiskLevel: start.RiskLevel, SelectedLenses: lenses, OriginalChangedLines: *start.OriginalChangedLines,
-		CorrectionBudget: budget, LensResults: []LensResult{}, Findings: []Finding{},
+		CorrectionBudget: budget, CorrectionBudgetPolicy: CorrectionBudgetPolicyFloorTwo,
+		LensResults: []LensResult{}, Findings: []Finding{},
 		Classifications: map[string]FindingEvidence{}, Outcomes: map[string]EvidenceOutcome{},
 		FixFindingIDs: []string{}, FollowUps: []FollowUp{}, FixDeltaHash: EmptyFixDeltaHash,
 	}
 	return state, state.Validate()
+}
+
+// CompactExpectedBudget derives the budget a compact state should carry under
+// its persisted policy. Floor-two states use CompactCorrectionBudget;
+// historical states with no policy field retain the legacy CorrectionBudget
+// formula byte-for-byte. An unrecognized policy is rejected (issue #2247).
+func CompactExpectedBudget(originalChangedLines int, policy string) (int, error) {
+	switch policy {
+	case CorrectionBudgetPolicyFloorTwo:
+		return CompactCorrectionBudget(originalChangedLines)
+	case "":
+		return CorrectionBudget(originalChangedLines)
+	default:
+		// refusal:by-design world-action: a persisted policy outside the closed contract cannot be repaired safely without provider-owned authority
+		return 0, errors.New("compact correction budget policy is unrecognized")
+	}
 }
 
 func (state CompactState) Validate() error {
@@ -467,9 +493,12 @@ func (state CompactState) Validate() error {
 	if err != nil || !equalStrings(selected, state.SelectedLenses) {
 		return errors.New("compact selected lenses are invalid")
 	}
-	wantBudget, err := CorrectionBudget(state.OriginalChangedLines)
+	wantBudget, err := CompactExpectedBudget(state.OriginalChangedLines, state.CorrectionBudgetPolicy)
 	preservedRecoveryBudget := state.Recovery != nil && state.Recovery.ConsumedCorrectionAttempts > 0
-	if err != nil || state.CorrectionBudget != wantBudget && !preservedRecoveryBudget {
+	if err != nil {
+		return err
+	}
+	if state.CorrectionBudget != wantBudget && !preservedRecoveryBudget {
 		return errors.New("compact correction budget does not match original changed lines")
 	}
 	if state.LensResults == nil || state.Findings == nil || state.Classifications == nil || state.Outcomes == nil || state.FixFindingIDs == nil || state.FollowUps == nil {

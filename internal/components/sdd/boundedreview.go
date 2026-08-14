@@ -62,8 +62,8 @@ func boundedReviewContract() string {
 	return strings.TrimSpace(assets.MustRead(boundedReviewContractAsset))
 }
 
-func renderSDDOrchestratorAsset(agent model.AgentID) string {
-	return renderBoundedReviewAsset(agent, sddOrchestratorAsset(agent))
+func renderSDDOrchestratorAsset(agent model.AgentID, options ...OrchestratorRenderOptions) string {
+	return composeOrchestratorPrompt(agent, options...)
 }
 
 // renderBoundedReviewAsset resolves one embedded asset into the exact bytes a
@@ -85,7 +85,10 @@ func bindRuntimeAgentIdentity(content string, agent model.AgentID) string {
 }
 
 func renderBoundedReviewAssetBody(path string) string {
-	content := assets.MustRead(path)
+	return renderBoundedReviewAssetBodyFromContent(path, assets.MustRead(path))
+}
+
+func renderBoundedReviewAssetBodyFromContent(path, content string) string {
 	content = strings.ReplaceAll(content, authorityFirstProcedurePlaceholder, authorityFirstTerminalProcedure())
 	if strings.HasSuffix(path, "/sdd-orchestrator.md") {
 		return replaceBoundedReviewSection(content, "#### Review Execution Contract", "Cost and Context Balance")

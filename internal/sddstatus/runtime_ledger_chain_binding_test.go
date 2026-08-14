@@ -100,6 +100,54 @@ func TestRuntimeUnmanagedRemediationBindsAcrossAuditedReset(t *testing.T) {
 	}
 }
 
+func TestRuntimeLegacyInterruptedEvidenceStillReplays(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "legacy-interrupted-evidence")
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{RequestID: "legacy-begin", WorkUnit: "unit", EvidenceGoal: "goal", MaxAttempts: 2, MaxChangedLines: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.loadRecord(started.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := runtimeRecord{Schema: runtimeRecordSchema, Change: store.Change, PreviousRevision: started.Revision, Operation: runtimeOperationFinish, RequestID: "legacy-finish", Finish: &runtimeFinishEvent{
+		Ordinal: 1, FinishCandidateIdentity: record.Begin.BeginCandidateIdentity, FinishCandidateTree: record.Begin.BeginCandidateTree,
+		Outcome: AttemptInterrupted, ChangedLines: 0, EvidenceRevision: runtimeTestHash('a'), Diagnosis: "legacy interrupted record",
+		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "clean", ProcessEvidence: "none",
+	}}
+	legacy.RequestDigest = runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", FinishAttemptRequest{ExpectedRevision: legacy.PreviousRevision, RequestID: legacy.RequestID, Outcome: legacy.Finish.Outcome, EvidenceRevision: legacy.Finish.EvidenceRevision, Diagnosis: legacy.Finish.Diagnosis, HarnessDisposition: legacy.Finish.HarnessDisposition, CleanupEvidence: legacy.Finish.CleanupEvidence, ProcessEvidence: legacy.Finish.ProcessEvidence})
+	revision, payload, err := runtimeRecordRevision(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishRecord(revision, payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishHead(revision); err != nil {
+		t.Fatal(err)
+	}
+	status, err := store.Status()
+	if err != nil {
+		t.Fatalf("legacy interrupted record did not replay: %v", err)
+	}
+	if status.ActiveAttempt != nil || len(status.Attempts) != 1 || status.Attempts[0].EvidenceRevision != legacy.Finish.EvidenceRevision {
+		t.Fatalf("legacy replay = %#v", status)
+	}
+	retried, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: legacy.RequestID, Outcome: AttemptInterrupted,
+		EvidenceRevision: legacy.Finish.EvidenceRevision, Diagnosis: legacy.Finish.Diagnosis,
+		HarnessDisposition: legacy.Finish.HarnessDisposition, CleanupEvidence: legacy.Finish.CleanupEvidence,
+		ProcessEvidence: legacy.Finish.ProcessEvidence,
+	})
+	if err != nil {
+		t.Fatalf("legacy interrupted request retry did not replay: %v", err)
+	}
+	if retried.Revision != status.Revision || len(retried.Attempts) != 1 {
+		t.Fatalf("legacy interrupted retry appended or changed the projection: %#v", retried)
+	}
+}
+
 func TestRuntimeUnmanagedRemediationSkipsInterruptedAuditRecords(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
 	store := mustRuntimeStore(t, repo, "chain-interrupt")
@@ -133,7 +181,7 @@ func TestRuntimeUnmanagedRemediationSkipsInterruptedAuditRecords(t *testing.T) {
 	}
 	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: stalledStatus.Revision, RequestID: "interrupt-finish-stalled", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('c'), Diagnosis: "transport ended before the correction settled",
+		Diagnosis:          "transport ended before the correction settled",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "stalled process group cleanup completed",
 		ProcessEvidence: "stalled process scan found no surviving descendants",
 	})
@@ -236,8 +284,17 @@ func TestRuntimeUnmanagedRemediationRefusesASecondCorrectionForSettledEvidence(t
 		HarnessDisposition: HarnessReused, CleanupEvidence: "correction cleanup completed",
 		ProcessEvidence: "correction process scan completed", RemediatesEvidenceRevision: failedEvidence,
 	})
-	if err == nil || err.Error() != "unmanaged remediation requires the current failed evidence and a direct correction attempt" {
-		t.Fatalf("second correction against settled evidence = %v, want the exact direct-correction refusal", err)
+	// The anti-laundering property is unchanged: a second correction may not
+	// claim evidence a passing settlement already repaired. What changed is
+	// that the refusal now says so (#2881). Asserting the property and the
+	// disclosure beats pinning the prose, which is what made this brittle.
+	if err == nil {
+		t.Fatal("second correction against settled evidence was admitted; a passing settlement already repaired it")
+	}
+	for _, want := range []string{"already been repaired", failedEvidence, "--remediates-evidence-revision"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the laundering refusal does not disclose %q:\n%v", want, err)
+		}
 	}
 	status, statusErr := store.Status()
 	if statusErr != nil || status.Revision != second.Revision || status.ActiveAttempt == nil ||

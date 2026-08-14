@@ -52,19 +52,18 @@ func transitionJourneys() []Journey {
 			// rescope it belongs to the previous generation, so the record is
 			// committed and then rejected by its own validator.
 			//
-			// This journey deliberately does NOT assert that the second rescope
-			// succeeds. Whether consecutive rescopes are supported is a product
-			// decision that is still open. What is not open is the last step:
-			// after any answer, `status` must still work. That is the assertion
-			// that would have caught #2830 before it shipped.
+			// #2830's ratified boundary rejects the second rescope before
+			// publication. The unit regression pins that exact writer behavior;
+			// this journey proves the operator-visible invariant that follows it:
+			// `status` still works after the refusal.
 			Steps: []Step{
 				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
 				{Name: "begin an objective and fail it with the workspace unchanged",
 					Requires: sddAttemptBeginCapability, Composite: transitionBeginAndFail},
-				{Name: "narrow the objective once", Requires: sddAttemptResetCapability,
+				{Name: "narrow the objective once", Requires: sddAttemptRescopeCapability,
 					Composite: transitionRescope("bench-rescope-one", "narrower work unit one")},
 				{Name: "narrow it again, which is where the report lands",
-					Requires:  sddAttemptResetCapability,
+					Requires:  sddAttemptRescopeCapability,
 					Composite: transitionRescope("bench-rescope-two", "narrower work unit two")},
 				{Name: "the ledger still answers", Composite: transitionProveLedgerReadable},
 			},
@@ -95,7 +94,7 @@ func transitionJourneys() []Journey {
 				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
 				{Name: "begin an objective and fail it with the workspace unchanged",
 					Requires: sddAttemptBeginCapability, Composite: transitionBeginAndFail},
-				{Name: "narrow the objective", Requires: sddAttemptResetCapability,
+				{Name: "narrow the objective", Requires: sddAttemptRescopeCapability,
 					Composite: transitionRescope("bench-rescope-before-reset", "narrower before reset")},
 				{Name: "spend the narrowed objective's remaining attempts",
 					Requires: sddAttemptBeginCapability, Composite: transitionExhaustAttempts},
@@ -122,7 +121,7 @@ func transitionJourneys() []Journey {
 					Requires: sddAttemptBeginCapability, Composite: transitionExhaustOriginal},
 				{Name: "reset the objective", Requires: sddAttemptResetCapability,
 					Composite: transitionReset("bench-reset-before-rescope")},
-				{Name: "then narrow the fresh objective", Requires: sddAttemptResetCapability,
+				{Name: "then narrow the fresh objective", Requires: sddAttemptRescopeCapability,
 					Composite: transitionRescope("bench-rescope-after-reset", "narrower after reset")},
 				{Name: "the ledger still answers", Composite: transitionProveLedgerReadable},
 			},
@@ -208,7 +207,7 @@ func transitionJourneys() []Journey {
 					Requires: sddAttemptHandoffCapability, Composite: sddHandoffAndSettleDelegatedWorktree},
 				{Name: "the ledger answers after the handoff", Composite: transitionProveLedgerReadable},
 				{Name: "now change the scope of the handed-off objective",
-					Requires:  sddAttemptResetCapability,
+					Requires:  sddAttemptRescopeCapability,
 					Composite: transitionRescope("bench-rescope-after-handoff", "narrower after handoff")},
 				{Name: "the ledger still answers", Composite: transitionProveLedgerReadable},
 			},
@@ -261,7 +260,7 @@ func transitionJourneys() []Journey {
 				{Name: "bind the approved review to the change", Requires: bindSDDCapability,
 					Composite: sddBindApprovedReview},
 				{Name: "now move the objective the binding names",
-					Requires:  sddAttemptResetCapability,
+					Requires:  sddAttemptRescopeCapability,
 					Composite: transitionRescope("bench-rescope-after-bind", "narrower after binding")},
 				{Name: "the ledger still answers", Composite: transitionProveLedgerReadable},
 				{Name: "and so does review status", Requires: statusCapability,
@@ -343,9 +342,9 @@ func transitionBeginAndFail(r *journeyRun) error {
 	return nil
 }
 
-// transitionRescope narrows the objective. It tolerates a refusal: whether the
-// product admits this call is the open question, and the journey measures what
-// happens to the store either way rather than demanding one answer.
+// transitionRescope narrows the objective. A journey's following status check
+// measures whether the result, including a correct refusal, left the store
+// readable; #2830's unit regression separately pins its exact refusal.
 func transitionRescope(requestID, workUnit string) func(*journeyRun) error {
 	return func(r *journeyRun) error {
 		status, err := readRuntimeStatus(r)

@@ -37,6 +37,7 @@ func init() {
 			"cw01 pins the issue #2447 fix: a direct `review start --base-ref ... --committed-only` over a candidate large enough to select a reviewer lens now refuses before creating any lineage, naming the negotiated form. Before the fix (verified by running this exact journey against a pre-fix binary) it exited 0, created a lineage, and no reviewer lens could ever complete it -- the trap the issue reports. The journey also proves the refusal is idempotent (repeating the identical call produces byte-identical output), which is this benchmark's only black-box way to show nothing was persisted on the first attempt.",
 			"cw02 pins a sibling surface of the same shape: the hyphenated `review-start` (note: no space) v1-compatibility verb, registered in internal/app/app.go alongside `review start`. It has refused unconditionally since before this axis existed. It belongs here because an axis about direct/legacy start surfaces that omitted the one already-closed door would be an incomplete map of exactly the territory #2447 is about.",
 			"cw03 proves the surface #2447's fix deliberately leaves open still completes a review end to end: `review capture-result --cwd` (review-ledger-contract.md: \"Capture follows the native transition; opaque handles are cwd-independent and legacy bindings need --cwd\") drives a negotiated-started review through capture, finalize and a gate WITHOUT ever supplying --repository-context. This is the direct/manual capture path the execution contract still names as supported, and #2447's maintainer decision explicitly kept it: closing direct START does not close direct capture/finalize.",
+			"cw04 reproduces issue #2885 at the public direct-route boundary, extracts the exact unbound recovery command from the refusal, and executes it without an agent guess or transport-admission failure.",
 			"Surveyed from internal/app/app.go and excluded from this slice, with reasons: `review-resume`, `review-bundle-export`, `review-bundle-import`, and `review-validate` operate over authority the core corpus's ordinary lifecycle journeys already create and exercise through their own verbs -- they are not START-shaped, so they carry none of #2447's specific gap (a route that CREATES a lineage nothing can complete). `review-step` is structurally identical to cw02's already-closed shape (a permanent read-only refusal naming the compact verb) and would duplicate it rather than add coverage. The retired `--result` finalize flag no longer exists in the flag set at all (internal/cli/review_facade.go), so it is not a surface a caller can reach and is not a corpus member.",
 		},
 		Journeys: compatibilityJourneys,
@@ -213,7 +214,7 @@ func compatAssertNoRepositoryContext(_ *Sandbox, observation Observation) error 
 // ---------------------------------------------------------------------------
 
 func compatibilityJourneys() []Journey {
-	return []Journey{
+	journeys := []Journey{
 		{
 			ID:     "cw01-direct-start-refuses-uncompletable-base-diff",
 			Title:  "Direct `review start --base-ref ... --committed-only` over a real candidate refuses up front and names the negotiated exit",
@@ -257,4 +258,5 @@ func compatibilityJourneys() []Journey {
 			},
 		},
 	}
+	return append(journeys, compatibilityRuntimeIdentityJourneys()...)
 }

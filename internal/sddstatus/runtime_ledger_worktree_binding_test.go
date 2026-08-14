@@ -94,6 +94,8 @@ func TestRuntimeLedgerFinishRefusesDelegatedWorktreeUntilHandoff(t *testing.T) {
 
 func TestRuntimeLedgerHandoffAtomicallyBindsDelegatedLinkedWorktree(t *testing.T) {
 	_, worktree, storeA, _, began := newRuntimeLedgerHandoffFixture(t, "handoff-atomic")
+	originWorktree := canonicalRuntimeLedgerWorktreePath(t, storeA.Workspace)
+	destinationWorktree := canonicalRuntimeLedgerWorktreePath(t, worktree)
 
 	handedOff, err := storeA.Handoff(context.Background(), HandoffAttemptRequest{
 		ExpectedRevision: began.Revision, RequestID: "handoff-a-to-b", DestinationWorktree: worktree,
@@ -106,11 +108,13 @@ func TestRuntimeLedgerHandoffAtomicallyBindsDelegatedLinkedWorktree(t *testing.T
 		t.Fatalf("handoff must append exactly one uncharged record: %#v", handedOff)
 	}
 	active := handedOff.ActiveAttempt
-	if active == nil || active.BeginWorktree != storeA.Workspace || active.EffectiveWorktree != worktree || active.Handoff == nil {
+	if active == nil || canonicalRuntimeLedgerWorktreePath(t, active.BeginWorktree) != originWorktree ||
+		canonicalRuntimeLedgerWorktreePath(t, active.EffectiveWorktree) != destinationWorktree || active.Handoff == nil {
 		t.Fatalf("handoff active attempt = %#v", active)
 	}
 	if active.BeginCandidateIdentity != began.ActiveAttempt.BeginCandidateIdentity || active.BeginCandidateTree != began.ActiveAttempt.BeginCandidateTree ||
-		active.Handoff.SourceWorktree != storeA.Workspace || active.Handoff.DestinationWorktree != worktree ||
+		canonicalRuntimeLedgerWorktreePath(t, active.Handoff.SourceWorktree) != originWorktree ||
+		canonicalRuntimeLedgerWorktreePath(t, active.Handoff.DestinationWorktree) != destinationWorktree ||
 		active.Handoff.ExpectedRevision != began.Revision || active.Handoff.DestinationCandidateIdentity == "" || active.Handoff.DestinationCandidateTree == "" {
 		t.Fatalf("handoff provenance = %#v", active)
 	}
@@ -122,13 +126,16 @@ func TestRuntimeLedgerHandoffAtomicallyBindsDelegatedLinkedWorktree(t *testing.T
 		t.Fatalf("handoff record = %#v", record)
 	}
 	replay, err := storeA.Status()
-	if err != nil || replay.Revision != handedOff.Revision || replay.ActiveAttempt == nil || replay.ActiveAttempt.EffectiveWorktree != worktree {
+	if err != nil || replay.Revision != handedOff.Revision || replay.ActiveAttempt == nil ||
+		canonicalRuntimeLedgerWorktreePath(t, replay.ActiveAttempt.EffectiveWorktree) != destinationWorktree {
 		t.Fatalf("handoff replay = %#v err=%v", replay, err)
 	}
 }
 
 func TestRuntimeLedgerHandoffPreservesOriginAndChargesOnlyFinalSettlement(t *testing.T) {
 	_, worktree, storeA, storeB, began := newRuntimeLedgerHandoffFixture(t, "handoff-final-charge")
+	originWorktree := canonicalRuntimeLedgerWorktreePath(t, storeA.Workspace)
+	destinationWorktree := canonicalRuntimeLedgerWorktreePath(t, worktree)
 	handedOff, err := storeA.Handoff(context.Background(), HandoffAttemptRequest{
 		ExpectedRevision: began.Revision, RequestID: "handoff-final-charge", DestinationWorktree: worktree,
 	})
@@ -147,8 +154,8 @@ func TestRuntimeLedgerHandoffPreservesOriginAndChargesOnlyFinalSettlement(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(finished.Attempts) != 1 || finished.Attempts[0].BeginWorktree != storeA.Workspace ||
-		finished.Attempts[0].EffectiveWorktree != worktree || finished.Attempts[0].ChangedLines != 1 ||
+	if len(finished.Attempts) != 1 || canonicalRuntimeLedgerWorktreePath(t, finished.Attempts[0].BeginWorktree) != originWorktree ||
+		canonicalRuntimeLedgerWorktreePath(t, finished.Attempts[0].EffectiveWorktree) != destinationWorktree || finished.Attempts[0].ChangedLines != 1 ||
 		finished.CumulativeAttempts != 1 || finished.CumulativeChangedLines != 1 {
 		t.Fatalf("final handoff settlement = %#v", finished)
 	}

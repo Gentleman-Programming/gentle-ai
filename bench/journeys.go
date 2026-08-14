@@ -73,6 +73,15 @@ func (e statusEnvelope) argument(name string) string {
 	return ""
 }
 
+func (e statusEnvelope) executeArgument(name string) string {
+	for _, argument := range e.NextTransition.Execute.Arguments {
+		if argument.Name == name {
+			return argument.Value
+		}
+	}
+	return ""
+}
+
 func (e statusEnvelope) paths() []string {
 	if len(e.NextTransition.Collect.Inputs) == 0 {
 		return nil
@@ -326,28 +335,35 @@ func printedCommandArguments(command string) ([]string, error) {
 
 // splitPrintedCommandWords splits a printed command line into shell words.
 //
-// It understands exactly the quoting the product emits and nothing more:
-// POSIX single quotes, and a backslash escape for the one character single
-// quotes cannot contain (reviewTransitionShellWord renders an embedded quote
-// as '\”). Anything else -- an unterminated quote, a trailing escape -- is a
+// It understands the single and double quotes the product emits. Within double
+// quotes it applies POSIX's narrow backslash rules without evaluating any shell
+// syntax. Anything else -- an unterminated quote or a trailing escape -- is a
 // line that would not run as printed, and saying so is the point.
 func splitPrintedCommandWords(line string) ([]string, error) {
 	words := []string{}
 	var word strings.Builder
-	quoted, escaped, started := false, false, false
+	var quote rune
+	escaped, doubleQuotedEscape, started := false, false, false
 	for _, char := range line {
 		switch {
-		case quoted && char == '\'':
-			quoted = false
-		case quoted:
-			word.WriteRune(char)
 		case escaped:
+			if char != '\n' {
+				if doubleQuotedEscape && char != '$' && char != '`' && char != '"' && char != '\\' {
+					word.WriteRune('\\')
+				}
+				word.WriteRune(char)
+			}
+			escaped, doubleQuotedEscape = false, false
+		case quote != 0 && char == quote:
+			quote = 0
+		case quote == '"' && char == '\\':
+			escaped, doubleQuotedEscape, started = true, true, true
+		case quote != 0:
 			word.WriteRune(char)
-			escaped = false
 		case char == '\\':
 			escaped, started = true, true
-		case char == '\'':
-			quoted, started = true, true
+		case char == '\'' || char == '"':
+			quote, started = char, true
 		case char == ' ' || char == '\t' || char == '\n' || char == '\r':
 			if started {
 				words = append(words, word.String())
@@ -359,7 +375,7 @@ func splitPrintedCommandWords(line string) ([]string, error) {
 			started = true
 		}
 	}
-	if quoted {
+	if quote != 0 {
 		return nil, fmt.Errorf("printed a command with an unterminated quote: %q", line)
 	}
 	if escaped {
@@ -462,6 +478,37 @@ func pushHead(sandbox *Sandbox) error {
 	return sandbox.git(sandbox.Repo, "push", "-q", "origin", "HEAD")
 }
 
+func breakRemoteForIssue1890(sandbox *Sandbox) error {
+	return sandbox.git(sandbox.Repo, "remote", "set-url", "origin", filepath.Join(sandbox.Root, "missing-remote.git"))
+}
+
+func addUnreachableRemoteForIssue1890(sandbox *Sandbox) error {
+	return sandbox.git(sandbox.Repo, "remote", "add", "backup", filepath.Join(sandbox.Root, "missing-remote.git"))
+}
+
+func issue1890PrePushArgs(baseRef string) func(*Sandbox) ([]string, error) {
+	return func(sandbox *Sandbox) ([]string, error) {
+		if strings.TrimSpace(sandbox.Lineage) == "" {
+			return nil, errors.New("review start did not leave a lineage for the pre-push gate")
+		}
+		return []string{"review", "validate", "--lineage", sandbox.Lineage, "--gate", "pre-push", "--base-ref", baseRef, "--cwd", sandbox.Repo}, nil
+	}
+}
+
+func assertIssue1890RemoteFailure(_ *Sandbox, observation Observation) error {
+	if observation.ExitCode == 0 || !strings.Contains(observation.Stderr, "git ls-remote --heads origin main failed") {
+		return fmt.Errorf("pre-push did not preserve the qualified ls-remote failure: %s", observation.Stderr)
+	}
+	return nil
+}
+
+func assertIssue1890ValidRemoteWins(_ *Sandbox, observation Observation) error {
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("pre-push did not use the valid advertised remote: %s", observation.Stderr)
+	}
+	return nil
+}
+
 func unbornRepo(sandbox *Sandbox) error {
 	sandbox.Repo = filepath.Join(sandbox.Home, "unborn")
 	if err := sandbox.initRepo(sandbox.Repo); err != nil {
@@ -499,7 +546,73 @@ func rememberLineage(sandbox *Sandbox, observation Observation) error {
 	return nil
 }
 
+// assertReviewParseRefusalsPreflight keeps parser refusals inside a composite
+// because a direct unknown-flag step is classified as unsupported before its
+// After assertion can inspect the negotiated envelope. The positive equals
+// forms remain covered by TestReviewBooleanFlagSpacedValueNamesTheEqualsForm
+// and core journey j02's --captured-results=true transition.
+func assertReviewParseRefusalsPreflight(run *journeyRun, operation, booleanFlag string) error {
+	cases := []struct {
+		name, cause string
+		args        []string
+		usage       bool
+	}{
+		{name: "unknown flag", args: []string{"--unknown-" + operation + "-flag"}, cause: "flag provided but not defined: -unknown-" + operation + "-flag", usage: true},
+		{name: "detached boolean", args: []string{"--" + booleanFlag, "true"}, cause: "boolean flag --" + booleanFlag + " takes --" + booleanFlag + " or --" + booleanFlag + "=true, not a separate value; got \"true\""},
+	}
+	for _, test := range cases {
+		for _, negotiated := range []bool{true, false} {
+			mode := "plain"
+			args := []string{"review", operation}
+			if negotiated {
+				mode = "negotiated"
+				args = append(args, "--contract", reviewContract)
+			}
+			observation := run.run(productArgsFor(run, append(args, test.args...)...), false)
+			if observation.ExitCode == 0 {
+				return fmt.Errorf("%s %s %s accepted a parser refusal", operation, test.name, mode)
+			}
+			if negotiated {
+				var failure struct {
+					Code            string `json:"code"`
+					Phase           string `json:"phase"`
+					MutationOutcome string `json:"mutation_outcome"`
+					RetrySafe       bool   `json:"retry_safe"`
+					Replayability   string `json:"replayability"`
+					NextAction      string `json:"next_action"`
+					Cause           string `json:"cause"`
+				}
+				if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &failure); err != nil {
+					return fmt.Errorf("decode %s %s %s envelope: %w (stderr: %s)", operation, test.name, mode, err, firstLine(observation.Stderr))
+				}
+				if failure.Code != "invalid_request" || failure.Phase != "preflight" ||
+					failure.MutationOutcome != "not_started" || !failure.RetrySafe ||
+					failure.Replayability != "not_replayable" || failure.NextAction != "correct_request" || failure.Cause != test.cause {
+					return fmt.Errorf("%s %s %s failure = code=%q phase=%q mutation_outcome=%q retry_safe=%t replayability=%q next_action=%q cause=%q", operation, test.name, mode, failure.Code, failure.Phase, failure.MutationOutcome, failure.RetrySafe, failure.Replayability, failure.NextAction, failure.Cause)
+				}
+			} else {
+				if got := strings.TrimSpace(observation.Stderr); got != "Error: "+test.cause {
+					return fmt.Errorf("%s %s plain diagnostic = %q, want %q", operation, test.name, got, "Error: "+test.cause)
+				}
+				usage := "Usage: gentle-ai review " + operation + " [flags]"
+				if got := strings.Contains(observation.Stdout, usage); got != test.usage {
+					return fmt.Errorf("%s %s plain usage %t, want %t", operation, test.name, got, test.usage)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(run.sandbox.Repo, ".git", "gentle-ai", "defect-reports")); !errors.Is(err, os.ErrNotExist) {
+				if err == nil {
+					return fmt.Errorf("%s %s %s refusal wrote a defect report", operation, test.name, mode)
+				}
+				return fmt.Errorf("inspect %s %s %s defect reports: %w", operation, test.name, mode, err)
+			}
+		}
+	}
+	return nil
+}
+
 var startCapability = &Capability{Verb: []string{"review", "start"}, Flags: []string{"--cwd"}}
+var startParseRefusalCapability = &Capability{Verb: []string{"review", "start"}, Flags: []string{"--cwd", "--contract", "--committed-only"}}
+var finalizeParseRefusalCapability = &Capability{Verb: []string{"review", "finalize"}, Flags: []string{"--cwd", "--contract", "--captured-results"}}
 
 // Capabilities declare only the flags the step actually uses. Over-declaring
 // would report an older binary as `unsupported` for a step it can in fact run.
@@ -507,6 +620,7 @@ var finalizeCapability = &Capability{Verb: []string{"review", "finalize"}, Flags
 var finalizeResultsCapability = &Capability{Verb: []string{"review", "finalize"}, Flags: []string{"--cwd", "--captured-results"}}
 var finalizeEvidenceCapability = &Capability{Verb: []string{"review", "finalize"}, Flags: []string{"--cwd", "--captured-evidence"}}
 var validateCapability = &Capability{Verb: []string{"review", "validate"}, Flags: []string{"--cwd", "--gate"}}
+var validateBaseRefCapability = &Capability{Verb: []string{"review", "validate"}, Flags: []string{"--cwd", "--gate", "--base-ref", "--lineage"}}
 var modeCapability = &Capability{Verb: []string{"review", "mode"}, Flags: []string{"--cwd", "--json"}}
 var abandonCapability = &Capability{Verb: []string{"review", "abandon"}, Flags: []string{"--lineage", "--expected-revision", "--reason", "--actor", "--maintainer-authorization"}}
 
@@ -527,7 +641,10 @@ var abandonCapability = &Capability{Verb: []string{"review", "abandon"}, Flags: 
 func Journeys() []Journey {
 	journeys := append(coreJourneys(), edgeJourneys()...)
 	journeys = append(journeys, sddJourneys()...)
+	journeys = append(journeys, issue2891Journeys()...)
+	journeys = append(journeys, issue2696Journeys()...)
 	journeys = append(journeys, sddChainJourneys()...)
+	journeys = append(journeys, issue3094Journeys()...)
 	journeys = append(journeys, captureEvidenceDescriptorJourneys()...)
 	journeys = append(journeys, scopeChangedFixtureJourneys()...)
 	journeys = append(journeys, waveOneJourneys()...)
@@ -535,10 +652,24 @@ func Journeys() []Journey {
 	journeys = append(journeys, waveFiveJourneys()...)
 	journeys = append(journeys, advisoryJourneys()...)
 	journeys = append(journeys, zeroDeltaJourneys()...)
+	journeys = append(journeys, lensContextBudgetJourneys()...)
 	journeys = append(journeys, localGateBaseAdvanceJourneys()...)
 	journeys = append(journeys, intendedUntrackedJourneys()...)
 	journeys = append(journeys, captureResultDryRunJourneys()...)
+	journeys = append(journeys, issue2031Journeys()...)
 	journeys = append(journeys, findingIDPrefixJourneys()...)
+	journeys = append(journeys, rescopeWriteGuardJourneys()...)
+	journeys = append(journeys, rescopeEvidenceOnlyRetryJourneys()...)
+	journeys = append(journeys, consecutiveRescopeRepairJourneys()...)
+	journeys = append(journeys, reviewedSupersetJourneys()...)
+	journeys = append(journeys, stagedDeliveryJourneys()...)
+	journeys = append(journeys, frozenLineageResumeJourneys()...)
+	journeys = append(journeys, issue1800Journeys()...)
+	journeys = append(journeys, issue2879Journeys()...)
+	journeys = append(journeys, managedAssetJourneys()...)
+	journeys = append(journeys, issue2906Journeys()...)
+	journeys = append(journeys, issue2138Journeys()...)
+	journeys = append(journeys, issue3043Journeys()...)
 	return append(journeys, handoffJourneys()...)
 }
 
@@ -629,6 +760,38 @@ func coreJourneys() []Journey {
 				{Name: "fixture: push", Fixture: pushHead},
 				{Name: "gate pre-push after publishing", Requires: validateCapability,
 					Args: productArgs("review", "validate", "--gate", "pre-push"), AbortOnBlock: true},
+			},
+		},
+		{
+			ID:     "j97-pre-push-preserves-ls-remote-failure",
+			Title:  "Failure path: pre-push preserves an advertised remote query failure",
+			Source: "issue #1890: advertised remote identity and ls-remote failures must not become semantic selector errors",
+			Steps: []Step{
+				{Name: "fixture: repo with remote", Fixture: baseRepoWithRemote},
+				{Name: "fixture: stage docs", Fixture: stageDocs("remote-failure")},
+				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
+				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize")},
+				{Name: "gate pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit")},
+				{Name: "fixture: commit", Fixture: commitStaged("docs: remote failure")},
+				{Name: "fixture: make origin unavailable", Fixture: breakRemoteForIssue1890},
+				{Name: "gate pre-push preserves ls-remote failure", Requires: validateBaseRefCapability,
+					Args: issue1890PrePushArgs("origin/main"), After: assertIssue1890RemoteFailure, AbortOnBlock: true},
+			},
+		},
+		{
+			ID:     "j100-pre-push-unqualified-selector-ignores-unreachable-remote",
+			Title:  "Failure path: pre-push selects the valid remote for an unqualified selector",
+			Source: "issue #1890: an unqualified advertised branch ignores unrelated remote identity or query failures when exactly one valid match remains",
+			Steps: []Step{
+				{Name: "fixture: repo with remote", Fixture: baseRepoWithRemote},
+				{Name: "fixture: stage docs", Fixture: stageDocs("unqualified-remote-failure")},
+				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
+				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize")},
+				{Name: "gate pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit")},
+				{Name: "fixture: commit", Fixture: commitStaged("docs: unqualified remote failure")},
+				{Name: "fixture: add unrelated unreachable remote", Fixture: addUnreachableRemoteForIssue1890},
+				{Name: "gate pre-push selects valid advertised remote", Requires: validateBaseRefCapability,
+					Args: issue1890PrePushArgs("main"), After: assertIssue1890ValidRemoteWins, AbortOnBlock: true},
 			},
 		},
 		{
@@ -739,6 +902,18 @@ func coreJourneys() []Journey {
 				{Name: "fixture: stage docs", Fixture: stageDocs("abandoned")},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
 				{Name: "abandon a non-terminal lineage with its V2 binding", Requires: abandonCapability, Composite: abandonNonTerminalLineage},
+			},
+		},
+		{
+			ID:     "j85-review-parse-refusals-are-preflight",
+			Title:  "START and FINALIZE parser refusals are preflight and non-mutating",
+			Source: "#1956: argv parsing happens before review authority can mutate",
+			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
+				{Name: "START parser refusals preserve their preflight contract", Requires: startParseRefusalCapability, Composite: func(run *journeyRun) error { return assertReviewParseRefusalsPreflight(run, "start", "committed-only") }},
+				{Name: "FINALIZE parser refusals preserve their preflight contract", Requires: finalizeParseRefusalCapability, Composite: func(run *journeyRun) error {
+					return assertReviewParseRefusalsPreflight(run, "finalize", "captured-results")
+				}},
 			},
 		},
 	}

@@ -86,8 +86,12 @@ func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
 	}
 }
 
+// TestRunInstallReturnsStatePersistenceFailure verifies that a failed state
+// commit restores the managed asset bytes and preserves the previous state.
 func TestRunInstallReturnsStatePersistenceFailure(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
@@ -103,6 +107,14 @@ func TestRunInstallReturnsStatePersistenceFailure(t *testing.T) {
 	if err := state.Write(home, state.InstallState{}); err != nil {
 		t.Fatal(err)
 	}
+	originalState, err := os.ReadFile(state.Path(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if _, err := os.ReadFile(configPath); !os.IsNotExist(err) {
+		t.Fatalf("pre-install config read error = %v, want absent", err)
+	}
 	statePath := state.Path(home)
 	target := filepath.Join(home, ".gentle-ai", "persisted-state.json")
 	if err := os.Rename(statePath, target); err != nil {
@@ -112,9 +124,19 @@ func TestRunInstallReturnsStatePersistenceFailure(t *testing.T) {
 		t.Skipf("state symlink unavailable: %v", err)
 	}
 
-	_, err := RunInstall([]string{"--agent", "opencode", "--component", "permissions"}, system.DetectionResult{})
+	_, err = RunInstall([]string{"--agent", "opencode", "--component", "permissions"}, system.DetectionResult{})
 	if err == nil || !strings.Contains(err.Error(), "persist install state") {
 		t.Fatalf("RunInstall() error = %v, want state persistence failure", err)
+	}
+	if _, readErr := os.ReadFile(configPath); !os.IsNotExist(readErr) {
+		t.Fatalf("config after failed install read error = %v, want absent", readErr)
+	}
+	finalState, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(finalState) != string(originalState) {
+		t.Fatalf("state after failed install changed:\n got %s\nwant %s", finalState, originalState)
 	}
 }
 
@@ -2555,9 +2577,10 @@ func TestRunInstallWorkspaceScopeVerification(t *testing.T) {
 
 // TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace verifies that executing
 // a real workspace operation with --scope workspace and Context7 component:
-// 1. Returns a successful result with verification ready.
-// 2. Persists Context7 MCP configuration directly into the workspace-managed settings file.
-// 3. Leaves the user's home directory settings untouched.
+//  1. Returns a successful result with verification ready.
+//  2. Persists Context7 MCP configuration into <project-root>/.mcp.json, the file
+//     Claude Code loads project-scoped MCP servers from (issue #2213).
+//  3. Leaves the user's home directory settings untouched.
 func TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -2605,9 +2628,18 @@ func TestRunInstall_Context7WorkspaceScope_PersistsToWorkspace(t *testing.T) {
 		t.Fatalf("post-apply verification failed for Context7 workspace scope: %#v", result.Verify)
 	}
 
-	// Assert that Context7 MCP configuration was persisted to workspace-scoped Claude settings.
-	workspaceSettingsFile := filepath.Join(workspace, ".claude", "settings.json")
-	assertFileContains(t, workspaceSettingsFile, "context7")
+	// Context7 MCP configuration must persist to <project-root>/.mcp.json, the
+	// file Claude Code loads project-scoped MCP servers from (issue #2213).
+	workspaceMCPFile := filepath.Join(workspace, ".mcp.json")
+	assertFileContains(t, workspaceMCPFile, "context7")
+
+	// The legacy .claude/settings.json key is inert for MCP discovery and must
+	// not carry the managed context7 entry after install.
+	if settingsRaw, err := os.ReadFile(filepath.Join(workspace, ".claude", "settings.json")); err == nil {
+		if strings.Contains(string(settingsRaw), `"mcpServers"`) {
+			t.Errorf("workspace .claude/settings.json must not carry mcpServers; got %s", settingsRaw)
+		}
+	}
 
 	// Assert that no Context7 configuration was written to home directory settings.
 	homeSettingsFile := filepath.Join(home, ".claude", "settings.json")
@@ -2653,10 +2685,12 @@ func TestRunInstall_Context7WorkspaceScope_FailurePath(t *testing.T) {
 		t.Fatalf("failed to change working directory to temp workspace: %v", err)
 	}
 
-	// Create .claude as a read-only file (not directory) so writing settings.json fails.
-	claudePath := filepath.Join(workspace, ".claude")
-	if err := os.WriteFile(claudePath, []byte("blocking directory creation"), 0o444); err != nil {
-		t.Fatalf("failed to block workspace .claude path: %v", err)
+	// Block the <project-root>/.mcp.json write by making it a directory, so the
+	// atomic file write fails. The primary workspace-scope target is .mcp.json
+	// (issue #2213), not .claude/settings.json.
+	blockingPath := filepath.Join(workspace, ".mcp.json")
+	if err := os.Mkdir(blockingPath, 0o755); err != nil {
+		t.Fatalf("failed to create blocking .mcp.json directory: %v", err)
 	}
 
 	args := []string{

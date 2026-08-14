@@ -89,6 +89,9 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 		status.Projection.Schema != ReviewIntegrationProjectionSchema || !reflect.DeepEqual(status.Projection.Paths, []string{"tracked.txt"}) || status.Projection.IntendedUntracked == nil {
 		t.Fatalf("restart projection = %#v", status)
 	}
+	if bytes.Contains(first.Bytes(), []byte("correction_budget_policy")) {
+		t.Fatalf("frozen v1 status leaked internal budget policy: %s", first.String())
+	}
 	var document any
 	if err := json.Unmarshal(first.Bytes(), &document); err != nil {
 		t.Fatal(err)
@@ -119,6 +122,14 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 		t.Fatalf("status repository context = %q: %v", gotContext, err)
 	}
 	normalized := bytes.ReplaceAll(first.Bytes(), []byte(gotContext), []byte(wantContext))
+	normalized = bytes.ReplaceAll(normalized, []byte(status.Authority.Revision), []byte(fixtureStatus.Authority.Revision))
+	gotExpectedRevision := transitionArgumentValue(t, status.NextTransition, "expected-revision")
+	wantExpectedRevision := transitionArgumentValue(t, fixtureStatus.NextTransition, "expected-revision")
+	normalized = bytes.ReplaceAll(normalized, []byte(gotExpectedRevision), []byte(wantExpectedRevision))
+	gotSubject := status.NextTransition.Collect.Inputs[0].ArtifactSubject
+	wantSubject := fixtureStatus.NextTransition.Collect.Inputs[0].ArtifactSubject
+	normalized = bytes.ReplaceAll(normalized, []byte(gotSubject.SubjectHash), []byte(wantSubject.SubjectHash))
+	normalized = bytes.ReplaceAll(normalized, []byte(gotSubject.AuthorityRevision), []byte(wantSubject.AuthorityRevision))
 	if !bytes.Equal(normalized, fixture) {
 		t.Fatalf("status fixture mismatch:\ngot=%s\nwant=%s", first.String(), fixture)
 	}
@@ -1044,6 +1055,49 @@ func TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart(t *testing.T)
 		t.Fatalf("fresh large dirty status published an authority: %#v", status.Authority)
 	}
 	requireNoReviewProcessTempResidue(t, repo)
+}
+
+// Issue #3102: STATUS must not offer a committed-only START for a base-diff
+// whose named base resolves to the candidate's own tree. The START preflight
+// refuses that scope as empty_candidate_scope before authority evaluation, so
+// the only honest STATUS result is the #1641 empty-root bootstrap STOP.
+func TestNegotiatedReviewStatusStopsZeroPathBaseDiffWithoutAuthority(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	base := runReviewCLIGit(t, repo, "rev-parse", "HEAD")
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition", "--cwd", repo,
+		"--base-ref", base, "--committed-only",
+	}, &output); err != nil {
+		t.Fatalf("negotiated zero-path base-diff status: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatalf("negotiated zero-path base-diff status Validate() = %v\n%s", err, output.String())
+	}
+	if status.Applicability != reviewtransaction.TargetApplicabilityUnrelated ||
+		status.Action != reviewtransaction.TargetStatusActionStop ||
+		status.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
+		status.Projection.Kind != reviewtransaction.TargetBaseDiff ||
+		len(status.Projection.Paths) != 0 ||
+		status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "empty_base_diff_bootstrap_required" ||
+		status.NextTransition.Execute != nil || status.NextTransition.Collect != nil {
+		t.Fatalf("negotiated zero-path base-diff status = %#v\n%s", status, output.String())
+	}
+	if status.Authority != nil {
+		t.Fatalf("zero-path base-diff STATUS published authority: %#v", status.Authority)
+	}
+	stores, err := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stores) != 0 {
+		t.Fatalf("zero-path base-diff STATUS mutated authority: %#v", stores)
+	}
 }
 
 func TestNegotiatedReviewStatusReturnsFailureForUnreadableAuthority(t *testing.T) {

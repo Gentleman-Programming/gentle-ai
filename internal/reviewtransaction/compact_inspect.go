@@ -32,6 +32,7 @@ type CompactRecoveryInspectionReport struct {
 	Totals           CompactRecoveryInspectionTotals  `json:"totals"`
 	Edges            []CompactRecoveryEdgeInspection  `json:"edges"`
 	EntryDiagnostics []CompactRecoveryEntryDiagnostic `json:"entry_diagnostics"`
+	historical       map[string]historicalCompactForensicRecord
 }
 type CompactRecoveryInspectionTotals struct {
 	CompactEntries   int `json:"compact_entries"`
@@ -128,7 +129,7 @@ func InspectCompactRecoveryEdges(ctx context.Context, repo string) (CompactRecov
 // down one level with InspectCompactRecoveryEdges left as a thin wrapper: no
 // inspection semantics or JSON output changed by this extraction.
 var loadCompactRecoveryRecords = func(ctx context.Context, repo string) (CompactRecoveryInspectionReport, map[string]CompactRecord, error) {
-	report := CompactRecoveryInspectionReport{Complete: true, Valid: true, Edges: []CompactRecoveryEdgeInspection{}, EntryDiagnostics: []CompactRecoveryEntryDiagnostic{}}
+	report := CompactRecoveryInspectionReport{Complete: true, Valid: true, Edges: []CompactRecoveryEdgeInspection{}, EntryDiagnostics: []CompactRecoveryEntryDiagnostic{}, historical: map[string]historicalCompactForensicRecord{}}
 	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {
 		return report, nil, err
@@ -162,6 +163,11 @@ var loadCompactRecoveryRecords = func(ctx context.Context, repo string) (Compact
 			lockPath: filepath.Join(versionRoot, "LOCK"), maintenanceLockPath: compactMaintenanceLockPath(base)}
 		record, loadErr := store.Load()
 		if loadErr != nil {
+			if payload, err := os.ReadFile(store.StatePath()); err == nil {
+				if historical, ok := forensicHistoricalCompactRecord(payload, entry.Name()); ok {
+					report.historical[entry.Name()] = historical
+				}
+			}
 			report.EntryDiagnostics = append(report.EntryDiagnostics, CompactRecoveryEntryDiagnostic{
 				LineageID: entry.Name(), Problem: compactRecoveryEntryProblem(loadErr),
 			})
@@ -208,7 +214,11 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	// aborts the whole exit computation.
 	dispositionSeed := ""
 	if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitClosureDisposition(plan) == nil {
-		dispositionSeed = plan.SeedSet[0]
+		if plan.AnomalyClass == compactHistoricalSnapshotIdentityClass {
+			exits = append(exits, CompactRecoverySanctionedExit{SuccessorLineageID: plan.SeedSet[0], Operation: CompactRecoveryEdgeExitRepair})
+		} else {
+			dispositionSeed = plan.SeedSet[0]
+		}
 	}
 	for _, edge := range report.Edges {
 		if err := ctx.Err(); err != nil {

@@ -21,6 +21,10 @@ type compactAttemptOutput struct {
 	Token  string `json:"token,omitempty"`
 	Exit   string `json:"exit,omitempty"`
 	Detail string `json:"detail,omitempty"`
+	// SettleObligation rides the proceed envelope (#2912): what this attempt's
+	// passing settle will already owe, named while the attempt is still
+	// unspent.
+	SettleObligation string `json:"settle_obligation,omitempty"`
 }
 
 func TestRunSDDAttemptCompactOutputStaysBoundedAcrossHistory(t *testing.T) {

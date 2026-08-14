@@ -157,9 +157,9 @@ func TestExecuteTUIInstallClosesWindowsCompatibilityTransactionAfterSuccess(t *t
 		closeCount++
 	})
 	selection, resolved, profile := windowsTUICompatibilityPlan()
-	result := ExecuteTUIInstall(home, selection, resolved, profile, nil)
+	result, _ := ExecuteTUIInstallWithBackgroundAndOrchestrator(home, selection, resolved, profile, model.OpenCodeBackgroundAuto, nil)
 	if result.Err != nil {
-		t.Fatalf("ExecuteTUIInstall() error = %v", result.Err)
+		t.Fatalf("ExecuteTUIInstallWithBackgroundAndOrchestrator() error = %v", result.Err)
 	}
 	if closeCount != 1 {
 		t.Fatalf("compatibility transaction close count = %d, want 1", closeCount)
@@ -190,12 +190,12 @@ func TestExecuteTUIInstallClosesWindowsCompatibilityTransactionAfterRollback(t *
 	})
 
 	selection, resolved, profile := windowsTUICompatibilityPlan()
-	result := ExecuteTUIInstall(home, selection, resolved, profile, nil)
+	result, _ := ExecuteTUIInstallWithBackgroundAndOrchestrator(home, selection, resolved, profile, model.OpenCodeBackgroundAuto, nil)
 	if result.Err == nil {
-		t.Fatal("ExecuteTUIInstall() error = nil, want post-publication failure")
+		t.Fatal("ExecuteTUIInstallWithBackgroundAndOrchestrator() error = nil, want post-publication failure")
 	}
 	if !result.Rollback.Success {
-		t.Fatalf("ExecuteTUIInstall() rollback = %+v, want successful restoration", result.Rollback)
+		t.Fatalf("ExecuteTUIInstallWithBackgroundAndOrchestrator() rollback = %+v, want successful restoration", result.Rollback)
 	}
 	if closeCount != 1 {
 		t.Fatalf("compatibility transaction close count = %d, want 1", closeCount)

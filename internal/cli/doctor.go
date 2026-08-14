@@ -111,6 +111,7 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	}
 	checks = append(checks,
 		doctor.Check{ID: doctor.CheckStateJSON, Run: func(context.Context) doctor.Result { return checkStateJSON(homeDir) }},
+		doctor.Check{ID: doctor.CheckInstalledAssetVersion, Run: func(context.Context) doctor.Result { return checkInstalledAssetVersion(homeDir) }},
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx, homeDir, installedAgents) }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
 	)
@@ -483,13 +484,28 @@ func checkEngramReachable(ctx context.Context, homeDir string, installedAgents [
 
 	sources := make([]string, 0, len(commands))
 	for _, command := range commands {
-		err := engramProbeStdioFn(ctx, command.Command, command.Args...)
+		err := engramProbeStdioFn(ctx, command.Timeout, command.Command, command.Args...)
 		switch {
 		case errors.Is(err, engram.ErrNotInstalled):
 			return CheckResult{
 				Name:   id,
 				Status: CheckStatusWarn,
 				Detail: "engram MCP not probed: persisted command in " + command.Source + " is not found on PATH (see the tool:engram check)",
+			}
+		// A deadline that elapsed is not evidence that the transport is
+		// broken, and #3068 showed what the old wording cost: the reporter's
+		// arguments were correct and their store answered in about five
+		// seconds, but they were told the handshake failed and sent to inspect
+		// the command and arguments, which the evidence did not implicate.
+		// Failing stays, because a probe that never answered is not a pass.
+		case errors.Is(err, context.DeadlineExceeded):
+			return CheckResult{
+				Name:   id,
+				Status: CheckStatusFail,
+				Detail: "engram MCP (stdio) did not answer within " + engram.StdioProbeDeadline(command.Timeout).String() +
+					" for persisted configuration " + command.Source,
+				Remedy: doctor.NewRemedy(doctor.RemedyInspectEngram,
+					"Raise the Engram MCP server's timeout in "+command.Source+" if the store is simply slow to start, or check whether the process is hanging"),
 			}
 		case err != nil:
 			return CheckResult{
@@ -621,5 +637,31 @@ func statusIcon(s CheckStatus) string {
 		return "[xx]"
 	default:
 		return "[??]"
+	}
+}
+
+func checkInstalledAssetVersion(homeDir string) CheckResult {
+	s, err := state.Read(homeDir)
+	if err != nil {
+		return CheckResult{
+			Status: CheckStatusPass,
+			Detail: "no state file found — asset version check skipped",
+		}
+	}
+	if s.InstalledBinaryVersion == "" {
+		return CheckResult{
+			Status: CheckStatusPass,
+			Detail: "no installed binary version recorded in state file — check skipped",
+		}
+	}
+	if s.InstalledBinaryVersion != AppVersion {
+		return CheckResult{
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("installed assets were configured by gentle-ai %s, but running binary is %s — run 'gentle-ai sync' to update installed assets", s.InstalledBinaryVersion, AppVersion),
+		}
+	}
+	return CheckResult{
+		Status: CheckStatusPass,
+		Detail: fmt.Sprintf("installed assets match running binary version (%s)", AppVersion),
 	}
 }

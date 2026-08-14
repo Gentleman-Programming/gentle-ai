@@ -56,6 +56,11 @@ func TestNegotiatedReviewStartMatchesVersionedFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	normalized := bytes.ReplaceAll(output.Bytes(), []byte(result.RepositoryContext.Handle), []byte(fixtureResult.RepositoryContext.Handle))
+	normalized = bytes.ReplaceAll(normalized, []byte(result.RepositoryContext.Revision), []byte(fixtureResult.RepositoryContext.Revision))
+	for index, subject := range result.ArtifactSubjects {
+		normalized = bytes.ReplaceAll(normalized, []byte(subject.SubjectHash), []byte(fixtureResult.ArtifactSubjects[index].SubjectHash))
+		normalized = bytes.ReplaceAll(normalized, []byte(subject.AuthorityRevision), []byte(fixtureResult.ArtifactSubjects[index].AuthorityRevision))
+	}
 	if !bytes.Equal(normalized, fixture) {
 		t.Fatalf("START fixture mismatch:\ngot=%s\nwant=%s", output.String(), fixture)
 	}
@@ -710,6 +715,9 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 	}
 	if legacy.Operation != "review/start" {
 		t.Fatalf("legacy operation = %q", legacy.Operation)
+	}
+	if legacy.CorrectionBudget != 1 || bytes.Contains(legacyOutput.Bytes(), []byte("correction_budget_policy")) {
+		t.Fatalf("legacy START budget projection = %#v\n%s", legacy, legacyOutput.String())
 	}
 
 	var negotiatedOutput bytes.Buffer

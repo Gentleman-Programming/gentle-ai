@@ -174,3 +174,30 @@ func TestNegotiatedStatusKeepsStartForNonEmptyWorkspaceCandidate(t *testing.T) {
 		t.Fatalf("non-empty fresh candidate execute = %#v, want review.start", got.Execute)
 	}
 }
+
+// Issue #3102: the empty-root bootstrap policy from #1641 requires a typed
+// STOP when a committed base-diff names the candidate itself. START rejects
+// this exact zero-path scope before authority evaluation, so STATUS must not
+// offer that START or collect the already-supplied base reference again.
+func TestNegotiatedStatusStopsZeroPathBaseDiffCandidate(t *testing.T) {
+	status := emptyWorkspaceCandidateStatus()
+	status.Projection.Kind = reviewtransaction.TargetBaseDiff
+	status.Action = reviewtransaction.TargetStatusActionStop
+	status.Replayability = reviewtransaction.ReplayabilityManualActionRequired
+
+	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-empty-base-diff"})
+
+	if got.Kind != reviewNextTransitionStop {
+		t.Fatalf("zero-path base-diff transition kind = %q, want %q", got.Kind, reviewNextTransitionStop)
+	}
+	if got.ReasonCode != "empty_base_diff_bootstrap_required" {
+		t.Fatalf("zero-path base-diff reason code = %q, want empty_base_diff_bootstrap_required", got.ReasonCode)
+	}
+	if got.Execute != nil || got.Collect != nil {
+		t.Fatalf("zero-path base-diff STOP exposed continuation data: %#v", got)
+	}
+	status.NextTransition = &got
+	if err := status.validateNextTransitionTargets(); err != nil {
+		t.Fatalf("zero-path base-diff validateNextTransitionTargets() = %v, want nil", err)
+	}
+}

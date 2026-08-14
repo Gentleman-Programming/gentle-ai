@@ -67,8 +67,7 @@ func TestWithPostInstallNotesFallsBackWhenNoRunnableAgentSelected(t *testing.T) 
 func TestWithPostInstallNotesDoesNotOverrideAnAlreadyCustomizedFinalNote(t *testing.T) {
 	t.Parallel()
 
-	// AgentClaudeCode (not OpenCode) so withOpenCodeExperimentalNote has
-	// nothing to append -- isolating the ready-agent-run override.
+	// AgentClaudeCode isolates the ready-agent-run override.
 	report := verify.Report{Ready: true, FinalNote: "You're ready."}
 	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentClaudeCode}}
 

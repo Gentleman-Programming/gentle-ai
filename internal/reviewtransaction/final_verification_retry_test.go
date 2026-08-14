@@ -837,7 +837,13 @@ func finalVerificationEvidencePath(store CompactStore) string {
 	if err != nil || !validSHA256(record.State.CurrentSnapshot.Identity) {
 		return filepath.Join(store.Dir, CompactFinalEvidenceDir, CompactFinalEvidenceFile)
 	}
-	dir, err := compactFinalEvidenceCandidateDir(store.Dir, record.State.CurrentSnapshot.Identity)
+	// Evidence lives under the revision it was CAPTURED at, which the state
+	// records; the store revision has usually advanced since.
+	revision := record.State.EvidenceAuthorityRevision
+	if !validSHA256(revision) {
+		revision = record.Revision
+	}
+	dir, err := compactFinalEvidenceCandidateDir(store.Dir, revision, record.State.CurrentSnapshot.Identity)
 	if err != nil {
 		return filepath.Join(store.Dir, CompactFinalEvidenceDir, CompactFinalEvidenceFile)
 	}

@@ -776,9 +776,9 @@ func initOrganicUnbornRepository(t *testing.T) string {
 	return repo
 }
 
-// TestOrganicReviewTargetShapeRefusals proves Group G: combining staged
-// projection with an explicit base ref is refused, naming both real escapes
-// verbatim because the seam cannot guess which one the caller meant (1812);
+// TestOrganicReviewTargetShapeRefusals proves Group G: staged base-diff input
+// is canonicalized to its committed-only route, so an empty candidate names
+// that real continuation rather than the retired staged/base-ref ambiguity;
 // a selector-free status call on an unborn HEAD resolves to the empty-tree
 // projection instead of surfacing a raw Git command failure (1771); and a
 // first publication attempted from an empty-base receipt is refused, naming
@@ -797,10 +797,9 @@ func TestOrganicReviewTargetShapeRefusals(t *testing.T) {
 		if err == nil {
 			t.Fatal("staged projection + base-ref start unexpectedly succeeded")
 		}
-		wantStagedEscape := "gentle-ai review start --projection staged"
-		wantBaseDiffEscape := fmt.Sprintf("gentle-ai review start --base-ref %s --committed-only", base)
-		if !strings.Contains(stderr, wantStagedEscape) || !strings.Contains(stderr, wantBaseDiffEscape) {
-			t.Fatalf("staged projection + base-ref refusal did not name both escapes verbatim: stderr=%q", stderr)
+		if strings.Contains(stderr, "intent is ambiguous") || !strings.Contains(stderr, "candidate has no pending changes") ||
+			!strings.Contains(stderr, "--base-ref <commit>") {
+			t.Fatalf("staged base-diff empty-candidate continuation = %q", stderr)
 		}
 		harness.assertNoSDDArtifacts()
 	})
@@ -1305,9 +1304,8 @@ func reviewDefectReportDirEntries(t *testing.T, harness *organicHarness) []strin
 // Phase 5: a genuine tool-fault terminal (the confirmed captured-final-
 // EVIDENCE byte conflict, tasks.md 3b.9) generates a template-shaped,
 // privacy-clean defect report named by its Tier C statement, while a
-// legitimate user-decision terminal (the reviewer-result byte conflict,
-// tasks.md 3b.7 -- a human must choose `review dispose-result` or `review
-// preserve-result`) generates none.
+// legitimate occupied reviewer-result slot generates none and directs the
+// caller to the authoritative STATUS continuation.
 func TestOrganicReviewDefectReportToolFaultVersusUserDecision(t *testing.T) {
 	t.Run("issue-organic-dx-phase5-tool-fault-report", func(t *testing.T) {
 		harness := newOrganicHarness(t)
@@ -1421,8 +1419,15 @@ func TestOrganicReviewDefectReportToolFaultVersusUserDecision(t *testing.T) {
 		if err == nil {
 			t.Fatal("conflicting reviewer result capture unexpectedly succeeded")
 		}
-		if !strings.Contains(stderr, "review dispose-result") || !strings.Contains(stderr, "review preserve-result") {
-			t.Fatalf("user-decision terminal did not name the deciding operations: %q", stderr)
+		for _, want := range []string{"reviewer_result_slot_occupied", "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition", "authoritative continuation"} {
+			if !strings.Contains(stderr, want) {
+				t.Fatalf("occupied-slot terminal did not name %q: %q", want, stderr)
+			}
+		}
+		for _, forbidden := range []string{"review dispose-result", "review preserve-result", "retry capture-result"} {
+			if strings.Contains(stderr, forbidden) {
+				t.Fatalf("occupied-slot terminal advertised %q: %q", forbidden, stderr)
+			}
 		}
 		if entries := reviewDefectReportDirEntries(t, harness); len(entries) != 0 {
 			t.Fatalf("user-decision terminal wrote a defect report, want none: %v", entries)

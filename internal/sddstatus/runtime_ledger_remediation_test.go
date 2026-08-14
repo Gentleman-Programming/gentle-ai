@@ -165,18 +165,15 @@ func TestRuntimeRemediationFinishChargesButDoesNotSelectAnOverBudgetSuccessor(t 
 }
 
 func TestRuntimeRemediationFinishRejectsIncompleteStaleAndUnrelatedAuthority(t *testing.T) {
-	t.Run("successor required for a changed bound passing attempt", func(t *testing.T) {
+	t.Run("no successor is required for a changed bound passing attempt", func(t *testing.T) {
 		fixture := newRuntimeRemediationFixture(t, true)
 		request := fixture.finishRequest("finish-without-successor")
 		request.ExpectedBindingRevision = ""
 		request.SuccessorLineageID = ""
 		request.RemediatesEvidenceRevision = ""
-		before := countRuntimeRecords(t, fixture.store.Dir)
-		_, err := fixture.store.Finish(context.Background(), request)
-		if !errors.Is(err, ErrRuntimeRemediationSuccessorRequired) {
-			t.Fatalf("missing successor error = %T %v", err, err)
+		if _, err := fixture.store.Finish(context.Background(), request); err != nil {
+			t.Fatalf("finish without a successor = %T %v; review acts after implementation, so the ledger closes on its own evidence", err, err)
 		}
-		assertRuntimeRemediationUnchanged(t, fixture, before)
 	})
 
 	t.Run("stale populated binding revision", func(t *testing.T) {
