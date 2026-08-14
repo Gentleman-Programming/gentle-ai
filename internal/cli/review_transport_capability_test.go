@@ -76,6 +76,14 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		{name: "Pi", runtime: string(model.AgentPi), startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "unknown", runtime: "unknown-runtime", startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "logical orchestrator role", runtime: "gentle-orchestrator", startCode: reviewTransportCapabilityUnsupportedCode},
+		// Codex, wired but unadvertised since the #3138 slice-8 flip
+		// (REQ-RTC-5). Its start refusal surfaces through the broader
+		// review-transport-capability gate -- the same gate that catches Pi
+		// and unknown runtimes on `review start` -- never through the narrower
+		// immutable-transport check, because codex is a declared runtime whose
+		// advertisement was withdrawn rather than a transport that was never
+		// gained. `review status` keeps the immutable-transport code for it.
+		{name: "Codex", runtime: string(model.AgentCodex), startCode: reviewTransportCapabilityUnsupportedCode},
 		// OpenCode used to stand here, refused for lacking its host isolation
 		// controls. The shared advisory transport (rdd-advisory-transport
 		// SKILL.md) retired that requirement: OpenCode's output is advisory

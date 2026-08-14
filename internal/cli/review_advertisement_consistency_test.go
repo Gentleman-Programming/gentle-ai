@@ -62,8 +62,23 @@ func TestAdvertisementSurfacesAgreeAtEveryCommit(t *testing.T) {
 
 	// The advisoryreview generic prompt/text seam admits exactly the same
 	// advertised runtimes (SEN-RTC-8: Supports() must not advertise codex).
-	if advisoryreview.RuntimeCodex.Supports() {
-		t.Fatal("advisoryreview still advertises the codex runtime after the flip")
+	// All three runtime symbols are pinned so the check fails if the seam
+	// ever drops an advertised runtime as well as if codex sneaks back in.
+	advertised := map[advisoryreview.Runtime]bool{}
+	for _, agent := range reviewTransportSupportedRuntimeIDs() {
+		advertised[advisoryreview.Runtime(agent)] = true
+	}
+	for runtime, want := range map[advisoryreview.Runtime]bool{
+		advisoryreview.RuntimeClaudeCode: true,
+		advisoryreview.RuntimeOpenCode:   true,
+		advisoryreview.RuntimeCodex:      false,
+	} {
+		if got := runtime.Supports(); got != want || got != advertised[runtime] {
+			t.Fatalf("advisoryreview runtime %q Supports() = %t, want %t (slice-8 advertisement consistency)", runtime, got, want)
+		}
+		if runtime.Supports() != advertised[runtime] {
+			t.Fatalf("advisoryreview runtime %q Supports() = %t disagrees with the compiled advertised set", runtime, runtime.Supports())
+		}
 	}
 
 	// The docs surface agrees with the compiled surfaces: the enforced
