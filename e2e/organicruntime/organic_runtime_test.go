@@ -15,8 +15,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,8 +33,10 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
@@ -59,13 +65,17 @@ const (
 // never escalates its own route. Re-executing the compiled test binary keeps
 // that real without adding a language runtime dependency to the suite.
 const (
-	organicActorRoleEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_ROLE"
-	organicActorRepoEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_REPO"
-	organicActorPathEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_PATH"
-	organicActorBodyEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_BODY"
-	organicActorMessageEnvironment = "GENTLE_AI_ORGANIC_ACTOR_MESSAGE"
-	organicActorBinaryEnvironment  = "GENTLE_AI_ORGANIC_ACTOR_BINARY"
-	organicTestBinaryEnvironment   = "GENTLE_AI_ORGANIC_TEST_BINARY"
+	organicActorRoleEnvironment                     = "GENTLE_AI_ORGANIC_ACTOR_ROLE"
+	organicActorRepoEnvironment                     = "GENTLE_AI_ORGANIC_ACTOR_REPO"
+	organicActorPathEnvironment                     = "GENTLE_AI_ORGANIC_ACTOR_PATH"
+	organicActorBodyEnvironment                     = "GENTLE_AI_ORGANIC_ACTOR_BODY"
+	organicActorMessageEnvironment                  = "GENTLE_AI_ORGANIC_ACTOR_MESSAGE"
+	organicActorBinaryEnvironment                   = "GENTLE_AI_ORGANIC_ACTOR_BINARY"
+	organicTestBinaryEnvironment                    = "GENTLE_AI_ORGANIC_TEST_BINARY"
+	organicProviderCaptureFakeAgentEnvironment      = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_AGENT"
+	organicProviderCaptureFakePayloadEnvironment    = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_PAYLOAD"
+	organicProviderCaptureFakeFailureEnvironment    = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_FAILURE"
+	organicProviderCaptureFakeInvocationEnvironment = "GENTLE_AI_ORGANIC_PROVIDER_CAPTURE_FAKE_INVOCATION"
 
 	organicActorRoleDirect    = "direct"
 	organicActorRoleDelegated = "delegated"
@@ -96,6 +106,9 @@ const (
 var organicBinary string
 
 func TestMain(m *testing.M) {
+	if agent := strings.TrimSpace(os.Getenv(organicProviderCaptureFakeAgentEnvironment)); agent != "" {
+		os.Exit(runOrganicProviderCaptureFake(agent))
+	}
 	if role := strings.TrimSpace(os.Getenv(organicActorRoleEnvironment)); role != "" {
 		os.Exit(runOrganicActor(role))
 	}
@@ -244,6 +257,959 @@ func TestOrganicDirectoryIdentityAcceptsCanonicalAliases(t *testing.T) {
 	if sameOrganicDirectory(canonical, file) {
 		t.Fatal("a regular file was accepted as the repository directory")
 	}
+}
+
+func TestClaudeProviderAdapterUsesPinnedNetworkNoneRuntime(t *testing.T) {
+	if testing.Short() || os.Getenv("GENTLE_AI_CLAUDE_RUNTIME_E2E") != "1" {
+		t.Skip("claude_network_none_skipped: requires the pinned Docker proof image")
+	}
+	binary := os.Getenv("GENTLE_AI_CLAUDE_RUNTIME_BINARY")
+	if binary == "" {
+		t.Fatal("claude_network_none_unavailable: pinned binary path is empty")
+	}
+	adapter := reviewerprovider.NewClaudeAdapter()
+	originalLookPath := adapter.LookPath
+	adapter.LookPath = func(string) (string, error) { return binary, nil }
+	t.Cleanup(func() { adapter.LookPath = originalLookPath })
+	response := []byte(`{"subject_hash":"local-subject","inspection":{"status":"completed","paths":["internal/provider/candidate.go"]},"lens":"reliability","findings":[],"evidence":["loopback inspected the frozen candidate"]}`)
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodHead && request.URL.Path == "/api/hello" {
+			writer.WriteHeader(http.StatusOK)
+			return
+		}
+		requests++
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/messages" {
+			t.Errorf("Claude request = %s %s, want POST /v1/messages", request.Method, request.URL.Path)
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		payload, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Errorf("read Claude request: %v", err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if !bytes.Contains(payload, []byte("provider transport")) {
+			t.Error("Claude Messages request omitted the provider prompt")
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_local\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-20250514\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n")
+		_, _ = fmt.Fprint(writer, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+		encoded, _ := json.Marshal(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": string(response)}})
+		_, _ = fmt.Fprintf(writer, "event: content_block_delta\ndata: %s\n\n", encoded)
+		_, _ = fmt.Fprint(writer, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+		_, _ = fmt.Fprint(writer, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":1}}\n\n")
+		_, _ = fmt.Fprint(writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+	t.Setenv("ANTHROPIC_BASE_URL", server.URL)
+	t.Setenv("ANTHROPIC_API_KEY", "local-loopback-key")
+	raw, err := adapter.Review(t.Context(), reviewerprovider.NewInvocation([]byte("provider transport")))
+	if err != nil {
+		t.Fatalf("pinned Claude adapter loopback: %v", err)
+	}
+	if want := append(response, '\n'); !bytes.Equal(raw, want) || requests == 0 {
+		t.Fatalf("pinned Claude loopback = %q with %d Messages requests, want %q with at least one request", raw, requests, want)
+	}
+	completedRequests := requests
+	ctx, cancel := context.WithTimeout(t.Context(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+	if raw, err := adapter.Review(ctx, reviewerprovider.NewInvocation([]byte(`{"review":"provider transport"}`))); err == nil || len(raw) != 0 || requests != completedRequests {
+		t.Fatalf("pinned Claude adapter failure = %q, %v; want no bytes and a transport error", raw, err)
+	}
+}
+
+func TestCodexProviderAdapterUsesPinnedLocalRuntime(t *testing.T) {
+	if testing.Short() || strings.TrimSpace(os.Getenv("GENTLE_AI_CODEX_RUNTIME_E2E")) != "1" {
+		t.Skip("set GENTLE_AI_CODEX_RUNTIME_E2E=1 to run the pinned local Codex transport proof")
+	}
+	if runtime.GOOS != "linux" {
+		t.Skip("the Codex egress proof requires Linux strace")
+	}
+	strace, err := exec.LookPath("strace")
+	if err != nil {
+		t.Fatalf("Codex egress isolation unavailable: strace is required: %v", err)
+	}
+	binary, err := exec.LookPath("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := exec.Command(binary, "--version").Output()
+	if err != nil || strings.TrimSpace(string(version)) != "codex-cli 0.147.0" {
+		t.Fatalf("Codex version = %q, %v", strings.TrimSpace(string(version)), err)
+	}
+	harness := newOrganicHarness(t)
+	harness.writeFiles(map[string]string{"internal/provider/candidate.go": "package provider\n\nfunc Value() int { return 1 }\n"})
+	const lineage = "codex-loopback-egress-proof"
+	_ = organicProviderStart(t, harness, lineage, "codex")
+	binding := organicProviderBinding(t, organicProviderStatus(t, harness, lineage, "codex"))
+	order, err := strconv.Atoi(binding["order"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := json.Marshal(map[string]any{
+		"subject_hash": binding["subject-hash"],
+		"inspection":   map[string]any{"status": "completed", "paths": []string{"internal/provider/candidate.go"}},
+		"lens":         binding["lens"],
+		"findings":     []any{},
+		"evidence":     []string{"loopback inspected the frozen candidate"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rootRequests, modelRequests, responseRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet && request.URL.Path == "/" {
+			rootRequests++
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if request.Method == http.MethodGet && request.URL.Path == "/v1/models" {
+			modelRequests++
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(writer, `{"object":"list","data":[{"id":"gpt-5.6-terra","object":"model","created":0,"owned_by":"gentle-ai-loopback"}]}`)
+			return
+		}
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/responses" {
+			t.Errorf("Codex request = %s %s, want GET /, GET /v1/models, or POST /v1/responses", request.Method, request.URL.Path)
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		responseRequests++
+		_, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Errorf("read Codex request: %v", err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writeCodexResponsesLoopback(t, writer, response)
+	}))
+	defer server.Close()
+
+	proxy := newLoopbackDenyingProxy(t)
+	defer proxy.Close()
+
+	traceBase := filepath.Join(t.TempDir(), "codex-connect")
+	bin := t.TempDir()
+	wrapper := filepath.Join(bin, "codex")
+	if err := os.WriteFile(wrapper, []byte(`#!/bin/sh
+set -eu
+exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e trace=connect "$GENTLE_AI_RUNTIME_TRACE_TARGET" "$@"
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	environment := append(harness.environment(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GENTLE_AI_CODEX_REVIEWER_LOOPBACK_BASE_URL="+server.URL+"/v1",
+		"GENTLE_AI_RUNTIME_TRACE_BINARY="+strace,
+		"GENTLE_AI_RUNTIME_TRACE_LOG="+traceBase,
+		"GENTLE_AI_RUNTIME_TRACE_TARGET="+binary,
+		"HTTP_PROXY="+proxy.URL,
+		"HTTPS_PROXY="+proxy.URL,
+		"ALL_PROXY="+proxy.URL,
+		"http_proxy="+proxy.URL,
+		"https_proxy="+proxy.URL,
+		"all_proxy="+proxy.URL,
+		"NO_PROXY=127.0.0.1,localhost,::1",
+		"no_proxy=127.0.0.1,localhost,::1",
+	)
+	arguments := []string{
+		"review", "capture-result", "--agent", "codex",
+		"--repository-context", binding["repository-context"], "--expected-revision", binding["expected-revision"],
+		"--lineage", binding["lineage"], "--target", binding["target"], "--lens", binding["lens"], "--order", strconv.Itoa(order),
+	}
+	if stdout, stderr, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...); err != nil {
+		t.Fatalf("registered Codex provider route: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if responseRequests != 1 {
+		t.Fatalf("registered Codex loopback made %d root, %d model, and %d Responses requests; want exactly one Responses request", rootRequests, modelRequests, responseRequests)
+	}
+	denied := proxy.deniedRequests()
+	if denied == 0 {
+		t.Fatal("Codex made no externally addressed request through the denying proxy; the external-refusal path was not exercised")
+	}
+	connections, err := codexTracedConnectAddresses(traceBase)
+	if err != nil {
+		t.Fatalf("Codex egress trace is unavailable: %v", err)
+	}
+	for _, address := range connections {
+		if !address.IsLoopback() {
+			t.Fatalf("Codex bypassed egress isolation with a non-loopback connect to %s", address)
+		}
+	}
+	t.Logf("Codex egress proof: %d external attempts denied by the loopback proxy; strace observed %d Internet-socket connects, all loopback: %v", denied, len(connections), connections)
+	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
+		t.Fatalf("registered Codex provider capture did not enter validation: %#v", result)
+	}
+}
+
+// codexTracedConnectAddresses parses one trace per child process. strace -ff
+// avoids interleaving unfinished connect calls from Codex's concurrent workers.
+// Every Internet-socket connection is returned, including failed attempts, so
+// a direct external bypass is rejected before it can be mistaken for isolation.
+func codexTracedConnectAddresses(traceBase string) ([]netip.Addr, error) {
+	paths, err := filepath.Glob(traceBase + ".*")
+	if err != nil {
+		return nil, fmt.Errorf("discover strace output: %w", err)
+	}
+	if len(paths) == 0 {
+		return nil, errors.New("strace produced no child trace files")
+	}
+	sort.Strings(paths)
+	addresses := make([]netip.Addr, 0)
+	for _, path := range paths {
+		trace, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read strace output %q: %w", path, err)
+		}
+		for _, line := range strings.Split(string(trace), "\n") {
+			address, internet, err := codexTracedConnectAddress(line)
+			if err != nil {
+				return nil, fmt.Errorf("parse strace connect %q: %w", line, err)
+			}
+			if internet {
+				addresses = append(addresses, address)
+			}
+		}
+	}
+	if len(addresses) == 0 {
+		return nil, errors.New("strace observed no Internet-socket connects")
+	}
+	return addresses, nil
+}
+
+func codexTracedConnectAddress(line string) (netip.Addr, bool, error) {
+	if !strings.Contains(line, "connect(") {
+		return netip.Addr{}, false, nil
+	}
+	prefix := ""
+	switch {
+	case strings.Contains(line, "sa_family=AF_INET,"):
+		prefix = `sin_addr=inet_addr("`
+	case strings.Contains(line, "sa_family=AF_INET6,"):
+		prefix = `sin6_addr=inet_pton(AF_INET6, "`
+	default:
+		return netip.Addr{}, false, nil
+	}
+	start := strings.Index(line, prefix)
+	if start < 0 {
+		return netip.Addr{}, false, errors.New("missing numeric address")
+	}
+	remaining := line[start+len(prefix):]
+	end := strings.IndexByte(remaining, '"')
+	if end < 0 {
+		return netip.Addr{}, false, errors.New("unterminated numeric address")
+	}
+	address, err := netip.ParseAddr(remaining[:end])
+	if err != nil {
+		return netip.Addr{}, false, err
+	}
+	return address, true, nil
+}
+
+type loopbackDenyingProxy struct {
+	*httptest.Server
+	lock     sync.Mutex
+	requests int
+}
+
+func newLoopbackDenyingProxy(t *testing.T) *loopbackDenyingProxy {
+	t.Helper()
+	proxy := &loopbackDenyingProxy{}
+	proxy.Server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !denyingProxyTargetIsExternal(request) {
+			forwarded := request.Clone(request.Context())
+			forwarded.RequestURI = ""
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.Proxy = nil
+			defer transport.CloseIdleConnections()
+			response, err := transport.RoundTrip(forwarded)
+			if err != nil {
+				http.Error(writer, fmt.Sprintf("loopback proxy forward: %v", err), http.StatusBadGateway)
+				return
+			}
+			defer response.Body.Close()
+			for name, values := range response.Header {
+				writer.Header()[name] = append([]string{}, values...)
+			}
+			writer.WriteHeader(response.StatusCode)
+			_, _ = io.Copy(writer, response.Body)
+			return
+		}
+		proxy.lock.Lock()
+		proxy.requests++
+		proxy.lock.Unlock()
+		// The proxy is process-scoped through a command's environment. Any
+		// attempted external request receives an explicit refusal instead of a
+		// route to the host network.
+		writer.WriteHeader(http.StatusForbidden)
+	}))
+	return proxy
+}
+
+func (proxy *loopbackDenyingProxy) deniedRequests() int {
+	proxy.lock.Lock()
+	defer proxy.lock.Unlock()
+	return proxy.requests
+}
+
+func denyingProxyTargetIsExternal(request *http.Request) bool {
+	host := request.URL.Hostname()
+	if host == "" {
+		host = request.Host
+		if hostname, _, err := net.SplitHostPort(host); err == nil {
+			host = hostname
+		}
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return false
+	}
+	address, err := netip.ParseAddr(host)
+	return err != nil || !address.IsLoopback()
+}
+
+func writeCodexResponsesLoopback(t *testing.T, writer http.ResponseWriter, response []byte) {
+	t.Helper()
+	writer.Header().Set("Content-Type", "text/event-stream")
+	completed := map[string]any{
+		"id":                 "resp_local",
+		"object":             "response",
+		"created_at":         0,
+		"status":             "completed",
+		"error":              nil,
+		"incomplete_details": nil,
+		"instructions":       nil,
+		"model":              "gpt-5.6-terra",
+		"output": []any{map[string]any{
+			"id":     "msg_local",
+			"type":   "message",
+			"status": "completed",
+			"role":   "assistant",
+			"content": []any{map[string]any{
+				"type":        "output_text",
+				"text":        string(response),
+				"annotations": []any{},
+			}},
+		}},
+		"parallel_tool_calls":  false,
+		"previous_response_id": nil,
+		"store":                false,
+		"temperature":          1,
+		"text":                 map[string]any{"format": map[string]string{"type": "text"}},
+		"tool_choice":          "auto",
+		"tools":                []any{},
+		"top_p":                1,
+		"truncation":           "disabled",
+		"usage":                nil,
+		"user":                 nil,
+		"metadata":             map[string]any{},
+	}
+	created := maps.Clone(completed)
+	created["status"] = "in_progress"
+	created["output"] = []any{}
+	for _, event := range []struct {
+		name string
+		data any
+	}{
+		{name: "response.created", data: map[string]any{"type": "response.created", "response": created}},
+		{name: "response.output_item.added", data: map[string]any{"type": "response.output_item.added", "output_index": 0, "item": map[string]any{"id": "msg_local", "type": "message", "status": "in_progress", "role": "assistant", "content": []any{}}}},
+		{name: "response.content_part.added", data: map[string]any{"type": "response.content_part.added", "item_id": "msg_local", "output_index": 0, "content_index": 0, "part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}}}},
+		{name: "response.output_text.delta", data: map[string]any{"type": "response.output_text.delta", "item_id": "msg_local", "output_index": 0, "content_index": 0, "delta": string(response)}},
+		{name: "response.output_text.done", data: map[string]any{"type": "response.output_text.done", "item_id": "msg_local", "output_index": 0, "content_index": 0, "text": string(response)}},
+		{name: "response.content_part.done", data: map[string]any{"type": "response.content_part.done", "item_id": "msg_local", "output_index": 0, "content_index": 0, "part": completed["output"].([]any)[0].(map[string]any)["content"].([]any)[0]}},
+		{name: "response.output_item.done", data: map[string]any{"type": "response.output_item.done", "output_index": 0, "item": completed["output"].([]any)[0]}},
+		{name: "response.completed", data: map[string]any{"type": "response.completed", "response": completed}},
+	} {
+		encoded, err := json.Marshal(event.data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", event.name, encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport(t *testing.T) {
+	if testing.Short() || strings.TrimSpace(os.Getenv("GENTLE_AI_OPENCODE_RUNTIME_E2E")) != "1" {
+		t.Skip("set GENTLE_AI_OPENCODE_RUNTIME_E2E=1 to verify the pinned ordinary OpenCode runtime")
+	}
+	if runtime.GOOS != "linux" {
+		t.Fatal("OpenCode egress isolation requires Linux")
+	}
+	strace, err := exec.LookPath("strace")
+	if err != nil {
+		t.Fatalf("OpenCode egress isolation unavailable: strace is required: %v", err)
+	}
+	binary, err := exec.LookPath("opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := exec.Command(binary, "--version").Output()
+	if err != nil || strings.TrimSpace(string(version)) != pinnedOpenCodeVersion {
+		t.Fatalf("OpenCode version = %q, want %q (error %v)", strings.TrimSpace(string(version)), pinnedOpenCodeVersion, err)
+	}
+
+	harness := newOrganicHarness(t)
+	harness.writeFiles(map[string]string{"internal/provider/candidate.go": "package provider\n\nfunc Value() int { return 1 }\n"})
+	const lineage = "opencode-current-session-poison"
+	_ = organicProviderStart(t, harness, lineage, "opencode")
+	binding := organicProviderBinding(t, organicProviderStatus(t, harness, lineage, "opencode"))
+	order, err := strconv.Atoi(binding["order"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundTask, err := json.Marshal(map[string]any{
+		"lineage": binding["lineage"], "target": binding["target"], "lens": binding["lens"], "order": order,
+		"revision": binding["expected-revision"], "repository_context": binding["repository-context"], "subject_hash": binding["subject-hash"],
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const poison = "OPENCODE_CURRENT_SESSION_POISON_MUST_NOT_REACH_REVIEWER"
+	const reviewerSystemMarker = "GENTLE_AI_OPENCODE_REVIEWER_SYSTEM_MARKER"
+	hostPrompt := "GENTLE_AI_REVIEW_BINDING " + string(boundTask) + "\n" + poison
+	reviewerRaw, err := json.Marshal(map[string]any{
+		"subject_hash": binding["subject-hash"], "inspection": map[string]any{"status": "completed", "paths": []string{"internal/provider/candidate.go"}},
+		"lens": binding["lens"], "findings": []any{}, "evidence": []string{"loopback inspected the frozen candidate"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var lock sync.Mutex
+	var titleAnswered, taskIssued, canonicalPromptSeen bool
+	var providerRequests int
+	var handlerFailure string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet && request.URL.Path == "/" {
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/chat/completions" {
+			lock.Lock()
+			handlerFailure = fmt.Sprintf("OpenCode request = %s %s, want GET / or POST /v1/chat/completions", request.Method, request.URL.Path)
+			lock.Unlock()
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		payload, err := io.ReadAll(request.Body)
+		if err != nil {
+			lock.Lock()
+			handlerFailure = fmt.Sprintf("read OpenCode request: %v", err)
+			lock.Unlock()
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		lock.Lock()
+		defer lock.Unlock()
+		if strings.Contains(string(payload), poison) {
+			handlerFailure = "OpenCode passed the poisoned host Task prompt to the reviewer"
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if bytes.Contains(payload, []byte(reviewerSystemMarker)) {
+			if !bytes.Contains(payload, []byte("GENTLE_AI_REVIEW_CONTEXT_END")) {
+				handlerFailure = "OpenCode reviewer request omitted the Go-materialized canonical prompt"
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			canonicalPromptSeen = true
+			providerRequests++
+			writeOpenCodeChatText(writer, string(reviewerRaw))
+			return
+		}
+		if !titleAnswered {
+			titleAnswered = true
+			writeOpenCodeChatText(writer, "review transport")
+			return
+		}
+		if !taskIssued {
+			taskIssued = true
+			writeOpenCodeChatTask(writer, map[string]string{
+				"description": "run the Go-bound reviewer", "subagent_type": "review-reliability", "prompt": hostPrompt,
+			})
+			return
+		}
+		writeOpenCodeChatText(writer, "review task complete")
+	}))
+	defer server.Close()
+	proxy := newLoopbackDenyingProxy(t)
+	defer proxy.Close()
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	response, err := probe.Get("http://opencode-egress-proof.invalid/")
+	if err != nil {
+		t.Fatalf("loopback denying proxy probe: %v", err)
+	}
+	if response.StatusCode != http.StatusForbidden {
+		_ = response.Body.Close()
+		t.Fatalf("loopback denying proxy probe status = %d, want %d", response.StatusCode, http.StatusForbidden)
+	}
+	_ = response.Body.Close()
+	if proxy.deniedRequests() != 1 {
+		t.Fatal("loopback denying proxy did not refuse the external egress probe")
+	}
+
+	pluginSource, err := assets.Read("opencode/plugins/opencode-review-transport.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDirectory := t.TempDir()
+	pluginDirectory := filepath.Join(configDirectory, "plugins")
+	if err := os.MkdirAll(pluginDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDirectory, "opencode-review-transport.ts"), []byte(pluginSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := json.Marshal(map[string]any{
+		"autoupdate":  false,
+		"share":       "disabled",
+		"snapshot":    false,
+		"model":       "loopback/loopback",
+		"small_model": "loopback/loopback",
+		"provider": map[string]any{"loopback": map[string]any{
+			"npm": "@ai-sdk/openai-compatible", "name": "Gentle AI loopback",
+			"options": map[string]any{"baseURL": server.URL + "/v1", "apiKey": "loopback-key"},
+			"models":  map[string]any{"loopback": map[string]any{"name": "Loopback", "limit": map[string]int{"context": 32000, "output": 2048}}},
+		}},
+		"agent": map[string]any{"review-reliability": map[string]any{
+			"mode": "subagent", "hidden": true, "description": "test reviewer", "prompt": reviewerSystemMarker,
+			"tools": map[string]bool{"read": false, "write": false, "edit": false, "bash": false, "task": false},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	context, cancel := context.WithTimeout(t.Context(), organicAgentTimeout)
+	defer cancel()
+	traceBase := filepath.Join(t.TempDir(), "opencode-connect")
+	bin := t.TempDir()
+	wrapper := filepath.Join(bin, "opencode")
+	if err := os.WriteFile(wrapper, []byte(`#!/bin/sh
+set -eu
+exec "$GENTLE_AI_RUNTIME_TRACE_BINARY" -ff -o "$GENTLE_AI_RUNTIME_TRACE_LOG" -e trace=connect "$GENTLE_AI_RUNTIME_TRACE_TARGET" "$@"
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(context, wrapper, "run", "--format", "json", "--dir", harness.repo.worktree, "--model", "loopback/loopback", "start the Go-bound reviewer task")
+	command.Dir = harness.repo.worktree
+	command.Env = append(harness.environment(),
+		"OPENCODE_CONFIG_DIR="+configDirectory,
+		"OPENCODE_CONFIG_CONTENT="+string(config),
+		"PATH="+bin+string(os.PathListSeparator)+filepath.Dir(organicBinary)+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GENTLE_AI_RUNTIME_TRACE_BINARY="+strace,
+		"GENTLE_AI_RUNTIME_TRACE_LOG="+traceBase,
+		"GENTLE_AI_RUNTIME_TRACE_TARGET="+binary,
+		"HTTP_PROXY="+proxy.URL,
+		"HTTPS_PROXY="+proxy.URL,
+		"ALL_PROXY="+proxy.URL,
+		"http_proxy="+proxy.URL,
+		"https_proxy="+proxy.URL,
+		"all_proxy="+proxy.URL,
+		"NO_PROXY=127.0.0.1,localhost,::1",
+		"no_proxy=127.0.0.1,localhost,::1",
+	)
+	output, runErr := command.CombinedOutput()
+	lock.Lock()
+	failed, issued, seen, calls := handlerFailure, taskIssued, canonicalPromptSeen, providerRequests
+	lock.Unlock()
+	if failed != "" {
+		t.Fatalf("ordinary OpenCode provider session: %v\n%s\n%s", runErr, failed, output)
+	}
+	if runErr != nil {
+		t.Fatalf("ordinary OpenCode provider session: %v\n%s", runErr, output)
+	}
+	if !issued || !seen || calls == 0 {
+		t.Fatalf("ordinary OpenCode transport task=%t canonical=%t provider_requests=%d\n%s", issued, seen, calls, output)
+	}
+	connections, err := codexTracedConnectAddresses(traceBase)
+	if err != nil {
+		t.Fatalf("OpenCode egress trace is unavailable: %v", err)
+	}
+	for _, address := range connections {
+		if !address.IsLoopback() {
+			t.Fatalf("OpenCode bypassed egress isolation with a non-loopback connect to %s", address)
+		}
+	}
+	t.Logf("OpenCode egress proof: %d external attempts denied by the loopback proxy; strace observed %d Internet-socket connects, all loopback: %v", proxy.deniedRequests(), len(connections), connections)
+	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
+		t.Fatalf("OpenCode capture did not enter validation: %#v", result)
+	}
+}
+
+func writeOpenCodeChatTask(writer http.ResponseWriter, arguments map[string]string) {
+	encodedArguments, _ := json.Marshal(arguments)
+	writeOpenCodeChatChunk(writer, map[string]any{
+		"role": "assistant", "tool_calls": []map[string]any{{
+			"index": 0, "id": "call_review", "type": "function", "function": map[string]string{"name": "task", "arguments": ""},
+		}},
+	}, nil)
+	writeOpenCodeChatChunk(writer, map[string]any{"tool_calls": []map[string]any{{
+		"index": 0, "function": map[string]string{"arguments": string(encodedArguments)},
+	}}}, nil)
+	writeOpenCodeChatChunk(writer, map[string]any{}, "tool_calls")
+	_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+}
+
+func writeOpenCodeChatText(writer http.ResponseWriter, text string) {
+	writeOpenCodeChatChunk(writer, map[string]any{"role": "assistant", "content": text}, nil)
+	writeOpenCodeChatChunk(writer, map[string]any{}, "stop")
+	_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+}
+
+func writeOpenCodeChatChunk(writer http.ResponseWriter, delta map[string]any, finishReason any) {
+	writer.Header().Set("Content-Type", "text/event-stream")
+	encoded, _ := json.Marshal(map[string]any{
+		"id": "chatcmpl-loopback", "object": "chat.completion.chunk", "created": 0, "model": "loopback",
+		"choices": []map[string]any{{"index": 0, "delta": delta, "finish_reason": finishReason}},
+	})
+	_, _ = fmt.Fprintf(writer, "data: %s\n\n", encoded)
+}
+
+func TestNativeProviderCaptureResultCLIUsesCompiledAdapters(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		agent  string
+		binary string
+	}{
+		{name: "Claude", agent: "claude-code", binary: "claude"},
+		{name: "Codex", agent: "codex", binary: "codex"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			harness := newOrganicHarness(t)
+			harness.writeFiles(map[string]string{"internal/provider/candidate.go": "package provider\n\nfunc Value() int { return 1 }\n"})
+			lineage := "provider-capture-" + test.agent
+			start := organicProviderStart(t, harness, lineage, test.agent)
+			if len(start.SelectedLenses) != 1 {
+				t.Fatalf("selected lenses = %v, want one", start.SelectedLenses)
+			}
+			status := organicProviderStatus(t, harness, lineage, test.agent)
+			binding := organicProviderBinding(t, status)
+			bin := t.TempDir()
+			fake := organicWriteProviderCaptureFake(t, bin, test.binary, test.agent, binding, []string{"internal/provider/candidate.go"})
+			environment := append(harness.environment(), fake.environment...)
+			arguments := []string{"review", "capture-result", "--agent", test.agent, "--repository-context", binding["repository-context"],
+				"--expected-revision", binding["expected-revision"], "--lineage", binding["lineage"], "--target", binding["target"],
+				"--lens", binding["lens"], "--order", binding["order"]}
+			stdout, stderr, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...)
+			fake.assertInvoked(t)
+			if err != nil {
+				t.Fatalf("provider capture: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+			}
+			if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
+				t.Fatalf("provider capture did not enter validation: %#v", result)
+			}
+		})
+	}
+}
+
+func TestNativeProviderCaptureFailureReoffersTheSameBinding(t *testing.T) {
+	for _, test := range []struct{ agent, binary string }{{"claude-code", "claude"}, {"codex", "codex"}} {
+		t.Run(test.agent, func(t *testing.T) {
+			harness := newOrganicHarness(t)
+			harness.writeFiles(map[string]string{"internal/provider/failure.go": "package provider\n\nfunc Failure() int { return 1 }\n"})
+			lineage := "provider-failure-" + test.agent
+			_ = organicProviderStart(t, harness, lineage, test.agent)
+			before := organicProviderBinding(t, organicProviderStatus(t, harness, lineage, test.agent))
+			bin := t.TempDir()
+			fake := organicWriteProviderCaptureFake(t, bin, test.binary, test.agent, nil, nil)
+			environment := append(harness.environment(), fake.environment...)
+			arguments := []string{"review", "capture-result", "--agent", test.agent, "--repository-context", before["repository-context"],
+				"--expected-revision", before["expected-revision"], "--lineage", before["lineage"], "--target", before["target"], "--lens", before["lens"], "--order", before["order"]}
+			_, _, err := runOrganicCommand(t, organicBinary, harness.repo.worktree, environment, arguments...)
+			fake.assertInvoked(t)
+			if err == nil {
+				t.Fatal("provider transport failure unexpectedly captured a result")
+			}
+			after := organicProviderBinding(t, organicProviderStatus(t, harness, lineage, test.agent))
+			for _, name := range []string{"lineage", "expected-revision", "target", "repository-context", "lens", "order", "subject-hash"} {
+				if after[name] != before[name] {
+					t.Fatalf("failure changed pending %s: before=%q after=%q", name, before[name], after[name])
+				}
+			}
+		})
+	}
+}
+
+func organicProviderStart(t *testing.T, harness *organicHarness, lineage, agent string) organicStartResult {
+	t.Helper()
+	status := organicProviderStatus(t, harness, lineage, agent)
+	if status.NextTransition == nil || status.NextTransition.Execute == nil {
+		t.Fatalf("provider START transition = %#v", status.NextTransition)
+	}
+	transition := status.NextTransition.Execute
+	stdout, stderr, err := harness.gentleAllowFailure("review", "start", "--cwd", harness.repo.worktree,
+		"--contract", "gentle-ai.review-integration/v2", "--target", transition.argument("target"), "--projection", transition.argument("projection"),
+		"--lineage", lineage, "--agent", agent, "--consent", "granted", "--focus", "reliability")
+	if err != nil {
+		t.Fatalf("provider START: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	var start organicStartResult
+	if err := json.Unmarshal([]byte(stdout), &start); err != nil {
+		t.Fatalf("decode provider START: %v\n%s", err, stdout)
+	}
+	return start
+}
+
+type organicProviderStatusResult struct {
+	NextTransition *organicProviderTransition `json:"next_transition"`
+}
+
+type organicProviderTransition struct {
+	Kind    string                  `json:"kind"`
+	Execute *organicProviderExecute `json:"execute"`
+	Collect *organicProviderCollect `json:"collect"`
+}
+
+type organicProviderExecute struct {
+	Arguments []organicProviderArgument `json:"arguments"`
+}
+
+type organicProviderCollect struct {
+	Inputs []organicProviderCollectInput `json:"inputs"`
+}
+
+type organicProviderCollectInput struct {
+	Arguments []organicProviderArgument `json:"arguments"`
+}
+
+type organicProviderArgument struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+func (execute organicProviderExecute) argument(name string) string {
+	for _, argument := range execute.Arguments {
+		if argument.Name == name {
+			return argument.Value
+		}
+	}
+	return ""
+}
+
+func organicProviderStatus(t *testing.T, harness *organicHarness, lineage, agent string) organicProviderStatusResult {
+	t.Helper()
+	payload := harness.gentle("review", "status", "--cwd", harness.repo.worktree, "--contract", "gentle-ai.review-integration/v2", "--agent", agent, "--lineage", lineage, "--next-transition", "--projection", "workspace")
+	var status organicProviderStatusResult
+	if err := json.Unmarshal(payload, &status); err != nil {
+		t.Fatalf("decode provider status: %v\n%s", err, payload)
+	}
+	return status
+}
+
+func organicProviderBinding(t *testing.T, status organicProviderStatusResult) map[string]string {
+	t.Helper()
+	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("provider collect transition = %#v", status.NextTransition)
+	}
+	binding := map[string]string{}
+	for _, argument := range status.NextTransition.Collect.Inputs[0].Arguments {
+		binding[argument.Name] = argument.Value
+	}
+	for _, name := range []string{"lineage", "expected-revision", "target", "repository-context", "lens", "order", "subject-hash"} {
+		if binding[name] == "" {
+			t.Fatalf("provider collect binding missing %q: %#v", name, status.NextTransition)
+		}
+	}
+	return binding
+}
+
+func TestOrganicProviderCaptureFakeWindowsDispatch(t *testing.T) {
+	for _, test := range []struct {
+		name, goos, binary, wantExecutable, wantPathPrefix, wantPathExt string
+	}{
+		{name: "Unix Claude", goos: "linux", binary: "claude", wantExecutable: "claude", wantPathPrefix: "PATH=/fake-bin:"},
+		{name: "Windows Claude", goos: "windows", binary: "claude", wantExecutable: "claude.exe", wantPathPrefix: "PATH=/fake-bin;", wantPathExt: "PATHEXT=.EXE"},
+		{name: "Windows Codex", goos: "windows", binary: "codex", wantExecutable: "codex.exe", wantPathPrefix: "PATH=/fake-bin;", wantPathExt: "PATHEXT=.EXE"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := organicProviderCaptureFakeExecutableName(test.binary, test.goos); got != test.wantExecutable {
+				t.Fatalf("fake executable = %q, want %q", got, test.wantExecutable)
+			}
+			environment := organicProviderCaptureFakeDispatchEnvironment("/fake-bin", test.goos)
+			if !strings.HasPrefix(environment[0], test.wantPathPrefix) {
+				t.Fatalf("fake PATH = %q, want prefix %q", environment[0], test.wantPathPrefix)
+			}
+			if got := strings.TrimPrefix(environment[0], test.wantPathPrefix); got != os.Getenv("PATH") {
+				t.Fatalf("fake inherited PATH = %q, want %q", got, os.Getenv("PATH"))
+			}
+			if test.wantPathExt == "" {
+				if len(environment) != 1 {
+					t.Fatalf("Unix fake environment = %q, want only PATH", environment)
+				}
+				return
+			}
+			if len(environment) != 2 || environment[1] != test.wantPathExt {
+				t.Fatalf("Windows fake environment = %q, want PATHEXT %q", environment, test.wantPathExt)
+			}
+		})
+	}
+}
+
+type organicProviderCaptureFake struct {
+	agent          string
+	payload        string
+	failure        bool
+	invocationPath string
+	environment    []string
+}
+
+type organicProviderCaptureFakeInvocation struct {
+	Agent             string   `json:"agent"`
+	Failure           bool     `json:"failure"`
+	Payload           string   `json:"payload"`
+	Arguments         []string `json:"arguments"`
+	OutputLastMessage string   `json:"output_last_message"`
+}
+
+func organicWriteProviderCaptureFake(t *testing.T, directory, binary, agent string, binding map[string]string, paths []string) organicProviderCaptureFake {
+	t.Helper()
+	fake := organicProviderCaptureFake{
+		agent:          agent,
+		failure:        binding == nil,
+		invocationPath: filepath.Join(directory, "provider-capture-invocation.json"),
+		environment:    organicProviderCaptureFakeDispatchEnvironment(directory, runtime.GOOS),
+	}
+	if binding != nil {
+		payload, err := json.Marshal(map[string]any{"subject_hash": binding["subject-hash"], "inspection": map[string]any{"status": "completed", "paths": paths}, "findings": []any{}, "evidence": []string{"inspected the complete frozen candidate"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fake.payload = string(payload) + "\n"
+	}
+	fake.environment = append(fake.environment,
+		organicProviderCaptureFakeAgentEnvironment+"="+fake.agent,
+		organicProviderCaptureFakePayloadEnvironment+"="+fake.payload,
+		organicProviderCaptureFakeFailureEnvironment+"="+strconv.FormatBool(fake.failure),
+		organicProviderCaptureFakeInvocationEnvironment+"="+fake.invocationPath,
+	)
+	path := filepath.Join(directory, organicProviderCaptureFakeExecutableName(binary, runtime.GOOS))
+	source, err := os.Open(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	destination, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(destination, source); err != nil {
+		_ = destination.Close()
+		t.Fatal(err)
+	}
+	if err := destination.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return fake
+}
+
+func organicProviderCaptureFakeExecutableName(binary, goos string) string {
+	if goos == "windows" {
+		return binary + ".exe"
+	}
+	return binary
+}
+
+func organicProviderCaptureFakeDispatchEnvironment(directory, goos string) []string {
+	separator := ":"
+	if goos == "windows" {
+		separator = ";"
+	}
+	environment := []string{"PATH=" + directory + separator + os.Getenv("PATH")}
+	if goos == "windows" {
+		environment = append(environment, "PATHEXT=.EXE")
+	}
+	return environment
+}
+
+func (fake organicProviderCaptureFake) assertInvoked(t *testing.T) {
+	t.Helper()
+	data, err := os.ReadFile(fake.invocationPath)
+	if err != nil {
+		t.Fatalf("provider capture fake was not invoked: %v", err)
+	}
+	var invocation organicProviderCaptureFakeInvocation
+	if err := json.Unmarshal(data, &invocation); err != nil {
+		t.Fatalf("decode provider capture fake invocation: %v\n%s", err, data)
+	}
+	if invocation.Agent != fake.agent || invocation.Failure != fake.failure {
+		t.Fatalf("provider capture fake invocation = %#v, want agent=%q failure=%t", invocation, fake.agent, fake.failure)
+	}
+	if !fake.failure && invocation.Payload != fake.payload {
+		t.Fatalf("provider capture fake payload = %q, want %q", invocation.Payload, fake.payload)
+	}
+	switch fake.agent {
+	case "claude-code":
+		if invocation.OutputLastMessage != "" {
+			t.Fatalf("Claude fake received --output-last-message=%q", invocation.OutputLastMessage)
+		}
+	case "codex":
+		if invocation.OutputLastMessage == "" {
+			t.Fatalf("Codex fake did not receive --output-last-message: %q", invocation.Arguments)
+		}
+	default:
+		t.Fatalf("unsupported provider capture fake agent %q", fake.agent)
+	}
+}
+
+func runOrganicProviderCaptureFake(agent string) int {
+	if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+		return 1
+	}
+	invocation := organicProviderCaptureFakeInvocation{
+		Agent:     agent,
+		Failure:   os.Getenv(organicProviderCaptureFakeFailureEnvironment) == "true",
+		Payload:   os.Getenv(organicProviderCaptureFakePayloadEnvironment),
+		Arguments: os.Args[1:],
+	}
+	for index, argument := range invocation.Arguments {
+		if argument == "--output-last-message" && index+1 < len(invocation.Arguments) {
+			invocation.OutputLastMessage = invocation.Arguments[index+1]
+			break
+		}
+	}
+	encoded, err := json.Marshal(invocation)
+	if err != nil {
+		return 1
+	}
+	if err := os.WriteFile(os.Getenv(organicProviderCaptureFakeInvocationEnvironment), encoded, 0o600); err != nil {
+		return 1
+	}
+	if invocation.Failure {
+		return 1
+	}
+	if invocation.Payload == "" {
+		return 1
+	}
+	switch agent {
+	case "claude-code":
+		_, err = fmt.Fprint(os.Stdout, invocation.Payload)
+	case "codex":
+		if invocation.OutputLastMessage == "" {
+			return 1
+		}
+		err = os.WriteFile(invocation.OutputLastMessage, []byte(invocation.Payload), 0o600)
+	default:
+		return 1
+	}
+	if err != nil {
+		return 1
+	}
+	return 0
 }
 
 // TestOrganicConfiguredAgentReceivesRoutingGuidance is the optional-SDD

@@ -23,34 +23,13 @@ type reviewImmutableTransport string
 const (
 	reviewImmutableTransportUnsupported         reviewImmutableTransport = "unsupported"
 	reviewImmutableTransportClaudePromptCarried reviewImmutableTransport = "claude_prompt_carried"
-	// reviewImmutableTransportOpenCodeProviderInjected is the shared advisory
-	// transport (rdd-advisory-transport SKILL.md): the OpenCode plugin
-	// (review-result-artifacts.ts) asks `review lens-context` for the
-	// finished reviewer context through its shell-less runNative channel and
-	// injects those exact bytes into the reviewer task's prompt before the
-	// reviewer ever launches. The provider materializes the evidence, applies
-	// the budget, and resolves every refusal; the plugin assembles nothing,
-	// interprets no binding field, and captures no result -- it hands the
-	// model's raw final text back for native admission. The generated lens
-	// holds no bash and no read tool. An ordinary already-running OpenCode
-	// session is sufficient: no restart, no child process, no special
-	// user-visible session, and no OPENCODE_DISABLE_* variable, because the
-	// runtime's output is advisory and cannot mint authority until Go admits
-	// it.
+	// reviewImmutableTransportOpenCodeProviderInjected is a one-Task,
+	// one-process relay. Go owns the provider contract, prompt materialization,
+	// admission, capture, and completion binding; the OpenCode plugin only
+	// relays opaque frames through its live child process.
 	reviewImmutableTransportOpenCodeProviderInjected reviewImmutableTransport = "opencode_provider_injected"
-	// reviewImmutableTransportCodexAdvisoryScratchProcess is the shared
-	// advisory transport's Codex boundary (rdd-advisory-transport SKILL.md):
-	// internal/advisoryreview's CodexAdapter launches a brand-new `codex
-	// exec` process in an empty scratch directory it creates and deletes
-	// itself, handing it only the canonical provider-rendered prompt
-	// (advisoryreview.PromptFor). Codex's own shell tool stays permitted even
-	// under --sandbox read-only (that flag bounds writes and network, not
-	// reads), so the enforced boundary is the empty directory, not a
-	// no-tool agent config this CLI does not have for Codex. Proven
-	// organically by TestRealCodexReviewerOrdinarySessionAdmitsRawOutput and
-	// its fail-closed companions in e2e/organicruntime: the reviewer's raw
-	// output reached native admission and a terminal receipt while a
-	// poisoned live worktree never did.
+	// reviewImmutableTransportCodexAdvisoryScratchProcess retains the canonical
+	// Go-owned provider contract across a fresh Codex subprocess boundary.
 	reviewImmutableTransportCodexAdvisoryScratchProcess reviewImmutableTransport = "codex_advisory_scratch_process"
 )
 

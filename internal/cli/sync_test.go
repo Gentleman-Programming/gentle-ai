@@ -23,6 +23,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
@@ -1002,8 +1003,8 @@ func TestRunSyncRefreshesInstalledOpenCodeReviewPluginWithoutSDDComponent(t *tes
 
 	pluginsDir := filepath.Join(home, ".config", "opencode", "plugins")
 	stalePlugins := map[string]string{
-		"review-result-artifacts.ts": filepath.Join(pluginsDir, "review-result-artifacts.ts"),
-		"model-variants.ts":          filepath.Join(pluginsDir, "model-variants.ts"),
+		"opencode-review-transport.ts": filepath.Join(pluginsDir, "opencode-review-transport.ts"),
+		"model-variants.ts":            filepath.Join(pluginsDir, "model-variants.ts"),
 	}
 	for name, path := range stalePlugins {
 		mustWriteFile(t, path, []byte("// stale v2.1.7 managed plugin "+name))
@@ -1116,7 +1117,7 @@ func TestRunSyncDoesNotCreateOpenCodeReviewPluginWhenNeverInstalled(t *testing.T
 		t.Fatalf("RunSync() error = %v", err)
 	}
 
-	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "review-result-artifacts.ts")
+	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "opencode-review-transport.ts")
 	if _, err := os.Stat(pluginPath); !os.IsNotExist(err) {
 		t.Errorf("sync must not install %q for users who never had it; stat err = %v", pluginPath, err)
 	}
@@ -1137,8 +1138,8 @@ func TestSyncBackupTargetsIncludeManagedOpenCodePluginsWithoutSDD(t *testing.T) 
 		t.Fatalf("syncBackupTargets() error = %v", err)
 	}
 
-	for _, configDir := range []string{"opencode", "kilo"} {
-		for _, plugin := range []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"} {
+	for configDir, agent := range map[string]model.AgentID{"opencode": model.AgentOpenCode, "kilo": model.AgentKilocode} {
+		for _, plugin := range sdd.OpenCodePluginLifecycleNames(agent) {
 			want := filepath.Join(home, ".config", configDir, "plugins", plugin)
 			if !containsPath(targets, want) {
 				t.Errorf("syncBackupTargets missing managed plugin path %q\ntargets = %v", want, targets)
@@ -1254,6 +1255,38 @@ func TestRunSyncRollbackRestoresClaudeEngramMigrationSource(t *testing.T) {
 	}
 	if len(backups) != 1 {
 		t.Fatalf("persistent backup count = %d, want 1 after duplicate transaction", len(backups))
+	}
+}
+
+func TestSyncRollbackRestoresLegacyOpenCodePluginAndRemovesReplacement(t *testing.T) {
+	home := t.TempDir()
+	pluginsDir := filepath.Join(home, ".config", "opencode", "plugins")
+	legacyPath := filepath.Join(pluginsDir, sdd.LegacyOpenCodeReviewPluginName)
+	legacyBytes := []byte("legacy review plugin\n")
+	mustWriteFile(t, legacyPath, legacyBytes)
+
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD},
+	}
+	runtime, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := runtime.stagePlan()
+	plan.Apply = append(plan.Apply, failingSyncStep{})
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
+	if result.Err == nil || !result.Rollback.Success {
+		t.Fatalf("sync rollback = %#v", result)
+	}
+	got, err := os.ReadFile(legacyPath)
+	if err != nil || !bytes.Equal(got, legacyBytes) {
+		t.Fatalf("legacy plugin after rollback = %q, %v", got, err)
+	}
+	for _, plugin := range []string{"opencode-review-transport.ts", "sdd-task-result-artifacts.ts"} {
+		if _, statErr := os.Stat(filepath.Join(pluginsDir, plugin)); !os.IsNotExist(statErr) {
+			t.Fatalf("rollback retained replacement plugin %q: %v", plugin, statErr)
+		}
 	}
 }
 

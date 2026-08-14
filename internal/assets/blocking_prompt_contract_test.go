@@ -123,6 +123,47 @@ func TestCoordinatorOrchestratorsCarryLosslessBlockingPromptRule(t *testing.T) {
 	}
 }
 
+// TestCoordinatorOrchestratorsCarryClosedSingleSelectDomainContract guards
+// issue #3070: the closed-domain rule lives inside the existing Native route
+// and Answer validation clauses. The ordinal alias domain must be EXPLICIT
+// (not "for example") per Matere413's review on 2026-08-14. The issue's
+// reproduction (`la 1`) must be present.
+func TestCoordinatorOrchestratorsCarryClosedSingleSelectDomainContract(t *testing.T) {
+	for _, path := range allSDDOrchestratorAssetPaths(t) {
+		t.Run(path, func(t *testing.T) {
+			contract := blockingPromptContractSection(t, path)
+			for _, required := range []string{
+				"closed domain of a single-select envelope",
+				"EXACTLY ONE presented option",
+				"reject zero matches and reject multiple matches",
+				"canonical internal token once",
+				"Accepted ordinal aliases, for each presented option index N",
+				"the bare numeral `N`",
+				"`la N`",
+				"`opción N`",
+				"`first` is additionally accepted for index 1",
+			} {
+				if !strings.Contains(contract, required) {
+					t.Errorf("%s missing closed-domain amendment %q", path, required)
+				}
+			}
+			// Matere413: ordinal alias domain must be explicit, not "for example".
+			if strings.Contains(contract, "Ordinal aliases") && strings.Contains(contract, "for example") {
+				idx := strings.Index(contract, "Ordinal aliases")
+				end := strings.Index(contract[idx:], "\n")
+				if end < 0 {
+					end = len(contract)
+				} else {
+					end += idx
+				}
+				if strings.Contains(contract[idx:end], "for example") {
+					t.Errorf("%s uses 'for example' for ordinal aliases (Matere413: must be explicit list)", path)
+				}
+			}
+		})
+	}
+}
+
 func TestBlockingPromptFallbackCoversWindsurfToolResults(t *testing.T) {
 	content := MustRead("windsurf/sdd-orchestrator.md")
 	if !strings.Contains(content, "There are no sub-agents") {

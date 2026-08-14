@@ -79,9 +79,17 @@ jobs:
             completed_once("j55-sdd-mismatched-authority-receipt-fails-closed") and
             completed_once("j56-sdd-non-allow-post-apply-gate-fails-closed") and
             completed_once("j58-sdd-foreign-openspec-path-fails-closed") and
+            completed_once("j104-repository-context-survives-fresh-process") and
             completed_once("j81-rc1-consecutive-rescope-repair-executes-printed-command") and
             completed_once("j75-intended-untracked-selection-executes-printed-start")
           ' "$RUNNER_TEMP/bench-portable.json"
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --only j105-compiled-provider-capture-retries-same-binding --out "$RUNNER_TEMP/bench-provider-capture.json"
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            completed_once("j105-compiled-provider-capture-retries-same-binding")
+          ' "$RUNNER_TEMP/bench-provider-capture.json"
           # Transition axis (#2829): sequences of ordinary operations, which is
           # how #2830 shipped. #2830 now refuses the second consecutive rescope
           # before publication, so every transition journey must complete.
@@ -240,7 +248,7 @@ jobs:
         env:
           GENTLE_AI_TEST_BINARY: ${{ runner.temp }}\gentle-ai.exe
           GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER: "1"
-        run: go test -v ./internal/cli ./internal/reviewtransaction ./internal/sddstatus ./internal/components/engram -run '^(TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals|TestRARPrivateOwnerRemainsTokenUserOnly|TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags|TestWindowsSecureOpenDriveFallbackFailsClosed|TestWindowsSecureOpenDoesNotRetryOtherErrors|TestWindowsStoreLockUsesExistingInodeAdvisoryTruth|TestRunGitBoundsLocalAndRemoteCommands|TestRunGitDistinguishesAggregateDeadlineAndTypedExit|TestStoreLockReportsLiveOwnerAndCannotBeStolen|TestStoreLockRecoversCrashAndCorruptOwnerRecords|TestStoreLockIsReleasedWhenOwnerProcessExits|TestConcurrentStoreLockRecoverersCannotBothWin|TestCompactStoresShareRepositoryWriteLock|TestCompactStoreRejectsConcurrentLockedWriter|TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline|TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance|TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays|TestRepairClassifiedAuthorityResumesEachDurablePhase|TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState|TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath|TestRejectFacadeCorrectionUntrackedRespectsStagedProjection|TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree|TestWindowsPowerShell51ArtifactManifestFileFinalize|TestNegotiatedStatusUnderUnavailableProcessTempOffersFreshStartOnBothContracts|TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBaseRef|TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection|TestNegotiatedStatusLeavesNoTemporaryGitArtifactsAfterFailure|TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart|TestFrozenCandidateReviewerDiffUsesRegularAttributesFileAndIgnoresMutableSources|TestStdioHandshake_TerminatesDescendantOnContextEnd|TestStdioHandshake_PreservesEarlierDeadline|TestStdioHandshake_PreservesCallerCancellation|TestProbeStdio_MissingAbsoluteConfiguredCommandFails|TestProbeStdio_MissingRelativeWindowsExecutableIsNotInstalled)$' -count=1 -timeout=8m
+        run: go test -v ./internal/cli ./internal/reviewtransaction ./internal/sddstatus ./internal/components/engram -run '^(TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals|TestRARPrivateOwnerRemainsTokenUserOnly|TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags|TestWindowsSecureOpenDriveFallbackFailsClosed|TestWindowsSecureOpenDoesNotRetryOtherErrors|TestWindowsStoreLockUsesExistingInodeAdvisoryTruth|TestRunGitBoundsLocalAndRemoteCommands|TestRunGitDistinguishesAggregateDeadlineAndTypedExit|TestStoreLockReportsLiveOwnerAndCannotBeStolen|TestStoreLockRecoversCrashAndCorruptOwnerRecords|TestStoreLockIsReleasedWhenOwnerProcessExits|TestConcurrentStoreLockRecoverersCannotBothWin|TestCompactStoresShareRepositoryWriteLock|TestCompactStoreRejectsConcurrentLockedWriter|TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline|TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance|TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays|TestRepairClassifiedAuthorityResumesEachDurablePhase|TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState|TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath|TestRejectFacadeCorrectionUntrackedRespectsStagedProjection|TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree|TestWindowsPowerShell51ArtifactManifestFileFinalize|TestNegotiatedStatusUnderUnavailableProcessTempOffersFreshStartOnBothContracts|TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBaseRef|TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection|TestNegotiatedStatusLeavesNoTemporaryGitArtifactsAfterFailure|TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart|TestFrozenCandidateReviewerDiffUsesRegularAttributesFileAndIgnoresMutableSources|TestStdioHandshake_TerminatesDescendantOnContextEnd|TestStdioHandshake_PreservesEarlierDeadline|TestStdioHandshake_PreservesCallerCancellation|TestProbeStdio_MissingAbsoluteConfiguredCommandFails|TestProbeStdio_MissingRelativeWindowsExecutableIsNotInstalled|TestCompactEffectMarkerStrictValidation|TestCompactEffectMarkerIsPrivateSeparateAndStable|TestCompactRepositoryContextIntentAndReconcilerContract|TestCompactStartReturnsCommittedRecordWhenRepositoryContextReconciliationFails|TestRARAuthorityExactReplayConflictAndConcurrentPublication|TestCompactRoleResultSlotAcceptsCompatibleRelativeStoreRoot)$' -count=1 -timeout=8m
 
       - name: Stress repository-context sharing retry
         shell: pwsh
@@ -345,27 +353,11 @@ jobs:
         # advises "latest" too (see internal/installcmd/resolver.go).
         run: npm install --global @anthropic-ai/claude-code@latest
 
-      - name: Verify OpenCode reviewer support E2E is registered
+      - name: Install pinned Codex runtime
         shell: pwsh
         run: |
-          $tests = go test -list '^TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutput$' ./e2e/organicruntime
-          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestRealOpenCodeReviewerOrdinarySessionInjectsFrozenContextAndAdmitsRawOutput') {
-            throw 'OpenCode reviewer support E2E is missing'
-          }
-
-      - name: Verify Codex reviewer support E2E is registered
-        # Unlike the OpenCode step above, this only proves the organic proof
-        # is still registered by name -- it does not install a codex binary
-        # or an authenticated account, so TestRealCodexReviewerOrdinarySessionAdmitsRawOutput
-        # itself skips in "Run organic journeys" below rather than actually
-        # executing. Codex's activation proof is maintainer-executed locally
-        # today; continuous CI execution of the real Codex proof is tracked
-        # in https://github.com/Gentleman-Programming/gentle-ai/issues/2662.
-        shell: pwsh
-        run: |
-          $tests = go test -list '^TestRealCodexReviewerOrdinarySessionAdmitsRawOutput$' ./e2e/organicruntime
-          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestRealCodexReviewerOrdinarySessionAdmitsRawOutput') {
-            throw 'Codex reviewer support E2E is missing'
+          if ($env:RUNNER_OS -eq 'Linux') {
+            npm install --global @openai/codex@0.147.0
           }
 
       - name: Verify real-agent detection E2E is registered
@@ -383,6 +375,15 @@ jobs:
             throw 'Real-agent detection E2E is missing'
           }
 
+      - name: Verify live OpenCode provider isolation E2E is registered
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_OS -ne 'Linux') { exit 0 }
+          $tests = go test -list '^TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport$' ./e2e/organicruntime
+          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport') {
+            throw 'Live OpenCode provider isolation E2E is missing'
+          }
+
       - name: Run organic journeys
         # No -run filter: a renamed test must fail this job loudly, never let
         # go test exit 0 having matched nothing. The gated real-agent journey
@@ -392,6 +393,12 @@ jobs:
         # `go test ./...` never does — see that file's build-tag comment.
         env:
           GENTLE_AI_REAL_AGENT_E2E: "1"
+          # The Linux-only Codex journey invokes the registered adapter through
+          # the product CLI under a process-scoped denying proxy and strace.
+          GENTLE_AI_CODEX_RUNTIME_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+          # The live OpenCode transport stays on Ubuntu because its process-scoped
+          # loopback denying proxy and strace proof require Linux.
+          GENTLE_AI_OPENCODE_RUNTIME_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
           # The large-workspace journey spawns one Git subprocess per intended
           # untracked path, so its cost is dominated by process creation. Linux
           # absorbs it; Windows does not, and gating it here keeps the real

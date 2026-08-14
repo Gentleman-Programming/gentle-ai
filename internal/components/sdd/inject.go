@@ -994,15 +994,13 @@ func extractManagedSection(content, sectionID string) string {
 
 // expandOpenCodeBoundedReviewAgents renders the OpenCode-shaped review-lens
 // sub-agents shared by the OpenCode and Kilocode overlays. Both identities
-// get the identical shell-less, read-less shape: the OpenCode plugin
-// (review-result-artifacts.ts) asks `review lens-context` for all immutable
-// candidate evidence through its provider-owned native channel and injects it
-// into each reviewer task's prompt before the reviewer ever launches, so the lens
-// itself needs no bash and no read tool — this provider-injected block is
+// get the identical shell-less, read-less shape. The OpenCode relay replaces
+// each review task prompt with the provider-owned immutable contract before
+// launch, so the lens itself needs no bash and no read tool — that contract is
 // its only byte source. Kilocode is not RDD-eligible and never receives the
-// capturing plugin, so review never starts there; it gets the identical
-// denied shape rather than a permissive one that a fresh Kilocode-specific
-// entry point could someday reach.
+// relay, so review never starts there; it gets the identical denied shape
+// rather than a permissive one that a fresh Kilocode-specific entry point
+// could someday reach.
 func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 	for _, name := range opencode.ReviewLensPhases() {
 		agent, ok := agentsMap[name].(map[string]any)
@@ -1699,10 +1697,22 @@ func ManagedOpenCodePluginNames() []string {
 	return managedOpenCodePluginNames(model.AgentOpenCode)
 }
 
+const LegacyOpenCodeReviewPluginName = "review-result-artifacts.ts"
+
+// OpenCodePluginLifecycleNames includes the retired plugin so transactional
+// install and sync snapshot it before replacing it.
+func OpenCodePluginLifecycleNames(agent model.AgentID) []string {
+	names := append([]string(nil), managedOpenCodePluginNames(agent)...)
+	if agent == model.AgentOpenCode || agent == model.AgentKilocode {
+		names = append(names, LegacyOpenCodeReviewPluginName)
+	}
+	return names
+}
+
 func managedOpenCodePluginNames(agent model.AgentID) []string {
 	switch agent {
 	case model.AgentOpenCode:
-		return []string{"model-variants.ts", "review-result-artifacts.ts", "skill-registry.ts"}
+		return []string{"model-variants.ts", "opencode-review-transport.ts", "sdd-task-result-artifacts.ts", "skill-registry.ts"}
 	case model.AgentKilocode:
 		return []string{"model-variants.ts", "skill-registry.ts"}
 	default:
@@ -1747,8 +1757,12 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 
 	var files []string
 	var changed bool
-	if adapter.Agent() == model.AgentKilocode {
-		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
+	migrate, err := hasRegularLegacyOpenCodeReviewPlugin(pluginsDir)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	if migrate {
+		path, removed, err := removeLegacyOpenCodeReviewPlugin(pluginsDir)
 		if err != nil {
 			return InjectionResult{}, err
 		}
@@ -1762,7 +1776,19 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 		pluginPath := filepath.Join(pluginsDir, name)
 		info, err := os.Lstat(pluginPath)
 		if err != nil {
+			if os.IsNotExist(err) && !(migrate && adapter.Agent() == model.AgentOpenCode && isOpenCodeReviewMigrationPlugin(name)) {
+				continue
+			}
 			if os.IsNotExist(err) {
+				content := assets.MustRead("opencode/plugins/" + name)
+				writeResult, err := filemerge.WriteFileAtomic(pluginPath, []byte(content), 0o644)
+				if err != nil {
+					return InjectionResult{}, fmt.Errorf("refresh managed OpenCode plugin %s: %w", name, err)
+				}
+				if writeResult.Changed {
+					changed = true
+					files = append(files, pluginPath)
+				}
 				continue
 			}
 			return InjectionResult{}, fmt.Errorf("stat managed OpenCode plugin %s: %w", pluginPath, err)
@@ -1785,20 +1811,39 @@ func RefreshInstalledOpenCodePlugins(homeDir string, adapter agents.Adapter) (In
 	return InjectionResult{Changed: changed, Files: files}, nil
 }
 
-func removeOpenCodeOnlyReviewPlugin(pluginsDir string) (string, bool, error) {
-	path := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+func isOpenCodeReviewMigrationPlugin(name string) bool {
+	return name == "opencode-review-transport.ts" || name == "sdd-task-result-artifacts.ts"
+}
+
+func hasRegularLegacyOpenCodeReviewPlugin(pluginsDir string) (bool, error) {
+	path := filepath.Join(pluginsDir, LegacyOpenCodeReviewPluginName)
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stat legacy OpenCode review plugin %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("legacy OpenCode review plugin %s is not a regular file", path) // refusal:by-design world-action: replace or remove the user-owned non-regular legacy plugin before installing the incompatible Go transport shim
+	}
+	return true, nil
+}
+
+func removeLegacyOpenCodeReviewPlugin(pluginsDir string) (string, bool, error) {
+	path := filepath.Join(pluginsDir, LegacyOpenCodeReviewPluginName)
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return path, false, nil
 		}
-		return path, false, fmt.Errorf("stat OpenCode-only review plugin %s: %w", path, err)
+		return path, false, fmt.Errorf("stat legacy OpenCode review plugin %s: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
-		return path, false, nil
+		return path, false, fmt.Errorf("legacy OpenCode review plugin %s is not a regular file", path) // refusal:by-design world-action: replace or remove the user-owned non-regular legacy plugin before installing the incompatible Go transport shim
 	}
 	if err := os.Remove(path); err != nil {
-		return path, false, fmt.Errorf("remove OpenCode-only review plugin %s: %w", path, err)
+		return path, false, fmt.Errorf("remove legacy OpenCode review plugin %s: %w", path, err)
 	}
 	return path, true, nil
 }
@@ -1812,6 +1857,9 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 
 	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
 		return InjectionResult{}, fmt.Errorf("create plugins dir: %w", err)
+	}
+	if _, err := hasRegularLegacyOpenCodeReviewPlugin(pluginsDir); err != nil {
+		return InjectionResult{}, err
 	}
 
 	var files []string
@@ -1829,8 +1877,8 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 		}
 	}
 
-	if adapter.Agent() == model.AgentKilocode {
-		path, removed, err := removeOpenCodeOnlyReviewPlugin(pluginsDir)
+	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
+		path, removed, err := removeLegacyOpenCodeReviewPlugin(pluginsDir)
 		if err != nil {
 			return InjectionResult{}, err
 		}

@@ -196,7 +196,7 @@ func assertCurrentOpenCodeOrchestratorContract(t *testing.T, label string, conte
 	assertTextContainsClauses(t, label+" bounded review", content, []string{
 		"#### Review Execution Contract",
 		"Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding",
-		"OpenCode's provider plugin replaces the task prompt",
+		"OpenCode relays one host Task through one live Go transport process",
 		"Only candidate-caused severe findings block",
 		"Model/provider/profile selection remains user-owned",
 	})

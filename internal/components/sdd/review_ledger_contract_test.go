@@ -301,29 +301,10 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// provider-injected reviewer shape, #2440's runtime-bound identity, and
 	// #2207's executor-boundary wording. It is recomputed from the merged tree.
 	//
-	// RDD shared advisory transport, Slice B: claudeReviewerPrompt and
-	// openCodeProviderInjectedReviewerPrompt were unified into one shared
-	// template (runtimeReviewerPrompt) so the reviewer input contract exists
-	// exactly once instead of once per runtime. Kilocode embeds the unified
-	// OpenCode-shaped reviewer prompt, so the hash moved again. Deliberate,
-	// not drift.
-	//
-	// RDD shared advisory transport, Slice E: Codex was activated as an
-	// advertised immutable-reviewer-execution runtime once its organic proof
-	// passed (TestRealCodexReviewerOrdinarySessionAdmitsRawOutput,
-	// e2e/organicruntime). Kilocode embeds the shared orchestrator contract's
-	// executor-boundary paragraph, which now names Codex's CodexAdapter
-	// boundary too, so the hash moved again. Deliberate, not drift.
-	//
-	// RDD shared advisory transport, Slice D (retirement pass): the
-	// executor-boundary paragraph's OpenCode clause used to claim OpenCode's
-	// provider plugin "requires process-isolation controls before launch",
-	// which the shared advisory transport made false the moment slices A-C
-	// landed (rdd-advisory-transport SKILL.md: "No OpenCode restart, child
-	// isolation, special session, or OPENCODE_DISABLE_* variables. An
-	// ordinary running session is sufficient."). It now names that ordinary-
-	// session boundary explicitly. Kilocode embeds the same paragraph, so the
-	// hash moved again. Deliberate, not drift.
+	// The provider-contract relay replaces the legacy OpenCode reviewer plugin
+	// and preserves a single Go-owned authority boundary. Kilocode renders the
+	// shared executor-boundary paragraph, so the hash moved. Deliberate, not
+	// drift.
 	//
 	// Provider defect handoff recovery fix: an installed published fix remains
 	// valid, but an explicit maintainer-authorized native recovery or reset that
@@ -363,9 +344,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// shipped stop-reason table, so the invariant guard can cross-check the
 	// contract consumers receive instead of only the docs copy. Kilocode
 	// embeds that contract, so the hash moved. Deliberate, not drift.
-	// The merged tree combines both moves, so the baseline derives from
-	// this combined source rather than either parent.
-	const want = "62b25d7c5b5bb3b588c892becc6b383abed3ca6721cbd4fe3d7cd00245e96438"
+	// #3070 amends the closed single-select clauses with the symmetric
+	// ordinal-alias domain, so the hash moved. Deliberate, not drift.
+	const want = "97987b78ad81f6c07a2718f86b6ae7391d07ab973fe22324ee4dc0a67e945ada"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -555,36 +536,9 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// moves with it (21,200 -> 22,200) to restore the ~15% margin below;
 		// full-4R still has headroom and is unchanged.
 		//
-		// #2207 advertises only Claude Code and OpenCode after their fresh-reviewer
-		// constraints are made explicit in the shared contract.
-		//
-		// wantChars grew by 59 per lens (19,569 -> 19,628 / 29,970 -> 30,206)
-		// when claudeReviewerPrompt and openCodeProviderInjectedReviewerPrompt
-		// were unified into runtimeReviewerPrompt, one shared template whose
-		// only runtime-specific input is the context marker and the supplying
-		// process. The union of both runtimes' forbidden-tool wording ("Bash,
-		// Git, Read") and the "Never read the live worktree" clause now render
-		// identically for every runtime; this is a deliberate contract
-		// unification, not drift. Ceilings are unchanged: both rows keep more
-		// than 15% headroom.
-		//
-		// RDD shared advisory transport, Slice E: wantChars grew by 291 per
-		// row (19,628 -> 19,919 / 30,206 -> 30,497) when the shared
-		// executor-boundary paragraph was extended to describe Codex's
-		// CodexAdapter boundary alongside Claude's and OpenCode's, once
-		// Codex's organic proof passed
-		// (TestRealCodexReviewerOrdinarySessionAdmitsRawOutput,
-		// e2e/organicruntime). Ceilings are unchanged: both rows keep more
-		// than 15% headroom.
-		//
-		// RDD shared advisory transport, Slice D (retirement pass): wantChars
-		// grew by 143 per row (19,919 -> 20,062 / 30,497 -> 30,640) when the
-		// same paragraph's OpenCode clause was corrected from claiming its
-		// provider plugin "requires process-isolation controls before launch"
-		// (false since slices A-C landed) to naming the actual ordinary-
-		// session boundary: no restart, child process, special session, or
-		// OPENCODE_DISABLE_* variable. Ceilings are unchanged: both rows keep
-		// more than 15% headroom.
+		// The provider-contract relay replaces legacy reviewer prompt assets
+		// without changing the configured ceilings; both rows retain more than
+		// 15% headroom.
 		//
 		// +458 per lens injects the canonical artifact language contract into every
 		// rendered sub-agent prompt, so executors no longer depend on the orchestrator
@@ -604,8 +558,8 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// the "Terminal — " marker so the invariant guard can cross-check the
 		// contract itself (+132 characters in both renderings, ~33 tokens,
 		// still over 15% headroom). Deliberate, not drift.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_220, maxCharacters: 26_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_565, maxCharacters: 41_000},
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 21_932, maxCharacters: 26_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_277, maxCharacters: 41_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

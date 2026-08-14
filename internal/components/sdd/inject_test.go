@@ -7121,7 +7121,7 @@ func TestRefreshInstalledOpenCodePluginsSkipsSymlinksAndDirectories(t *testing.T
 	if err := os.WriteFile(userFile, userContent, 0o644); err != nil {
 		t.Fatalf("WriteFile(user file) error = %v", err)
 	}
-	symlinkPath := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+	symlinkPath := filepath.Join(pluginsDir, "opencode-review-transport.ts")
 	if err := os.Symlink(userFile, symlinkPath); err != nil {
 		t.Skipf("symlinks not supported on this platform: %v", err)
 	}

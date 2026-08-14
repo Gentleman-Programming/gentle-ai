@@ -195,13 +195,9 @@ var claudeReviewerInvocation = reviewerTransportInvocation{
 	supplier:      "the parent",
 }
 
-// openCodeReviewerInvocation names the OpenCode transport: the OpenCode
-// plugin (review-result-artifacts.ts) asks `review lens-context` for the
-// finished reviewer context through its shell-less native channel before the
-// reviewer task ever launches, then replaces the task prompt wholesale with
-// the binding and context block runtimeReviewerPrompt names. The generated
-// agent holds no bash and no read tool, so that provider-injected block is
-// its only byte source for the reviewer's own turn.
+// openCodeReviewerInvocation names the OpenCode transport: the managed shim
+// relays a Task to Go, which materializes the canonical context before the
+// reviewer launches. The generated agent holds no bash and no read tool.
 var openCodeReviewerInvocation = reviewerTransportInvocation{
 	contextMarker: openCodeReviewContextMarker,
 	supplier:      "the OpenCode host process",

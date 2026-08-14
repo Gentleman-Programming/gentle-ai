@@ -35,7 +35,6 @@ func journeySources() []journeySource {
 		{"journeys_wave1.go", waveOneJourneys()},
 		{"journeys_wave3.go", waveThreeJourneys()},
 		{"journeys_wave5.go", waveFiveJourneys()},
-		{"journeys_advisory.go", advisoryJourneys()},
 		{"journeys_zero_delta.go", zeroDeltaJourneys()},
 		{"journeys_lens_context_budget.go", lensContextBudgetJourneys()},
 		{"journeys_local_gate_advance.go", localGateBaseAdvanceJourneys()},
@@ -55,6 +54,8 @@ func journeySources() []journeySource {
 		{"journeys_issue2906.go", issue2906Journeys()},
 		{"journeys_issue_2138.go", issue2138Journeys()},
 		{"journeys_issue_3043.go", issue3043Journeys()},
+		{"journeys_repository_context.go", repositoryContextJourneys()},
+		{"journeys_provider_capture.go", providerCaptureRetryJourneys()},
 	}
 }
 

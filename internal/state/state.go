@@ -39,27 +39,17 @@ type ClaudePhaseAssignmentState struct {
 	Effort string `json:"effort,omitempty"`
 }
 
-// OpenCodeRuntimeProvenance identifies the exact gentle-ai binary that wrote
-// managed OpenCode reviewer assets. The temporary plugin adapter uses it only
-// to launch that binary; native Go remains the review authority owner.
-type OpenCodeRuntimeProvenance struct {
-	Executable string `json:"executable"`
-	SHA256     string `json:"sha256"`
-	Version    string `json:"version"`
-}
-
 // InstallState holds the persisted user selections from the last install run.
 type InstallState struct {
-	InstalledAgents           []string                   `json:"installed_agents"`
-	InstalledBinaryVersion    string                     `json:"installed_binary_version,omitempty"`
-	ManagedAssetDigest        string                     `json:"managed_asset_digest,omitempty"`
-	OpenCodeRuntimeProvenance *OpenCodeRuntimeProvenance `json:"opencode_runtime_provenance,omitempty"`
-	SelectionConfigured       bool                       `json:"selection_configured,omitempty"`
-	Components                []model.ComponentID        `json:"components,omitempty"`
-	Skills                    []model.SkillID            `json:"skills,omitempty"`
-	Preset                    model.PresetID             `json:"preset,omitempty"`
-	SDDMode                   model.SDDModeID            `json:"sdd_mode,omitempty"`
-	StrictTDD                 bool                       `json:"strict_tdd,omitempty"`
+	InstalledAgents        []string            `json:"installed_agents"`
+	InstalledBinaryVersion string              `json:"installed_binary_version,omitempty"`
+	ManagedAssetDigest     string              `json:"managed_asset_digest,omitempty"`
+	SelectionConfigured    bool                `json:"selection_configured,omitempty"`
+	Components             []model.ComponentID `json:"components,omitempty"`
+	Skills                 []model.SkillID     `json:"skills,omitempty"`
+	Preset                 model.PresetID      `json:"preset,omitempty"`
+	SDDMode                model.SDDModeID     `json:"sdd_mode,omitempty"`
+	StrictTDD              bool                `json:"strict_tdd,omitempty"`
 	// CommunityTools records optional tools explicitly selected in the Gentle AI
 	// installer. Configured distinguishes a completed empty selection from legacy
 	// state files that predate persistence of this choice.
@@ -234,7 +224,6 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		InstalledAgents:             merged,
 		InstalledBinaryVersion:      existing.InstalledBinaryVersion,
 		ManagedAssetDigest:          existing.ManagedAssetDigest,
-		OpenCodeRuntimeProvenance:   existing.OpenCodeRuntimeProvenance,
 		SelectionConfigured:         existing.SelectionConfigured,
 		Components:                  existing.Components,
 		Skills:                      existing.Skills,

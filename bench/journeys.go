@@ -650,7 +650,6 @@ func Journeys() []Journey {
 	journeys = append(journeys, waveOneJourneys()...)
 	journeys = append(journeys, waveThreeJourneys()...)
 	journeys = append(journeys, waveFiveJourneys()...)
-	journeys = append(journeys, advisoryJourneys()...)
 	journeys = append(journeys, zeroDeltaJourneys()...)
 	journeys = append(journeys, lensContextBudgetJourneys()...)
 	journeys = append(journeys, localGateBaseAdvanceJourneys()...)
@@ -670,6 +669,8 @@ func Journeys() []Journey {
 	journeys = append(journeys, issue2906Journeys()...)
 	journeys = append(journeys, issue2138Journeys()...)
 	journeys = append(journeys, issue3043Journeys()...)
+	journeys = append(journeys, repositoryContextJourneys()...)
+	journeys = append(journeys, providerCaptureRetryJourneys()...)
 	return append(journeys, handoffJourneys()...)
 }
 

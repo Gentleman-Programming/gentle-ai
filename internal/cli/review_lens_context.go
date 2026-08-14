@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/advisoryreview"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -33,6 +32,10 @@ const reviewLensContextTimeout = 120 * time.Second
 // partial view of the candidate while still letting it report a clean result,
 // which is the one failure this surface exists to make impossible.
 const reviewLensContextByteBudget = reviewtransaction.MaxFrozenCandidateDiffBytes
+
+// reviewProviderMaxEvidenceEntries bounds every provider-owned role request.
+// It is shared native policy, never adapter-owned configuration.
+const reviewProviderMaxEvidenceEntries = 32
 
 const (
 	reviewLensContextBindingHeader = "GENTLE_AI_REVIEW_BINDING"
@@ -190,6 +193,9 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 		return nil, reviewPreflightError(errors.New("review lens-context requires the exact provider-issued repository context and lens carried by the collect transition; run `gentle-ai review lens-context --help` for the closed command form"))
 	}
 	level := reviewtransaction.ReviewerContextLevel(strings.TrimSpace(*delivery))
+	if level == reviewtransaction.ReviewerContextLevelProviderContract {
+		return nil, reviewPreflightError(errors.New("review lens-context delivery provider_contract is reserved for Go-owned provider execution and cannot be declared by callers")) // refusal:by-design world-action: only the live Go transport may record its provider contract provenance
+	}
 	if !reviewtransaction.ReviewerContextLevelAccepted(level) {
 		return nil, reviewPreflightError(fmt.Errorf("unknown reviewer context delivery %q; run `gentle-ai review lens-context --help` for the closed command form", *delivery))
 	}
@@ -240,7 +246,7 @@ func reviewLensContextAssemble(
 	subject reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext,
 	inspector reviewLensCandidateInspector,
 ) ([]byte, error) {
-	if len(frozen.ChangedPathManifest) > advisoryreview.MaxEvidenceEntries {
+	if len(frozen.ChangedPathManifest) > reviewProviderMaxEvidenceEntries {
 		return nil, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextCapacityAction(len(frozen.ChangedPathManifest)))
 	}
 	return reviewLensContextBlock(ctx, deps, inspector, binding, subject, frozen)
@@ -286,11 +292,9 @@ func reviewLensContextStatusBudgetExhausted(ctx context.Context, repo string, st
 
 // reviewLensAuthority is the resolved provider-owned binding, subject, and
 // frozen candidate context for one selected lens slot: the common prefix
-// every surface that needs frozen-candidate reviewer input shares. `review
-// lens-context` and `review advisory` both resolve through
-// resolveReviewLensAuthority so there is exactly one place that turns an
-// opaque repository context and a lens name into native authority -- never
-// two independent copies of that resolution.
+// every surface that needs frozen-candidate reviewer input shares.
+// resolveReviewLensAuthority is the only place that turns an opaque repository
+// context and a lens name into native authority.
 type reviewLensAuthority struct {
 	Store     reviewtransaction.CompactStore
 	Binding   reviewLensContextBinding
@@ -531,5 +535,5 @@ func reviewLensContextDeadline(ctx context.Context, err error) error {
 }
 
 func reviewLensContextCapacityAction(entries int) string {
-	return fmt.Sprintf("immutable candidate evidence has %d paths but provider-owned reviewer context accepts at most %d evidence entries; retrying this candidate cannot succeed; split the candidate into a chained sequence of smaller reviewable commits, then refresh the exact native next transition by running %s and execute the returned transition for the reduced scope", entries, advisoryreview.MaxEvidenceEntries, reviewNextTransitionRefreshCommandV21)
+	return fmt.Sprintf("immutable candidate evidence has %d paths but provider-owned reviewer context accepts at most %d evidence entries; retrying this candidate cannot succeed; split the candidate into a chained sequence of smaller reviewable commits, then refresh the exact native next transition by running %s and execute the returned transition for the reduced scope", entries, reviewProviderMaxEvidenceEntries, reviewNextTransitionRefreshCommandV21)
 }

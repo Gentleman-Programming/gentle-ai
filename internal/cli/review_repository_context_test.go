@@ -448,7 +448,7 @@ func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
 
-	args := boundNegotiatedStartArgs(t, []string{"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--lineage", "repository-context-start"})
+	args := boundNegotiatedStartArgs(t, []string{"--cwd", repo, "--contract", ReviewIntegrationContractV2, "--lineage", "repository-context-start"})
 	var first bytes.Buffer
 	if err := RunReviewFacadeStart(args, &first); err != nil {
 		t.Fatal(err)
@@ -456,7 +456,8 @@ func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
 	var started ReviewIntegrationStartResult
 	decodeStrictReviewJSON(t, first.Bytes(), &started)
 	if started.RepositoryContext == nil || started.RepositoryContext.Capability != reviewtransaction.ReviewRepositoryContextCapability ||
-		started.RepositoryContext.Handle == "" || !validReviewCapabilitySHA256(started.RepositoryContext.Revision) {
+		started.RepositoryContext.Handle == "" || !validReviewCapabilitySHA256(started.RepositoryContext.Revision) ||
+		!validReviewCapabilitySHA256(started.RepositoryContext.EventID) || started.RepositoryContext.Outcome != reviewtransaction.CompactRepositoryContextApplied {
 		t.Fatalf("repository context = %#v", started.RepositoryContext)
 	}
 	if bytes.Contains(first.Bytes(), []byte(repo)) || bytes.Contains(first.Bytes(), []byte(filepath.Join(repo, ".git"))) {
@@ -478,6 +479,73 @@ func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
 	if retry.Action != string(reviewtransaction.CompactStartResumed) || retry.RepositoryContext == nil ||
 		retry.RepositoryContext.Handle != started.RepositoryContext.Handle || retry.RepositoryContext.Revision != started.RepositoryContext.Revision {
 		t.Fatalf("resumed repository context = %#v", retry)
+	}
+	var statusOutput bytes.Buffer
+	if err := RunReviewStatus([]string{"--cwd", repo, "--contract", ReviewIntegrationContractV2, "--lineage", started.LineageID, "--next-transition"}, &statusOutput); err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+	if status.RepositoryContext == nil || status.RepositoryContext.Handle != started.RepositoryContext.Handle ||
+		status.RepositoryContext.EventID != started.RepositoryContext.EventID || status.RepositoryContext.Outcome != reviewtransaction.CompactRepositoryContextApplied {
+		t.Fatalf("status repository context = %#v", status.RepositoryContext)
+	}
+	wrongRevision := status
+	wrongRevisionContext := *status.RepositoryContext
+	wrongRevisionContext.Revision = "sha256:" + strings.Repeat("f", 64)
+	wrongRevision.RepositoryContext = &wrongRevisionContext
+	if err := wrongRevision.Validate(); err == nil {
+		t.Fatal("STATUS accepted repository context bound to the wrong authority revision")
+	}
+	wrongTarget := status
+	wrongTargetContext := *status.RepositoryContext
+	wrongTargetContext.TargetIdentity = "sha256:" + strings.Repeat("f", 64)
+	wrongTarget.RepositoryContext = &wrongTargetContext
+	if err := wrongTarget.Validate(); err == nil {
+		t.Fatal("STATUS accepted repository context bound to the wrong authority target")
+	}
+	wrongStartRevision := started
+	wrongStartRevisionContext := *started.RepositoryContext
+	wrongStartRevisionContext.Revision = "sha256:" + strings.Repeat("f", 64)
+	wrongStartRevision.RepositoryContext = &wrongStartRevisionContext
+	if err := wrongStartRevision.Validate(); err == nil {
+		t.Fatal("START accepted repository context bound to the wrong authority revision")
+	}
+}
+
+func TestStatusRepositoryContextIntentSelection(t *testing.T) {
+	if hasRepositoryContextIntent([]reviewtransaction.CompactEffectIntent{{Class: "requested_trace"}}) {
+		t.Fatal("START/STATUS effect-only authority selected repository context reconciliation")
+	}
+	if !hasRepositoryContextIntent([]reviewtransaction.CompactEffectIntent{{Class: reviewtransaction.CompactEffectClassRepositoryContext}}) {
+		t.Fatal("repository context authority preserved direct publication fallback")
+	}
+}
+
+func TestRepositoryContextReferenceRejectsInvalidEventContract(t *testing.T) {
+	valid := ReviewRepositoryContextReference{
+		Capability: reviewtransaction.ReviewRepositoryContextCapability,
+		Handle:     "rctx1_" + strings.Repeat("a", 64), Revision: "sha256:" + strings.Repeat("b", 64),
+		TargetIdentity: "sha256:" + strings.Repeat("c", 64), EventID: "sha256:" + strings.Repeat("d", 64),
+		Outcome: reviewtransaction.CompactRepositoryContextApplied,
+	}
+	tests := []struct {
+		name   string
+		mutate func(*ReviewRepositoryContextReference)
+	}{
+		{name: "event without outcome", mutate: func(reference *ReviewRepositoryContextReference) { reference.Outcome = "" }},
+		{name: "outcome without event", mutate: func(reference *ReviewRepositoryContextReference) { reference.EventID = "" }},
+		{name: "invalid event shape", mutate: func(reference *ReviewRepositoryContextReference) { reference.EventID = "event" }},
+		{name: "unknown outcome", mutate: func(reference *ReviewRepositoryContextReference) { reference.Outcome = "unknown" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reference := valid
+			tt.mutate(&reference)
+			if err := validateReviewRepositoryContextReference(reference); err == nil {
+				t.Fatal("invalid repository context event contract was accepted")
+			}
+		})
 	}
 }
 

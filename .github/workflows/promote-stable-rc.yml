@@ -23,6 +23,7 @@ jobs:
     outputs:
       source_sha: ${{ steps.provenance.outputs.source_sha }}
       recovery_state: ${{ steps.provenance.outputs.recovery_state }}
+      provider_contract_semver: ${{ steps.provider-contract.outputs.semver }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
@@ -67,6 +68,15 @@ jobs:
           printf '%s:%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_JOB" >"$marker"
           printf 'RELEASE_POLICY_SNAPSHOT_MARKER=%s\n' "$marker" >>"$GITHUB_ENV"
           printf 'RELEASE_POLICY_SNAPSHOT_RUN_ID=%s:%s:%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_JOB" >>"$GITHUB_ENV"
+      - id: provider-contract
+        name: Read immutable provider contract semver
+        working-directory: source
+        run: |
+          set -euo pipefail
+          semver=$(tr -d '\n' < contracts/review-provider-contract/CONTRACT_SEMVER)
+          [[ "$semver" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          printf 'semver=%s\n' "$semver" >>"$GITHUB_OUTPUT"
+          printf 'PROVIDER_CONTRACT_SEMVER=%s\n' "$semver" >>"$GITHUB_ENV"
       - name: Resolve source distribution plan without publishing
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -78,6 +88,9 @@ jobs:
       - name: Verify source distribution policy
         working-directory: source
         run: ./scripts/verify-release-distribution-policy.sh
+      - name: Verify source provider contract bundle
+        working-directory: source
+        run: go run ./internal/providercontractbundlecmd verify --archive "dist/gentle-ai-review-provider-contract-${PROVIDER_CONTRACT_SEMVER}.tar.gz"
   release:
     needs: preflight
     runs-on: ubuntu-24.04
@@ -95,6 +108,7 @@ jobs:
           SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
           STABLE_TAG: ${{ inputs.stable_tag }}
           RECOVERY_STATE: ${{ needs.preflight.outputs.recovery_state }}
+          PROVIDER_CONTRACT_SEMVER: ${{ needs.preflight.outputs.provider_contract_semver }}
         with:
           github-token: ${{ github.token }}
           script: |
@@ -103,7 +117,8 @@ jobs:
             const sourceSHA = process.env.SOURCE_SHA;
             const stableTag = process.env.STABLE_TAG;
             const recovery = process.env.RECOVERY_STATE;
-            const expectedAssets = [`gentle-ai_${stableTag.slice(1)}_darwin_amd64.tar.gz`, `gentle-ai_${stableTag.slice(1)}_darwin_arm64.tar.gz`, `gentle-ai_${stableTag.slice(1)}_linux_amd64.tar.gz`, `gentle-ai_${stableTag.slice(1)}_linux_arm64.tar.gz`, 'checksums.txt', 'checksums.txt.minisig'].sort().join('\n');
+            const contractSemver = process.env.PROVIDER_CONTRACT_SEMVER;
+            const expectedAssets = [`gentle-ai_${stableTag.slice(1)}_darwin_amd64.tar.gz`, `gentle-ai_${stableTag.slice(1)}_darwin_arm64.tar.gz`, `gentle-ai_${stableTag.slice(1)}_linux_amd64.tar.gz`, `gentle-ai_${stableTag.slice(1)}_linux_arm64.tar.gz`, `gentle-ai-review-provider-contract-${contractSemver}.tar.gz`, 'checksums.txt', 'checksums.txt.minisig'].sort().join('\n');
             const optional = async (request) => {
               try { return await request(); } catch (error) {
                 if (error.status === 404) return null;
@@ -199,6 +214,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GORELEASER_CURRENT_TAG: ${{ inputs.stable_tag }}
+          PROVIDER_CONTRACT_SEMVER: ${{ needs.preflight.outputs.provider_contract_semver }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           MINISIGN_SECRET_KEY_FILE: ${{ env.MINISIGN_SECRET_KEY_FILE }}
           MINISIGN_PUBLIC_KEYS_CANONICAL: ${{ steps.trust-anchors.outputs.canonical }}
@@ -236,6 +252,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERIFICATION_TAG: ${{ inputs.stable_tag }}
+          PROVIDER_CONTRACT_SEMVER: ${{ needs.preflight.outputs.provider_contract_semver }}
           MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
         run: ./scripts/verify-release-assets.sh
       - name: Verify immutable public provenance

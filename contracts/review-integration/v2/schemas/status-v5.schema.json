@@ -78,16 +78,19 @@
         "base_tree": {"$ref": "#/$defs/git_tree"},
         "candidate_tree": {"$ref": "#/$defs/git_tree"},
         "changed_path_manifest": {"type": "array", "uniqueItems": true, "items": {"$ref": "start.schema.json#/$defs/changed_path"}},
-        "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"}
+        "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"},
+        "provider_task": {"$ref": "#/$defs/provider_task"}
       },
       "allOf": [
         {"if": {"properties": {"capture_operation": {"const": "external.run_targeted_validation"}}, "required": ["capture_operation"]}, "then": {"required": ["validation_request", "submission"], "properties": {"schema": {"const": "gentle-ai.review-targeted-validation-request/v1"}}}, "else": {"not": {"required": ["validation_request"]}}},
         {"if": {"properties": {"capture_operation": {"const": "external.plan_correction"}}, "required": ["capture_operation"]}, "then": {"required": ["submission"], "properties": {"schema": {"const": "gentle-ai.review-correction-plan/v1"}}}},
         {"if": {"properties": {"capture_operation": {"const": "review.capture-evidence"}}, "required": ["capture_operation"]}, "then": {"required": ["submission"], "properties": {"schema": {"const": "https://gentle-ai.dev/schema/review/verification-evidence/v1"}, "submission": {"$ref": "#/$defs/capture_evidence_submission_descriptor"}}}},
         {"if": {"properties": {"capture_operation": {"not": {"enum": ["external.plan_correction", "external.run_targeted_validation", "review.capture-evidence"]}}}, "required": ["capture_operation"]}, "then": {"not": {"required": ["submission"]}}},
-        {"if": {"properties": {"capture_operation": {"const": "review.capture-result"}}, "required": ["capture_operation"]}, "then": {"required": ["artifact_subject", "base_tree", "candidate_tree", "changed_path_manifest"], "properties": {"schema": {"const": "https://gentle-ai.dev/schema/review/reviewer/v1"}}}, "else": {"allOf": [{"not": {"required": ["artifact_subject"]}}, {"not": {"required": ["base_tree"]}}, {"not": {"required": ["candidate_tree"]}}, {"not": {"required": ["changed_path_manifest"]}}]}}
+        {"if": {"properties": {"capture_operation": {"const": "review.capture-result"}}, "required": ["capture_operation"]}, "then": {"required": ["artifact_subject", "base_tree", "candidate_tree", "changed_path_manifest"], "properties": {"schema": {"const": "https://gentle-ai.dev/schema/review/reviewer/v1"}}}, "else": {"allOf": [{"not": {"required": ["artifact_subject"]}}, {"not": {"required": ["base_tree"]}}, {"not": {"required": ["candidate_tree"]}}, {"not": {"required": ["changed_path_manifest"]}}]}},
+        {"if": {"properties": {"capture_operation": {"const": "external.run_provider_role"}}, "required": ["capture_operation"]}, "then": {"required": ["provider_task"]}, "else": {"not": {"required": ["provider_task"]}}}
       ]
     },
+    "provider_task": {"type": "object", "additionalProperties": false, "required": ["agent", "role", "prompt"], "properties": {"agent": {"enum": ["review-refuter", "review-validator"]}, "role": {"enum": ["refuter", "targeted-validator"]}, "prompt": {"type": "string", "minLength": 1}}},
     "submission_descriptor": {
       "type": "object", "additionalProperties": false,
       "required": ["operation_token", "argument_tokens", "value"],

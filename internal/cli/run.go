@@ -189,14 +189,6 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 				"will be written to each selected agent's global config directory and will affect ALL workspaces for those agents on this machine.\n"+
 				"To install only into the current workspace, rerun with --scope=workspace.\n\n")
 	}
-	var openCodeRuntime *state.OpenCodeRuntimeProvenance
-	if hasOpenCodeReviewerPlugin(input.Selection.Agents) {
-		openCodeRuntime, err = captureOpenCodeRuntimeProvenance()
-		if err != nil {
-			return result, fmt.Errorf("capture OpenCode reviewer runtime provenance: %w", err)
-		}
-	}
-
 	runtime, err := newInstallRuntime(homeDir, input.Scope, input.Channel, input.Selection, resolved, profile)
 	if err != nil {
 		return result, err
@@ -274,7 +266,6 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		CodexPhaseModelAssignments:  input.Selection.CodexPhaseModelAssignments,
 		ModelAssignments:            modelAssignmentsToState(input.Selection.ModelAssignments),
 		Persona:                     string(input.Selection.Persona),
-		OpenCodeRuntimeProvenance:   openCodeRuntime,
 	}
 	newState.SetSelection(input.Selection)
 	if background.Persist != "" {
@@ -382,10 +373,6 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	}
 	if newState.CodexPhaseModelAssignments != nil {
 		merged.CodexPhaseModelAssignments = newState.CodexPhaseModelAssignments
-	}
-	if newState.OpenCodeRuntimeProvenance != nil {
-		provenance := *newState.OpenCodeRuntimeProvenance
-		merged.OpenCodeRuntimeProvenance = &provenance
 	}
 	if merged.SelectionConfigured {
 		if len(flags.Components) > 0 {
@@ -619,7 +606,6 @@ func buildStagePlan(selection model.Selection, resolved planner.ResolvedPlan) pi
 	for _, component := range resolved.OrderedComponents {
 		apply = append(apply, noopStep{id: "component:" + string(component)})
 	}
-
 	if len(selection.Agents) == 0 && len(resolved.OrderedComponents) == 0 {
 		prepare = nil
 	}
@@ -1952,8 +1938,10 @@ func selectedSkillIDs(selection model.Selection) []model.SkillID {
 func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) ([]string, error) {
 	paths := map[string]struct{}{}
 	adapters := resolveAdapters(resolved.Agents)
+	managesSDDPlugins := false
 
 	for _, component := range resolved.OrderedComponents {
+		managesSDDPlugins = managesSDDPlugins || component == model.ComponentSDD
 		for _, path := range componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
@@ -1981,6 +1969,17 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 				for _, path := range plan.OutputStylePaths(adapter.OutputStyleDir(componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentPersona))).Backup {
 					paths[path] = struct{}{}
 				}
+			}
+		}
+	}
+	if managesSDDPlugins {
+		for _, adapter := range adapters {
+			if !sdd.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+				continue
+			}
+			pluginsDir := filepath.Join(adapter.GlobalConfigDir(componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentSDD)), "plugins")
+			for _, name := range sdd.OpenCodePluginLifecycleNames(adapter.Agent()) {
+				paths[filepath.Join(pluginsDir, name)] = struct{}{}
 			}
 		}
 	}
@@ -2473,8 +2472,9 @@ func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
 }
 
 func openCodeSDDPluginPaths(targetDir string) []string {
-	// Legacy plugin first: installOpenCodePlugins removes it, and verification
-	// asserts its absence (isLegacyOpenCodeBackgroundAgentsPlugin).
+	// Legacy background-agents is removed during installation and therefore has
+	// an absence check. The retired reviewer plugin is part of the rollback
+	// snapshot but not post-apply verification because migration removes it.
 	paths := []string{filepath.Join(targetDir, ".config", "opencode", "plugins", "background-agents.ts")}
 	for _, name := range sdd.ManagedOpenCodePluginNames() {
 		paths = append(paths, filepath.Join(targetDir, ".config", "opencode", "plugins", name))

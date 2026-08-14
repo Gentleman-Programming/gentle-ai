@@ -1,8 +1,3 @@
-internal/advisoryreview/codex_adapter.go	CodexAdapter.Review
-internal/advisoryreview/codex_adapter.go	NewCodexAdapter
-internal/advisoryreview/codex_adapter.go	codexAdvisoryEnvironment
-internal/advisoryreview/contract.go	RuntimeNames
-internal/advisoryreview/contract.go	SupportedRuntimes
 internal/agentbuilder/engine.go	MockEngine.Agent
 internal/agentbuilder/engine.go	MockEngine.Available
 internal/agentbuilder/engine.go	MockEngine.Generate
@@ -27,6 +22,8 @@ internal/cli/review_narration.go	reviewNarrationStripCodeSpans
 internal/cli/review_operation_contract.go	reviewNamedArgument
 internal/cli/review_printed_command.go	ReviewOperationFlagSurface
 internal/cli/review_printed_command.go	SplitPrintedCommandWords
+internal/cli/review_provider.go	reviewProviderAdmitLensRaw
+internal/cli/review_provider.go	reviewProviderRoleContracts
 internal/cli/run.go	componentPathDir
 internal/cli/run.go	componentPaths
 internal/cli/run.go	ensureGoAvailableAfterInstall

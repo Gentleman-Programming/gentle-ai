@@ -159,9 +159,13 @@ func TestCompactStoreCaptureAdmittedReviewerResultPublishesDurableExactReplay(
 		t.Fatal(err)
 	}
 	if got.ResultHash == "" ||
-		got.ResultHash != LensResultHash(got) ||
+		got.ResultHash != LensResultHash(got.LensResult) ||
 		got.Lens != LensReliability {
 		t.Fatalf("admitted result = %#v", got)
+	}
+	if !got.Slot.Occupied || got.Slot.Digest == "" || got.Subject != fixture.request.ArtifactSubject ||
+		got.Admission.Decision != ArtifactAdmissionCompleted {
+		t.Fatalf("durable capture metadata = %#v", got)
 	}
 	payload, digest, err := readCompactReviewerArtifact(fixture.path)
 	if err != nil {
@@ -214,7 +218,7 @@ func TestCompactStoreCaptureAdmittedReviewerResultPublishesDurableExactReplay(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayed.ResultHash != got.ResultHash ||
+	if replayed.ResultHash != got.ResultHash || replayed.Slot.Digest != got.Slot.Digest ||
 		!bytes.Equal(beforeArtifact, afterArtifact) ||
 		!bytes.Equal(beforeDigest, afterDigest) {
 		t.Fatal("exact replay changed admitted reviewer artifacts")
@@ -233,7 +237,7 @@ func TestCompactStoreCaptureAdmittedReviewerResultPublishesDurableExactReplay(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recovered.ResultHash != got.ResultHash ||
+	if recovered.ResultHash != got.ResultHash || recovered.Slot.Digest != got.Slot.Digest ||
 		!bytes.Equal(recoveredDigest, beforeDigest) {
 		t.Fatal("exact replay did not recover the missing digest sidecar")
 	}
@@ -244,6 +248,24 @@ func TestCompactStoreCaptureAdmittedReviewerResultPublishesDurableExactReplay(
 	if record.Revision != fixture.request.ExpectedRevision ||
 		record.State.State != StateReviewing {
 		t.Fatalf("capture mutated compact authority = %#v", record)
+	}
+}
+
+func TestCompactStoreCaptureAdmittedReviewerResultPrepareFailureDoesNotPublish(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "capture-prepare-failure")
+	request := fixture.request
+	request.PreparePublication = func(CompactState) error {
+		return errors.New("inject capture preparation failure")
+	}
+	if _, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), request); err == nil {
+		t.Fatal("capture unexpectedly succeeded")
+	}
+	if _, err := os.Lstat(fixture.path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("failed capture published a slot: %v", err)
+	}
+	slot, err := ReadCompactReviewerResultSlot(fixture.store.Dir, 0, LensReliability)
+	if err != nil || slot.Occupied {
+		t.Fatalf("failed capture readback = %#v, %v", slot, err)
 	}
 }
 
@@ -531,7 +553,7 @@ func TestCompactStoreResolveAdmittedReviewerResultIsExactAndReadOnly(
 		fixture.request.FrozenContext,
 		fixture.request.ArtifactSubject,
 	)
-	if err != nil || !found || !reflect.DeepEqual(got, want) {
+	if err != nil || !found || !reflect.DeepEqual(got, want.LensResult) {
 		t.Fatalf("resolved admitted result = %#v, %t, %v", got, found, err)
 	}
 	stateAfter, err := os.ReadFile(fixture.store.StatePath())

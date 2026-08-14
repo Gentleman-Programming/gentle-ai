@@ -15,7 +15,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/advisoryreview"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -155,6 +154,7 @@ func TestReviewLensContextRefusesUnboundInput(t *testing.T) {
 		{name: "positional", argv: []string{"lens-context", "--repository-context", handle, "--lens", lens, "HEAD"}, want: "requires the exact provider-issued"},
 		{name: "unknown flag", argv: []string{"lens-context", "--repository-context", handle, "--lens", lens, "--order", "0"}, want: "flag provided but not defined"},
 		{name: "unknown delivery", argv: []string{"lens-context", "--repository-context", handle, "--lens", lens, "--delivery", "hand-wave"}, want: "unknown reviewer context delivery"},
+		{name: "caller provider contract", argv: []string{"lens-context", "--repository-context", handle, "--lens", lens, "--delivery", string(reviewtransaction.ReviewerContextLevelProviderContract)}, want: "reserved for Go-owned provider execution"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -287,7 +287,7 @@ func TestReviewLensContextRefusesManifestOverAdvisoryCapacityBeforePatchInspecti
 func TestNegotiatedStatusStopsDeterministicLensContextBudgetWithoutMutation(t *testing.T) {
 	home := reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
-	for index := range advisoryreview.MaxEvidenceEntries + 1 {
+	for index := range reviewProviderMaxEvidenceEntries + 1 {
 		writeReviewStartCandidate(t, repo, "path-"+strconv.Itoa(index)+".txt", "candidate\n", 0o644)
 	}
 	started := runNegotiatedReviewStart(t, repo, "lens-context-status-budget")
@@ -373,7 +373,7 @@ func TestReviewLensContextRecoveryGuidanceRefreshesThenExecutesNextTransition(t 
 		action string
 	}{
 		{name: "evidence capacity", action: reviewLensContextBudgetAction},
-		{name: "entry capacity", action: reviewLensContextCapacityAction(advisoryreview.MaxEvidenceEntries + 1)},
+		{name: "entry capacity", action: reviewLensContextCapacityAction(reviewProviderMaxEvidenceEntries + 1)},
 		{name: "deadline", action: reviewLensContextDeadlineAction},
 	}
 	for _, test := range tests {
@@ -432,9 +432,9 @@ func TestReviewLensContextCallersFailClosedOnInspectorCleanupFailure(t *testing.
 			payload, err := runReviewLensContext([]string{"--repository-context", handle, "--lens", lens}, io.Discard, deps)
 			return err, payload == nil
 		}},
-		{"advisory request", func(deps reviewLensContextDeps, handle, lens string) (error, bool) {
-			request, err := resolveAdvisoryRequest(context.Background(), deps, handle, lens)
-			return err, request.ArtifactSubject == (reviewtransaction.ArtifactSubject{}) && request.ChangedPathManifest == nil && request.Evidence == nil
+		{"provider materialization", func(deps reviewLensContextDeps, handle, lens string) (error, bool) {
+			request, err := reviewProviderMaterialize(context.Background(), deps, handle, lens)
+			return err, request.Store.Dir == "" && request.Binding == (reviewLensContextBinding{}) && request.Subject == (reviewtransaction.ArtifactSubject{}) && len(request.Invocation.Prompt()) == 0
 		}},
 	} {
 		for _, operation := range []bool{false, true} {

@@ -486,7 +486,6 @@ type syncRuntime struct {
 	state                *runtimeState
 	managedPaths         []string
 	changedFiles         []string // accumulates candidate paths reported by component injectors
-	openCodeRuntime      *state.OpenCodeRuntimeProvenance
 	backgroundPolicy     bool
 	backgroundActivation *opencodeactivation.ActivationPlan
 	runtimeReady         bool
@@ -508,13 +507,6 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 		agentIDs:     selection.Agents,
 		backupRoot:   backupRoot,
 		state:        &runtimeState{compatibilityTransaction: compatibilityTransaction},
-	}
-	if hasOpenCodeReviewerPlugin(selection.Agents) {
-		provenance, err := captureOpenCodeRuntimeProvenance()
-		if err != nil {
-			return nil, fmt.Errorf("capture OpenCode reviewer runtime provenance: %w", err)
-		}
-		runtime.openCodeRuntime = provenance
 	}
 	return runtime, nil
 }
@@ -668,7 +660,7 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 			continue
 		}
 		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
-		for _, name := range sdd.ManagedOpenCodePluginNames() {
+		for _, name := range sdd.OpenCodePluginLifecycleNames(adapter.Agent()) {
 			paths[filepath.Join(pluginsDir, name)] = struct{}{}
 		}
 	}
@@ -1634,7 +1626,7 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	if err != nil {
 		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
 	}
-	if err := persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, rt.openCodeRuntime, background.Persist); err != nil {
+	if err := persistSyncManagedAssetStateWithBackground(homeDir, selection, writer, background.Persist); err != nil {
 		persistErr := fmt.Errorf("persist sync managed asset state: %w", err)
 		rollback := orchestrator.Rollback(result.Execution)
 		if rollback.Err != nil {
@@ -1646,7 +1638,7 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	return result, nil
 }
 
-func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.Selection, writer string, runtimeProvenance *state.OpenCodeRuntimeProvenance, background model.OpenCodeBackgroundIntent) error {
+func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.Selection, writer string, background model.OpenCodeBackgroundIntent) error {
 	return withInstallStateLock(homeDir, func() error {
 		latest, err := state.Read(homeDir)
 		if errors.Is(err, os.ErrNotExist) {
@@ -1667,11 +1659,6 @@ func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.
 		}
 		if latest.ManagedAssetDigest != writer {
 			latest.ManagedAssetDigest = writer
-			shouldWrite = true
-		}
-		if runtimeProvenance != nil && (latest.OpenCodeRuntimeProvenance == nil || *latest.OpenCodeRuntimeProvenance != *runtimeProvenance) {
-			provenance := *runtimeProvenance
-			latest.OpenCodeRuntimeProvenance = &provenance
 			shouldWrite = true
 		}
 		if !latest.CommunityToolsConfigured && selection.CommunityTools != nil {
@@ -2050,6 +2037,25 @@ func runPostSyncVerification(homeDir, workspaceDir string, selection model.Selec
 				},
 			})
 		}
+	}
+	for _, adapter := range adapters {
+		if !sdd.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+			continue
+		}
+		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
+		legacyPath := filepath.Join(pluginsDir, sdd.LegacyOpenCodeReviewPluginName)
+		checks = append(checks, verify.Check{
+			ID:          "verify:sync:file:" + legacyPath,
+			Description: "legacy OpenCode review plugin removed",
+			Run: func(context.Context) error {
+				if _, err := os.Lstat(legacyPath); err == nil {
+					return fmt.Errorf("legacy OpenCode review plugin still exists; rerun `gentle-ai sync` to complete the managed plugin migration")
+				} else if !os.IsNotExist(err) {
+					return err
+				}
+				return nil
+			},
+		})
 	}
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
