@@ -114,7 +114,7 @@ func Classify(fixture Fixture, provider ProvenanceProvider) Record {
 		observation = provider.Observe(context.Background(), IssueEvidence{Number: fixture.Number})
 	}
 	record := Record{Number: fixture.Number, Origin: validOrigin(fixture.Origin), Attribution: AttributionObserved}
-	if observation.Kind != ProvenanceOfficial && !fixture.Official {
+	if observation.Kind != ProvenanceOfficial {
 		record.Outcome = OutcomeInsufficientEvidence
 		record.Attribution = AttributionAbstained
 		return record

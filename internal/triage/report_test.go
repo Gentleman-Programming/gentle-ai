@@ -11,6 +11,31 @@ func (p fixtureProvider) Observe(context.Context, IssueEvidence) ProvenanceObser
 	return p.observation
 }
 
+func TestClassifyCanonicalProvenanceOverridesFixtureOfficial(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		provenance Provenance
+	}{
+		{name: "unknown provenance", provenance: ProvenanceUnknown},
+		{name: "custom dirty provenance", provenance: ProvenanceCustomDirty},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := Classify(Fixture{Official: true}, fixtureProvider{ProvenanceObservation{Kind: tt.provenance}})
+
+			if record.Outcome != OutcomeInsufficientEvidence {
+				t.Errorf("outcome = %q, want %q", record.Outcome, OutcomeInsufficientEvidence)
+			}
+			if record.Attribution != AttributionAbstained {
+				t.Errorf("attribution = %q, want %q", record.Attribution, AttributionAbstained)
+			}
+		})
+	}
+}
+
 func TestClassifyProvenanceFixturesAndMetrics(t *testing.T) {
 	t.Parallel()
 
