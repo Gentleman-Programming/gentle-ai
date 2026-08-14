@@ -4207,9 +4207,15 @@ func TestRunSyncWithSelectionPiRejectsInvalidPersistedPersonaWithoutMutation(t *
 	}{
 		{name: "malformed JSON", stateJSON: `{"installed_agents":["pi"],"persona":`, wantErr: "read persisted installation state"},
 		{name: "unreadable state", stateAsDir: true, wantErr: "read persisted installation state"},
+		{name: "top-level null", stateJSON: `null`, wantErr: "must be a JSON object"},
 		{name: "unsupported persona", stateJSON: `{"installed_agents":["pi"],"persona":"unknown"}`, wantErr: `unsupported persona "unknown"`},
+		{name: "case-variant unsupported persona", stateJSON: `{"installed_agents":["pi"],"Persona":"unknown"}`, wantErr: `unsupported persona "unknown"`},
 		{name: "explicit empty persona", stateJSON: `{"installed_agents":["pi"],"persona":""}`, wantErr: "explicitly empty persona"},
+		{name: "case-variant empty persona", stateJSON: `{"installed_agents":["pi"],"PERSONA":""}`, wantErr: "explicitly empty persona"},
+		{name: "case-variant null persona", stateJSON: `{"installed_agents":["pi"],"Persona":null}`, wantErr: "explicitly empty persona"},
 		{name: "whitespace-only persona", stateJSON: `{"installed_agents":["pi"],"persona":" \t "}`, wantErr: "whitespace-only persona"},
+		{name: "exact duplicate laundering", stateJSON: `{"installed_agents":["pi"],"persona":"unknown","persona":"neutral"}`, wantErr: "duplicate persona fields"},
+		{name: "duplicate persona variants", stateJSON: `{"persona":"neutral","Persona":"gentleman"}`, wantErr: "duplicate persona fields"},
 	}
 
 	for _, tt := range tests {
@@ -4221,12 +4227,14 @@ func TestRunSyncWithSelectionPiRejectsInvalidPersistedPersonaWithoutMutation(t *
 			originalPi := []byte("{\n  \"mode\": \"gentleman\"\n}\n")
 			mustWriteFile(t, piPath, originalPi)
 
+			var originalState []byte
 			if tt.stateAsDir {
 				if err := os.MkdirAll(state.Path(home), 0o755); err != nil {
 					t.Fatalf("MkdirAll(state path) error = %v", err)
 				}
 			} else {
-				mustWriteFile(t, state.Path(home), []byte(tt.stateJSON))
+				originalState = []byte(tt.stateJSON)
+				mustWriteFile(t, state.Path(home), originalState)
 			}
 
 			result, err := RunSyncWithSelection(home, model.Selection{
@@ -4239,11 +4247,85 @@ func TestRunSyncWithSelectionPiRejectsInvalidPersistedPersonaWithoutMutation(t *
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("RunSyncWithSelection() error = %q, want %q", err, tt.wantErr)
 			}
+			if !strings.Contains(err.Error(), state.Path(home)) || !strings.Contains(err.Error(), "gentle-ai sync") {
+				t.Fatalf("RunSyncWithSelection() error is not actionable: %v", err)
+			}
 			if result.Selection.Persona != "" {
 				t.Fatalf("Selection.Persona = %q, want unchanged empty persona", result.Selection.Persona)
 			}
 			if got := readTextFile(t, piPath); got != string(originalPi) {
 				t.Fatalf("Pi persona config mutated after rejected sync: got %q, want %q", got, originalPi)
+			}
+			if !tt.stateAsDir {
+				if got, readErr := os.ReadFile(state.Path(home)); readErr != nil || !bytes.Equal(got, originalState) {
+					t.Fatalf("state mutated after rejected sync: got %q, error %v; want %q", got, readErr, originalState)
+				}
+			}
+		})
+	}
+}
+
+func TestSyncEntryPointsPreserveStateAndPersonaBytesOnRejection(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		run  func(home string) (SyncResult, error)
+	}{
+		{name: "CLI normal", run: func(_ string) (SyncResult, error) { return RunSync([]string{"--agents", "claude-code"}) }},
+		{name: "CLI dry-run", run: func(_ string) (SyncResult, error) { return RunSync([]string{"--agents", "claude-code", "--dry-run"}) }},
+		{name: "programmatic explicit override", run: func(home string) (SyncResult, error) {
+			return RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Components: []model.ComponentID{model.ComponentPersona}, Persona: model.PersonaNeutral})
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			setSyncTestHome(t, home)
+			stateBytes := []byte(`{"installed_agents":["claude-code"],"persona":"unknown","unrelated":"preserved"}`)
+			mustWriteFile(t, state.Path(home), stateBytes)
+			personaPath := filepath.Join(home, ".claude", "CLAUDE.md")
+			personaBytes := []byte("existing persona bytes\n")
+			mustWriteFile(t, personaPath, personaBytes)
+
+			result, err := tt.run(home)
+			if err == nil || !strings.Contains(err.Error(), `unsupported persona "unknown"`) {
+				t.Fatalf("sync result = %#v, error = %v; want persisted persona rejection", result, err)
+			}
+			if got, readErr := os.ReadFile(state.Path(home)); readErr != nil || !bytes.Equal(got, stateBytes) {
+				t.Fatalf("state after rejection = %q, error = %v; want %q", got, readErr, stateBytes)
+			}
+			if got, readErr := os.ReadFile(personaPath); readErr != nil || !bytes.Equal(got, personaBytes) {
+				t.Fatalf("persona after rejection = %q, error = %v; want %q", got, readErr, personaBytes)
+			}
+		})
+	}
+}
+
+func TestRunSyncWithSelectionStrictlyValidatesExplicitPersona(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		stateJSON string
+		explicit  model.PersonaID
+		want      model.PersonaID
+		wantErr   string
+	}{
+		{name: "valid explicit with missing state", explicit: model.PersonaGentleman, want: model.PersonaGentleman},
+		{name: "valid explicit wins over valid state", stateJSON: `{"persona":"gentleman"}`, explicit: model.PersonaCustom, want: model.PersonaCustom},
+		{name: "invalid state cannot be laundered", stateJSON: `{"persona":"unknown"}`, explicit: model.PersonaNeutral, wantErr: `unsupported persona "unknown"`},
+		{name: "unsupported explicit rejects", stateJSON: `{}`, explicit: model.PersonaID("unknown"), wantErr: `unsupported persona "unknown"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if tt.stateJSON != "" {
+				mustWriteFile(t, state.Path(home), []byte(tt.stateJSON))
+			}
+			result, err := RunSyncWithSelection(home, model.Selection{Persona: tt.explicit})
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("RunSyncWithSelection() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || result.Selection.Persona != tt.want {
+				t.Fatalf("RunSyncWithSelection() persona = %q, error = %v; want %q", result.Selection.Persona, err, tt.want)
 			}
 		})
 	}
@@ -5005,7 +5087,6 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "medium"},
 		},
 		Persona:         "neutral",
-		PersonaPresent:  true,
 		LastUpdateCheck: &lastUpdate,
 		PendingSync:     true,
 	}
@@ -5016,6 +5097,12 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 	before.ManagedAssetDigest = writer
 	if err := state.Write(home, before); err != nil {
 		t.Fatalf("state.Write: %v", err)
+	}
+	// Re-read so the baseline includes the decoded personaPresent bit. Complete
+	// serialization fidelity is covered by TestInstallStatePreservesEveryField.
+	before, err = state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read before sync: %v", err)
 	}
 
 	restoreHome := osUserHomeDir

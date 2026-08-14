@@ -79,7 +79,7 @@ func fullyPopulatedInstallState() InstallState {
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: "medium"},
 		},
 		Persona:           "neutral",
-		PersonaPresent:    true,
+		personaPresent:    true,
 		LastUpdateCheck:   &lastUpdateCheck,
 		PendingSync:       true,
 		RDDMode:           "off",
@@ -311,14 +311,20 @@ func TestPersonaBackwardCompat(t *testing.T) {
 	}
 }
 
-func TestPersonaPresenceDistinguishesOmittedAndExplicitEmpty(t *testing.T) {
+func TestPersonaPresenceMatchesJSONFieldSemantics(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		stateJSON   string
 		wantPresent bool
+		wantPersona string
 	}{
 		{name: "omitted", stateJSON: `{"installed_agents":["pi"]}`, wantPresent: false},
+		{name: "nested", stateJSON: `{"metadata":{"persona":"neutral"}}`, wantPresent: false},
 		{name: "explicit empty", stateJSON: `{"installed_agents":["pi"],"persona":""}`, wantPresent: true},
+		{name: "case variant empty", stateJSON: `{"installed_agents":["pi"],"Persona":""}`, wantPresent: true},
+		{name: "case variant null", stateJSON: `{"installed_agents":["pi"],"PERSONA":null}`, wantPresent: true},
+		{name: "case variant supported", stateJSON: `{"installed_agents":["pi"],"PeRsOnA":"neutral"}`, wantPresent: true, wantPersona: "neutral"},
+		{name: "case variant unsupported", stateJSON: `{"installed_agents":["pi"],"pErSoNa":"unknown"}`, wantPresent: true, wantPersona: "unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -333,8 +339,41 @@ func TestPersonaPresenceDistinguishesOmittedAndExplicitEmpty(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Read() error = %v", err)
 			}
-			if got.PersonaPresent != tc.wantPresent {
-				t.Fatalf("PersonaPresent = %t, want %t", got.PersonaPresent, tc.wantPresent)
+			if got.PersonaWasPresent() != tc.wantPresent || got.Persona != tc.wantPersona {
+				t.Fatalf("persona = %q, present = %t; want %q, %t", got.Persona, got.PersonaWasPresent(), tc.wantPersona, tc.wantPresent)
+			}
+		})
+	}
+}
+
+func TestInstallStateRejectsInvalidJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		stateJSON string
+		wantErr   string
+	}{
+		{name: "top-level null", stateJSON: `null`, wantErr: "must be a JSON object"},
+		{name: "top-level array", stateJSON: `[]`, wantErr: "must be a JSON object"},
+		{name: "trailing JSON data", stateJSON: `{} {}`},
+		{name: "exact duplicate canonical values", stateJSON: `{"persona":"neutral","persona":"gentleman"}`, wantErr: "duplicate persona fields"},
+		{name: "exact duplicate invalid then valid", stateJSON: `{"persona":"unknown","persona":"neutral"}`, wantErr: "duplicate persona fields"},
+		{name: "exact duplicate valid then invalid", stateJSON: `{"persona":"neutral","persona":"unknown"}`, wantErr: "duplicate persona fields"},
+		{name: "case-variant duplicate", stateJSON: `{"persona":"neutral","Persona":"gentleman"}`, wantErr: "duplicate persona fields"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Dir(Path(home)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(Path(home), []byte(tc.stateJSON), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Read(home)
+			if err == nil {
+				t.Fatal("Read() error = nil, want invalid state rejection")
+			}
+			if tc.wantErr != "" && !contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Read() error = %v, want %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -422,7 +461,7 @@ func TestWriteOverwrite(t *testing.T) {
 
 func TestWriteFailurePreservesExistingState(t *testing.T) {
 	home := t.TempDir()
-	original := InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral", PersonaPresent: true}
+	original := InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral", personaPresent: true}
 	if err := Write(home, original); err != nil {
 		t.Fatal(err)
 	}
