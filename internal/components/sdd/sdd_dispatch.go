@@ -101,14 +101,13 @@ var sddTaskTag = regexp.MustCompile(`</?task(?:\s|>)|</?task_result>`)
 // means the child never ran inference at all, a malformed result means it
 // produced output that failed the envelope contract.
 func UnwrapSDDTaskResult(output any) (body, class string, err error) {
-	if text, ok := output.(string); ok {
-		output = text
-	} else {
-		return "", "empty_result", errSDDOuputEmpty
+	text, ok := output.(string)
+	if !ok {
+		return "", "empty_result", errSDDOutputEmpty
 	}
-	trimmed := strings.TrimSpace(output.(string))
+	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
-		return "", "empty_result", errSDDOuputEmpty
+		return "", "empty_result", errSDDOutputEmpty
 	}
 	if envelope := sddTaskResultEnvelope.FindStringSubmatch(trimmed); envelope != nil {
 		inner := envelope[1]
@@ -127,7 +126,7 @@ func UnwrapSDDTaskResult(output any) (body, class string, err error) {
 }
 
 var (
-	errSDDOuputEmpty        = errors.New("SDD phase output must not be empty")
+	errSDDOutputEmpty       = errors.New("SDD phase output must not be empty")
 	errSDDResultEmpty       = errors.New("SDD phase task result is empty")
 	errSDDNestedEnvelope    = errors.New("SDD phase task result contains a nested task envelope")
 	errSDDMalformedEnvelope = errors.New("SDD phase output contains a malformed task result envelope")
@@ -207,7 +206,6 @@ func SDDTaskFailureEnvelope(phase, cwd, class string, metadata any) string {
 	code := SDDTaskResultCode(class)
 	summary := phase + " returned no valid task result. " + sddFailureGuidance
 	if class == "empty_result" {
-		code = "sdd_task_result_empty"
 		summary = phase + " produced no task output at all. The child task returned nothing, which most often means the " +
 			"provider rejected the request before generation (authentication, region, or model access), the task was " +
 			"interrupted, or the phase genuinely wrote nothing. " + sddFailureGuidance
@@ -329,6 +327,12 @@ func (s *FileSDDLatchStore) load() (map[string]SDDTaskFailure, error) {
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil, err
 	}
+	if items == nil {
+		// `null` is valid JSON and decodes into a nil map; Record would panic
+		// assigning into it, so a truncated or hand-edited latch file must
+		// become an empty latch, not a crash.
+		items = map[string]SDDTaskFailure{}
+	}
 	return items, nil
 }
 
@@ -348,11 +352,30 @@ func (s *FileSDDLatchStore) save(items map[string]SDDTaskFailure) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	// A unique temp file in the destination directory, never a fixed shared
+	// name: a concurrent verb process must not be able to rename a half-
+	// written `.tmp` into place and install a torn latch.
+	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".sdd-dispatch-latch-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), s.path)
 }
 
 func (s *FileSDDLatchStore) Record(sessionID string, failure SDDTaskFailure) error {

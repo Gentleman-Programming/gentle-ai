@@ -240,6 +240,40 @@ func TestSDDLatchStoreIsPerSessionAndClearsOnSessionEnd(t *testing.T) {
 	}
 }
 
+func TestFileSDDLatchStoreRecordsAfterNullPayload(t *testing.T) {
+	// `null` is valid JSON that decodes into a nil map; a truncated write or
+	// a hand edit landing on "null" must behave as an empty latch, not crash
+	// Record with a nil-map assignment. Arguably the rarer and the more
+	// dangerous failure: it happens exactly when the store is already
+	// suspect, so it must fail closed, never panic.
+	path := t.TempDir() + "/sdd-dispatch-latch.json"
+	if err := os.WriteFile(path, []byte("null"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewFileSDDLatchStore(path)
+	failure := SDDTaskFailure{Phase: "sdd-spec", Code: "sdd_task_result_malformed", Handoff: "GENTLE_AI_SDD_FAILURE {\"handoff\":true}"}
+	if err := store.Record("session-1", failure); err != nil {
+		t.Fatalf("Record(session-1) over a \"null\" latch file error = %v", err)
+	}
+	got, ok, err := store.Recall("session-1")
+	if err != nil || !ok || got != failure {
+		t.Fatalf("Recall(session-1) = (%#v, %v, %v), want the recorded failure", got, ok, err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("latch file is not valid JSON after Record over \"null\": %v\n%s", err, raw)
+	}
+	if _, present := decoded["session-1"]; !present {
+		t.Fatalf("latch file missing session-1: %v", decoded)
+	}
+}
+
 func TestFileSDDLatchStorePersistsAcrossSpawns(t *testing.T) {
 	// The native verbs are spawned per hook call, so the latch must survive
 	// process exits: a Record from one store instance is visible to a new
