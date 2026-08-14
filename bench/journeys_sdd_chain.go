@@ -23,8 +23,6 @@ var sddChainVerifyObjective = []string{
 	"--max-attempts", "1", "--max-changed-lines", "20",
 }
 
-const sddChainInterruptedEvidence = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-
 // sddChainFailedVerificationExhaustsBudget settles the admitted verification
 // failure and proves the runtime demands a maintainer decision.
 func sddChainFailedVerificationExhaustsBudget(r *journeyRun) error {
@@ -76,7 +74,7 @@ func sddChainAuditedReset(r *journeyRun) error {
 }
 
 // sddChainInterruptedAttempt records a later non-remediation interruption.
-// Its evidence becomes the live pointer, while the earlier failed verification
+// Its evidence pointer is cleared, while the earlier failed verification
 // remains the immutable correction binding after the audited reset.
 func sddChainInterruptedAttempt(r *journeyRun) error {
 	acquire := r.run(append([]string{
@@ -93,15 +91,15 @@ func sddChainInterruptedAttempt(r *journeyRun) error {
 	r.run(append([]string{
 		"sdd-attempt", "settle", "--cwd", r.sandbox.Repo, "--change", sddChange,
 		"--token", result.Token, "--request-id", "bench-chain-settle-interruption",
-		"--outcome", "interrupted", "--evidence-revision", sddChainInterruptedEvidence,
+		"--outcome", "interrupted",
 	}, sddTerminalEvidence...), false)
 	status, err := proveRuntime(r.sandbox)
 	if err != nil {
 		return err
 	}
 	if status.ActiveAttempt != nil || len(status.Attempts) != 2 || status.Attempts[1].Outcome != "interrupted" ||
-		status.EvidenceRevision != sddChainInterruptedEvidence || status.NextAction != "begin" {
-		return fmt.Errorf("interrupted successor did not retain its distinct live evidence: %#v", status)
+		status.Attempts[1].EvidenceRevision != "" || status.EvidenceRevision != "" || status.NextAction != "begin" {
+		return fmt.Errorf("interrupted successor did not omit evidence: %#v", status)
 	}
 	return nil
 }
@@ -127,7 +125,7 @@ func sddChainCorrectionCompletes(r *journeyRun) error {
 			return err
 		}
 		if status.ActiveAttempt == nil || len(status.Attempts) != 3 || status.ActiveAttempt.Ordinal != 3 ||
-			status.EvidenceRevision != sddChainInterruptedEvidence {
+			status.EvidenceRevision != "" {
 			return fmt.Errorf("invalid continuation did not leave the exact remediation attempt running: %#v", status)
 		}
 		return fmt.Errorf("bounded correction was blocked as invalid_continuation and left the exact live remediation attempt running")

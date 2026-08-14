@@ -31,7 +31,7 @@ func TestAdapterIdentityAndCapabilities(t *testing.T) {
 	}{
 		{"SupportsSkills", a.SupportsSkills(), false},
 		{"SupportsMCP", a.SupportsMCP(), true},
-		{"SupportsSystemPrompt", a.SupportsSystemPrompt(), true},
+		{"SupportsSystemPrompt", a.SupportsSystemPrompt(), false},
 		{"SupportsSlashCommands", a.SupportsSlashCommands(), false},
 		{"SupportsOutputStyles", a.SupportsOutputStyles(), false},
 		{"SupportsSubAgents", a.SupportsSubAgents(), false},

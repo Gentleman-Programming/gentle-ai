@@ -27,9 +27,17 @@ const (
 	reviewResultArtifactLimit      = 4 << 20
 )
 
-// reviewerResultSlotConflictError gives immutable publication conflicts a
-// stable identity so discoverability guidance can wrap them with %w.
-var reviewerResultSlotConflictError = errors.New("captured reviewer result already exists with different canonical bytes")
+const (
+	// reviewerResultSlotOccupiedCode names the one cause that is neither a
+	// transport failure nor a bad binding: the slot holds a different reviewer
+	// result already.
+	reviewerResultSlotOccupiedCode   = "reviewer_result_slot_occupied"
+	reviewerResultSlotOccupiedAction = "refresh the negotiated STATUS transition with " + reviewNextTransitionRefreshCommandV21 + " and follow its authoritative continuation"
+)
+
+func reviewReviewerResultSlotOccupiedFailure() error {
+	return reviewPreflightError(fmt.Errorf("%s: a different reviewer result already occupies this immutable slot; %s: %w", reviewerResultSlotOccupiedCode, reviewerResultSlotOccupiedAction, reviewtransaction.ErrCapturedReviewerResultSlotConflict))
+}
 
 // errCapturedFinalEvidenceMissing has the historical explicit-selector error
 // text, but a distinct identity so lineage-only discovery can distinguish an
@@ -442,8 +450,8 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		},
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "different canonical bytes") {
-			err = fmt.Errorf("%w; a different reviewer result already occupies this slot — decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)", reviewerResultSlotConflictError)
+		if errors.Is(err, reviewtransaction.ErrCapturedReviewerResultSlotConflict) {
+			return reviewReviewerResultSlotOccupiedFailure()
 		}
 		if contextHandle != "" {
 			return reviewOpaqueContextCause("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status", err)

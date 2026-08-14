@@ -536,7 +536,7 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		// nothing governs, so nothing decides) while still listing those
 		// stale lineages as optional, discoverable recovery candidates. An
 		// unrelated target with zero candidates remains equally valid.
-		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired) {
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
 			return errors.New("unrelated target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityAmbiguous:
@@ -729,8 +729,23 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
 		if result.Action == reviewtransaction.TargetStatusActionStop {
-			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "staged_workspace_overlay_recovery_unavailable" {
-				return errors.New("fresh staged workspace-overlay target lacks a STOP transition")
+			if result.NextTransition.Kind != reviewNextTransitionStop {
+				// refusal:by-design world-action: a provider-built status envelope paired STOP with a non-STOP transition; only a producer code fix can make that invariant true
+				return errors.New("fresh target STOP action lacks a STOP transition")
+			}
+			switch result.Projection.Kind {
+			case reviewtransaction.TargetBaseWorkspaceOverlay:
+				if result.Projection.Projection != reviewtransaction.ProjectionStaged || result.NextTransition.ReasonCode != "staged_workspace_overlay_recovery_unavailable" {
+					return errors.New("fresh staged workspace-overlay target lacks a STOP transition")
+				}
+			case reviewtransaction.TargetBaseDiff:
+				if len(result.Projection.Paths) != 0 || result.NextTransition.ReasonCode != "empty_base_diff_bootstrap_required" {
+					// refusal:by-design world-action: a provider-built zero-path base-diff omitted its one admissible STOP classification; only a producer code fix can make the envelope executable
+					return errors.New("fresh zero-path base-diff target lacks an empty-root bootstrap STOP transition")
+				}
+			default:
+				// refusal:by-design world-action: this negotiated status invariant supports only the explicitly classified fresh STOP projections; a producer must choose one of those projections
+				return errors.New("fresh target STOP action has an unsupported projection")
 			}
 			return nil
 		}

@@ -70,7 +70,7 @@ func TestRunSDDAttemptRescopeCarriesHistoryForwardThroughTheCLI(t *testing.T) {
 	})
 	interrupted := runSDDAttemptStatus(t, []string{
 		"finish", "--cwd", repo, "--change", change, "--expected-revision", started.Revision, "--request-id", "rescope-finish-1",
-		"--outcome", "interrupted", "--evidence-revision", cliAttemptHash('d'),
+		"--outcome", "interrupted",
 		"--diagnosis", "reverted every temporary change back to the exact original candidate", "--harness-disposition", "invalidated",
 		"--cleanup-evidence", "cleanup completed", "--process-evidence", "process scan found no descendants",
 	})
@@ -119,6 +119,7 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 		{name: "missing begin CAS", args: []string{"begin", "--cwd", repo, "--change", "thin", "--request-id", "begin", "--work-unit", "unit", "--evidence-goal", "goal"}, want: "--expected-revision"},
 		{name: "missing rescope scope", args: []string{"rescope", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('e'), "--request-id", "rescope", "--reason", "narrowing", "--actor", "maintainer"}, want: "--work-unit"},
 		{name: "missing finish evidence", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "failed", "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process"}, want: "--evidence-revision"},
+		{name: "interrupted malformed evidence", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "interrupted", "--evidence-revision", "not-a-revision", "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process"}, want: "empty or a canonical legacy sha256 revision"},
 		{name: "partial remediation successor", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "passed", "--evidence-revision", cliAttemptHash('c'), "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process", "--successor-lineage", "review-successor"}, want: "remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together"},
 		{name: "positional argument", args: []string{"status", "--cwd", repo, "--change", "thin", "extra"}, want: "unexpected sdd-attempt argument"},
 		// Grant's missing-flag refusal follows acquire/settle: it enumerates
@@ -136,6 +137,29 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMissingSDDAttemptEvidenceRecognizesBothOutcomeSpellings(t *testing.T) {
+	base := []string{"--cwd", "/tmp/repo", "--change", "change", "--expected-revision", cliAttemptHash('a'), "--request-id", "request", "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process"}
+	for _, outcome := range [][]string{{"--outcome", "interrupted"}, {"--outcome=interrupted"}} {
+		args := append([]string{"finish"}, base...)
+		args = append(args, outcome...)
+		if missing := missingSDDAttemptOperationFlags(args[1:], "finish", sddAttemptOutcome(args[1:])); len(missing) != 0 {
+			t.Fatalf("outcome %v missing flags = %v", outcome, missing)
+		}
+	}
+}
+
+func sddAttemptOutcome(args []string) string {
+	for index, argument := range args {
+		if strings.HasPrefix(argument, "--outcome=") {
+			return strings.TrimPrefix(argument, "--outcome=")
+		}
+		if argument == "--outcome" && index+1 < len(args) {
+			return args[index+1]
+		}
+	}
+	return ""
 }
 
 // TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently proves the
@@ -247,13 +271,13 @@ func TestRunSDDAttemptHelpContractsCoverEveryOperation(t *testing.T) {
 	}{
 		{"status", []string{"cwd", "change", "change-instance", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"}, []string{"optional", "128 bytes"}},
 		{"begin", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"}, []string{"default 2", "default 200", "1..100", "1..1000000"}},
-		{"finish", []string{"cwd", "change", "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "expected-binding-revision", "successor-lineage", "remediates-evidence-revision"}, []string{"failed, interrupted, or passed", "reused or invalidated", "never none", "500 bytes"}},
+		{"finish", []string{"cwd", "change", "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "expected-binding-revision", "successor-lineage", "remediates-evidence-revision"}, []string{"failed, interrupted, or passed", "reused or invalidated", "empty or canonical legacy sha256 revision", "500 bytes"}},
 		{"handoff", []string{"cwd", "change", "expected-revision", "request-id", "destination-worktree"}, []string{"registered linked worktree", "Git common directory"}},
 		{"reset", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"500 bytes", "128 bytes"}},
 		{"rescope", []string{"cwd", "change", "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"}, []string{"explicit limit", "cannot exceed current objective"}},
 		{"repair", []string{"cwd", "change", "expected-revision", "request-id", "reason", "actor"}, []string{"unreadable sha256", "500 bytes", "128 bytes"}},
 		{"acquire", []string{"cwd", "change", "token", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "remediates-evidence-revision"}, []string{"default 2", "default 200", "unmanaged remediation"}},
-		{"settle", []string{"cwd", "change", "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "successor-lineage", "remediates-evidence-revision"}, []string{"opaque token returned by acquire", "never none"}},
+		{"settle", []string{"cwd", "change", "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "successor-lineage", "remediates-evidence-revision"}, []string{"opaque token returned by acquire", "required for failed/passed; omit for interrupted"}},
 		{"grant", []string{"cwd", "change", "expected-revision", "root", "change-instance", "request-id", "actor", "reason"}, []string{"repeatable", "1..32", "4096 bytes"}},
 	}
 

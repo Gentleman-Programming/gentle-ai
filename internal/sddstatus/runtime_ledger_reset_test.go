@@ -45,7 +45,7 @@ func TestRuntimeLedgerExplicitResetStartsDistinctBudgetWithoutLosingHistory(t *t
 	}
 	exhausted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: second.Revision, RequestID: "finish-two", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('2'), Diagnosis: "transport ended after bounded process evidence was captured",
+		Diagnosis:          "transport ended after bounded process evidence was captured",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "second process group cleanup completed",
 		ProcessEvidence: "second process scan found no surviving descendants",
 	})
@@ -282,7 +282,7 @@ func TestRuntimeLedgerResetRecoversDriftDeadlockAfterInterruptedAttempt(t *testi
 	// workspace bytes changed, so the native line charge is exactly zero.
 	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: started.Revision, RequestID: "deadlock-finish-1", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('d'), Diagnosis: "transport closed before the executor was launched",
+		Diagnosis:          "transport closed before the executor was launched",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "no executor process was ever spawned",
 		ProcessEvidence: "pre-launch process scan found no descendants",
 	})
@@ -403,7 +403,7 @@ func TestRuntimeLedgerDriftResetRequiresExactCAS(t *testing.T) {
 	}
 	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: started.Revision, RequestID: "cas-finish-1", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('e'), Diagnosis: "transport closed before the executor was launched",
+		Diagnosis:          "transport closed before the executor was launched",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "no executor process was ever spawned",
 		ProcessEvidence: "pre-launch process scan found no descendants",
 	})
@@ -438,7 +438,7 @@ func TestRuntimeLedgerDriftResetRequiresMaintainerAuthorization(t *testing.T) {
 	}
 	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: started.Revision, RequestID: "auth-finish-1", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('f'), Diagnosis: "transport closed before the executor was launched",
+		Diagnosis:          "transport closed before the executor was launched",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "no executor process was ever spawned",
 		ProcessEvidence: "pre-launch process scan found no descendants",
 	})
@@ -475,7 +475,7 @@ func TestRuntimeLedgerResetWithoutDriftStillRequiresTerminalScope(t *testing.T) 
 	}
 	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: started.Revision, RequestID: "no-drift-finish-1", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('0'), Diagnosis: "transport closed before the executor was launched",
+		Diagnosis:          "transport closed before the executor was launched",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "no executor process was ever spawned",
 		ProcessEvidence: "pre-launch process scan found no descendants",
 	})

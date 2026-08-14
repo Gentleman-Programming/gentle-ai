@@ -86,8 +86,12 @@ func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
 	}
 }
 
+// TestRunInstallReturnsStatePersistenceFailure verifies that a failed state
+// commit restores the managed asset bytes and preserves the previous state.
 func TestRunInstallReturnsStatePersistenceFailure(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
@@ -103,6 +107,14 @@ func TestRunInstallReturnsStatePersistenceFailure(t *testing.T) {
 	if err := state.Write(home, state.InstallState{}); err != nil {
 		t.Fatal(err)
 	}
+	originalState, err := os.ReadFile(state.Path(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if _, err := os.ReadFile(configPath); !os.IsNotExist(err) {
+		t.Fatalf("pre-install config read error = %v, want absent", err)
+	}
 	statePath := state.Path(home)
 	target := filepath.Join(home, ".gentle-ai", "persisted-state.json")
 	if err := os.Rename(statePath, target); err != nil {
@@ -112,9 +124,19 @@ func TestRunInstallReturnsStatePersistenceFailure(t *testing.T) {
 		t.Skipf("state symlink unavailable: %v", err)
 	}
 
-	_, err := RunInstall([]string{"--agent", "opencode", "--component", "permissions"}, system.DetectionResult{})
+	_, err = RunInstall([]string{"--agent", "opencode", "--component", "permissions"}, system.DetectionResult{})
 	if err == nil || !strings.Contains(err.Error(), "persist install state") {
 		t.Fatalf("RunInstall() error = %v, want state persistence failure", err)
+	}
+	if _, readErr := os.ReadFile(configPath); !os.IsNotExist(readErr) {
+		t.Fatalf("config after failed install read error = %v, want absent", readErr)
+	}
+	finalState, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(finalState) != string(originalState) {
+		t.Fatalf("state after failed install changed:\n got %s\nwant %s", finalState, originalState)
 	}
 }
 

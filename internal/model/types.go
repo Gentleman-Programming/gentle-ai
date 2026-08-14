@@ -1,6 +1,31 @@
 package model
 
+import "fmt"
+
 type AgentID string
+
+// OpenCodeBackgroundIntent is OpenCode's unresolved auto/on/off preference.
+type OpenCodeBackgroundIntent string
+
+const (
+	OpenCodeBackgroundAuto OpenCodeBackgroundIntent = "auto"
+	OpenCodeBackgroundOn   OpenCodeBackgroundIntent = "on"
+	OpenCodeBackgroundOff  OpenCodeBackgroundIntent = "off"
+)
+
+func (i OpenCodeBackgroundIntent) Valid() bool {
+	return i == OpenCodeBackgroundAuto || i == OpenCodeBackgroundOn || i == OpenCodeBackgroundOff
+}
+
+// ParseOpenCodeBackgroundIntent validates the persisted and user-supplied
+// control vocabulary without selecting a runtime behavior.
+func ParseOpenCodeBackgroundIntent(raw string) (OpenCodeBackgroundIntent, error) {
+	intent := OpenCodeBackgroundIntent(raw)
+	if intent.Valid() {
+		return intent, nil
+	}
+	return "", fmt.Errorf("invalid OpenCode background-subagent intent %q (valid values: auto, on, off)", raw)
+}
 
 const (
 	AgentClaudeCode    AgentID = "claude-code"

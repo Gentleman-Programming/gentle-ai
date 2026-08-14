@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -97,6 +98,7 @@ type baseAdvanceScenarioResult struct {
 // conditions unless one of the scenario hooks perturbs exactly one of them.
 func runBaseAdvanceScenario(t *testing.T, scenario baseAdvanceScenario) baseAdvanceScenarioResult {
 	t.Helper()
+	requireMergeTreeWriteTree(t)
 	ctx := context.Background()
 
 	deliveryPath := scenario.deliveryPath
@@ -284,6 +286,7 @@ func TestDeriveBaseAdvanceCompatibilityFailsClosedOnSingleConditionViolation(t *
 		condition  string
 		scenario   baseAdvanceScenario
 		wantErrSub string
+		wantGitErr bool
 	}{
 		{
 			name:      "merge-base tree not preserved",
@@ -337,6 +340,7 @@ func TestDeriveBaseAdvanceCompatibilityFailsClosedOnSingleConditionViolation(t *
 				basePath:     "conflict",
 			},
 			wantErrSub: "merge against new base is not conflict-free",
+			wantGitErr: true,
 		},
 		{
 			name:      "CI attestation issuer does not match the receipt-bound trust root",
@@ -365,6 +369,10 @@ func TestDeriveBaseAdvanceCompatibilityFailsClosedOnSingleConditionViolation(t *
 			}
 			if !strings.Contains(result.err.Error(), tt.wantErrSub) {
 				t.Fatalf("condition %s: error = %q, want substring %q", tt.condition, result.err.Error(), tt.wantErrSub)
+			}
+			var gitErr *GitCommandError
+			if errors.As(result.err, &gitErr) != tt.wantGitErr {
+				t.Fatalf("condition %s: GitCommandError presence = %v, want %v", tt.condition, gitErr != nil, tt.wantGitErr)
 			}
 			if (result.proof != BaseAdvanceCompatibility{}) {
 				t.Fatalf("condition %s: proof = %#v, want zero value on failure", tt.condition, result.proof)

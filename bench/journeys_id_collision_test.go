@@ -28,6 +28,7 @@ func journeySources() []journeySource {
 		{"journeys_issue_2891.go", issue2891Journeys()},
 		{"journeys_issue2696.go", issue2696Journeys()},
 		{"journeys_sdd_chain.go", sddChainJourneys()},
+		{"journeys_issue3094.go", issue3094Journeys()},
 		{"journeys_handoff.go", handoffJourneys()},
 		{"journeys_capture_evidence_v5.go", captureEvidenceDescriptorJourneys()},
 		{"journeys_scope_changed_fixture.go", scopeChangedFixtureJourneys()},
@@ -36,6 +37,7 @@ func journeySources() []journeySource {
 		{"journeys_wave5.go", waveFiveJourneys()},
 		{"journeys_advisory.go", advisoryJourneys()},
 		{"journeys_zero_delta.go", zeroDeltaJourneys()},
+		{"journeys_lens_context_budget.go", lensContextBudgetJourneys()},
 		{"journeys_local_gate_advance.go", localGateBaseAdvanceJourneys()},
 		{"journeys_intended_untracked.go", intendedUntrackedJourneys()},
 		{"journeys_capture_result_dry_run.go", captureResultDryRunJourneys()},
@@ -52,6 +54,7 @@ func journeySources() []journeySource {
 		{"journeys_managed_assets.go", managedAssetJourneys()},
 		{"journeys_issue2906.go", issue2906Journeys()},
 		{"journeys_issue_2138.go", issue2138Journeys()},
+		{"journeys_issue_3043.go", issue3043Journeys()},
 	}
 }
 

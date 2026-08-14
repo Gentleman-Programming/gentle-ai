@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
@@ -21,6 +22,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
@@ -1987,12 +1989,22 @@ func TestRunSyncMigratesLegacyManagedPiCodeGraphSelection(t *testing.T) {
 	}
 }
 
+// TestRunSyncReportsLegacySelectionMigrationPersistenceFailure verifies that
+// failed legacy migration persistence restores both managed assets and state.
 func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	original := state.InstallState{InstalledAgents: []string{"opencode"}, Persona: "neutral"}
 	if err := state.Write(home, original); err != nil {
 		t.Fatal(err)
 	}
+	originalState, readErr := os.ReadFile(state.Path(home))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	opencodeConfig := filepath.Join(home, ".config", "opencode", "opencode.json")
+	piMCP := filepath.Join(home, ".pi", "agent", "mcp.json")
 	statePath := state.Path(home)
 	stateTarget := filepath.Join(home, ".gentle-ai", "persisted-state.json")
 	if err := os.Rename(statePath, stateTarget); err != nil {
@@ -2004,10 +2016,15 @@ func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) 
 	writeManagedPiCodeGraphManifest(t, home)
 
 	previousRefresh := refreshPiCodeGraphIfConfigured
+	previousLookPath := cmdLookPath
 	refreshPiCodeGraphIfConfigured = func(string, string) (communitytool.PiCodeGraphResult, bool, error) {
 		return communitytool.PiCodeGraphResult{}, true, nil
 	}
-	t.Cleanup(func() { refreshPiCodeGraphIfConfigured = previousRefresh })
+	cmdLookPath = func(string) (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() {
+		refreshPiCodeGraphIfConfigured = previousRefresh
+		cmdLookPath = previousLookPath
+	})
 
 	result, err := RunSyncWithSelection(home, model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Persona: model.PersonaNeutral})
 	if err == nil || !strings.Contains(err.Error(), "persist managed asset provenance") {
@@ -2022,6 +2039,18 @@ func TestRunSyncReportsLegacySelectionMigrationPersistenceFailure(t *testing.T) 
 	}
 	if persisted.CommunityToolsConfigured || persisted.CommunityTools != nil || !reflect.DeepEqual(persisted.InstalledAgents, original.InstalledAgents) {
 		t.Fatalf("state changed after failed persistence: %#v", persisted)
+	}
+	finalState, readErr := os.ReadFile(stateTarget)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(finalState) != string(originalState) {
+		t.Fatalf("state bytes after failed migration changed:\n got %s\nwant %s", finalState, originalState)
+	}
+	for _, path := range []string{opencodeConfig, piMCP} {
+		if _, assetErr := os.ReadFile(path); !os.IsNotExist(assetErr) {
+			t.Fatalf("asset %q after failed migration read error = %v, want absent", path, assetErr)
+		}
 	}
 }
 
@@ -3901,6 +3930,13 @@ func TestSyncPersonaPathsDeclareManagedClaudeOutputStyle(t *testing.T) {
 			unwanted:   filepath.Join(home, ".claude", "output-styles", "gentleman.md"),
 			wantConfig: filepath.Join(home, ".claude", "settings.json"),
 		},
+		{
+			name:       "legacy neutral alias",
+			persona:    model.PersonaGentlemanNeutralArtifacts,
+			wantStyle:  filepath.Join(home, ".claude", "output-styles", "neutral.md"),
+			unwanted:   filepath.Join(home, ".claude", "output-styles", "gentleman.md"),
+			wantConfig: filepath.Join(home, ".claude", "settings.json"),
+		},
 	}
 
 	for _, tt := range tests {
@@ -3946,6 +3982,42 @@ func TestSyncBackupTargetsCaptureBothManagedOutputStyles(t *testing.T) {
 		if !containsPath(targets, neutral) {
 			t.Errorf("syncBackupTargets(%q) missing neutral.md; got %v", persona, targets)
 		}
+	}
+}
+
+func TestPersonaSyncOutputStyleSwitchIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    model.PersonaGentlemanNeutralArtifacts,
+	}
+	gentleman := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
+
+	if _, err := persona.Inject(home, claude.NewAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+	if _, err := os.Stat(gentleman); err != nil {
+		t.Fatalf("precondition: gentleman output style missing: %v", err)
+	}
+
+	first, err := RunSyncWithSelection(home, selection)
+	if err != nil {
+		t.Fatalf("first RunSyncWithSelection() error = %v", err)
+	}
+	if first.FilesChanged == 0 || first.NoOp {
+		t.Fatalf("first sync files changed = %d, no-op = %t; want output-style switch", first.FilesChanged, first.NoOp)
+	}
+	if _, err := os.Stat(gentleman); !os.IsNotExist(err) {
+		t.Fatalf("first sync left retired gentleman output style: %v", err)
+	}
+
+	second, err := RunSyncWithSelection(home, selection)
+	if err != nil {
+		t.Fatalf("second RunSyncWithSelection() error = %v", err)
+	}
+	if second.FilesChanged != 0 || !second.NoOp {
+		t.Fatalf("second sync files changed = %d, no-op = %t; want idempotent no-op", second.FilesChanged, second.NoOp)
 	}
 }
 
@@ -4936,8 +5008,17 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Read after sync: %v", err)
 	}
-	if !reflect.DeepEqual(after, before) {
-		t.Fatalf("CLI sync changed persisted state:\nafter:  %#v\nbefore: %#v", after, before)
+	// #2685: sync deliberately stamps the binary version that performed it, so
+	// doctor can surface managed assets older than the running binary. It is
+	// the one field sync is ALLOWED to write here; everything else must
+	// survive byte-identical, which is this guard's whole point.
+	if after.InstalledBinaryVersion != AppVersion {
+		t.Fatalf("sync did not stamp the binary version: %q, want %q", after.InstalledBinaryVersion, AppVersion)
+	}
+	expected := before
+	expected.InstalledBinaryVersion = AppVersion
+	if !reflect.DeepEqual(after, expected) {
+		t.Fatalf("CLI sync changed persisted state beyond the version stamp:\nafter:  %#v\nbefore: %#v", after, expected)
 	}
 }
 

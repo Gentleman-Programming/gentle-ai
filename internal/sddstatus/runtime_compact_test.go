@@ -232,6 +232,62 @@ func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
 	}
 }
 
+func TestCompactSettleReplaysCanonicalLegacyInterruptedRequest(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "compact-legacy-interrupted-replay")
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "legacy-begin", WorkUnit: "unit", EvidenceGoal: "goal", MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beginRecord, err := store.loadRecord(started.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := runtimeRecord{Schema: runtimeRecordSchema, Change: store.Change, PreviousRevision: started.Revision,
+		Operation: runtimeOperationFinish, RequestID: "legacy-finish", Finish: &runtimeFinishEvent{
+			Ordinal: 1, FinishCandidateIdentity: beginRecord.Begin.BeginCandidateIdentity,
+			FinishCandidateTree: beginRecord.Begin.BeginCandidateTree, Outcome: AttemptInterrupted,
+			ChangedLines: 0, EvidenceRevision: runtimeTestHash('a'), Diagnosis: "legacy interrupted record",
+			HarnessDisposition: HarnessInvalidated, CleanupEvidence: "clean", ProcessEvidence: "none",
+		}}
+	legacy.RequestDigest = runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", FinishAttemptRequest{
+		ExpectedRevision: legacy.PreviousRevision, RequestID: legacy.RequestID, Outcome: legacy.Finish.Outcome,
+		EvidenceRevision: legacy.Finish.EvidenceRevision, Diagnosis: legacy.Finish.Diagnosis,
+		HarnessDisposition: legacy.Finish.HarnessDisposition, CleanupEvidence: legacy.Finish.CleanupEvidence,
+		ProcessEvidence: legacy.Finish.ProcessEvidence,
+	})
+	revision, payload, err := runtimeRecordRevision(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishRecord(revision, payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishHead(revision); err != nil {
+		t.Fatal(err)
+	}
+	beforeRecords := countRuntimeRecords(t, store.Dir)
+
+	result, err := store.Settle(context.Background(), CompactSettleRequest{
+		Token: started.Revision, RequestID: legacy.RequestID, Outcome: AttemptInterrupted,
+		EvidenceRevision: legacy.Finish.EvidenceRevision, Diagnosis: legacy.Finish.Diagnosis,
+		HarnessDisposition: legacy.Finish.HarnessDisposition, CleanupEvidence: legacy.Finish.CleanupEvidence,
+		ProcessEvidence: legacy.Finish.ProcessEvidence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != CompactStateProceed || status.Revision != revision || countRuntimeRecords(t, store.Dir) != beforeRecords {
+		t.Fatalf("legacy interrupted compact replay result=%#v status=%#v records=%d", result, status, countRuntimeRecords(t, store.Dir))
+	}
+}
+
 func TestCompactSettleReviewDisabledClosesOrdinaryWithoutAdvancingBinding(t *testing.T) {
 	fixture := newRuntimeRemediationFixture(t, true)
 	legacy := fixture.finishRequest("compact-review-disabled-settle")

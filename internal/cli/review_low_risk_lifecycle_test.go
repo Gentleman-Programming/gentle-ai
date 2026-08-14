@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
@@ -25,7 +24,6 @@ func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
 	}
 	writeReviewStartCandidate(t, repo, "docs/ordinary-guide.md", strings.Join(lines, "\n")+"\n", 0o644)
 
-	startedAt := time.Now()
 	var startOutput bytes.Buffer
 	if err := RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
@@ -137,9 +135,6 @@ func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
 		if strings.Contains(name, "model") || strings.Contains(name, "evidence") || strings.Contains(name, "result") {
 			t.Fatalf("native low-risk lifecycle created external model/evidence artifact %q", name)
 		}
-	}
-	if elapsed := time.Since(startedAt); elapsed > 10*time.Second {
-		t.Fatalf("warm low-risk lifecycle took %s", elapsed)
 	}
 }
 

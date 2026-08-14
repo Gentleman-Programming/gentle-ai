@@ -61,6 +61,24 @@ func TestOrchestratorRollsBackApplyStepsOnFailure(t *testing.T) {
 	}
 }
 
+// TestOrchestratorRollbackCompensatesSuccessfulApply verifies that a
+// downstream failure can explicitly roll back an otherwise successful apply.
+func TestOrchestratorRollbackCompensatesSuccessfulApply(t *testing.T) {
+	order := []string{}
+	orchestrator := NewOrchestrator(DefaultRollbackPolicy())
+	result := orchestrator.Execute(StagePlan{Apply: []Step{newRollbackStep("apply-1", &order, nil)}})
+	if result.Err != nil {
+		t.Fatalf("Execute() error = %v", result.Err)
+	}
+
+	rollback := orchestrator.Rollback(result)
+	if !rollback.Success || !reflect.DeepEqual(order, []string{"run:apply-1", "rollback:apply-1"}) {
+		t.Fatalf("rollback = %#v, order = %v", rollback, order)
+	}
+}
+
+// TestOrchestratorSkipsRollbackWhenPolicyDisabled verifies that a disabled
+// policy leaves failed apply steps without compensation.
 func TestOrchestratorSkipsRollbackWhenPolicyDisabled(t *testing.T) {
 	order := []string{}
 	orchestrator := NewOrchestrator(RollbackPolicy{OnApplyFailure: false})

@@ -38,7 +38,7 @@ func TestRuntimeLedgerRescopeRecoversZeroDriftDeadlock(t *testing.T) {
 	// settling: zero drift, zero changed lines.
 	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: started.Revision, RequestID: "oversized-finish-1", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('1'), Diagnosis: "required scope measured 449 changed lines against a 400-line ceiling; reverted",
+		Diagnosis:          "required scope measured 449 changed lines against a 400-line ceiling; reverted",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "every temporary change was reverted before settling",
 		ProcessEvidence: "post-revert process scan found no surviving descendants",
 	})
@@ -333,7 +333,7 @@ func TestRuntimeLedgerRescopeRefusesWideningMaxChangedLines(t *testing.T) {
 	}
 	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: started.Revision, RequestID: "widen-finish-1", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('3'), Diagnosis: "interrupted with the workspace unchanged",
+		Diagnosis:          "interrupted with the workspace unchanged",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "no executor process was ever spawned",
 		ProcessEvidence: "pre-launch process scan found no descendants",
 	})
@@ -393,7 +393,7 @@ func TestRuntimeLedgerRescopeReplayRefusesForgedWidenedRecord(t *testing.T) {
 	}
 	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: started.Revision, RequestID: "forge-finish-1", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('4'), Diagnosis: "interrupted with the workspace unchanged",
+		Diagnosis:          "interrupted with the workspace unchanged",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "no executor process was ever spawned",
 		ProcessEvidence: "pre-launch process scan found no descendants",
 	})
@@ -474,7 +474,7 @@ func TestRuntimeLedgerRescopeCarriedBudgetBindsTheNextBegin(t *testing.T) {
 	appendRuntimeLedgerFile(t, repo, strings.Repeat("consumed-line\n", 50))
 	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: started.Revision, RequestID: "bind-finish-1", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('5'), Diagnosis: "interrupted after charging real lines, within budget",
+		Diagnosis:          "interrupted after charging real lines, within budget",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "cleanup completed with the charge left in place",
 		ProcessEvidence: "post-interruption process scan found no descendants",
 	})
@@ -573,7 +573,7 @@ func TestRuntimeLedgerRescopeRequiresPreconditions(t *testing.T) {
 	appendRuntimeLedgerFile(t, repo, "drift-after-begin\n")
 	interrupted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: started.Revision, RequestID: "active-finish-1", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('6'), Diagnosis: "interrupted after charging a real line",
+		Diagnosis:          "interrupted after charging a real line",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "cleanup completed",
 		ProcessEvidence: "process scan found no descendants",
 	})

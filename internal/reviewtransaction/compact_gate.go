@@ -454,7 +454,21 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if strictBinding {
 		expectedBaseTree = binding.BaseTree
 	}
-	baseMismatch := snapshot.BaseTree != expectedBaseTree && request.Target.Kind != TargetFixDiff && !compatibleAdvance
+	// Issue #2017: the receipt covers the original candidate plus its one
+	// bounded correction, so the correction-only publication over the
+	// already-merged candidate is receipt-derived, never base drift. Exactly
+	// one derived pair matches — base tree equal to the receipt's original
+	// candidate tree AND candidate tree equal to the corrected final tree,
+	// with a real correction between them — and only at the PR boundary,
+	// where the merged original is the publication base. Any other subset
+	// or base still denies; tree OIDs compare against tree OIDs on both
+	// sides (initial and current snapshots store ^{tree} resolutions).
+	correctionOnlyDelivery := request.Gate == GatePrePR &&
+		record.State.InitialSnapshot.Kind == TargetBaseDiff &&
+		receipt.FinalCandidateTree != record.State.InitialSnapshot.CandidateTree &&
+		snapshot.BaseTree == record.State.InitialSnapshot.CandidateTree &&
+		snapshot.CandidateTree == receipt.FinalCandidateTree
+	baseMismatch := snapshot.BaseTree != expectedBaseTree && request.Target.Kind != TargetFixDiff && !compatibleAdvance && !correctionOnlyDelivery
 	if strictBinding {
 		baseMismatch = snapshot.BaseTree != expectedBaseTree && !squashedFixDelivery && !compatibleAdvance
 	}

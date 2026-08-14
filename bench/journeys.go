@@ -644,6 +644,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, issue2891Journeys()...)
 	journeys = append(journeys, issue2696Journeys()...)
 	journeys = append(journeys, sddChainJourneys()...)
+	journeys = append(journeys, issue3094Journeys()...)
 	journeys = append(journeys, captureEvidenceDescriptorJourneys()...)
 	journeys = append(journeys, scopeChangedFixtureJourneys()...)
 	journeys = append(journeys, waveOneJourneys()...)
@@ -651,6 +652,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, waveFiveJourneys()...)
 	journeys = append(journeys, advisoryJourneys()...)
 	journeys = append(journeys, zeroDeltaJourneys()...)
+	journeys = append(journeys, lensContextBudgetJourneys()...)
 	journeys = append(journeys, localGateBaseAdvanceJourneys()...)
 	journeys = append(journeys, intendedUntrackedJourneys()...)
 	journeys = append(journeys, captureResultDryRunJourneys()...)
@@ -667,6 +669,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, managedAssetJourneys()...)
 	journeys = append(journeys, issue2906Journeys()...)
 	journeys = append(journeys, issue2138Journeys()...)
+	journeys = append(journeys, issue3043Journeys()...)
 	return append(journeys, handoffJourneys()...)
 }
 

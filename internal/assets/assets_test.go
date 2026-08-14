@@ -228,6 +228,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 
 		// OpenCode agent files
 		"opencode/persona-gentleman.md",
+		"opencode/background-subagents.md",
 		"opencode/sdd-orchestrator.md",
 		"opencode/sdd-overlay-single.json",
 		"opencode/sdd-overlay-multi.json",
@@ -432,7 +433,7 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 		seen[entry.Name()] = true
 	}
 
-	for _, name := range []string{"commands", "plugins", "persona-gentleman.md", "sdd-orchestrator.md", "sdd-overlay-single.json", "sdd-overlay-multi.json"} {
+	for _, name := range []string{"commands", "plugins", "persona-gentleman.md", "background-subagents.md", "sdd-orchestrator.md", "sdd-overlay-single.json", "sdd-overlay-multi.json"} {
 		if !seen[name] {
 			t.Fatalf("opencode embedded assets missing %q", name)
 		}
@@ -465,6 +466,24 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 		if !wantPlugins[entry.Name()] {
 			t.Fatalf("unexpected plugin entry = %q", entry.Name())
 		}
+	}
+}
+
+// TestOpenCodeBackgroundPolicyMarkersAreBalanced pins the background
+// subagent policy asset added upstream after #3138 branched: the marker
+// fence must stay balanced around the complete asset.
+func TestOpenCodeBackgroundPolicyMarkersAreBalanced(t *testing.T) {
+	content := MustRead("opencode/background-subagents.md")
+	const (
+		start = "<!-- gentle-ai:opencode-background-subagents -->"
+		end   = "<!-- /gentle-ai:opencode-background-subagents -->"
+	)
+	trimmed := strings.TrimSpace(content)
+	if strings.Count(trimmed, start) != 1 || strings.Count(trimmed, end) != 1 {
+		t.Fatalf("background policy marker cardinality = (%d, %d), want (1, 1)", strings.Count(trimmed, start), strings.Count(trimmed, end))
+	}
+	if !strings.HasPrefix(trimmed, start+"\n") || !strings.HasSuffix(trimmed, "\n"+end) {
+		t.Fatalf("background policy markers are not balanced around the complete asset")
 	}
 }
 
@@ -622,6 +641,14 @@ func TestSkillRegistryPluginContract(t *testing.T) {
 	}
 	if strings.Contains(src, "exec(") {
 		t.Fatal("skill-registry.ts must use execFile, not shell exec")
+	}
+	worktreeIdx := strings.Index(src, "input.worktree")
+	directoryIdx := strings.Index(src, "input.directory")
+	if worktreeIdx == -1 || directoryIdx == -1 {
+		t.Fatal("skill-registry.ts must contain both input.worktree and input.directory")
+	}
+	if worktreeIdx >= directoryIdx {
+		t.Errorf("skill-registry.ts must use input.worktree before input.directory; got worktree@%d >= directory@%d", worktreeIdx, directoryIdx)
 	}
 }
 

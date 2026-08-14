@@ -420,7 +420,11 @@ func TestCompactStoreCaptureAdmittedReviewerResultNormalizesInspectionPathsBefor
 		t.Fatal(err)
 	}
 	conflicting.RawPayload = append(raw, '\n')
-	if _, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), conflicting); err == nil || !strings.Contains(err.Error(), "different canonical bytes") {
+	beforeDigest, err := os.ReadFile(fixture.path + ".sha256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.CaptureAdmittedReviewerResult(t.Context(), conflicting); !errors.Is(err, ErrCapturedReviewerResultSlotConflict) {
 		t.Fatalf("conflicting provider payload error = %v", err)
 	}
 	afterConflict, err := os.ReadFile(fixture.path)
@@ -429,6 +433,13 @@ func TestCompactStoreCaptureAdmittedReviewerResultNormalizesInspectionPathsBefor
 	}
 	if !bytes.Equal(afterConflict, persisted) {
 		t.Fatal("conflicting provider payload changed the persisted result")
+	}
+	afterDigest, err := os.ReadFile(fixture.path + ".sha256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(afterDigest, beforeDigest) {
+		t.Fatal("conflicting provider payload changed the persisted digest")
 	}
 }
 
@@ -905,10 +916,7 @@ func TestCompactStoreCaptureAdmittedReviewerResultSerializesConcurrentReplayAndC
 			switch {
 			case err == nil:
 				successes++
-			case strings.Contains(
-				err.Error(),
-				"different canonical bytes",
-			):
+			case errors.Is(err, ErrCapturedReviewerResultSlotConflict):
 				conflicts++
 			default:
 				t.Fatalf("concurrent conflict error = %v", err)

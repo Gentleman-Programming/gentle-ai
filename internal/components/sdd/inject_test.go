@@ -69,13 +69,14 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				"exactly three semantic choices in this order",
 				"`report_and_continue`, `continue_without_reporting`, `stop_here`",
 				"Only after explicit consent and that final privacy scan",
+				"If no equivalent exists, create a new automated provider-defect report.",
 				"search open and closed issues",
-				"confirms a newly-created issue identity/URL",
-				"Only a completed duplicate lookup with a definitive result may branch to a write",
-				"Do not create, comment, update, or label any issue",
-				"do not add, remove, or change any labels on it",
-				"label application fails or has an ambiguous outcome",
-				"re-resolve that exact created issue identity",
+				"newly-created issue identity/URL",
+				"Only a definitive lookup may branch to GitHub mutation",
+				"If search, comment, or creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome",
+				"perform no further GitHub mutation and no blind retry",
+				"use the uncertainty continuation below",
+				"After a definitive successful report outcome, or any report-side uncertainty after stopping further GitHub mutation, execute the shared candidate-scoped continuation below.",
 				"Both continue choices execute that exact captured decline invocation exactly once",
 				"`consent: \"declined_this_candidate\"`",
 				"native negotiated STATUS",
@@ -83,6 +84,9 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				if !strings.Contains(renderSDDOrchestratorAsset(tc.agent), required) {
 					t.Fatalf("rendered %s orchestrator missing provider-defect handoff clause %q", tc.agent, required)
 				}
+			}
+			if strings.Contains(renderSDDOrchestratorAsset(tc.agent), "gentle-"+"report") {
+				t.Fatalf("rendered %s orchestrator retains report label", tc.agent)
 			}
 		})
 	}

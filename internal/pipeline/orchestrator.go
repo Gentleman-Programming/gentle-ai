@@ -63,6 +63,13 @@ func (o *Orchestrator) Execute(plan StagePlan) ExecutionResult {
 	return result
 }
 
+// Rollback compensates successful apply steps after a downstream consumer,
+// such as state persistence, fails. It must not be called after apply failure,
+// because Execute already performs that rollback.
+func (o *Orchestrator) Rollback(result ExecutionResult) StageResult {
+	return ExecuteRollback(result.Apply.Steps, o.stepByID)
+}
+
 func (o *Orchestrator) indexSteps(steps []Step) {
 	for _, step := range steps {
 		o.stepByID[step.ID()] = step

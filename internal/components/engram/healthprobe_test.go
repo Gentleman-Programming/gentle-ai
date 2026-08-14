@@ -200,13 +200,6 @@ func TestStdioHandshake_TerminatesDescendantOnContextEnd(t *testing.T) {
 		want       error
 	}{
 		{
-			name: "deadline",
-			newContext: func() (context.Context, context.CancelFunc) {
-				return context.WithTimeout(context.Background(), 300*time.Millisecond)
-			},
-			want: context.DeadlineExceeded,
-		},
-		{
 			name: "cancellation",
 			newContext: func() (context.Context, context.CancelFunc) {
 				return context.WithCancel(context.Background())

@@ -36,57 +36,18 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 			want[journey.ID] = true
 		}
 	}
-	// 88 since j76-claude-advisory-result-reaches-delivery (#2692, #2566),
-	// j77-capture-result-input-preflight-is-read-only (#2630 D2),
-	// j78-lens-finding-id-prefix-discovery (#1844), j79-consecutive-rescope-
-	// refuses-before-publication (#2830), and j80-rescope-authorized-evidence-
-	// only-retry (#2621).
-	// j81's RC-created repair fixture (#2839) follows the independently-owned
-	// #2621 journey. j85 proves #1956's START and FINALIZE parser refusals are preflight.
-	// j82 proves #2127's reviewed full candidate can publish an unpublished
-	// monotonic subset without reopening review.
-	// j83 proves #2127's pre-PR path binds its candidate to the unique merge-base
-	// while the advertised main ref remains a moving publication boundary. j87
-	// proves #2871's correction binds the immutable failure across a later interrupt;
-	// j88 proves #2843's unborn STATUS collects explicit untracked intent first;
-	// j89 proves #2758 never offers a workspace receipt for a different index;
-	// j90 proves #2016 resumes an explicit frozen reviewing lineage after workspace drift;
-	// j91 proves #1800's pre-plan exit is audited abandon;
-	// j92 proves #2879 quarantines released historical bytes without compatibility loading;
-	// j93 proves #2822 classifies stale managed assets before START can persist;
-	// j94 proves #2031 executes recovery when escalated target scope changes;
-	// j95 proves #2945 corrected-tree inspection.
-	// j99 proves #2906 classifies missing FINALIZE contract flags before mutation.
-	// j97 proves #1890 preserves the qualified failure; j100 proves the valid unqualified branch wins over an unreachable remote.
-	// j2138 proves #2138 renders native OpenCode fallback boundaries through public install.
-	// Merge note: this branch narrated its journey as "j97" while #1890 took that
-	// number on main. Its registered ID is j2138-opencode-native-fallback-boundary,
-	// so only the prose collided, never the identifier.
-	// #1993 REMOVED two: j38 (the bound-passing-finish refusal routing to the
-	// review router) and j39 (the stranded-successor exit it named). Review
-	// acts after implementation and verification, so that refusal is gone and
-	// both journeys had no subject left. j37 survives, rewritten to prove the
+	// The corpus total used to be asserted here as a hand-written integer. It
+	// moved to bench/testdata/journeys.manifest, because two branches that each
+	// add one journey each write the same next number and git resolves that
+	// silently by taking one side. See TestRegisteredJourneysMatchTheManifest.
+	//
+	// Kept because it is knowledge rather than bookkeeping: #1993 REMOVED two
+	// journeys, j38 (the bound-passing-finish refusal routing to the review
+	// router) and j39 (the stranded-successor exit it named). Review acts after
+	// implementation and verification, so that refusal is gone and both
+	// journeys had no subject left. j37 survives, rewritten to prove the
 	// opposite of what it used to: the bound passing finish now CLOSES over a
 	// corrected candidate and keeps the binding recorded.
-	// j98 proves #2696 discovers a committed flat-root spec through both public
-	// SDD status surfaces and preserves the same routing state.
-	//
-	// j96 proves #2891 blocks an off-path sibling in a nested same-repository workspace.
-	// Bump this deliberately when a journey is added OR removed, and name it
-	// here: the count exists so a journey cannot appear or vanish unnoticed.
-	//
-	// 94 -> 95 because #3037 (j98) and #3038 (j99) each added one journey and
-	// each bumped 93 -> 94 against a main where the other had not landed. Both
-	// were green alone; merging both left 95 journeys under a baseline of 94
-	// and turned main red. The guard did exactly its job -- this is what a
-	// count catches that a per-PR suite cannot.
-	// 97 -> 98: this branch adds one journey on top of the CURRENT main
-	// baseline, which #1890 moved to 97 while this PR was open. The branch
-	// carried 96, derived from a main that had 95. Taking either side verbatim
-	// would have left the count describing a tree that does not exist.
-	if got := len(seen); got != 98 {
-		t.Errorf("core journey count = %d, want 98", got)
-	}
 	for id, found := range want {
 		if !found {
 			t.Errorf("required SDD authority journey %q is not registered", id)

@@ -955,6 +955,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			var correctionRequest *reviewtransaction.CorrectionPlanRequest
 			var preCommitDeliveryAssessment *reviewtransaction.CompactGateTargetApplicability
 			correctionForecasted := false
+			lensContextBudgetExceeded := false
 			var artifactErr error
 			if native.Applicability == reviewtransaction.TargetApplicabilityCurrent && native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact {
 				store, storeErr := reviewtransaction.CompactAuthoritativeStore(ctx, root, native.LineageID)
@@ -1006,10 +1007,16 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 							})
 						}
 						if record.State.State == reviewtransaction.StateReviewing {
-							repositoryContext, artifactErr = reviewtransaction.PublishReviewRepositoryContext(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
-								LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
-							})
-							if artifactErr == nil {
+							artifacts, artifactErr = discoverCapturedReviewerArtifacts(ctx, root, store.Dir, record.State, record.Revision)
+							if artifactErr == nil && len(artifacts) != len(record.State.SelectedLenses) {
+								lensContextBudgetExceeded = reviewLensContextStatusBudgetExhausted(ctx, root, record.State, record.Revision)
+							}
+							if artifactErr == nil && !lensContextBudgetExceeded {
+								repositoryContext, artifactErr = reviewtransaction.PublishReviewRepositoryContext(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
+									LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
+								})
+							}
+							if artifactErr == nil && !lensContextBudgetExceeded {
 								contextBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
 								frozen, frozenErr := contextBuilder.FrozenCandidateContext(ctx, record.State.InitialSnapshot)
 								if frozenErr == nil && *contract == ReviewIntegrationContractV1 {
@@ -1022,7 +1029,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								}
 							}
 						}
-						if artifactErr == nil {
+						if artifactErr == nil && record.State.State != reviewtransaction.StateReviewing {
 							artifacts, artifactErr = discoverCapturedReviewerArtifacts(ctx, root, store.Dir, record.State, record.Revision)
 						}
 						if artifactErr == nil {
@@ -1050,7 +1057,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if native.Applicability == reviewtransaction.TargetApplicabilityUnrelated && !reviewStartLineageAvailable(ctx, root, startLineage) {
 				startLineage = reviewAvailableStartLineage(ctx, root, native.TargetIdentity)
 			}
-			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, PreCommitDeliveryAssessment: preCommitDeliveryAssessment}
+			if lensContextBudgetExceeded {
+				result.Action = reviewtransaction.TargetStatusActionStop
+				result.Replayability = reviewtransaction.ReplayabilityManualActionRequired
+				if *actionEligibility {
+					result.Eligibility = newReviewActionEligibility(result)
+				}
+			}
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, PreCommitDeliveryAssessment: preCommitDeliveryAssessment}
 			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, input)
 			result.NextTransition = &transition
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&
@@ -1190,8 +1204,18 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		}
 	}
 	// Issue #2394: a recovery successor declares scope exactly the way a fresh
-	// START does, so it never re-sweeps the worktree either.
+	// START does, so it never re-sweeps the worktree either. Issue #3159:
+	// inheriting the predecessor's frozen, explicitly authorized declaration
+	// is not a sweep — those exact paths were human-selected and frozen into
+	// the authority being recovered, and dropping them silently rebinds the
+	// successor to a partial candidate. Only the current-changes successor
+	// carries the declaration forward; base-diff, overlay, and release
+	// scopes never hold intended-untracked paths.
 	intended := []string{}
+	if !*releaseScope && !*committedOnly && !stagedScopeOverlay && !overlay &&
+		predecessorRecord.State.InitialSnapshot.Kind == reviewtransaction.TargetCurrentChanges {
+		intended = append(intended, predecessorRecord.State.InitialSnapshot.IntendedUntracked...)
+	}
 	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
 	if *committedOnly {
 		target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, base
@@ -3421,6 +3445,10 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 		preCommitBaseline      reviewtransaction.CompactPreCommitDiscoveryBaseline
 		preCommitBaselineOK    bool
 		preCommitBaselineTried bool
+		// issue #1886: same bounded-discovery optimization for pre-push
+		prePushBaseline      CompactPrePushDiscoveryBaseline
+		prePushBaselineOK    bool
+		prePushBaselineTried bool
 	)
 	for _, store := range stores {
 		record, loadErr := store.Load()
@@ -3449,6 +3477,18 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 				}
 			}
 			if preCommitBaselineOK && reviewtransaction.CompactLeafProvablyUnrelatedToPreCommitBaseline(record.State, preCommitBaseline) {
+				continue
+			}
+		}
+		// issue #1886: skip provably-unrelated pre-push leaves from per-leaf gate assessment
+		if input.Gate == reviewtransaction.GatePrePush && strings.TrimSpace(input.LineageID) == "" {
+			if !prePushBaselineTried {
+				prePushBaselineTried = true
+				if baseline, baselineErr := BuildCompactPrePushDiscoveryBaseline(ctx, repo); baselineErr == nil {
+					prePushBaseline, prePushBaselineOK = baseline, true
+				}
+			}
+			if prePushBaselineOK && CompactLeafProvablyUnrelatedToPrePushCandidate(record.State, prePushBaseline.PushBaseTree, prePushBaseline.Paths) {
 				continue
 			}
 		}

@@ -107,17 +107,234 @@ func TestReviewModeCloneScopeDisablesOnlyThisClone(t *testing.T) {
 	}
 }
 
-func TestReviewModeCloneScopeRejectsForcingOn(t *testing.T) {
-	reviewModeHome(t)
+func TestReviewModeCloneScopeEnableIsIdempotentWhenGlobalOn(t *testing.T) {
+	home := reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
+	if err := state.Write(home, state.InstallState{RDDMode: string(reviewtransaction.RDDModeOn)}); err != nil {
+		t.Fatalf("state.Write error = %v", err)
+	}
 
 	var output bytes.Buffer
 	err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--expected-revision", "", "--json"}, &output)
 	if err != nil {
-		t.Fatalf("clearing an absent clone override must succeed: %v", err)
+		t.Fatalf("clearing an absent clone override must succeed while global mode is on: %v", err)
 	}
-	if result := decodeReviewModeResult(t, output.Bytes()); result.Status.Effective != reviewtransaction.RDDModeOn {
+	if result := decodeReviewModeResult(t, output.Bytes()); result.Status.Effective != reviewtransaction.RDDModeOn ||
+		result.Status.Source != reviewtransaction.RDDModeSourceGlobal || result.Status.Revision != "" {
 		t.Fatalf("clone enable result = %#v", result.Status)
+	}
+	if _, err := os.Lstat(filepath.Join(repo, ".git", "gentle-ai")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("idempotent clone enable created repository state: %v", err)
+	}
+}
+
+func TestReviewModeCloneScopeEnableMigratesLegacyRevision(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	ctx := context.Background()
+	disabled, err := reviewtransaction.SetCloneLocalRDDMode(ctx, repo, reviewtransaction.RDDModeOff, "", reviewtransaction.RDDGlobalMode{Value: "on"})
+	if err != nil {
+		t.Fatalf("seed clone-local override: %v", err)
+	}
+	current, err := reviewtransaction.CloneLocalRDDModeRecordPath(ctx, repo)
+	if err != nil {
+		t.Fatalf("current record path: %v", err)
+	}
+	legacyBytes, err := os.ReadFile(current)
+	if err != nil {
+		t.Fatalf("read current record: %v", err)
+	}
+	legacyRoot := filepath.Join(repo, ".git", "gentle-ai", "review-transactions")
+	if err := os.Rename(filepath.Join(repo, ".git", "gentle-ai", "review-mode"), legacyRoot); err != nil {
+		t.Fatalf("relocate secure legacy fixture: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(repo, ".git", "gentle-ai", "review-mode")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy fixture left a separately created private directory: %v", err)
+	}
+	legacy := filepath.Join(legacyRoot, "rar-authority", "v1", "rdd-mode", filepath.Base(current))
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"status", "--cwd", repo, "--json"}, &output); err != nil {
+		t.Fatalf("legacy status: %v", err)
+	}
+	status := decodeReviewModeResult(t, output.Bytes()).Status
+	if status.Revision != disabled.Revision || status.CloneLocal != reviewtransaction.RDDModeOff {
+		t.Fatalf("legacy CLI status = %#v", status)
+	}
+	output.Reset()
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--expected-revision", status.Revision, "--json"}, &output); err != nil {
+		t.Fatalf("legacy CLI enable: %v", err)
+	}
+	migrated := decodeReviewModeResult(t, output.Bytes()).Status
+	if !migrated.Enabled() || migrated.Revision == "" || migrated.Revision == status.Revision {
+		t.Fatalf("migrated CLI status = %#v", migrated)
+	}
+	if after, err := os.ReadFile(legacy); err != nil || !bytes.Equal(after, legacyBytes) {
+		t.Fatalf("legacy CLI bytes changed: err=%v", err)
+	}
+}
+
+func TestReviewModeCloneScopeEnableRejectsGlobalOffWithoutLocalOverride(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := state.Write(home, state.InstallState{RDDMode: string(reviewtransaction.RDDModeOff)}); err != nil {
+		t.Fatalf("state.Write error = %v", err)
+	}
+
+	var output bytes.Buffer
+	err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--json"}, &output)
+	var disabled *reviewtransaction.RDDDisabledError
+	if !errors.As(err, &disabled) || !errors.Is(err, reviewtransaction.ErrRDDDisabled) ||
+		disabled.Source != reviewtransaction.RDDModeSourceGlobal {
+		t.Fatalf("clone enable error = %v, want global typed disabled error", err)
+	}
+	if !strings.Contains(err.Error(), "gentle-ai review mode enable --scope=global") {
+		t.Fatalf("clone enable error does not name the global continuation: %v", err)
+	}
+	if result := decodeReviewModeResult(t, output.Bytes()); result.Status.Effective != reviewtransaction.RDDModeOff ||
+		result.Status.Source != reviewtransaction.RDDModeSourceGlobal || result.Status.Revision != "" {
+		t.Fatalf("clone enable result = %#v", result.Status)
+	}
+	if _, err := os.Lstat(filepath.Join(repo, ".git", "gentle-ai")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected clone enable created repository state: %v", err)
+	}
+}
+
+func TestReviewModeCloneScopeEnableRejectsLegacyInheritWhileGlobalOff(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	global := reviewtransaction.RDDGlobalMode{Value: string(reviewtransaction.RDDModeOn)}
+	disabled, err := reviewtransaction.SetCloneLocalRDDMode(context.Background(), repo, reviewtransaction.RDDModeOff, "", global)
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+	}
+	inherited, err := reviewtransaction.SetCloneLocalRDDMode(context.Background(), repo, reviewtransaction.RDDModeUnset, disabled.Revision, global)
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(inherit) error = %v", err)
+	}
+	if err := state.Write(home, state.InstallState{RDDMode: string(reviewtransaction.RDDModeOff)}); err != nil {
+		t.Fatalf("state.Write error = %v", err)
+	}
+	record, err := reviewtransaction.CloneLocalRDDModeRecordPath(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath error = %v", err)
+	}
+	before, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("read inherited record: %v", err)
+	}
+
+	var output bytes.Buffer
+	err = RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--json"}, &output)
+	var blocked *reviewtransaction.RDDDisabledError
+	if !errors.As(err, &blocked) || blocked.Source != reviewtransaction.RDDModeSourceGlobal {
+		t.Fatalf("legacy inherit clone enable error = %v, want global typed disabled error", err)
+	}
+	recordAfter, err := reviewtransaction.CloneLocalRDDModeRecordPath(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath after retry error = %v", err)
+	}
+	after, err := os.ReadFile(recordAfter)
+	if err != nil {
+		t.Fatalf("read inherited record after retry: %v", err)
+	}
+	if recordAfter != record || !bytes.Equal(after, before) {
+		t.Fatalf("legacy inherit retry published a new generation")
+	}
+	if result := decodeReviewModeResult(t, output.Bytes()); result.Status.Revision != inherited.Revision ||
+		result.Status.Source != reviewtransaction.RDDModeSourceGlobal {
+		t.Fatalf("legacy inherit clone enable result = %#v", result.Status)
+	}
+}
+
+func TestReviewModeCloneScopeEnableRejectsExplicitOffWhileGlobalOff(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	disabled, err := reviewtransaction.SetCloneLocalRDDMode(
+		context.Background(), repo, reviewtransaction.RDDModeOff, "", reviewtransaction.RDDGlobalMode{Value: string(reviewtransaction.RDDModeOn)})
+	if err != nil {
+		t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+	}
+	if err := state.Write(home, state.InstallState{RDDMode: string(reviewtransaction.RDDModeOff)}); err != nil {
+		t.Fatalf("state.Write error = %v", err)
+	}
+	record, err := reviewtransaction.CloneLocalRDDModeRecordPath(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath error = %v", err)
+	}
+	before, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("read explicit-off record: %v", err)
+	}
+
+	var output bytes.Buffer
+	err = RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "clone", "--json"}, &output)
+	var blocked *reviewtransaction.RDDDisabledError
+	if !errors.As(err, &blocked) || !errors.Is(err, reviewtransaction.ErrRDDDisabled) ||
+		blocked.Source != reviewtransaction.RDDModeSourceGlobal {
+		t.Fatalf("explicit-off clone enable error = %v, want global typed disabled error", err)
+	}
+	if !strings.Contains(err.Error(), "gentle-ai review mode enable --scope=global") {
+		t.Fatalf("explicit-off clone enable error does not name the global continuation: %v", err)
+	}
+	result := decodeReviewModeResult(t, output.Bytes())
+	if result.Status.Effective != reviewtransaction.RDDModeOff || result.Status.CloneLocal != reviewtransaction.RDDModeOff ||
+		result.Status.Revision != disabled.Revision {
+		t.Fatalf("explicit-off clone enable result = %#v", result.Status)
+	}
+	recordAfter, err := reviewtransaction.CloneLocalRDDModeRecordPath(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath after rejected enable error = %v", err)
+	}
+	after, err := os.ReadFile(recordAfter)
+	if err != nil {
+		t.Fatalf("read explicit-off record after rejected enable: %v", err)
+	}
+	if recordAfter != record || !bytes.Equal(after, before) {
+		t.Fatalf("explicit-off clone enable published a new generation")
+	}
+}
+
+func TestReviewModeCloneScopeDisableIsIdempotent(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	if err := state.Write(home, state.InstallState{RDDMode: string(reviewtransaction.RDDModeOn)}); err != nil {
+		t.Fatalf("state.Write error = %v", err)
+	}
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone", "--json"}, &output); err != nil {
+		t.Fatalf("first clone disable: %v", err)
+	}
+	first := decodeReviewModeResult(t, output.Bytes()).Status
+	if first.Global != reviewtransaction.RDDModeOn || first.CloneLocal != reviewtransaction.RDDModeOff ||
+		first.Source != reviewtransaction.RDDModeSourceCloneLocal {
+		t.Fatalf("seeded clone disable status = %#v", first)
+	}
+	record, err := reviewtransaction.CloneLocalRDDModeRecordPath(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath error = %v", err)
+	}
+	before, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("read disabled record: %v", err)
+	}
+
+	output.Reset()
+	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--scope", "clone", "--json"}, &output); err != nil {
+		t.Fatalf("repeated clone disable: %v", err)
+	}
+	second := decodeReviewModeResult(t, output.Bytes()).Status
+	recordAfter, err := reviewtransaction.CloneLocalRDDModeRecordPath(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("CloneLocalRDDModeRecordPath after retry error = %v", err)
+	}
+	after, err := os.ReadFile(recordAfter)
+	if err != nil {
+		t.Fatalf("read disabled record after retry: %v", err)
+	}
+	if second.Revision != first.Revision || recordAfter != record || !bytes.Equal(after, before) {
+		t.Fatalf("repeated clone disable published a new generation: first=%#v second=%#v", first, second)
 	}
 }
 

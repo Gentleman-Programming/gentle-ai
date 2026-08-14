@@ -415,6 +415,8 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		base.Action, base.Replayability = TargetStatusActionStart, ReplayabilityNotReplayable
 		if live.Kind == TargetBaseWorkspaceOverlay && live.Projection == ProjectionStaged {
 			base.Action, base.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+		} else if live.Kind == TargetBaseDiff && len(live.Paths) == 0 {
+			base.Action, base.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
 		}
 		for _, candidate := range scopeChangedCandidates {
 			base.CandidateLineageIDs = append(base.CandidateLineageIDs, candidate.lineage)
@@ -426,6 +428,8 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		base.Applicability = TargetApplicabilityUnrelated
 		base.Action, base.Replayability = TargetStatusActionStart, ReplayabilityNotReplayable
 		if live.Kind == TargetBaseWorkspaceOverlay && live.Projection == ProjectionStaged {
+			base.Action, base.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+		} else if live.Kind == TargetBaseDiff && len(live.Paths) == 0 {
 			base.Action, base.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
 		}
 		return base, nil

@@ -1,7 +1,9 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -49,6 +51,7 @@ type OpenCodeRuntimeProvenance struct {
 // InstallState holds the persisted user selections from the last install run.
 type InstallState struct {
 	InstalledAgents           []string                   `json:"installed_agents"`
+	InstalledBinaryVersion    string                     `json:"installed_binary_version,omitempty"`
 	ManagedAssetDigest        string                     `json:"managed_asset_digest,omitempty"`
 	OpenCodeRuntimeProvenance *OpenCodeRuntimeProvenance `json:"opencode_runtime_provenance,omitempty"`
 	SelectionConfigured       bool                       `json:"selection_configured,omitempty"`
@@ -143,6 +146,8 @@ type InstallState struct {
 	// recorded is authority, not a cosmetic audit field. Nil for state files
 	// written before the switch existed.
 	RDDModeRecordedAt *time.Time `json:"rdd_mode_recorded_at,omitempty"`
+
+	BackgroundIntent model.OpenCodeBackgroundIntent `json:"opencode_background_subagents,omitempty"`
 }
 
 // UnmarshalJSON preserves whether the persisted persona field was present.
@@ -227,6 +232,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 
 	return InstallState{
 		InstalledAgents:             merged,
+		InstalledBinaryVersion:      existing.InstalledBinaryVersion,
 		ManagedAssetDigest:          existing.ManagedAssetDigest,
 		OpenCodeRuntimeProvenance:   existing.OpenCodeRuntimeProvenance,
 		SelectionConfigured:         existing.SelectionConfigured,
@@ -251,6 +257,8 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		PendingSync:                 existing.PendingSync,
 		RDDMode:                     existing.RDDMode,
 		RDDModeRecordedAt:           existing.RDDModeRecordedAt,
+
+		BackgroundIntent: existing.BackgroundIntent,
 	}
 }
 
@@ -261,10 +269,36 @@ func Write(homeDir string, s InstallState) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(s, "", "  ")
+	data, err := marshal(s)
 	if err != nil {
 		return err
 	}
-	_, err = filemerge.WriteFileAtomic(Path(homeDir), append(data, '\n'), 0o644)
+	_, err = filemerge.WriteFileAtomic(Path(homeDir), data, 0o644)
 	return err
+}
+
+// WriteReconciled persists install state and treats an atomic-write error as
+// successful when the requested bytes are visible on disk after the error.
+func WriteReconciled(homeDir string, s InstallState) error {
+	err := Write(homeDir, s)
+	if err == nil {
+		return nil
+	}
+
+	data, marshalErr := marshal(s)
+	if marshalErr == nil {
+		if visible, readErr := os.ReadFile(Path(homeDir)); readErr == nil && bytes.Equal(visible, data) {
+			log.Printf("state: write returned %v but requested state is visible; treating persistence as successful", err)
+			return nil
+		}
+	}
+	return err
+}
+
+func marshal(s InstallState) ([]byte, error) {
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
 }

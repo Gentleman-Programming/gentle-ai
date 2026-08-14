@@ -88,7 +88,7 @@ An issue **without** that label is usually waiting on information (`status:needs
 
 - Go 1.25.10+
 - Docker (for E2E tests)
-- Git
+- Git 2.38+
 
 ### Clone and Build
 

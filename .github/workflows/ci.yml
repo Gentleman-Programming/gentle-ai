@@ -299,7 +299,10 @@ jobs:
     needs: go-format
     if: always()
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Issue #3185: the Windows suite legitimately runs 11-13 minutes; a 15m
+    # go-test budget flaked on slow runners with every test passing. The job
+    # limit still bounds a real hang.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -394,7 +397,7 @@ jobs:
           # absorbs it; Windows does not, and gating it here keeps the real
           # coverage where it is affordable instead of deleting it outright.
           GENTLE_AI_LARGE_WORKSPACE_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
-        run: go test -tags real_agent_e2e -v ./e2e/organicruntime -count=1 -timeout=15m
+        run: go test -tags real_agent_e2e -v ./e2e/organicruntime -count=1 -timeout=25m
 
   e2e-tests:
     name: E2E Tests (${{ matrix.platform.name }})

@@ -9,7 +9,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -279,6 +281,89 @@ func TestReviewLensContextRefusesManifestOverAdvisoryCapacityBeforePatchInspecti
 	}
 	if len(block) != 0 {
 		t.Fatalf("entry-capacity refusal emitted %d bytes of reviewer context", len(block))
+	}
+}
+
+func TestNegotiatedStatusStopsDeterministicLensContextBudgetWithoutMutation(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	for index := range advisoryreview.MaxEvidenceEntries + 1 {
+		writeReviewStartCandidate(t, repo, "path-"+strconv.Itoa(index)+".txt", "candidate\n", 0o644)
+	}
+	started := runNegotiatedReviewStart(t, repo, "lens-context-status-budget")
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := readLegacyAuthorityTree(t, reviewCLIAuthorityRoot(t, repo))
+	homeBefore := readLegacyAuthorityTree(t, home)
+	worktreeBefore := runReviewCLIGit(t, repo, "status", "--porcelain=v2", "--untracked-files=all")
+
+	var context bytes.Buffer
+	err = RunReview([]string{
+		"lens-context", "--repository-context", started.RepositoryContext.Handle, "--lens", started.SelectedLenses[0],
+	}, &context)
+	if err == nil || !strings.Contains(err.Error(), "lens_context_budget_exceeded") {
+		t.Fatalf("lens-context refusal = %v, want deterministic budget exhaustion", err)
+	}
+	if context.Len() != 0 {
+		t.Fatalf("lens-context emitted %d bytes after budget refusal", context.Len())
+	}
+	if after := readLegacyAuthorityTree(t, reviewCLIAuthorityRoot(t, repo)); !reflect.DeepEqual(before, after) {
+		t.Fatalf("lens-context budget refusal mutated authority: before=%#v after=%#v", before, after)
+	}
+	if after := readLegacyAuthorityTree(t, home); !reflect.DeepEqual(homeBefore, after) {
+		t.Fatalf("lens-context budget refusal persisted an artifact: before=%#v after=%#v", homeBefore, after)
+	}
+
+	status := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+	if status.Action != reviewtransaction.TargetStatusActionStop ||
+		status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "lens_context_budget_exceeded" ||
+		status.NextTransition.Execute != nil || status.NextTransition.Collect != nil ||
+		status.Forecast == nil || status.Forecast.Horizon != ForecastHorizonTerminal {
+		t.Fatalf("STATUS reoffered a deterministically impossible reviewer slot: %#v", status)
+	}
+	if status.Authority == nil || status.Authority.Revision != record.Revision ||
+		status.Authority.State != reviewtransaction.StateReviewing || status.Receipt.Status != ReviewReceiptExpectedMissing ||
+		status.Frozen == nil || status.Frozen.CorrectionBudget != record.State.CorrectionBudget {
+		t.Fatalf("terminal STATUS changed frozen review truth: %#v", status)
+	}
+	if after := readLegacyAuthorityTree(t, reviewCLIAuthorityRoot(t, repo)); !reflect.DeepEqual(before, after) {
+		t.Fatalf("STATUS budget classification mutated authority: before=%#v after=%#v", before, after)
+	}
+	if after := readLegacyAuthorityTree(t, home); !reflect.DeepEqual(homeBefore, after) {
+		t.Fatalf("STATUS budget classification persisted an artifact: before=%#v after=%#v", homeBefore, after)
+	}
+	if worktreeAfter := runReviewCLIGit(t, repo, "status", "--porcelain=v2", "--untracked-files=all"); worktreeAfter != worktreeBefore {
+		t.Fatalf("STATUS budget classification changed the worktree: before=%q after=%q", worktreeBefore, worktreeAfter)
+	}
+}
+
+func TestNegotiatedStatusReoffersEmptyReviewerResultWithoutBudgetTerminal(t *testing.T) {
+	reviewModeHome(t)
+	repo, started, _, record := newArtifactReview(t, false)
+	input := filepath.Join(t.TempDir(), "empty-reviewer-result.json")
+	if err := os.WriteFile(input, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("empty reviewer result was accepted")
+	}
+
+	status := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "reviewer_results_required" || status.NextTransition.Collect == nil ||
+		len(status.NextTransition.Collect.Inputs) != 1 || status.NextTransition.Collect.Inputs[0].Name != "reviewer_result" {
+		t.Fatalf("empty reviewer result STATUS = %#v, want fresh collect continuity", status)
 	}
 }
 

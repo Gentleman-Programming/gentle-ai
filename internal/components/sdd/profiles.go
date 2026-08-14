@@ -245,7 +245,7 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 //     sub-agent references and model assignments table), permissions scoped to *-{name}
 //   - sdd-{phase}-{name} (10 agents): subagent mode, hidden, file reference to
 //     the shared prompt at SharedPromptDir(homeDir)/sdd-{phase}.md
-func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string, fallbackPhaseAssignments map[string]model.ModelAssignment, codeGraphGuidance string) ([]byte, error) {
+func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string, fallbackPhaseAssignments map[string]model.ModelAssignment, codeGraphGuidance string, options ...OrchestratorRenderOptions) ([]byte, error) {
 	if profile.Name == "" || profile.Name == "default" {
 		return nil, fmt.Errorf("GenerateProfileOverlay: profile name must be non-empty and not 'default'")
 	}
@@ -255,7 +255,7 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 
 	// Build the orchestrator prompt: start with the base asset, inject model
 	// assignments table, then suffix sub-agent references.
-	orchestratorPrompt, err := buildProfileOrchestratorPrompt(profile)
+	orchestratorPrompt, err := buildProfileOrchestratorPrompt(profile, options...)
 	if err != nil {
 		return nil, fmt.Errorf("build orchestrator prompt for profile %q: %w", profile.Name, err)
 	}
@@ -557,8 +557,8 @@ func jdProfileAgentEntry(jd string) map[string]any {
 //  3. Injects a model assignments table reflecting the profile's models
 //  4. Replaces bare sub-agent references (e.g. sdd-init) with suffixed ones
 //     (e.g. sdd-init-{name}) in the prompt text
-func buildProfileOrchestratorPrompt(profile model.Profile) (string, error) {
-	base := renderSDDOrchestratorAsset(model.AgentOpenCode)
+func buildProfileOrchestratorPrompt(profile model.Profile, options ...OrchestratorRenderOptions) (string, error) {
+	base := composeOrchestratorPrompt(model.AgentOpenCode, options...)
 	// Named profiles have their own orchestrator surface and must not inherit
 	// the default OpenCode Desktop progress narration.
 	base = filemerge.InjectMarkdownSection(base, openCodeDelegationVisibilitySectionID, "")
@@ -569,6 +569,9 @@ func buildProfileOrchestratorPrompt(profile model.Profile) (string, error) {
 		capability = model.ModelCapability(profile.OrchestratorModel.ModelID)
 	}
 	base = extractModelSection(base, capability)
+	if policy := renderOpenCodeBackgroundPolicy(model.AgentOpenCode, options...); policy != "" {
+		base = appendOpenCodeBackgroundPolicy(base, policy)
+	}
 
 	// Inject model assignments table.
 	const openMarker = "<!-- gentle-ai:sdd-model-assignments -->"

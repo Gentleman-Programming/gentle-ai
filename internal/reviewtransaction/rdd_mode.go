@@ -258,6 +258,27 @@ func SetCloneLocalRDDMode(
 	if err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
 	}
+	globalMode, globalErr := normalizeRDDMode(global.Value)
+	if globalErr != nil {
+		return failedClosedRDDModeStatus(RDDModeSourceGlobal), globalErr
+	}
+	currentStatus, currentErr := ResolveRDDMode(ctx, repo, global)
+	if currentErr == nil && strings.TrimSpace(expectedRevision) != currentStatus.Revision {
+		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), fmt.Errorf(
+			"%w: expected %q but the clone-local head is %q", ErrRDDModeRevisionMismatch, expectedRevision, currentStatus.Revision)
+	}
+	if currentErr == nil && mode == RDDModeUnset && globalMode == RDDModeOff {
+		// Clearing this clone's off-only override cannot enable review while the
+		// global source remains off, so refuse without publishing a generation.
+		return currentStatus, &RDDDisabledError{Operation: RDDOperationStart, Source: RDDModeSourceGlobal}
+	}
+	if currentErr == nil && ((mode == RDDModeOff && currentStatus.CloneLocal == RDDModeOff) ||
+		(mode == RDDModeUnset && currentStatus.CloneLocal == RDDModeUnset)) {
+		return currentStatus, nil
+	}
+	if currentErr != nil && !errors.Is(currentErr, ErrRDDModeCorrupt) {
+		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), currentErr
+	}
 	dir, err := cloneLocalRDDModeRoot(ctx, repo, true)
 	if err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
@@ -269,6 +290,7 @@ func SetCloneLocalRDDMode(
 	defer func() { _ = lock.release() }()
 
 	head, present, err := readCloneLocalRDDOverrideHead(dir)
+	repairingCurrentHead := false
 	if err != nil {
 		// An unreadable head is precisely what this command exists to replace,
 		// so it must not be able to block its own repair -- that left the
@@ -288,6 +310,29 @@ func SetCloneLocalRDDMode(
 			return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), generationErr
 		}
 		head, present = rddModeOverrideRecord{Generation: generation}, false
+		repairingCurrentHead = true
+	}
+	if !present && !repairingCurrentHead {
+		// Legacy records are immutable forensic evidence. A valid one may advance
+		// only by publishing its successor in the switch-owned authority root;
+		// a damaged legacy record must never be shadowed by a fresh root.
+		legacy, legacyErr := cloneLocalRDDModeLegacyRoot(ctx, repo)
+		if legacyErr == nil {
+			// Writers before the relocation lock this path. Taking current then
+			// legacy serializes either version without a lock-order cycle.
+			legacyLock, lockErr := acquireRARAuthorityLock(ctx, filepath.Join(legacy, rddModeLockName))
+			if lockErr != nil {
+				return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), lockErr
+			}
+			defer func() { _ = legacyLock.release() }()
+			legacyHead, legacyPresent, legacyHeadErr := readCloneLocalRDDOverrideHead(legacy)
+			if legacyHeadErr != nil {
+				return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), legacyHeadErr
+			}
+			if legacyPresent {
+				head, present = legacyHead, true
+			}
+		}
 	}
 	current := ""
 	if present {
@@ -320,10 +365,6 @@ func SetCloneLocalRDDMode(
 	// generation, so a lost race can never corrupt the head record.
 	if err := publishPrivateRARImmutable(filepath.Join(dir, rddModeGenerationName(record.Generation)), payload); err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
-	}
-	globalMode, globalErr := normalizeRDDMode(global.Value)
-	if globalErr != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceGlobal), globalErr
 	}
 	return rddModeStatus(globalMode, record, true), nil
 }

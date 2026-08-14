@@ -372,6 +372,43 @@ func TestCheckStateJSON_OK(t *testing.T) {
 	}
 }
 
+func TestCheckInstalledAssetVersion_MatchingPass(t *testing.T) {
+	homeDir := t.TempDir()
+	stateDir := filepath.Join(homeDir, ".gentle-ai")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := fmt.Sprintf(`{"installed_binary_version":%q}`, AppVersion)
+	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkInstalledAssetVersion(homeDir)
+	if got.Status != CheckStatusPass {
+		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
+	}
+}
+
+func TestCheckInstalledAssetVersion_SkewWarning(t *testing.T) {
+	homeDir := t.TempDir()
+	stateDir := filepath.Join(homeDir, ".gentle-ai")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"installed_binary_version":"v0.9.0"}`
+	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := checkInstalledAssetVersion(homeDir)
+	if got.Status != CheckStatusWarn {
+		t.Errorf("expected warn for version skew, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "v0.9.0") || !strings.Contains(got.Detail, "gentle-ai sync") {
+		t.Errorf("unexpected detail: %s", got.Detail)
+	}
+}
+
 // --- checkEngramReachable ---
 
 // setStdioProbeForTest pins the stdio MCP probe outcome for one test.
@@ -742,10 +779,11 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [ok]  tool:engram                    engram found at /usr/local/bin/engram
   [ok]  tool:claude                    claude found at /usr/local/bin/claude
   [ok]  state:json                     state file OK — 1 agent(s) installed: claude-code
+  [ok]  installed:asset_version        no installed binary version recorded in state file — check skipped
   [ok]  engram:reachable               engram MCP (stdio) answered the initialize handshake for persisted configuration: %s
   [ok]  disk:space                     1024 MB free on %s filesystem
 
-Summary: 7 passed, 0 failed, 0 warnings
+Summary: 8 passed, 0 failed, 0 warnings
 Status:  healthy
 `, configPath, filepath.Join(homeDir, ".gentle-ai"))
 	if got := buf.String(); got != want {

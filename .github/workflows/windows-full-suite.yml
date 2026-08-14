@@ -77,9 +77,12 @@ jobs:
           - name: cli-s-z
             packages: ./internal/cli
             run: ^Test[S-Z]
-          - name: reviewtransaction-a-k
+          - name: reviewtransaction-a-c
             packages: ./internal/reviewtransaction
-            run: ^Test[A-K]
+            run: ^Test[A-C]
+          - name: reviewtransaction-d-k
+            packages: ./internal/reviewtransaction
+            run: ^Test[D-K]
           - name: reviewtransaction-l-z
             packages: ./internal/reviewtransaction
             run: ^Test[L-Z]

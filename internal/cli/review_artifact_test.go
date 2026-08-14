@@ -78,12 +78,10 @@ func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
 	}
 	if err := RunReviewCaptureResult(validArgs, io.Discard); err == nil {
 		t.Fatal("mismatched replay accepted")
-	} else {
-		for _, want := range []string{"review dispose-result", "review preserve-result"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("reviewer result byte-conflict = %q, want it to name %q", err.Error(), want)
-			}
-		}
+	} else if !errors.Is(err, reviewtransaction.ErrCapturedReviewerResultSlotConflict) ||
+		!strings.Contains(err.Error(), reviewerResultSlotOccupiedCode) ||
+		!strings.Contains(err.Error(), reviewNextTransitionRefreshCommandV21) {
+		t.Fatalf("reviewer result byte-conflict = %q, want occupied-slot STATUS continuation", err.Error())
 	}
 	manifest := strings.TrimSpace(first.String())
 	for _, finalize := range [][]string{

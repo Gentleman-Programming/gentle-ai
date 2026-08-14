@@ -111,6 +111,7 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	}
 	checks = append(checks,
 		doctor.Check{ID: doctor.CheckStateJSON, Run: func(context.Context) doctor.Result { return checkStateJSON(homeDir) }},
+		doctor.Check{ID: doctor.CheckInstalledAssetVersion, Run: func(context.Context) doctor.Result { return checkInstalledAssetVersion(homeDir) }},
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx, homeDir, installedAgents) }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
 	)
@@ -636,5 +637,31 @@ func statusIcon(s CheckStatus) string {
 		return "[xx]"
 	default:
 		return "[??]"
+	}
+}
+
+func checkInstalledAssetVersion(homeDir string) CheckResult {
+	s, err := state.Read(homeDir)
+	if err != nil {
+		return CheckResult{
+			Status: CheckStatusPass,
+			Detail: "no state file found — asset version check skipped",
+		}
+	}
+	if s.InstalledBinaryVersion == "" {
+		return CheckResult{
+			Status: CheckStatusPass,
+			Detail: "no installed binary version recorded in state file — check skipped",
+		}
+	}
+	if s.InstalledBinaryVersion != AppVersion {
+		return CheckResult{
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("installed assets were configured by gentle-ai %s, but running binary is %s — run 'gentle-ai sync' to update installed assets", s.InstalledBinaryVersion, AppVersion),
+		}
+	}
+	return CheckResult{
+		Status: CheckStatusPass,
+		Detail: fmt.Sprintf("installed assets match running binary version (%s)", AppVersion),
 	}
 }

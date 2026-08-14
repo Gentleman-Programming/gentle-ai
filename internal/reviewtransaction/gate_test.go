@@ -1181,6 +1181,7 @@ func newCompatiblePrePRFixture(t *testing.T, deliveryPath, basePath string) *com
 
 func newCompatiblePrePRFixtureMode(t *testing.T, deliveryPath, basePath string, mode Mode) *compatiblePrePRFixture {
 	t.Helper()
+	requireMergeTreeWriteTree(t)
 	repo := initSnapshotRepo(t)
 	baseCommit := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
 	gitSnapshot(t, repo, "branch", "main", baseCommit)
