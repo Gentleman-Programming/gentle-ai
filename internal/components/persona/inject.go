@@ -424,7 +424,7 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 		for _, retiredPath := range stylePaths.Remove {
 			styleRemoved, err := removeFileAtomic(retiredPath)
 			if err != nil {
-				return InjectionResult{}, fmt.Errorf("remove retired output style: %w", err)
+				return InjectionResult{}, &OutputStyleRemovalError{Path: retiredPath, Err: err}
 			}
 			if styleRemoved {
 				changed = true
@@ -599,6 +599,35 @@ var osReadFile = func(path string) ([]byte, error) {
 	return content, nil
 }
 
+// RemoveFileFn is the file-removal seam used when retiring a managed persona
+// output style. Package-level var for testability — tests override it to force
+// removal failures (backup.UserHomeDirFn pattern). Defaults to os.Remove.
+var RemoveFileFn = os.Remove
+
+// OutputStyleRemovalError marks a failure to remove a retired persona output
+// style after the new style file and settings were already written. The
+// pipeline may roll the transition back; the CLI converts a successfully
+// rolled-back removal into an exit-0 warning instead of a hard failure.
+type OutputStyleRemovalError struct {
+	Path string
+	Err  error
+}
+
+func (e *OutputStyleRemovalError) Error() string {
+	return fmt.Sprintf("remove retired output style %q: %v", e.Path, e.Err)
+}
+
+func (e *OutputStyleRemovalError) Unwrap() error {
+	return e.Err
+}
+
+// MessageRolledBackOutputStyle is the warning printed when a retired persona
+// output style could not be removed and the pre-transition style file and
+// settings were restored. Nothing was half-applied.
+const MessageRolledBackOutputStyle = "The retired persona output style could not be removed, so the " +
+	"previous style file and settings were restored. Nothing was half-applied. " +
+	"Close any program that may have the file open and run again."
+
 // preserveManagedSections checks whether the existing file content has
 // gentle-ai managed sections (SDD orchestrator, engram protocol, etc.) and
 // returns new content that preserves those sections while replacing only the
@@ -697,7 +726,7 @@ func legacyVSCodePersonaPaths(homeDir string) []string {
 // present and successfully deleted, false when it did not exist. Any other
 // OS-level error is returned as-is.
 func removeFileAtomic(path string) (bool, error) {
-	err := os.Remove(path)
+	err := RemoveFileFn(path)
 	if err == nil {
 		return true, nil
 	}

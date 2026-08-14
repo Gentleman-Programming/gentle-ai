@@ -2,6 +2,7 @@ package persona
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1729,6 +1730,125 @@ func TestInjectClaude_SwitchGentlemanToNeutral_CleansOutputStyle(t *testing.T) {
 	if got, want := settingsAfter["outputStyle"], "Neutral"; got != want {
 		t.Fatalf("outputStyle = %v, want %q after switching to neutral", got, want)
 	}
+}
+
+func TestInjectOutputStyleRemovalFailureReturnsTypedError(t *testing.T) {
+	home := t.TempDir()
+
+	// Precondition: Gentleman installed — writes gentleman.md and selects it.
+	if _, err := Inject(home, claudeAdapter(), model.PersonaGentleman); err != nil {
+		t.Fatalf("Inject(gentleman) error = %v", err)
+	}
+	gentlemanPath := filepath.Join(home, ".claude", "output-styles", "gentleman.md")
+	if _, statErr := os.Stat(gentlemanPath); os.IsNotExist(statErr) {
+		t.Fatal("precondition: gentleman.md missing after Gentleman install")
+	}
+
+	// Inject a persistent removal failure through the exported seam
+	// (REQ-REMOVE-HOOK / SEN-INJECTED-REMOVAL-FAILURE).
+	injectedErr := errors.New("simulated removal failure: file locked")
+	calls := 0
+	original := RemoveFileFn
+	RemoveFileFn = func(string) error {
+		calls++
+		return injectedErr
+	}
+	t.Cleanup(func() { RemoveFileFn = original })
+
+	_, err := Inject(home, claudeAdapter(), model.PersonaNeutral)
+	if err == nil {
+		t.Fatal("Inject(neutral) with failing removal returned nil error")
+	}
+	var removalErr *OutputStyleRemovalError
+	if !errors.As(err, &removalErr) {
+		t.Fatalf("error type = %T, want *OutputStyleRemovalError; error = %v", err, err)
+	}
+	if removalErr.Path != gentlemanPath {
+		t.Fatalf("removalErr.Path = %q, want %q", removalErr.Path, gentlemanPath)
+	}
+	if !errors.Is(removalErr, injectedErr) {
+		t.Fatalf("removalErr does not unwrap to injected error %v; got %v", injectedErr, removalErr)
+	}
+	if calls != 1 {
+		t.Fatalf("removal attempted %d times, want exactly 1 (REQ-NO-RETRY)", calls)
+	}
+}
+
+func TestOutputStyleRemovalErrorCarriesPathAndUnwrapsCause(t *testing.T) {
+	injectedErr := errors.New("simulated removal failure: file locked")
+	removalErr := &OutputStyleRemovalError{
+		Path: filepath.Join("home", ".claude", "output-styles", "gentleman.md"),
+		Err:  injectedErr,
+	}
+
+	msg := removalErr.Error()
+	if !strings.Contains(msg, filepath.Join("home", ".claude", "output-styles", "gentleman.md")) {
+		t.Fatalf("Error() = %q, want it to name the retired style path", msg)
+	}
+	if !strings.Contains(msg, injectedErr.Error()) {
+		t.Fatalf("Error() = %q, want it to include the underlying cause %q", msg, injectedErr.Error())
+	}
+	if !errors.Is(removalErr, injectedErr) {
+		t.Fatalf("errors.Is(%v, %v) = false, want true (Unwrap contract)", removalErr, injectedErr)
+	}
+	if unwrapped := removalErr.Unwrap(); unwrapped != injectedErr {
+		t.Fatalf("Unwrap() = %v, want %v", unwrapped, injectedErr)
+	}
+}
+
+func TestRemoveFileAtomicRoutesThroughSeam(t *testing.T) {
+	home := t.TempDir()
+	present := filepath.Join(home, "present.md")
+	if err := os.WriteFile(present, []byte("managed"), 0o644); err != nil {
+		t.Fatalf("WriteFile(present): %v", err)
+	}
+	missing := filepath.Join(home, "missing.md")
+
+	t.Run("successful removal returns true", func(t *testing.T) {
+		original := RemoveFileFn
+		RemoveFileFn = os.Remove
+		t.Cleanup(func() { RemoveFileFn = original })
+
+		removed, err := removeFileAtomic(present)
+		if err != nil {
+			t.Fatalf("removeFileAtomic(present) error = %v", err)
+		}
+		if !removed {
+			t.Fatal("removeFileAtomic(present) removed = false, want true")
+		}
+	})
+
+	t.Run("injected failure returns error without retry", func(t *testing.T) {
+		injectedErr := errors.New("injected failure")
+		calls := 0
+		original := RemoveFileFn
+		RemoveFileFn = func(string) error {
+			calls++
+			return injectedErr
+		}
+		t.Cleanup(func() { RemoveFileFn = original })
+
+		removed, err := removeFileAtomic(missing)
+		if err == nil {
+			t.Fatal("removeFileAtomic with failing seam error = nil")
+		}
+		if removed {
+			t.Fatal("removeFileAtomic with failing seam removed = true")
+		}
+		if calls != 1 {
+			t.Fatalf("seam called %d times, want exactly 1", calls)
+		}
+	})
+
+	t.Run("not-exist stays silent noop", func(t *testing.T) {
+		removed, err := removeFileAtomic(missing)
+		if err != nil {
+			t.Fatalf("removeFileAtomic(missing) error = %v, want nil (os.IsNotExist noop)", err)
+		}
+		if removed {
+			t.Fatal("removeFileAtomic(missing) removed = true, want false")
+		}
+	})
 }
 
 func TestInjectClaude_NeutralSelectsManagedOutputStyleAndPreservesOtherSettings(t *testing.T) {
