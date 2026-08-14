@@ -3,9 +3,11 @@ package state
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
@@ -110,11 +112,9 @@ type InstallState struct {
 	// "custom"). Persisted so that `gentle-ai sync` regenerates the same persona
 	// the user originally chose instead of defaulting to Gentleman every time.
 	// Empty for state files written before persona persistence was added —
-	// callers fall back to PersonaGentleman in that case.
-	Persona string `json:"persona,omitempty"`
-	// PersonaPresent distinguishes an omitted legacy field from an explicit
-	// empty persona, which must fail closed during sync validation.
-	PersonaPresent bool `json:"-"`
+	// sync resolves a genuinely omitted field to the neutral compatibility default.
+	Persona        string `json:"persona,omitempty"`
+	personaPresent bool
 
 	// LastUpdateCheck records the last time a successful remote update check was
 	// performed. Used by the cooldown gate (UpdateCheckTTL = 6h) to avoid
@@ -150,22 +150,59 @@ type InstallState struct {
 	BackgroundIntent model.OpenCodeBackgroundIntent `json:"opencode_background_subagents,omitempty"`
 }
 
-// UnmarshalJSON preserves whether the persisted persona field was present.
-// The value itself is still decoded into the public InstallState field.
+// PersonaWasPresent reports whether decoding found a persona field. Matching is
+// case-insensitive, as it is for encoding/json struct fields.
+func (s InstallState) PersonaWasPresent() bool {
+	return s.personaPresent
+}
+
+// UnmarshalJSON preserves whether the persisted persona field was present and
+// rejects ambiguous case variants before decoding the state value.
 func (s *InstallState) UnmarshalJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	first, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	object, ok := first.(json.Delim)
+	if !ok || object != '{' {
+		return fmt.Errorf("installation state must be a JSON object")
+	}
+
+	var personaKey string
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return fmt.Errorf("installation state object contains a non-string key")
+		}
+		if strings.EqualFold(key, "persona") {
+			if personaKey != "" {
+				return fmt.Errorf("installation state contains duplicate persona fields %q and %q", personaKey, key)
+			}
+			personaKey = key
+		}
+
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+
 	type plainInstallState InstallState
 	var decoded plainInstallState
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
 
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-
 	*s = InstallState(decoded)
-	_, s.PersonaPresent = fields["persona"]
+	s.personaPresent = personaKey != ""
 	return nil
 }
 
@@ -252,7 +289,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		CodexCarrilModelAssignments: existing.CodexCarrilModelAssignments,
 		CodexPhaseModelAssignments:  existing.CodexPhaseModelAssignments,
 		Persona:                     existing.Persona,
-		PersonaPresent:              existing.PersonaPresent,
+		personaPresent:              existing.personaPresent,
 		LastUpdateCheck:             existing.LastUpdateCheck,
 		PendingSync:                 existing.PendingSync,
 		RDDMode:                     existing.RDDMode,
