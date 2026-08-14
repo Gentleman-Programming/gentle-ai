@@ -19,15 +19,14 @@ func TestRepositoryIssueTemplatesUseMarkdownContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read issue chooser config: %v", err)
 	}
-	for _, required := range []string{
-		"blank_issues_enabled: false",
-		"name: Questions & Discussions",
-		"url: https://github.com/Gentleman-Programming/gentle-ai/discussions",
-		"about: Use discussions for questions, not issues",
-	} {
-		if !strings.Contains(string(config), required) {
-			t.Fatalf("issue chooser config must preserve %q", required)
-		}
+	const wantConfig = `blank_issues_enabled: false
+contact_links:
+  - name: Questions & Discussions
+    url: https://github.com/Gentleman-Programming/gentle-ai/discussions
+    about: Use discussions for questions, not issues
+`
+	if got := strings.ReplaceAll(string(config), "\r\n", "\n"); got != wantConfig {
+		t.Fatalf("unexpected issue chooser config:\n%s", got)
 	}
 
 	tests := []struct {
