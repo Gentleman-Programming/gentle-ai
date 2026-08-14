@@ -187,10 +187,10 @@ var shimTaskTag = regexp.MustCompile(`</?task(?:\s|>)|</?task_result>`)
 // capture, no preservation, no admission: native Go decides what a malformed
 // or empty result means (SEN-RPC-5/6).
 func UnwrapReviewerTaskResult(raw string) (string, error) {
-	if strings.TrimSpace(raw) == "" {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
 		return "", errors.New("reviewer output must not be empty")
 	}
-	trimmed := strings.TrimSpace(raw)
 	if envelope := shimTaskResultEnvelope.FindStringSubmatch(trimmed); envelope != nil {
 		body := envelope[1]
 		if strings.TrimSpace(body) == "" {
