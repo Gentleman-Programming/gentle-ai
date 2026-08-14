@@ -91,8 +91,9 @@ func (adapter *ClaudeAdapter) Invoke(ctx context.Context, r Request) ([]byte, er
 	// Env is an explicit allowlist, not a security boundary: authority over
 	// what a runtime may do lives in Go admission, never in what environment
 	// variables happen to reach a transport subprocess. claudeAdvisoryEnvironment
-	// carries only PATH (so claude can start) and CLAUDE_CONFIG_DIR (so it
-	// can still read its own ~/.claude auth/config), nothing else.
+	// carries only PATH (so claude can start), HOME (so it can resolve its
+	// own auth paths), and CLAUDE_CONFIG_DIR (so it can read its own ~/.claude
+	// config), nothing else.
 	command.Env = claudeAdvisoryEnvironment()
 	command.Stdin = bytes.NewReader(prompt)
 	var stdout, stderr bytes.Buffer
@@ -110,16 +111,22 @@ func (adapter *ClaudeAdapter) Invoke(ctx context.Context, r Request) ([]byte, er
 }
 
 // claudeAdvisoryEnvironment returns the minimal explicit environment
-// allowlist for the claude child process: PATH and CLAUDE_CONFIG_DIR, nothing
-// else. Everything the parent process happens to carry -- PWD in particular,
-// which would otherwise still name the real worktree even though Dir points
-// claude at an empty scratch directory -- is dropped by construction, since
-// exec.Cmd.Env, once non-nil, replaces rather than extends the inherited
-// environment.
+// allowlist for the claude child process: PATH, HOME, and CLAUDE_CONFIG_DIR,
+// nothing else. Everything the parent process happens to carry -- PWD in
+// particular, which would otherwise still name the real worktree even though
+// Dir points claude at an empty scratch directory -- is dropped by
+// construction, since exec.Cmd.Env, once non-nil, replaces rather than
+// extends the inherited environment.
 func claudeAdvisoryEnvironment() []string {
-	env := make([]string, 0, 2)
+	env := make([]string, 0, 3)
 	if path, ok := os.LookupEnv("PATH"); ok {
 		env = append(env, "PATH="+path)
+	}
+	// HOME carries the Claude credentials store (~/.claude/.credentials.json);
+	// CLAUDE_CONFIG_DIR covers config but not the auth path the child still
+	// resolves from HOME.
+	if home, err := os.UserHomeDir(); err == nil {
+		env = append(env, "HOME="+home)
 	}
 	if configDir, ok := os.LookupEnv("CLAUDE_CONFIG_DIR"); ok {
 		env = append(env, "CLAUDE_CONFIG_DIR="+configDir)

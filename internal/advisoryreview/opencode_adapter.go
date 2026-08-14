@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // OpenCodeAdapter is the thin invocation wiring for the OpenCode runtime
@@ -40,6 +41,13 @@ func NewOpenCodeAdapter() *OpenCodeAdapter {
 	return &OpenCodeAdapter{LookPath: exec.LookPath, PromptFor: NewProvider().PromptFor}
 }
 
+// advisoryTransportTimeout bounds one reviewer invocation. The transport owns
+// this bound because `opencode run` can wait on input that never arrives; a
+// caller's context.Background() must not leave the transport hanging forever.
+// It is a var, not a const, so the hanging-child test can shorten it; the
+// production default is always the 10-minute bound.
+var advisoryTransportTimeout = 10 * time.Minute
+
 // Invoke renders the request through the injected PromptFor seam and invokes
 // `opencode run` with that prompt, returning its raw final message. Every
 // returned error is a transport failure -- unavailable binary, render
@@ -47,6 +55,8 @@ func NewOpenCodeAdapter() *OpenCodeAdapter {
 // context -- never a verdict about the reviewer's content. Only Validate may
 // render that verdict, and only once this adapter has hung up (SEN-RPC-5).
 func (adapter *OpenCodeAdapter) Invoke(ctx context.Context, r Request) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, advisoryTransportTimeout)
+	defer cancel()
 	lookPath := adapter.LookPath
 	if lookPath == nil {
 		lookPath = exec.LookPath
@@ -72,6 +82,11 @@ func (adapter *OpenCodeAdapter) Invoke(ctx context.Context, r Request) ([]byte, 
 	defer os.RemoveAll(scratch)
 
 	command := exec.CommandContext(ctx, binary, "run", string(prompt))
+	// WaitDelay bounds how long Run waits after the context deadline fires and
+	// the child is killed: the grandchild may hold the inherited stdout pipe
+	// open, and without a bound Wait would block on draining it for the
+	// grandchild's whole lifetime instead of returning at the transport bound.
+	command.WaitDelay = advisoryTransportTimeout
 	// Dir is the OS-level process boundary this adapter independently
 	// guarantees: the child runs in the same empty scratch directory the
 	// adapter created, never the caller's repository.
@@ -79,9 +94,9 @@ func (adapter *OpenCodeAdapter) Invoke(ctx context.Context, r Request) ([]byte, 
 	// Env is an explicit allowlist, not a security boundary: authority over
 	// what a runtime may do lives in Go admission, never in what environment
 	// variables happen to reach a transport subprocess. opencodeAdvisoryEnvironment
-	// carries only PATH (so opencode can start) and OPENCODE_CONFIG_DIR (so
-	// it can still read its own config without inheriting the caller's),
-	// nothing else.
+	// carries only PATH (so opencode can start), HOME (so the child can reach
+	// its own auth store), and OPENCODE_CONFIG_DIR (so it can still read its
+	// own config without inheriting the caller's), nothing else.
 	command.Env = opencodeAdvisoryEnvironment()
 	command.Stdin = bytes.NewReader(nil)
 	var stdout, stderr bytes.Buffer
@@ -99,16 +114,22 @@ func (adapter *OpenCodeAdapter) Invoke(ctx context.Context, r Request) ([]byte, 
 }
 
 // opencodeAdvisoryEnvironment returns the minimal explicit environment
-// allowlist for the opencode child process: PATH and OPENCODE_CONFIG_DIR,
-// nothing else. Everything the parent process happens to carry -- PWD in
-// particular, which would otherwise still name the real worktree even though
-// Dir points opencode at an empty scratch directory -- is dropped by
-// construction, since exec.Cmd.Env, once non-nil, replaces rather than
-// extends the inherited environment.
+// allowlist for the opencode child process: PATH, HOME, and
+// OPENCODE_CONFIG_DIR, nothing else. Everything the parent process happens to
+// carry -- PWD in particular, which would otherwise still name the real
+// worktree even though Dir points opencode at an empty scratch directory --
+// is dropped by construction, since exec.Cmd.Env, once non-nil, replaces
+// rather than extends the inherited environment.
 func opencodeAdvisoryEnvironment() []string {
-	env := make([]string, 0, 2)
+	env := make([]string, 0, 3)
 	if path, ok := os.LookupEnv("PATH"); ok {
 		env = append(env, "PATH="+path)
+	}
+	// HOME carries the OpenCode credentials store (~/.local/share/opencode/
+	// auth.json), which OPENCODE_CONFIG_DIR does not cover; without it the
+	// child cannot authenticate.
+	if home, err := os.UserHomeDir(); err == nil {
+		env = append(env, "HOME="+home)
 	}
 	if configDir, ok := os.LookupEnv("OPENCODE_CONFIG_DIR"); ok {
 		env = append(env, "OPENCODE_CONFIG_DIR="+configDir)

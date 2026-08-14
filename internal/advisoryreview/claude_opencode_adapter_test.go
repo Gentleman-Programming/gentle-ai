@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // providerAdapterInvoker is the Request carrying the Invoker seam the tests
@@ -281,14 +282,16 @@ func buildRawEnvDumpingFakeRuntime(t *testing.T, dumpPath, fixedOutput string) (
 	return binary
 }
 
-// TestProviderAdaptersScrubChildEnvironmentToPathAndConfigHome proves both
-// adapters hand their child process an explicit two-variable allowlist
-// (PATH + the runtime's own config-home override), never the full ambient
-// environment Invoke()'s own process happens to carry -- PWD is the
-// motivating case, a sentinel variable proves the exclusion is general, and
-// the config-home variable proves each runtime still receives its own
-// auth/config location without inheriting the caller's.
-func TestProviderAdaptersScrubChildEnvironmentToPathAndConfigHome(t *testing.T) {
+// TestProviderAdaptersScrubChildEnvironmentToPathConfigHomeAndHome proves both
+// adapters hand their child process an explicit three-variable allowlist
+// (PATH + HOME + the runtime's own config-home override), never the full
+// ambient environment Invoke()'s own process happens to carry -- PWD is the
+// motivating case, a sentinel variable proves the exclusion is general, HOME
+// stays reachable so the child can authenticate (OpenCode credentials live
+// under ~/.local/share/opencode, Claude's under ~/.claude), and the
+// config-home variable proves each runtime still receives its own auth/config
+// location without inheriting the caller's.
+func TestProviderAdaptersScrubChildEnvironmentToPathConfigHomeAndHome(t *testing.T) {
 	run := func(name, configVar string, makeAdapter func(binary string) Invoker) {
 		t.Run(name, func(t *testing.T) {
 			dumpDir := t.TempDir()
@@ -299,6 +302,10 @@ func TestProviderAdaptersScrubChildEnvironmentToPathAndConfigHome(t *testing.T) 
 			const sentinelName = "GENTLE_AI_PROVIDER_ADAPTER_TEST_SENTINEL"
 			t.Setenv(sentinelName, "sentinel-value-must-not-leak")
 			t.Setenv(configVar, filepath.Join(t.TempDir(), "config"))
+			wantHome, err := os.UserHomeDir()
+			if err != nil {
+				t.Fatalf("UserHomeDir: %v", err)
+			}
 
 			raw, err := makeAdapter(binary).Invoke(context.Background(), testRequest(t))
 			if err != nil {
@@ -333,6 +340,9 @@ func TestProviderAdaptersScrubChildEnvironmentToPathAndConfigHome(t *testing.T) 
 			if value, present := entries["PATH"]; !present || value == "" {
 				t.Fatalf("child environment PATH = %q, present=%v, want the allowlisted PATH", value, present)
 			}
+			if value, present := entries["HOME"]; !present || value != wantHome {
+				t.Fatalf("child environment HOME = %q, present=%v, want the allowlisted home %q", value, present, wantHome)
+			}
 			if value, present := entries[configVar]; !present || value == "" {
 				t.Fatalf("child environment %s = %q, present=%v, want the allowlisted config home", configVar, value, present)
 			}
@@ -345,8 +355,8 @@ func TestProviderAdaptersScrubChildEnvironmentToPathAndConfigHome(t *testing.T) 
 					}
 				}
 			}
-			if len(entries) != 2 {
-				t.Fatalf("child environment = %v, want exactly PATH and %s", entries, configVar)
+			if len(entries) != 3 {
+				t.Fatalf("child environment = %v, want exactly PATH, HOME and %s", entries, configVar)
 			}
 		})
 	}
@@ -378,16 +388,19 @@ func TestProviderAdaptersScrubChildEnvironmentToPathAndConfigHome(t *testing.T) 
 func TestProviderAdaptersStrandNothingAndConsumeNoBudget(t *testing.T) {
 	overCount := freezeRequestWithEntries(t, MaxEvidenceEntries+1)
 	rawOutput := `{"ok":true}`
+	// The fake runtime is built once, up front, not lazily inside each
+	// LookPath seam: every row must exercise the exact same script, and
+	// building it during invocation makes the closure do test setup work
+	// hidden inside a production seam.
+	script, _ := fakeRawReviewerScript(t, rawOutput)
 	tests := []struct {
 		name    string
 		adapter Invoker
 	}{
 		{name: "claude", adapter: &ClaudeAdapter{LookPath: func(string) (string, error) {
-			script, _ := fakeRawReviewerScript(t, rawOutput)
 			return script, nil
 		}, PromptFor: passThroughPrompt}},
 		{name: "opencode", adapter: &OpenCodeAdapter{LookPath: func(string) (string, error) {
-			script, _ := fakeRawReviewerScript(t, rawOutput)
 			return script, nil
 		}, PromptFor: passThroughPrompt}},
 	}
@@ -402,5 +415,52 @@ func TestProviderAdaptersStrandNothingAndConsumeNoBudget(t *testing.T) {
 				t.Fatalf("Invoke() = %q, want the fake runtime's fixed raw output unmodified", raw)
 			}
 		})
+	}
+}
+
+// TestOpenCodeAdapterBoundsInvocationWhenCallerContextNeverExpires proves the
+// opencode transport itself bounds one reviewer invocation (SEN-RPC-30 delivery
+// gate): `opencode run` is documented to wait on input that never arrives, and
+// the caller -- here passing context.Background(), exactly as the CLI does --
+// must not hang forever. With advisoryTransportTimeout shortened to a tick, a
+// child that never returns must surface a transport error in bounded wall time
+// and never fabricate bytes. ClaudeAdapter is deliberately out of scope: it
+// drives a different command and does not independently use the unbounded
+// opencode run transport (SEN-RPC-30 scope note).
+func TestOpenCodeAdapterBoundsInvocationWhenCallerContextNeverExpires(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hanging fake runtime script targets POSIX shells")
+	}
+	original := advisoryTransportTimeout
+	advisoryTransportTimeout = time.Second
+	defer func() { advisoryTransportTimeout = original }()
+
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-hanging-runtime")
+	contents := "#!/bin/sh\n" +
+		"sleep 30\n" + // outlive even a generous shortened bound; never emits output
+		"printf '%s' '{}'\n"
+	if err := os.WriteFile(script, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &OpenCodeAdapter{LookPath: func(string) (string, error) {
+		return script, nil
+	}, PromptFor: passThroughPrompt}
+
+	start := time.Now()
+	raw, err := adapter.Invoke(context.Background(), testRequest(t))
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("Invoke() = %q, nil, want the transport's own bound to expire", raw)
+	}
+	if raw != nil {
+		t.Fatalf("Invoke() returned bytes alongside the transport error: %q", raw)
+	}
+	// The bound is a second and the child sleeps for thirty, so anything near
+	// sleep(30) proves the call did not actually wait on the hung child. Grace
+	// for CI scheduling load and the process kill/drain tail.
+	if elapsed > 10*time.Second {
+		t.Fatalf("Invoke() took %v, want only the transport's %v bound when the child never returns", elapsed, advisoryTransportTimeout)
 	}
 }
