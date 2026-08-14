@@ -5065,6 +5065,8 @@ func TestRunSyncPreservesCompletePersistedState(t *testing.T) {
 	if err := state.Write(home, before); err != nil {
 		t.Fatalf("state.Write: %v", err)
 	}
+	// Re-read so the baseline includes the decoded personaPresent bit. Complete
+	// serialization fidelity is covered by TestInstallStatePreservesEveryField.
 	before, err = state.Read(home)
 	if err != nil {
 		t.Fatalf("state.Read before sync: %v", err)
