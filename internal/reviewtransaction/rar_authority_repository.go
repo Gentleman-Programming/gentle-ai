@@ -380,9 +380,6 @@ func (repository *RARAuthorityRepository) convergePublishedReplay(ctx context.Co
 	if !errors.Is(cause, ErrAuthorityLockTimeout) {
 		return RARVerificationAuthority{}, false
 	}
-	if _, err := readPrivateRARFile(repository.pairIndexPath(request.ReceiptRef, request.Result.ResultRef)); err != nil {
-		return RARVerificationAuthority{}, false
-	}
 	authority, err := repository.ResolveReceiptResult(ctx, request.ReceiptRef, request.Result.ResultRef)
 	if err != nil || authority.Receipt.lineageID() != request.LineageID ||
 		!reflect.DeepEqual(authority.Applicability, request.Applicability) ||
