@@ -87,8 +87,10 @@ func TestOpenCodeShimDefersWhileLegacyReviewPluginInstalled(t *testing.T) {
 func TestOpenCodeShimDispatchRefusesProvenanceAbsence(t *testing.T) {
 	// REQ-RPC-6 (#3049): an absent opencode_runtime_provenance record refuses
 	// with the exact refusal text the managed plugin authors, never a weaker
-	// or reworded message.
-	shim := shimTestShim(t, false, &[]struct{ repositoryContext, lens string }{})
+	// or reworded message. A refusal is a transport outcome, never a verdict
+	// (SEN-RPC-20): no block is produced.
+	var produceCalls []struct{ repositoryContext, lens string }
+	shim := shimTestShim(t, false, &produceCalls)
 	shim.ReadPinned = func() (PinnedRuntime, error) {
 		return PinnedRuntime{}, errors.New("no opencode_runtime_provenance recorded")
 	}
@@ -99,6 +101,9 @@ func TestOpenCodeShimDispatchRefusesProvenanceAbsence(t *testing.T) {
 	}
 	if err.Error() != ShimProvenanceRefusal {
 		t.Fatalf("provenance-absence refusal = %q, want the exact preserved text %q", err.Error(), ShimProvenanceRefusal)
+	}
+	if len(produceCalls) != 0 {
+		t.Fatalf("provenance-absence refusal produced a block (SEN-RPC-20): %#v", produceCalls)
 	}
 }
 
@@ -123,7 +128,8 @@ func TestOpenCodeShimDispatchRefusesProvenanceMismatch(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			current := pinned
 			scenario.mutate(&current)
-			shim := shimTestShim(t, false, &[]struct{ repositoryContext, lens string }{})
+			var produceCalls []struct{ repositoryContext, lens string }
+			shim := shimTestShim(t, false, &produceCalls)
 			shim.CurrentProcess = func() (PinnedRuntime, error) { return current, nil }
 
 			_, err := shim.Dispatch(context.Background(), shimTestPrompt(t, "rctx_1"), "review-risk")
@@ -132,6 +138,9 @@ func TestOpenCodeShimDispatchRefusesProvenanceMismatch(t *testing.T) {
 			}
 			if err.Error() != ShimProvenanceRefusal {
 				t.Fatalf("provenance-mismatch refusal = %q, want the exact preserved text %q", err.Error(), ShimProvenanceRefusal)
+			}
+			if len(produceCalls) != 0 {
+				t.Fatalf("provenance-mismatch refusal produced a block (SEN-RPC-20): %#v", produceCalls)
 			}
 		})
 	}
@@ -142,7 +151,8 @@ func TestOpenCodeShimDispatchRefusesWhenCurrentProcessUndeterminable(t *testing.
 	// shim refuses rather than admit a review it cannot bind to the synced
 	// binary. A refusal is a transport outcome, never a verdict (SEN-RPC-20):
 	// no block, no ValidatedResult.
-	shim := shimTestShim(t, false, &[]struct{ repositoryContext, lens string }{})
+	var produceCalls []struct{ repositoryContext, lens string }
+	shim := shimTestShim(t, false, &produceCalls)
 	shim.CurrentProcess = func() (PinnedRuntime, error) {
 		return PinnedRuntime{}, errors.New("resolve current gentle-ai executable: test failure")
 	}
@@ -153,6 +163,9 @@ func TestOpenCodeShimDispatchRefusesWhenCurrentProcessUndeterminable(t *testing.
 	}
 	if result.Block != nil {
 		t.Fatalf("provenance refusal still produced a block: %q", result.Block)
+	}
+	if len(produceCalls) != 0 {
+		t.Fatalf("provenance refusal produced a block (SEN-RPC-20): %#v", produceCalls)
 	}
 }
 
@@ -202,7 +215,9 @@ func TestOpenCodeShimDispatchRefusesMissingBindingRoute(t *testing.T) {
 
 func TestOpenCodeShimDispatchFailsClosedOnUnwiredSeams(t *testing.T) {
 	// Fail-closed wiring: an OpenCodeShim whose seams were never wired must
-	// return a transport error, never panic and never admit anything.
+	// return a transport error, never panic and never admit anything. The
+	// wiring check is a four-way condition, so each of the four seam fields
+	// gets its own case: a regression that drops any one check fails here.
 	shim := NewOpenCodeShim()
 	shim.ProduceBlock = func(context.Context, string, string) ([]byte, error) {
 		t.Fatal("unwired shim called ProduceBlock")
@@ -221,10 +236,20 @@ func TestOpenCodeShimDispatchFailsClosedOnUnwiredSeams(t *testing.T) {
 		return PinnedRuntime{}, nil
 	}
 
-	shim.ReadPinned = nil
-	result, err := shim.Dispatch(context.Background(), shimTestPrompt(t, "rctx_1"), "review-risk")
-	if err == nil || !strings.Contains(err.Error(), "not wired") {
-		t.Fatalf("Dispatch() with unwired ReadPinned = (%#v, %v), want fail-closed transport error", result, err)
+	for name, unwire := range map[string]func(*OpenCodeShim){
+		"ReadPinned":                  func(s *OpenCodeShim) { s.ReadPinned = nil },
+		"CurrentProcess":              func(s *OpenCodeShim) { s.CurrentProcess = nil },
+		"LegacyReviewPluginInstalled": func(s *OpenCodeShim) { s.LegacyReviewPluginInstalled = nil },
+		"ProduceBlock":                func(s *OpenCodeShim) { s.ProduceBlock = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			unwired := *shim
+			unwire(&unwired)
+			result, err := unwired.Dispatch(context.Background(), shimTestPrompt(t, "rctx_1"), "review-risk")
+			if err == nil || !strings.Contains(err.Error(), "not wired") {
+				t.Fatalf("Dispatch() with unwired %s = (%#v, %v), want fail-closed transport error", name, result, err)
+			}
+		})
 	}
 }
 
@@ -238,6 +263,35 @@ func TestOpenCodeShimProvenanceRefusalPreservesOriginalText(t *testing.T) {
 	}
 	if !strings.Contains(ShimProvenanceRefusal, "Run `gentle-ai sync` from the intended installation, then relaunch the reviewer.") {
 		t.Fatalf("ShimProvenanceRefusal lost the sync recovery instruction: %q", ShimProvenanceRefusal)
+	}
+}
+
+func TestOpenCodeShimDispatchDefersWithScanErrorOnDeferralCause(t *testing.T) {
+	// SEN-RPC-17 + Finding 6: an undeterminable legacy state must still defer
+	// (under-injection can never violate the exactly-one-injection invariant),
+	// but the scan error must ride on the result instead of being silent: a
+	// legacy plugin directory that a permission error makes unreadable would
+	// otherwise defer every dispatch forever with the caller seeing a
+	// successful, blockless result and no signal at all.
+	scanErr := errors.New("legacy plugin scan failed: permission denied")
+	shim := shimTestShim(t, false, &[]struct{ repositoryContext, lens string }{})
+	shim.LegacyReviewPluginInstalled = func() (bool, error) { return false, scanErr }
+
+	result, err := shim.Dispatch(context.Background(), shimTestPrompt(t, "rctx_1"), "review-risk")
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v, want the scan failure to defer rather than error", err)
+	}
+	if !result.Deferred {
+		t.Fatal("Dispatch() did not defer when the legacy state could not be determined")
+	}
+	if result.Block != nil {
+		t.Fatalf("Dispatch() produced a block while deferring on a scan error: %q", result.Block)
+	}
+	if result.DeferralCause == nil {
+		t.Fatal("Dispatch() returned a deferred result without recording the scan error in DeferralCause")
+	}
+	if !errors.Is(result.DeferralCause, scanErr) {
+		t.Fatalf("DeferralCause = %v, want the scan error %v", result.DeferralCause, scanErr)
 	}
 }
 

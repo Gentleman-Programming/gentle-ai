@@ -43,6 +43,9 @@ type DispatchResult struct {
 	// Deferred reports that the legacy review plugin is installed and is the
 	// sole injection source; the shim produced nothing.
 	Deferred bool
+	// DeferralCause carries the scan error when the legacy state could not be
+	// determined. Deferral stays the outcome; the cause stops being invisible.
+	DeferralCause error
 	// Block is the provider's finished lens context, returned untouched.
 	Block []byte
 }
@@ -101,9 +104,14 @@ func (shim *OpenCodeShim) Dispatch(ctx context.Context, prompt, lens string) (Di
 	// SEN-RPC-17: the deferral happens BEFORE provenance admission and BEFORE
 	// any block production. An undeterminable legacy state also defers: the
 	// migration window's invariant is exactly one injection, and under-injection
-	// is the only direction that can never violate it.
+	// is the only direction that can never violate it. The scan error rides on
+	// the result so a persistently failing scan is visible to the caller as a
+	// degraded transport instead of a silent, unbounded deferral.
 	legacyInstalled, err := shim.LegacyReviewPluginInstalled()
-	if err != nil || legacyInstalled {
+	if err != nil {
+		return DispatchResult{Deferred: true, DeferralCause: err}, nil
+	}
+	if legacyInstalled {
 		return DispatchResult{Deferred: true}, nil
 	}
 
