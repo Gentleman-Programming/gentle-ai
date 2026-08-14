@@ -41,8 +41,9 @@ func captureStderr(t *testing.T, fn func()) string {
 // fall through to the hard-failure path unchanged and print nothing.
 func TestHandleRolledBackPersonaTransition(t *testing.T) {
 	typedErr := &persona.OutputStyleRemovalError{
-		Path: "/home/.claude/output-styles/gentleman.md",
-		Err:  errors.New("simulated removal failure: file locked"),
+		Path:         "/home/.claude/output-styles/gentleman.md",
+		SettingsPath: "/home/.claude/settings.json",
+		Err:          errors.New("simulated removal failure: file locked"),
 	}
 
 	t.Run("typed error with successful rollback returns true and warns", func(t *testing.T) {
@@ -62,6 +63,35 @@ func TestHandleRolledBackPersonaTransition(t *testing.T) {
 		}
 		if !strings.HasPrefix(stderr, "WARNING: ") {
 			t.Fatalf("stderr does not start with WARNING prefix; got:\n%s", stderr)
+		}
+		for _, target := range typedErr.RestoredTargets() {
+			if !strings.Contains(stderr, target) {
+				t.Fatalf("stderr missing restored target %q; got:\n%s", target, stderr)
+			}
+		}
+	})
+
+	t.Run("typed error without settings path still names the retired style", func(t *testing.T) {
+		noSettingsErr := &persona.OutputStyleRemovalError{
+			Path: "/home/.claude/output-styles/gentleman.md",
+			Err:  errors.New("simulated removal failure: file locked"),
+		}
+		exec := pipeline.ExecutionResult{
+			Err:      noSettingsErr,
+			Rollback: pipeline.StageResult{Success: true},
+		}
+		var handled bool
+		stderr := captureStderr(t, func() {
+			handled = handleRolledBackPersonaTransition(exec)
+		})
+		if !handled {
+			t.Fatal("handleRolledBackPersonaTransition(typed no-settings+rollback-ok) = false, want true")
+		}
+		if !strings.Contains(stderr, noSettingsErr.Path) {
+			t.Fatalf("stderr missing restored style path %q; got:\n%s", noSettingsErr.Path, stderr)
+		}
+		if strings.Contains(stderr, "settings.json") {
+			t.Fatalf("stderr unexpectedly names settings when SettingsPath is empty; got:\n%s", stderr)
 		}
 	})
 

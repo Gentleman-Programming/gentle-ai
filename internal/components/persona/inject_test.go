@@ -1766,6 +1766,10 @@ func TestInjectOutputStyleRemovalFailureReturnsTypedError(t *testing.T) {
 	if removalErr.Path != gentlemanPath {
 		t.Fatalf("removalErr.Path = %q, want %q", removalErr.Path, gentlemanPath)
 	}
+	settingsPath := claudeAdapter().SettingsPath(home)
+	if removalErr.SettingsPath != settingsPath {
+		t.Fatalf("removalErr.SettingsPath = %q, want %q", removalErr.SettingsPath, settingsPath)
+	}
 	if !errors.Is(removalErr, injectedErr) {
 		t.Fatalf("removalErr does not unwrap to injected error %v; got %v", injectedErr, removalErr)
 	}

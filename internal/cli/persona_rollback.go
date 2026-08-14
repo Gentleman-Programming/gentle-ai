@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
@@ -22,6 +23,10 @@ func handleRolledBackPersonaTransition(exec pipeline.ExecutionResult) bool {
 	if !errors.As(exec.Err, &removalErr) || !exec.Rollback.Success {
 		return false
 	}
-	fmt.Fprintf(os.Stderr, "WARNING: %s\n", persona.MessageRolledBackOutputStyle)
+	msg := persona.MessageRolledBackOutputStyle
+	if targets := removalErr.RestoredTargets(); len(targets) > 0 {
+		msg = fmt.Sprintf("%s\nRestored: %s.", msg, strings.Join(targets, ", "))
+	}
+	fmt.Fprintf(os.Stderr, "WARNING: %s\n", msg)
 	return true
 }

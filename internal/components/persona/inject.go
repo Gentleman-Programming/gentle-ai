@@ -424,7 +424,11 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 		for _, retiredPath := range stylePaths.Remove {
 			styleRemoved, err := removeFileAtomic(retiredPath)
 			if err != nil {
-				return InjectionResult{}, &OutputStyleRemovalError{Path: retiredPath, Err: err}
+				removalErr := &OutputStyleRemovalError{Path: retiredPath, Err: err}
+				if settingsPath != "" {
+					removalErr.SettingsPath = settingsPath
+				}
+				return InjectionResult{}, removalErr
 			}
 			if styleRemoved {
 				changed = true
@@ -608,9 +612,12 @@ var RemoveFileFn = os.Remove
 // style after the new style file and settings were already written. The
 // pipeline may roll the transition back; the CLI converts a successfully
 // rolled-back removal into an exit-0 warning instead of a hard failure.
+// SettingsPath carries the settings file restored by the rollback when the
+// adapter manages one; it is empty for adapters without settings.
 type OutputStyleRemovalError struct {
-	Path string
-	Err  error
+	Path         string
+	SettingsPath string
+	Err          error
 }
 
 func (e *OutputStyleRemovalError) Error() string {
@@ -619,6 +626,18 @@ func (e *OutputStyleRemovalError) Error() string {
 
 func (e *OutputStyleRemovalError) Unwrap() error {
 	return e.Err
+}
+
+// RestoredTargets returns the paths restored by the rollback, in stable
+// order: the retired style file always first, then the settings file when the
+// adapter manages one. The CLI renders these in the exit-0 warning so the
+// user knows exactly what was rolled back.
+func (e *OutputStyleRemovalError) RestoredTargets() []string {
+	targets := []string{e.Path}
+	if e.SettingsPath != "" {
+		targets = append(targets, e.SettingsPath)
+	}
+	return targets
 }
 
 // MessageRolledBackOutputStyle is the warning printed when a retired persona

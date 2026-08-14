@@ -133,6 +133,12 @@ func assertRolledBackPersonaTransition(t *testing.T, env *personaTransitionTestE
 	if !strings.Contains(stderr, persona.MessageRolledBackOutputStyle) {
 		t.Errorf("stderr missing rollback warning; got:\n%s", stderr)
 	}
+	if !strings.Contains(stderr, env.gentlemanPath) {
+		t.Errorf("stderr missing restored retired style path %q; got:\n%s", env.gentlemanPath, stderr)
+	}
+	if !strings.Contains(stderr, env.settingsPath) {
+		t.Errorf("stderr missing restored settings path %q; got:\n%s", env.settingsPath, stderr)
+	}
 	if env.removeCalls != 1 {
 		t.Errorf("removal seam called %d times, want exactly 1 (REQ-NO-RETRY)", env.removeCalls)
 	}
