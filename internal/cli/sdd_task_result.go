@@ -168,13 +168,18 @@ func sddTaskResultResult(flags sddTaskResultFlags, cwd string, stdin io.Reader, 
 		Output   any `json:"output"`
 		Metadata any `json:"metadata"`
 	}
-	if err := json.Unmarshal(payload, &body); err != nil {
-		return fmt.Errorf("sdd task-result result: decode payload: %w", err)
-	}
-
-	_, class, err := sdd.UnwrapSDDTaskResult(body.Output)
-	if err == nil {
-		return nil
+	// An undecodable payload fails closed exactly like an unclassifiable
+	// result: the boundary cannot establish that the phase succeeded, so the
+	// failure latch is recorded and the terminal handoff is written, never a
+	// silent pass for the next SDD phase launch (SEN-SOA-2). The raw Go
+	// decode-error text stays out of the transcript -- the handoff envelope
+	// is the only permanent record.
+	class := "malformed_result"
+	if err := json.Unmarshal(payload, &body); err == nil {
+		var unwrapErr error
+		if _, class, unwrapErr = sdd.UnwrapSDDTaskResult(body.Output); unwrapErr == nil {
+			return nil
+		}
 	}
 
 	handoff := sdd.SDDTaskFailureEnvelope(flags.phase, cwd, class, body.Metadata)

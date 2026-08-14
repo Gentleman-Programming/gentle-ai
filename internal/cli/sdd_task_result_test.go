@@ -25,6 +25,20 @@ import (
 // and that contract: which verbs touch the latch, what is printed on what
 // path, and that a cold latch or a non-SDD phase never blocks.
 
+func TestRunSDDTaskResultUnknownCommandIsRefused(t *testing.T) {
+	// The reviewer-shim glue spawns exactly the documented verbs, so an
+	// unrecognized command is the drift signal when the installed glue and
+	// this binary disagree; the operator is directed to re-sync the glue.
+	var out bytes.Buffer
+	err := runSDDTaskResult(
+		[]string{"frobnicate", "--cwd", "/repo", "--session", "s1", "--phase", "sdd-apply", "--latch-path", latchPath(t)},
+		bytes.NewReader(nil), &out,
+	)
+	if err == nil {
+		t.Fatal("runSDDTaskResult accepted an unknown command")
+	}
+}
+
 func TestRunSDDTaskResultGuardColdLatchPasses(t *testing.T) {
 	var out bytes.Buffer
 	err := runSDDTaskResult(
@@ -226,6 +240,42 @@ func TestRunSDDTaskResultClearAllRemovesEveryLatchEntry(t *testing.T) {
 	}
 }
 
+func TestRunSDDTaskResultUndecodablePayloadLatchesMalformed(t *testing.T) {
+	// A payload that fails JSON decode fails closed: the session must never
+	// behave as if the phase passed (SEN-SOA-2), so the malformed_result
+	// latch is recorded and the terminal handoff written, and the next SDD
+	// phase launch in this session is refused.
+	path := latchPath(t)
+
+	var out bytes.Buffer
+	err := runSDDTaskResult(
+		[]string{"result", "--cwd", "/repo", "--session", "s1", "--phase", "sdd-verify", "--latch-path", path},
+		bytes.NewReader([]byte("{not-json")), &out,
+	)
+	if err != nil {
+		t.Fatalf("result on undecodable payload: %v", err)
+	}
+	wantHandoff := sdd.SDDTaskFailureEnvelope("sdd-verify", "/repo", "malformed_result", nil)
+	if out.String() != wantHandoff {
+		t.Fatalf("undecodable handoff mismatch:\n got %q\nwant %q", out.String(), wantHandoff)
+	}
+
+	var latched bytes.Buffer
+	err = runSDDTaskResult(
+		[]string{"guard", "--cwd", "/repo", "--session", "s1", "--phase", "sdd-archive", "--latch-path", path},
+		bytes.NewReader(nil), &latched,
+	)
+	if err != nil {
+		t.Fatalf("guard after undecodable failure: %v", err)
+	}
+	wantLatched := sdd.SDDDispatchLatchedEnvelope("sdd-archive", sdd.SDDTaskFailure{
+		Phase: "sdd-verify", Code: "sdd_task_result_malformed",
+	}, "/repo")
+	if latched.String() != wantLatched {
+		t.Fatalf("undecodable latched envelope mismatch:\n got %q\nwant %q", latched.String(), wantLatched)
+	}
+}
+
 func latchPath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(t.TempDir(), "sdd-dispatch-latch.json")
@@ -233,9 +283,13 @@ func latchPath(t *testing.T) string {
 
 func recordLatch(t *testing.T, path, session, phase, code string) {
 	t.Helper()
+	reason := "malformed_result"
+	if code == "sdd_task_result_empty" {
+		reason = "empty_result"
+	}
 	store := sdd.NewFileSDDLatchStore(path)
 	if err := store.Record(session, sdd.SDDTaskFailure{
-		Phase: phase, Code: code, Handoff: sdd.SDDTaskFailureEnvelope(phase, "/repo", "empty_result", nil),
+		Phase: phase, Code: code, Handoff: sdd.SDDTaskFailureEnvelope(phase, "/repo", reason, nil),
 	}); err != nil {
 		t.Fatalf("record latch: %v", err)
 	}
