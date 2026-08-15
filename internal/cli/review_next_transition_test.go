@@ -609,22 +609,20 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 
 func TestReviewRecoveryTransitionRefusesSelectorsNativeRecoverCannotReplay(t *testing.T) {
 	t.Parallel()
-	status := ReviewTargetStatusResult{
-		Applicability: reviewtransaction.TargetApplicabilityCurrent, Action: reviewtransaction.TargetStatusActionRecover,
-		ActionDisposition: reviewtransaction.RecoveryEscalated, TargetIdentity: "sha256:" + strings.Repeat("b", 64), AuthorityTargetIdentity: "sha256:" + strings.Repeat("c", 64),
-		Authority: &ReviewTargetStatusAuthority{LineageID: "selector-predecessor", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateEscalated}, Projection: ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace},
-	}
+	status := ReviewTargetStatusResult{Applicability: reviewtransaction.TargetApplicabilityCurrent, Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryEscalated, TargetIdentity: "sha256:" + strings.Repeat("b", 64), AuthorityTargetIdentity: "sha256:" + strings.Repeat("c", 64), Authority: &ReviewTargetStatusAuthority{LineageID: "selector-predecessor", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateEscalated}, Projection: ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace}}
 	t.Run("explicit workspace overlay authorization keeps its existing route", func(t *testing.T) {
-		selector := reviewTransitionSelector{Recovery: &reviewtransaction.Target{Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "HEAD^"}}
-		input := reviewNextTransitionInput{Successor: "selector-successor", Reason: "explicit recovery", Actor: "maintainer", Selector: &selector}
+		input := reviewNextTransitionInput{Successor: "selector-successor", Reason: "explicit recovery", Actor: "maintainer", Selector: &reviewTransitionSelector{Recovery: &reviewtransaction.Target{Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "HEAD^"}}}
 		input.Authorization = reviewTransitionRecoveryAuthorization(reviewTransitionBinding(status.Authority, status.TargetIdentity), input.Successor, input.Actor, input.Reason)
 		got := newReviewNextTransition(status, nil, nil, nil, nil, input)
 		if got.Kind != reviewNextTransitionExecute || got.Execute == nil {
 			t.Fatalf("explicit workspace-overlay recovery = %#v, want an execute route", got)
 		}
-		arguments, _ := reviewTransitionArgumentMap(got.Execute.Arguments)
-		if len(arguments) != 9 || arguments["workspace-overlay"] != "true" || arguments["maintainer-authorization"] != input.Authorization {
-			t.Fatalf("explicit workspace-overlay recovery = %#v, want the existing seven-field authorization route", got)
+		arguments, err := reviewTransitionArgumentMap(got.Execute.Arguments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(arguments, map[string]string{"predecessor-lineage": status.Authority.LineageID, "expected-predecessor-revision": status.Authority.Revision, "successor-lineage": input.Successor, "disposition": string(reviewtransaction.RecoveryEscalated), "reason": input.Reason, "actor": input.Actor, "maintainer-authorization": input.Authorization, "base-ref": "HEAD^", "workspace-overlay": "true"}) {
+			t.Fatalf("explicit workspace-overlay recovery = %#v, want the existing explicit authorization route", got)
 		}
 	})
 	tests := []struct {
@@ -632,7 +630,7 @@ func TestReviewRecoveryTransitionRefusesSelectorsNativeRecoverCannotReplay(t *te
 		selector reviewTransitionSelector
 	}{
 		{name: "new intended-untracked selection", selector: reviewTransitionSelector{Recovery: &reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{"new.txt"}}}},
-		{name: "workspace overlay without native staged replay shape", selector: reviewTransitionSelector{Recovery: &reviewtransaction.Target{Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "HEAD^"}}},
+		{name: "workspace overlay without explicit authorization", selector: reviewTransitionSelector{Recovery: &reviewtransaction.Target{Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "HEAD^"}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
