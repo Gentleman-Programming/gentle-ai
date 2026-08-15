@@ -3296,12 +3296,12 @@ func TestRealOpenCodeExecutesInstalledAdvisoryRouteWithoutMutation(t *testing.T)
 			output := stdout.Bytes()
 			fixture.assertComplete(t, true)
 			fixture.assertAdvisoryRoute(t, "explore", 1)
-			if !bytes.Contains(output, []byte(advisoryCompleted)) || !bytes.Contains(output, []byte(advisoryResult)) {
-				t.Fatalf("ordinary advisory did not complete through explore:\n%s", output)
-			}
 			assistantText, err := organicOpenCodeAssistantText(output)
 			if err != nil {
 				t.Fatalf("ordinary advisory transcript: %v\nstdout:\n%s\nstderr:\n%s", err, output, stderr.Bytes())
+			}
+			if !bytes.Contains(assistantText, []byte(advisoryCompleted)) || !bytes.Contains(assistantText, []byte(advisoryResult)) {
+				t.Fatalf("ordinary advisory did not complete through explore:\nassistant text:\n%s\nstdout:\n%s\nstderr:\n%s", assistantText, output, stderr.Bytes())
 			}
 			for _, forbidden := range []string{"PASS", `"captured":true`, "receipt", "approved", "delivery authority"} {
 				if bytes.Contains(bytes.ToLower(assistantText), bytes.ToLower([]byte(forbidden))) {
