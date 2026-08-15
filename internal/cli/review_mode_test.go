@@ -140,18 +140,18 @@ func TestReviewModeCloneScopeEnableMigratesLegacyRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("current record path: %v", err)
 	}
-	legacyDir := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
-	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
-		t.Fatalf("create legacy directory: %v", err)
-	}
-	legacy := filepath.Join(legacyDir, filepath.Base(current))
 	legacyBytes, err := os.ReadFile(current)
 	if err != nil {
 		t.Fatalf("read current record: %v", err)
 	}
-	if err := os.Rename(current, legacy); err != nil {
-		t.Fatalf("relocate legacy record: %v", err)
+	legacyRoot := filepath.Join(repo, ".git", "gentle-ai", "review-transactions")
+	if err := os.Rename(filepath.Join(repo, ".git", "gentle-ai", "review-mode"), legacyRoot); err != nil {
+		t.Fatalf("relocate secure legacy fixture: %v", err)
 	}
+	if _, err := os.Lstat(filepath.Join(repo, ".git", "gentle-ai", "review-mode")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy fixture left a separately created private directory: %v", err)
+	}
+	legacy := filepath.Join(legacyRoot, "rar-authority", "v1", "rdd-mode", filepath.Base(current))
 
 	var output bytes.Buffer
 	if err := RunReviewMode([]string{"status", "--cwd", repo, "--json"}, &output); err != nil {

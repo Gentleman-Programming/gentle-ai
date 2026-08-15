@@ -46,6 +46,10 @@ for ref in "${refs[@]}"; do
 done
 source_sha=${peeled_sha:-$direct_sha}
 [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || die "source prerelease tag does not resolve to a commit"
+git fetch --no-tags --quiet origin "refs/tags/$source_tag:refs/tags/$source_tag"
+[[ "$(git rev-parse "refs/tags/$source_tag^{commit}")" == "$source_sha" ]] || die "source prerelease tag changed during contract read"
+provider_contract_semver=$(git show "refs/tags/$source_tag:contracts/review-provider-contract/CONTRACT_SEMVER" 2>/dev/null | tr -d '\n') || die "source provider contract semver is unavailable"
+[[ "$provider_contract_semver" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die "source provider contract semver is invalid"
 
 release=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$source_tag") || die "source prerelease release is unavailable"
 jq -e --arg tag "$source_tag" \
@@ -69,7 +73,7 @@ else
     if jq -e '.draft == true and (.assets | length) == 0' <<<"$release" >/dev/null; then
       recovery_state=reset-empty-draft
     elif jq -e '.draft == false and .prerelease == false and .immutable == true' <<<"$release" >/dev/null &&
-      diff -u <(printf '%s\n' "gentle-ai_${version}_darwin_amd64.tar.gz" "gentle-ai_${version}_darwin_arm64.tar.gz" "gentle-ai_${version}_linux_amd64.tar.gz" "gentle-ai_${version}_linux_arm64.tar.gz" checksums.txt checksums.txt.minisig | LC_ALL=C sort) <(jq -r '.assets[].name' <<<"$release" | LC_ALL=C sort); then
+      diff -u <(printf '%s\n' "gentle-ai_${version}_darwin_amd64.tar.gz" "gentle-ai_${version}_darwin_arm64.tar.gz" "gentle-ai_${version}_linux_amd64.tar.gz" "gentle-ai_${version}_linux_arm64.tar.gz" "gentle-ai-review-provider-contract-${provider_contract_semver}.tar.gz" checksums.txt checksums.txt.minisig | LC_ALL=C sort) <(jq -r '.assets[].name' <<<"$release" | LC_ALL=C sort); then
       recovery_state=verify-existing
     else
       die "stable release state is incompatible with safe recovery"

@@ -76,7 +76,7 @@ var reviewIntegrationOperationRegistry = []reviewIntegrationOperationMetadata{
 	// from the failure envelope. Only "result" was ever listed, so every
 	// negotiated finalize failure on the admitted routes reported less than the
 	// unsafe one did.
-	{Command: "finalize", Operation: ReviewIntegrationOperationFinalize, Label: "Review FINALIZE", Negotiated: true, ValueFlags: []string{"cwd", "lineage", "expected-revision", "target", "request-hash", "repository-context", "validation", "refuter", "evidence", "trace", "result", "result-artifact", "result-artifact-file"}, BoolFlags: []string{"failed", "captured-results", "captured-evidence"}, IntFlags: []string{"correction-lines"}, MutatesAuthority: true},
+	{Command: "finalize", Operation: ReviewIntegrationOperationFinalize, Label: "Review FINALIZE", Negotiated: true, ValueFlags: []string{"cwd", "agent", "lineage", "expected-revision", "target", "request-hash", "repository-context", "validation", "refuter", "evidence", "trace", "result", "result-artifact", "result-artifact-file"}, BoolFlags: []string{"failed", "captured-results", "captured-evidence"}, IntFlags: []string{"correction-lines"}, MutatesAuthority: true},
 	// review.recover owns a verb without joining the published negotiated
 	// surface (see Negotiated above). It is emitted as an execute transition by
 	// reviewRecoveryCollection, both shipped status schemas publish it in their

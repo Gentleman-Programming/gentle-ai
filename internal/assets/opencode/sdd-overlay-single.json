@@ -66,7 +66,8 @@
         "write": false,
         "edit": false,
         "bash": false,
-        "task": false
+        "task": false,
+        "codegraph_codegraph_explore": true
       }
     },
     "sdd-init": {

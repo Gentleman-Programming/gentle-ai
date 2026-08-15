@@ -126,6 +126,11 @@ func RunArgs(args []string, stdout io.Writer) error {
 				cli.PrintInstallHelp(stdout)
 				return nil
 			}
+		case "sync":
+			if hasHelpFlag(args[1:]) {
+				cli.PrintSyncHelp(stdout)
+				return nil
+			}
 		}
 	}
 
@@ -209,10 +214,16 @@ func RunArgs(args []string, stdout io.Writer) error {
 					_, _ = fmt.Fprintf(stdout, "Warning: failed to clear PendingSync flag: %v\n", writeErr)
 				}
 			}
+			// TUI self-update path: the previous launch completed a gentle-ai
+			// self-upgrade under the old binary and set PendingSync=true. We are
+			// now running under the new binary; print the doctor advisory so the
+			// user can verify ecosystem health against the post-upgrade state.
+			// Print regardless of sync outcome — the advisory is informational.
+			printPostUpgradeDoctorAdvisory(stdout)
 		}
 
 		m := tui.NewModel(result, Version, installedState)
-		m.ExecuteFn = tuiExecute
+		m.ExecuteFn = tuiExecuteWithBackground
 		m.RestoreFn = tuiRestore
 		m.DeleteBackupFn = func(manifest backup.Manifest) error {
 			return backup.DeleteBackup(manifest)
@@ -511,7 +522,14 @@ func runUpgrade(ctx context.Context, args upgradeArgs, detection system.Detectio
 	}
 	if !dryRun {
 		if latestVersion, ok := gentleAIUpgradeSucceeded(report); ok {
-			return restartAfterGentleAIUpgrade(latestVersion, stdout)
+			if err := restartAfterGentleAIUpgrade(latestVersion, stdout); err != nil {
+				return err
+			}
+			// CLI upgrade path: print the doctor advisory so the user can verify
+			// ecosystem health against the post-upgrade state. Informational only;
+			// does not run any checks or change exit status.
+			printPostUpgradeDoctorAdvisory(stdout)
+			return nil
 		}
 	}
 	return nil
@@ -527,16 +545,22 @@ func updateCheckError(results []update.UpdateResult) error {
 }
 
 // tuiExecute creates a real install runtime and runs the pipeline with progress reporting.
-func tuiExecute(
+var appUserHomeDir = os.UserHomeDir
+
+func tuiExecuteWithBackground(
 	selection model.Selection,
 	resolved planner.ResolvedPlan,
 	detection system.DetectionResult,
+	background model.OpenCodeBackgroundIntent,
+	backgroundPersist model.OpenCodeBackgroundIntent,
+	piBackground model.PiBackgroundIntent,
+	piBackgroundPersist model.PiBackgroundIntent,
 	onProgress pipeline.ProgressFunc,
 ) pipeline.ExecutionResult {
 	restoreCommandOutput := cli.SetCommandOutputStreaming(false)
 	defer restoreCommandOutput()
 
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := appUserHomeDir()
 	if err != nil {
 		return pipeline.ExecutionResult{Err: fmt.Errorf("resolve user home directory: %w", err)}
 	}
@@ -544,7 +568,7 @@ func tuiExecute(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	execResult := cli.ExecuteTUIInstall(homeDir, selection, resolved, profile, onProgress)
+	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, piBackground, onProgress)
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
@@ -553,23 +577,46 @@ func tuiExecute(
 			agentIDs = append(agentIDs, string(a))
 		}
 		claudePhaseState := claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
-		installState := state.InstallState{
-			InstalledAgents:             agentIDs,
-			CommunityTools:              appCommunityToolIDsToStrings(selection.CommunityTools),
-			CommunityToolsConfigured:    true,
-			ClaudeModelAssignments:      claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState),
-			ClaudePhaseAssignments:      claudePhaseState,
-			KiroModelAssignments:        kiroAliasesToStrings(selection.KiroModelAssignments),
-			CodexModelAssignments:       codexEffortsToStrings(selection.CodexModelAssignments),
-			CodexOrchestratorAssignment: codexOrchestratorToState(selection.CodexOrchestratorAssignment),
-			CodexCarrilModelAssignments: selection.CodexCarrilModelAssignments,
-			CodexPhaseModelAssignments:  selection.CodexPhaseModelAssignments,
-			ModelAssignments:            modelAssignmentsToState(selection.ModelAssignments),
-			Persona:                     string(selection.Persona),
+		installState, readErr := state.Read(homeDir)
+		if errors.Is(readErr, os.ErrNotExist) {
+			installState = state.InstallState{}
+		} else if readErr != nil {
+			execResult.Err = fmt.Errorf("read persisted install state: %w", readErr)
+			if orchestrator != nil {
+				rollback := orchestrator.Rollback(execResult)
+				if rollback.Err != nil {
+					execResult.Err = errors.Join(execResult.Err, rollback.Err)
+				}
+			}
+			return execResult
 		}
+		installState.InstalledAgents = agentIDs
+		installState.CommunityTools = appCommunityToolIDsToStrings(selection.CommunityTools)
+		installState.CommunityToolsConfigured = true
+		installState.ClaudeModelAssignments = claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState)
+		installState.ClaudePhaseAssignments = claudePhaseState
+		installState.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+		installState.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
+		installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
+		installState.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
+		installState.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
+		installState.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+		installState.Persona = string(selection.Persona)
 		installState.SetSelection(selection)
-		if writeErr := state.Write(homeDir, installState); writeErr != nil {
+		if backgroundPersist != "" {
+			installState.BackgroundIntent = backgroundPersist
+		}
+		if piBackgroundPersist != "" {
+			installState.PiBackgroundIntent = piBackgroundPersist
+		}
+		if writeErr := state.WriteReconciled(homeDir, installState); writeErr != nil {
 			execResult.Err = fmt.Errorf("persist install state: %w", writeErr)
+			if orchestrator != nil {
+				rollback := orchestrator.Rollback(execResult)
+				if rollback.Err != nil {
+					execResult.Err = errors.Join(execResult.Err, rollback.Err)
+				}
+			}
 		}
 	}
 

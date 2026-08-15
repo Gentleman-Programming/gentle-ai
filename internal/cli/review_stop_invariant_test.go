@@ -280,6 +280,55 @@ func TestReviewStopInvariantTerminalClassificationAgreesWithDocs(t *testing.T) {
 // every terminal-proof entry (Terminal: true) must classify ToolFault one
 // way or the other, and the question must not apply to any caller-continuable
 // entry (Terminal: false), where ToolFault must stay nil.
+// TestReviewStopInvariantTerminalClassificationAgreesWithShippedContract is
+// #2492's actual fix. The docs table was always cross-checked; the SHIPPED
+// table — internal/assets/skills/_shared/review-ledger-contract.md, the one
+// the orchestrator contract tells consumers to read — was not, and its rows
+// carried no terminality signal at all. Eleven rows drifted before anyone
+// noticed, because the guard was pointed at the copy rather than the contract.
+//
+// Same three properties the docs check enforces, now against the contract:
+// every classified code has exactly one shipped row, every shipped row is a
+// classified code, and a row opens with the literal "Terminal — " marker iff
+// the classification says no in-lineage continuation exists. Terminal rows
+// may still name their unblocking precondition or the clone-scoped delivery
+// exit; the marker states review-terminality, not helplessness.
+func TestReviewStopInvariantTerminalClassificationAgreesWithShippedContract(t *testing.T) {
+	contract, err := os.ReadFile("../../internal/assets/skills/_shared/review-ledger-contract.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]string{}
+	for _, match := range reviewStopReasonDocsRowTextRegexp.FindAllStringSubmatch(string(contract), -1) {
+		if _, dup := rows[match[1]]; dup {
+			t.Errorf("shipped contract carries two rows for %q", match[1])
+		}
+		rows[match[1]] = match[2]
+	}
+	if len(rows) == 0 {
+		t.Fatal("found no stop-reason rows in the shipped review-ledger contract; the table shape moved")
+	}
+	for code := range rows {
+		if _, ok := reviewStopInvariantClassification[code]; !ok {
+			t.Errorf("shipped contract row %q is not a classified emittable code; a row nothing emits misroutes consumers", code)
+		}
+	}
+	for code, disposition := range reviewStopInvariantClassification {
+		text, ok := rows[code]
+		if !ok {
+			t.Errorf("classified code %q has no row in the shipped contract; a consumer receiving this stop cannot route it", code)
+			continue
+		}
+		marked := strings.HasPrefix(text, reviewStopReasonDocsTerminalPrefix)
+		if disposition.Terminal && !marked {
+			t.Errorf("code %q is classified terminal but its shipped row carries no %q marker: %q", code, reviewStopReasonDocsTerminalPrefix, text[:min(80, len(text))])
+		}
+		if !disposition.Terminal && marked {
+			t.Errorf("code %q is caller-continuable but its shipped row opens with %q: %q", code, reviewStopReasonDocsTerminalPrefix, text[:min(80, len(text))])
+		}
+	}
+}
+
 func TestReviewStopInvariantToolFaultColumnIsWellFormed(t *testing.T) {
 	t.Parallel()
 

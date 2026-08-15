@@ -1106,7 +1106,7 @@ func sddBeginThenInterrupt(r *journeyRun) error {
 		return err
 	}
 	r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-finish-one",
-		append([]string{"--outcome", "interrupted", "--evidence-revision", sddFailedEvidence}, sddTerminalEvidence...)...), false)
+		append([]string{"--outcome", "interrupted"}, sddTerminalEvidence...)...), false)
 
 	final, err := proveRuntime(r.sandbox)
 	if err != nil {

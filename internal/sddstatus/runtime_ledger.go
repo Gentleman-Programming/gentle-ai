@@ -795,6 +795,13 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if active == nil {
 			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
 		}
+		// A canonical evidence revision is accepted through normalization so an
+		// exact retry can reach mutate's request receipt and replay a legacy
+		// interrupted record. New interrupted requests are rejected below, after
+		// that idempotency check.
+		if request.Outcome == AttemptInterrupted && request.EvidenceRevision != "" {
+			return runtimeRecord{}, errors.New("interrupted attempts must omit evidence_revision; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --outcome interrupted and without --evidence-revision")
+		}
 		// Check the effective binding before candidate capture or line charging.
 		if active.EffectiveWorktree != "" && active.EffectiveWorktree != store.Workspace {
 			return runtimeRecord{}, store.runtimeEffectiveWorktreeMismatchRefusal(*active)
@@ -2302,7 +2309,9 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		event := record.Finish
 		if event.Ordinal < 1 || !validTerminalAttemptOutcome(event.Outcome) || event.ChangedLines < 0 ||
-			event.ChangedLines > maximumRuntimeChangedLines || !runtimeRevisionPattern.MatchString(event.EvidenceRevision) ||
+			event.ChangedLines > maximumRuntimeChangedLines ||
+			((event.Outcome == AttemptInterrupted && event.EvidenceRevision != "" && !runtimeRevisionPattern.MatchString(event.EvidenceRevision)) ||
+				(event.Outcome != AttemptInterrupted && !runtimeRevisionPattern.MatchString(event.EvidenceRevision))) ||
 			!runtimeRevisionPattern.MatchString(event.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.FinishCandidateTree) ||
 			validateRuntimeText(event.Diagnosis, 500) != nil || !validHarnessDisposition(event.HarnessDisposition) ||
 			validateRuntimeText(event.CleanupEvidence, 500) != nil || validateRuntimeText(event.ProcessEvidence, 500) != nil ||
@@ -2590,7 +2599,10 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 	if !validTerminalAttemptOutcome(request.Outcome) {
 		return FinishAttemptRequest{}, errors.New("outcome must be failed, interrupted, or passed")
 	}
-	if !runtimeRevisionPattern.MatchString(request.EvidenceRevision) {
+	if request.Outcome == AttemptInterrupted && request.EvidenceRevision != "" && !runtimeRevisionPattern.MatchString(request.EvidenceRevision) {
+		return FinishAttemptRequest{}, errors.New("interrupted evidence_revision must be empty or a canonical legacy sha256 revision; rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --outcome interrupted and without --evidence-revision")
+	}
+	if request.Outcome != AttemptInterrupted && !runtimeRevisionPattern.MatchString(request.EvidenceRevision) {
 		return FinishAttemptRequest{}, fmt.Errorf(
 			"evidence_revision must be sha256:<64-lowercase-hex> (%s); rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --evidence-revision sha256:<64-lowercase-hex>",
 			runtimeRevisionShapeObservation(request.EvidenceRevision),

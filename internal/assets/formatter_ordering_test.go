@@ -100,6 +100,14 @@ func TestOrganicRuntimeE2EUsesInstalledOpenCodePin(t *testing.T) {
 	if strings.Count(string(data), install) != 1 {
 		t.Fatalf("organic runtime E2E must install exact supported OpenCode pin %q once", install)
 	}
+	for _, required := range []string{
+		"TestOpenCodeRuntimeIsPinnedForTheLiveProviderTransport",
+		`GENTLE_AI_OPENCODE_RUNTIME_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}`,
+	} {
+		if !strings.Contains(string(data), required) {
+			t.Fatalf("organic runtime E2E is missing live OpenCode provider isolation guard %q", required)
+		}
+	}
 }
 
 func TestWindowsReleaseBlockerCannotSkipOwnerRebinding(t *testing.T) {

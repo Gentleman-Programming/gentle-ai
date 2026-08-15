@@ -62,8 +62,8 @@ func boundedReviewContract() string {
 	return strings.TrimSpace(assets.MustRead(boundedReviewContractAsset))
 }
 
-func renderSDDOrchestratorAsset(agent model.AgentID) string {
-	return renderBoundedReviewAsset(agent, sddOrchestratorAsset(agent))
+func renderSDDOrchestratorAsset(agent model.AgentID, options ...OrchestratorRenderOptions) string {
+	return composeOrchestratorPrompt(agent, options...)
 }
 
 // renderBoundedReviewAsset resolves one embedded asset into the exact bytes a
@@ -85,7 +85,10 @@ func bindRuntimeAgentIdentity(content string, agent model.AgentID) string {
 }
 
 func renderBoundedReviewAssetBody(path string) string {
-	content := assets.MustRead(path)
+	return renderBoundedReviewAssetBodyFromContent(path, assets.MustRead(path))
+}
+
+func renderBoundedReviewAssetBodyFromContent(path, content string) string {
 	content = strings.ReplaceAll(content, authorityFirstProcedurePlaceholder, authorityFirstTerminalProcedure())
 	if strings.HasSuffix(path, "/sdd-orchestrator.md") {
 		return replaceBoundedReviewSection(content, "#### Review Execution Contract", "Cost and Context Balance")
@@ -192,13 +195,9 @@ var claudeReviewerInvocation = reviewerTransportInvocation{
 	supplier:      "the parent",
 }
 
-// openCodeReviewerInvocation names the OpenCode transport: the OpenCode
-// plugin (review-result-artifacts.ts) asks `review lens-context` for the
-// finished reviewer context through its shell-less native channel before the
-// reviewer task ever launches, then replaces the task prompt wholesale with
-// the binding and context block runtimeReviewerPrompt names. The generated
-// agent holds no bash and no read tool, so that provider-injected block is
-// its only byte source for the reviewer's own turn.
+// openCodeReviewerInvocation names the OpenCode transport: the managed shim
+// relays a Task to Go, which materializes the canonical context before the
+// reviewer launches. The generated agent holds no bash and no read tool.
 var openCodeReviewerInvocation = reviewerTransportInvocation{
 	contextMarker: openCodeReviewContextMarker,
 	supplier:      "the OpenCode host process",

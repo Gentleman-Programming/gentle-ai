@@ -16,7 +16,7 @@ func TestPersistSyncManagedAssetStateReReadsLatestStateAfterLockContention(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := persistSyncManagedAssetState(home, model.Selection{}, "sha256:current-writer", nil); err == nil || !strings.Contains(err.Error(), "acquire install state lock") {
+	if err := persistSyncManagedAssetStateWithBackground(home, model.Selection{}, "sha256:current-writer", "", ""); err == nil || !strings.Contains(err.Error(), "acquire install state lock") {
 		t.Fatalf("contended sync state persistence error = %v", err)
 	}
 	if err := state.Write(home, state.InstallState{Persona: "concurrent"}); err != nil {
@@ -25,12 +25,11 @@ func TestPersistSyncManagedAssetStateReReadsLatestStateAfterLockContention(t *te
 	if err := held.Release(); err != nil {
 		t.Fatal(err)
 	}
-	provenance := &state.OpenCodeRuntimeProvenance{Executable: "/opt/gentle ai/gentle-ai", SHA256: "sha256:current-runtime", Version: "gentle-ai current"}
-	if err := persistSyncManagedAssetState(home, model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph}}, "sha256:current-writer", provenance); err != nil {
+	if err := persistSyncManagedAssetStateWithBackground(home, model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph}}, "sha256:current-writer", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	got, err := state.Read(home)
-	if err != nil || got.Persona != "concurrent" || got.ManagedAssetDigest != "sha256:current-writer" || got.OpenCodeRuntimeProvenance == nil || *got.OpenCodeRuntimeProvenance != *provenance || !got.CommunityToolsConfigured || len(got.CommunityTools) != 1 || got.CommunityTools[0] != string(model.CommunityToolCodeGraph) {
+	if err != nil || got.Persona != "concurrent" || got.ManagedAssetDigest != "sha256:current-writer" || !got.CommunityToolsConfigured || len(got.CommunityTools) != 1 || got.CommunityTools[0] != string(model.CommunityToolCodeGraph) {
 		t.Fatalf("persisted sync state = %#v, err = %v", got, err)
 	}
 }
@@ -43,7 +42,7 @@ func TestPersistSyncManagedAssetStateRefusesCorruptLatestState(t *testing.T) {
 	if err := os.WriteFile(state.Path(home), []byte("{not valid json\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := persistSyncManagedAssetState(home, model.Selection{}, "sha256:current-writer", nil); err == nil || !strings.Contains(err.Error(), "run `gentle-ai install`") {
+	if err := persistSyncManagedAssetStateWithBackground(home, model.Selection{}, "sha256:current-writer", "", ""); err == nil || !strings.Contains(err.Error(), "run `gentle-ai install`") {
 		t.Fatalf("corrupt sync state persistence error = %v", err)
 	}
 }

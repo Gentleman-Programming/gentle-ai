@@ -385,6 +385,21 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			candidates = append(candidates, candidate)
 		}
 	}
+	if len(candidates) == 0 && request.LineageID != "" {
+		_, compactExists := view.compact[request.LineageID]
+		_, legacyExists := view.legacy[request.LineageID]
+		if !compactExists && !legacyExists {
+			// #2645: an explicitly requested lineage that owns no authority at
+			// all must not reclassify the live target as fresh. START's own
+			// discovery resolves whatever authority exactly governs this
+			// candidate regardless of the requested name, so STATUS has to
+			// advertise that same decision — one recursion with the
+			// restriction lifted keeps the answer in this single place.
+			unrestricted := request
+			unrestricted.LineageID = ""
+			return assessTargetStatusSnapshot(ctx, repo, unrestricted, live)
+		}
+	}
 	if len(candidates) == 0 && len(approvedScopeRecovery) == 1 {
 		// START answers recover for exactly one approved delivery-scope
 		// predecessor with no other claimant, so status must bind that same

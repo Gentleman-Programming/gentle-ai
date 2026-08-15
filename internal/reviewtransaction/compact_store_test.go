@@ -3,6 +3,8 @@ package reviewtransaction
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
@@ -1468,6 +1470,227 @@ func TestCompactStoreReplaceContextRejectsCancelledMutation(t *testing.T) {
 	}
 }
 
+func TestCompactRecordEffectIntentIdentity(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "effect-intent-identity")
+	statePayload, _ := json.Marshal(state)
+	bindingRevision := compactStateRevision(statePayload)
+	binding := ReviewRepositoryContextBinding{LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Revision: bindingRevision}
+	destination, err := DeriveReviewRepositoryContextHandle(context.Background(), repo, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := reviewRepositoryIdentity(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextPayload, _ := json.Marshal(reviewRepositoryContextFile{
+		Schema: ReviewRepositoryContextSchema, Handle: destination,
+		LineageID: binding.LineageID, TargetIdentity: binding.TargetIdentity, Revision: binding.Revision,
+		RepositoryIdentity: identity.RepositoryIdentity, RepositoryRoot: identity.RepositoryRoot,
+		GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir,
+	})
+	intents := []CompactEffectIntent{
+		{Class: "repository_context", Destination: destination, PayloadHash: hashPayload(contextPayload)},
+		{Class: "requested_trace", Destination: "requested-output", PayloadHash: hash("d")},
+	}
+	for _, tt := range []struct {
+		name   string
+		intent CompactEffectIntent
+	}{
+		{"unsupported class", CompactEffectIntent{Class: "receipt", Destination: destination, PayloadHash: hashPayload(contextPayload)}},
+		{"blank destination", CompactEffectIntent{Class: "repository_context", Destination: " ", PayloadHash: hashPayload(contextPayload)}},
+		{"invalid payload hash", CompactEffectIntent{Class: "repository_context", Destination: destination, PayloadHash: "invalid"}},
+	} {
+		t.Run("constructor rejects "+tt.name, func(t *testing.T) {
+			if _, _, err := makeCompactRecordWithIntents(state, []CompactEffectIntent{tt.intent}); err == nil {
+				t.Fatal("malformed effect intent was accepted")
+			}
+		})
+	}
+	record, payload, err := makeCompactRecordWithIntents(state, intents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, retryPayload, retryErr := makeCompactRecordWithIntents(state, intents)
+	if retryErr != nil || !reflect.DeepEqual(retry, record) || !bytes.Equal(retryPayload, payload) || intents[0].BindingRevision != "" || intents[0].EventID != "" {
+		t.Fatalf("same-slice retry mutated input or drifted: record = %#v, err = %v, intents = %#v", retry, retryErr, intents)
+	}
+	reordered, reorderedPayload, err := makeCompactRecordWithIntents(state, []CompactEffectIntent{intents[1], intents[0]})
+	if err != nil || reordered.Revision != record.Revision || !bytes.Equal(reorderedPayload, payload) {
+		t.Fatalf("reordered intent set = %q, %v; want canonical revision %q and identical bytes", reordered.Revision, err, record.Revision)
+	}
+	if _, _, err := makeCompactRecordWithIntents(state, append(intents, intents[0])); err == nil {
+		t.Fatal("creation accepted duplicate semantic intent")
+	}
+	parsed, err := parseCompactRecord(payload, state.LineageID)
+	if err != nil || parsed.Revision != record.Revision || !reflect.DeepEqual(parsed.EffectIntents, record.EffectIntents) {
+		t.Fatalf("parse intent record = %#v, %v; want revision/intents %#v", parsed, err, record)
+	}
+	legacy, _, err := makeCompactRecord(state)
+	// The record revision is a pure function of state: a lineage with intents
+	// and one without share the revision, because every re-deriver in the
+	// tree (provider role requests, invalidation-evidence validation,
+	// recovery-chain composition, FINALIZE planning) recomputes it from state
+	// alone. Intents ride outside the revision with their own bound identity.
+	if err != nil || legacy.Revision != bindingRevision || legacy.Revision != record.Revision || record.EffectIntents[0].BindingRevision != bindingRevision {
+		t.Fatalf("legacy revision = %q, intent revision = %q, err = %v", legacy.Revision, record.Revision, err)
+	}
+
+	for _, tt := range []struct {
+		name   string
+		mutate func(*CompactRecord)
+	}{
+		{"unknown class", func(candidate *CompactRecord) { candidate.EffectIntents[0].Class = "unknown" }},
+		{"blank destination", func(candidate *CompactRecord) { candidate.EffectIntents[0].Destination = " " }},
+		{"invalid payload hash", func(candidate *CompactRecord) { candidate.EffectIntents[0].PayloadHash = "invalid" }},
+		{"omitted identity", func(candidate *CompactRecord) {
+			candidate.EffectIntents[0].BindingRevision = ""
+			candidate.EffectIntents[0].EventID = ""
+		}},
+		{"invalid event hash", func(candidate *CompactRecord) { candidate.EffectIntents[0].EventID = "invalid" }},
+		{"forged binding revision", func(candidate *CompactRecord) { candidate.EffectIntents[0].BindingRevision = hash("forged") }},
+		{"forged event identity", func(candidate *CompactRecord) { candidate.EffectIntents[0].EventID = hash("forged") }},
+		{"noncanonical order", func(candidate *CompactRecord) {
+			candidate.EffectIntents[0], candidate.EffectIntents[1] = candidate.EffectIntents[1], candidate.EffectIntents[0]
+		}},
+		{"duplicate", func(candidate *CompactRecord) { candidate.EffectIntents[1] = candidate.EffectIntents[0] }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := record
+			candidate.EffectIntents = append([]CompactEffectIntent(nil), record.EffectIntents...)
+			tt.mutate(&candidate)
+			candidatePayload, _ := json.Marshal(candidate)
+			if _, err := parseCompactRecord(candidatePayload, state.LineageID); err == nil {
+				t.Fatalf("accepted invalid intents: %#v", candidate.EffectIntents)
+			}
+		})
+	}
+	invalidBuilder := record
+	invalidBuilder.EffectIntents = append([]CompactEffectIntent(nil), record.EffectIntents...)
+	invalidBuilder.EffectIntents[0].BindingRevision = hash("forged")
+	invalidPayload, _ := json.Marshal(invalidBuilder)
+	if _, err := parseCompactRecord(invalidPayload, state.LineageID); err == nil || !strings.Contains(err.Error(), "invalid compact required effect identity") {
+		t.Fatalf("builder error = %v; want exact effect-authority evidence", err)
+	}
+
+	// A coordinated binding+event rewrite stays self-consistent, so parse
+	// admits it — content addressing is integrity, not authentication. The
+	// effect layer is the authority that blocks it: reconciliation recomputes
+	// the committed handle and payload from the intent's own frozen binding
+	// and the repository identity, and a rewritten binding cannot reproduce
+	// the committed destination.
+	forged := record
+	forged.EffectIntents = append([]CompactEffectIntent(nil), record.EffectIntents...)
+	forgedIntent := &forged.EffectIntents[0]
+	forgedIntent.BindingRevision = hash("f")
+	forgedEventPayload, _ := json.Marshal([]string{forged.State.LineageID, forgedIntent.BindingRevision, forgedIntent.Class, forgedIntent.Destination, forgedIntent.PayloadHash})
+	forgedEventSum := sha256.Sum256(append([]byte("gentle-ai.review-effect-event/v1\x00"), forgedEventPayload...))
+	forgedIntent.EventID = "sha256:" + hex.EncodeToString(forgedEventSum[:])
+	forgedPayload, _ := json.Marshal(forged)
+	parsedForged, err := parseCompactRecord(forgedPayload, state.LineageID)
+	if err != nil {
+		t.Fatalf("self-consistent rewrite must parse (integrity, not authentication): %v", err)
+	}
+	forgedStore, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconcileErr := reconcileCompactRepositoryContext(context.Background(), forgedStore, parsedForged); reconcileErr == nil ||
+		!strings.Contains(reconcileErr.Error(), "does not match committed intent") {
+		t.Fatalf("effect layer verdict = %v; want committed-intent conflict for the rewritten binding", reconcileErr)
+	}
+	otherState := state
+	otherState.LineageID = "effect-intent-other-lineage"
+	other, _, err := makeCompactRecordWithIntents(otherState, []CompactEffectIntent{{Class: "repository_context", Destination: destination, PayloadHash: hashPayload(contextPayload)}, intents[1]})
+	if err != nil || other.EffectIntents[0].EventID == record.EffectIntents[0].EventID {
+		t.Fatalf("lineage-bound event identity = %q, %v; want different from %q", other.EffectIntents[0].EventID, err, record.EffectIntents[0].EventID)
+	}
+}
+
+func hashPayload(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func TestCompactRecordWithoutIntentsRetainsHistoricalIdentityAndBytes(t *testing.T) {
+	state := newCompactTestState(t, initSnapshotRepo(t), "intent-free-history")
+	statePayload, _ := json.Marshal(state)
+	sum := sha256.Sum256(append([]byte("gentle-ai.review-state/v2\x00"), statePayload...))
+	wantRevision := "sha256:" + hex.EncodeToString(sum[:])
+	wantBytes, _ := json.MarshalIndent(struct {
+		Schema   string       `json:"schema"`
+		Revision string       `json:"revision"`
+		State    CompactState `json:"state"`
+	}{compactRecordSchema, wantRevision, state}, "", "  ")
+	record, payload, err := makeCompactRecord(state)
+	if err != nil || record.Revision != wantRevision || !bytes.Equal(payload, append(wantBytes, '\n')) {
+		t.Fatalf("intent-free compatibility = %q, %v, bytes equal %t", record.Revision, err, bytes.Equal(payload, append(wantBytes, '\n')))
+	}
+}
+
+func TestCompactEffectIntentMismatchBlocksSuccessor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "effect-intent-schema-only")
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, payload, err := makeCompactRecordWithIntents(state, []CompactEffectIntent{{
+		Class: "repository_context", Destination: "native-reviewer", PayloadHash: hash("c"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	next := state
+	results := make([]LensResult, len(next.SelectedLenses))
+	for index, lens := range next.SelectedLenses {
+		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"review completed"}}
+	}
+	if err := next.CompleteReview(CompactReviewInput{
+		LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(record.Revision, "review/complete-review", next); err == nil || !strings.Contains(err.Error(), "binding or payload does not match") {
+		t.Fatalf("successor mismatch error = %v", err)
+	}
+	loaded, err := store.Load()
+	if err != nil || loaded.Revision != record.Revision {
+		t.Fatalf("authority after refusal = %#v, %v", loaded, err)
+	}
+}
+
+func TestCompactStartReturnsCommittedRecordWhenRepositoryContextReconciliationFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Windows resolves the context home through USERPROFILE, so the blocker
+	// below must land in the same directory on every OS (#3231).
+	t.Setenv("USERPROFILE", home)
+	repo := initSnapshotRepo(t)
+	state := newCompactTestState(t, repo, "start-post-commit-effect-failure")
+	if err := os.WriteFile(filepath.Join(home, ".gentle-ai"), []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state, RepositoryContext: true})
+	if err == nil || result.Action != CompactStartCreated || result.Record.State.LineageID != state.LineageID {
+		t.Fatalf("start result = %#v, %v", result, err)
+	}
+	store, storeErr := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	committed, loadErr := store.Load()
+	if loadErr != nil || committed.Revision != result.Record.Revision {
+		t.Fatalf("committed record = %#v, %v", committed, loadErr)
+	}
+}
+
 func TestWriteCompactReceiptAtomicPublishesWithoutClobberingTerminalContent(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	state, _, receipt := approvedCompactCurrentChangesFixture(t, repo, "immutable-terminal-receipt", []string{})
@@ -2311,6 +2534,36 @@ func TestCompactTransportRoundTripRecoversEquivalentCurrentAuthority(t *testing.
 	}
 	if _, err := os.Stat(filepath.Join(destinationStore.Dir, "events")); !os.IsNotExist(err) {
 		t.Fatalf("compact import reconstructed event history: %v", err)
+	}
+}
+
+func TestCompactTransportRoundTripPreservesIntentAuthorityIdentity(t *testing.T) {
+	source := initSnapshotRepo(t)
+	state := newCompactTestState(t, source, "compact-intent-transport")
+	record, recordPayload, err := makeCompactRecordWithIntents(state, []CompactEffectIntent{{
+		Class: "requested_trace", Destination: "requested-output", PayloadHash: hash("d"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _ := CompactAuthoritativeStore(context.Background(), source, state.LineageID)
+	if err := writeAtomic(store.StatePath(), recordPayload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	transport, err := store.ExportTransport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(t.TempDir(), "clone")
+	gitSnapshot(t, source, "clone", "--no-local", source, destination)
+	imported, err := ImportCompactTransport(context.Background(), destination, transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationStore, _ := CompactAuthoritativeStore(context.Background(), destination, state.LineageID)
+	importedPayload, err := os.ReadFile(destinationStore.StatePath())
+	if err != nil || imported.Revision != record.Revision || !bytes.Equal(importedPayload, recordPayload) {
+		t.Fatalf("intent transport changed revision/bytes: revision %q, bytes equal %t, err %v", imported.Revision, bytes.Equal(importedPayload, recordPayload), err)
 	}
 }
 

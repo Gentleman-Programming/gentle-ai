@@ -3,8 +3,11 @@
 package reviewtransaction
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -33,14 +36,8 @@ func TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals(t *testing.T) {
 		sid  windows.WELL_KNOWN_SID_TYPE
 		want bool
 	}{
-		// Elevated shells and managed provisioning own repository
-		// directories as BUILTIN\Administrators; SYSTEM services and CI
-		// runners own theirs as LocalSystem. Both require administrative
-		// privilege to forge, so both are trusted shared owners.
 		{name: "BUILTIN Administrators", sid: windows.WinBuiltinAdministratorsSid, want: true},
 		{name: "LocalSystem", sid: windows.WinLocalSystemSid, want: true},
-		// Any standard user can hold these owners; accepting them would
-		// let an attacker-controlled directory host review authority.
 		{name: "Everyone", sid: windows.WinWorldSid, want: false},
 		{name: "Authenticated Users", sid: windows.WinAuthenticatedUserSid, want: false},
 	}
@@ -59,20 +56,12 @@ func TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			descriptor := rarWindowsDescriptorForOwner(t, test.owner)
-			if got := rarSharedSecurityDescriptorOwnedByCurrentProcess(
-				descriptor,
-			); got != test.want {
+			if got := rarSharedSecurityDescriptorOwnedByCurrentProcess(descriptor); got != test.want {
 				t.Fatalf("shared owner accepted = %t, want %t", got, test.want)
 			}
 		})
 	}
 
-	// CI runners hold an elevated token whose token owner IS
-	// BUILTIN\Administrators, so the descriptor-level Administrators case
-	// above passes there even without the administrative-owner acceptance.
-	// These direct assertions prove the token-independent comparison itself,
-	// which is what a non-elevated token (the reported onboarding wall)
-	// exercises in production.
 	t.Run("administrative trust is token independent", func(t *testing.T) {
 		for _, trusted := range []windows.WELL_KNOWN_SID_TYPE{
 			windows.WinBuiltinAdministratorsSid,
@@ -105,9 +94,6 @@ func TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals(t *testing.T) {
 		}
 	})
 
-	// A real directory created by this process is owned by the current user
-	// or, under an elevated token, by BUILTIN\Administrators. Both shapes
-	// must proceed through the real ACL read.
 	t.Run("real directory proceeds", func(t *testing.T) {
 		dir := t.TempDir()
 		info, err := os.Lstat(dir)
@@ -115,16 +101,10 @@ func TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !rarRepositoryDirectorySafe(dir, info) {
-			t.Fatalf(
-				"real repository parent %q was refused; owner is %s",
-				dir, rarRepositoryOwnerDescription(dir),
-			)
+			t.Fatalf("real repository parent %q was refused", dir)
 		}
 	})
 
-	// A trusted owner never excuses a reparse point: the redirection half of
-	// the check must keep refusing even when the link and its target are
-	// owned by an accepted principal.
 	t.Run("reparse parent still refused", func(t *testing.T) {
 		target := t.TempDir()
 		link := filepath.Join(t.TempDir(), "git-common-link")
@@ -159,13 +139,8 @@ func TestRARPrivateOwnerRemainsTokenUserOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if tokenOwner.Equals(currentUser) {
-		// The release blocker runs this test on an account whose token owner
-		// differs from its token user; there the rebind class must be proven,
-		// never skipped.
 		if os.Getenv("GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER") == "1" {
-			t.Fatal(
-				"release blocker requires a distinct Windows token owner; the rebind class was not exercised",
-			)
+			t.Fatal("release blocker requires a distinct Windows token owner")
 		}
 		t.Skip("token owner and token user are identical")
 	}
@@ -196,4 +171,100 @@ func rarWindowsDescriptorForOwner(
 		t.Fatal("test security descriptor is invalid")
 	}
 	return descriptor
+}
+
+// classifierStub records every path it receives and returns a fixed filesystem type.
+type classifierStub struct {
+	calls []string
+	give  string
+}
+
+func (s *classifierStub) classify(path string) string {
+	s.calls = append(s.calls, path)
+	return s.give
+}
+
+// ownerStubAlwaysReject forces rarRepositoryDirectorySafe to return false.
+func ownerStubAlwaysReject(path string, info fs.FileInfo) bool {
+	return false
+}
+
+func TestRARWindowsAuthorityFilesystemClassifier(t *testing.T) {
+	origOwner := rarWindowsAuthorityOwnerUnsafe
+	t.Cleanup(func() { rarWindowsAuthorityOwnerUnsafe = origOwner })
+	rarWindowsAuthorityOwnerUnsafe = ownerStubAlwaysReject
+
+	stub := &classifierStub{give: "NTFS"}
+	origClassifier := rarWindowsAuthorityFilesystemClassifier
+	t.Cleanup(func() { rarWindowsAuthorityFilesystemClassifier = origClassifier })
+	rarWindowsAuthorityFilesystemClassifier = stub.classify
+
+	dir := t.TempDir()
+
+	tests := []struct {
+		name            string
+		path            string
+		fsType          string
+		wantBase        error
+		wantUnknown     bool
+		wantUnsupported bool
+		wantSubStr      string
+		wantNilStr      string
+	}{
+		{"NTFS → ACL guidance", "", "NTFS", errUnsafeRARAuthorityPath, false, false, "takeown", "exFAT"},
+		{"ReFS → ACL guidance", "", "ReFS", errUnsafeRARAuthorityPath, false, false, "icacls", "exFAT"},
+		{"exFAT → unsupported", "", "exFAT", errUnsafeRARAuthorityPath, false, true, "exFAT", "takeown"},
+		{"FAT32 → unsupported", "", "FAT32", errUnsafeRARAuthorityPath, false, true, "FAT32", "icacls"},
+		{"empty → unknown", "", "", errUnsafeRARAuthorityPath, true, false, "", "takeown"},
+		{"FOOFS → unknown", "", "FOOFS", errUnsafeRARAuthorityPath, true, false, "", "takeown"},
+		{"UNC → unknown", `\\server\share`, "NTFS", errUnsafeRARAuthorityPath, true, false, "", "takeown"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			testDir := dir
+			if tc.path != "" {
+				testDir = tc.path + `\temp`
+			}
+			stub.give = tc.fsType
+			stub.calls = nil
+
+			err := validateRARRepositoryParent(testDir)
+
+			if !errors.Is(err, tc.wantBase) {
+				t.Fatalf("err = %v, want errors.Is(_, %v)", err, tc.wantBase)
+			}
+			if tc.wantUnknown && !errors.Is(err, errUnknownWindowsFilesystem) {
+				t.Fatalf("err = %v, want errUnknownWindowsFilesystem", err)
+			}
+			if tc.wantUnsupported && !errors.Is(err, errUnsupportedWindowsFilesystem) {
+				t.Fatalf("err = %v, want errUnsupportedWindowsFilesystem", err)
+			}
+			if tc.wantSubStr != "" && !strings.Contains(err.Error(), tc.wantSubStr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tc.wantSubStr)
+			}
+			if tc.wantNilStr != "" && strings.Contains(err.Error(), tc.wantNilStr) {
+				t.Fatalf("error %q unexpectedly contains %q", err.Error(), tc.wantNilStr)
+			}
+			if tc.path == "" && (len(stub.calls) != 1 || stub.calls[0] != testDir) {
+				t.Fatalf("classifier called with calls=%v, want [%q]", stub.calls, testDir)
+			}
+		})
+	}
+}
+
+func TestRARWindowsAuthorityFilesystemClassifierFS5WorktreeOnExFAT(t *testing.T) {
+	stub := &classifierStub{give: "exFAT"}
+	origClassifier := rarWindowsAuthorityFilesystemClassifier
+	t.Cleanup(func() { rarWindowsAuthorityFilesystemClassifier = origClassifier })
+	rarWindowsAuthorityFilesystemClassifier = stub.classify
+
+	dir := t.TempDir()
+	err := validateRARRepositoryParent(dir)
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if len(stub.calls) > 0 {
+		t.Fatalf("classifier was called for trusted-owner path: calls=%v", stub.calls)
+	}
 }

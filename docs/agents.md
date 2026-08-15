@@ -102,7 +102,11 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 
 - Full multi-agent overlay with 11 named agents in `opencode.json` (`gentle-orchestrator` plus 10 SDD phase agents)
 - Slash commands for SDD phases (`/sdd-new`, `/sdd-explore`, etc.)
-- Native OpenCode `task` subagents; experimental background execution is available when OpenCode is launched with `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`
+- Native OpenCode `task` subagents; managed background execution is configured through `gentle-ai install` / `gentle-ai sync` with `--opencode-background-subagents=auto|on|off` or `GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS`
+- CLI precedence is flag, non-empty environment, prior managed state, then `auto`; the interactive OpenCode + SDD installer prompts only when that preference is unresolved
+- Managed launchers live under `~/.gentle-ai/bin/` and preserve an explicit `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=false`; restart OpenCode after enabling them
+- `serve`, `attach`, Desktop, and sessions not launched through the managed launcher use the safe foreground fallback
+- Background jobs are process-local and non-durable, have no filesystem isolation, and must not be used for dependent phases or parallel writers in one worktree
 - The TUI model picker includes providers and models discovered from the local `opencode.json`, including custom providers
 - Custom models from `opencode.json` must set `tool_call: true` explicitly to appear as selectable SDD-capable options in the model picker
 - Multi-mode prerequisite: connect your AI providers first, then run `opencode models --refresh`
@@ -252,6 +256,9 @@ For the full Pi command and package reference, see [Pi Agent](pi.md).
 - **`gentle-engram` package**: adds persistent Engram memory for Pi. It captures sessions, exposes Engram MCP tools through `pi-mcp-adapter`, and degrades safely when the local `engram` binary is missing.
 - **MCP adapter wiring**: ComponentEngram declares `npm:pi-mcp-adapter` in `.pi/agent/settings.json` packages and adds `pi-mcp-adapter` `^2.6.0` to `.pi/npm/package.json` without removing unrelated user entries. `pi-engram init` owns the Pi Engram MCP config schema and is run during installation.
 - **`pi-subagents-j0k3r` package**: discovers and runs SDD agents from `.pi/agents/`; Gentle AI installs it directly with `pi install npm:pi-subagents-j0k3r`.
+- **Background subagents**: managed background execution is configured through `gentle-ai install` / `gentle-ai sync` with `--pi-background-subagents=auto|on|off` or `GENTLE_AI_PI_BACKGROUND_SUBAGENTS`; there is no launcher or activation plumbing, because the primitive is the already-installed `pi-subagents-j0k3r` extension.
+- CLI precedence is flag, non-empty environment, prior managed state, then `auto`; `auto` never enables by itself, unresolved non-interactive `auto` stays foreground, and the interactive Pi installer prompts only when that preference is unresolved.
+- The resolved on/off policy is projected to `~/.pi/gentle-ai/background-subagents.json` as `{"schema":"gentle-pi.background-subagents/v1","policy":"on"|"off"}` (the base directory honors `GENTLE_PI_CONFIG_HOME`); `off` rewrites the policy instead of deleting files, and a file at that path without the managed schema marker is never overwritten.
 - **`@juicesharp/rpiv-ask-user-question` package**: lets Pi child agents ask the active user session for clarification when they need human input.
 - **Pi companion packages**: `pi-web-access`, `@juicesharp/rpiv-todo`, and `pi-btw` add web access, todo tracking, and companion workflow support.
 - **Pi-only flow**: when Pi is the only selected agent, gentle-ai skips persona, ecosystem component selection, and Strict TDD prompts because those behaviors are provided by `gentle-pi`.

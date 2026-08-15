@@ -98,14 +98,7 @@ func InjectForSync(homeDir string, adapter agents.Adapter, persona model.Persona
 // syncManaged is the internal flag previously called `markdownOnly`.
 // When true the OpenCode/Kilocode agent overlay is skipped (see InjectForSync).
 func injectInternal(homeDir string, adapter agents.Adapter, persona model.PersonaID, syncManaged bool) (InjectionResult, error) {
-	// Normalize the legacy alias at the single entry point so every branch
-	// below (persona content, output-style write, Kimi module selection,
-	// cleanup) sees one canonical neutral identity. CLI callers already pass
-	// normalized IDs (cli.normalizePersona, internal/cli/validate.go); this
-	// guards direct callers.
-	if persona == model.PersonaGentlemanNeutralArtifacts {
-		persona = model.PersonaNeutral
-	}
+	persona = canonicalPersona(persona)
 	if !adapter.SupportsSystemPrompt() {
 		return InjectionResult{}, nil
 	}
@@ -387,78 +380,37 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 		}
 	}
 
-	// 3. Gentleman-only: write output style + merge into settings (if agent supports it).
-	if isGentlemanConversationPersona(persona) && adapter.Agent() != model.AgentOpenClaw && adapter.SupportsOutputStyles() {
-		outputStyleDir := adapter.OutputStyleDir(homeDir)
-		if outputStyleDir != "" {
-			outputStylePath := outputStyleDir + "/gentleman.md"
-			outputStyleContent := assets.MustRead("claude/output-style-gentleman.md")
-
-			styleResult, err := filemerge.WriteFileAtomic(outputStylePath, []byte(outputStyleContent), 0o644)
+	// 3. Write the selected managed output style, then remove only the retired
+	// resources declared by the persona plan. The backup/verify callers derive
+	// their paths from this same plan.
+	plan := ResourcePlanFor(persona)
+	style, selectedStyle := plan.OutputStyle()
+	if adapter.Agent() != model.AgentOpenClaw && adapter.SupportsOutputStyles() {
+		stylePaths := plan.OutputStylePaths(adapter.OutputStyleDir(homeDir))
+		if selectedStyle && stylePaths.Write != "" {
+			styleResult, err := filemerge.WriteFileAtomic(stylePaths.Write, []byte(assets.MustRead(style.AssetPath)), 0o644)
 			if err != nil {
 				return InjectionResult{}, err
 			}
 			changed = changed || styleResult.Changed
-			files = append(files, outputStylePath)
+			files = append(files, stylePaths.Write)
 		}
 
-		// Merge "outputStyle": "Gentleman" into settings.
 		settingsPath := adapter.SettingsPath(homeDir)
-		if settingsPath != "" {
-			settingsResult, err := mergeJSONFile(settingsPath, outputStyleOverlayJSON("Gentleman"))
+		if selectedStyle && settingsPath != "" {
+			var settingsResult filemerge.WriteResult
+			var err error
+			if persona == model.PersonaNeutral {
+				settingsResult, err = mergeJSONFileToleratingMalformed(settingsPath, outputStyleOverlayJSON(style.Name))
+			} else {
+				settingsResult, err = mergeJSONFile(settingsPath, outputStyleOverlayJSON(style.Name))
+			}
 			if err != nil {
 				return InjectionResult{}, err
 			}
 			changed = changed || settingsResult.Changed
 			files = append(files, settingsPath)
-		}
-	}
-
-	// 3a. Neutral: write the Neutral output-style twin and make it the selected
-	// managed outputStyle for Claude Code.
-	if persona == model.PersonaNeutral && adapter.Agent() != model.AgentOpenClaw && adapter.SupportsOutputStyles() {
-		outputStyleDir := adapter.OutputStyleDir(homeDir)
-		if outputStyleDir != "" {
-			outputStylePath := filepath.Join(outputStyleDir, "neutral.md")
-			outputStyleContent := assets.MustRead("claude/output-style-neutral.md")
-
-			styleResult, err := filemerge.WriteFileAtomic(outputStylePath, []byte(outputStyleContent), 0o644)
-			if err != nil {
-				return InjectionResult{}, err
-			}
-			changed = changed || styleResult.Changed
-			files = append(files, outputStylePath)
-		}
-
-		settingsPath := adapter.SettingsPath(homeDir)
-		if settingsPath != "" {
-			settingsResult, err := mergeJSONFileToleratingMalformed(settingsPath, outputStyleOverlayJSON("Neutral"))
-			if err != nil {
-				return InjectionResult{}, err
-			}
-			changed = changed || settingsResult.Changed
-			files = append(files, settingsPath)
-		}
-	}
-
-	// 3b. Non-gentleman cleanup: remove residual Gentleman output-style artifacts
-	// left by a previous install when the user switches away from the gentleman persona.
-	if !isGentlemanConversationPersona(persona) && adapter.Agent() != model.AgentOpenClaw && adapter.SupportsOutputStyles() {
-		outputStyleDir := adapter.OutputStyleDir(homeDir)
-		if outputStyleDir != "" {
-			outputStylePath := outputStyleDir + "/gentleman.md"
-			styleRemoved, err := removeFileAtomic(outputStylePath)
-			if err != nil {
-				return InjectionResult{}, fmt.Errorf("remove gentleman output style: %w", err)
-			}
-			if styleRemoved {
-				changed = true
-				files = append(files, outputStylePath)
-			}
-		}
-
-		settingsPath := adapter.SettingsPath(homeDir)
-		if settingsPath != "" {
+		} else if settingsPath != "" {
 			removed, err := removeJSONKeyIfValue(settingsPath, "outputStyle", "Gentleman")
 			if err != nil {
 				return InjectionResult{}, fmt.Errorf("clean outputStyle from settings: %w", err)
@@ -466,6 +418,17 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 			if removed {
 				changed = true
 				files = append(files, settingsPath)
+			}
+		}
+
+		for _, retiredPath := range stylePaths.Remove {
+			styleRemoved, err := removeFileAtomic(retiredPath)
+			if err != nil {
+				return InjectionResult{}, fmt.Errorf("remove retired output style: %w", err)
+			}
+			if styleRemoved {
+				changed = true
+				files = append(files, retiredPath)
 			}
 		}
 	}
@@ -554,8 +517,9 @@ func residualChannel(adapter agents.Adapter) bool {
 
 // personaContent returns the persona asset for the given agent and persona.
 func personaContent(agent model.AgentID, persona model.PersonaID, residualContentAvailable bool) string {
+	persona = canonicalPersona(persona)
 	switch persona {
-	case model.PersonaNeutral, model.PersonaGentlemanNeutralArtifacts:
+	case model.PersonaNeutral:
 		return neutralPersonaContent(agent, residualContentAvailable)
 	case model.PersonaCustom:
 		return ""

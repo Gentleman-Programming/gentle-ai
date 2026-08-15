@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -908,13 +909,27 @@ func runNegotiatedReviewStart(t *testing.T, repo, lineage string) ReviewIntegrat
 	if err := RunReview(boundNegotiatedStartArgs(t, []string{
 		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage,
 	}), &output); err != nil {
-		t.Fatal(err)
+		t.Fatal(negotiatedReviewStartFailure(err, output.String()))
 	}
 	result := decodeNegotiatedReviewStart(t, output.Bytes())
 	if err := result.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	return result
+}
+
+func negotiatedReviewStartFailure(err error, output string) string {
+	return fmt.Sprintf("negotiated review START failed: %v\noutput:\n%s", err, output)
+}
+
+func TestNegotiatedReviewStartFailurePreservesCauseDetails(t *testing.T) {
+	output := `{"code":"operation_outcome_unknown","cause":"native START cause","details":"native START details"}`
+	failure := negotiatedReviewStartFailure(errors.New("start failed"), output)
+	for _, want := range []string{"start failed", `"cause":"native START cause"`, `"details":"native START details"`} {
+		if !strings.Contains(failure, want) {
+			t.Fatalf("failure %q does not preserve %q", failure, want)
+		}
+	}
 }
 
 func boundNegotiatedStartArgs(t *testing.T, args []string) []string {

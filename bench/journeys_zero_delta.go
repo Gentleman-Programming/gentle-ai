@@ -1,6 +1,18 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
+
+func assertStderrContains(substr string) func(*Sandbox, Observation) error {
+	return func(_ *Sandbox, observation Observation) error {
+		if !strings.Contains(observation.Stderr, substr) {
+			return fmt.Errorf("expected stderr to contain %q, got: %s", substr, observation.Stderr)
+		}
+		return nil
+	}
+}
 
 // journeys_zero_delta.go covers issue #2586's fix: `review start` used to
 // refuse an empty (zero-delta) candidate only on the negotiated route. A

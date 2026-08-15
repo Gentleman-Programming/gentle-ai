@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
@@ -509,7 +510,8 @@ func (result facadeValidationResult) conclusive() error {
 }
 
 type facadeRefuterResult struct {
-	Results []facadeRefuterOutcome `json:"results"`
+	RequestHash string                 `json:"refuter_request_hash,omitempty"`
+	Results     []facadeRefuterOutcome `json:"results"`
 }
 
 type facadeRefuterOutcome struct {
@@ -533,12 +535,24 @@ var reviewFacadeOperationTimeout = 25 * time.Second
 // that mutate that var directly.
 const reviewFacadeStartOperationTimeout = 120 * time.Second
 
+// reviewFacadeFinalizeProviderOperationTimeout is the deadline for
+// review.finalize only when a compiled runtime is bound with --agent: that
+// finalize launches the provider refuter (and, on the correction path, the
+// targeted validator) as a real model process, whose ordinary duration is
+// minutes — categorically outside the shared 25s budget, for the same
+// reason review.start owns its own constant.
+const reviewFacadeFinalizeProviderOperationTimeout = 600 * time.Second
+
 // reviewFacadeOperationDeadline selects the operation-scoped deadline.
-// review.start uses its own larger constant; every other operation keeps
-// the shared reviewFacadeOperationTimeout var byte-identical.
-func reviewFacadeOperationDeadline(operation string) time.Duration {
+// review.start uses its own larger constant, review.finalize with a bound
+// compiled runtime uses the provider constant, and every other operation
+// keeps the shared reviewFacadeOperationTimeout var byte-identical.
+func reviewFacadeOperationDeadline(operation string, args []string) time.Duration {
 	if operation == "review.start" {
 		return reviewFacadeStartOperationTimeout
+	}
+	if operation == "review.finalize" && reviewRuntimeAgentCount(args) > 0 {
+		return reviewFacadeFinalizeProviderOperationTimeout
 	}
 	return reviewFacadeOperationTimeout
 }
@@ -625,7 +639,7 @@ func (err *reviewStartContextError) Unwrap() error { return err.Cause }
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <advisory|capture-result|lens-context|capture-evidence|preserve-result|capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. `review advisory` validates model transport output for later native admission; it never directly creates a receipt or delivery decision. Use review retry-final-verification only for a provider-proven completed failed final-verification tooling incident. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capture-result|capture-refuter|capture-validation|lens-context|capture-evidence|preserve-result|capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|retry-final-verification|reclaim|inspect-authority|inspect-candidate|dispose-result|reopen-results|schema|opencode-transport|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Provider transports relay opaque bytes only; Go materializes, admits, captures, and decides delivery. Use review retry-final-verification only for a provider-proven completed failed final-verification tooling incident. Generic review recover remains unchanged. Use review repair --preflight for provider-owned classified authority repair.")
 		return nil
 	}
 	operation, negotiated, preflightFailure := reviewIntegrationFailureRoute(args)
@@ -645,7 +659,7 @@ func RunReview(args []string, stdout io.Writer) error {
 		}
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), reviewFacadeOperationDeadline(operation))
+	ctx, cancel := context.WithTimeout(context.Background(), reviewFacadeOperationDeadline(operation, args[1:]))
 	defer cancel()
 	var committed atomic.Pointer[reviewFacadeOperationProgressError]
 	ctx = context.WithValue(ctx, reviewFacadeOperationProgressError{}, &committed)
@@ -713,10 +727,12 @@ func runReviewCommandContext(ctx context.Context, args []string, stdout io.Write
 
 func runReviewCommand(args []string, stdout io.Writer) error {
 	switch args[0] {
-	case "advisory":
-		return RunReviewAdvisory(args[1:], stdout)
 	case "capture-result":
 		return RunReviewCaptureResult(args[1:], stdout)
+	case "capture-refuter":
+		return RunReviewCaptureRefuter(args[1:], stdout)
+	case "capture-validation":
+		return RunReviewCaptureValidation(args[1:], stdout)
 	case "inspect-candidate":
 		return RunReviewInspectCandidate(args[1:], stdout)
 	case "lens-context":
@@ -743,6 +759,8 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewReopenResults(args[1:], stdout)
 	case "schema":
 		return RunReviewSchema(args[1:], stdout)
+	case "opencode-transport":
+		return RunReviewOpenCodeTransport(args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown review command %q", args[0])
 	}
@@ -953,6 +971,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			var captureContext *reviewCaptureContext
 			var validationRequest *reviewtransaction.TargetedValidationRequest
 			var correctionRequest *reviewtransaction.CorrectionPlanRequest
+			providerRole := reviewProviderRole("")
 			var preCommitDeliveryAssessment *reviewtransaction.CompactGateTargetApplicability
 			correctionForecasted := false
 			lensContextBudgetExceeded := false
@@ -1012,9 +1031,28 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 								lensContextBudgetExceeded = reviewLensContextStatusBudgetExhausted(ctx, root, record.State, record.Revision)
 							}
 							if artifactErr == nil && !lensContextBudgetExceeded {
-								repositoryContext, artifactErr = reviewtransaction.PublishReviewRepositoryContext(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
-									LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
-								})
+								if hasRepositoryContextIntent(record.EffectIntents) {
+									var reconciled reviewtransaction.CompactRepositoryContextResult
+									reconciled, artifactErr = reviewtransaction.ReconcileCompactRepositoryContext(ctx, store, record)
+									if artifactErr == nil {
+										repositoryContext = reconciled.Handle
+										result.RepositoryContext = &ReviewRepositoryContextReference{
+											Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: reconciled.Handle,
+											Revision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity,
+											EventID: reconciled.EventID, Outcome: reconciled.Outcome,
+										}
+									}
+								} else {
+									repositoryContext, artifactErr = reviewtransaction.PublishReviewRepositoryContext(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
+										LineageID: record.State.LineageID, TargetIdentity: record.State.InitialSnapshot.Identity, Revision: record.Revision,
+									})
+									if artifactErr == nil && *contract == ReviewIntegrationContractV2 {
+										result.RepositoryContext = &ReviewRepositoryContextReference{
+											Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: repositoryContext,
+											Revision: record.Revision, TargetIdentity: record.State.InitialSnapshot.Identity,
+										}
+									}
+								}
 							}
 							if artifactErr == nil && !lensContextBudgetExceeded {
 								contextBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
@@ -1045,6 +1083,34 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 									capturedEvidence = &recordCopy
 								}
 							}
+							// OpenCode relays Go-issued role tasks through its live
+							// transport; the pi host relay collects the same roles
+							// through the printed materialize + submission route.
+							// Both discover pending roles identically here.
+							providerRoleHost := runtime == model.AgentOpenCode || reviewProviderHostRelayMaterializeRuntime(runtime)
+							if providerRoleHost && record.State.State == reviewtransaction.StateReviewing && len(artifacts) == len(record.State.SelectedLenses) {
+								slot, slotErr := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
+								if slotErr != nil {
+									artifactErr = slotErr
+								} else if !slot.Occupied {
+									_, requestErr := reviewProviderNewRefuterRequest(ctx, root, store.Dir, record.State, record.Revision)
+									switch {
+									case requestErr == nil:
+										providerRole = reviewerprovider.RoleRefuter
+									case errors.Is(requestErr, errReviewProviderRefuterNotRequired):
+									default:
+										artifactErr = requestErr
+									}
+								}
+							}
+							if providerRoleHost && validationRequest != nil && capturedEvidence != nil && capturedEvidence.Outcome == reviewtransaction.VerificationOutcomePassed {
+								slot, slotErr := reviewtransaction.ReadCompactTargetedValidatorResultSlot(store.Dir, *validationRequest)
+								if slotErr != nil {
+									artifactErr = slotErr
+								} else if !slot.Occupied {
+									providerRole = reviewerprovider.RoleTargetedValidator
+								}
+							}
 						}
 					}
 				}
@@ -1064,7 +1130,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					result.Eligibility = newReviewActionEligibility(result)
 				}
 			}
-			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, PreCommitDeliveryAssessment: preCommitDeliveryAssessment}
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, PreCommitDeliveryAssessment: preCommitDeliveryAssessment}
 			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, input)
 			result.NextTransition = &transition
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&
@@ -1118,6 +1184,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		return fmt.Errorf("inventory review authority: %w", err)
 	}
 	return encodeReviewJSON(stdout, report)
+}
+
+func hasRepositoryContextIntent(intents []reviewtransaction.CompactEffectIntent) bool {
+	for _, intent := range intents {
+		if intent.Class == reviewtransaction.CompactEffectClassRepositoryContext {
+			return true
+		}
+	}
+	return false
 }
 
 func RunReviewRecover(args []string, stdout io.Writer) error {
@@ -1204,8 +1279,18 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		}
 	}
 	// Issue #2394: a recovery successor declares scope exactly the way a fresh
-	// START does, so it never re-sweeps the worktree either.
+	// START does, so it never re-sweeps the worktree either. Issue #3159:
+	// inheriting the predecessor's frozen, explicitly authorized declaration
+	// is not a sweep — those exact paths were human-selected and frozen into
+	// the authority being recovered, and dropping them silently rebinds the
+	// successor to a partial candidate. Only the current-changes successor
+	// carries the declaration forward; base-diff, overlay, and release
+	// scopes never hold intended-untracked paths.
 	intended := []string{}
+	if !*releaseScope && !*committedOnly && !stagedScopeOverlay && !overlay &&
+		predecessorRecord.State.InitialSnapshot.Kind == reviewtransaction.TargetCurrentChanges {
+		intended = append(intended, predecessorRecord.State.InitialSnapshot.IntendedUntracked...)
+	}
 	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
 	if *committedOnly {
 		target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, base
@@ -1960,7 +2045,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return nil
 	}
 	started, err := reviewtransaction.StartCompactAuthority(ctx, root, reviewtransaction.CompactStartRequest{
-		State: state, TracePath: strings.TrimSpace(*tracePath), ExplicitLineage: explicitLineage, BeforeCreate: beforeCreate,
+		State: state, TracePath: strings.TrimSpace(*tracePath), ExplicitLineage: explicitLineage, RepositoryContext: *contract == ReviewIntegrationContractV2, BeforeCreate: beforeCreate,
 	})
 	if err != nil {
 		return fmt.Errorf("start compact facade review: %w", err)
@@ -2024,18 +2109,27 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	var repositoryContext *ReviewRepositoryContextReference
 	if authority.State == reviewtransaction.StateReviewing &&
 		(started.Action == reviewtransaction.CompactStartCreated || started.Action == reviewtransaction.CompactStartResumed) {
-		binding := reviewtransaction.ReviewRepositoryContextBinding{
-			LineageID: authority.LineageID, TargetIdentity: authority.InitialSnapshot.Identity, Revision: started.Record.Revision,
+		var reconciled reviewtransaction.CompactRepositoryContextResult
+		var contextErr error
+		if hasRepositoryContextIntent(started.Record.EffectIntents) {
+			var store reviewtransaction.CompactStore
+			store, contextErr = reviewtransaction.CompactAuthoritativeStore(ctx, root, authority.LineageID)
+			if contextErr == nil {
+				reconciled, contextErr = reviewtransaction.ReconcileCompactRepositoryContext(ctx, store, started.Record)
+			}
+		} else {
+			reconciled.Handle, contextErr = reviewtransaction.PublishReviewRepositoryContext(ctx, root, reviewtransaction.ReviewRepositoryContextBinding{
+				LineageID: authority.LineageID, TargetIdentity: authority.InitialSnapshot.Identity, Revision: started.Record.Revision,
+			})
 		}
-		handle, contextErr := reviewtransaction.PublishReviewRepositoryContext(ctx, root, binding)
 		if contextErr != nil {
 			return &reviewStartContextError{
 				AuthoritySelected: true, LineageID: authority.LineageID, StoreRevision: started.Record.Revision, Cause: contextErr,
 			}
 		}
 		repositoryContext = &ReviewRepositoryContextReference{
-			Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: handle, Revision: started.Record.Revision,
-			TargetIdentity: authority.InitialSnapshot.Identity,
+			Capability: reviewtransaction.ReviewRepositoryContextCapability, Handle: reconciled.Handle, Revision: started.Record.Revision,
+			TargetIdentity: authority.InitialSnapshot.Identity, EventID: reconciled.EventID, Outcome: reconciled.Outcome,
 		}
 	}
 	negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment, authority.InitialSnapshot.Kind, frozenContext, repositoryContext, *contract)
@@ -2340,6 +2434,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	flags := newReviewFlagSet("review finalize", stdout, "Canonicalize reviewer output and evidence, perform required native transitions, and materialize the terminal receipt.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
+	runtimeAgent := flags.String("agent", "", "generated registered runtime identity for native provider-role execution")
 	expectedSubmissionRevision := flags.String("expected-revision", "", "provider-issued compact authority revision for a submission descriptor")
 	targetIdentity := flags.String("target", "", "provider-issued target identity for a submission descriptor")
 	requestHash := flags.String("request-hash", "", "provider-issued correction or validation request hash")
@@ -2379,6 +2474,20 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	if (*actionEligibility || *nextTransition) && !negotiated {
 		return reviewPreflightError(errors.New(reviewContractRequiredForActionEligibilityReason))
 	}
+	providerRuntime := model.AgentID("")
+	if reviewRuntimeAgentCount(args) != 0 {
+		if !negotiated || *contract != ReviewIntegrationContractV2 || reviewRuntimeAgentCount(args) != 1 {
+			return reviewPreflightError(errors.New("review finalize --agent requires exactly one negotiated v2 runtime identity; refresh with `gentle-ai review status --contract gentle-ai.review-integration/v2 --next-transition`"))
+		}
+		resolved, runtimeErr := reviewRuntimeWithImmutableTransport(*runtimeAgent)
+		if runtimeErr != nil {
+			return reviewPreflightError(runtimeErr)
+		}
+		if !reviewProviderCaptureRuntime(resolved) {
+			return reviewPreflightError(fmt.Errorf("review finalize provider runtime %q is host-mediated; use its live transport collection", resolved)) // refusal:by-design world-action: host-mediated runtimes do not use subprocess finalization
+		}
+		providerRuntime = resolved
+	}
 	submissionBindingProvided := reviewFinalizeFlagProvided(args, "expected-revision") || reviewFinalizeFlagProvided(args, "target") ||
 		reviewFinalizeFlagProvided(args, "request-hash") || reviewFinalizeFlagProvided(args, "repository-context")
 	if submissionBindingProvided && (!negotiated || *contract != ReviewIntegrationContractV2 || strings.TrimSpace(*expectedSubmissionRevision) == "" ||
@@ -2400,6 +2509,9 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	}
 	if reviewerResultSources > 1 || (*capturedEvidence && strings.TrimSpace(*evidencePath) != "") {
 		return reviewPreflightError(errors.New("review finalize accepts exactly one reviewer-result source and one final-evidence source"))
+	}
+	if providerRuntime != "" && (strings.TrimSpace(*refuterPath) != "" || strings.TrimSpace(*validationPath) != "") {
+		return reviewPreflightError(errors.New("review finalize --agent materializes provider refuter and validator requests; omit --refuter and --validation")) // refusal:by-design operator-knowledge: a provider runtime must receive the Go-materialized request rather than caller-authored role output
 	}
 	// Refused before any repository or authority work, so the rejection cannot
 	// advance the lineage or consume a lens slot. reviewUnadmittedResultRefusal
@@ -2527,7 +2639,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			return err
 		}
 	}
-	if terminalAtEntry && !facadeFinalizeReplayInputsEmpty(resultPaths, resultArtifacts, resultArtifactFiles, *capturedResults, *capturedEvidence, *validationPath, *refuterPath, *evidencePath, *correctionLines, *failed, *tracePath) {
+	if terminalAtEntry && !facadeFinalizeReplayInputsEmpty(resultPaths, resultArtifacts, resultArtifactFiles, *capturedResults, *capturedEvidence, *validationPath, *refuterPath, *evidencePath, *correctionLines, *failed, *tracePath, providerRuntime) {
 		return errors.New("terminal review finalize accepts no review inputs; exact replay requires only --lineage")
 	}
 	// --captured-results is deliberately absent from this guard. The artifact
@@ -2606,12 +2718,6 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		if err != nil {
 			return reviewPreflightError(err)
 		}
-		// Observed here, at the one moment the captured artifacts and the
-		// frozen authority are both in hand, and carried onto the receipt by
-		// the review completion below. Record only: nothing reads it back.
-		if state.State == reviewtransaction.StateReviewing {
-			state.ReviewerContextLevel = discoverReviewerContextLevel(ctx, root, store.Dir, state, record.Revision)
-		}
 	}
 	var validation *facadeValidationResult
 	if strings.TrimSpace(*validationPath) != "" {
@@ -2625,6 +2731,38 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		if err := readFacadeJSON(*refuterPath, &refuter); err != nil {
 			return reviewPreflightError(fmt.Errorf("read refuter outcomes: %w", err))
 		}
+	} else if *capturedResults && state.State == reviewtransaction.StateReviewing {
+		// The slot READ is deliberately not gated on a compiled --agent: a
+		// host-mediated finalize (OpenCode's transport or the pi host relay's
+		// capture-refuter submission) occupies the same compact slot, and the
+		// ordinary `--captured-results` finalize must discover it identically.
+		// Only the in-process provider CAPTURE below stays compiled-only.
+		slot, slotErr := reviewtransaction.ReadCompactRefuterResultSlot(store.Dir)
+		if slotErr != nil {
+			return reviewPreflightError(fmt.Errorf("read captured provider refuter result: %w", slotErr))
+		}
+		switch {
+		case slot.Occupied:
+			refuter, err = readCapturedProviderRefuterResult(ctx, root, store.Dir, state, record.Revision)
+		case providerRuntime != "":
+			var captured bool
+			_, captured, err = reviewProviderCaptureRefuter(ctx, root, store, state, record.Revision, providerRuntime)
+			if err == nil && captured {
+				refuter, err = readCapturedProviderRefuterResult(ctx, root, store.Dir, state, record.Revision)
+			}
+		}
+		if err != nil {
+			return reviewPreflightError(err)
+		}
+	}
+	// Observed only after every consumer that re-derives the revision from
+	// the state it is handed (the provider refuter materialization above)
+	// has run: CompactRevisionForState hashes ReviewerContextLevel, so
+	// setting it earlier made every compiled-runtime finalize diverge from
+	// the frozen record revision. The completion plan below still carries
+	// the observation onto the receipt.
+	if *capturedResults && state.State == reviewtransaction.StateReviewing {
+		state.ReviewerContextLevel = discoverReviewerContextLevel(ctx, root, store.Dir, state, record.Revision)
 	}
 	var evidence []byte
 	var capturedVerification *reviewtransaction.CapturedVerificationEvidence
@@ -2651,6 +2789,30 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			return reviewPreflightError(errors.New("--failed conflicts with captured verification evidence outcome")) // refusal:by-design operator-knowledge: callers must omit the legacy boolean or make it agree with the immutable captured outcome
 		}
 		effectiveFailed = derivedFailed
+	}
+	if state.State == reviewtransaction.StateCorrectionRequired && capturedVerification != nil &&
+		capturedVerification.Record.Outcome == reviewtransaction.VerificationOutcomePassed && validation == nil {
+		// Discovery of an occupied validator slot is host-mediated-safe: the
+		// pi host relay's capture-validation submission occupies the same
+		// compact slot the compiled path does, so the ordinary finalize (no
+		// --agent) reads it back here. Only the in-process provider CAPTURE
+		// stays compiled-only, and a host-mediated finalize with no captured
+		// slot keeps its ordinary --validation route.
+		capturedValidation, readErr := readCapturedProviderTargetedValidatorResult(ctx, root, store.Dir, state, record.Revision)
+		switch {
+		case readErr == nil:
+			validation = &capturedValidation
+		case providerRuntime != "":
+			var captureErr error
+			capturedValidation, _, captureErr = reviewProviderCaptureTargetedValidator(ctx, root, store, state, record.Revision, providerRuntime)
+			if captureErr != nil {
+				return reviewPreflightError(captureErr)
+			}
+			validation = &capturedValidation
+		case errors.Is(readErr, errReviewProviderTargetedValidatorResultNotCaptured):
+		default:
+			return reviewPreflightError(readErr)
+		}
 	}
 	// A lineage-only finalize call at StateValidating with no request evidence
 	// must not silently ignore canonical evidence a separate `review
@@ -3091,9 +3253,9 @@ func facadeTerminalState(state reviewtransaction.State) bool {
 	return state == reviewtransaction.StateApproved || state == reviewtransaction.StateEscalated
 }
 
-func facadeFinalizeReplayInputsEmpty(results, artifacts, artifactFiles []string, capturedResults, capturedEvidence bool, validation, refuter, evidence string, correctionLines int, failed bool, trace string) bool {
+func facadeFinalizeReplayInputsEmpty(results, artifacts, artifactFiles []string, capturedResults, capturedEvidence bool, validation, refuter, evidence string, correctionLines int, failed bool, trace string, providerRuntime model.AgentID) bool {
 	return len(results) == 0 && len(artifacts) == 0 && len(artifactFiles) == 0 && !capturedResults && !capturedEvidence && strings.TrimSpace(validation) == "" && strings.TrimSpace(refuter) == "" &&
-		strings.TrimSpace(evidence) == "" && correctionLines == 0 && !failed && strings.TrimSpace(trace) == ""
+		strings.TrimSpace(evidence) == "" && correctionLines == 0 && !failed && strings.TrimSpace(trace) == "" && providerRuntime == ""
 }
 
 func inspectCompactFacadeReceipt(path string, expected reviewtransaction.CompactReceipt) (bool, error) {
@@ -3435,6 +3597,10 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 		preCommitBaseline      reviewtransaction.CompactPreCommitDiscoveryBaseline
 		preCommitBaselineOK    bool
 		preCommitBaselineTried bool
+		// issue #1886: same bounded-discovery optimization for pre-push
+		prePushBaseline      CompactPrePushDiscoveryBaseline
+		prePushBaselineOK    bool
+		prePushBaselineTried bool
 	)
 	for _, store := range stores {
 		record, loadErr := store.Load()
@@ -3463,6 +3629,18 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 				}
 			}
 			if preCommitBaselineOK && reviewtransaction.CompactLeafProvablyUnrelatedToPreCommitBaseline(record.State, preCommitBaseline) {
+				continue
+			}
+		}
+		// issue #1886: skip provably-unrelated pre-push leaves from per-leaf gate assessment
+		if input.Gate == reviewtransaction.GatePrePush && strings.TrimSpace(input.LineageID) == "" {
+			if !prePushBaselineTried {
+				prePushBaselineTried = true
+				if baseline, baselineErr := BuildCompactPrePushDiscoveryBaseline(ctx, repo); baselineErr == nil {
+					prePushBaseline, prePushBaselineOK = baseline, true
+				}
+			}
+			if prePushBaselineOK && CompactLeafProvablyUnrelatedToPrePushCandidate(record.State, prePushBaseline.PushBaseTree, prePushBaseline.Paths) {
 				continue
 			}
 		}

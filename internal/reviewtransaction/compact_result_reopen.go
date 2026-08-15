@@ -81,12 +81,9 @@ type compactProviderReviewerResult struct {
 	Evidence    []string           `json:"evidence"`
 }
 
-// CompactReviewerResultSlot is one immutable reviewer-result publication slot.
-type CompactReviewerResultSlot struct {
-	Occupied bool
-	Payload  []byte
-	Digest   string
-}
+// CompactReviewerResultSlot is the typed lens wrapper over the shared role
+// slot substrate. The historical type remains readable to existing callers.
+type CompactReviewerResultSlot = CompactRoleResultSlot
 
 // CompactResultReopenAuthorization derives the exact maintainer binding for
 // one reopen. authorizedLenses must already be canonical (selected order,
@@ -455,31 +452,7 @@ var readCompactReviewerResultSlotFile = readPrivateCompactReviewerFile
 
 // ReadCompactReviewerResultSlot reads and verifies one immutable result slot.
 func ReadCompactReviewerResultSlot(storeDir string, order int, lens string) (CompactReviewerResultSlot, error) {
-	if order < 0 || !isSupportedLens(lens) {
-		return CompactReviewerResultSlot{}, errors.New("reviewer result slot requires a selected order and lens") // refusal:by-design operator-knowledge: callers pass only the frozen selected order and lens
-	}
-	path := filepath.Join(storeDir, CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", order, lens))
-	payload, payloadErr := readCompactReviewerResultSlotFile(path, compactReviewerResultSizeLimit)
-	digestPayload, digestErr := readCompactReviewerResultSlotFile(path+".sha256", 256)
-	payloadMissing := errors.Is(payloadErr, os.ErrNotExist)
-	digestMissing := errors.Is(digestErr, os.ErrNotExist)
-	if payloadErr != nil && !payloadMissing {
-		return CompactReviewerResultSlot{}, fmt.Errorf("read reviewer result payload: %w", payloadErr)
-	}
-	if digestErr != nil && !digestMissing {
-		return CompactReviewerResultSlot{}, fmt.Errorf("read reviewer result digest: %w", digestErr)
-	}
-	if payloadMissing && digestMissing {
-		return CompactReviewerResultSlot{}, nil
-	}
-	if payloadMissing || digestMissing {
-		return CompactReviewerResultSlot{}, errors.New("reviewer result slot is partially published") // refusal:by-design human-authority: an interrupted immutable slot requires maintainer inspection
-	}
-	digest := strings.TrimSpace(string(digestPayload))
-	if !validSHA256(digest) || compactPreservedPayloadDigest(payload) != digest {
-		return CompactReviewerResultSlot{}, errors.New("reviewer result digest does not match its bytes") // refusal:by-design human-authority: mismatched immutable evidence requires maintainer inspection
-	}
-	return CompactReviewerResultSlot{Occupied: true, Payload: append([]byte(nil), payload...), Digest: digest}, nil
+	return ReadCompactRoleResultSlot(storeDir, compactLensRoleResultSlotKey(order, lens))
 }
 
 func replayCompactResultReopen(record CompactRecord, request CompactResultReopenRequest) (CompactResultReopenRecord, bool) {

@@ -185,43 +185,6 @@ func ensurePrivateRARDirectoryTree(base, dir string, create bool) error {
 	return nil
 }
 
-func validateRARRepositoryParent(path string) error {
-	before, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if rarPathUnsafe(path, before) || !before.IsDir() {
-		return errUnsafeRARAuthorityPath
-	}
-	if !rarRepositoryDirectorySafe(path, before) {
-		// Name the exact directory and the owner that was refused so the
-		// operator can repair ownership instead of guessing which ancestor
-		// tripped the check.
-		return fmt.Errorf(
-			"RAR authority parent %q is owned by %s, which is neither the current user nor a trusted administrative authority: %w",
-			path, rarRepositoryOwnerDescription(path), errUnsafeRARAuthorityPath,
-		)
-	}
-	file, err := openRARPathNoFollow(path, true)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	opened, err := file.Stat()
-	if err != nil {
-		return err
-	}
-	current, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if !os.SameFile(before, opened) || !os.SameFile(opened, current) ||
-		!rarRepositoryOpenDirectorySafe(file, opened) {
-		return errRARAuthorityPathReplaced
-	}
-	return nil
-}
-
 func validatePrivateRARDirectory(path string) error {
 	return validatePrivateRARPath(path, true)
 }
@@ -363,6 +326,43 @@ func publishPrivateRARImmutable(path string, payload []byte) error {
 		return err
 	}
 	return SyncReviewDirectory(dir)
+}
+
+func writePrivateRARAtomic(path string, payload []byte) error {
+	if len(payload) == 0 || len(payload) > rarAuthorityMaxBytes {
+		return errors.New("RAR atomic payload size is invalid") // refusal:by-design operator-knowledge: callers must supply a non-empty payload within the closed authority size bound
+	}
+	dir := filepath.Dir(path)
+	if err := validatePrivateRARDirectory(dir); err != nil {
+		return err
+	}
+	temp, err := createPrivateRARTempFile(dir)
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if _, err := temp.Write(payload); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := replaceFileAtomic(tempPath, path); err != nil {
+		return err
+	}
+	if err := validatePrivateRARFile(path); err != nil {
+		return err
+	}
+	if err := SyncReviewDirectory(dir); err != nil {
+		return &directorySyncError{path: path, cause: err}
+	}
+	return nil
 }
 
 func createPrivateRARTempFile(dir string) (*os.File, error) {

@@ -35,10 +35,22 @@ func TestAuthorizeReviewTransportCapabilityMatrix(t *testing.T) {
 		}
 	})
 	t.Run("absent claim fails closed", func(t *testing.T) {
-		// Pi declares only AutoInstall|SystemPrompt|MCP; its manifest does
-		// not advertise ContractReviewTransportV1.
+		// Every compiled adapter advertises ContractReviewTransportV1 since
+		// gentle-ai#3249 registered Pi, so the absent claim is synthesized
+		// through the resolution seam: a valid manifest whose transport
+		// exposure stays dormant.
+		previous := reviewTransportCapabilityForAgent
+		reviewTransportCapabilityForAgent = func(agent model.AgentID) (capabilitymanifest.AgentCapabilityManifest, error) {
+			manifest, err := previous(agent)
+			if err != nil {
+				return capabilitymanifest.AgentCapabilityManifest{}, err
+			}
+			manifest.Contracts.ReviewTransportV1.Exposure = capabilitymanifest.ContractExposureDormant
+			return manifest, nil
+		}
+		defer func() { reviewTransportCapabilityForAgent = previous }()
 		if err := authorizeReviewTransportCapability(string(model.AgentPi)); err == nil {
-			t.Fatal("authorizeReviewTransportCapability(pi) = nil, want an absent-claim refusal")
+			t.Fatal("authorizeReviewTransportCapability(pi) with a dormant transport claim = nil, want an absent-claim refusal")
 		}
 	})
 	t.Run("unrecognised claim fails closed", func(t *testing.T) {
@@ -79,7 +91,7 @@ func TestUnsupportedReviewTransportCapabilityStopsBeforeAnyAuthority(t *testing.
 
 	var output bytes.Buffer
 	err := RunReview([]string{
-		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--agent", string(model.AgentPi),
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--agent", "unknown-runtime",
 	}, &output)
 	if err == nil {
 		t.Fatalf("review start with an unsupported-transport agent succeeded:\n%s", output.String())
@@ -99,22 +111,23 @@ func TestUnsupportedReviewTransportCapabilityStopsBeforeAnyAuthority(t *testing.
 }
 
 func TestReviewTransportAdmissionRefusalNamesWorkingExits(t *testing.T) {
+	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n", 0o644)
 
 	var output bytes.Buffer
 	err := RunReview([]string{
-		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--agent", string(model.AgentPi),
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--agent", "unknown-runtime",
 	}, &output)
 	if err == nil {
-		t.Fatalf("review start for Pi succeeded:\n%s", output.String())
+		t.Fatalf("review start for an unrecognised runtime succeeded:\n%s", output.String())
 	}
 	failure := decodeReviewIntegrationFailure(t, output.Bytes())
 	if failure.Code != reviewTransportCapabilityUnsupportedCode {
-		t.Fatalf("Pi refusal code = %q, want %q", failure.Code, reviewTransportCapabilityUnsupportedCode)
+		t.Fatalf("unrecognised-runtime refusal code = %q, want %q", failure.Code, reviewTransportCapabilityUnsupportedCode)
 	}
 	const exit = "gentle-ai review mode disable --scope clone --cwd <repo>"
-	if !strings.Contains(failure.Cause, exit) || !strings.Contains(failure.Cause, string(model.AgentClaudeCode)) || !strings.Contains(failure.Cause, string(model.AgentOpenCode)) {
+	if !strings.Contains(failure.Cause, exit) || !strings.Contains(failure.Cause, string(model.AgentClaudeCode)) || !strings.Contains(failure.Cause, string(model.AgentOpenCode)) || !strings.Contains(failure.Cause, string(model.AgentPi)) {
 		t.Fatalf("transport refusal does not name actionable exits: %s", failure.Cause)
 	}
 }

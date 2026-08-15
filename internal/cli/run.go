@@ -36,6 +36,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/theme"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -53,6 +54,11 @@ type InstallResult struct {
 	Dependencies system.DependencyReport
 	PiCodeGraph  *communitytool.PiCodeGraphResult
 	DryRun       bool
+
+	Background              OpenCodeBackgroundResolution
+	BackgroundPolicyEnabled bool
+
+	PiBackground PiBackgroundResolution
 }
 
 var (
@@ -65,6 +71,7 @@ var (
 	goEnv                        = defaultGoEnv
 	installCommunityTool         = communitytool.Install
 	installCommunityToolWithHome = communitytool.InstallWithHome
+	injectSDD                    = sdd.Inject
 	pathEnvEntries               = func(profile system.PlatformProfile) []string {
 		return splitPathForOS(os.Getenv("PATH"), profile.OS)
 	}
@@ -134,9 +141,38 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	}
 	profile := ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
+	homeDir, err := osUserHomeDir()
+	if err != nil {
+		return InstallResult{}, fmt.Errorf("resolve user home directory: %w", err)
+	}
+	persistedState, stateErr := state.Read(homeDir)
+	if errors.Is(stateErr, os.ErrNotExist) {
+		persistedState = state.InstallState{}
+	} else if stateErr != nil {
+		return InstallResult{}, fmt.Errorf("persist install state preflight: %w", stateErr)
+	}
+	background, err := resolveOpenCodeBackgroundCLI(flags.OpenCodeBackgroundSubagentsSet, flags.OpenCodeBackgroundSubagents, persistedState)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	backgroundActivation, err := prepareOpenCodeBackgroundActivation(homeDir, &background, containsAgent(resolved.Agents, model.AgentOpenCode))
+	if err != nil {
+		return InstallResult{}, fmt.Errorf("prepare OpenCode background activation: %w", err)
+	}
+	piBackground, err := resolvePiBackgroundCLI(flags.PiBackgroundSubagentsSet, flags.PiBackgroundSubagents, persistedState)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	piBackgroundProjection := preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(resolved.Agents, model.AgentPi))
 
 	review := planner.BuildReviewPayload(input.Selection, resolved)
 	stagePlan := buildStagePlan(input.Selection, resolved)
+	if backgroundActivation != nil {
+		stagePlan.Apply = append(stagePlan.Apply, noopStep{id: "opencode:background-activation"})
+	}
+	if piBackgroundProjection != nil {
+		stagePlan.Apply = append(stagePlan.Apply, noopStep{id: "pi:background-projection"})
+	}
 
 	result := InstallResult{
 		Selection:    input.Selection,
@@ -145,15 +181,17 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		Plan:         stagePlan,
 		Dependencies: detection.Dependencies,
 		DryRun:       input.DryRun,
+		Background:   background,
+		PiBackground: piBackground,
+	}
+	result.Background.activationPlan = backgroundActivation
+	if backgroundActivation != nil {
+		result.Background.Activation = backgroundActivation.Report()
+		result.BackgroundPolicyEnabled = backgroundActivation.Capability().Ready() && background.Effective == model.OpenCodeBackgroundOn
 	}
 
 	if input.DryRun {
 		return result, nil
-	}
-
-	homeDir, err := osUserHomeDir()
-	if err != nil {
-		return result, fmt.Errorf("resolve user home directory: %w", err)
 	}
 
 	if input.Scope == ScopeGlobal {
@@ -162,14 +200,6 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 				"will be written to each selected agent's global config directory and will affect ALL workspaces for those agents on this machine.\n"+
 				"To install only into the current workspace, rerun with --scope=workspace.\n\n")
 	}
-	var openCodeRuntime *state.OpenCodeRuntimeProvenance
-	if hasOpenCodeReviewerPlugin(input.Selection.Agents) {
-		openCodeRuntime, err = captureOpenCodeRuntimeProvenance()
-		if err != nil {
-			return result, fmt.Errorf("capture OpenCode reviewer runtime provenance: %w", err)
-		}
-	}
-
 	runtime, err := newInstallRuntime(homeDir, input.Scope, input.Channel, input.Selection, resolved, profile)
 	if err != nil {
 		return result, err
@@ -183,6 +213,10 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 			strings.Join(detection.Dependencies.MissingRequired, ", "),
 			system.FormatMissingDepsMessage(detection.Dependencies))
 	}
+	runtime.background = background
+	runtime.backgroundActivation = backgroundActivation
+	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
+	runtime.piBackgroundProjection = piBackgroundProjection
 
 	stagePlan = runtime.stagePlan()
 	result.Plan = stagePlan
@@ -194,7 +228,6 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		return result, fmt.Errorf("execute install pipeline: %w", result.Execution.Err)
 	}
 	result.PiCodeGraph = runtime.state.piCodeGraph
-
 	result.Verify = runPostApplyVerification(postApplyVerificationInput{
 		HomeDir:      homeDir,
 		WorkspaceDir: runtime.workspaceDir,
@@ -204,8 +237,22 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		State:        runtime.state,
 	})
 	result.Verify = withPostInstallNotes(result.Verify, resolved)
+	result.Verify = withOpenCodeBackgroundPending(result.Verify, background, runtime.runtimeReady, resolved.Agents)
+	result.Verify = withOpenCodeBackgroundActivationNote(result.Verify, background, resolved.Agents)
+	if plan := piBackground.projectionPlan; plan != nil && plan.skipReason != "" {
+		result.Verify.FinalNote += "\n\nPi background projection skipped: " + plan.skipReason
+	}
+	result.BackgroundPolicyEnabled = runtime.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
+	if backgroundActivation != nil {
+		result.Background.Activation = backgroundActivation.Report()
+	}
 	if !result.Verify.Ready {
-		return result, fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
+		verificationErr := fmt.Errorf("post-apply verification failed:\n%s", verify.RenderReport(result.Verify))
+		rollback := orchestrator.Rollback(result.Execution)
+		if rollback.Err != nil {
+			verificationErr = errors.Join(verificationErr, rollback.Err)
+		}
+		return result, verificationErr
 	}
 
 	// Persist the user's agent selection and model assignments so that future
@@ -222,6 +269,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	claudePhaseState := claudePhaseAssignmentsToState(input.Selection.ClaudePhaseAssignments)
 	newState := state.InstallState{
 		InstalledAgents:             agentIDs,
+		InstalledBinaryVersion:      AppVersion,
 		CommunityTools:              communityToolIDsToStrings(input.Selection.CommunityTools),
 		CommunityToolsConfigured:    true,
 		ClaudeModelAssignments:      claudeLegacyAssignmentsForState(input.Selection.ClaudeModelAssignments, claudePhaseState),
@@ -233,15 +281,25 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 		CodexPhaseModelAssignments:  input.Selection.CodexPhaseModelAssignments,
 		ModelAssignments:            modelAssignmentsToState(input.Selection.ModelAssignments),
 		Persona:                     string(input.Selection.Persona),
-		OpenCodeRuntimeProvenance:   openCodeRuntime,
 	}
 	newState.SetSelection(input.Selection)
+	if background.Persist != "" {
+		newState.BackgroundIntent = background.Persist
+	}
+	if piBackground.Persist != "" {
+		newState.PiBackgroundIntent = piBackground.Persist
+	}
 	writer, err := managedAssetDigest()
 	if err != nil {
 		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
 	}
 	if err := persistInstallState(homeDir, newState, agentIDs, flags, writer); err != nil {
-		return result, fmt.Errorf("persist install state: %w", err)
+		persistErr := fmt.Errorf("persist install state: %w", err)
+		rollback := orchestrator.Rollback(result.Execution)
+		if rollback.Err != nil {
+			persistErr = errors.Join(persistErr, rollback.Err)
+		}
+		return result, persistErr
 	}
 
 	return result, nil
@@ -250,15 +308,43 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 func persistInstallState(homeDir string, newState state.InstallState, agentIDs []string, flags InstallFlags, writer string) error {
 	return withInstallStateLock(homeDir, func() error {
 		if len(flags.Agents) > 0 {
-			merged, err := mergeExplicitAgentInstallState(homeDir, newState, agentIDs, flags)
-			if err != nil {
-				return fmt.Errorf("merge explicit agent install state: %w", err)
+			merged, mergeErr := mergeExplicitAgentInstallState(homeDir, newState, agentIDs, flags)
+			if mergeErr != nil {
+				return fmt.Errorf("merge explicit agent install state: %w", mergeErr)
 			}
 			newState = merged
+		} else {
+			existing, err := state.Read(homeDir)
+			if errors.Is(err, os.ErrNotExist) {
+				existing = state.InstallState{}
+			} else if err != nil {
+				return err
+			}
+			newState = mergeFullInstallState(existing, newState)
 		}
 		newState.ManagedAssetDigest = writer
-		return state.Write(homeDir, newState)
+		return state.WriteReconciled(homeDir, newState)
 	})
+}
+
+func mergeFullInstallState(existing, fresh state.InstallState) state.InstallState {
+	merged := existing
+	merged.InstalledAgents = fresh.InstalledAgents
+	merged.SelectionConfigured, merged.Components, merged.Skills = fresh.SelectionConfigured, fresh.Components, fresh.Skills
+	merged.Preset, merged.SDDMode, merged.StrictTDD = fresh.Preset, fresh.SDDMode, fresh.StrictTDD
+	merged.CommunityTools, merged.CommunityToolsConfigured = fresh.CommunityTools, fresh.CommunityToolsConfigured
+	merged.ClaudeModelAssignments, merged.ClaudePhaseAssignments = fresh.ClaudeModelAssignments, fresh.ClaudePhaseAssignments
+	merged.KiroModelAssignments, merged.CodexModelAssignments = fresh.KiroModelAssignments, fresh.CodexModelAssignments
+	merged.CodexOrchestratorAssignment = fresh.CodexOrchestratorAssignment
+	merged.CodexCarrilModelAssignments, merged.CodexPhaseModelAssignments = fresh.CodexCarrilModelAssignments, fresh.CodexPhaseModelAssignments
+	merged.ModelAssignments, merged.Persona = fresh.ModelAssignments, fresh.Persona
+	if fresh.BackgroundIntent != "" {
+		merged.BackgroundIntent = fresh.BackgroundIntent
+	}
+	if fresh.PiBackgroundIntent != "" {
+		merged.PiBackgroundIntent = fresh.PiBackgroundIntent
+	}
+	return merged
 }
 
 // mergeExplicitAgentInstallState merges a fresh single-agent install's state
@@ -309,10 +395,6 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	if newState.CodexPhaseModelAssignments != nil {
 		merged.CodexPhaseModelAssignments = newState.CodexPhaseModelAssignments
 	}
-	if newState.OpenCodeRuntimeProvenance != nil {
-		provenance := *newState.OpenCodeRuntimeProvenance
-		merged.OpenCodeRuntimeProvenance = &provenance
-	}
 	if merged.SelectionConfigured {
 		if len(flags.Components) > 0 {
 			merged.Components = newState.Components
@@ -330,6 +412,12 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	if flags.Persona != "" || merged.Persona == "" {
 		merged.Persona = newState.Persona
 	}
+	if newState.BackgroundIntent != "" {
+		merged.BackgroundIntent = newState.BackgroundIntent
+	}
+	if newState.PiBackgroundIntent != "" {
+		merged.PiBackgroundIntent = newState.PiBackgroundIntent
+	}
 	return merged, nil
 }
 
@@ -340,7 +428,6 @@ func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan) v
 		report.FinalNote = report.FinalNote + "\n\nGGA is now installed globally. To enable project hooks, run in each repo:\n- gga init\n- gga install"
 	}
 	report = withGoInstallPathNote(report, resolved)
-	report = withOpenCodeExperimentalNote(report, resolved)
 	return report
 }
 
@@ -409,21 +496,6 @@ func runnableAgentCommands(agentIDs []model.AgentID) []string {
 		}
 	}
 	return commands
-}
-
-// withOpenCodeExperimentalNote appends guidance to enable OpenCode
-// experimental features, but only when OpenCode is among the selected agents.
-// It only prints copy-paste guidance — it never writes to the user's shell
-// config — mirroring the engram PATH guidance pattern.
-func withOpenCodeExperimentalNote(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
-	if !containsAgent(resolved.Agents, model.AgentOpenCode) {
-		return report
-	}
-	report.FinalNote = report.FinalNote + fmt.Sprintf(
-		"\n\nTo enable OpenCode experimental features, add this to your shell:\n  %s",
-		openCodeExperimentalGuidance(os.Getenv("SHELL")),
-	)
-	return report
 }
 
 // withGoInstallPathNote appends a PATH guidance note when engram was installed
@@ -558,7 +630,6 @@ func buildStagePlan(selection model.Selection, resolved planner.ResolvedPlan) pi
 	for _, component := range resolved.OrderedComponents {
 		apply = append(apply, noopStep{id: "component:" + string(component)})
 	}
-
 	if len(selection.Agents) == 0 && len(resolved.OrderedComponents) == 0 {
 		prepare = nil
 	}
@@ -576,6 +647,12 @@ type installRuntime struct {
 	channel      InstallChannel
 	backupRoot   string
 	state        *runtimeState
+
+	background           OpenCodeBackgroundResolution
+	runtimeReady         bool
+	backgroundActivation *opencodeactivation.ActivationPlan
+
+	piBackgroundProjection *piBackgroundProjectionPlan
 }
 
 type runtimeState struct {
@@ -671,6 +748,12 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 
 	apply := make([]pipeline.Step, 0, len(r.resolved.Agents)+len(r.selection.CommunityTools)+len(r.resolved.OrderedComponents)+1)
 	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir})
+	if r.backgroundActivation != nil {
+		apply = append(apply, openCodeBackgroundActivationStep{id: "opencode:background-activation", plan: r.backgroundActivation, state: r.state, ready: &r.runtimeReady})
+	}
+	if r.piBackgroundProjection != nil {
+		apply = append(apply, piBackgroundProjectionStep{id: "pi:background-projection", plan: r.piBackgroundProjection})
+	}
 
 	// Before installing components, ensure modular agents have their system prompt hub.
 	// This ensures that SDD or Engram can inject their modules even if Persona is skipped.
@@ -696,7 +779,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	for _, component := range r.resolved.OrderedComponents {
-		apply = append(apply, componentApplyStep{
+		step := componentApplyStep{
 			id:           "component:" + string(component),
 			component:    component,
 			homeDir:      r.homeDir,
@@ -707,7 +790,9 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			profile:      r.profile,
 			channel:      r.channel,
 			state:        r.state,
-		})
+		}
+		step.backgroundPolicy = r.backgroundActivation != nil && r.backgroundActivation.Capability().Ready() && r.background.Effective == model.OpenCodeBackgroundOn
+		apply = append(apply, step)
 	}
 	// Routing guidance is scheduled per agent and outside the component loop:
 	// an agent that cannot choose between direct, delegated, and proposed work is
@@ -1070,6 +1155,27 @@ type rollbackRestoreStep struct {
 	workspaceDir string
 }
 
+type openCodeBackgroundActivationStep struct {
+	id    string
+	plan  *opencodeactivation.ActivationPlan
+	state *runtimeState
+	ready *bool
+}
+
+func (s openCodeBackgroundActivationStep) ID() string { return s.id }
+
+func (s openCodeBackgroundActivationStep) Run() error {
+	if err := s.plan.Apply(); err != nil {
+		return fmt.Errorf("apply managed OpenCode background activation: %w", err)
+	}
+	if s.ready != nil {
+		*s.ready = s.plan.Capability().Ready()
+	}
+	return nil
+}
+
+func (s openCodeBackgroundActivationStep) Rollback() error { return s.plan.Rollback() }
+
 func (s rollbackRestoreStep) ID() string {
 	return s.id
 }
@@ -1232,6 +1338,8 @@ type componentApplyStep struct {
 	profile      system.PlatformProfile
 	channel      InstallChannel
 	state        *runtimeState
+
+	backgroundPolicy bool
 }
 
 type communityToolInstallStep struct {
@@ -1572,9 +1680,11 @@ func (s componentApplyStep) Run() error {
 				CodexPhaseModelAssignments:  s.selection.CodexPhaseModelAssignments,
 				WorkspaceDir:                s.workspaceDir,
 				StrictTDD:                   s.selection.StrictTDD,
+				Profiles:                    s.selection.Profiles,
 				CodeGraphGuidanceMarkdown:   codeGraphGuidanceMarkdownForSDD(s.homeDir, s.selection.CommunityTools),
 			}
-			if _, err := sdd.Inject(targetDir, adapter, s.selection.SDDMode, opts); err != nil {
+			opts.IncludeOpenCodeBackgroundPolicy = s.backgroundPolicy && adapter.Agent() == model.AgentOpenCode
+			if _, err := injectSDD(targetDir, adapter, s.selection.SDDMode, opts); err != nil {
 				return fmt.Errorf("inject sdd for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -1702,27 +1812,48 @@ func windowsGoCandidates() []string {
 	}
 }
 
-// ExecuteTUIInstall runs the same install runtime as the CLI and carries
-// non-fatal Pi CodeGraph manual actions into the TUI completion result.
 // The seam lets native tests add a post-publication failure while still using
 // the public TUI execution boundary and the real compatibility writer.
 var tuiInstallStagePlan = func(runtime *installRuntime) pipeline.StagePlan {
 	return runtime.stagePlan()
 }
 
-func ExecuteTUIInstall(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, onProgress pipeline.ProgressFunc) pipeline.ExecutionResult {
+// ExecuteTUIInstallWithBackgroundAndOrchestrator runs a TUI install and returns
+// the orchestrator so a downstream state-persistence failure can be compensated.
+func ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
+	return executeTUIInstallWithBackground(homeDir, selection, resolved, profile, background, piBackground, onProgress)
+}
+
+func executeTUIInstallWithBackground(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, background model.OpenCodeBackgroundIntent, piBackground model.PiBackgroundIntent, onProgress pipeline.ProgressFunc) (pipeline.ExecutionResult, *pipeline.Orchestrator) {
 	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile)
 	if err != nil {
-		return pipeline.ExecutionResult{Err: err}
+		return pipeline.ExecutionResult{Err: err}, nil
 	}
 	defer runtime.state.cleanupCompatibilityTransaction()
+	backgroundResolution := OpenCodeBackgroundResolution{
+		Intent:    background,
+		Effective: background,
+	}
+	backgroundActivation, err := prepareOpenCodeBackgroundActivation(homeDir, &backgroundResolution, containsAgent(resolved.Agents, model.AgentOpenCode))
+	if err != nil {
+		return pipeline.ExecutionResult{Err: fmt.Errorf("prepare OpenCode background activation: %w", err)}, nil
+	}
+	runtime.background = backgroundResolution
+	runtime.backgroundActivation = backgroundActivation
+	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
+	piBackgroundResolution := PiBackgroundResolution{
+		Intent:    piBackground,
+		Effective: piBackground,
+		managed:   piBackground == model.PiBackgroundOn || piBackground == model.PiBackgroundOff,
+	}
+	runtime.piBackgroundProjection = preparePiBackgroundProjection(homeDir, &piBackgroundResolution, containsAgent(resolved.Agents, model.AgentPi))
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress))
 	result := orchestrator.Execute(tuiInstallStagePlan(runtime))
 	runtime.state.cleanupRollbackSnapshot()
 	if runtime.state.piCodeGraph != nil {
 		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
 	}
-	return result
+	return result, orchestrator
 }
 
 // RenderInstallManualActions renders non-fatal completion actions after the
@@ -1842,8 +1973,10 @@ func selectedSkillIDs(selection model.Selection) []model.SkillID {
 func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) ([]string, error) {
 	paths := map[string]struct{}{}
 	adapters := resolveAdapters(resolved.Agents)
+	managesSDDPlugins := false
 
 	for _, component := range resolved.OrderedComponents {
+		managesSDDPlugins = managesSDDPlugins || component == model.ComponentSDD
 		for _, path := range componentPathsWithWorkspaceScoped(homeDir, workspaceDir, scope, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
@@ -1863,10 +1996,25 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		// selected one, so a failed persona switch can restore the file its
 		// cleanup removed. Backup-only: verification stays on the selected file.
 		if component == model.ComponentPersona {
-			for _, path := range managedOutputStyleBackupPaths(selection, adapters, func(a agents.Adapter) string {
-				return a.OutputStyleDir(componentPathDirScoped(homeDir, workspaceDir, scope, a, model.ComponentPersona))
-			}) {
-				paths[path] = struct{}{}
+			plan := persona.ResourcePlanFor(selection.Persona)
+			for _, adapter := range adapters {
+				if !adapter.SupportsOutputStyles() {
+					continue
+				}
+				for _, path := range plan.OutputStylePaths(adapter.OutputStyleDir(componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentPersona))).Backup {
+					paths[path] = struct{}{}
+				}
+			}
+		}
+	}
+	if managesSDDPlugins {
+		for _, adapter := range adapters {
+			if !sdd.AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
+				continue
+			}
+			pluginsDir := filepath.Join(adapter.GlobalConfigDir(componentPathDirScoped(homeDir, workspaceDir, scope, adapter, model.ComponentSDD)), "plugins")
+			for _, name := range sdd.OpenCodePluginLifecycleNames(adapter.Agent()) {
+				paths[filepath.Join(pluginsDir, name)] = struct{}{}
 			}
 		}
 	}
@@ -1914,6 +2062,11 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	}
 	for _, path := range pluginPaths {
 		paths[path] = struct{}{}
+	}
+	if containsAgent(resolved.Agents, model.AgentOpenCode) {
+		for _, path := range opencodeactivation.LauncherPaths(homeDir, runtime.GOOS) {
+			paths[path] = struct{}{}
+		}
 	}
 
 	targets := make([]string, 0, len(paths))
@@ -2159,9 +2312,9 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			if adapter.SupportsSystemPrompt() && adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
 				paths = append(paths, adapter.SystemPromptFile(targetDir))
 			}
-			if managedOutputStyleName(selection.Persona) != "" {
-				if adapter.SupportsOutputStyles() {
-					paths = append(paths, filepath.Join(adapter.OutputStyleDir(targetDir), managedOutputStyleFile(selection.Persona)))
+			if adapter.SupportsOutputStyles() {
+				if stylePaths := persona.ResourcePlanFor(selection.Persona).OutputStylePaths(adapter.OutputStyleDir(targetDir)); stylePaths.Write != "" {
+					paths = append(paths, stylePaths.Write)
 					if p := adapter.SettingsPath(targetDir); p != "" {
 						paths = append(paths, p)
 					}
@@ -2354,8 +2507,9 @@ func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
 }
 
 func openCodeSDDPluginPaths(targetDir string) []string {
-	// Legacy plugin first: installOpenCodePlugins removes it, and verification
-	// asserts its absence (isLegacyOpenCodeBackgroundAgentsPlugin).
+	// Legacy background-agents is removed during installation and therefore has
+	// an absence check. The retired reviewer plugin is part of the rollback
+	// snapshot but not post-apply verification because migration removes it.
 	paths := []string{filepath.Join(targetDir, ".config", "opencode", "plugins", "background-agents.ts")}
 	for _, name := range sdd.ManagedOpenCodePluginNames() {
 		paths = append(paths, filepath.Join(targetDir, ".config", "opencode", "plugins", name))
@@ -2545,23 +2699,6 @@ func engramPathGuidance(shellPath string) string {
 		return fmt.Sprintf("echo 'export PATH=\"%s:$PATH\"' >> ~/.bashrc && source ~/.bashrc", binDir)
 	}
 	return fmt.Sprintf("Add %s to your shell PATH and restart the terminal.", binDir)
-}
-
-// openCodeExperimentalGuidance returns shell-aware copy-paste guidance to
-// persist OPENCODE_EXPERIMENTAL=true. It only produces a command string and
-// never writes to the user's shell config files.
-func openCodeExperimentalGuidance(shellPath string) string {
-	if strings.Contains(shellPath, "fish") {
-		return "set -Ux OPENCODE_EXPERIMENTAL true"
-	}
-	if strings.Contains(shellPath, "zsh") {
-		return "echo 'export OPENCODE_EXPERIMENTAL=true' >> ~/.zshrc && source ~/.zshrc"
-	}
-	if strings.Contains(shellPath, "bash") {
-		return "echo 'export OPENCODE_EXPERIMENTAL=true' >> ~/.bashrc && source ~/.bashrc"
-	}
-	return "Set the OPENCODE_EXPERIMENTAL=true environment variable " +
-		"(on Windows PowerShell: [Environment]::SetEnvironmentVariable('OPENCODE_EXPERIMENTAL','true','User'))."
 }
 
 // checkDependenciesStep verifies that required system dependencies are present.

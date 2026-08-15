@@ -78,6 +78,9 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	*evidenceRevision = strings.TrimSpace(*evidenceRevision)
 	*expectedBindingRevision = strings.TrimSpace(*expectedBindingRevision)
 	*remediatesEvidenceRevision = strings.TrimSpace(*remediatesEvidenceRevision)
+	if missing := missingSDDAttemptOperationFlags(args[1:], operation, *outcome); len(missing) != 0 {
+		return missingSDDAttemptOperationError(operation, missing)
+	}
 	if strings.TrimSpace(*cwd) == "" {
 		return errors.New("sdd-attempt requires --cwd")
 	}
@@ -98,9 +101,6 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	// attempt must not demand a review obligation the operator has no way to
 	// satisfy.
 	store.ReviewDisabled = reviewDisabled
-	if missing := missingSDDAttemptOperationFlags(args[1:], operation); len(missing) != 0 {
-		return missingSDDAttemptOperationError(operation, missing)
-	}
 	var result any
 	switch operation {
 	case "status":
@@ -263,7 +263,7 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "expected-revision", required: true, usage: "required; exact sha256:<64 lowercase hex> runtime revision"},
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
 		{name: "outcome", required: true, usage: "required; failed, interrupted, or passed"},
-		{name: "evidence-revision", required: true, usage: "required; sha256:<64 lowercase hex>, never none"},
+		{name: "evidence-revision", required: true, usage: "required for failed/passed; empty or canonical legacy sha256 revision for interrupted"},
 		{name: "diagnosis", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "harness-disposition", required: true, usage: "required; reused or invalidated"},
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
@@ -318,7 +318,7 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 		{name: "token", required: true, usage: "required; opaque token returned by acquire"},
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
 		{name: "outcome", required: true, usage: "required; failed, interrupted, or passed"},
-		{name: "evidence-revision", required: true, usage: "required; sha256:<64 lowercase hex>, never none"},
+		{name: "evidence-revision", required: true, usage: "required for failed/passed; omit for interrupted"},
 		{name: "diagnosis", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
 		{name: "harness-disposition", required: true, usage: "required; reused or invalidated"},
 		{name: "cleanup-evidence", required: true, usage: "required; trimmed single-line text, at most 500 bytes"},
@@ -529,13 +529,22 @@ func registerSDDAttemptRootFlag(flags *flag.FlagSet, operation string, roots *sd
 	}
 }
 
-func missingSDDAttemptOperationFlags(args []string, operation string) []string {
+func missingSDDAttemptOperationFlags(args []string, operation, parsedOutcome string) []string {
 	definition, _ := sddAttemptOperationDefinition(operation)
 	names := make([]string, 0, len(definition.flags))
 	for _, flagDefinition := range definition.flags {
 		if flagDefinition.required {
 			names = append(names, flagDefinition.name)
 		}
+	}
+	if (operation == "finish" || operation == "settle") && parsedOutcome == "interrupted" {
+		filtered := names[:0]
+		for _, name := range names {
+			if name != "evidence-revision" {
+				filtered = append(filtered, name)
+			}
+		}
+		names = filtered
 	}
 	return missingSDDAttemptFlags(args, names...)
 }

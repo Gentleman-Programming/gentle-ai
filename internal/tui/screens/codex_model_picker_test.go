@@ -76,6 +76,22 @@ func TestCodexModelPickerOptionCount_PhaseListMode(t *testing.T) {
 	}
 }
 
+func TestCodexCustomModelSelect_UsesStateCatalog(t *testing.T) {
+	state := screens.NewCodexModelPickerState()
+	state.CustomMode = screens.CodexCustomModeModelSelect
+	state.AvailableModels = []string{"state-model-a", "state-model-b"}
+
+	out := screens.RenderCodexModelPicker(state, 0)
+	for _, id := range state.AvailableModels {
+		if !strings.Contains(out, id) {
+			t.Fatalf("custom model picker missing state model %q; output:\n%s", id, out)
+		}
+	}
+	if strings.Contains(out, "gpt-5.5") {
+		t.Fatalf("custom model picker should use state catalog; output:\n%s", out)
+	}
+}
+
 func TestCodexModelPickerOptionCount_EffortMode(t *testing.T) {
 	// Effort-select mode: 4 effort levels
 	state := screens.NewCodexModelPickerState()
@@ -478,7 +494,7 @@ func TestCodexCustomModelSelect_EnterSelectsThirdModel(t *testing.T) {
 	}
 
 	// The pending model must be the third model in the list, not the second.
-	allModels := model.FilterCodexModels("")
+	allModels := model.FilterCodexModelList(model.CodexAvailableModels(), "")
 	if len(allModels) < 3 {
 		t.Skip("fewer than 3 models available")
 	}

@@ -2,6 +2,10 @@ version: 2
 
 project_name: gentle-ai
 
+before:
+  hooks:
+    - go run ./internal/providercontractbundlecmd generate --out .goreleaser-provider-contract
+
 builds:
   - main: ./cmd/gentle-ai
     binary: gentle-ai
@@ -34,6 +38,34 @@ archives:
       - contracts/review-integration/v1/fixtures/*.fixture.json
       - contracts/review-integration/v2/schemas/*.schema.json
       - contracts/review-integration/v2/fixtures/*.fixture.json
+  - id: review-provider-contract
+    meta: true
+    formats:
+      - tar.gz
+    name_template: "gentle-ai-review-provider-contract-{{ .Env.PROVIDER_CONTRACT_SEMVER }}"
+    files:
+      - src: .goreleaser-provider-contract/README.md
+        strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
+      - src: .goreleaser-provider-contract/manifest.json
+        strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
+      - src: .goreleaser-provider-contract/schemas/*.schema.json
+        dst: schemas
+        strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
+      - src: .goreleaser-provider-contract/vectors/*.json
+        dst: vectors
+        strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
 
 checksum:
   name_template: "checksums.txt"

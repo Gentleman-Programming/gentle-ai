@@ -1,12 +1,14 @@
 package uninstall
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
@@ -399,6 +402,12 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 	if slices.Contains(agentIDs, model.AgentPi) {
 		for _, target := range communitytool.PiCodeGraphPaths(s.homeDir, s.workspaceDir) {
 			backupTargets[target] = struct{}{}
+		}
+	}
+	if slices.Contains(agentIDs, model.AgentOpenCode) && removesAllAgentComponents(componentIDs) {
+		for _, path := range opencodeactivation.LauncherPaths(s.homeDir, runtime.GOOS) {
+			backupTargets[path] = struct{}{}
+			operationsByKey[operationKey(removeOwnedOpenCodeLauncher(path))] = removeOwnedOpenCodeLauncher(path)
 		}
 	}
 
@@ -1482,10 +1491,46 @@ func managedSDDSkillIDs() []string {
 	return append(ids, "judgment-day")
 }
 
+func removesAllAgentComponents(componentIDs []model.ComponentID) bool {
+	if len(componentIDs) == 0 {
+		return true
+	}
+	for _, componentID := range fullAgentRemovalComponents {
+		if !slices.Contains(componentIDs, componentID) {
+			return false
+		}
+	}
+	return true
+}
+
 func globalBackupTargets(homeDir string) []string {
 	return []string{
 		gga.ConfigPath(homeDir),
 		gga.AgentsTemplatePath(homeDir),
+	}
+}
+
+func removeOwnedOpenCodeLauncher(path string) operation {
+	return operation{
+		typeID: opRemoveFile,
+		path:   path,
+		agents: []model.AgentID{model.AgentOpenCode},
+		apply: func(path string) (bool, bool, error) {
+			data, err := os.ReadFile(path)
+			if os.IsNotExist(err) {
+				return false, false, nil
+			}
+			if err != nil {
+				return false, false, err
+			}
+			if !bytes.Contains(data, []byte(opencodeactivation.OwnershipMarker)) {
+				return false, false, nil
+			}
+			if err := os.Remove(path); err != nil {
+				return false, false, err
+			}
+			return true, true, nil
+		},
 	}
 }
 
@@ -1535,6 +1580,9 @@ func updateStateAfterUninstall(homeDir string, toRemove []model.AgentID) ([]mode
 
 	updated := current
 	updated.InstalledAgents = kept
+	if slices.Contains(toRemove, model.AgentOpenCode) {
+		updated.BackgroundIntent = ""
+	}
 	if err := state.Write(homeDir, updated); err != nil {
 		return nil, fmt.Errorf("write install state: %w", err)
 	}

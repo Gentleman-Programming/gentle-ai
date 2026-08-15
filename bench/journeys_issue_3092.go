@@ -16,7 +16,7 @@ var issue3092StartCapability = &Capability{
 
 func issue3092Journeys() []Journey {
 	return []Journey{{
-		ID:     "j103-pre-push-symbolic-fork-selector",
+		ID:     "j106-pre-push-symbolic-fork-selector",
 		Title:  "Fork pre-push validation preserves an upstream review base separate from the origin tracking branch",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/3092",
 		Steps: []Step{

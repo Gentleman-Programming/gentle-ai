@@ -176,6 +176,9 @@ func TestGoldenSDD_OpenCode_Multi(t *testing.T) {
 		}
 	}
 	assertGolden(t, "sdd-opencode-multi-settings.golden", settingsJSON)
+	if strings.Contains(string(settingsJSON), "<!-- gentle-ai:opencode-background-subagents -->") {
+		t.Fatal("default OpenCode golden output unexpectedly contains background policy")
+	}
 
 	legacyPluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
 	if _, err := os.Stat(legacyPluginPath); !os.IsNotExist(err) {

@@ -9,6 +9,7 @@ Before you dive in, please read this guide fully. We have a structured workflow 
 ## Table of Contents
 
 - [Issue-First Workflow](#issue-first-workflow)
+- [AI-Assisted Contributions](#ai-assisted-contributions)
 - [Label System](#label-system)
 - [Development Setup](#development-setup)
 - [Testing](#testing)
@@ -41,6 +42,21 @@ Start at the **[Community Roadmap](docs/community-roadmap.md)**.
 Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3Aup-for-grabs) is scoped, carries `status:approved` so a PR can be opened, and is unclaimed. Comment that you are taking it and go.
 
 An issue **without** that label is usually waiting on information (`status:needs-info`) or on an architectural decision (`status:needs-design`). Those want discussion first — implementing before the decision lands means the work gets thrown away.
+
+## AI-Assisted Contributions
+
+**AI assistance is allowed, but you must understand and own the complete submission.** Before opening a PR:
+
+- [ ] Confirm the change matches the approved issue scope.
+- [ ] Inspect every changed line.
+- [ ] Remove invented, unverifiable, or unrelated output.
+- [ ] Identify the responsible cause or invariant; confirm the fix resolves it rather than masking or shifting the symptom.
+- [ ] Remove duplicate authority, unnecessary abstractions, and unrelated complexity; keep the fix proportionate.
+- [ ] Run applicable tests and report the actual outcomes.
+- [ ] Be ready to explain the design and tradeoffs.
+- [ ] Disclose material AI assistance in the PR.
+
+For disclosure boundaries, required details, attribution rules, and reviewer expectations, see the canonical [AI-Assisted Contribution Policy](AI_POLICY.md).
 
 ## Label System
 
@@ -316,6 +332,7 @@ Review feedback should be warm, direct, and useful quickly. Start with the actio
 - [ ] Benchmark validation completed, or this change is not applicable to the benchmark (explain why in the Test Plan).
 - [ ] Commits follow Conventional Commits format
 - [ ] Code is self-reviewed
+- [ ] I understand and take responsibility for the complete submission, and have disclosed any material AI assistance in the PR
 
 ### PR Title
 

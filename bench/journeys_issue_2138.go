@@ -87,7 +87,7 @@ func issue2138AssertGeneratedFallbacks(mode string) func(*Sandbox, Observation) 
 		}
 		wantTools := map[string]map[string]bool{
 			"general": {"read": true, "write": true, "edit": true, "bash": true, "task": false},
-			"explore": {"read": true, "write": false, "edit": false, "bash": false, "task": false},
+			"explore": {"read": true, "write": false, "edit": false, "bash": false, "task": false, "codegraph_codegraph_explore": true},
 		}
 		for name, toolsWant := range wantTools {
 			raw, ok := agents[name].(map[string]any)

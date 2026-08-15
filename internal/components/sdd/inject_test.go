@@ -69,13 +69,14 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				"exactly three semantic choices in this order",
 				"`report_and_continue`, `continue_without_reporting`, `stop_here`",
 				"Only after explicit consent and that final privacy scan",
+				"If no equivalent exists, create a new automated provider-defect report.",
 				"search open and closed issues",
-				"confirms a newly-created issue identity/URL",
-				"Only a completed duplicate lookup with a definitive result may branch to a write",
-				"Do not create, comment, update, or label any issue",
-				"do not add, remove, or change any labels on it",
-				"label application fails or has an ambiguous outcome",
-				"re-resolve that exact created issue identity",
+				"newly-created issue identity/URL",
+				"Only a definitive lookup may branch to GitHub mutation",
+				"If search, comment, or creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome",
+				"perform no further GitHub mutation and no blind retry",
+				"use the uncertainty continuation below",
+				"After a definitive successful report outcome, or any report-side uncertainty after stopping further GitHub mutation, execute the shared candidate-scoped continuation below.",
 				"Both continue choices execute that exact captured decline invocation exactly once",
 				"`consent: \"declined_this_candidate\"`",
 				"native negotiated STATUS",
@@ -83,6 +84,9 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				if !strings.Contains(renderSDDOrchestratorAsset(tc.agent), required) {
 					t.Fatalf("rendered %s orchestrator missing provider-defect handoff clause %q", tc.agent, required)
 				}
+			}
+			if strings.Contains(renderSDDOrchestratorAsset(tc.agent), "gentle-"+"report") {
+				t.Fatalf("rendered %s orchestrator retains report label", tc.agent)
 			}
 		})
 	}
@@ -2683,6 +2687,13 @@ func TestInjectOpenCodeNativeFallbackAgentsPromptsAlignedWithGentlePi(t *testing
 			}
 
 			agentMap := root["agent"].(map[string]any)
+			if rootTools, ok := root["tools"].(map[string]any); ok {
+				for _, forbidden := range []string{"codegraph_*", "codegraph_codegraph_explore"} {
+					if _, exists := rootTools[forbidden]; exists {
+						t.Fatalf("root tools unexpectedly grant %q", forbidden)
+					}
+				}
+			}
 			for _, fallbackAgent := range []string{"general", "explore"} {
 				agent, ok := agentMap[fallbackAgent].(map[string]any)
 				if !ok {
@@ -2722,14 +2733,50 @@ func TestInjectOpenCodeNativeFallbackAgentsPromptsAlignedWithGentlePi(t *testing
 					"bash":  fallbackAgent == "general",
 					"task":  false,
 				}
+				if fallbackAgent == "explore" {
+					wantTools["codegraph_codegraph_explore"] = true
+				}
 				for tool, want := range wantTools {
 					got, exists := tools[tool].(bool)
 					if !exists || got != want {
 						t.Errorf("agent %q tool %q = %v, want %t", fallbackAgent, tool, tools[tool], want)
 					}
 				}
+				if fallbackAgent == "explore" {
+					for _, forbidden := range []string{"codegraph_*", "apply_patch"} {
+						if _, exists := tools[forbidden]; exists {
+							t.Errorf("explore tools unexpectedly configure %q", forbidden)
+						}
+					}
+				}
 			}
 		})
+	}
+}
+
+func TestInjectOpenCodePreservesExploreCodeGraphDenyAndCustomTool(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"agent":{"explore":{"tools":{"custom_readonly":true},"permission":{"codegraph_codegraph_explore":"deny"}}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeSingle); err != nil {
+		t.Fatal(err)
+	}
+
+	explore := readOpenCodeAgents(t, settingsPath)["explore"].(map[string]any)
+	tools := explore["tools"].(map[string]any)
+	if tools["codegraph_codegraph_explore"] != true || tools["custom_readonly"] != true {
+		t.Fatalf("explore tools lost managed or custom key: %#v", tools)
+	}
+	// OpenCode 1.18.18 normalizes agent tools before agent permission.
+	if got := explore["permission"].(map[string]any)["codegraph_codegraph_explore"]; got != "deny" {
+		t.Fatalf("agent CodeGraph permission = %v, want deny", got)
 	}
 }
 
@@ -4344,6 +4391,9 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 	}
 	if _, exists := agentMap["gentle-orchestrator"]; !exists {
 		t.Fatalf("Kilocode settings must retain gentle-orchestrator agent: %v", agentMap)
+	}
+	if strings.Contains(string(settings), "codegraph_codegraph_explore") {
+		t.Fatal("Kilocode settings must not receive the OpenCode CodeGraph grant")
 	}
 	for _, fallbackAgent := range []string{"general", "explore"} {
 		if _, exists := agentMap[fallbackAgent]; exists {
@@ -7071,7 +7121,7 @@ func TestRefreshInstalledOpenCodePluginsSkipsSymlinksAndDirectories(t *testing.T
 	if err := os.WriteFile(userFile, userContent, 0o644); err != nil {
 		t.Fatalf("WriteFile(user file) error = %v", err)
 	}
-	symlinkPath := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+	symlinkPath := filepath.Join(pluginsDir, "opencode-review-transport.ts")
 	if err := os.Symlink(userFile, symlinkPath); err != nil {
 		t.Skipf("symlinks not supported on this platform: %v", err)
 	}
