@@ -392,12 +392,11 @@ func recoverStagedCorrection(r *journeyRun) error {
 	if err != nil || envelope.NextTransition.Kind != "execute" || envelope.NextTransition.Execute.Operation != "review.recover" {
 		return fmt.Errorf("staged recovery regressed to collect/external.authorize_recovery or another non-native transition: got %+v, %v; want executable review.recover", envelope.NextTransition, err)
 	}
-	if envelope.executeArgument("predecessor-lineage") != stagedRecoveryLineage ||
+	if envelope.Authority.Revision == "" || len(envelope.NextTransition.Execute.Arguments) != 7 ||
+		envelope.executeArgument("predecessor-lineage") != stagedRecoveryLineage || envelope.executeArgument("expected-predecessor-revision") != envelope.Authority.Revision ||
 		envelope.executeArgument("successor-lineage") != stagedSuccessorLineage ||
-		envelope.executeArgument("base-ref") != r.sandbox.Scratch["staged-recovery-base"] ||
-		envelope.executeArgument("projection") != "staged" || envelope.executeArgument("workspace-overlay") != "true" ||
-		envelope.executeArgument("actor") != "" || envelope.executeArgument("reason") != "" ||
-		envelope.executeArgument("maintainer-authorization") != "" {
+		envelope.executeArgument("disposition") != "scope_changed" || envelope.executeArgument("base-ref") != r.sandbox.Scratch["staged-recovery-base"] ||
+		envelope.executeArgument("projection") != "staged" || envelope.executeArgument("workspace-overlay") != "true" {
 		return fmt.Errorf("staged recovery transition binding = %+v", envelope.NextTransition.Execute)
 	}
 	recovered, err := runPrintedTransition(r, envelope)
