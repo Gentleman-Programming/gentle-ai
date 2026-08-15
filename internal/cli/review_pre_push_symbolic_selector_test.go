@@ -35,7 +35,7 @@ func TestPrePushValidationPreservesForkBaseSelectorAndRejectsInvalidSelectors(t 
 	runReviewCLIGit(t, repo, "checkout", "-q", "-B", "feature", upstreamBase)
 	writeReviewStartCandidate(t, repo, "docs/feature.md", "# Feature\n", 0o644)
 	runReviewCLIGit(t, repo, "commit", "-qm", "add feature")
-	runReviewCLIGit(t, repo, "--git-dir", origin, "update-ref", "refs/heads/feature", base)
+	// Keep origin/feature unpublished and configure only its push destination; no tracking upstream exists.
 	runReviewCLIGit(t, repo, "config", "branch.feature.pushRemote", "origin")
 	runReviewCLIGit(t, repo, "--git-dir", origin, "update-ref", "refs/heads/main", base)
 
