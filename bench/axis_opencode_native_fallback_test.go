@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestNativeFallbackFixtureHandlesConcurrentRequests(t *testing.T) {
@@ -26,14 +28,26 @@ func TestNativeFallbackFixtureHandlesConcurrentRequests(t *testing.T) {
 				errs <- err
 				return
 			}
-			response, err := http.Post(server.URL, "application/json", bytes.NewReader(body))
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL, bytes.NewReader(body))
 			if err != nil {
 				errs <- err
 				return
 			}
-			defer response.Body.Close()
-			if response.StatusCode != http.StatusOK {
-				errs <- &unexpectedStatusError{status: response.StatusCode}
+			request.Header.Set("Content-Type", "application/json")
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				errs <- err
+				return
+			}
+			statusCode := response.StatusCode
+			if err := response.Body.Close(); err != nil {
+				errs <- err
+				return
+			}
+			if statusCode != http.StatusOK {
+				errs <- &unexpectedStatusError{status: statusCode}
 			}
 		}()
 	}
