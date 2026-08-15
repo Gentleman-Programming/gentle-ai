@@ -212,7 +212,8 @@ func issue3092RejectInvalidSelectors(r *journeyRun) error {
 	for _, selector := range []string{r.sandbox.Scratch["issue3092-raw-base"], "main", "upstream/missing", "local-only"} {
 		observation := r.run(productArgsFor(r, "review", "validate", "--lineage", issue3092Lineage, "--gate", "pre-push", "--base-ref", selector), false)
 		var gate waveGateResult
-		if observation.ExitCode == 0 || json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &gate) != nil || gate.Allowed || gate.Result == "allow" {
+		if observation.ExitCode == 0 || json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &gate) != nil || gate.Allowed || gate.Result != "invalidated" ||
+			gate.Context.Denial == nil || gate.Context.Denial.Stage != "target-resolution" || gate.Context.Denial.Code != "target_resolution_failed" {
 			return fmt.Errorf("invalid selector %q was not denied: exit=%d stdout=%s stderr=%s", selector, observation.ExitCode, observation.Stdout, observation.Stderr)
 		}
 		if err := issue3092AssertUnchanged(r, authority, candidate); err != nil {

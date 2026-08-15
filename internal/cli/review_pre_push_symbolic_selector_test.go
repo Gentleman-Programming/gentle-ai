@@ -36,8 +36,6 @@ func TestPrePushValidationPreservesForkBaseSelectorAndRejectsInvalidSelectors(t 
 	writeReviewStartCandidate(t, repo, "docs/feature.md", "# Feature\n", 0o644)
 	runReviewCLIGit(t, repo, "commit", "-qm", "add feature")
 	runReviewCLIGit(t, repo, "--git-dir", origin, "update-ref", "refs/heads/feature", base)
-	runReviewCLIGit(t, repo, "config", "branch.feature.remote", "origin")
-	runReviewCLIGit(t, repo, "config", "branch.feature.merge", "refs/heads/feature")
 	runReviewCLIGit(t, repo, "config", "branch.feature.pushRemote", "origin")
 	runReviewCLIGit(t, repo, "--git-dir", origin, "update-ref", "refs/heads/main", base)
 
@@ -82,7 +80,7 @@ func TestPrePushValidationPreservesForkBaseSelectorAndRejectsInvalidSelectors(t 
 		selector string
 		want     string
 	}{
-		{name: "raw nontracking commit", selector: rawBase, want: "advertised tracking branch"},
+		{name: "raw nontracking commit", selector: rawBase, want: "configured upstream"},
 		{name: "ambiguous unqualified branch", selector: "main", want: "missing or ambiguous"},
 		{name: "unadvertised qualified branch", selector: "upstream/missing", want: "missing or ambiguous"},
 		{name: "local-only branch", selector: "local-only", want: "missing or ambiguous"},
@@ -102,8 +100,9 @@ func TestPrePushValidationPreservesForkBaseSelectorAndRejectsInvalidSelectors(t 
 			if decodeErr := json.Unmarshal(output.Bytes(), &result); decodeErr != nil {
 				t.Fatalf("decode denied selector %q: %v\n%s", test.selector, decodeErr, output.String())
 			}
-			if result.Allowed || result.Result == reviewtransaction.GateAllow {
-				t.Fatalf("selector %q was allowed: %#v", test.selector, result)
+			if result.Allowed || result.Result != reviewtransaction.GateInvalidated || result.Context.Denial == nil ||
+				result.Context.Denial.Stage != "target-resolution" || result.Context.Denial.Code != "target_resolution_failed" {
+				t.Fatalf("selector %q denial = %#v", test.selector, result)
 			}
 			stateAfter, stateErr := os.ReadFile(store.StatePath())
 			receiptAfter, receiptErr := os.ReadFile(store.ReceiptPath())

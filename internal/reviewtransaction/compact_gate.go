@@ -280,6 +280,11 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		}
 	}
 	if err != nil {
+		var targetResolution *GateTargetResolutionError
+		if input.Gate == GatePrePush && errors.As(err, &targetResolution) {
+			denialContext.Denial = &GateDenial{Stage: "target-resolution", Code: "target_resolution_failed"}
+			return invalid("compact gate inputs cannot be derived: "+err.Error(), err)
+		}
 		if input.Gate == GatePrePR {
 			denialContext.Denial = &GateDenial{Stage: "boundary-selection", Code: "unavailable"}
 			return NativeGateEvaluation{Result: GateInvalidated, Reason: "compact gate inputs cannot be derived: " + err.Error(), Context: denialContext, Cause: err}
