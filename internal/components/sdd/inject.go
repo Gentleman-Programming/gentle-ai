@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -1828,7 +1829,15 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 		return false, err
 	}
 
-	const command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	// command is platform-aware: PowerShell-safe on Windows (where the legacy
+	// POSIX `|| true` form fails to parse under Windows PowerShell 5.1), POSIX
+	// form elsewhere.
+	var command string
+	if runtime.GOOS == "windows" {
+		command = "powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd $dir; exit 0'"
+	} else {
+		command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	}
 	if claudeHookExists(root, command) {
 		return false, nil
 	}
@@ -1841,6 +1850,57 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	if hooksMap == nil {
 		hooksMap = map[string]any{}
 	}
+
+	// Legacy migration: on Windows, the canonical command differs from the
+	// pre-fix POSIX literal. Remove any prior POSIX entry before appending the
+	// canonical one, otherwise sync produces two UserPromptSubmit entries
+	// (one broken, one new). On non-Windows the canonical IS the legacy, so
+	// claudeHookExists already short-circuited above.
+	if runtime.GOOS == "windows" {
+		const legacy = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+		if ups, ok := hooksMap["UserPromptSubmit"].([]any); ok {
+			var pruned []any
+			for _, item := range ups {
+				itemMap, ok := item.(map[string]any)
+				if !ok {
+					pruned = append(pruned, item)
+					continue
+				}
+				innerHooks, ok := itemMap["hooks"].([]any)
+				if !ok {
+					pruned = append(pruned, item)
+					continue
+				}
+				var kept []any
+				for _, h := range innerHooks {
+					hMap, ok := h.(map[string]any)
+					if ok && hMap["command"] == legacy {
+						continue
+					}
+					kept = append(kept, h)
+				}
+				if len(kept) == len(innerHooks) {
+					pruned = append(pruned, item)
+					continue
+				}
+				if len(kept) == 0 {
+					continue
+				}
+				copy := make(map[string]any, len(itemMap))
+				for k, v := range itemMap {
+					copy[k] = v
+				}
+				copy["hooks"] = kept
+				pruned = append(pruned, copy)
+			}
+			if len(pruned) == 0 {
+				delete(hooksMap, "UserPromptSubmit")
+			} else {
+				hooksMap["UserPromptSubmit"] = pruned
+			}
+		}
+	}
+
 	promptRaw, hasUserPromptSubmit := hooksMap["UserPromptSubmit"]
 	userPromptSubmit, _ := promptRaw.([]any)
 	if hasUserPromptSubmit && userPromptSubmit == nil {
