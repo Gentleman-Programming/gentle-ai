@@ -91,11 +91,14 @@ func readNativeFallbackAssignments(settingsPath string) (map[string]nativeFallba
 func nativeFallbackDefaults(sddMode model.SDDModeID, assignments map[string]model.ModelAssignment, rootModel string) map[string]nativeFallbackAssignment {
 	defaults := make(map[string]nativeFallbackAssignment)
 	if sddMode == model.SDDModeMulti {
-		for role, source := range map[string]string{"general": "sdd-mid", "explore": "sdd-explore"} {
-			if assignment := assignments[source]; assignment.ProviderID != "" && assignment.ModelID != "" {
-				defaults[role] = nativeFallbackAssignment{Model: assignment.FullID(), Variant: assignment.Effort}
-			}
+		if assignment := assignments["sdd-mid"]; assignment.ProviderID != "" && assignment.ModelID != "" {
+			defaults["general"] = nativeFallbackAssignment{Model: assignment.FullID(), Variant: assignment.Effort}
+			defaults["explore"] = defaults["general"]
 		}
+		if assignment := assignments["sdd-explore"]; assignment.ProviderID != "" && assignment.ModelID != "" {
+			defaults["explore"] = nativeFallbackAssignment{Model: assignment.FullID(), Variant: assignment.Effort}
+		}
+		return defaults
 	}
 	if rootModel != "" {
 		for _, role := range []string{"general", "explore"} {

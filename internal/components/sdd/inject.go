@@ -536,7 +536,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				rootForAllAgents = ""
 			}
 
-			if len(assignments) > 0 || len(fallbackDefaults) > 0 {
+			if len(assignments) > 0 || len(fallbackDefaults) > 0 || rootForAllAgents != "" {
 				var managedDefaults map[string]nativeFallbackAssignment
 				overlayBytes, managedDefaults, err = injectModelAssignmentsWithOwnership(overlayBytes, assignments, rootForAllAgents, existingAgentKeys, ownership.Agents, fallbackDefaults)
 				if err != nil {
