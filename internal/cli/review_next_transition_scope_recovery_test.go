@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,8 +95,7 @@ func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) 
 		}
 	}
 
-	// Supplying an explicitly wrong authorization must never fall through to
-	// the self-derived route or create the named successor.
+	// Wrong explicit authorization must neither fall through to self-derived recovery nor create its successor.
 	var wrongOut bytes.Buffer
 	if err := RunReview([]string{
 		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition",
@@ -110,8 +110,11 @@ func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) 
 	if wrong.NextTransition == nil || wrong.NextTransition.Kind == reviewNextTransitionExecute {
 		t.Fatalf("wrong explicit authorization emitted execution: %s", wrongOut.String())
 	}
-	wrongStore, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "wrong-authorization-successor")
-	if _, err := os.Stat(wrongStore.StatePath()); !os.IsNotExist(err) {
+	wrongStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "wrong-authorization-successor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(wrongStore.StatePath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("wrong explicit authorization created a successor: %v", err)
 	}
 

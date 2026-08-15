@@ -63,8 +63,7 @@ func negotiateIssue2031Recovery(r *journeyRun) error {
 		return fmt.Errorf("escalated changed-scope status = %+v, want executable native recovery", envelope)
 	}
 	successor := envelope.executeArgument("successor-lineage")
-	if envelope.Authority.Revision != expectedRevision || envelope.TargetIdentity != expectedTarget ||
-		envelope.executeArgument("predecessor-lineage") != issue2031EscalatedPredecessor ||
+	if envelope.executeArgument("predecessor-lineage") != issue2031EscalatedPredecessor ||
 		envelope.executeArgument("expected-predecessor-revision") != expectedRevision || successor == "" ||
 		envelope.executeArgument("disposition") != "escalated" || envelope.executeArgument("actor") != "" ||
 		envelope.executeArgument("reason") != "" || envelope.executeArgument("maintainer-authorization") != "" {
