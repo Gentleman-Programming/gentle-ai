@@ -13,6 +13,8 @@ import (
 
 const nativeFallbackOwnershipSchema = "gentle-ai.opencode-native-fallbacks"
 
+var writeNativeFallbackOwnershipFile = filemerge.WriteFileAtomic
+
 type nativeFallbackAssignment struct {
 	Model   string `json:"model"`
 	Variant string `json:"variant"`
@@ -28,8 +30,17 @@ func nativeFallbackOwnershipPath(settingsPath string) string {
 	return filepath.Join(filepath.Dir(settingsPath), ".gentle-ai-native-fallbacks.json")
 }
 
+// NativeFallbackOwnershipPath returns the sidecar managed with OpenCode SDD settings.
+func NativeFallbackOwnershipPath(settingsPath string) string {
+	return nativeFallbackOwnershipPath(settingsPath)
+}
+
+func emptyNativeFallbackOwnership() nativeFallbackOwnership {
+	return nativeFallbackOwnership{Schema: nativeFallbackOwnershipSchema, Version: 1, Agents: map[string]nativeFallbackAssignment{}}
+}
+
 func readNativeFallbackOwnership(settingsPath string, existing map[string]bool) (nativeFallbackOwnership, error) {
-	owned := nativeFallbackOwnership{Schema: nativeFallbackOwnershipSchema, Version: 1, Agents: map[string]nativeFallbackAssignment{}}
+	owned := emptyNativeFallbackOwnership()
 	raw, err := os.ReadFile(nativeFallbackOwnershipPath(settingsPath))
 	if os.IsNotExist(err) {
 		return owned, nil
@@ -37,12 +48,17 @@ func readNativeFallbackOwnership(settingsPath string, existing map[string]bool) 
 	if err != nil {
 		return owned, fmt.Errorf("read OpenCode native fallback ownership: %w", err)
 	}
-	if err := json.Unmarshal(raw, &owned); err != nil || owned.Schema != nativeFallbackOwnershipSchema || owned.Version != 1 {
-		return nativeFallbackOwnership{}, fmt.Errorf("invalid OpenCode native fallback ownership %q", nativeFallbackOwnershipPath(settingsPath))
+	var decoded nativeFallbackOwnership
+	if err := json.Unmarshal(raw, &decoded); err != nil || decoded.Schema != nativeFallbackOwnershipSchema || decoded.Version != 1 {
+		return owned, nil
 	}
+	if decoded.Agents == nil {
+		decoded.Agents = map[string]nativeFallbackAssignment{}
+	}
+	owned = decoded
 	current, err := readNativeFallbackAssignments(settingsPath)
 	if err != nil {
-		return nativeFallbackOwnership{}, err
+		return emptyNativeFallbackOwnership(), err
 	}
 	for role, assignment := range owned.Agents {
 		if !existing[role] || current[role] != assignment {
@@ -64,6 +80,9 @@ func readNativeFallbackAssignments(settingsPath string) (map[string]nativeFallba
 		Agent map[string]nativeFallbackAssignment `json:"agent"`
 	}
 	if err := json.Unmarshal(raw, &root); err != nil {
+		return map[string]nativeFallbackAssignment{}, nil
+	}
+	if root.Agent == nil {
 		return map[string]nativeFallbackAssignment{}, nil
 	}
 	return root.Agent, nil
@@ -126,6 +145,6 @@ func (o nativeFallbackOwnership) write(settingsPath string) (bool, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return false, err
 	}
-	result, err := filemerge.WriteFileAtomic(path, raw, 0o644)
+	result, err := writeNativeFallbackOwnershipFile(path, raw, 0o644)
 	return result.Changed, err
 }

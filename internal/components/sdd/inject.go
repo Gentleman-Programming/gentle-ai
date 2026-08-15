@@ -460,6 +460,15 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if AgentReceivesManagedOpenCodePlugins(adapter.Agent()) {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
+			settingsSnapshot, err := snapshotNativeFallbackFile(settingsPath)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			ownershipPath := nativeFallbackOwnershipPath(settingsPath)
+			ownershipSnapshot, err := snapshotNativeFallbackFile(ownershipPath)
+			if err != nil {
+				return InjectionResult{}, err
+			}
 			overlayContent, err := assets.Read(overlayAssetPath(sddMode))
 			if err != nil {
 				return InjectionResult{}, fmt.Errorf("read SDD overlay asset: %w", err)
@@ -550,12 +559,13 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			mergedSettingsBytes = agentResult.merged
 			ownershipChanged, ownershipErr := ownership.write(settingsPath)
 			if ownershipErr != nil {
+				if rollbackErr := restoreNativeFallbackFiles(settingsPath, settingsSnapshot, ownershipPath, ownershipSnapshot); rollbackErr != nil {
+					return InjectionResult{}, fmt.Errorf("write OpenCode native fallback ownership: %w (restore settings: %v)", ownershipErr, rollbackErr)
+				}
 				return InjectionResult{}, ownershipErr
 			}
 			changed = changed || ownershipChanged
-			if ownershipChanged || len(ownership.Agents) > 0 {
-				files = append(files, nativeFallbackOwnershipPath(settingsPath))
-			}
+			files = append(files, ownershipPath)
 
 			// Install OpenCode plugins (all SDD modes).
 			pluginResult, err := installOpenCodePlugins(homeDir, adapter)
@@ -838,6 +848,45 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+type nativeFallbackFileSnapshot struct {
+	data   []byte
+	mode   os.FileMode
+	exists bool
+}
+
+func snapshotNativeFallbackFile(path string) (nativeFallbackFileSnapshot, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nativeFallbackFileSnapshot{}, nil
+	}
+	if err != nil {
+		return nativeFallbackFileSnapshot{}, fmt.Errorf("snapshot OpenCode native fallback file %q: %w", path, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nativeFallbackFileSnapshot{}, fmt.Errorf("snapshot OpenCode native fallback file %q: %w", path, err)
+	}
+	return nativeFallbackFileSnapshot{data: data, mode: info.Mode().Perm(), exists: true}, nil
+}
+
+func restoreNativeFallbackFiles(settingsPath string, settings nativeFallbackFileSnapshot, ownershipPath string, ownership nativeFallbackFileSnapshot) error {
+	if err := restoreNativeFallbackFile(settingsPath, settings); err != nil {
+		return err
+	}
+	return restoreNativeFallbackFile(ownershipPath, ownership)
+}
+
+func restoreNativeFallbackFile(path string, snapshot nativeFallbackFileSnapshot) error {
+	if !snapshot.exists {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	_, err := filemerge.WriteFileAtomic(path, snapshot.data, snapshot.mode)
+	return err
 }
 
 func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
