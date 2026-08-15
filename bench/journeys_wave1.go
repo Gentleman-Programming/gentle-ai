@@ -387,23 +387,18 @@ func stageExpandedCorrection(sandbox *Sandbox) error {
 func recoverStagedCorrection(r *journeyRun) error {
 	selectors := stagedRecoverySelectors(r.sandbox)
 	selectors[1] = stagedRecoveryLineage
-	probeObservation := r.run(productArgsFor(r, append([]string{"review", "status", "--contract", reviewContract, "--next-transition", "--action-eligibility"}, selectors...)...), false)
-	var probe waveCorrectionStatus
-	if err := decodeWaveObservation(probeObservation, &probe, "staged recovery probe"); err != nil {
-		return err
-	}
-	if probe.Authority == nil || probe.Action != "recover" || probe.ActionDisposition != "scope_changed" || probe.NextTransition == nil || probe.NextTransition.Kind != "collect" {
-		return fmt.Errorf("staged recovery was not negotiated: %+v", probe)
-	}
-	const actor, reason = "bench-maintainer", "authorize staged correction scope expansion"
-	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + stagedRecoveryLineage +
-		"\npredecessor_revision=" + probe.Authority.Revision + "\ntarget_identity=" + probe.TargetIdentity +
-		"\nsuccessor_lineage=" + stagedSuccessorLineage + "\nactor=" + actor + "\nreason=" + reason
-	authorized := append(selectors, "--recovery-successor-lineage", stagedSuccessorLineage, "--recovery-reason", reason,
-		"--recovery-actor", actor, "--recovery-authorization", authorization)
-	envelope, err := readStatusFor(r, authorized...)
+	selectors = append(selectors, "--recovery-successor-lineage", stagedSuccessorLineage)
+	envelope, err := readStatusFor(r, selectors...)
 	if err != nil || envelope.NextTransition.Kind != "execute" || envelope.NextTransition.Execute.Operation != "review.recover" {
-		return fmt.Errorf("authorized staged recovery is not executable: %+v, %v", envelope.NextTransition, err)
+		return fmt.Errorf("staged recovery is not directly executable: %+v, %v", envelope.NextTransition, err)
+	}
+	if envelope.executeArgument("predecessor-lineage") != stagedRecoveryLineage ||
+		envelope.executeArgument("successor-lineage") != stagedSuccessorLineage ||
+		envelope.executeArgument("base-ref") != r.sandbox.Scratch["staged-recovery-base"] ||
+		envelope.executeArgument("projection") != "staged" || envelope.executeArgument("workspace-overlay") != "true" ||
+		envelope.executeArgument("actor") != "" || envelope.executeArgument("reason") != "" ||
+		envelope.executeArgument("maintainer-authorization") != "" {
+		return fmt.Errorf("staged recovery transition binding = %+v", envelope.NextTransition.Execute)
 	}
 	recovered, err := runPrintedTransition(r, envelope)
 	if err != nil {
