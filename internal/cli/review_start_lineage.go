@@ -52,9 +52,28 @@ func reviewDerivedStartLineage(targetIdentity string) string {
 // already emitted, so the ordinary first review of a candidate is untouched,
 // and a repeated start on that candidate still resumes rather than forking.
 func reviewAvailableStartLineage(ctx context.Context, root, targetIdentity string) string {
-	derived := reviewDerivedStartLineage(targetIdentity)
-	if derived == "" || reviewStartLineageAvailable(ctx, root, derived) {
+	available := reviewAvailableDerivedLineage(ctx, root, targetIdentity)
+	if available == reviewDerivedStartLineage(targetIdentity) {
 		return ""
+	}
+	return available
+}
+
+func reviewAvailableRecoveryLineage(ctx context.Context, root, targetIdentity, predecessor string) string {
+	available := reviewAvailableDerivedLineage(ctx, root, targetIdentity)
+	if available == predecessor {
+		return ""
+	}
+	return available
+}
+
+func reviewAvailableDerivedLineage(ctx context.Context, root, targetIdentity string) string {
+	derived := reviewDerivedStartLineage(targetIdentity)
+	if derived == "" {
+		return ""
+	}
+	if reviewStartLineageAvailable(ctx, root, derived) {
+		return derived
 	}
 	for suffix := 2; suffix <= reviewStartLineageSuffixLimit; suffix++ {
 		candidate := fmt.Sprintf("%s-%d", derived, suffix)
