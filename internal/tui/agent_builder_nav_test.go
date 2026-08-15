@@ -2,6 +2,8 @@ package tui
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -243,6 +245,209 @@ func TestAgentBuilder_InstallDoneMsg_MovesToComplete(t *testing.T) {
 	if len(state.AgentBuilder.InstallResults) != 1 {
 		t.Errorf("InstallResults len = %d, want 1", len(state.AgentBuilder.InstallResults))
 	}
+}
+
+func TestAgentBuilder_RegistryWriteFailurePreventsSuccess(t *testing.T) {
+	registryErr := errors.New("registry is read-only")
+	_, _ = installAgentBuilderDependencies(t, registryErr, nil)
+
+	started, cmd := agentBuilderInstallModel().startInstallation()
+	done := agentBuilderInstallDoneFromCmd(t, cmd)
+	if !errors.Is(done.Err, registryErr) {
+		t.Fatalf("install error = %v, want registry error %v", done.Err, registryErr)
+	}
+	if len(done.Results) != 1 || done.Results[0].Success {
+		t.Fatalf("results = %#v, want one failed result", done.Results)
+	}
+	updated, _ := started.Update(done)
+	if state := updated.(Model); state.Screen != ScreenAgentBuilderPreview {
+		t.Fatalf("screen = %v, want ScreenAgentBuilderPreview", state.Screen)
+	}
+}
+
+func TestAgentBuilder_SDDReferenceWriteFailurePreventsSuccess(t *testing.T) {
+	sddErr := errors.New("system prompt is read-only")
+	savedRegistries, _ := installAgentBuilderDependencies(t, nil, sddErr)
+	m := agentBuilderInstallModel()
+	m.AgentBuilder.Generated.SDDConfig = &agentbuilder.SDDIntegration{Mode: agentbuilder.SDDPhaseSupport, TargetPhase: "apply"}
+
+	started, cmd := m.startInstallation()
+	done := agentBuilderInstallDoneFromCmd(t, cmd)
+	if !errors.Is(done.Err, sddErr) {
+		t.Fatalf("install error = %v, want SDD error %v", done.Err, sddErr)
+	}
+	if len(done.Results) != 1 || done.Results[0].Success {
+		t.Fatalf("results = %#v, want one failed result", done.Results)
+	}
+	if len(*savedRegistries) != 2 {
+		t.Fatalf("registry save calls = %d, want 2 (persist then restore)", len(*savedRegistries))
+	}
+	if got := len((*savedRegistries)[1].Agents); got != 0 {
+		t.Fatalf("restored registry agents = %d, want 0", got)
+	}
+	updated, _ := started.Update(done)
+	if state := updated.(Model); state.Screen != ScreenAgentBuilderPreview {
+		t.Fatalf("screen = %v, want ScreenAgentBuilderPreview", state.Screen)
+	}
+}
+
+func TestAgentBuilder_LaterSDDReferenceFailureRestoresEarlierSystemPrompt(t *testing.T) {
+	sddErr := errors.New("later system prompt is read-only")
+	_, home := installAgentBuilderDependencies(t, nil, nil)
+	original := []byte("# Existing Claude instructions\n")
+	claudePrompt := filepath.Join(home, ".claude", "CLAUDE.md")
+	openCodePrompt := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	for _, path := range []string{claudePrompt, openCodePrompt} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(claudePrompt, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(openCodePrompt, []byte("# Existing OpenCode instructions\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	agentBuilderInjectSDDReferenceFn = func(_ *agentbuilder.GeneratedAgent, path string) error {
+		if path == openCodePrompt {
+			return sddErr
+		}
+		if err := os.WriteFile(path, []byte("modified"), 0o644); err != nil {
+			return err
+		}
+		return os.Chmod(path, 0o644)
+	}
+	m := agentBuilderInstallModel()
+	m.AgentBuilder.AvailableEngines = []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode}
+	m.AgentBuilder.Generated.SDDConfig = &agentbuilder.SDDIntegration{Mode: agentbuilder.SDDPhaseSupport, TargetPhase: "apply"}
+
+	_, cmd := m.startInstallation()
+	done := agentBuilderInstallDoneFromCmd(t, cmd)
+	if !errors.Is(done.Err, sddErr) {
+		t.Fatalf("install error = %v, want SDD error %v", done.Err, sddErr)
+	}
+	content, err := os.ReadFile(claudePrompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(original) {
+		t.Fatalf("earlier system prompt = %q, want exact before-image %q", content, original)
+	}
+	info, err := os.Stat(claudePrompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("earlier system prompt mode = %o, want 600", got)
+	}
+}
+
+func TestAgentBuilder_SDDReferenceFailureJoinsPromptRollbackError(t *testing.T) {
+	sddErr := errors.New("later system prompt is read-only")
+	rollbackErr := errors.New("restore system prompt failed")
+	_, _ = installAgentBuilderDependencies(t, nil, nil)
+	injections := 0
+	agentBuilderInjectSDDReferenceFn = func(*agentbuilder.GeneratedAgent, string) error {
+		injections++
+		if injections == 2 {
+			return sddErr
+		}
+		return nil
+	}
+	originalRestore := agentBuilderRestoreSystemPromptsFn
+	agentBuilderRestoreSystemPromptsFn = func([]agentBuilderSystemPromptBeforeImage) error { return rollbackErr }
+	t.Cleanup(func() { agentBuilderRestoreSystemPromptsFn = originalRestore })
+	m := agentBuilderInstallModel()
+	m.AgentBuilder.AvailableEngines = []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode}
+	m.AgentBuilder.Generated.SDDConfig = &agentbuilder.SDDIntegration{Mode: agentbuilder.SDDPhaseSupport, TargetPhase: "apply"}
+
+	_, cmd := m.startInstallation()
+	done := agentBuilderInstallDoneFromCmd(t, cmd)
+	if !errors.Is(done.Err, sddErr) {
+		t.Fatalf("install error = %v, want SDD error %v", done.Err, sddErr)
+	}
+	if !errors.Is(done.Err, rollbackErr) {
+		t.Fatalf("install error = %v, want prompt rollback error %v", done.Err, rollbackErr)
+	}
+}
+
+func agentBuilderInstallModel() Model {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.AgentBuilder = AgentBuilderState{
+		AvailableEngines: []model.AgentID{model.AgentClaudeCode},
+		SelectedEngine:   model.AgentClaudeCode,
+		Generated: &agentbuilder.GeneratedAgent{
+			Name:    "my-agent",
+			Title:   "My Agent",
+			Content: "# My Agent\n",
+		},
+	}
+	return m
+}
+
+func installAgentBuilderDependencies(t *testing.T, registryErr, sddErr error) (*[]agentbuilder.Registry, string) {
+	t.Helper()
+	originalInstall := agentBuilderInstallFn
+	originalMkdirAll := agentBuilderMkdirAllFn
+	originalLoadRegistry := agentBuilderLoadRegistryFn
+	originalSaveRegistry := agentBuilderSaveRegistryFn
+	originalInjectSDDReference := agentBuilderInjectSDDReferenceFn
+	originalHomeDir := agentBuilderHomeDirFn
+	agentBuilderInstallFn = func(_ *agentbuilder.GeneratedAgent, adapters []agentbuilder.AdapterInfo, finalize func([]agentbuilder.InstallResult) error) ([]agentbuilder.InstallResult, error) {
+		results := make([]agentbuilder.InstallResult, 0, len(adapters))
+		for _, adapter := range adapters {
+			results = append(results, agentbuilder.InstallResult{AgentID: adapter.AgentID, Success: true})
+		}
+		if err := finalize(results); err != nil {
+			for i := range results {
+				results[i].Success = false
+			}
+			return results, err
+		}
+		return results, nil
+	}
+	agentBuilderMkdirAllFn = func(string, os.FileMode) error { return nil }
+	agentBuilderLoadRegistryFn = func(string) (*agentbuilder.Registry, error) { return &agentbuilder.Registry{Version: 1}, nil }
+	savedRegistries := []agentbuilder.Registry{}
+	agentBuilderSaveRegistryFn = func(_ string, reg *agentbuilder.Registry) error {
+		snapshot := *reg
+		snapshot.Agents = append([]agentbuilder.RegistryEntry(nil), reg.Agents...)
+		savedRegistries = append(savedRegistries, snapshot)
+		if len(savedRegistries) == 1 {
+			return registryErr
+		}
+		return nil
+	}
+	agentBuilderInjectSDDReferenceFn = func(*agentbuilder.GeneratedAgent, string) error { return sddErr }
+	home := t.TempDir()
+	agentBuilderHomeDirFn = func() string { return home }
+	t.Cleanup(func() {
+		agentBuilderInstallFn = originalInstall
+		agentBuilderMkdirAllFn = originalMkdirAll
+		agentBuilderLoadRegistryFn = originalLoadRegistry
+		agentBuilderSaveRegistryFn = originalSaveRegistry
+		agentBuilderInjectSDDReferenceFn = originalInjectSDDReference
+		agentBuilderHomeDirFn = originalHomeDir
+	})
+	return &savedRegistries, home
+}
+
+func agentBuilderInstallDoneFromCmd(t *testing.T, cmd tea.Cmd) AgentBuilderInstallDoneMsg {
+	t.Helper()
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, batchCmd := range batch {
+			if done, ok := batchCmd().(AgentBuilderInstallDoneMsg); ok {
+				return done
+			}
+		}
+	}
+	if done, ok := msg.(AgentBuilderInstallDoneMsg); ok {
+		return done
+	}
+	t.Fatalf("message = %T, want AgentBuilderInstallDoneMsg", msg)
+	return AgentBuilderInstallDoneMsg{}
 }
 
 // ─── T-28.13: Enter on Complete → back to Welcome ────────────────────────────

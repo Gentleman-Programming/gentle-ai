@@ -88,7 +88,7 @@ func TestIntegration_FullAgentBuilderFlow(t *testing.T) {
 		{AgentID: model.AgentOpenCode, SkillsDir: dir2},
 	}
 
-	results, err := Install(agent, adapters, "")
+	results, err := Install(agent, adapters, nil)
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
