@@ -285,7 +285,7 @@ func decodeOpenCodeTransportBinding(prompt string) (openCodeTransportTaskBinding
 	}
 	encoded, found := strings.CutPrefix(line, reviewLensContextBindingHeader+" ")
 	if !found {
-		return openCodeTransportTaskBinding{}, errors.New("opencode_review_transport_binding_invalid: Task prompt has no provider-issued review binding") // refusal:by-design world-action: the managed shim must relay a collect Task prompt emitted by native review authority
+		return openCodeTransportTaskBinding{}, errors.New("opencode_review_transport_binding_invalid: Task prompt has no provider-issued review binding; for an ordinary non-authoritative advisory review, dispatch native `explore` with exact candidate evidence, requested focus, and acceptance criteria") // refusal:by-design world-action: formal review Tasks require native authority; ordinary advisory review continues through OpenCode explore
 	}
 	decoder := json.NewDecoder(strings.NewReader(encoded))
 	decoder.DisallowUnknownFields()
