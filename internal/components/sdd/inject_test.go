@@ -3,6 +3,7 @@ package sdd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
 	windsurfagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	opencodemodel "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
@@ -7354,6 +7356,7 @@ func TestInjectOpenCodeNativeFallbackOwnership(t *testing.T) {
 		second      map[string]model.ModelAssignment
 		want        map[string]nativeFallbackAssignment
 		owned       bool
+		wantOwned   map[string]nativeFallbackAssignment
 	}{
 		{
 			name:     "single mode derives both roles from root with medium variant",
@@ -7364,6 +7367,10 @@ func TestInjectOpenCodeNativeFallbackOwnership(t *testing.T) {
 				"explore": {Model: "openai/gpt-5", Variant: "medium"},
 			},
 			owned: true,
+			wantOwned: map[string]nativeFallbackAssignment{
+				"general": {Model: "openai/gpt-5", Variant: "medium"},
+				"explore": {Model: "openai/gpt-5", Variant: "medium"},
+			},
 		},
 		{
 			name: "explicit native assignments win",
@@ -7388,6 +7395,9 @@ func TestInjectOpenCodeNativeFallbackOwnership(t *testing.T) {
 				"explore": {Model: "openai/gpt-5", Variant: "medium"},
 			},
 			owned: true,
+			wantOwned: map[string]nativeFallbackAssignment{
+				"explore": {Model: "openai/gpt-5", Variant: "medium"},
+			},
 		},
 		{
 			name: "selection-less path invents no model",
@@ -7411,6 +7421,9 @@ func TestInjectOpenCodeNativeFallbackOwnership(t *testing.T) {
 				"explore": {Model: "user/explore", Variant: "high"},
 			},
 			owned: true,
+			wantOwned: map[string]nativeFallbackAssignment{
+				"general": {Model: "second/code", Variant: "high"},
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -7447,6 +7460,149 @@ func TestInjectOpenCodeNativeFallbackOwnership(t *testing.T) {
 			if (err == nil) != tt.owned {
 				t.Errorf("ownership metadata present = %t, want %t (err=%v)", err == nil, tt.owned, err)
 			}
+			if !tt.owned {
+				return
+			}
+			raw, err := os.ReadFile(nativeFallbackOwnershipPath(settingsPath))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ownership nativeFallbackOwnership
+			if err := json.Unmarshal(raw, &ownership); err != nil {
+				t.Fatal(err)
+			}
+			if ownership.Schema != nativeFallbackOwnershipSchema || ownership.Version != 1 {
+				t.Errorf("ownership contract = %#v, want schema %q version 1", ownership, nativeFallbackOwnershipSchema)
+			}
+			if !equalNativeFallbackAssignments(ownership.Agents, tt.wantOwned) {
+				t.Errorf("ownership agents = %#v, want %#v", ownership.Agents, tt.wantOwned)
+			}
 		})
 	}
+}
+
+func TestReadNativeFallbackAssignmentsReturnsEmptyMapWithoutAgent(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"model":"openai/gpt-5"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assignments, err := readNativeFallbackAssignments(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignments == nil || len(assignments) != 0 {
+		t.Fatalf("assignments = %#v, want non-nil empty map", assignments)
+	}
+}
+
+func TestReadNativeFallbackOwnershipRecoversInvalidSidecars(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"agent":{"general":{"model":"openai/gpt-5","variant":"medium"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	valid := `{"schema":"gentle-ai.opencode-native-fallbacks","version":1,"agents":{"general":{"model":"openai/gpt-5","variant":"medium"}}}`
+	tests := []struct {
+		name      string
+		contents  string
+		directory bool
+		wantErr   bool
+		want      map[string]nativeFallbackAssignment
+	}{
+		{name: "missing file", want: map[string]nativeFallbackAssignment{}},
+		{name: "malformed JSON", contents: `{`, want: map[string]nativeFallbackAssignment{}},
+		{name: "missing schema", contents: `{"version":1}`, want: map[string]nativeFallbackAssignment{}},
+		{name: "missing version", contents: `{"schema":"gentle-ai.opencode-native-fallbacks"}`, want: map[string]nativeFallbackAssignment{}},
+		{name: "wrong schema", contents: `{"schema":"wrong","version":1}`, want: map[string]nativeFallbackAssignment{}},
+		{name: "wrong version", contents: `{"schema":"gentle-ai.opencode-native-fallbacks","version":2}`, want: map[string]nativeFallbackAssignment{}},
+		{name: "omitted agents", contents: `{"schema":"gentle-ai.opencode-native-fallbacks","version":1}`, want: map[string]nativeFallbackAssignment{}},
+		{name: "valid sidecar", contents: valid, want: map[string]nativeFallbackAssignment{"general": {Model: "openai/gpt-5", Variant: "medium"}}},
+		{name: "hard read failure", directory: true, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ownershipPath := nativeFallbackOwnershipPath(settingsPath)
+			_ = os.RemoveAll(ownershipPath)
+			if tt.directory {
+				if err := os.Mkdir(ownershipPath, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else if tt.contents != "" {
+				if err := os.WriteFile(ownershipPath, []byte(tt.contents), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := readNativeFallbackOwnership(settingsPath, map[string]bool{"general": true})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("readNativeFallbackOwnership() error = %v, wantErr %t", err, tt.wantErr)
+			}
+			if err == nil && (got.Schema != nativeFallbackOwnershipSchema || got.Version != 1 || !equalNativeFallbackAssignments(got.Agents, tt.want)) {
+				t.Errorf("ownership = %#v, want schema %q version 1 agents %#v", got, nativeFallbackOwnershipSchema, tt.want)
+			}
+		})
+	}
+}
+
+func TestInjectRollsBackSettingsWhenNativeFallbackOwnershipWriteFails(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		initial []byte
+		mode    os.FileMode
+	}{
+		{name: "existing settings preserve bytes and mode", initial: []byte(`{"model":"openai/gpt-5","agent":{"user":{"model":"user/model"}}}`), mode: 0o600},
+		{name: "absent settings are removed", mode: 0o644},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			mockNoPackageManager(t)
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			if tt.initial != nil {
+				if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(settingsPath, tt.initial, tt.mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			originalWriter := writeNativeFallbackOwnershipFile
+			writeNativeFallbackOwnershipFile = func(string, []byte, os.FileMode) (filemerge.WriteResult, error) {
+				return filemerge.WriteResult{}, errors.New("sidecar write failed")
+			}
+			t.Cleanup(func() { writeNativeFallbackOwnershipFile = originalWriter })
+			_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: map[string]model.ModelAssignment{
+				"sdd-mid": {ProviderID: "fixture", ModelID: "general", Effort: "medium"},
+			}})
+			if err == nil || !strings.Contains(err.Error(), "sidecar write failed") {
+				t.Fatalf("Inject() error = %v, want sidecar write failure", err)
+			}
+			got, readErr := os.ReadFile(settingsPath)
+			if tt.initial == nil {
+				if !os.IsNotExist(readErr) {
+					t.Fatalf("settings exists after rollback: read error = %v, contents = %q", readErr, got)
+				}
+				return
+			}
+			if readErr != nil || !bytes.Equal(got, tt.initial) {
+				t.Fatalf("settings after rollback = %q, %v; want %q", got, readErr, tt.initial)
+			}
+			info, err := os.Stat(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != tt.mode {
+				t.Errorf("settings mode = %o, want %o", info.Mode().Perm(), tt.mode)
+			}
+		})
+	}
+}
+
+func equalNativeFallbackAssignments(got, want map[string]nativeFallbackAssignment) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for role, assignment := range want {
+		if got[role] != assignment {
+			return false
+		}
+	}
+	return true
 }

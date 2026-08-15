@@ -5342,5 +5342,9 @@ func TestSyncBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 		t.Fatalf("syncBackupTargets() error = %v", err)
 	}
 
+	want := sdd.NativeFallbackOwnershipPath(openCodeSettingsPath(home))
+	if !containsPath(targets, want) {
+		t.Fatalf("syncBackupTargets missing native fallback ownership sidecar %q; targets=%v", want, targets)
+	}
 	assertNoDuplicatePaths(t, "syncBackupTargets", targets)
 }

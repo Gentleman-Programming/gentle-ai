@@ -663,6 +663,10 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 		for _, name := range sdd.OpenCodePluginLifecycleNames(adapter.Agent()) {
 			paths[filepath.Join(pluginsDir, name)] = struct{}{}
 		}
+		if selection.HasComponent(model.ComponentSDD) && adapter.Agent() == model.AgentOpenCode {
+			settingsPath := adapter.SettingsPath(componentInjectionDir(homeDir, workspaceDir, adapter))
+			paths[sdd.NativeFallbackOwnershipPath(settingsPath)] = struct{}{}
+		}
 	}
 	adapterSkillPaths, err := syncAdapterSkillBackupTargets(homeDir, workspaceDir, selection, adapters)
 	if err != nil {
