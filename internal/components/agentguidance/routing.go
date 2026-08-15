@@ -58,6 +58,12 @@ func RenderRouting(agent model.AgentID) (string, error) {
 	output.WriteString("- These are implementation routes, not a ban on per-action delegation. Tests, builds, installs, and review actors may still use fresh workers without changing the selected route.\n")
 	output.WriteString("- Direct and delegated work never create SDD artifacts, prompts, phase attempts, or synthetic SDD runs.\n")
 
+	output.WriteString("\n### OpenCode advisory review routing\n\n")
+	output.WriteString("- Formal `review-*` actors may be dispatched only from an exact provider-issued native collection transition. Never select one for an ordinary manual review request.\n")
+	output.WriteString("- In OpenCode, route an ordinary unbound manual read-only or advisory review through native `explore`. The parent must supply exact candidate evidence appropriate to the request: changed paths and relevant bytes, or exact immutable references where available, plus the requested review focus, and acceptance criteria.\n")
+	output.WriteString("- Treat the result as non-authoritative advice. It must not claim PASS, a receipt, approval, gate, or delivery authority.\n")
+	output.WriteString("- If an explicit unbound formal `review-*` Task is refused, continue the ordinary advisory request through native `explore`; do not bypass the transport. When the component is absent or unmanaged, use the same native `explore` route without creating a managed role or authority state.\n")
+
 	// The kill switch ships in the routing block, not in the optional SDD
 	// assets, for the same reason routing itself is unconditional: it is
 	// installed for every configured agent. A switch the agent cannot name does

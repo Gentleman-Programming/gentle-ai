@@ -174,6 +174,29 @@ func TestRenderRoutingObeysTheUserOnReviewMode(t *testing.T) {
 	}
 }
 
+func TestRenderRoutingDeclaresOpenCodeAdvisoryReviewSeparateFromFormalAuthority(t *testing.T) {
+	t.Parallel()
+
+	rendered, err := RenderRouting(model.AgentOpenCode)
+	if err != nil {
+		t.Fatalf("RenderRouting error = %v", err)
+	}
+
+	for _, want := range []string{
+		"Formal `review-*` actors may be dispatched only from an exact provider-issued native collection transition.",
+		"route an ordinary unbound manual read-only or advisory review through native `explore`",
+		"changed paths and relevant bytes, or exact immutable references where available",
+		"requested review focus, and acceptance criteria",
+		"non-authoritative",
+		"must not claim PASS, a receipt, approval, gate, or delivery authority",
+		"without creating a managed role or authority state",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered routing is missing the OpenCode advisory invariant %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestRenderRoutingOmitsRetiredRemoteControlPlaneVocabulary(t *testing.T) {
 	t.Parallel()
 
