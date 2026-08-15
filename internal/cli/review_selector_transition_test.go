@@ -415,7 +415,7 @@ func TestStatusRecoverTransitionExecutesApprovedStagedScopeExpansion(t *testing.
 	probe := selectorTransitionStatus(t, repo, selectors...)
 	if probe.Action != reviewtransaction.TargetStatusActionRecover ||
 		probe.ActionDisposition != reviewtransaction.RecoveryScopeChanged ||
-		probe.NextTransition == nil || probe.NextTransition.Collect == nil {
+		probe.NextTransition == nil || probe.NextTransition.Execute == nil || probe.NextTransition.Execute.Operation != "review.recover" {
 		t.Fatalf("staged scope probe = %#v", probe)
 	}
 	reason, actor, successor := "include staged release notes", "maintainer", "staged-scope-successor"
@@ -586,7 +586,7 @@ func TestStatusRecoverTransitionExecutesCorrectionRequiredStagedScopeExpansion(t
 	}
 	probe := selectorTransitionStatus(t, repo, selectors...)
 	if probe.Action != reviewtransaction.TargetStatusActionRecover || probe.ActionDisposition != reviewtransaction.RecoveryScopeChanged ||
-		probe.NextTransition == nil || probe.NextTransition.Collect == nil {
+		probe.NextTransition == nil || probe.NextTransition.Execute == nil || probe.NextTransition.Execute.Operation != "review.recover" {
 		t.Fatalf("correction-required staged scope probe = %#v", probe)
 	}
 	const successor, actor, reason = "correction-staged-successor", "maintainer", "authorize staged correction scope expansion"

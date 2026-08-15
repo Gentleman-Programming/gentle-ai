@@ -973,6 +973,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			var correctionRequest *reviewtransaction.CorrectionPlanRequest
 			providerRole := reviewProviderRole("")
 			var preCommitDeliveryAssessment *reviewtransaction.CompactGateTargetApplicability
+			var recoveryPredecessorIntendedUntracked []string
 			correctionForecasted := false
 			lensContextBudgetExceeded := false
 			var artifactErr error
@@ -985,6 +986,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					if loadErr != nil {
 						artifactErr = loadErr
 					} else {
+						recoveryPredecessorIntendedUntracked = append([]string{}, record.State.InitialSnapshot.IntendedUntracked...)
 						compactAuthority = &reviewStatusCompactAuthority{
 							OriginalChangedLines:   record.State.OriginalChangedLines,
 							CorrectionBudget:       record.State.CorrectionBudget,
@@ -1123,6 +1125,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if native.Applicability == reviewtransaction.TargetApplicabilityUnrelated && !reviewStartLineageAvailable(ctx, root, startLineage) {
 				startLineage = reviewAvailableStartLineage(ctx, root, native.TargetIdentity)
 			}
+			resolvedRecoverySuccessor := strings.TrimSpace(*recoverySuccessor)
+			if native.Action == reviewtransaction.TargetStatusActionRecover && resolvedRecoverySuccessor == "" {
+				resolvedRecoverySuccessor = reviewAvailableRecoveryLineage(ctx, root, native.TargetIdentity, native.LineageID)
+			}
 			if lensContextBudgetExceeded {
 				result.Action = reviewtransaction.TargetStatusActionStop
 				result.Replayability = reviewtransaction.ReplayabilityManualActionRequired
@@ -1130,7 +1136,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					result.Eligibility = newReviewActionEligibility(result)
 				}
 			}
-			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, PreCommitDeliveryAssessment: preCommitDeliveryAssessment}
+			input := reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: resolvedRecoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, ProviderRole: providerRole, Contract: *contract, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector, IntendedUntracked: intendedScope, RDDMode: result.rddMode, RDDModeResolved: result.rddModeResolved, LensContextBudgetExceeded: lensContextBudgetExceeded, PreCommitDeliveryAssessment: preCommitDeliveryAssessment, RecoveryAuthorizationProvided: reviewFlagWasProvided(flags, "recovery-authorization"), RecoveryPredecessorIntendedUntracked: recoveryPredecessorIntendedUntracked}
 			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, input)
 			result.NextTransition = &transition
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&

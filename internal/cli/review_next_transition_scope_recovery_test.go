@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,19 +11,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-// TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery pins the closed
-// negotiated loop confirmed on issue #1826: with an approved lineage and the
-// operator's staged revision of the exact reviewed path set, negotiated status
-// answered fresh_target_ready, the printed START answered blocked-scope-action
-// at exit 0 having created nothing, and status then printed the same START
-// again. The gentle-ai.review-recovery-authorization/v1 collection was
-// reachable only after status had already selected recovery, which this shape
-// never did.
-//
-// The store already refuses a fresh lineage for this shape and answers
-// recover, so the negotiated surface must classify with the same predicate:
-// bind the approved predecessor for recovery and expose the authorization
-// collection with no caller-invented flags.
+// TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery is issue #1658's
+// root regression: once native STATUS has selected a deterministic recovery,
+// its transition must invoke native RECOVER's existing self-derivation rather
+// than hand the caller to an unowned authorization capture operation.
 func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
@@ -38,6 +30,14 @@ func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) 
 	var finalized bytes.Buffer
 	if err := RunReview([]string{"finalize", "--cwd", repo}, &finalized); err != nil {
 		t.Fatalf("review finalize: %v\n%s", err, finalized.String())
+	}
+	predecessorStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, startResult.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessorBefore, err := os.ReadFile(predecessorStore.StatePath())
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	// The operator stages a revision of the exact reviewed path set: the
@@ -57,79 +57,57 @@ func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) 
 	if transition == nil {
 		t.Fatalf("status carried no next transition:\n%s", statusOut.String())
 	}
-	if transition.Kind == reviewNextTransitionExecute && transition.Execute != nil &&
-		transition.Execute.Operation == "review.start" {
-		// Prove the loop instead of merely asserting a shape: run the printed
-		// transition verbatim and show what it answers while changing nothing.
-		arguments := []string{"start", "--cwd", repo}
-		for _, argument := range transition.Execute.Arguments {
-			arguments = append(arguments, argument.Token)
-		}
-		var rerun bytes.Buffer
-		if err := RunReview(arguments, &rerun); err != nil {
-			t.Fatalf("the printed start does not run: %v\n%s", err, rerun.String())
-		}
-		var result ReviewIntegrationStartResult
-		decodeStrictReviewJSON(t, rerun.Bytes(), &result)
-		t.Fatalf("status routed the approved scope change to a fresh start; running it verbatim answered %q against lineage %q: the issue #1826 closed loop",
-			result.Action, result.LineageID)
-	}
 	if status.Applicability != reviewtransaction.TargetApplicabilityCurrent ||
 		status.Action != reviewtransaction.TargetStatusActionRecover ||
 		status.ActionDisposition != reviewtransaction.RecoveryScopeChanged ||
 		status.Authority == nil || status.Authority.LineageID != startResult.LineageID {
 		t.Fatalf("status did not bind the approved predecessor for recovery:\n%s", statusOut.String())
 	}
-	if transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != "recovery_authorization_required" ||
-		transition.Collect == nil || len(transition.Collect.Inputs) != 1 {
-		t.Fatalf("next transition is not the bound recovery collection:\n%s", statusOut.String())
+	if transition.Kind != reviewNextTransitionExecute || transition.ReasonCode != "recovery_authorized" ||
+		transition.Execute == nil || transition.Execute.Operation != "review.recover" {
+		t.Fatalf("next transition is not the self-derived recovery execution:\n%s", statusOut.String())
 	}
-	input := transition.Collect.Inputs[0]
-	if input.Schema != "gentle-ai.review-recovery-authorization/v1" || input.CaptureOperation != "external.authorize_recovery" {
-		t.Fatalf("collection input = %q via %q, want the recovery authorization schema", input.Schema, input.CaptureOperation)
-	}
-	bound := map[string]string{}
-	for _, argument := range input.Arguments {
+	bound, argumentNames := map[string]string{}, []string{}
+	for _, argument := range transition.Execute.Arguments {
 		bound[argument.Name] = argument.Value
-	}
-	if bound["lineage"] != startResult.LineageID || bound["disposition"] != string(reviewtransaction.RecoveryScopeChanged) ||
-		bound["target"] == "" || bound["expected-revision"] == "" {
-		t.Fatalf("recovery collection is not fully bound: %#v", bound)
-	}
-
-	// Completing the collection must yield an executable transition that,
-	// run verbatim, creates the generation-2 successor: the loop is closed
-	// by an exit the operator can actually take.
-	authorization := strings.Join([]string{
-		"gentle-ai.review-recovery-authorization/v1",
-		"predecessor_lineage=" + bound["lineage"],
-		"predecessor_revision=" + bound["expected-revision"],
-		"target_identity=" + bound["target"],
-		"successor_lineage=scope-loop-successor",
-		"actor=maintainer",
-		"reason=scope changed after approval",
-	}, "\n")
-	statusOut.Reset()
-	if err := RunReview([]string{
-		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition",
-		"--recovery-successor-lineage", "scope-loop-successor",
-		"--recovery-reason", "scope changed after approval",
-		"--recovery-actor", "maintainer", "--recovery-authorization", authorization,
-	}, &statusOut); err != nil {
-		t.Fatalf("authorized review status: %v\n%s", err, statusOut.String())
-	}
-	var authorized ReviewTargetStatusResult
-	decodeStrictReviewJSON(t, statusOut.Bytes(), &authorized)
-	execute := authorized.NextTransition
-	if execute == nil || execute.Kind != reviewNextTransitionExecute || execute.Execute == nil ||
-		execute.Execute.Operation != "review.recover" || execute.ReasonCode != "recovery_authorized" {
-		t.Fatalf("authorized status did not emit an executable recovery:\n%s", statusOut.String())
-	}
-	arguments := []string{"recover", "--cwd", repo}
-	for _, argument := range execute.Execute.Arguments {
+		argumentNames = append(argumentNames, argument.Name)
 		if argument.Token == "" {
 			t.Fatalf("recovery argument %q carried no runnable token", argument.Name)
 		}
+	}
+	wantNames := []string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition"}
+	if strings.Join(argumentNames, ",") != strings.Join(wantNames, ",") {
+		t.Fatalf("recovery arguments = %v, want only %v", argumentNames, wantNames)
+	}
+	if bound["predecessor-lineage"] != startResult.LineageID || bound["expected-predecessor-revision"] == "" ||
+		bound["successor-lineage"] == "" || bound["successor-lineage"] == startResult.LineageID ||
+		bound["disposition"] != string(reviewtransaction.RecoveryScopeChanged) {
+		t.Fatalf("recovery execution is not fully bound: %#v", bound)
+	}
+
+	// Supplying an explicitly wrong authorization must never fall through to
+	// the self-derived route or create the named successor.
+	var wrongOut bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition",
+		"--recovery-successor-lineage", "wrong-authorization-successor",
+		"--recovery-reason", "scope changed after approval", "--recovery-actor", "maintainer",
+		"--recovery-authorization", "not the exact binding",
+	}, &wrongOut); err != nil {
+		t.Fatalf("wrongly authorized review status: %v\n%s", err, wrongOut.String())
+	}
+	var wrong ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, wrongOut.Bytes(), &wrong)
+	if wrong.NextTransition == nil || wrong.NextTransition.Kind == reviewNextTransitionExecute {
+		t.Fatalf("wrong explicit authorization emitted execution: %s", wrongOut.String())
+	}
+	wrongStore, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "wrong-authorization-successor")
+	if _, err := os.Stat(wrongStore.StatePath()); !os.IsNotExist(err) {
+		t.Fatalf("wrong explicit authorization created a successor: %v", err)
+	}
+
+	arguments := []string{"recover", "--cwd", repo}
+	for _, argument := range transition.Execute.Arguments {
 		arguments = append(arguments, argument.Token)
 	}
 	var recovered bytes.Buffer
@@ -138,10 +116,14 @@ func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) 
 	}
 	var successor ReviewRecoverResult
 	decodeStrictReviewJSON(t, recovered.Bytes(), &successor)
-	if successor.LineageID != "scope-loop-successor" || successor.State != reviewtransaction.StateReviewing ||
+	if successor.LineageID != bound["successor-lineage"] || successor.State != reviewtransaction.StateReviewing ||
 		successor.Recovery.PredecessorLineageID != startResult.LineageID ||
 		successor.Recovery.Disposition != reviewtransaction.RecoveryScopeChanged {
 		t.Fatalf("recovery successor = %s", recovered.String())
+	}
+	predecessorAfter, err := os.ReadFile(predecessorStore.StatePath())
+	if err != nil || !bytes.Equal(predecessorBefore, predecessorAfter) {
+		t.Fatalf("recovery changed predecessor authority: %v", err)
 	}
 }
 
@@ -189,7 +171,8 @@ func TestNegotiatedStatusRecoversApprovedFeatureOntoCurrentBase(t *testing.T) {
 		status.Action != reviewtransaction.TargetStatusActionRecover ||
 		status.ActionDisposition != reviewtransaction.RecoveryScopeChanged || status.Authority == nil ||
 		status.Authority.LineageID != started.LineageID || status.NextTransition == nil ||
-		status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.Collect == nil {
+		status.NextTransition.Kind != reviewNextTransitionExecute || status.NextTransition.Execute == nil ||
+		status.NextTransition.Execute.Operation != "review.recover" {
 		t.Fatalf("rebased status did not select scope recovery:\n%s", statusOut.String())
 	}
 	native, _, nativeErr := reviewtransaction.AssessTargetStatusWithSnapshot(context.Background(), repo, reviewtransaction.TargetStatusRequest{
@@ -198,44 +181,20 @@ func TestNegotiatedStatusRecoversApprovedFeatureOntoCurrentBase(t *testing.T) {
 	if nativeErr != nil || native.Decision.RecoverySelector == nil || native.Decision.RecoverySelector.Kind != reviewtransaction.TargetBaseDiff || native.Decision.RecoverySelector.BaseRef == "" {
 		t.Fatalf("core did not project the native scope recovery: decision=%#v err=%v", native.Decision, nativeErr)
 	}
-	input := status.NextTransition.Collect.Inputs[0]
-	bound := map[string]string{}
-	for _, argument := range input.Arguments {
-		bound[argument.Name] = argument.Value
-	}
-	authorization := strings.Join([]string{
-		"gentle-ai.review-recovery-authorization/v1",
-		"predecessor_lineage=" + bound["lineage"],
-		"predecessor_revision=" + bound["expected-revision"],
-		"target_identity=" + bound["target"],
-		"successor_lineage=approved-rebase-successor",
-		"actor=maintainer",
-		"reason=recover approved feature onto current base",
-	}, "\n")
-	authorizedArgs := append(append([]string{}, statusArgs...),
-		"--recovery-successor-lineage", "approved-rebase-successor",
-		"--recovery-reason", "recover approved feature onto current base",
-		"--recovery-actor", "maintainer", "--recovery-authorization", authorization)
-	statusOut.Reset()
-	if err := RunReview(authorizedArgs, &statusOut); err != nil {
-		t.Fatalf("authorized rebased status: %v\n%s", err, statusOut.String())
-	}
-	var authorized ReviewTargetStatusResult
-	decodeStrictReviewJSON(t, statusOut.Bytes(), &authorized)
-	execute := authorized.NextTransition
-	if execute == nil || execute.Kind != reviewNextTransitionExecute || execute.Execute == nil ||
-		execute.Execute.Operation != "review.recover" {
-		t.Fatalf("authorized status did not emit recovery:\n%s", statusOut.String())
-	}
+	execute := status.NextTransition
+	successorLineage := ""
 	recoverArgs := []string{"recover", "--cwd", repo}
 	for _, argument := range execute.Execute.Arguments {
 		recoverArgs = append(recoverArgs, argument.Token)
+		if argument.Name == "successor-lineage" {
+			successorLineage = argument.Value
+		}
 	}
 	var recoveredOut bytes.Buffer
 	if err := RunReview(recoverArgs, &recoveredOut); err != nil {
 		t.Fatalf("emitted rebased recovery failed: %v\n%s", err, recoveredOut.String())
 	}
-	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "approved-rebase-successor")
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, successorLineage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +210,7 @@ func TestNegotiatedStatusRecoversApprovedFeatureOntoCurrentBase(t *testing.T) {
 	}
 }
 
-func TestNegotiatedStatusCollectsEscalatedChangedScopeRecovery(t *testing.T) {
+func TestNegotiatedStatusExecutesEscalatedChangedScopeRecovery(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	attempt := filepath.Join(repo, "internal", "auth", "session.go")
@@ -293,12 +252,13 @@ func TestNegotiatedStatusCollectsEscalatedChangedScopeRecovery(t *testing.T) {
 	decodeStrictReviewJSON(t, statusOut.Bytes(), &status)
 	if status.Action != reviewtransaction.TargetStatusActionRecover || status.ActionDisposition != reviewtransaction.RecoveryEscalated ||
 		status.Authority == nil || status.Authority.LineageID != started.LineageID || status.NextTransition == nil ||
-		status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "recovery_authorization_required" ||
-		status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
-		t.Fatalf("escalated changed-scope status did not collect recovery authorization:\n%s", statusOut.String())
+		status.NextTransition.Kind != reviewNextTransitionExecute || status.NextTransition.Execute == nil ||
+		status.NextTransition.Execute.Operation != "review.recover" {
+		t.Fatalf("escalated changed-scope status did not execute native recovery:\n%s", statusOut.String())
 	}
-	input := status.NextTransition.Collect.Inputs[0]
-	if input.Schema != "gentle-ai.review-recovery-authorization/v1" || input.CaptureOperation != "external.authorize_recovery" {
-		t.Fatalf("recovery authorization input = %#v", input)
+	for _, argument := range status.NextTransition.Execute.Arguments {
+		if argument.Name == "actor" || argument.Name == "reason" || argument.Name == "maintainer-authorization" {
+			t.Fatalf("self-derived recovery leaked %q into STATUS argv", argument.Name)
+		}
 	}
 }
