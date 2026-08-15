@@ -509,24 +509,31 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				assignments = nil
 			}
 
-			var rootModelID string
-			var existingAgentKeys map[string]bool
-			if sddMode == model.SDDModeMulti {
-				rootModelID, err = readOpenCodeRootModel(settingsPath)
-				if err != nil {
-					return InjectionResult{}, err
-				}
-				existingAgentKeys, err = readExistingAgentModels(settingsPath)
-				if err != nil {
-					return InjectionResult{}, err
-				}
+			rootModelID, err := readOpenCodeRootModel(settingsPath)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			existingAgentKeys, err := readExistingAgentModels(settingsPath)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			ownership, err := readNativeFallbackOwnership(settingsPath, existingAgentKeys)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			fallbackDefaults := nativeFallbackDefaults(sddMode, assignments, rootModelID)
+			rootForAllAgents := rootModelID
+			if sddMode != model.SDDModeMulti {
+				rootForAllAgents = ""
 			}
 
-			if sddMode == model.SDDModeMulti && (len(assignments) > 0 || rootModelID != "") {
-				overlayBytes, err = injectModelAssignments(overlayBytes, assignments, rootModelID, existingAgentKeys)
+			if len(assignments) > 0 || len(fallbackDefaults) > 0 {
+				var managedDefaults map[string]nativeFallbackAssignment
+				overlayBytes, managedDefaults, err = injectModelAssignmentsWithOwnership(overlayBytes, assignments, rootForAllAgents, existingAgentKeys, ownership.Agents, fallbackDefaults)
 				if err != nil {
 					return InjectionResult{}, fmt.Errorf("inject model assignments: %w", err)
 				}
+				ownership.reconcile(assignments, existingAgentKeys, managedDefaults)
 			}
 
 			overlayBytes, err = defaultOpenCodeShareDisabled(settingsPath, overlayBytes)
@@ -541,6 +548,14 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			changed = changed || agentResult.writeResult.Changed
 			files = append(files, settingsPath)
 			mergedSettingsBytes = agentResult.merged
+			ownershipChanged, ownershipErr := ownership.write(settingsPath)
+			if ownershipErr != nil {
+				return InjectionResult{}, ownershipErr
+			}
+			changed = changed || ownershipChanged
+			if ownershipChanged || len(ownership.Agents) > 0 {
+				files = append(files, nativeFallbackOwnershipPath(settingsPath))
+			}
 
 			// Install OpenCode plugins (all SDD modes).
 			pluginResult, err := installOpenCodePlugins(homeDir, adapter)
@@ -2675,20 +2690,26 @@ func isJDAgent(name string) bool {
 //
 // If none of the above conditions apply, nothing is written for that agent.
 func injectModelAssignments(overlayBytes []byte, assignments map[string]model.ModelAssignment, rootModelID string, existingAgentKeys map[string]bool) ([]byte, error) {
+	result, _, err := injectModelAssignmentsWithOwnership(overlayBytes, assignments, rootModelID, existingAgentKeys, nil, nil)
+	return result, err
+}
+
+func injectModelAssignmentsWithOwnership(overlayBytes []byte, assignments map[string]model.ModelAssignment, rootModelID string, existingAgentKeys map[string]bool, managedFallbacks map[string]nativeFallbackAssignment, fallbackDefaults map[string]nativeFallbackAssignment) ([]byte, map[string]nativeFallbackAssignment, error) {
 	assignments = normalizeOpenCodeSDDModelAssignments(assignments)
+	managed := make(map[string]nativeFallbackAssignment)
 
 	var overlay map[string]any
 	if err := json.Unmarshal(overlayBytes, &overlay); err != nil {
-		return nil, fmt.Errorf("unmarshal overlay for model injection: %w", err)
+		return nil, nil, fmt.Errorf("unmarshal overlay for model injection: %w", err)
 	}
 
 	agentsRaw, ok := overlay["agent"]
 	if !ok {
-		return overlayBytes, nil
+		return overlayBytes, managed, nil
 	}
 	agents, ok := agentsRaw.(map[string]any)
 	if !ok {
-		return overlayBytes, nil
+		return overlayBytes, managed, nil
 	}
 
 	for phase, agentDef := range agents {
@@ -2708,22 +2729,14 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 			} else {
 				agentMap["variant"] = ""
 			}
-		case existingAgentKeys[phase]:
+		case existingAgentKeys[phase] && managedFallbacks[phase].Model == "":
 			// 2. Agent already exists in user's config — let merge preserve whatever they have
 			// (don't touch the overlay for this agent's model)
 		case isNativeFallbackAgent(phase):
-			// 3. Native fallback agents (general, explore) not yet in user config:
-			// derive model from sdd-explore if available, else rootModelID
-			if exploreAssignment, ok := assignments["sdd-explore"]; ok && exploreAssignment.ProviderID != "" && exploreAssignment.ModelID != "" {
-				agentMap["model"] = exploreAssignment.FullID()
-				if exploreAssignment.Effort != "" {
-					agentMap["variant"] = exploreAssignment.Effort
-				} else {
-					agentMap["variant"] = ""
-				}
-			} else if rootModelID != "" {
-				agentMap["model"] = rootModelID
-				agentMap["variant"] = ""
+			if fallback, ok := fallbackDefaults[phase]; ok {
+				agentMap["model"] = fallback.Model
+				agentMap["variant"] = fallback.Variant
+				managed[phase] = fallback
 			}
 		case rootModelID != "":
 			// 4. Fresh install or new agent: use root model as default to break inheritance.
@@ -2757,9 +2770,9 @@ func injectModelAssignments(overlayBytes []byte, assignments map[string]model.Mo
 
 	result, err := json.MarshalIndent(overlay, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("marshal overlay after model injection: %w", err)
+		return nil, nil, fmt.Errorf("marshal overlay after model injection: %w", err)
 	}
-	return append(result, '\n'), nil
+	return append(result, '\n'), managed, nil
 }
 
 func isNativeFallbackAgent(name string) bool {
