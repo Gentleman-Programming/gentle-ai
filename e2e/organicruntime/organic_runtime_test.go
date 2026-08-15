@@ -3287,18 +3287,25 @@ func TestRealOpenCodeExecutesInstalledAdvisoryRouteWithoutMutation(t *testing.T)
 				"--agent", "gentle-orchestrator", "--model", "fixture/fixture", "--dir", harness.repo.worktree,
 				"Provide an ordinary read-only advisory review of "+candidatePath+".")
 			command.Dir, command.Env = harness.repo.worktree, environment
-			output, err := command.CombinedOutput()
+			var stdout, stderr bytes.Buffer
+			command.Stdout, command.Stderr = &stdout, &stderr
+			err = command.Run()
 			if err != nil {
-				t.Fatalf("run ordinary OpenCode advisory review: %v\n%s", err, output)
+				t.Fatalf("run ordinary OpenCode advisory review: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.Bytes(), stderr.Bytes())
 			}
+			output := stdout.Bytes()
 			fixture.assertComplete(t, true)
 			fixture.assertAdvisoryRoute(t, "explore", 1)
 			if !bytes.Contains(output, []byte(advisoryCompleted)) || !bytes.Contains(output, []byte(advisoryResult)) {
 				t.Fatalf("ordinary advisory did not complete through explore:\n%s", output)
 			}
+			assistantText, err := organicOpenCodeAssistantText(output)
+			if err != nil {
+				t.Fatalf("ordinary advisory transcript: %v\nstdout:\n%s\nstderr:\n%s", err, output, stderr.Bytes())
+			}
 			for _, forbidden := range []string{"PASS", `"captured":true`, "receipt", "approved", "delivery authority"} {
-				if bytes.Contains(bytes.ToLower(output), bytes.ToLower([]byte(forbidden))) {
-					t.Fatalf("ordinary advisory output claimed authority with %q:\n%s", forbidden, output)
+				if bytes.Contains(bytes.ToLower(assistantText), bytes.ToLower([]byte(forbidden))) {
+					t.Fatalf("ordinary advisory output claimed authority with %q:\n%s", forbidden, assistantText)
 				}
 			}
 			afterBytes, err := os.ReadFile(filepath.Join(harness.repo.worktree, filepath.FromSlash(candidatePath)))
@@ -3325,16 +3332,77 @@ func TestRealOpenCodeExecutesInstalledAdvisoryRouteWithoutMutation(t *testing.T)
 	}
 }
 
-func assertOrganicAdvisoryModeOff(t *testing.T, harness *organicHarness, recorded time.Time) {
+func assertOrganicAdvisoryModeOff(t *testing.T, harness *organicHarness, expectedRecordedAt time.Time) {
 	t.Helper()
 	persisted, err := state.Read(harness.home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	mode, err := reviewtransaction.ResolveRDDMode(t.Context(), harness.repo.worktree, reviewtransaction.RDDGlobalMode{Value: persisted.RDDMode, RecordedAt: recorded})
+	if persisted.RDDModeRecordedAt == nil || !persisted.RDDModeRecordedAt.Equal(expectedRecordedAt) {
+		t.Fatalf("persisted review mode timestamp = %v, want %v", persisted.RDDModeRecordedAt, expectedRecordedAt)
+	}
+	mode, err := reviewtransaction.ResolveRDDMode(t.Context(), harness.repo.worktree, reviewtransaction.RDDGlobalMode{Value: persisted.RDDMode, RecordedAt: *persisted.RDDModeRecordedAt})
 	if err != nil || mode.Effective != reviewtransaction.RDDModeOff || mode.Source != reviewtransaction.RDDModeSourceGlobal {
 		t.Fatalf("effective review mode = %#v, %v; want disabled global mode", mode, err)
 	}
+}
+
+func TestOrganicOpenCodeAssistantText(t *testing.T) {
+	transcript := strings.Join([]string{
+		`{"type":"request","text":"PASS receipt approved delivery authority"}`,
+		`{"type":"tool_use","part":{"type":"tool","state":{"output":"{\"captured\":true}"}}}`,
+		`{"type":"step_start","part":{"type":"step-start","metadata":{"system":"receipt approved"}}}`,
+		`{"type":"text","part":{"type":"text","text":"bounded advisory observation"}}`,
+		`{"type":"text","part":{"type":"text","text":"second advisory observation"}}`,
+	}, "\n")
+	text, err := organicOpenCodeAssistantText([]byte(transcript))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(text) != "bounded advisory observationsecond advisory observation" {
+		t.Fatalf("assistant text = %q, want assistant chunks in stream order", text)
+	}
+
+	for _, test := range []struct {
+		name       string
+		transcript string
+	}{
+		{name: "malformed transcript", transcript: `{"type":"text","part":`},
+		{name: "missing assistant output", transcript: `{"type":"tool_use","part":{"type":"tool"}}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := organicOpenCodeAssistantText([]byte(test.transcript)); err == nil {
+				t.Fatal("transcript unexpectedly accepted without assistant output")
+			}
+		})
+	}
+}
+
+func organicOpenCodeAssistantText(transcript []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(transcript))
+	var text bytes.Buffer
+	for {
+		var event struct {
+			Type string `json:"type"`
+			Part struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"part"`
+		}
+		if err := decoder.Decode(&event); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("decode OpenCode JSON transcript: %w", err)
+		}
+		if event.Type == "text" && event.Part.Type == "text" && event.Part.Text != "" {
+			text.WriteString(event.Part.Text)
+		}
+	}
+	if text.Len() == 0 {
+		return nil, errors.New("OpenCode JSON transcript contains no assistant text")
+	}
+	return text.Bytes(), nil
 }
 
 func TestOpenCodeAdvisoryRuntimeReadsNativeAgentFromRenderedContract(t *testing.T) {
