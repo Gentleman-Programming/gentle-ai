@@ -7225,7 +7225,7 @@ func TestInjectRefreshesStaleArchiveSkillWithFinalStateAuthority(t *testing.T) {
 	}
 }
 
-func TestInjectOpenCodeNativeFallbackAgentsDeriveFromExploreModel(t *testing.T) {
+func TestInjectOpenCodeNativeFallbackAgentsDeriveFromAssignments(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -7239,6 +7239,7 @@ func TestInjectOpenCodeNativeFallbackAgentsDeriveFromExploreModel(t *testing.T) 
 
 	opts := InjectOptions{
 		OpenCodeModelAssignments: map[string]model.ModelAssignment{
+			"sdd-mid":     {ProviderID: "openai", ModelID: "gpt-5-codex", Effort: "high"},
 			"sdd-explore": {ProviderID: "anthropic", ModelID: "claude-3-5-haiku", Effort: "medium"},
 		},
 	}
@@ -7262,18 +7263,21 @@ func TestInjectOpenCodeNativeFallbackAgentsDeriveFromExploreModel(t *testing.T) 
 		t.Fatal("opencode.json missing agent map")
 	}
 
-	for _, fallbackAgent := range []string{"general", "explore"} {
+	for fallbackAgent, want := range map[string]nativeFallbackAssignment{
+		"general": {Model: "openai/gpt-5-codex", Variant: "high"},
+		"explore": {Model: "anthropic/claude-3-5-haiku", Variant: "medium"},
+	} {
 		agentDef, ok := agentMap[fallbackAgent].(map[string]any)
 		if !ok {
 			t.Fatalf("fallback agent %q not found in opencode.json", fallbackAgent)
 		}
 		m, hasModel := agentDef["model"]
-		if !hasModel || m != "anthropic/claude-3-5-haiku" {
-			t.Fatalf("%s model = %v, want anthropic/claude-3-5-haiku", fallbackAgent, m)
+		if !hasModel || m != want.Model {
+			t.Fatalf("%s model = %v, want %s", fallbackAgent, m, want.Model)
 		}
 		v, hasVariant := agentDef["variant"]
-		if !hasVariant || v != "medium" {
-			t.Fatalf("%s variant = %v, want medium", fallbackAgent, v)
+		if !hasVariant || v != want.Variant {
+			t.Fatalf("%s variant = %v, want %s", fallbackAgent, v, want.Variant)
 		}
 	}
 }
@@ -7333,5 +7337,111 @@ func TestInjectOpenCodeNativeFallbackAgentsPreserveExistingUserModel(t *testing.
 	}
 	if genDef["variant"] != "high" {
 		t.Fatalf("general variant = %v, want preserved high", genDef["variant"])
+	}
+}
+
+func TestInjectOpenCodeNativeFallbackOwnership(t *testing.T) {
+	tests := []struct {
+		name        string
+		mode        model.SDDModeID
+		settings    string
+		assignments map[string]model.ModelAssignment
+		second      map[string]model.ModelAssignment
+		want        map[string]nativeFallbackAssignment
+		owned       bool
+	}{
+		{
+			name:     "single mode derives both roles from root with medium variant",
+			mode:     model.SDDModeSingle,
+			settings: `{"model":"openai/gpt-5"}`,
+			want: map[string]nativeFallbackAssignment{
+				"general": {Model: "openai/gpt-5", Variant: "medium"},
+				"explore": {Model: "openai/gpt-5", Variant: "medium"},
+			},
+			owned: true,
+		},
+		{
+			name: "explicit native assignments win",
+			mode: model.SDDModeMulti,
+			assignments: map[string]model.ModelAssignment{
+				"general":     {ProviderID: "user", ModelID: "general", Effort: "high"},
+				"explore":     {ProviderID: "user", ModelID: "explore", Effort: "low"},
+				"sdd-mid":     {ProviderID: "mid", ModelID: "code"},
+				"sdd-explore": {ProviderID: "explore", ModelID: "web"},
+			},
+			want: map[string]nativeFallbackAssignment{
+				"general": {Model: "user/general", Variant: "high"},
+				"explore": {Model: "user/explore", Variant: "low"},
+			},
+		},
+		{
+			name:     "model-less user role is preserved",
+			mode:     model.SDDModeMulti,
+			settings: `{"model":"openai/gpt-5","agent":{"general":{"mode":"subagent"}}}`,
+			want: map[string]nativeFallbackAssignment{
+				"general": {},
+				"explore": {Model: "openai/gpt-5", Variant: "medium"},
+			},
+			owned: true,
+		},
+		{
+			name: "selection-less path invents no model",
+			mode: model.SDDModeMulti,
+			want: map[string]nativeFallbackAssignment{
+				"general": {}, "explore": {},
+			},
+		},
+		{
+			name:     "repeat sync refreshes only managed defaults",
+			mode:     model.SDDModeMulti,
+			settings: `{"model":"openai/gpt-5","agent":{"explore":{"model":"user/explore","variant":"high"}}}`,
+			assignments: map[string]model.ModelAssignment{
+				"sdd-mid": {ProviderID: "first", ModelID: "code", Effort: "low"},
+			},
+			second: map[string]model.ModelAssignment{
+				"sdd-mid": {ProviderID: "second", ModelID: "code", Effort: "high"},
+			},
+			want: map[string]nativeFallbackAssignment{
+				"general": {Model: "second/code", Variant: "high"},
+				"explore": {Model: "user/explore", Variant: "high"},
+			},
+			owned: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			mockNoPackageManager(t)
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tt.settings != "" {
+				if err := os.WriteFile(settingsPath, []byte(tt.settings), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := Inject(home, opencodeAdapter(), tt.mode, InjectOptions{OpenCodeModelAssignments: tt.assignments}); err != nil {
+				t.Fatal(err)
+			}
+			if tt.second != nil {
+				if _, err := Inject(home, opencodeAdapter(), tt.mode, InjectOptions{OpenCodeModelAssignments: tt.second}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := readNativeFallbackAssignments(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, role := range []string{"general", "explore"} {
+				if got[role] != tt.want[role] {
+					t.Errorf("%s = %#v, want %#v", role, got[role], tt.want[role])
+				}
+			}
+			_, err = os.Stat(nativeFallbackOwnershipPath(settingsPath))
+			if (err == nil) != tt.owned {
+				t.Errorf("ownership metadata present = %t, want %t (err=%v)", err == nil, tt.owned, err)
+			}
+		})
 	}
 }
