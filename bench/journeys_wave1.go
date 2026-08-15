@@ -387,23 +387,17 @@ func stageExpandedCorrection(sandbox *Sandbox) error {
 func recoverStagedCorrection(r *journeyRun) error {
 	selectors := stagedRecoverySelectors(r.sandbox)
 	selectors[1] = stagedRecoveryLineage
-	probeObservation := r.run(productArgsFor(r, append([]string{"review", "status", "--contract", reviewContract, "--next-transition", "--action-eligibility"}, selectors...)...), false)
-	var probe waveCorrectionStatus
-	if err := decodeWaveObservation(probeObservation, &probe, "staged recovery probe"); err != nil {
-		return err
-	}
-	if probe.Authority == nil || probe.Action != "recover" || probe.ActionDisposition != "scope_changed" || probe.NextTransition == nil || probe.NextTransition.Kind != "collect" {
-		return fmt.Errorf("staged recovery was not negotiated: %+v", probe)
-	}
-	const actor, reason = "bench-maintainer", "authorize staged correction scope expansion"
-	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + stagedRecoveryLineage +
-		"\npredecessor_revision=" + probe.Authority.Revision + "\ntarget_identity=" + probe.TargetIdentity +
-		"\nsuccessor_lineage=" + stagedSuccessorLineage + "\nactor=" + actor + "\nreason=" + reason
-	authorized := append(selectors, "--recovery-successor-lineage", stagedSuccessorLineage, "--recovery-reason", reason,
-		"--recovery-actor", actor, "--recovery-authorization", authorization)
-	envelope, err := readStatusFor(r, authorized...)
+	selectors = append(selectors, "--recovery-successor-lineage", stagedSuccessorLineage)
+	envelope, err := readStatusFor(r, selectors...)
 	if err != nil || envelope.NextTransition.Kind != "execute" || envelope.NextTransition.Execute.Operation != "review.recover" {
-		return fmt.Errorf("authorized staged recovery is not executable: %+v, %v", envelope.NextTransition, err)
+		return fmt.Errorf("staged recovery regressed to collect/external.authorize_recovery or another non-native transition: got %+v, %v; want executable review.recover", envelope.NextTransition, err)
+	}
+	if envelope.Authority.Revision == "" || len(envelope.NextTransition.Execute.Arguments) != 7 ||
+		envelope.executeArgument("predecessor-lineage") != stagedRecoveryLineage || envelope.executeArgument("expected-predecessor-revision") != envelope.Authority.Revision ||
+		envelope.executeArgument("successor-lineage") != stagedSuccessorLineage ||
+		envelope.executeArgument("disposition") != "scope_changed" || envelope.executeArgument("base-ref") != r.sandbox.Scratch["staged-recovery-base"] ||
+		envelope.executeArgument("projection") != "staged" || envelope.executeArgument("workspace-overlay") != "true" {
+		return fmt.Errorf("staged recovery transition binding = %+v", envelope.NextTransition.Execute)
 	}
 	recovered, err := runPrintedTransition(r, envelope)
 	if err != nil {
@@ -1305,7 +1299,7 @@ func waveOneJourneys() []Journey {
 		{
 			ID:     "j46-correction-required-staged-recovery",
 			Title:  "Correction-required base diff: negotiated staged recovery receives a fresh review and delivers",
-			Source: "issue #1921",
+			Source: "issues #1921 and #1658: correction-required changed-scope recovery must execute native review.recover, not dead-end at collect/external.authorize_recovery",
 			Steps: []Step{
 				{Name: "fixture: linked worktree and remote", Fixture: linkedWorktreeWithRemote},
 				{Name: "fixture: commit base-diff candidate", Fixture: commitStagedRecoveryCandidate},

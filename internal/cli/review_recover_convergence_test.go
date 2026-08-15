@@ -11,9 +11,7 @@ import (
 // TestNegotiatedRecoverTransitionRunsVerbatimForStagedPredecessorAfterRebase
 // is the first leg of the rc.7 report on #2645: a staged review is approved,
 // its exact candidate is committed and rebased across a disjoint parent
-// advance (patch-identical), STATUS binds the approved predecessor, collects
-// the exclusion and the exact maintainer authorization, and renders a
-// complete native RECOVER command — which must then run verbatim. Root 13's
+// advance (patch-identical), STATUS binds the approved predecessor and renders a complete self-derived native RECOVER command — which must run verbatim. Root 13's
 // property for RECOVER: STATUS never renders a recovery its own preflight
 // refuses.
 func TestNegotiatedRecoverTransitionRunsVerbatimForStagedPredecessorAfterRebase(t *testing.T) {
@@ -71,48 +69,22 @@ func TestNegotiatedRecoverTransitionRunsVerbatimForStagedPredecessorAfterRebase(
 	if status.Action != reviewtransaction.TargetStatusActionRecover {
 		t.Skipf("status routed the rebased staged candidate to %q/%q rather than recover; this leg pins only the rendered-recover contract", status.Action, transition.ReasonCode)
 	}
-	if transition.Kind != reviewNextTransitionCollect || transition.ReasonCode != "recovery_authorization_required" {
-		t.Fatalf("next transition is not the recovery collection: %s %s\n%s", transition.Kind, transition.ReasonCode, statusOut.String())
-	}
-	bound := map[string]string{}
-	for _, argument := range transition.Collect.Inputs[0].Arguments {
-		bound[argument.Name] = argument.Value
-	}
-	authorization := strings.Join([]string{
-		"gentle-ai.review-recovery-authorization/v1",
-		"predecessor_lineage=" + bound["lineage"],
-		"predecessor_revision=" + bound["expected-revision"],
-		"target_identity=" + bound["target"],
-		"successor_lineage=staged-rebase-successor",
-		"actor=maintainer",
-		"reason=rebase across disjoint parent advance",
-	}, "\n")
-
-	statusOut.Reset()
-	if err := RunReview([]string{
-		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition",
-		"--lineage", startResult.LineageID,
-		"--recovery-successor-lineage", "staged-rebase-successor",
-		"--recovery-reason", "rebase across disjoint parent advance",
-		"--recovery-actor", "maintainer", "--recovery-authorization", authorization,
-	}, &statusOut); err != nil {
-		t.Fatalf("authorized status: %v\n%s", err, statusOut.String())
-	}
-	var authorized ReviewTargetStatusResult
-	decodeStrictReviewJSON(t, statusOut.Bytes(), &authorized)
-	execute := authorized.NextTransition
-	if execute == nil || execute.Kind != reviewNextTransitionExecute || execute.Execute == nil ||
-		execute.Execute.Operation != "review.recover" || execute.ReasonCode != "recovery_authorized" {
-		t.Fatalf("authorized status did not render an executable recovery:\n%s", statusOut.String())
+	if transition.Kind != reviewNextTransitionExecute || transition.Execute == nil ||
+		transition.Execute.Operation != "review.recover" || transition.ReasonCode != "recovery_authorized" {
+		t.Fatalf("status did not render an executable recovery:\n%s", statusOut.String())
 	}
 
 	// The property: the rendered command runs verbatim.
 	arguments := []string{"recover", "--cwd", repo}
-	for _, argument := range execute.Execute.Arguments {
+	successorLineage := ""
+	for _, argument := range transition.Execute.Arguments {
 		if argument.Token == "" {
 			t.Fatalf("recovery argument %q carried no runnable token", argument.Name)
 		}
 		arguments = append(arguments, argument.Token)
+		if argument.Name == "successor-lineage" {
+			successorLineage = argument.Value
+		}
 	}
 	var recovered bytes.Buffer
 	if err := RunReview(arguments, &recovered); err != nil {
@@ -120,7 +92,7 @@ func TestNegotiatedRecoverTransitionRunsVerbatimForStagedPredecessorAfterRebase(
 	}
 	var successor ReviewRecoverResult
 	decodeStrictReviewJSON(t, recovered.Bytes(), &successor)
-	if successor.LineageID != "staged-rebase-successor" ||
+	if successor.LineageID != successorLineage ||
 		successor.Recovery.PredecessorLineageID != startResult.LineageID {
 		t.Fatalf("recovery successor = %s", recovered.String())
 	}

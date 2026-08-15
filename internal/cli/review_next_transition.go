@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -650,6 +651,8 @@ type reviewNextTransitionInput struct {
 	RDDModeResolved                                bool
 	LensContextBudgetExceeded                      bool
 	PreCommitDeliveryAssessment                    *reviewtransaction.CompactGateTargetApplicability
+	RecoveryAuthorizationProvided                  bool
+	RecoveryPredecessorIntendedUntracked           []string
 }
 
 const reviewSubmissionValuePlaceholder = "{{value}}"
@@ -924,10 +927,28 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 		}
 		return transition
 	}
-	return reviewCollectTransition("recovery_authorization_required", ReviewTransitionInput{
-		Name: "recovery_authorization", Schema: "gentle-ai.review-recovery-authorization/v1", CaptureOperation: "external.authorize_recovery",
-		Arguments: append(reviewBindingArguments(binding), ReviewTransitionArgument{Name: "disposition", Value: string(disposition)}),
-	})
+	if input.RecoveryAuthorizationProvided || strings.TrimSpace(input.Authorization) != "" || strings.TrimSpace(input.Successor) == "" {
+		return reviewStopTransition("manual_intervention_required")
+	}
+	if input.Selector != nil && input.Selector.Recovery != nil &&
+		(input.RecoveryPredecessorIntendedUntracked != nil && !slices.Equal(input.Selector.Recovery.IntendedUntracked, input.RecoveryPredecessorIntendedUntracked) ||
+			input.Selector.Recovery.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && input.Selector.Recovery.Projection != reviewtransaction.ProjectionStaged) {
+		return reviewCollectTransition("recovery_target_unrepresentable", ReviewTransitionInput{
+			Name: "recovery_target_selector", Schema: "gentle-ai.review-recovery-target-selection/v1",
+			CaptureOperation: "external.select_recovery_target", Arguments: reviewTargetArguments(status),
+		})
+	}
+	arguments := []ReviewTransitionArgument{
+		{Name: "predecessor-lineage", Value: binding.LineageID},
+		{Name: "expected-predecessor-revision", Value: binding.Revision},
+		{Name: "successor-lineage", Value: input.Successor},
+		{Name: "disposition", Value: string(disposition)},
+	}
+	transition := reviewExecuteTransition("recovery_authorized", "review.recover", append(arguments, selectorArguments...), []ReviewTransitionArgument{{Name: "state", Value: string(status.Authority.State)}}, binding, nil)
+	if input.Selector != nil && !input.Selector.SelectorFreeAccountingOnlyRecovery {
+		transition.Execute.SelectorArguments = reviewTransitionSelectorArguments(selectorArguments)
+	}
+	return transition
 }
 
 func (selector reviewTransitionSelector) recoveryArguments() ([]ReviewTransitionArgument, bool) {

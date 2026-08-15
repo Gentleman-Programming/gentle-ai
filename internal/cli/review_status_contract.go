@@ -294,7 +294,7 @@ func newReviewActionEligibility(status ReviewTargetStatusResult) *ReviewActionEl
 		allowed.Action, allowed.ReasonCode = "stop", reviewActionForbiddenReconciliation
 	case reviewtransaction.TargetStatusActionRecover:
 		allowed.Action, allowed.Disposition = "review.recover", status.ActionDisposition
-		allowed.RequiredInputs = []string{"predecessor_lineage", "expected_predecessor_revision", "successor_lineage", "disposition", "reason", "actor", "maintainer_authorization"}
+		allowed.RequiredInputs = []string{"predecessor_lineage", "expected_predecessor_revision", "successor_lineage", "disposition"}
 		allowed.ReasonCode = reviewActionEligibleRecovery
 		if status.ActionDisposition == reviewtransaction.RecoveryEscalated {
 			allowed.ReasonCode = reviewActionEligibleEscalatedRecovery
@@ -1550,7 +1550,9 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		if execution.SelectorArguments != nil && !reflect.DeepEqual(*execution.SelectorArguments, wantSelectors) {
 			return errors.New("review recover transition selectors are invalid")
 		}
-		if !exact([]string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition", "reason", "actor", "maintainer-authorization"}, wantSelectors) ||
+		explicitAuthorization := exact([]string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition", "reason", "actor", "maintainer-authorization"}, wantSelectors)
+		selfDerivedAuthorization := exact([]string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition"}, wantSelectors)
+		if (!explicitAuthorization && !selfDerivedAuthorization) ||
 			arguments["predecessor-lineage"] != execution.Binding.LineageID ||
 			arguments["expected-predecessor-revision"] != execution.Binding.Revision ||
 			!validReviewIntegrationLineage(arguments["successor-lineage"]) ||
@@ -1572,7 +1574,7 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		committed, hasCommitted := arguments["committed-only"]
 		projection, hasProjection := arguments["projection"]
 		workspaceOverlay, hasWorkspaceOverlay := arguments["workspace-overlay"]
-		if arguments["maintainer-authorization"] != wantAuthorization ||
+		if explicitAuthorization && arguments["maintainer-authorization"] != wantAuthorization ||
 			hasBase && !validReviewTransitionSelector(base) ||
 			hasCommitted && (!hasBase || committed != "true") ||
 			hasProjection && projection != string(reviewtransaction.ProjectionWorkspace) &&
