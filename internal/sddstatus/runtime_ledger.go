@@ -1312,6 +1312,9 @@ func runtimeObjectiveAdvanceAdmissible(status RuntimeStatus, request BeginAttemp
 	if request.WorkUnit == status.Objective.WorkUnit {
 		return false
 	}
+	if status.Objective.ItemID != "" && (request.ItemID == "" || request.ItemID == status.Objective.ItemID) {
+		return false
+	}
 	last := status.Attempts[len(status.Attempts)-1]
 	return last.ObjectiveID == status.Objective.ID && last.Outcome == AttemptPassed &&
 		!last.ChangedLineBudgetExceeded && last.FinishCandidateIdentity != "" && last.FinishCandidateTree != ""
@@ -2217,6 +2220,9 @@ func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record run
 	}
 	if record.Begin.WorkUnit == objective.WorkUnit {
 		return errors.New("objective advance does not select a distinct work unit") // refusal:by-design world-action: same-scope advance is refused at write time, so observing one on replay is a forged record and the exit is restoring the store
+	}
+	if objective.ItemID != "" && (record.Begin.ItemID == "" || record.Begin.ItemID == objective.ItemID) {
+		return errors.New("objective advance drops or rebinds its item") // refusal:by-design world-action: a bound predecessor may advance only to a distinct immutable item binding
 	}
 	replay.Status.LastAdvance = &RuntimeAdvance{
 		Revision: revision, PreviousObjectiveID: objective.ID, PreviousGeneration: objective.Generation,

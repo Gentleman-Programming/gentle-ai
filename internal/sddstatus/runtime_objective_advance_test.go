@@ -3,6 +3,8 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -123,6 +125,59 @@ func TestRuntimeLedgerAdvancesDistinctWorkUnitAfterPassedObjective(t *testing.T)
 	replayed, err := fixture.store.Begin(context.Background(), request)
 	if err != nil || replayed.Revision != advanced.Revision || countRuntimeRecords(t, fixture.store.Dir) != before+1 {
 		t.Fatalf("advance replay = %#v err=%v records=%d", replayed, err, countRuntimeRecords(t, fixture.store.Dir))
+	}
+}
+
+func TestRuntimeLedgerAdvancePreservesBoundItemAuthority(t *testing.T) {
+	newBound := func(t *testing.T) (RuntimeStore, RuntimeStatus, string) {
+		t.Helper()
+		repo := initRuntimeLedgerRepo(t)
+		root := filepath.Join(repo, "item-root")
+		successorRoot := filepath.Join(repo, "successor-root")
+		if err := os.Mkdir(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(successorRoot, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		store, err := OpenRuntimeStore(context.Background(), repo, "bound-advance")
+		if err != nil {
+			t.Fatal(err)
+		}
+		started, err := store.Begin(context.Background(), BeginAttemptRequest{RequestID: "bound-apply", WorkUnit: "apply", EvidenceGoal: "apply", MaxAttempts: 2, MaxChangedLines: 20, ItemID: "item-a", ItemEditRoots: []string{root}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		passed, err := store.Finish(context.Background(), FinishAttemptRequest{ExpectedRevision: started.Revision, RequestID: "bound-finish", Outcome: AttemptPassed, EvidenceRevision: runtimeTestHash('a'), Diagnosis: "passed", HarnessDisposition: HarnessReused, CleanupEvidence: "clean", ProcessEvidence: "none"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store, passed, successorRoot
+	}
+	for _, test := range []struct {
+		name, item string
+		roots      []string
+		allowed    bool
+	}{
+		{name: "distinct bound successor", item: "item-b", allowed: true},
+		{name: "unbound successor", allowed: false},
+		{name: "same item successor", item: "item-a", allowed: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, passed, root := newBound(t)
+			if test.item != "" {
+				test.roots = []string{root}
+			}
+			request := BeginAttemptRequest{ExpectedRevision: passed.Revision, RequestID: "bound-advance", WorkUnit: "verify", EvidenceGoal: "verify", MaxAttempts: 2, MaxChangedLines: 20, ItemID: test.item, ItemEditRoots: test.roots}
+			advanced, err := store.Begin(context.Background(), request)
+			if test.allowed {
+				if err != nil || advanced.Objective == nil || advanced.Objective.ItemID != "item-b" {
+					t.Fatalf("distinct bound advance = %#v, %v", advanced, err)
+				}
+			} else if !errors.Is(err, ErrRuntimeObjectiveDone) {
+				t.Fatalf("bound downgrade error = %v", err)
+			}
+		})
 	}
 }
 
