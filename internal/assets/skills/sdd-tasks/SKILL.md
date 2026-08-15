@@ -126,6 +126,22 @@ Chain strategy: <stacked-to-main|feature-branch-chain|size-exception|pending>
 - [ ] 4.2 {Remove temporary code}
 ```
 
+#### Optional Item Metadata
+
+When a coordinator needs item-level status, add exactly one block and give each
+item exactly one checkbox ID as `- [ ] item-id: description`. Omit it for the
+legacy flow.
+
+```html
+<!-- gentle-ai.sdd-items/v1
+{"items":[{"id":"item-id","dependsOn":[],"workUnit":"existing-runtime-work-unit","editRoots":["internal/example"],"maxAttempts":2,"maxChangedLines":200,"evidenceGoal":"focused tests"}]}
+-->
+```
+
+All fields are required. IDs and dependencies are item-scoped; do not use
+change relationships. Edit roots are repository-relative and budgets/evidence
+must match the intended existing runtime objective.
+
 ### Task Writing Rules
 
 Each task MUST be:

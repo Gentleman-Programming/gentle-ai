@@ -221,6 +221,7 @@ type Status struct {
 	// placeholder or a status call that happened anyway. See
 	// applyReviewOfferRouting and review_door.go's reviewOfferForVerify.
 	ReviewOffer *ReviewOfferBlock `json:"reviewOffer,omitempty"`
+	Items       []WorkItem        `json:"items,omitempty"`
 	// ReVerify is Wave 4 S6's targeted re-verify routing decision
 	// (design.md's "Amendment (coordinator-resolved): targeted re-verify
 	// call site"), present exactly when the change's governing receipt
@@ -758,6 +759,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	} else {
 		applyNativeRuntimeRouting(&status)
 	}
+	applyWorkItemProjection(&status, readText(firstPath(artifactPaths.Tasks)))
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
@@ -1167,6 +1169,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	} else {
 		applyNativeRuntimeRouting(&status)
 	}
+	applyWorkItemProjection(&status, artifactsByType["tasks"].Content)
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
