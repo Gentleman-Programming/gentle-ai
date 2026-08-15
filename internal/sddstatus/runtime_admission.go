@@ -115,7 +115,8 @@ func runtimeObjectiveScopeChanged(status RuntimeStatus, request BeginAttemptRequ
 	return request.WorkUnit != status.Objective.WorkUnit ||
 		request.EvidenceGoal != status.Objective.EvidenceGoal ||
 		request.MaxAttempts != status.Objective.MaxAttempts ||
-		request.MaxChangedLines != status.Objective.MaxChangedLines
+		request.MaxChangedLines != status.Objective.MaxChangedLines ||
+		!runtimeItemBindingEqual(request.ItemID, request.ItemEditRoots, status.Objective.ItemID, status.Objective.ItemEditRoots)
 }
 
 // AdmissionStatus is the read-only surface's answer to the question consumers

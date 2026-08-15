@@ -25,6 +25,7 @@ const (
 	runtimeRecordSchema                      = "gentle-ai.sdd-runtime-record/v1"
 	runtimeObjectiveSchema                   = "gentle-ai.sdd-runtime-objective/v1"
 	runtimeObjectiveSchemaV2                 = "gentle-ai.sdd-runtime-objective/v2"
+	runtimeObjectiveSchemaV3                 = "gentle-ai.sdd-runtime-objective/v3"
 	DefaultRuntimeAttemptLimit               = 2
 	DefaultRuntimeChangedLines               = 200
 	maximumRuntimeAttemptLimit               = 100
@@ -201,23 +202,27 @@ const (
 )
 
 type RuntimeObjective struct {
-	ID                       string `json:"id"`
-	Generation               int    `json:"generation"`
-	WorkUnit                 string `json:"work_unit"`
-	EvidenceGoal             string `json:"evidence_goal"`
-	InitialCandidateIdentity string `json:"initial_candidate_identity"`
-	InitialCandidateTree     string `json:"initial_candidate_tree"`
-	MaxAttempts              int    `json:"max_attempts"`
-	MaxChangedLines          int    `json:"max_changed_lines"`
+	ID                       string   `json:"id"`
+	Generation               int      `json:"generation"`
+	WorkUnit                 string   `json:"work_unit"`
+	EvidenceGoal             string   `json:"evidence_goal"`
+	InitialCandidateIdentity string   `json:"initial_candidate_identity"`
+	InitialCandidateTree     string   `json:"initial_candidate_tree"`
+	MaxAttempts              int      `json:"max_attempts"`
+	MaxChangedLines          int      `json:"max_changed_lines"`
+	ItemID                   string   `json:"item_id,omitempty"`
+	ItemEditRoots            []string `json:"item_edit_roots,omitempty"`
 }
 
 type RuntimeAttempt struct {
-	Ordinal                int    `json:"ordinal"`
-	ObjectiveID            string `json:"objective_id"`
-	ObjectiveGeneration    int    `json:"objective_generation"`
-	WorkUnit               string `json:"work_unit"`
-	BeginCandidateIdentity string `json:"begin_candidate_identity"`
-	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	Ordinal                int      `json:"ordinal"`
+	ObjectiveID            string   `json:"objective_id"`
+	ObjectiveGeneration    int      `json:"objective_generation"`
+	WorkUnit               string   `json:"work_unit"`
+	ItemID                 string   `json:"item_id,omitempty"`
+	ItemEditRoots          []string `json:"item_edit_roots,omitempty"`
+	BeginCandidateIdentity string   `json:"begin_candidate_identity"`
+	BeginCandidateTree     string   `json:"begin_candidate_tree"`
 	// BeginWorktree is the canonical (absolute, symlink-evaluated) --cwd Begin
 	// ran under (#2296 part 1). It is empty for every chain recorded before
 	// this field existed — that emptiness IS the legacy signal, so replay and
@@ -360,12 +365,14 @@ type RuntimeStatus struct {
 }
 
 type BeginAttemptRequest struct {
-	ExpectedRevision string `json:"expected_revision"`
-	RequestID        string `json:"request_id"`
-	WorkUnit         string `json:"work_unit"`
-	EvidenceGoal     string `json:"evidence_goal"`
-	MaxAttempts      int    `json:"max_attempts"`
-	MaxChangedLines  int    `json:"max_changed_lines"`
+	ExpectedRevision string   `json:"expected_revision"`
+	RequestID        string   `json:"request_id"`
+	WorkUnit         string   `json:"work_unit"`
+	EvidenceGoal     string   `json:"evidence_goal"`
+	MaxAttempts      int      `json:"max_attempts"`
+	MaxChangedLines  int      `json:"max_changed_lines"`
+	ItemID           string   `json:"item_id,omitempty"`
+	ItemEditRoots    []string `json:"item_edit_roots,omitempty"`
 }
 
 type FinishAttemptRequest struct {
@@ -563,15 +570,17 @@ type runtimeAdvanceEvent struct {
 }
 
 type runtimeBeginEvent struct {
-	ObjectiveID            string `json:"objective_id"`
-	ObjectiveGeneration    int    `json:"objective_generation,omitempty"`
-	WorkUnit               string `json:"work_unit"`
-	EvidenceGoal           string `json:"evidence_goal"`
-	MaxAttempts            int    `json:"max_attempts"`
-	MaxChangedLines        int    `json:"max_changed_lines"`
-	Ordinal                int    `json:"ordinal"`
-	BeginCandidateIdentity string `json:"begin_candidate_identity"`
-	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	ObjectiveID            string   `json:"objective_id"`
+	ObjectiveGeneration    int      `json:"objective_generation,omitempty"`
+	WorkUnit               string   `json:"work_unit"`
+	EvidenceGoal           string   `json:"evidence_goal"`
+	MaxAttempts            int      `json:"max_attempts"`
+	MaxChangedLines        int      `json:"max_changed_lines"`
+	ItemID                 string   `json:"item_id,omitempty"`
+	ItemEditRoots          []string `json:"item_edit_roots,omitempty"`
+	Ordinal                int      `json:"ordinal"`
+	BeginCandidateIdentity string   `json:"begin_candidate_identity"`
+	BeginCandidateTree     string   `json:"begin_candidate_tree"`
 	// BeginWorktree records store.Workspace at Begin time (#2296 part 1): the
 	// resolved, symlink-evaluated absolute path of the exact --cwd this begin
 	// ran under. omitempty is load-bearing — every record predating this field
@@ -755,7 +764,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	digest := runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request)
+	digest := runtimeBeginRequestDigest(request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
 		// Every precondition, ledger-side and repository-side, is evaluated by
@@ -767,13 +776,14 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			return runtimeRecord{}, err
 		}
 		advancing, generation, snapshot := admission.Advancing, admission.Generation, admission.Snapshot
-		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, snapshot.Identity, generation)
+		objectiveID := runtimeObjectiveIDForBinding(store.Change, request.WorkUnit, request.EvidenceGoal, snapshot.Identity, generation, request.ItemID, request.ItemEditRoots)
 		if status.Objective != nil && !advancing {
 			objectiveID = status.Objective.ID
 		}
 		event := &runtimeBeginEvent{
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
+			ItemID: request.ItemID, ItemEditRoots: request.ItemEditRoots,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
 			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace,
 		}
@@ -1458,6 +1468,9 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 				status, "--max-attempts", request.MaxAttempts, objective.MaxAttempts,
 			)
 		}
+		if objective.ItemID != "" {
+			return runtimeRecord{}, ErrRuntimeObjectiveChange
+		}
 		// The zero-drift `drift` snapshot above was captured with
 		// TargetBaseWorkspaceOverlay (same Kind/BaseRef Finish itself used),
 		// so its Identity is only comparable against another
@@ -1975,13 +1988,13 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 		return errors.New("begin record is not a valid successor")
 	}
 	if replay.Status.Objective == nil {
-		expectedObjectiveID := runtimeObjectiveID(record.Change, event.WorkUnit, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
+		expectedObjectiveID := runtimeObjectiveIDForBinding(record.Change, event.WorkUnit, event.EvidenceGoal, event.BeginCandidateIdentity, generation, event.ItemID, event.ItemEditRoots)
 		if event.ObjectiveGeneration == 0 {
 			expectedObjectiveID = legacyRuntimeObjectiveID(record.Change, event.EvidenceGoal)
 		}
 		legacyGeneratedID := runtimeObjectiveIDV1(record.Change, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
 		validObjectiveID := event.ObjectiveID == expectedObjectiveID ||
-			event.ObjectiveGeneration != 0 && event.ObjectiveID == legacyGeneratedID
+			event.ItemID == "" && event.ObjectiveGeneration != 0 && event.ObjectiveID == legacyGeneratedID
 		if event.Ordinal != replay.Status.NextOrdinal || generation != replay.Status.ObjectiveGeneration+1 || !validObjectiveID {
 			return errors.New("initial objective identity or ordinal is invalid")
 		}
@@ -1989,6 +2002,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 			ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 			InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree,
 			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+			ItemID: event.ItemID, ItemEditRoots: event.ItemEditRoots,
 		}
 		replay.Status.ObjectiveGeneration = generation
 	} else {
@@ -1996,6 +2010,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 		if event.ObjectiveID != objective.ID || generation != objective.Generation || event.EvidenceGoal != objective.EvidenceGoal ||
 			event.WorkUnit != objective.WorkUnit ||
 			event.MaxAttempts != objective.MaxAttempts || event.MaxChangedLines != objective.MaxChangedLines ||
+			!runtimeItemBindingEqual(event.ItemID, event.ItemEditRoots, objective.ItemID, objective.ItemEditRoots) ||
 			event.Ordinal != replay.Status.NextOrdinal {
 			return errors.New("begin record changes the active objective or ordinal")
 		}
@@ -2017,7 +2032,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 	}
 	attempt := RuntimeAttempt{
 		Ordinal: event.Ordinal, ObjectiveID: event.ObjectiveID, ObjectiveGeneration: generation,
-		WorkUnit: event.WorkUnit, BeginCandidateIdentity: event.BeginCandidateIdentity,
+		WorkUnit: event.WorkUnit, ItemID: event.ItemID, ItemEditRoots: event.ItemEditRoots, BeginCandidateIdentity: event.BeginCandidateIdentity,
 		BeginCandidateTree: event.BeginCandidateTree, BeginWorktree: event.BeginWorktree,
 		EffectiveWorktree: event.EffectiveWorktree, Outcome: AttemptRunning,
 	}
@@ -2346,14 +2361,17 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 		// must be a bounded, trimmed, single-line value like every other
 		// recorded text field, not raw garbage.
 		(event.BeginWorktree != "" && validateRuntimeText(event.BeginWorktree, 4096) != nil) ||
-		(event.EffectiveWorktree != "" && (validateRuntimeText(event.EffectiveWorktree, 4096) != nil || event.EffectiveWorktree != event.BeginWorktree)) {
+		(event.EffectiveWorktree != "" && (validateRuntimeText(event.EffectiveWorktree, 4096) != nil || event.EffectiveWorktree != event.BeginWorktree)) ||
+		validateRuntimeItemBinding(event.ItemID, event.ItemEditRoots) != nil ||
+		(event.ObjectiveGeneration == 0 && event.ItemID != "") {
 		return errors.New("invalid SDD runtime begin event")
 	}
 	request := BeginAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
 		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+		ItemID: event.ItemID, ItemEditRoots: event.ItemEditRoots,
 	}
-	if runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request) != record.RequestDigest {
+	if runtimeBeginRequestDigest(request) != record.RequestDigest {
 		return errors.New("SDD runtime begin request digest does not match record")
 	}
 	return nil
@@ -2654,7 +2672,57 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	if request.MaxChangedLines < 1 || request.MaxChangedLines > maximumRuntimeChangedLines {
 		return BeginAttemptRequest{}, fmt.Errorf("max_changed_lines must be within 1..%d", maximumRuntimeChangedLines)
 	}
+	if err := validateRuntimeItemBinding(request.ItemID, request.ItemEditRoots); err != nil {
+		return BeginAttemptRequest{}, err
+	}
 	return request, nil
+}
+
+func validateRuntimeItemBinding(itemID string, roots []string) error {
+	if itemID == "" {
+		if len(roots) != 0 {
+			return errors.New("item_id and item_edit_roots must be present together") // refusal:by-design operator-knowledge: only the caller can supply one coherent immutable item binding
+		}
+		return nil
+	}
+	if !workItemID.MatchString(itemID) {
+		return errors.New("item_id must be a canonical work item identifier") // refusal:by-design operator-knowledge: the caller owns the selected work-item identity
+	}
+	if len(roots) == 0 || len(roots) > maximumRuntimeGrantRoots {
+		return fmt.Errorf("item_edit_roots must contain between 1 and %d canonical roots", maximumRuntimeGrantRoots) // refusal:by-design operator-knowledge: the caller must supply the complete immutable root set
+	}
+	for index, root := range roots {
+		if validateRuntimeText(root, 4096) != nil || !filepath.IsAbs(root) || filepath.Clean(root) != root {
+			return errors.New("item_edit_roots must be canonical absolute cleaned paths") // refusal:by-design operator-knowledge: the caller must name the immutable canonical roots
+		}
+		resolved, err := filepath.EvalSymlinks(root)
+		if err != nil || resolved != root {
+			return errors.New("item_edit_roots must be canonical absolute cleaned paths") // refusal:by-design operator-knowledge: the caller must name the immutable canonical roots
+		}
+		if index > 0 && (roots[index-1] == root || roots[index-1] > root) {
+			return errors.New("item_edit_roots must be sorted and deduplicated") // refusal:by-design operator-knowledge: the caller must provide one deterministic root ordering
+		}
+	}
+	return nil
+}
+
+func runtimeItemBindingEqual(leftID string, leftRoots []string, rightID string, rightRoots []string) bool {
+	if leftID != rightID || len(leftRoots) != len(rightRoots) {
+		return false
+	}
+	for index := range leftRoots {
+		if leftRoots[index] != rightRoots[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func runtimeBeginRequestDigest(request BeginAttemptRequest) string {
+	if request.ItemID == "" {
+		return runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request)
+	}
+	return runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v2", request)
 }
 
 // runtimeRevisionShapeObservation describes a rejected sha256:<64-lowercase-hex>
@@ -3191,6 +3259,21 @@ func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string
 		CandidateIdentity string `json:"candidate_identity"`
 		Generation        int    `json:"generation"`
 	}{Change: change, WorkUnit: workUnit, EvidenceGoal: evidenceGoal, CandidateIdentity: candidateIdentity, Generation: generation})
+}
+
+func runtimeObjectiveIDForBinding(change, workUnit, evidenceGoal, candidateIdentity string, generation int, itemID string, roots []string) string {
+	if itemID == "" {
+		return runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity, generation)
+	}
+	return runtimeValueHash(runtimeObjectiveSchemaV3, struct {
+		Change            string   `json:"change"`
+		WorkUnit          string   `json:"work_unit"`
+		EvidenceGoal      string   `json:"evidence_goal"`
+		CandidateIdentity string   `json:"candidate_identity"`
+		Generation        int      `json:"generation"`
+		ItemID            string   `json:"item_id"`
+		ItemEditRoots     []string `json:"item_edit_roots"`
+	}{Change: change, WorkUnit: workUnit, EvidenceGoal: evidenceGoal, CandidateIdentity: candidateIdentity, Generation: generation, ItemID: itemID, ItemEditRoots: roots})
 }
 
 func runtimeObjectiveIDV1(change, evidenceGoal, candidateIdentity string, generation int) string {

@@ -379,10 +379,13 @@ func compactAcquireMatches(record runtimeRecord, request BeginAttemptRequest) bo
 		return false
 	}
 	event := record.Begin
-	return request == (BeginAttemptRequest{
-		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
+	expected := BeginAttemptRequest{ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
 		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
-	})
+		ItemID: event.ItemID, ItemEditRoots: event.ItemEditRoots}
+	return request.ExpectedRevision == expected.ExpectedRevision && request.RequestID == expected.RequestID &&
+		request.WorkUnit == expected.WorkUnit && request.EvidenceGoal == expected.EvidenceGoal &&
+		request.MaxAttempts == expected.MaxAttempts && request.MaxChangedLines == expected.MaxChangedLines &&
+		runtimeItemBindingEqual(request.ItemID, request.ItemEditRoots, expected.ItemID, expected.ItemEditRoots)
 }
 
 func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, request CompactSettleRequest) (FinishAttemptRequest, bool) {
