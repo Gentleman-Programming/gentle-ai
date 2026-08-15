@@ -71,6 +71,15 @@ func TestWorkItemStatesRespectDependenciesRuntimeScopeAndRelationships(t *testin
 	if err != nil || !items[0].Blocked {
 		t.Fatalf("items=%#v err=%v", items, err)
 	}
+	status.ActionContext.AllowedEditRoots = []string{filepath.Join(status.ActionContext.WorkspaceRoot, "allowed")}
+	items, _, err = projectWorkItems(strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"src"`, `"other/future"`, 1), status)
+	if err != nil || !items[0].Blocked {
+		t.Fatalf("nonexistent sibling items=%#v err=%v", items, err)
+	}
+	items, _, err = projectWorkItems(strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"src"`, `"allowed/future"`, 1), status)
+	if err != nil || !items[0].Ready {
+		t.Fatalf("nonexistent descendant items=%#v err=%v", items, err)
+	}
 }
 
 func TestWorkItemJSONOmitsAbsentProjection(t *testing.T) {

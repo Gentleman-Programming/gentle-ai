@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -175,14 +176,42 @@ func invalidWorkItem(_ string, _ ...any) error { return errInvalidWorkItem }
 func workItemRootsAllowed(roots []string, context ActionContext) bool {
 	allowed := make([]string, 0, len(context.AllowedEditRoots))
 	for _, root := range context.AllowedEditRoots {
-		allowed = append(allowed, resolveExistingPath(root))
+		canonical, ok := prospectiveWorkItemPath(root)
+		if !ok {
+			return false
+		}
+		allowed = append(allowed, canonical)
 	}
 	for _, root := range roots {
-		if !withinAnyRoot(resolveExistingPath(filepath.Join(context.WorkspaceRoot, root)), allowed) {
+		canonical, ok := prospectiveWorkItemPath(filepath.Join(context.WorkspaceRoot, root))
+		if !ok || !withinAnyRoot(canonical, allowed) {
 			return false
 		}
 	}
 	return true
+}
+
+// prospectiveWorkItemPath preserves absent suffixes while canonicalizing the
+// nearest existing ancestor, so unrelated future siblings cannot overlap.
+func prospectiveWorkItemPath(path string) (string, bool) {
+	path = filepath.Clean(path)
+	var suffix []string
+	for {
+		if _, err := os.Lstat(path); err == nil {
+			break
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return "", false
+		}
+		suffix = append([]string{filepath.Base(path)}, suffix...)
+		path = parent
+	}
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", false
+	}
+	return filepath.Join(append([]string{canonical}, suffix...)...), true
 }
 
 func workItemCycle(items []workItemMetadata, metadata map[string]workItemMetadata) bool {
