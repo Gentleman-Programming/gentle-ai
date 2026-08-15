@@ -253,20 +253,35 @@ func ResolveItemAcquire(options ResolveOptions, itemID, requestID string) (Begin
 		if item.ID != itemID {
 			continue
 		}
-		if item.Done || item.Blocked || (!item.Ready && !item.Active) {
-			// refusal:by-design operator-knowledge: the coordinator must update prerequisites or the checkbox before this item can open.
-			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: item %q is not ready", itemID)
-		}
 		roots, ok := canonicalWorkItemRoots(item.EditRoots, status.ActionContext.WorkspaceRoot)
 		if !ok || !workItemRootsAllowed(item.EditRoots, status.ActionContext) {
 			// refusal:by-design human-authority: only the coordinator may authorize or correct item edit roots.
 			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: item %q has incompatible edit roots", itemID)
+		}
+		if item.Active && !itemSelectedActiveBindingMatches(item, roots, status.RuntimeStatus) {
+			// refusal:by-design operator-knowledge: an unbound active attempt cannot be adopted as an item-selected attempt.
+			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: active item %q lacks the selected immutable binding", itemID)
+		}
+		if item.Done || item.Blocked || (!item.Ready && !item.Active) {
+			// refusal:by-design operator-knowledge: the coordinator must update prerequisites or the checkbox before this item can open.
+			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: item %q is not ready", itemID)
 		}
 		return BeginAttemptRequest{RequestID: requestID, WorkUnit: item.WorkUnit, EvidenceGoal: item.EvidenceGoal,
 			MaxAttempts: item.MaxAttempts, MaxChangedLines: item.MaxChangedLines, ItemID: item.ID, ItemEditRoots: roots}, nil
 	}
 	// refusal:by-design operator-knowledge: the caller selected an ID absent from authoritative metadata.
 	return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: projected item %q was not found", itemID)
+}
+
+func itemSelectedActiveBindingMatches(item WorkItem, roots []string, runtime *RuntimeStatus) bool {
+	if runtime == nil || runtime.Objective == nil || runtime.ActiveAttempt == nil {
+		return false
+	}
+	objective, attempt := runtime.Objective, runtime.ActiveAttempt
+	return objective.WorkUnit == item.WorkUnit && objective.EvidenceGoal == item.EvidenceGoal &&
+		objective.MaxAttempts == item.MaxAttempts && objective.MaxChangedLines == item.MaxChangedLines &&
+		runtimeItemBindingEqual(item.ID, roots, objective.ItemID, objective.ItemEditRoots) &&
+		attempt.WorkUnit == item.WorkUnit && runtimeItemBindingEqual(item.ID, roots, attempt.ItemID, attempt.ItemEditRoots)
 }
 
 // prospectiveWorkItemPath preserves absent suffixes while canonicalizing the

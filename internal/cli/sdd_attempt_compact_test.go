@@ -454,6 +454,32 @@ func TestRunSDDAttemptAcquireProjectedItemRefusesCallerScopeAndUnavailableItems(
 	}
 }
 
+func TestRunSDDAttemptAcquireProjectedItemRefusesUnboundActiveContinuation(t *testing.T) {
+	repo, change := projectedItemCLIChange(t)
+	legacy, _ := runCompactSDDAttempt(t, []string{
+		"acquire", "--cwd", repo, "--change", change, "--request-id", "legacy-active",
+		"--work-unit", "build", "--evidence-goal", "compile", "--max-attempts", "1", "--max-changed-lines", "100",
+	})
+	store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Status()
+	if err != nil || before.Objective == nil || before.ActiveAttempt == nil || before.Objective.ItemID != "" || before.ActiveAttempt.ItemID != "" {
+		t.Fatalf("legacy active status = %#v, %v", before, err)
+	}
+	files := snapshotRuntimeAuthorityFiles(t, store.Dir)
+	var output bytes.Buffer
+	err = RunSDDAttempt([]string{"acquire", "--cwd", repo, "--change", change, "--item", "build", "--request-id", "item-continuation", "--token", legacy.Token}, &output)
+	if err == nil || !strings.Contains(err.Error(), "lacks the selected immutable binding") {
+		t.Fatalf("unbound item continuation error = %v", err)
+	}
+	after, err := store.Status()
+	if err != nil || !reflect.DeepEqual(after, before) || !reflect.DeepEqual(snapshotRuntimeAuthorityFiles(t, store.Dir), files) {
+		t.Fatalf("unbound continuation mutated runtime\nbefore=%#v\nafter=%#v\nerr=%v", before, after, err)
+	}
+}
+
 func projectedItemCLIChange(t *testing.T) (string, string) {
 	t.Helper()
 	repo, change := initReviewCLIRepo(t), "projected-item"
