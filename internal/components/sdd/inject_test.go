@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -7512,6 +7513,31 @@ func TestInjectOpenCodeNativeFallbackOwnership(t *testing.T) {
 				t.Errorf("ownership agents = %#v, want %#v", ownership.Agents, tt.wantOwned)
 			}
 		})
+	}
+}
+
+func TestNativeFallbackRolesRemainAligned(t *testing.T) {
+	roles := opencodemodel.NativeFallbackPhases()
+	if !slices.Equal(roles, []string{"general", "explore"}) {
+		t.Fatalf("NativeFallbackPhases() = %v, want [general explore]", roles)
+	}
+
+	defaults := nativeFallbackDefaults(model.SDDModeSingle, nil, "fixture/root")
+	ownership := nativeFallbackOwnership{Agents: make(map[string]nativeFallbackAssignment, len(roles))}
+	assignments := make(map[string]model.ModelAssignment, len(roles))
+	for _, role := range roles {
+		if !isNativeFallbackAgent(role) {
+			t.Errorf("isNativeFallbackAgent(%q) = false", role)
+		}
+		if got := defaults[role]; got != (nativeFallbackAssignment{Model: "fixture/root", Variant: "medium"}) {
+			t.Errorf("nativeFallbackDefaults()[%q] = %#v", role, got)
+		}
+		ownership.Agents[role] = nativeFallbackAssignment{Model: "managed/" + role}
+		assignments[role] = model.ModelAssignment{ProviderID: "picker", ModelID: role}
+	}
+	ownership.reconcile(assignments, nil, nil)
+	if len(ownership.Agents) != 0 {
+		t.Errorf("reconcile() retained picker-owned roles: %#v", ownership.Agents)
 	}
 }
 

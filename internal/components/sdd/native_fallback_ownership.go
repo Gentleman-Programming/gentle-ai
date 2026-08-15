@@ -9,6 +9,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 const nativeFallbackOwnershipSchema = "gentle-ai.opencode-native-fallbacks"
@@ -101,7 +102,7 @@ func nativeFallbackDefaults(sddMode model.SDDModeID, assignments map[string]mode
 		return defaults
 	}
 	if rootModel != "" {
-		for _, role := range []string{"general", "explore"} {
+		for _, role := range opencode.NativeFallbackPhases() {
 			if _, exists := defaults[role]; !exists {
 				defaults[role] = nativeFallbackAssignment{Model: rootModel, Variant: "medium"}
 			}
@@ -111,7 +112,7 @@ func nativeFallbackDefaults(sddMode model.SDDModeID, assignments map[string]mode
 }
 
 func (o *nativeFallbackOwnership) reconcile(assignments map[string]model.ModelAssignment, existing map[string]bool, managed map[string]nativeFallbackAssignment) {
-	for _, role := range []string{"general", "explore"} {
+	for _, role := range opencode.NativeFallbackPhases() {
 		if assignment := assignments[role]; assignment.ProviderID != "" && assignment.ModelID != "" {
 			delete(o.Agents, role)
 			continue

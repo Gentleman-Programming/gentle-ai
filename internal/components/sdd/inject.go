@@ -2820,7 +2820,12 @@ func injectModelAssignmentsWithOwnership(overlayBytes []byte, assignments map[st
 }
 
 func isNativeFallbackAgent(name string) bool {
-	return name == "general" || name == "explore"
+	for _, phase := range opencode.NativeFallbackPhases() {
+		if name == phase {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeOpenCodeSDDModelAssignments accepts the historical
