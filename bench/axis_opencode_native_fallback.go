@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -47,7 +48,9 @@ func pinnedOpenCodeUnavailable(*Sandbox) string {
 	if err != nil {
 		return "opencode is unavailable"
 	}
-	output, err := exec.Command(path, "--version").CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
 	if err != nil || !strings.Contains(string(output), "1.18.4") {
 		return "opencode 1.18.4 is unavailable"
 	}
@@ -152,7 +155,11 @@ func syncNativeFallbackAssignments(r *journeyRun) error {
 	err = command.Run()
 	observation = Observation{Args: []string{"opencode", "run", "--agent", "gentle-orchestrator"}, ExitCode: 0, Stdout: output.String(), StdoutCaptured: true, StderrCaptured: true}
 	if err != nil {
-		observation.ExitCode = 1
+		if command.ProcessState != nil {
+			observation.ExitCode = command.ProcessState.ExitCode()
+		} else {
+			observation.ExitCode = 1
+		}
 		observation.Stderr = output.String()
 	}
 	record := r.accumulator.observe(r.step, observation, nil, true)
@@ -164,6 +171,7 @@ func syncNativeFallbackAssignments(r *journeyRun) error {
 }
 
 type nativeFallbackFixture struct {
+	mu        sync.Mutex
 	next      int
 	models    []string
 	tasks     []string
@@ -185,43 +193,65 @@ func (f *nativeFallbackFixture) serveHTTP(writer http.ResponseWriter, request *h
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
 	}
+	f.mu.Lock()
 	f.models = append(f.models, input.Model)
 	if input.Model == "root" && strings.Contains(nativeFallbackRequestText(input), "You are a title generator") {
-		writeNativeFallbackText(writer, "fixture title")
+		f.mu.Unlock()
+		if err := writeNativeFallbackText(writer, "fixture title"); err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 	for _, role := range []string{"general", "explore"} {
 		if input.Model == role || input.Model == "fixture/"+role {
 			f.roles = append(f.roles, role)
 			f.responses = append(f.responses, "ROLE_RESPONSE "+role)
-			writeNativeFallbackText(writer, "ROLE_RESPONSE "+role)
+			f.mu.Unlock()
+			if err := writeNativeFallbackText(writer, "ROLE_RESPONSE "+role); err != nil {
+				http.Error(writer, err.Error(), http.StatusInternalServerError)
+			}
 			return
 		}
 	}
 	if f.next == 0 {
 		f.next = 1
 		f.tasks = append(f.tasks, "general")
-		writeNativeFallbackTask(writer, "general")
+		f.mu.Unlock()
+		if err := writeNativeFallbackTask(writer, "general"); err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 	if f.next == 1 {
 		f.next = 2
 		f.tasks = append(f.tasks, "explore")
-		writeNativeFallbackTask(writer, "explore")
+		f.mu.Unlock()
+		if err := writeNativeFallbackTask(writer, "explore"); err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
-	writeNativeFallbackText(writer, "native fallback delegation complete")
+	f.mu.Unlock()
+	if err := writeNativeFallbackText(writer, "native fallback delegation complete"); err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func (f *nativeFallbackFixture) assertComplete() error {
-	if strings.Join(f.tasks, ",") != "general,explore" {
-		return fmt.Errorf("native task metadata = %v, want [general explore]", f.tasks)
+	f.mu.Lock()
+	tasks := append([]string(nil), f.tasks...)
+	roles := append([]string(nil), f.roles...)
+	responses := append([]string(nil), f.responses...)
+	models := append([]string(nil), f.models...)
+	f.mu.Unlock()
+	if strings.Join(tasks, ",") != "general,explore" {
+		return fmt.Errorf("native task metadata = %v, want [general explore]", tasks)
 	}
-	if strings.Join(f.roles, ",") != "general,explore" {
-		return fmt.Errorf("native role request models = %v (all requests %v), want [general explore]", f.roles, f.models)
+	if strings.Join(roles, ",") != "general,explore" {
+		return fmt.Errorf("native role request models = %v (all requests %v), want [general explore]", roles, models)
 	}
-	if strings.Join(f.responses, ",") != "ROLE_RESPONSE general,ROLE_RESPONSE explore" {
-		return fmt.Errorf("native role responses = %v", f.responses)
+	if strings.Join(responses, ",") != "ROLE_RESPONSE general,ROLE_RESPONSE explore" {
+		return fmt.Errorf("native role responses = %v", responses)
 	}
 	return nil
 }
@@ -229,26 +259,39 @@ func (f *nativeFallbackFixture) assertComplete() error {
 func nativeFallbackRequestText(request nativeFallbackRequest) string {
 	var text strings.Builder
 	for _, message := range request.Messages {
-		text.WriteString(fmt.Sprint(message.Content))
+		_, _ = fmt.Fprint(&text, message.Content)
 	}
 	return text.String()
 }
 
-func writeNativeFallbackTask(writer http.ResponseWriter, role string) {
-	arguments, _ := json.Marshal(map[string]string{"description": "native fallback proof", "subagent_type": role, "prompt": "return ROLE_RESPONSE " + role})
-	toolCall := map[string]any{"index": 0, "id": "call-" + role, "type": "function", "function": map[string]any{"name": "task", "arguments": string(arguments)}}
-	writeNativeFallbackChunks(writer, []any{map[string]any{"id": "native", "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant", "tool_calls": []any{toolCall}}, "finish_reason": nil}}}, map[string]any{"id": "native", "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls"}}}})
-}
-
-func writeNativeFallbackText(writer http.ResponseWriter, text string) {
-	writeNativeFallbackChunks(writer, []any{map[string]any{"id": "native", "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant", "content": text}, "finish_reason": nil}}}, map[string]any{"id": "native", "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}}})
-}
-
-func writeNativeFallbackChunks(writer http.ResponseWriter, chunks []any) {
-	writer.Header().Set("Content-Type", "text/event-stream")
-	for _, chunk := range chunks {
-		encoded, _ := json.Marshal(chunk)
-		_, _ = fmt.Fprintf(writer, "data: %s\n\n", encoded)
+func writeNativeFallbackTask(writer http.ResponseWriter, role string) error {
+	arguments, err := json.Marshal(map[string]string{"description": "native fallback proof", "subagent_type": role, "prompt": "return ROLE_RESPONSE " + role})
+	if err != nil {
+		return err
 	}
-	_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+	toolCall := map[string]any{"index": 0, "id": "call-" + role, "type": "function", "function": map[string]any{"name": "task", "arguments": string(arguments)}}
+	return writeNativeFallbackChunks(writer, []any{map[string]any{"id": "native", "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant", "tool_calls": []any{toolCall}}, "finish_reason": nil}}}, map[string]any{"id": "native", "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls"}}}})
+}
+
+func writeNativeFallbackText(writer http.ResponseWriter, text string) error {
+	return writeNativeFallbackChunks(writer, []any{map[string]any{"id": "native", "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant", "content": text}, "finish_reason": nil}}}, map[string]any{"id": "native", "object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}}})
+}
+
+func writeNativeFallbackChunks(writer http.ResponseWriter, chunks []any) error {
+	frames := make([][]byte, len(chunks))
+	for i, chunk := range chunks {
+		encoded, err := json.Marshal(chunk)
+		if err != nil {
+			return err
+		}
+		frames[i] = encoded
+	}
+	writer.Header().Set("Content-Type", "text/event-stream")
+	for _, frame := range frames {
+		if _, err := fmt.Fprintf(writer, "data: %s\n\n", frame); err != nil {
+			return err
+		}
+	}
+	_, err := io.WriteString(writer, "data: [DONE]\n\n")
+	return err
 }
