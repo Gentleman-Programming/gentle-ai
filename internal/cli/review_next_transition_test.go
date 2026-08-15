@@ -611,16 +611,11 @@ func TestReviewRecoveryTransitionRefusesSelectorsNativeRecoverCannotReplay(t *te
 	t.Parallel()
 	status := ReviewTargetStatusResult{
 		Applicability: reviewtransaction.TargetApplicabilityCurrent, Action: reviewtransaction.TargetStatusActionRecover,
-		ActionDisposition:       reviewtransaction.RecoveryEscalated,
-		TargetIdentity:          "sha256:" + strings.Repeat("b", 64),
-		AuthorityTargetIdentity: "sha256:" + strings.Repeat("c", 64),
-		Authority:               &ReviewTargetStatusAuthority{LineageID: "selector-predecessor", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateEscalated},
-		Projection:              ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace},
+		ActionDisposition: reviewtransaction.RecoveryEscalated, TargetIdentity: "sha256:" + strings.Repeat("b", 64), AuthorityTargetIdentity: "sha256:" + strings.Repeat("c", 64),
+		Authority: &ReviewTargetStatusAuthority{LineageID: "selector-predecessor", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateEscalated}, Projection: ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace},
 	}
 	t.Run("explicit workspace overlay authorization keeps its existing route", func(t *testing.T) {
-		selector := reviewTransitionSelector{Recovery: &reviewtransaction.Target{
-			Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "HEAD^",
-		}}
+		selector := reviewTransitionSelector{Recovery: &reviewtransaction.Target{Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "HEAD^"}}
 		input := reviewNextTransitionInput{Successor: "selector-successor", Reason: "explicit recovery", Actor: "maintainer", Selector: &selector}
 		input.Authorization = reviewTransitionRecoveryAuthorization(reviewTransitionBinding(status.Authority, status.TargetIdentity), input.Successor, input.Actor, input.Reason)
 		got := newReviewNextTransition(status, nil, nil, nil, nil, input)
@@ -636,21 +631,12 @@ func TestReviewRecoveryTransitionRefusesSelectorsNativeRecoverCannotReplay(t *te
 		name     string
 		selector reviewTransitionSelector
 	}{
-		{name: "new intended-untracked selection",
-			selector: reviewTransitionSelector{Recovery: &reviewtransaction.Target{
-				Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{"new.txt"},
-			}}},
-		{name: "workspace overlay without native staged replay shape",
-			selector: reviewTransitionSelector{Recovery: &reviewtransaction.Target{
-				Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "HEAD^",
-			}}},
+		{name: "new intended-untracked selection", selector: reviewTransitionSelector{Recovery: &reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{"new.txt"}}}},
+		{name: "workspace overlay without native staged replay shape", selector: reviewTransitionSelector{Recovery: &reviewtransaction.Target{Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "HEAD^"}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			input := reviewNextTransitionInput{
-				Successor: "selector-successor", Selector: &test.selector,
-				RecoveryPredecessorIntendedUntracked: []string{},
-			}
+			input := reviewNextTransitionInput{Successor: "selector-successor", Selector: &test.selector, RecoveryPredecessorIntendedUntracked: []string{}}
 			got := newReviewNextTransition(status, nil, nil, nil, nil, input)
 			if got.Kind != reviewNextTransitionCollect || got.ReasonCode != "recovery_target_unrepresentable" ||
 				got.Collect == nil || len(got.Collect.Inputs) != 1 || got.Collect.Inputs[0].CaptureOperation != "external.select_recovery_target" {

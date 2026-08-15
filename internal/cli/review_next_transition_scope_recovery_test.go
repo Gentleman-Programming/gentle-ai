@@ -11,10 +11,19 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
-// TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery is issue #1658's
-// root regression: once native STATUS has selected a deterministic recovery,
-// its transition must invoke native RECOVER's existing self-derivation rather
-// than hand the caller to an unowned authorization capture operation.
+// TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery pins the closed
+// negotiated loop confirmed on issue #1826: with an approved lineage and the
+// operator's staged revision of the exact reviewed path set, negotiated status
+// answered fresh_target_ready, the printed START answered blocked-scope-action
+// at exit 0 having created nothing, and status then printed the same START
+// again. The gentle-ai.review-recovery-authorization/v1 collection was
+// reachable only after status had already selected recovery, which this shape
+// never did.
+//
+// The store already refuses a fresh lineage for this shape and answers
+// recover, so the negotiated surface must classify with the same predicate:
+// bind the approved predecessor for recovery and expose self-derived RECOVER
+// with no caller-invented authorization flags.
 func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
@@ -67,22 +76,22 @@ func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) 
 		transition.Execute == nil || transition.Execute.Operation != "review.recover" {
 		t.Fatalf("next transition is not the self-derived recovery execution:\n%s", statusOut.String())
 	}
-	bound, argumentNames := map[string]string{}, []string{}
-	for _, argument := range transition.Execute.Arguments {
-		bound[argument.Name] = argument.Value
-		argumentNames = append(argumentNames, argument.Name)
-		if argument.Token == "" {
-			t.Fatalf("recovery argument %q carried no runnable token", argument.Name)
-		}
+	if err := transition.Validate(); err != nil {
+		t.Fatal(err)
 	}
-	wantNames := []string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition"}
-	if strings.Join(argumentNames, ",") != strings.Join(wantNames, ",") {
-		t.Fatalf("recovery arguments = %v, want only %v", argumentNames, wantNames)
+	bound, err := reviewTransitionArgumentMap(transition.Execute.Arguments)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if bound["predecessor-lineage"] != startResult.LineageID || bound["expected-predecessor-revision"] == "" ||
+	if len(bound) != 4 || bound["predecessor-lineage"] != startResult.LineageID || bound["expected-predecessor-revision"] == "" ||
 		bound["successor-lineage"] == "" || bound["successor-lineage"] == startResult.LineageID ||
 		bound["disposition"] != string(reviewtransaction.RecoveryScopeChanged) {
 		t.Fatalf("recovery execution is not fully bound: %#v", bound)
+	}
+	for index, name := range []string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition"} {
+		if transition.Execute.Arguments[index].Name != name {
+			t.Fatalf("recovery argument %d = %q, want %q", index, transition.Execute.Arguments[index].Name, name)
+		}
 	}
 
 	// Supplying an explicitly wrong authorization must never fall through to
