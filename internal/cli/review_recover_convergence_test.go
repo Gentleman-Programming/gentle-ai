@@ -11,8 +11,7 @@ import (
 // TestNegotiatedRecoverTransitionRunsVerbatimForStagedPredecessorAfterRebase
 // is the first leg of the rc.7 report on #2645: a staged review is approved,
 // its exact candidate is committed and rebased across a disjoint parent
-// advance (patch-identical), STATUS binds the approved predecessor and renders
-// a complete self-derived native RECOVER command — which must run verbatim. Root 13's
+// advance (patch-identical), STATUS binds the approved predecessor and renders a complete self-derived native RECOVER command — which must run verbatim. Root 13's
 // property for RECOVER: STATUS never renders a recovery its own preflight
 // refuses.
 func TestNegotiatedRecoverTransitionRunsVerbatimForStagedPredecessorAfterRebase(t *testing.T) {

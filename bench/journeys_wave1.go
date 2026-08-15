@@ -390,7 +390,7 @@ func recoverStagedCorrection(r *journeyRun) error {
 	selectors = append(selectors, "--recovery-successor-lineage", stagedSuccessorLineage)
 	envelope, err := readStatusFor(r, selectors...)
 	if err != nil || envelope.NextTransition.Kind != "execute" || envelope.NextTransition.Execute.Operation != "review.recover" {
-		return fmt.Errorf("staged recovery is not directly executable: %+v, %v", envelope.NextTransition, err)
+		return fmt.Errorf("staged recovery regressed to collect/external.authorize_recovery or another non-native transition: got %+v, %v; want executable review.recover", envelope.NextTransition, err)
 	}
 	if envelope.executeArgument("predecessor-lineage") != stagedRecoveryLineage ||
 		envelope.executeArgument("successor-lineage") != stagedSuccessorLineage ||
@@ -1300,7 +1300,7 @@ func waveOneJourneys() []Journey {
 		{
 			ID:     "j46-correction-required-staged-recovery",
 			Title:  "Correction-required base diff: negotiated staged recovery receives a fresh review and delivers",
-			Source: "issue #1921",
+			Source: "issues #1921 and #1658: correction-required changed-scope recovery must execute native review.recover, not dead-end at collect/external.authorize_recovery",
 			Steps: []Step{
 				{Name: "fixture: linked worktree and remote", Fixture: linkedWorktreeWithRemote},
 				{Name: "fixture: commit base-diff candidate", Fixture: commitStagedRecoveryCandidate},

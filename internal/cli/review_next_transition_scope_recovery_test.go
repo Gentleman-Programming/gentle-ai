@@ -23,8 +23,7 @@ import (
 //
 // The store already refuses a fresh lineage for this shape and answers
 // recover, so the negotiated surface must classify with the same predicate:
-// bind the approved predecessor for recovery and expose self-derived RECOVER
-// with no caller-invented authorization flags.
+// bind the approved predecessor for recovery and expose self-derived RECOVER with no caller-invented authorization flags.
 func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
