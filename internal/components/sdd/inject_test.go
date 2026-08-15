@@ -4441,6 +4441,11 @@ func TestInjectOpenCodePluginIdempotent(t *testing.T) {
 	}
 }
 
+func injectModelAssignments(overlayBytes []byte, assignments map[string]model.ModelAssignment, rootModelID string, existingAgentKeys map[string]bool) ([]byte, error) {
+	result, _, err := injectModelAssignmentsWithOwnership(overlayBytes, assignments, rootModelID, existingAgentKeys, nil, nil)
+	return result, err
+}
+
 func TestInjectModelAssignmentsFunction(t *testing.T) {
 	overlayJSON := []byte(`{
   "agent": {

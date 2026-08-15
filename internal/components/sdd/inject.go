@@ -2675,7 +2675,7 @@ func isJDAgent(name string) bool {
 	return jdAgentSet[name]
 }
 
-// injectModelAssignments injects "model" fields into sub-agent definitions
+// injectModelAssignmentsWithOwnership injects "model" fields into sub-agent definitions
 // within the overlay JSON before it is merged into the settings file.
 //
 // Decision tree for EACH sub-agent:
@@ -2689,11 +2689,6 @@ func isJDAgent(name string) bool {
 //     leakage on the deep merge.
 //
 // If none of the above conditions apply, nothing is written for that agent.
-func injectModelAssignments(overlayBytes []byte, assignments map[string]model.ModelAssignment, rootModelID string, existingAgentKeys map[string]bool) ([]byte, error) {
-	result, _, err := injectModelAssignmentsWithOwnership(overlayBytes, assignments, rootModelID, existingAgentKeys, nil, nil)
-	return result, err
-}
-
 func injectModelAssignmentsWithOwnership(overlayBytes []byte, assignments map[string]model.ModelAssignment, rootModelID string, existingAgentKeys map[string]bool, managedFallbacks map[string]nativeFallbackAssignment, fallbackDefaults map[string]nativeFallbackAssignment) ([]byte, map[string]nativeFallbackAssignment, error) {
 	assignments = normalizeOpenCodeSDDModelAssignments(assignments)
 	managed := make(map[string]nativeFallbackAssignment)
