@@ -3235,7 +3235,7 @@ func TestRealOpenCodeExecutesInstalledAdvisoryRouteWithoutMutation(t *testing.T)
 			fixture.readOnlySubagent = true
 			fixture.routingAdvisoryPrompt = advisoryPrompt
 			fixture.subagentCompletion = advisoryResult
-			fixture.completion = advisoryCompleted
+			fixture.completion = advisoryResult + "\n" + advisoryCompleted
 			fixture.requiredMainPromptFragments = []string{
 				"Formal `review-*` actors may be dispatched only from an exact provider-issued native collection transition.",
 				"route an ordinary unbound manual read-only or advisory review through native `explore`",
