@@ -318,6 +318,9 @@ type ResolveOptions struct {
 	// against the exact workspace normalized by Resolve. When set, it is called
 	// once and its result replaces ReviewDisabled for the whole status decision.
 	ReviewDisabledForWorkspace func(workspaceRoot string) (bool, error)
+	// ReadOnly suppresses status's consent-marker write. Admission callers need
+	// the same artifact selection without creating a change-instance marker.
+	ReadOnly bool
 }
 
 type CommandArgs struct {
@@ -552,7 +555,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
 	applyState, unauthorizedRoots := applyEditAuthorityBlock(applyState, &blockedReasons, readText(firstPath(artifactPaths.Tasks)), workspaceRoot, append([]string{workspaceRoot}, grantedRoots...))
 	var consent *SDDIntegrationConsentResult
-	if len(unauthorizedRoots) != 0 {
+	if len(unauthorizedRoots) != 0 && !options.ReadOnly {
 		// The envelope must name an invocation the agent executes verbatim,
 		// so the instance token is minted (once) and persisted here; a
 		// covering grant later projects through the same token and detection

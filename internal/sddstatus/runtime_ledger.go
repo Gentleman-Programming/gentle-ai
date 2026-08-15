@@ -2701,8 +2701,8 @@ func validateRuntimeItemBinding(itemID string, roots []string) error {
 		if validateRuntimeText(root, 4096) != nil || !filepath.IsAbs(root) || filepath.Clean(root) != root {
 			return errors.New("item_edit_roots must be canonical absolute cleaned paths") // refusal:by-design operator-knowledge: the caller must name the immutable canonical roots
 		}
-		resolved, err := filepath.EvalSymlinks(root)
-		if err != nil || resolved != root {
+		resolved, ok := prospectiveWorkItemPath(root)
+		if !ok || resolved != root {
 			return errors.New("item_edit_roots must be canonical absolute cleaned paths") // refusal:by-design operator-knowledge: the caller must name the immutable canonical roots
 		}
 		if index > 0 && (roots[index-1] == root || roots[index-1] > root) {

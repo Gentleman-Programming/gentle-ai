@@ -28,6 +28,7 @@ func TestWorkItemsFailClosedForInvalidMetadata(t *testing.T) {
 	for _, text := range []string{
 		"<!-- gentle-ai.sdd-items/v1\n{\"items\":[\n-->",
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"id":"verify"`, `"id":"build"`, 1),
+		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"workUnit":"verify"`, `"workUnit":"build"`, 1),
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"dependsOn":["build"]`, `"dependsOn":["verify"]`, 1),
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"dependsOn":["build"]`, `"dependsOn":["missing"]`, 1),
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"maxAttempts":2`, `"maxAttempts":0`, 1),
@@ -93,6 +94,47 @@ func TestWorkItemJSONOmitsAbsentProjection(t *testing.T) {
 	payload, err = json.Marshal(ProjectStatusV1Must(t, status))
 	if err != nil || !strings.Contains(string(payload), `"items"`) {
 		t.Fatalf("payload=%s err=%v", payload, err)
+	}
+}
+
+func TestResolveItemAcquireUsesEquivalentOpenSpecAndEngramMetadata(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tasks := itemTasks("- [ ] build: Build\n- [ ] verify: Verify")
+	changeRoot := filepath.Join(root, "openspec", "changes", "items")
+	for path, content := range map[string]string{
+		"proposal.md": "# Proposal\n", "design.md": "# Design\n", "tasks.md": tasks, "specs/item/spec.md": "### Requirement: Item\n#### Scenario: Acquire\n",
+	} {
+		write(t, filepath.Join(changeRoot, path), content)
+	}
+	status, statusErr := Resolve(ResolveOptions{CWD: root, ChangeName: "items", ReviewDisabled: true})
+	if statusErr != nil || len(status.Items) == 0 || !status.Items[0].Ready {
+		t.Fatalf("ready OpenSpec status = %#v, %v", status, statusErr)
+	}
+	openSpec, err := ResolveItemAcquire(ResolveOptions{CWD: root, ChangeName: "items", ReviewDisabled: true}, "build", "open-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.RemoveAll(filepath.Join(root, "openspec"))
+	mkdir(t, filepath.Join(root, ".engram"))
+	runRuntimeLedgerGit(t, root, "init", "-q")
+	runRuntimeLedgerGit(t, root, "remote", "add", "origin", "git@github.com:Gentleman-Programming/gentle-ai.git")
+	restore := stubEngramExport(t, []engramObservation{
+		{Title: "sdd/items/proposal", Content: "# Proposal\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/items/spec", Content: "### Requirement: Item\n#### Scenario: Acquire\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/items/design", Content: "# Design\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/items/tasks", Content: tasks, Project: "gentle-ai", Scope: "project"},
+	})
+	defer restore()
+	engram, err := ResolveItemAcquire(ResolveOptions{CWD: root, ChangeName: "items", ReviewDisabled: true}, "build", "engram-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openSpec.WorkUnit != engram.WorkUnit || openSpec.EvidenceGoal != engram.EvidenceGoal || openSpec.MaxAttempts != engram.MaxAttempts || openSpec.MaxChangedLines != engram.MaxChangedLines ||
+		openSpec.ItemID != engram.ItemID || !reflect.DeepEqual(openSpec.ItemEditRoots, engram.ItemEditRoots) {
+		t.Fatalf("OpenSpec=%#v Engram=%#v", openSpec, engram)
 	}
 }
 

@@ -373,6 +373,110 @@ func TestRunSDDAttemptAcquireForeignTokenStaysBlockedWithNamedExit(t *testing.T)
 	assertCompactPayloadKeys(t, blockedPayload, "state", "reason", "token", "exit", "detail")
 }
 
+func TestRunSDDAttemptAcquireProjectedItemDerivesAndSettlesBoundScope(t *testing.T) {
+	repo, change := projectedItemCLIChange(t)
+	store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotRuntimeAuthorityFiles(t, store.Dir)
+	result, _ := runCompactSDDAttempt(t, []string{"acquire", "--cwd", repo, "--change", change, "--item", "build", "--request-id", "item-acquire"})
+	if result.State != "proceed" || result.Token == "" {
+		t.Fatalf("item acquire = %#v", result)
+	}
+	status, err := store.Status()
+	if err != nil || status.Objective == nil || status.Objective.ItemID != "build" || status.Objective.WorkUnit != "build" || status.Objective.EvidenceGoal != "compile" ||
+		status.Objective.MaxAttempts != 1 || status.Objective.MaxChangedLines != 100 || !reflect.DeepEqual(status.Objective.ItemEditRoots, []string{filepath.Join(repo, "src", "future")}) {
+		t.Fatalf("bound runtime status = %#v, %v", status, err)
+	}
+	if reflect.DeepEqual(before, snapshotRuntimeAuthorityFiles(t, store.Dir)) {
+		t.Fatal("item acquire did not create its runtime attempt")
+	}
+	continued, _ := runCompactSDDAttempt(t, []string{"acquire", "--cwd", repo, "--change", change, "--item", "build", "--request-id", "item-actor", "--token", result.Token})
+	if continued.State != "proceed" || continued.Token != result.Token {
+		t.Fatalf("item continuation = %#v", continued)
+	}
+	replayed, _ := runCompactSDDAttempt(t, []string{"acquire", "--cwd", repo, "--change", change, "--item", "build", "--request-id", "item-acquire"})
+	if replayed != result {
+		t.Fatalf("item replay = %#v, want %#v", replayed, result)
+	}
+	tasksPath := filepath.Join(repo, "openspec", "changes", change, "tasks.md")
+	tasks, err := os.ReadFile(tasksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tasksPath, []byte(strings.Replace(string(tasks), `"maxChangedLines":100`, `"maxChangedLines":101`, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunSDDAttempt([]string{"acquire", "--cwd", repo, "--change", change, "--item", "build", "--request-id", "item-acquire"}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "not ready") {
+		t.Fatalf("metadata drift replay error = %v", err)
+	}
+	writeProjectedItemTasks(t, repo, change, false)
+	settled, _ := runCompactSDDAttempt(t, compactSettleArgs(repo, change, result.Token, "item-settle", "passed"))
+	if settled.State != "complete" {
+		t.Fatalf("item settle = %#v", settled)
+	}
+	projected, err := sddstatus.Resolve(sddstatus.ResolveOptions{CWD: repo, ChangeName: change, ReviewDisabled: true})
+	if err != nil || !projected.Items[0].Blocked || projected.Items[0].Ready || projected.Items[0].Done || projected.Items[0].EvidenceRevision == "" {
+		t.Fatalf("unchecked settled item = %#v, %v", projected.Items, err)
+	}
+	writeProjectedItemTasks(t, repo, change, true)
+	projected, err = sddstatus.Resolve(sddstatus.ResolveOptions{CWD: repo, ChangeName: change, ReviewDisabled: true})
+	if err != nil || !projected.Items[0].Done || projected.Items[0].Active || projected.Items[0].EvidenceRevision != "" {
+		t.Fatalf("checked item = %#v, %v", projected.Items, err)
+	}
+}
+
+func TestRunSDDAttemptAcquireProjectedItemRefusesCallerScopeAndUnavailableItems(t *testing.T) {
+	repo, change := projectedItemCLIChange(t)
+	store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"acquire", "--cwd", repo, "--change", change, "--item", "build", "--request-id", "override", "--work-unit", "forged"},
+		{"acquire", "--cwd", repo, "--change", change, "--item", "missing", "--request-id", "missing"},
+		{"acquire", "--cwd", repo, "--change", change, "--item", "verify", "--request-id", "blocked"},
+	} {
+		before := snapshotRuntimeAuthorityFiles(t, store.Dir)
+		var output bytes.Buffer
+		if err := RunSDDAttempt(args, &output); err == nil || !strings.Contains(err.Error(), "item-selected acquire") {
+			t.Fatalf("RunSDDAttempt(%v) error = %v", args, err)
+		}
+		if after := snapshotRuntimeAuthorityFiles(t, store.Dir); !reflect.DeepEqual(before, after) {
+			t.Fatalf("refused item acquire mutated authority\nbefore=%v\nafter=%v", before, after)
+		}
+	}
+	legacy := []string{"acquire", "--cwd", repo, "--change", change, "--request-id", "legacy"}
+	var output bytes.Buffer
+	if err := RunSDDAttempt(legacy, &output); err == nil || !strings.Contains(err.Error(), "--work-unit") || !strings.Contains(err.Error(), "--evidence-goal") {
+		t.Fatalf("legacy acquire required flags changed: %v", err)
+	}
+}
+
+func projectedItemCLIChange(t *testing.T) (string, string) {
+	t.Helper()
+	repo, change := initReviewCLIRepo(t), "projected-item"
+	if err := os.MkdirAll(filepath.Join(repo, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{"proposal.md": "# Proposal\n", "design.md": "# Design\n", "specs/item/spec.md": "### Requirement: Item\n#### Scenario: Acquire\n"} {
+		writeReviewStartCandidate(t, repo, filepath.Join("openspec", "changes", change, path), content, 0o644)
+	}
+	writeProjectedItemTasks(t, repo, change, false)
+	return repo, change
+}
+
+func writeProjectedItemTasks(t *testing.T, repo, change string, done bool) {
+	t.Helper()
+	mark := " "
+	if done {
+		mark = "x"
+	}
+	tasks := fmt.Sprintf("- [%s] build: Build\n- [ ] verify: Verify\n<!-- gentle-ai.sdd-items/v1\n{\"items\":[{\"id\":\"build\",\"dependsOn\":[],\"workUnit\":\"build\",\"editRoots\":[\"src/future\"],\"maxAttempts\":1,\"maxChangedLines\":100,\"evidenceGoal\":\"compile\"},{\"id\":\"verify\",\"dependsOn\":[\"build\"],\"workUnit\":\"verify\",\"editRoots\":[\"src\"],\"maxAttempts\":1,\"maxChangedLines\":50,\"evidenceGoal\":\"test\"}]}\n-->", mark)
+	writeReviewStartCandidate(t, repo, filepath.Join("openspec", "changes", change, "tasks.md"), tasks, 0o644)
+}
+
 func compactAcquireArgs(repo, change, requestID string, maxAttempts int) []string {
 	return []string{
 		"acquire", "--cwd", repo, "--change", change, "--request-id", requestID,

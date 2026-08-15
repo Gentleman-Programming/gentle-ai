@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -100,6 +101,7 @@ func projectWorkItems(tasks string, status Status) ([]WorkItem, bool, error) {
 		return nil, true, invalidWorkItem("items must not be empty")
 	}
 	metadata := map[string]workItemMetadata{}
+	workUnits := map[string]bool{}
 	for _, item := range document.Items {
 		if err := validateWorkItem(item, status.ActionContext.WorkspaceRoot); err != nil {
 			return nil, true, err
@@ -107,7 +109,11 @@ func projectWorkItems(tasks string, status Status) ([]WorkItem, bool, error) {
 		if _, exists := metadata[item.ID]; exists {
 			return nil, true, invalidWorkItem("duplicate item id %q", item.ID)
 		}
+		if workUnits[item.WorkUnit] {
+			return nil, true, invalidWorkItem("duplicate work unit %q", item.WorkUnit)
+		}
 		metadata[item.ID] = item
+		workUnits[item.WorkUnit] = true
 		if _, exists := checkboxes[item.ID]; !exists {
 			return nil, true, invalidWorkItem("missing checkbox id %q", item.ID)
 		}
@@ -137,18 +143,38 @@ func projectWorkItems(tasks string, status Status) ([]WorkItem, bool, error) {
 		for _, dependency := range *declared.DependsOn {
 			dependenciesDone = dependenciesDone && checkboxes[dependency]
 		}
-		if !item.Done && status.RuntimeStatus != nil && status.RuntimeStatus.Objective != nil && status.RuntimeStatus.Objective.WorkUnit == declared.WorkUnit {
+		runtimeMatch := !item.Done && workItemRuntimeMatches(declared, status.ActionContext.WorkspaceRoot, status.RuntimeStatus)
+		if runtimeMatch {
 			item.EvidenceRevision = status.RuntimeStatus.EvidenceRevision
-			if status.RuntimeStatus.ActiveAttempt != nil && status.RuntimeStatus.ActiveAttempt.WorkUnit == declared.WorkUnit {
+			if status.RuntimeStatus.ActiveAttempt != nil {
 				item.Active, item.RuntimeAttempt = true, status.RuntimeStatus.ActiveAttempt
 			}
 		}
-		otherActive := status.RuntimeStatus != nil && status.RuntimeStatus.ActiveAttempt != nil && status.RuntimeStatus.ActiveAttempt.WorkUnit != declared.WorkUnit
-		item.Blocked = !item.Done && (!scopeAllowed || !dependenciesDone || otherActive || status.Dependencies.Apply != DependencyReady)
+		otherActive := status.RuntimeStatus != nil && status.RuntimeStatus.ActiveAttempt != nil && !runtimeMatch
+		terminalRuntime := runtimeMatch && status.RuntimeStatus.ActiveAttempt == nil && (status.RuntimeStatus.Complete || status.RuntimeStatus.DecisionRequired || lastWorkItemAttemptFailed(status.RuntimeStatus))
+		item.Blocked = !item.Done && (!scopeAllowed || !dependenciesDone || otherActive || terminalRuntime || status.Dependencies.Apply != DependencyReady)
 		item.Ready = !item.Done && !item.Active && !item.Blocked
 		result = append(result, item)
 	}
 	return result, true, nil
+}
+
+func workItemRuntimeMatches(item workItemMetadata, workspace string, runtime *RuntimeStatus) bool {
+	if runtime == nil || runtime.Objective == nil {
+		return false
+	}
+	objective := runtime.Objective
+	if objective.ItemID == "" {
+		return objective.WorkUnit == item.WorkUnit
+	}
+	roots, ok := canonicalWorkItemRoots(item.EditRoots, workspace)
+	return ok && objective.ItemID == item.ID && objective.WorkUnit == item.WorkUnit &&
+		objective.EvidenceGoal == item.EvidenceGoal && objective.MaxAttempts == item.MaxAttempts &&
+		objective.MaxChangedLines == item.MaxChangedLines && runtimeItemBindingEqual(item.ID, roots, objective.ItemID, objective.ItemEditRoots)
+}
+
+func lastWorkItemAttemptFailed(runtime *RuntimeStatus) bool {
+	return len(runtime.Attempts) != 0 && runtime.Attempts[len(runtime.Attempts)-1].Outcome == AttemptFailed
 }
 
 func validateWorkItem(item workItemMetadata, workspace string) error {
@@ -189,6 +215,58 @@ func workItemRootsAllowed(roots []string, context ActionContext) bool {
 		}
 	}
 	return true
+}
+
+// canonicalWorkItemRoots shares projection's prospective-path semantics with
+// item-selected acquire, preserving absent suffixes after resolving symlinks.
+func canonicalWorkItemRoots(roots []string, workspace string) ([]string, bool) {
+	canonical := make([]string, 0, len(roots))
+	for _, root := range roots {
+		path := root
+		if workspace != "" {
+			path = filepath.Join(workspace, root)
+		}
+		resolved, ok := prospectiveWorkItemPath(path)
+		if !ok {
+			return nil, false
+		}
+		canonical = append(canonical, resolved)
+	}
+	sort.Strings(canonical)
+	for index := 1; index < len(canonical); index++ {
+		if canonical[index] == canonical[index-1] {
+			return nil, false
+		}
+	}
+	return canonical, true
+}
+
+// ResolveItemAcquire selects one projected item without status's marker write
+// and derives the immutable request that RuntimeStore.Acquire will serialize.
+func ResolveItemAcquire(options ResolveOptions, itemID, requestID string) (BeginAttemptRequest, error) {
+	options.ReadOnly = true
+	status, err := Resolve(options)
+	if err != nil {
+		return BeginAttemptRequest{}, fmt.Errorf("resolve item-selected acquire: %w", err)
+	}
+	for _, item := range status.Items {
+		if item.ID != itemID {
+			continue
+		}
+		if item.Done || item.Blocked || (!item.Ready && !item.Active) {
+			// refusal:by-design operator-knowledge: the coordinator must update prerequisites or the checkbox before this item can open.
+			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: item %q is not ready", itemID)
+		}
+		roots, ok := canonicalWorkItemRoots(item.EditRoots, status.ActionContext.WorkspaceRoot)
+		if !ok || !workItemRootsAllowed(item.EditRoots, status.ActionContext) {
+			// refusal:by-design human-authority: only the coordinator may authorize or correct item edit roots.
+			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: item %q has incompatible edit roots", itemID)
+		}
+		return BeginAttemptRequest{RequestID: requestID, WorkUnit: item.WorkUnit, EvidenceGoal: item.EvidenceGoal,
+			MaxAttempts: item.MaxAttempts, MaxChangedLines: item.MaxChangedLines, ItemID: item.ID, ItemEditRoots: roots}, nil
+	}
+	// refusal:by-design operator-knowledge: the caller selected an ID absent from authoritative metadata.
+	return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: projected item %q was not found", itemID)
 }
 
 // prospectiveWorkItemPath preserves absent suffixes while canonicalizing the
