@@ -7387,21 +7387,55 @@ func TestInjectOpenCodeNativeFallbackOwnership(t *testing.T) {
 			},
 		},
 		{
+			name: "sdd mid defaults both roles with its effort",
+			mode: model.SDDModeMulti,
+			assignments: map[string]model.ModelAssignment{
+				"sdd-mid": {ProviderID: "mid", ModelID: "code", Effort: "medium"},
+			},
+			want: map[string]nativeFallbackAssignment{
+				"general": {Model: "mid/code", Variant: "medium"},
+				"explore": {Model: "mid/code", Variant: "medium"},
+			},
+			owned: true,
+			wantOwned: map[string]nativeFallbackAssignment{
+				"general": {Model: "mid/code", Variant: "medium"},
+				"explore": {Model: "mid/code", Variant: "medium"},
+			},
+		},
+		{
+			name: "sdd explore specializes explore only",
+			mode: model.SDDModeMulti,
+			assignments: map[string]model.ModelAssignment{
+				"sdd-mid":     {ProviderID: "mid", ModelID: "code", Effort: "medium"},
+				"sdd-explore": {ProviderID: "explore", ModelID: "web", Effort: "low"},
+			},
+			want: map[string]nativeFallbackAssignment{
+				"general": {Model: "mid/code", Variant: "medium"},
+				"explore": {Model: "explore/web", Variant: "low"},
+			},
+			owned: true,
+			wantOwned: map[string]nativeFallbackAssignment{
+				"general": {Model: "mid/code", Variant: "medium"},
+				"explore": {Model: "explore/web", Variant: "low"},
+			},
+		},
+		{
 			name:     "model-less user role is preserved",
 			mode:     model.SDDModeMulti,
 			settings: `{"model":"openai/gpt-5","agent":{"general":{"mode":"subagent"}}}`,
 			want: map[string]nativeFallbackAssignment{
 				"general": {},
-				"explore": {Model: "openai/gpt-5", Variant: "medium"},
-			},
-			owned: true,
-			wantOwned: map[string]nativeFallbackAssignment{
-				"explore": {Model: "openai/gpt-5", Variant: "medium"},
+				"explore": {},
 			},
 		},
 		{
-			name: "selection-less path invents no model",
-			mode: model.SDDModeMulti,
+			name:     "selection-less or malformed assignments invent no multi mode fallback",
+			mode:     model.SDDModeMulti,
+			settings: `{"model":"openai/gpt-5"}`,
+			assignments: map[string]model.ModelAssignment{
+				"sdd-mid":     {ProviderID: "mid"},
+				"sdd-explore": {ModelID: "web", Effort: "low"},
+			},
 			want: map[string]nativeFallbackAssignment{
 				"general": {}, "explore": {},
 			},

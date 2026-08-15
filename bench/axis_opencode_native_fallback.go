@@ -34,11 +34,11 @@ func init() {
 func openCodeNativeFallbackJourneys() []Journey {
 	return []Journey{{
 		ID:     "oc01-native-fallback-model-persistence",
-		Title:  "Sync persists and gentle-orchestrator delegates to native general and explore roles",
+		Title:  "Sync persists sdd-mid defaults and gentle-orchestrator delegates to native general and explore roles",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2104",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
-			{Name: "sync persists and routes native fallback assignments", Skip: pinnedOpenCodeUnavailable, Composite: syncNativeFallbackAssignments},
+			{Name: "sync persists and routes shared sdd-mid native fallback assignments", Skip: pinnedOpenCodeUnavailable, Composite: syncNativeFallbackAssignments},
 		},
 	}}
 }
@@ -71,7 +71,7 @@ func syncNativeFallbackAssignments(r *journeyRun) error {
 		"provider": map[string]any{"fixture": map[string]any{
 			"npm":     "@ai-sdk/openai-compatible",
 			"options": map[string]any{"baseURL": server.URL + "/v1", "apiKey": "fixture"},
-			"models":  map[string]any{"root": map[string]any{"name": "Root", "tool_call": true}, "general": map[string]any{"name": "General", "tool_call": true}, "explore": map[string]any{"name": "Explore", "tool_call": true}},
+			"models":  map[string]any{"root": map[string]any{"name": "Root", "tool_call": true}, "mid": map[string]any{"name": "Mid", "tool_call": true}},
 		}},
 		"plugin": []any{},
 	}
@@ -93,8 +93,7 @@ func syncNativeFallbackAssignments(r *journeyRun) error {
 		"sdd_mode":             "multi",
 		"persona":              "neutral",
 		"model_assignments": map[string]any{
-			"sdd-mid":     map[string]string{"provider_id": "fixture", "model_id": "general", "effort": "high"},
-			"sdd-explore": map[string]string{"provider_id": "fixture", "model_id": "explore", "effort": "low"},
+			"sdd-mid": map[string]string{"provider_id": "fixture", "model_id": "mid", "effort": "medium"},
 		},
 	}
 	raw, err := json.Marshal(state)
@@ -126,8 +125,8 @@ func syncNativeFallbackAssignments(r *journeyRun) error {
 		return err
 	}
 	for role, want := range map[string]struct{ model, variant string }{
-		"general": {"fixture/general", "high"},
-		"explore": {"fixture/explore", "low"},
+		"general": {"fixture/mid", "medium"},
+		"explore": {"fixture/mid", "medium"},
 	} {
 		got := decoded.Agent[role]
 		if got.Model != want.model || got.Variant != want.variant {
@@ -202,8 +201,12 @@ func (f *nativeFallbackFixture) serveHTTP(writer http.ResponseWriter, request *h
 		}
 		return
 	}
+	requestText := nativeFallbackRequestText(input)
 	for _, role := range []string{"general", "explore"} {
-		if input.Model == role || input.Model == "fixture/"+role {
+		if input.Model == "mid" || input.Model == "fixture/mid" {
+			if !strings.Contains(requestText, "ROLE_RESPONSE "+role) {
+				continue
+			}
 			f.roles = append(f.roles, role)
 			f.responses = append(f.responses, "ROLE_RESPONSE "+role)
 			f.mu.Unlock()
