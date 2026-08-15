@@ -19,7 +19,7 @@ func TestWorkItemsProjectIdenticallyFromOpenSpecAndEngramText(t *testing.T) {
 	if err != nil || !present || !reflect.DeepEqual(openSpec, engram) {
 		t.Fatalf("Engram projection = %#v, %v, %v", engram, present, err)
 	}
-	if !openSpec[0].Ready || !openSpec[1].Done {
+	if !openSpec[0].Ready || openSpec[0].DependsOn == nil || !openSpec[1].Done {
 		t.Fatalf("items = %#v", openSpec)
 	}
 }
@@ -32,6 +32,9 @@ func TestWorkItemsFailClosedForInvalidMetadata(t *testing.T) {
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"dependsOn":["build"]`, `"dependsOn":["missing"]`, 1),
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"maxAttempts":2`, `"maxAttempts":0`, 1),
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"src"`, `"../escape"`, 1),
+		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"dependsOn":[],`, "", 1),
+		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"dependsOn":[]`, `"dependsOn":null`, 1),
+		itemTasks("- [ ] build: Build\n- [ ] verify: Verify") + "\n<!-- gentle-ai.sdd-items/v1\n{",
 	} {
 		if items, present, err := projectWorkItems(text, itemStatus(t)); !present || err == nil || items != nil {
 			t.Fatalf("items=%#v present=%v err=%v", items, present, err)
@@ -55,9 +58,8 @@ func TestWorkItemStatesRespectDependenciesRuntimeScopeAndRelationships(t *testin
 	if err != nil || !items[0].Active || items[0].Ready || !items[1].Blocked || items[0].RuntimeAttempt == nil || items[0].EvidenceRevision != "evidence" {
 		t.Fatalf("items=%#v err=%v", items, err)
 	}
-	status.RuntimeStatus.ActiveAttempt.WorkUnit = "other"
 	items, _, err = projectWorkItems(itemTasks("- [x] build: Build\n- [ ] verify: Verify"), status)
-	if err != nil || !items[0].Done || !items[1].Blocked {
+	if err != nil || !items[0].Done || items[0].Active || items[0].RuntimeAttempt != nil || items[0].EvidenceRevision != "" || !items[1].Blocked {
 		t.Fatalf("items=%#v err=%v", items, err)
 	}
 	status.RuntimeStatus = nil

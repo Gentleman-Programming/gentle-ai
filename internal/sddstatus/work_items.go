@@ -14,6 +14,7 @@ const workItemMetadataVersion = "gentle-ai.sdd-items/v1"
 
 var (
 	errInvalidWorkItem = errors.New("invalid work item metadata; correct the block and rerun `gentle-ai sdd-status --cwd <repo> --json`")
+	workItemMarker     = regexp.MustCompile(`<!--\s*gentle-ai\.sdd-items/v1(?:\s|$)`)
 	workItemBlock      = regexp.MustCompile(`(?s)<!--\s*gentle-ai\.sdd-items/v1\s*\n(.*?)\n\s*-->`)
 	workItemID         = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	workItemCheckbox   = regexp.MustCompile(`^\s*(?:[-*]|\d+[.)])\s+\[([ xX])\]\s+([a-z0-9][a-z0-9._-]{0,127}):(?:\s|$)`)
@@ -42,13 +43,13 @@ type workItemDocument struct {
 }
 
 type workItemMetadata struct {
-	ID              string   `json:"id"`
-	DependsOn       []string `json:"dependsOn"`
-	WorkUnit        string   `json:"workUnit"`
-	EditRoots       []string `json:"editRoots"`
-	MaxAttempts     int      `json:"maxAttempts"`
-	MaxChangedLines int      `json:"maxChangedLines"`
-	EvidenceGoal    string   `json:"evidenceGoal"`
+	ID              string    `json:"id"`
+	DependsOn       *[]string `json:"dependsOn"`
+	WorkUnit        string    `json:"workUnit"`
+	EditRoots       []string  `json:"editRoots"`
+	MaxAttempts     int       `json:"maxAttempts"`
+	MaxChangedLines int       `json:"maxChangedLines"`
+	EvidenceGoal    string    `json:"evidenceGoal"`
 }
 
 func applyWorkItemProjection(status *Status, tasks string) {
@@ -67,13 +68,11 @@ func applyWorkItemProjection(status *Status, tasks string) {
 
 func projectWorkItems(tasks string, status Status) ([]WorkItem, bool, error) {
 	matches := workItemBlock.FindAllStringSubmatch(tasks, -1)
-	if len(matches) == 0 {
-		if strings.Contains(tasks, "gentle-ai.sdd-items/v1") {
-			return nil, true, invalidWorkItem("malformed %s block", workItemMetadataVersion)
-		}
+	markers := workItemMarker.FindAllStringIndex(tasks, -1)
+	if len(markers) == 0 {
 		return nil, false, nil
 	}
-	if len(matches) != 1 {
+	if len(markers) != 1 || len(matches) != 1 {
 		return nil, true, invalidWorkItem("expected one %s block", workItemMetadataVersion)
 	}
 	var document workItemDocument
@@ -116,7 +115,7 @@ func projectWorkItems(tasks string, status Status) ([]WorkItem, bool, error) {
 		return nil, true, invalidWorkItem("checkbox ids must exactly match metadata ids")
 	}
 	for _, item := range document.Items {
-		for _, dependency := range item.DependsOn {
+		for _, dependency := range *item.DependsOn {
 			if dependency == item.ID {
 				return nil, true, invalidWorkItem("item %q depends on itself", item.ID)
 			}
@@ -131,13 +130,13 @@ func projectWorkItems(tasks string, status Status) ([]WorkItem, bool, error) {
 
 	result := make([]WorkItem, 0, len(document.Items))
 	for _, declared := range document.Items {
-		item := WorkItem{ID: declared.ID, DependsOn: declared.DependsOn, WorkUnit: declared.WorkUnit, EditRoots: declared.EditRoots, MaxAttempts: declared.MaxAttempts, MaxChangedLines: declared.MaxChangedLines, EvidenceGoal: declared.EvidenceGoal, Done: checkboxes[declared.ID]}
+		item := WorkItem{ID: declared.ID, DependsOn: append([]string{}, (*declared.DependsOn)...), WorkUnit: declared.WorkUnit, EditRoots: declared.EditRoots, MaxAttempts: declared.MaxAttempts, MaxChangedLines: declared.MaxChangedLines, EvidenceGoal: declared.EvidenceGoal, Done: checkboxes[declared.ID]}
 		scopeAllowed := workItemRootsAllowed(declared.EditRoots, status.ActionContext)
 		dependenciesDone := true
-		for _, dependency := range declared.DependsOn {
+		for _, dependency := range *declared.DependsOn {
 			dependenciesDone = dependenciesDone && checkboxes[dependency]
 		}
-		if status.RuntimeStatus != nil && status.RuntimeStatus.Objective != nil && status.RuntimeStatus.Objective.WorkUnit == declared.WorkUnit {
+		if !item.Done && status.RuntimeStatus != nil && status.RuntimeStatus.Objective != nil && status.RuntimeStatus.Objective.WorkUnit == declared.WorkUnit {
 			item.EvidenceRevision = status.RuntimeStatus.EvidenceRevision
 			if status.RuntimeStatus.ActiveAttempt != nil && status.RuntimeStatus.ActiveAttempt.WorkUnit == declared.WorkUnit {
 				item.Active, item.RuntimeAttempt = true, status.RuntimeStatus.ActiveAttempt
@@ -152,7 +151,7 @@ func projectWorkItems(tasks string, status Status) ([]WorkItem, bool, error) {
 }
 
 func validateWorkItem(item workItemMetadata, workspace string) error {
-	if !workItemID.MatchString(item.ID) || !workItemID.MatchString(item.WorkUnit) || strings.TrimSpace(item.EvidenceGoal) == "" || item.MaxAttempts < 1 || item.MaxChangedLines < 1 {
+	if item.DependsOn == nil || !workItemID.MatchString(item.ID) || !workItemID.MatchString(item.WorkUnit) || strings.TrimSpace(item.EvidenceGoal) == "" || item.MaxAttempts < 1 || item.MaxChangedLines < 1 {
 		return invalidWorkItem("invalid item %q", item.ID)
 	}
 	if len(item.EditRoots) == 0 {
@@ -197,7 +196,7 @@ func workItemCycle(items []workItemMetadata, metadata map[string]workItemMetadat
 			return false
 		}
 		visiting[id] = true
-		for _, dependency := range metadata[id].DependsOn {
+		for _, dependency := range *metadata[id].DependsOn {
 			if visit(dependency) {
 				return true
 			}
