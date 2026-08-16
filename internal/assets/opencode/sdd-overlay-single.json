@@ -28,7 +28,8 @@
             "review-readability": "allow",
             "review-reliability": "allow",
             "review-resilience": "allow",
-            "review-refuter": "allow"
+            "review-refuter": "allow",
+            "review-validator": "allow"
           }
         }
       },
@@ -41,6 +42,33 @@
           "question": true,
           "task": true
         }
+      }
+    },
+    "general": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "General unstructured queries and auxiliary fallback tasks",
+      "prompt": "You are the general fallback sub-agent. When handling unstructured auxiliary tasks:\n- Read relevant codebase context before drawing conclusions.\n- Perform empirical verification of all claims and code execution paths.\n- Keep changes minimal and targeted when editing files.\n- Do NOT launch child sub-agents autonomously.",
+      "tools": {
+        "read": true,
+        "write": true,
+        "edit": true,
+        "bash": true,
+        "task": false
+      }
+    },
+    "explore": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Freeform exploration fallback agent",
+      "prompt": "You are the explore fallback sub-agent aligned with gentle-pi guidance.\n- Independently inspect codebase files and execution paths in full without relying on unverified assumptions.\n- Read relevant code files completely before reaching conclusions.\n- Perform exploration, analysis, and discovery ONLY. Do not create, edit, or delete files.\n- Return concise, structured findings naming affected files, code paths, and clear recommendations.",
+      "tools": {
+        "read": true,
+        "write": false,
+        "edit": false,
+        "bash": false,
+        "task": false,
+        "codegraph_codegraph_explore": true
       }
     },
     "sdd-init": {
@@ -229,6 +257,13 @@
       "description": "Batched adversarial refuter — evaluates every BLOCKER/CRITICAL candidate through one assigned lens and returns one verdict per finding",
       "prompt": "You are a read-only review refuter. Do NOT delegate and never modify files. Input: the complete merged list of BLOCKER/CRITICAL candidates, with id, location, severity, summary, and evidence per entry, plus exactly one lens: general, correctness, exploitability-impact, or reproducibility. Attempt to refute every candidate through that lens using concrete code evidence; 'seems unlikely' does not refute. Return the assigned lens and a verdicts list with one verdict entry per candidate: finding id, verdict refuted or stands, and evidence. Do not omit candidates or report new findings. Default inconclusive candidates to stands; the orchestrator also treats every malformed or missing per-finding verdict as stands.",
       "tools": { "read": true, "write": false, "edit": false, "bash": false, "task": false }
+    },
+    "review-validator": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Targeted read-only validator for provider-issued review checks",
+      "prompt": "You are a targeted validation subagent. Execute only the provider-issued targeted validation in the Go-issued task prompt. Do NOT edit files. Do NOT delegate. Return the exact requested JSON and nothing else.",
+      "tools": { "read": true, "write": false, "edit": false, "bash": true, "task": false }
     }
   }
 }

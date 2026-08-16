@@ -123,20 +123,27 @@ func compactAuthorityPathsBound(state reviewtransaction.CompactState, changeName
 	if !sameCanonicalPaths(state.GenesisPaths, state.InitialSnapshot.Paths) {
 		return false, "path-bound compact authority has inconsistent immutable paths"
 	}
+	if !validReviewBindingChange(changeName) {
+		return false, "path-bound compact authority contains a non-canonical OpenSpec path"
+	}
 	prefix := "openspec/changes/" + changeName + "/"
 	matched := false
 	foreignOpenSpec := false
 	for _, raw := range state.GenesisPaths {
 		path := filepath.ToSlash(raw)
-		if filepath.IsAbs(raw) || path != filepath.ToSlash(filepath.Clean(raw)) {
+		if filepath.IsAbs(raw) || path != filepath.ToSlash(filepath.Clean(raw)) || path == "openspec" || strings.HasPrefix(path, "openspec\\") {
 			return false, "path-bound compact authority contains a non-canonical OpenSpec path"
 		}
 		if strings.HasPrefix(path, "openspec/") {
-			if !strings.HasPrefix(path, prefix) {
+			switch {
+			case strings.HasPrefix(path, prefix):
+				matched = true
+			case path == "openspec/config.yaml", path == "openspec/changes/archive/.gitkeep", path == "openspec/specs/.gitkeep":
+				// Fresh repositories need these exact OpenSpec scaffolding files;
+				// they are not change payloads and cannot name another capability.
+			default:
 				foreignOpenSpec = true
-				continue
 			}
-			matched = true
 		}
 	}
 	if matched && foreignOpenSpec {

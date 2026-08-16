@@ -299,9 +299,8 @@ func TestReviewFacadeStartLensesRequiredHintsNegotiatedContract(t *testing.T) {
 		t.Fatalf("service-token start lenses_required = %v, selected_lenses = %v, want lenses selected", started.LensesRequired, started.SelectedLenses)
 	}
 	// The direct route refuses --agent, so this caller never declared a
-	// runtime and the hint must not declare one for it (issue #2440): it
-	// carries the fill-in slot the reader replaces with their own identity.
-	wantCommand := fmt.Sprintf("gentle-ai review start --contract %s --agent %s --target %s --projection %s", ReviewIntegrationContractV2, reviewUndeclaredRuntimeIdentitySlot, started.TargetIdentity, started.Projection)
+	// runtime and the hint must omit the complete agent segment (issue #2885).
+	wantCommand := fmt.Sprintf("gentle-ai review start --contract %s --target %s --projection %s", ReviewIntegrationContractV2, started.TargetIdentity, started.Projection)
 	if !strings.Contains(started.Hint, wantCommand) {
 		t.Fatalf("lenses-required start hint = %q, want it to contain %q", started.Hint, wantCommand)
 	}

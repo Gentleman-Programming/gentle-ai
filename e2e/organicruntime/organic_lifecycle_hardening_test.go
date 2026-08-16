@@ -1210,20 +1210,19 @@ func TestOrganicReviewStoreRobustness(t *testing.T) {
 	})
 }
 
-// TestOrganicReviewNarrationPairedRecoverableVersusTerminal proves spec
-// "Three-Tier Narration Contract"'s paired scenario for organic-dx Phase 4:
-// one underlying machinery condition -- no existing review record matches
-// this target (reviewtransaction.TargetApplicabilityUnrelated) -- with two
-// caller-selector shapes. The ordinary shape reaches an executable next step
-// with uninterrupted Tier-A behavior (stdout carries the machine envelope,
-// stderr carries zero Tier-B/Tier-C output). The same missing-record
-// condition, requested through the one selector combination that is
-// recovery-only for a fresh target (--workspace-overlay --projection
-// staged), is genuinely terminal here and produces exactly one Tier C
-// statement on stderr, naming the decision
-// (internal/cli/review_narration.go's registered
-// staged_workspace_overlay_recovery_unavailable statement) -- never on
-// stdout, which stays byte-for-byte the same JSON envelope contract either way.
+// TestOrganicReviewNarrationPairedRecoverableVersusTerminal keeps the paired
+// scenario from organic-dx Phase 4 -- one underlying machinery condition (no
+// existing review record matches this target,
+// reviewtransaction.TargetApplicabilityUnrelated) with two caller-selector
+// shapes -- under the negotiated-silence contract: a successful negotiated
+// (--contract) STATUS is machine-readable end to end, so BOTH shapes keep
+// stdout as the byte-for-byte JSON envelope and write zero bytes to stderr.
+// The terminal shape's decision stays structural in
+// next_transition.reason_code (staged_workspace_overlay_recovery_unavailable)
+// instead of being narrated: gentle-pi's adapter fails closed
+// (UNEXPECTED_STDERR) on any stderr a successful native process writes, and
+// the registered Tier C statement remains in internal/cli/review_narration.go
+// as vocabulary only.
 func TestOrganicReviewNarrationPairedRecoverableVersusTerminal(t *testing.T) {
 	t.Run("issue-organic-dx-phase4-paired-narration", func(t *testing.T) {
 		harness := newOrganicHarness(t)
@@ -1266,14 +1265,8 @@ func TestOrganicReviewNarrationPairedRecoverableVersusTerminal(t *testing.T) {
 			if status.NextTransition == nil || status.NextTransition.Kind != "stop" || status.NextTransition.ReasonCode != "staged_workspace_overlay_recovery_unavailable" {
 				t.Fatalf("terminal next-transition on the same fresh target = %#v, want the staged_workspace_overlay_recovery_unavailable stop", status.NextTransition)
 			}
-			lines := strings.Split(strings.TrimRight(stderr, "\n"), "\n")
-			if len(lines) != 1 || strings.TrimSpace(lines[0]) == "" {
-				t.Fatalf("terminal shape did not emit exactly one Tier C statement on stderr: %q", stderr)
-			}
-			const wantStatement = "Pass `--lineage <id>` to continue the review you already started, " +
-				"or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh."
-			if lines[0] != wantStatement {
-				t.Fatalf("terminal Tier C statement = %q, want %q", lines[0], wantStatement)
+			if stderr != "" {
+				t.Fatalf("stop-shaped negotiated STATUS wrote stderr, want zero bytes: %q", stderr)
 			}
 		})
 	})
@@ -1304,9 +1297,8 @@ func reviewDefectReportDirEntries(t *testing.T, harness *organicHarness) []strin
 // Phase 5: a genuine tool-fault terminal (the confirmed captured-final-
 // EVIDENCE byte conflict, tasks.md 3b.9) generates a template-shaped,
 // privacy-clean defect report named by its Tier C statement, while a
-// legitimate user-decision terminal (the reviewer-result byte conflict,
-// tasks.md 3b.7 -- a human must choose `review dispose-result` or `review
-// preserve-result`) generates none.
+// legitimate occupied reviewer-result slot generates none and directs the
+// caller to the authoritative STATUS continuation.
 func TestOrganicReviewDefectReportToolFaultVersusUserDecision(t *testing.T) {
 	t.Run("issue-organic-dx-phase5-tool-fault-report", func(t *testing.T) {
 		harness := newOrganicHarness(t)
@@ -1420,8 +1412,15 @@ func TestOrganicReviewDefectReportToolFaultVersusUserDecision(t *testing.T) {
 		if err == nil {
 			t.Fatal("conflicting reviewer result capture unexpectedly succeeded")
 		}
-		if !strings.Contains(stderr, "review dispose-result") || !strings.Contains(stderr, "review preserve-result") {
-			t.Fatalf("user-decision terminal did not name the deciding operations: %q", stderr)
+		for _, want := range []string{"reviewer_result_slot_occupied", "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition", "authoritative continuation"} {
+			if !strings.Contains(stderr, want) {
+				t.Fatalf("occupied-slot terminal did not name %q: %q", want, stderr)
+			}
+		}
+		for _, forbidden := range []string{"review dispose-result", "review preserve-result", "retry capture-result"} {
+			if strings.Contains(stderr, forbidden) {
+				t.Fatalf("occupied-slot terminal advertised %q: %q", forbidden, stderr)
+			}
 		}
 		if entries := reviewDefectReportDirEntries(t, harness); len(entries) != 0 {
 			t.Fatalf("user-decision terminal wrote a defect report, want none: %v", entries)

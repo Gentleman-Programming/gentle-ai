@@ -1057,6 +1057,49 @@ func TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart(t *testing.T)
 	requireNoReviewProcessTempResidue(t, repo)
 }
 
+// Issue #3102: STATUS must not offer a committed-only START for a base-diff
+// whose named base resolves to the candidate's own tree. The START preflight
+// refuses that scope as empty_candidate_scope before authority evaluation, so
+// the only honest STATUS result is the #1641 empty-root bootstrap STOP.
+func TestNegotiatedReviewStatusStopsZeroPathBaseDiffWithoutAuthority(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	base := runReviewCLIGit(t, repo, "rev-parse", "HEAD")
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition", "--cwd", repo,
+		"--base-ref", base, "--committed-only",
+	}, &output); err != nil {
+		t.Fatalf("negotiated zero-path base-diff status: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatalf("negotiated zero-path base-diff status Validate() = %v\n%s", err, output.String())
+	}
+	if status.Applicability != reviewtransaction.TargetApplicabilityUnrelated ||
+		status.Action != reviewtransaction.TargetStatusActionStop ||
+		status.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
+		status.Projection.Kind != reviewtransaction.TargetBaseDiff ||
+		len(status.Projection.Paths) != 0 ||
+		status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "empty_base_diff_bootstrap_required" ||
+		status.NextTransition.Execute != nil || status.NextTransition.Collect != nil {
+		t.Fatalf("negotiated zero-path base-diff status = %#v\n%s", status, output.String())
+	}
+	if status.Authority != nil {
+		t.Fatalf("zero-path base-diff STATUS published authority: %#v", status.Authority)
+	}
+	stores, err := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stores) != 0 {
+		t.Fatalf("zero-path base-diff STATUS mutated authority: %#v", stores)
+	}
+}
+
 func TestNegotiatedReviewStatusReturnsFailureForUnreadableAuthority(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {

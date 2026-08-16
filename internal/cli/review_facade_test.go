@@ -2556,7 +2556,7 @@ func TestReviewFacadeOperationDeadlineSelector(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := reviewFacadeOperationDeadline(tt.operation); got != tt.want {
+			if got := reviewFacadeOperationDeadline(tt.operation, nil); got != tt.want {
 				t.Fatalf("reviewFacadeOperationDeadline(%q) = %s, want %s", tt.operation, got, tt.want)
 			}
 		})
@@ -2694,8 +2694,10 @@ func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
 		}, io.Discard); err != nil {
 			t.Fatal(err)
 		}
+		// Candidate-and-revision-addressed since issue #2623.
 		canonical := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir,
-			strings.TrimPrefix(before.State.CurrentSnapshot.Identity, "sha256:"), reviewtransaction.CompactFinalEvidenceFile)
+			strings.TrimPrefix(before.State.CurrentSnapshot.Identity, "sha256:"),
+			strings.TrimPrefix(before.Revision, "sha256:"), reviewtransaction.CompactFinalEvidenceFile)
 		if err := os.WriteFile(canonical, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}

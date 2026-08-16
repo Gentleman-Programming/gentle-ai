@@ -145,6 +145,9 @@ func TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBase
 	}
 	var status ReviewTargetStatusResult
 	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if strings.Contains(output.String(), "operation_outcome_unknown") {
+		t.Fatalf("post-correction status returned unknown operation outcome: %s", output.String())
+	}
 	if status.Applicability != reviewtransaction.TargetApplicabilityUnrelated ||
 		status.Action != reviewtransaction.TargetStatusActionStart || status.NextTransition == nil ||
 		status.NextTransition.Execute == nil || status.NextTransition.Execute.Operation != "review.start" {

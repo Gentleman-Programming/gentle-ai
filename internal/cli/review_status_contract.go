@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -9,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -87,6 +90,7 @@ type ReviewTargetStatusResult struct {
 	Eligibility            *ReviewActionEligibility                             `json:"eligibility,omitempty"`
 	Forecast               *ReviewForecast                                      `json:"forecast,omitempty"`
 	NextTransition         *ReviewNextTransition                                `json:"next_transition,omitempty"`
+	RepositoryContext      *ReviewRepositoryContextReference                    `json:"repository_context,omitempty"`
 	ValidationRequest      *reviewtransaction.TargetedValidationRequest         `json:"validation_request,omitempty"`
 	FinalVerificationRetry *reviewtransaction.FinalVerificationRetryEligibility `json:"final_verification_retry,omitempty"`
 	decision               reviewtransaction.TargetStatusDecision               `json:"-"`
@@ -380,6 +384,17 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	if !validReviewCapabilitySHA256(result.TargetIdentity) || result.Candidates == nil {
 		return errors.New("invalid negotiated review target identity")
 	}
+	if result.RepositoryContext != nil {
+		if result.RepositoryContext.Capability != reviewtransaction.ReviewRepositoryContextCapability ||
+			reviewtransaction.ValidateReviewRepositoryContextHandle(result.RepositoryContext.Handle) != nil ||
+			!validReviewCapabilitySHA256(result.RepositoryContext.Revision) ||
+			!validReviewCapabilitySHA256(result.RepositoryContext.TargetIdentity) ||
+			validateReviewRepositoryContextReference(*result.RepositoryContext) != nil ||
+			result.Authority == nil || result.RepositoryContext.Revision != result.Authority.Revision ||
+			result.RepositoryContext.TargetIdentity != reviewAuthorityTargetIdentity(result) {
+			return errors.New("negotiated STATUS repository context is invalid") // refusal:by-design world-action: the provider-built envelope is internally inconsistent and requires a code fix
+		}
+	}
 	if err := result.Repair.Validate(); err != nil {
 		return err
 	}
@@ -427,7 +442,18 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		correctionEvidenceFirst := transitionRequest == nil && result.ValidationRequest != nil &&
 			(result.NextTransition.ReasonCode == "correction_repository_verification_required" ||
 				result.NextTransition.ReasonCode == "correction_repository_tooling_failed")
-		if !correctionEvidenceFirst && ((transitionRequest == nil) != (result.ValidationRequest == nil) ||
+		providerTargetedValidation := transitionRequest == nil && result.ValidationRequest != nil &&
+			result.NextTransition.ReasonCode == "targeted_validation_required" && result.NextTransition.Collect != nil &&
+			len(result.NextTransition.Collect.Inputs) == 1 && result.NextTransition.Collect.Inputs[0].ProviderTask != nil
+		capturedProviderTargetedValidation := transitionRequest == nil && result.ValidationRequest != nil &&
+			result.NextTransition.ReasonCode == "captured_provider_targeted_validation_ready" && result.NextTransition.Execute != nil &&
+			result.NextTransition.Execute.Operation == "review.finalize"
+		if capturedProviderTargetedValidation {
+			if err := result.validateCapturedProviderTargetedValidatorTransition(); err != nil {
+				return err
+			}
+		}
+		if !correctionEvidenceFirst && !providerTargetedValidation && !capturedProviderTargetedValidation && ((transitionRequest == nil) != (result.ValidationRequest == nil) ||
 			transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest)) {
 			return errors.New("negotiated status validation request copies differ")
 		}
@@ -536,7 +562,7 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 		// nothing governs, so nothing decides) while still listing those
 		// stale lineages as optional, discoverable recovery candidates. An
 		// unrelated target with zero candidates remains equally valid.
-		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired) {
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired && ((result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged) || (result.Projection.Kind == reviewtransaction.TargetBaseDiff && len(result.Projection.Paths) == 0))) {
 			return errors.New("unrelated target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityAmbiguous:
@@ -614,6 +640,42 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 	return nil
 }
 
+func (result ReviewTargetStatusResult) validateCapturedProviderTargetedValidatorTransition() error {
+	transition, request := result.NextTransition, result.ValidationRequest
+	if transition == nil || transition.Execute == nil || request == nil || result.Contract != ReviewIntegrationContractV2 ||
+		result.Authority == nil || result.Authority.State != reviewtransaction.StateCorrectionRequired ||
+		reviewtransaction.ValidateTargetedValidationRequest(*request) != nil || request.LineageID != result.Authority.LineageID ||
+		request.ExpectedRevision != result.Authority.Revision {
+		return errors.New("captured provider targeted-validator transition is not bound to current authority") // refusal:by-design world-action: a producer must not advertise an execute route outside current correction authority
+	}
+	binding := ReviewTransitionBinding{
+		LineageID: request.LineageID, Revision: request.ExpectedRevision, TargetIdentity: request.CorrectionTargetIdentity,
+		RepositoryContext: transition.Execute.Binding.RepositoryContext,
+	}
+	if reviewtransaction.ValidateReviewRepositoryContextHandle(binding.RepositoryContext) != nil {
+		return errors.New("captured provider targeted-validator transition has no repository context") // refusal:by-design world-action: a provider slot cannot safely resolve a repository without its Go-issued context handle
+	}
+	wantArguments := reviewTokenizedTransitionArguments([]ReviewTransitionArgument{
+		{Name: "contract", Value: ReviewIntegrationContractV2},
+		{Name: "lineage", Value: binding.LineageID},
+		{Name: "expected-revision", Value: binding.Revision},
+		{Name: "target", Value: binding.TargetIdentity},
+		{Name: "request-hash", Value: request.RequestHash},
+		{Name: "repository-context", Value: binding.RepositoryContext},
+		{Name: "captured-evidence", Value: "true"},
+	})
+	wantPreconditions := []ReviewTransitionArgument{
+		{Name: "state", Value: "correction_required"},
+		{Name: "verification_outcome", Value: string(reviewtransaction.VerificationOutcomePassed)},
+		{Name: "provider_targeted_validator", Value: "captured"},
+	}
+	if !reflect.DeepEqual(transition.Execute.Arguments, wantArguments) || !reflect.DeepEqual(transition.Execute.Preconditions, wantPreconditions) ||
+		transition.Execute.Binding != binding || len(transition.Execute.Artifacts) != 0 {
+		return errors.New("captured provider targeted-validator transition is not exact") // refusal:by-design world-action: only the exact Go-issued slot-consumption transition may finalize a correction
+	}
+	return nil
+}
+
 func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 	transition := result.NextTransition
 	if transition == nil || transition.Collect == nil {
@@ -632,11 +694,34 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			if input.Submission != nil {
 				return errors.New("v3 negotiated status contains a v4 submission descriptor") // refusal:by-design world-action: only a provider code fix can preserve the v3 wire contract
 			}
+			if input.ProviderTask != nil {
+				return errors.New("v3 negotiated status contains a provider role task") // refusal:by-design world-action: only the v5 provider can emit a Go-issued provider task
+			} else if input.CaptureOperation == "external.run_provider_role" {
+				return errors.New("provider role collection lacks its Go-issued task") // refusal:by-design world-action: provider role collection must be materialized by Go
+			}
 		}
 		return nil
 	}
 	if result.Schema != ReviewIntegrationStatusSchemaV4 && result.Schema != ReviewIntegrationStatusSchemaV5 {
 		return errors.New("submission descriptor status schema is unsupported") // refusal:by-design world-action: only a provider code fix can select a supported descriptor schema
+	}
+	for _, input := range transition.Collect.Inputs {
+		if input.ProviderTask == nil {
+			if input.CaptureOperation == "external.run_provider_role" {
+				return errors.New("provider role collection lacks its Go-issued task") // refusal:by-design world-action: provider role collection must be materialized by Go
+			}
+			continue
+		}
+		if result.Schema != ReviewIntegrationStatusSchemaV5 {
+			return errors.New("v4 negotiated status contains a provider role task") // refusal:by-design world-action: only the v5 provider can emit a Go-issued provider task
+		}
+		arguments, err := reviewTransitionArgumentMap(input.Arguments)
+		if err != nil {
+			return err
+		}
+		if err := validateReviewProviderTaskInput(input, arguments); err != nil {
+			return err
+		}
 	}
 	switch transition.ReasonCode {
 	case "correction_plan_required":
@@ -663,6 +748,31 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 			return errors.New("submission descriptor transition must contain exactly one input") // refusal:by-design world-action: only a provider code fix can produce the required single input
 		}
 		input := transition.Collect.Inputs[0]
+		if input.ProviderTask != nil {
+			// The OpenCode host-mediated form: a Go-issued provider validator
+			// task bound to the current correction authority. It carries no
+			// submission descriptor.
+			return result.validateTargetedValidatorProviderTaskInput(input)
+		}
+		if input.CaptureOperation == "external.run_provider_role" {
+			// A provider role collection input without its Go-issued task is
+			// never a valid targeted validation form.
+			return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+		}
+		if input.CaptureOperation == reviewCaptureValidationCaptureOperation {
+			// The pi host-relay form: a self-contained executable vector with
+			// no submission descriptor; bind it here to this exact authority
+			// and its frozen validation request.
+			arguments, err := reviewTransitionArgumentMap(input.Arguments)
+			if err != nil || result.Authority == nil || result.ValidationRequest == nil || input.Submission != nil ||
+				!reviewProviderHostRelayMaterializeRuntime(model.AgentID(arguments["agent"])) ||
+				arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.Authority.Revision ||
+				arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity ||
+				arguments["request-hash"] != result.ValidationRequest.RequestHash {
+				return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
+			}
+			return nil
+		}
 		if input.CaptureOperation != "external.run_targeted_validation" || result.Authority == nil || result.ValidationRequest == nil || input.Submission == nil {
 			return errors.New("targeted validation submission descriptor has no provider request") // refusal:by-design world-action: only a provider code fix can bind the validation request
 		}
@@ -670,12 +780,33 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		if err != nil {
 			return err
 		}
+		if arguments, err := reviewTransitionArgumentMap(input.Arguments); err != nil || len(arguments) != 6 ||
+			arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.Authority.Revision ||
+			arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity || arguments["repository-context"] != context ||
+			reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
+			arguments["purpose"] != reviewTargetedValidationPurpose || arguments["request-hash"] != result.ValidationRequest.RequestHash {
+			return errors.New("targeted validation transition lacks the corrected inspection binding") // refusal:by-design world-action: only STATUS can issue a complete corrected-candidate binding
+		}
 		want := reviewTargetedValidationSubmission(result.Contract, ReviewTransitionBinding{
 			LineageID: result.Authority.LineageID, Revision: result.Authority.Revision,
 			TargetIdentity: result.ValidationRequest.CorrectionTargetIdentity, RepositoryContext: context,
 		}, *result.ValidationRequest)
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
 			return errors.New("targeted validation submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
+		}
+	case "reviewer_results_required", "provider_refuter_required":
+		// Only the pi host-relay capture input carries a submission: its
+		// materialize arguments are a non-advancing prelude, so the --input
+		// descriptor is what advances authority. Transition.Validate() above
+		// already pinned the descriptor tokens to the reviewed binding.
+		for _, input := range transition.Collect.Inputs {
+			if input.Submission == nil {
+				continue
+			}
+			arguments, err := reviewTransitionArgumentMap(input.Arguments)
+			if err != nil || !reviewProviderHostRelayMaterializeRuntime(model.AgentID(arguments["agent"])) {
+				return errors.New("submission descriptor is attached to an unrelated collection input") // refusal:by-design world-action: only a provider code fix can remove the unrelated descriptor
+			}
 		}
 	case "verification_evidence_required", "correction_repository_verification_required":
 		if result.Schema == ReviewIntegrationStatusSchemaV4 {
@@ -716,14 +847,77 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 	return nil
 }
 
+func validateReviewProviderTaskInput(input ReviewTransitionInput, arguments map[string]string) error {
+	task := input.ProviderTask
+	role := reviewerprovider.Role(task.Role)
+	contract, err := reviewerprovider.ContractFor(role)
+	if err != nil || input.CaptureOperation != "external.run_provider_role" || input.Schema != string(contract.ResultSchema) ||
+		task.Agent != reviewProviderRoleOpenCodeAgent(role) || len(arguments) != 6 || arguments["agent"] != string(model.AgentOpenCode) ||
+		arguments["role"] != task.Role || arguments["repository-context"] == "" {
+		return errors.New("provider role collection is not an exact Go-owned binding") // refusal:by-design world-action: provider role collection must remain an exact Go-issued binding
+	}
+	encoded, found := strings.CutPrefix(task.Prompt, reviewProviderTaskBindingHeader+" ")
+	if !found {
+		return errors.New("provider role task prompt has no Go-issued binding") // refusal:by-design world-action: provider role task prompts must carry their Go-issued binding
+	}
+	decoder := json.NewDecoder(bytes.NewBufferString(encoded))
+	decoder.DisallowUnknownFields()
+	var binding reviewProviderTaskBinding
+	if err := decoder.Decode(&binding); err != nil {
+		return errors.New("provider role task binding is malformed") // refusal:by-design world-action: provider role task bindings are Go-issued strict JSON
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err == nil || binding.LineageID != arguments["lineage"] || binding.Revision != arguments["expected-revision"] ||
+		binding.TargetIdentity != arguments["target"] || binding.RepositoryContext != arguments["repository-context"] || binding.Role != task.Role ||
+		reviewtransaction.ValidateReviewRepositoryContextHandle(binding.RepositoryContext) != nil || !validReviewCapabilitySHA256(binding.Revision) || !validReviewCapabilitySHA256(binding.TargetIdentity) {
+		return errors.New("provider role task binding is incomplete") // refusal:by-design world-action: provider role task bindings must match the current authority exactly
+	}
+	return nil
+}
+
+func (result ReviewTargetStatusResult) validateTargetedValidatorProviderTaskInput(input ReviewTransitionInput) error {
+	if result.Schema != ReviewIntegrationStatusSchemaV5 || result.Authority == nil || result.ValidationRequest == nil ||
+		input.Name != reviewProviderRoleInputName(reviewerprovider.RoleTargetedValidator) || input.ProviderTask == nil ||
+		input.ProviderTask.Role != string(reviewerprovider.RoleTargetedValidator) || input.Submission != nil {
+		return errors.New("targeted validator provider task is not bound to the correction authority") // refusal:by-design world-action: only Go may issue a targeted validator task for the current correction authority
+	}
+	arguments, err := reviewTransitionArgumentMap(input.Arguments)
+	if err != nil {
+		return err
+	}
+	if err := validateReviewProviderTaskInput(input, arguments); err != nil {
+		return err
+	}
+	if arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.Authority.Revision ||
+		arguments["target"] != result.ValidationRequest.CorrectionTargetIdentity {
+		return errors.New("targeted validator provider task is not bound to the correction authority") // refusal:by-design world-action: only Go may issue a targeted validator task for the current correction authority
+	}
+	return nil
+}
+
 func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if result.NextTransition == nil {
 		return nil
 	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
 		if result.Action == reviewtransaction.TargetStatusActionStop {
-			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "staged_workspace_overlay_recovery_unavailable" {
-				return errors.New("fresh staged workspace-overlay target lacks a STOP transition")
+			if result.NextTransition.Kind != reviewNextTransitionStop {
+				// refusal:by-design world-action: a provider-built status envelope paired STOP with a non-STOP transition; only a producer code fix can make that invariant true
+				return errors.New("fresh target STOP action lacks a STOP transition")
+			}
+			switch result.Projection.Kind {
+			case reviewtransaction.TargetBaseWorkspaceOverlay:
+				if result.Projection.Projection != reviewtransaction.ProjectionStaged || result.NextTransition.ReasonCode != "staged_workspace_overlay_recovery_unavailable" {
+					return errors.New("fresh staged workspace-overlay target lacks a STOP transition")
+				}
+			case reviewtransaction.TargetBaseDiff:
+				if len(result.Projection.Paths) != 0 || result.NextTransition.ReasonCode != "empty_base_diff_bootstrap_required" {
+					// refusal:by-design world-action: a provider-built zero-path base-diff omitted its one admissible STOP classification; only a producer code fix can make the envelope executable
+					return errors.New("fresh zero-path base-diff target lacks an empty-root bootstrap STOP transition")
+				}
+			default:
+				// refusal:by-design world-action: this negotiated status invariant supports only the explicitly classified fresh STOP projections; a producer must choose one of those projections
+				return errors.New("fresh target STOP action has an unsupported projection")
 			}
 			return nil
 		}
@@ -763,7 +957,8 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if result.Authority != nil && result.Authority.State == reviewtransaction.StateValidating {
 		expectedExecutionTarget = reviewAuthorityTargetIdentity(result)
 	} else if result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired &&
-		result.ValidationRequest != nil && result.NextTransition.ReasonCode == "correction_repository_tooling_failed" {
+		result.ValidationRequest != nil && (result.NextTransition.ReasonCode == "correction_repository_tooling_failed" ||
+		result.NextTransition.ReasonCode == "captured_provider_targeted_validation_ready") {
 		expectedExecutionTarget = result.ValidationRequest.CorrectionTargetIdentity
 	}
 	if result.NextTransition.Execute != nil && result.NextTransition.Execute.Binding.TargetIdentity != expectedExecutionTarget {
@@ -835,7 +1030,7 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 	if execution == nil || (execution.Operation != "review.validate" && execution.Operation != "review.recover") {
 		return nil
 	}
-	arguments, err := reviewTransitionArgumentMap(execution.Arguments)
+	arguments, err := reviewTransitionArgumentMap(execution.Arguments, execution.Operation)
 	if err != nil {
 		return err
 	}
@@ -844,8 +1039,15 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 	if selectorsPresent {
 		selectors = *execution.SelectorArguments
 	}
+	// intended-untracked legitimately repeats on a selection-replaying
+	// RECOVER (#1972), so echo membership is checked pairwise against the
+	// executable arguments rather than through the deduplicating map.
+	argumentPairs := make(map[ReviewTransitionArgument]bool, len(execution.Arguments))
+	for _, argument := range execution.Arguments {
+		argumentPairs[ReviewTransitionArgument{Name: argument.Name, Value: argument.Value}] = true
+	}
 	for _, selector := range selectors {
-		if arguments[selector.Name] != selector.Value {
+		if !argumentPairs[ReviewTransitionArgument{Name: selector.Name, Value: selector.Value}] {
 			return errors.New("negotiated transition changed its normalized selector")
 		}
 	}
@@ -853,7 +1055,11 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 	_, hasCommitted := arguments["committed-only"]
 	projection, hasProjection := arguments["projection"]
 	workspaceOverlay, hasWorkspaceOverlay := arguments["workspace-overlay"]
-	if !selectorsPresent && (hasBase || hasCommitted || hasProjection || hasWorkspaceOverlay) {
+	_, hasUntrackedScope := arguments["untracked-scope"]
+	_, hasUntrackedInventory := arguments["expected-untracked-inventory"]
+	_, hasIntendedUntracked := arguments["intended-untracked"]
+	if !selectorsPresent && (hasBase || hasCommitted || hasProjection || hasWorkspaceOverlay ||
+		hasUntrackedScope || hasUntrackedInventory || hasIntendedUntracked) {
 		return errors.New("negotiated transition omitted its normalized selector")
 	}
 	if hasWorkspaceOverlay && workspaceOverlay != "true" {
@@ -872,11 +1078,11 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 			return errors.New("current-changes RECOVER transition invented target selectors")
 		}
 	case reviewtransaction.TargetBaseDiff:
-		if !hasBase || !hasCommitted || hasWorkspaceOverlay {
+		if !hasBase || !hasCommitted || hasWorkspaceOverlay || hasUntrackedScope || hasUntrackedInventory || hasIntendedUntracked {
 			return errors.New("base-diff RECOVER transition lacks exact target selectors")
 		}
 	case reviewtransaction.TargetBaseWorkspaceOverlay:
-		if !hasBase || hasCommitted {
+		if !hasBase || hasCommitted || hasUntrackedScope || hasUntrackedInventory || hasIntendedUntracked {
 			return errors.New("workspace-overlay RECOVER transition has incompatible target selectors")
 		}
 		if result.Projection.Projection == reviewtransaction.ProjectionStaged &&
@@ -1089,7 +1295,7 @@ func (transition ReviewNextTransition) Validate() error {
 			if err != nil {
 				return err
 			}
-			submissionAllowed := input.CaptureOperation == "external.plan_correction" || input.CaptureOperation == "external.run_targeted_validation" || input.CaptureOperation == "review.capture-evidence"
+			submissionAllowed := input.CaptureOperation == "external.plan_correction" || input.CaptureOperation == "external.run_targeted_validation" || input.CaptureOperation == "review.capture-evidence" || input.CaptureOperation == "review.capture-result"
 			if input.Submission != nil && !submissionAllowed {
 				return errors.New("collection transition submission placement is invalid") // refusal:by-design world-action: only a provider code fix can place a descriptor on a supported input
 			}
@@ -1106,11 +1312,37 @@ func (transition ReviewNextTransition) Validate() error {
 				if nativeGitTransport {
 					argumentCount = 7
 				}
+				providerRuntime := model.AgentID(arguments["agent"])
+				providerCapture := providerRuntime != "" && reviewProviderCaptureRuntime(providerRuntime)
+				hostRelayMaterialize := providerRuntime != "" && reviewProviderHostRelayMaterializeRuntime(providerRuntime)
+				if providerCapture {
+					argumentCount++
+				}
+				if hostRelayMaterialize {
+					// A host-relay capture input carries both --agent and
+					// --materialize=true: the host materializes first, then
+					// advances authority through the submission descriptor.
+					argumentCount += 2
+					expected := make([]string, 0, len(input.Arguments)-1)
+					for _, argument := range input.Arguments {
+						if argument.Name != "agent" && argument.Name != "materialize" {
+							expected = append(expected, reviewTransitionArgumentToken(argument))
+						}
+					}
+					expected = append(expected, "--input="+reviewSubmissionValuePlaceholder)
+					if input.Submission == nil || !reflect.DeepEqual(input.Submission.ArgumentTokens, expected) {
+						return errors.New("host-relay capture transition submission does not advance the reviewed binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+					}
+				} else if input.Submission != nil {
+					return errors.New("collection transition submission placement is invalid") // refusal:by-design world-action: only a provider code fix can place a descriptor on a supported input
+				}
 				if len(arguments) != argumentCount || !reviewStartSupportedLens(arguments["lens"]) || orderErr != nil || order < 0 ||
 					!validReviewCapabilitySHA256(arguments["expected-revision"]) || !validReviewCapabilitySHA256(arguments["target"]) ||
 					strings.TrimSpace(arguments["lineage"]) == "" || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
 					input.ArtifactSubject == nil || input.ChangedPathManifest == nil ||
 					nativeGitTransport && arguments["subject-hash"] != input.ArtifactSubject.SubjectHash ||
+					providerRuntime != "" && !providerCapture && !hostRelayMaterialize ||
+					hostRelayMaterialize && arguments["materialize"] != "true" ||
 					legacyTransport && input.CandidateDiff == nil || nativeGitTransport && (!validReviewGitTree(input.BaseTree) || !validReviewGitTree(input.CandidateTree)) ||
 					(!legacyTransport && !nativeGitTransport) {
 					return errors.New("review capture transition lacks an exact repository and authority binding")
@@ -1135,6 +1367,36 @@ func (transition ReviewNextTransition) Validate() error {
 			} else if input.ArtifactSubject != nil || input.CandidateDiff != nil || input.BaseTree != "" || input.CandidateTree != "" || input.ChangedPathManifest != nil {
 				return errors.New("non-reviewer collection transition contains frozen reviewer context")
 			}
+			if input.CaptureOperation == reviewCaptureRefuterCaptureOperation || input.CaptureOperation == reviewCaptureValidationCaptureOperation {
+				// A pi host-relay role capture input is a self-contained
+				// executable vector: exactly the binding arguments plus
+				// --agent and --execute=true. Go materializes the role
+				// request, spawns its own locked-down pi process, and admits
+				// the raw bytes, so no submission descriptor may exist for a
+				// caller to author a verdict through.
+				providerRuntime := model.AgentID(arguments["agent"])
+				argumentCount, schema := 6, reviewRefuterSchemaID
+				if input.CaptureOperation == reviewCaptureValidationCaptureOperation {
+					argumentCount, schema = 7, reviewValidatorSchemaID
+				}
+				// Fail closed on the argument count BEFORE any arithmetic over
+				// it: a hostile envelope with a truncated (or empty) argument
+				// vector must produce this refusal, never a panic.
+				if len(input.Arguments) != argumentCount || len(arguments) != argumentCount {
+					return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+				}
+				if input.CaptureOperation == reviewCaptureValidationCaptureOperation &&
+					(input.ValidationRequest == nil || arguments["request-hash"] != input.ValidationRequest.RequestHash) {
+					return errors.New("provider validation capture transition lacks its frozen request binding") // refusal:by-design world-action: only STATUS can bind the frozen correction request
+				}
+				if input.Schema != schema ||
+					!reviewProviderHostRelayMaterializeRuntime(providerRuntime) || arguments["execute"] != "true" ||
+					strings.TrimSpace(arguments["lineage"]) == "" || !validReviewCapabilitySHA256(arguments["expected-revision"]) ||
+					!validReviewCapabilitySHA256(arguments["target"]) || reviewtransaction.ValidateReviewRepositoryContextHandle(arguments["repository-context"]) != nil ||
+					input.Submission != nil {
+					return errors.New("provider role capture transition lacks an exact host-relay binding") // refusal:by-design world-action: only a provider code fix can make the rendered transition advance authority
+				}
+			}
 			if input.CaptureOperation == "review.capture-evidence" &&
 				((input.Schema != reviewtransaction.VerificationEvidenceRecordSchema || len(arguments) != 3) &&
 					(input.Schema != reviewVerificationEvidenceSchemaID || len(arguments) != 4 ||
@@ -1148,7 +1410,9 @@ func (transition ReviewNextTransition) Validate() error {
 			}
 			if input.ValidationRequest != nil {
 				request := input.ValidationRequest
-				if input.Schema != reviewtransaction.TargetedValidationRequestSchema || input.CaptureOperation != "external.run_targeted_validation" ||
+				externalForm := input.CaptureOperation == "external.run_targeted_validation" && input.Schema == reviewtransaction.TargetedValidationRequestSchema
+				hostRelayForm := input.CaptureOperation == reviewCaptureValidationCaptureOperation
+				if !externalForm && !hostRelayForm ||
 					arguments["lineage"] != request.LineageID || arguments["expected-revision"] != request.ExpectedRevision ||
 					arguments["target"] != request.CorrectionTargetIdentity || reviewtransaction.ValidateTargetedValidationRequest(*request) != nil {
 					return errors.New("targeted validation transition request is invalid")
@@ -1202,6 +1466,9 @@ func (input ReviewTransitionInput) submissionRepositoryContext() (string, error)
 }
 
 func (submission ReviewTransitionSubmission) Validate() error {
+	if submission.OperationToken == "capture-result" {
+		return submission.validateCaptureResult()
+	}
 	if submission.Value != nil {
 		return submission.validateFinalize()
 	}
@@ -1233,6 +1500,29 @@ func (submission ReviewTransitionSubmission) Validate() error {
 	}) || input.Slot != "input" || input.Domain != "artifact_path_or_stdin" || input.Schema != reviewVerificationEvidenceSchemaID ||
 		input.Minimum != 0 || input.Maximum != 0 || len(input.AllowedValues) != 0 || input.SubstitutionLocation != 5 {
 		return errors.New("verification evidence submission descriptor values are invalid") // refusal:by-design world-action: only a provider code fix can restore the capture value domains
+	}
+	return nil
+}
+
+// validateCaptureResult is the pi host-relay reviewer-result submission: the
+// materialize arguments only obtain the prompt bytes, so this descriptor --
+// the same binding tokens with the raw result substituted into --input -- is
+// the part of the rendered transition that advances reviewing authority.
+func (submission ReviewTransitionSubmission) validateCaptureResult() error {
+	if submission.Value == nil || len(submission.Values) != 0 || len(submission.ArgumentTokens) < 7 ||
+		submission.Value.SubstitutionLocation != len(submission.ArgumentTokens)-1 {
+		return errors.New("submission descriptor identity is incomplete") // refusal:by-design world-action: only a provider code fix can restore descriptor identity
+	}
+	for _, token := range submission.ArgumentTokens {
+		if strings.TrimSpace(token) == "" || !strings.HasPrefix(token, "--") || strings.ContainsAny(token, " \t\r\n") || strings.HasPrefix(token, "--cwd=") {
+			return errors.New("submission descriptor contains an unsafe argument token") // refusal:by-design world-action: only a provider code fix can emit safe argv tokens
+		}
+	}
+	if submission.ArgumentTokens[len(submission.ArgumentTokens)-1] != "--input="+reviewSubmissionValuePlaceholder ||
+		submission.Value.Slot != "reviewer_result" || submission.Value.Domain != "artifact_path_or_stdin" ||
+		submission.Value.Schema != reviewReviewerSchemaID || submission.Value.Minimum != 0 ||
+		submission.Value.Maximum != 0 || len(submission.Value.AllowedValues) != 0 {
+		return errors.New("reviewer result submission descriptor value is invalid") // refusal:by-design world-action: only a provider code fix can restore the capture value domain
 	}
 	return nil
 }
@@ -1281,7 +1571,7 @@ func (submission ReviewTransitionSubmission) validateFinalize() error {
 }
 
 func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument, operation ...string) (map[string]string, error) {
-	allowIntendedUntracked := len(operation) == 1 && operation[0] == "review.start"
+	allowIntendedUntracked := len(operation) == 1 && (operation[0] == "review.start" || operation[0] == "review.recover")
 	values := make(map[string]string, len(arguments))
 	for _, argument := range arguments {
 		if previous, duplicate := values[argument.Name]; duplicate && (!allowIntendedUntracked || argument.Name != "intended-untracked" || previous == argument.Value) {
@@ -1330,16 +1620,38 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 			return errors.New("review validate transition selectors are invalid")
 		}
 	case "review.recover":
+		// intended-untracked repeats once per selected path (#1972), so the
+		// selector echo is rebuilt from the ordered executable arguments and
+		// the argument-count check uses distinct selector names because the
+		// argument map deduplicates the repeats.
+		recoverSelectorNames := map[string]bool{
+			"base-ref": true, "committed-only": true, "projection": true, "workspace-overlay": true,
+			"untracked-scope": true, "expected-untracked-inventory": true, "intended-untracked": true,
+		}
 		wantSelectors := []ReviewTransitionArgument{}
-		for _, name := range []string{"base-ref", "committed-only", "projection", "workspace-overlay"} {
-			if value, present := arguments[name]; present {
-				wantSelectors = append(wantSelectors, ReviewTransitionArgument{Name: name, Value: value})
+		distinctSelectors := map[string]bool{}
+		intendedPaths := []string{}
+		for _, argument := range execution.Arguments {
+			if !recoverSelectorNames[argument.Name] {
+				continue
+			}
+			wantSelectors = append(wantSelectors, ReviewTransitionArgument{Name: argument.Name, Value: argument.Value})
+			distinctSelectors[argument.Name] = true
+			if argument.Name == "intended-untracked" {
+				intendedPaths = append(intendedPaths, argument.Value)
 			}
 		}
 		if execution.SelectorArguments != nil && !reflect.DeepEqual(*execution.SelectorArguments, wantSelectors) {
 			return errors.New("review recover transition selectors are invalid")
 		}
-		if !exact([]string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition", "reason", "actor", "maintainer-authorization"}, wantSelectors) ||
+		required := []string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition", "reason", "actor", "maintainer-authorization"}
+		requiredPresent := true
+		for _, name := range required {
+			if _, present := arguments[name]; !present {
+				requiredPresent = false
+			}
+		}
+		if !requiredPresent || len(arguments) != len(required)+len(distinctSelectors) ||
 			arguments["predecessor-lineage"] != execution.Binding.LineageID ||
 			arguments["expected-predecessor-revision"] != execution.Binding.Revision ||
 			!validReviewIntegrationLineage(arguments["successor-lineage"]) ||
@@ -1361,6 +1673,9 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		committed, hasCommitted := arguments["committed-only"]
 		projection, hasProjection := arguments["projection"]
 		workspaceOverlay, hasWorkspaceOverlay := arguments["workspace-overlay"]
+		untrackedScope, hasUntrackedScope := arguments["untracked-scope"]
+		inventory, hasInventory := arguments["expected-untracked-inventory"]
+		hasIntended := distinctSelectors["intended-untracked"]
 		if arguments["maintainer-authorization"] != wantAuthorization ||
 			hasBase && !validReviewTransitionSelector(base) ||
 			hasCommitted && (!hasBase || committed != "true") ||
@@ -1370,6 +1685,23 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 				projection != string(reviewtransaction.ProjectionStaged) || workspaceOverlay != "true") {
 			return errors.New("review recover transition selectors are invalid")
 		}
+		// The untracked selection replay (#1972) is only meaningful for a
+		// workspace current-changes successor: scope and inventory travel
+		// together, select carries at least one path, exclude carries none,
+		// and every path is a plain repository-relative spelling.
+		if hasUntrackedScope != hasInventory ||
+			hasIntended && untrackedScope != "select" ||
+			hasUntrackedScope && untrackedScope == "select" && !hasIntended ||
+			hasUntrackedScope && untrackedScope != "select" && untrackedScope != "exclude" ||
+			hasUntrackedScope && (hasBase || hasCommitted || hasWorkspaceOverlay || hasProjection) ||
+			hasInventory && strings.TrimSpace(inventory) == "" {
+			return errors.New("review recover transition selectors are invalid")
+		}
+		for _, path := range intendedPaths {
+			if !validReviewIntendedUntrackedPath(path) {
+				return errors.New("review recover transition selectors are invalid")
+			}
+		}
 	}
 	return nil
 }
@@ -1378,6 +1710,16 @@ func validReviewTransitionSelector(value string) bool {
 	fields := strings.Fields(value)
 	return len(fields) == 1 && fields[0] == value && !path.IsAbs(value) &&
 		!strings.HasPrefix(value, "-") && !strings.ContainsRune(value, 0)
+}
+
+// validReviewIntendedUntrackedPath admits the repository-relative spellings an
+// intended-untracked declaration may carry. Unlike a target selector, a path
+// may contain interior spaces, so only the shapes that would break argv
+// replay or escape the repository are rejected.
+func validReviewIntendedUntrackedPath(value string) bool {
+	return value != "" && value == strings.TrimSpace(value) && !path.IsAbs(value) &&
+		!strings.HasPrefix(value, "-") && !strings.ContainsRune(value, 0) &&
+		!strings.ContainsAny(value, "\n\r")
 }
 
 func (eligibility ReviewActionEligibility) Validate(status ReviewTargetStatusResult) error {

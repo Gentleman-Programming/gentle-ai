@@ -84,6 +84,7 @@ type CodexModelPickerState struct {
 	CustomModelCursor  int                              // cursor position in filtered model list
 	CustomEffortCursor int                              // cursor position in effort list
 	CustomPendingModel string                           // model ID selected in model-select (pending effort)
+	AvailableModels    []string                         // discovered model IDs for Custom mode
 	CustomAssignments  map[string]CodexCustomAssignment // phase → assignment
 	CustomConfirmed    bool                             // true after user presses Confirm
 }
@@ -92,6 +93,7 @@ type CodexModelPickerState struct {
 func NewCodexModelPickerState() CodexModelPickerState {
 	return CodexModelPickerState{
 		Preset:            CodexPresetRecommended,
+		AvailableModels:   model.CodexAvailableModels(),
 		CustomAssignments: make(map[string]CodexCustomAssignment),
 	}
 }
@@ -110,6 +112,7 @@ func NewCodexModelPickerStateFromAssignments(assignments map[string]model.CodexE
 		if codexAssignmentsEqual(constructor(), assignments) {
 			return CodexModelPickerState{
 				Preset:            preset,
+				AvailableModels:   model.CodexAvailableModels(),
 				CustomAssignments: make(map[string]CodexCustomAssignment),
 			}
 		}
@@ -117,6 +120,7 @@ func NewCodexModelPickerStateFromAssignments(assignments map[string]model.CodexE
 	// Unknown assignments → fall back to Recommended.
 	return CodexModelPickerState{
 		Preset:            CodexPresetRecommended,
+		AvailableModels:   model.CodexAvailableModels(),
 		CustomAssignments: make(map[string]CodexCustomAssignment),
 	}
 }
@@ -133,6 +137,14 @@ func codexAssignmentsEqual(a, b map[string]model.CodexEffort) bool {
 	return true
 }
 
+func filteredCodexModels(state CodexModelPickerState) []string {
+	models := state.AvailableModels
+	if len(models) == 0 {
+		models = model.CodexAvailableModels()
+	}
+	return model.FilterCodexModelList(models, state.CustomModelSearch)
+}
+
 // CodexModelPickerOptionCount returns the total number of selectable rows based
 // on the active sub-mode:
 //   - Main picker: 3 presets + Custom + Back = 5
@@ -144,7 +156,7 @@ func CodexModelPickerOptionCount(state CodexModelPickerState) int {
 	case CodexCustomModePhaseList:
 		return len(codexCustomPhases) + 1 // phases + Confirm
 	case CodexCustomModeModelSelect:
-		models := model.FilterCodexModels(state.CustomModelSearch)
+		models := filteredCodexModels(state)
 		if len(models) == 0 {
 			return 0
 		}
@@ -193,6 +205,7 @@ func HandleCodexModelPickerNav(
 
 	// Custom row: index len(codexPresetOrder) = 3.
 	if cursor == len(codexPresetOrder) {
+		state.AvailableModels = model.CodexAvailableModels()
 		state.CustomMode = CodexCustomModePhaseList
 		state.CustomPhaseIdx = 0
 		state.CustomModelSearch = ""
@@ -282,7 +295,8 @@ func handleCustomPhaseListNav(key string, state *CodexModelPickerState, cursor i
 }
 
 func handleCustomModelSelectNav(key string, state *CodexModelPickerState) (bool, map[string]model.CodexEffort) {
-	models := model.FilterCodexModels(state.CustomModelSearch)
+	models := filteredCodexModels(*state)
+	state.CustomModelCursor = min(max(0, state.CustomModelCursor), max(0, len(models)-1))
 
 	switch key {
 	case "up", "k":
@@ -483,7 +497,7 @@ func renderCodexCustomModelSelect(state CodexModelPickerState) string {
 	b.WriteString(styles.SubtextStyle.Render("Search: " + codexModelSearchDisplay(state.CustomModelSearch)))
 	b.WriteString("\n\n")
 
-	models := model.FilterCodexModels(state.CustomModelSearch)
+	models := filteredCodexModels(state)
 	cursor := state.CustomModelCursor
 	if cursor >= len(models) && len(models) > 0 {
 		cursor = len(models) - 1

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -70,7 +71,7 @@ func PublishLensContextEmission(storeDir string, emission LensContextEmission) e
 	if err != nil {
 		return err
 	}
-	path, err := lensContextEmissionPath(storeDir, emission.Lens, emission.SelectedOrder)
+	path, err := lensContextEmissionPath(storeDir, emission.AuthorityRevision, emission.Lens, emission.SelectedOrder)
 	if err != nil {
 		return err
 	}
@@ -89,11 +90,18 @@ func PublishLensContextEmission(storeDir string, emission LensContextEmission) e
 // lineage, target, revision, lens, order, and subject is treated as absent
 // rather than as evidence: it describes a different candidate.
 func ReadLensContextEmission(storeDir, lineageID, targetIdentity, revision, lens string, order int, subjectHash string) (LensContextEmission, bool) {
-	path, err := lensContextEmissionPath(storeDir, lens, order)
+	path, err := lensContextEmissionPath(storeDir, revision, lens, order)
 	if err != nil {
 		return LensContextEmission{}, false
 	}
 	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		legacy, legacyErr := lensContextEmissionLegacyPath(storeDir, lens, order)
+		if legacyErr != nil {
+			return LensContextEmission{}, false
+		}
+		file, err = os.Open(legacy)
+	}
 	if err != nil {
 		return LensContextEmission{}, false
 	}
@@ -143,7 +151,32 @@ func DiscoverReviewerContextLevel(storeDir, lineageID, targetIdentity, revision 
 	return agreed
 }
 
-func lensContextEmissionPath(storeDir, lens string, order int) (string, error) {
+// lensContextEmissionPath resolves the immutable file one lens slot's emission
+// is published to.
+//
+// The authority revision is part of the key because it is part of the record's
+// identity: ReadLensContextEmission already treats a record naming a different
+// revision as absent ("it describes a different candidate"), so a path keyed by
+// lens and order alone contradicted the reader. A maintainer-authorized
+// reopen-results moves the same lineage back to `reviewing` under a new
+// revision, and that legitimately-new record used to collide with the old one
+// at the shared path — permanently, because publication is immutable (issue
+// #2850). Scoping the path restores the invariant the refusal claims: audit
+// history is never rewritten, and now it is never blocked either.
+func lensContextEmissionPath(storeDir, revision, lens string, order int) (string, error) {
+	if storeDir == "" || order < 0 || lens == "" || lens != filepath.Base(lens) ||
+		lens == "." || lens == ".." || !validCanonicalLensName(lens) || !validSHA256(revision) {
+		return "", errors.New("reviewer lens context emission slot is invalid") // refusal:by-design world-action: reaching this means provider code bypassed the validated native CLI contract, which is a code fix rather than an operator command
+	}
+	return filepath.Join(storeDir, LensContextEmissionDir, strings.TrimPrefix(revision, "sha256:"),
+		fmt.Sprintf("%02d-%s.json", order, lens)), nil
+}
+
+// lensContextEmissionLegacyPath is the pre-#2850 flat location. It is read
+// from, never written to: a store recorded by an older binary keeps answering
+// for the revision it was written under, and the binding check in
+// ReadLensContextEmission still rejects it for every other revision.
+func lensContextEmissionLegacyPath(storeDir, lens string, order int) (string, error) {
 	if storeDir == "" || order < 0 || lens == "" || lens != filepath.Base(lens) ||
 		lens == "." || lens == ".." || !validCanonicalLensName(lens) {
 		return "", errors.New("reviewer lens context emission slot is invalid") // refusal:by-design world-action: reaching this means provider code bypassed the validated native CLI contract, which is a code fix rather than an operator command

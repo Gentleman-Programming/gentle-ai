@@ -182,7 +182,7 @@ func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
 	failNextCompactStoreSync(t, fixture.store)
 	before := countRuntimeRecords(t, fixture.store.Dir)
 	legacy := fixture.finishRequest("compact-remediation-settle")
-	evidence := remediationJSONPayload(fixture.failedEvidence)
+	evidence := remediationJSONPayloadWithBinding(fixture.failedEvidence, fixture.predecessorBinding.Lineage, fixture.predecessorBinding.GateContext.Generation)
 	legacy.EvidenceRevision, _ = AdmitRemediationEvidence(evidence, fixture.failedEvidence)
 	request := CompactSettleRequest{
 		Token: fixture.active.Revision, RequestID: legacy.RequestID, Outcome: legacy.Outcome,
@@ -209,7 +209,9 @@ func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
 		t.Fatalf("compact remediation status = %#v records=%d", status, countRuntimeRecords(t, fixture.store.Dir))
 	}
 
-	replayed, err := fixture.store.Settle(context.Background(), request)
+	replayWithoutFreshEvidence := request
+	replayWithoutFreshEvidence.RemediationEvidence = nil
+	replayed, err := fixture.store.Settle(context.Background(), replayWithoutFreshEvidence)
 	if err != nil || replayed != result || countRuntimeRecords(t, fixture.store.Dir) != before+1 {
 		t.Fatalf("compact remediation replay = %#v err=%v records=%d", replayed, err, countRuntimeRecords(t, fixture.store.Dir))
 	}
@@ -232,27 +234,6 @@ func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
 				t.Fatalf("conflicting replay = %#v err=%v records=%d", blocked, settleErr, countRuntimeRecords(t, fixture.store.Dir))
 			}
 		})
-	}
-}
-
-func TestCompactSettleUsesProviderOwnedSuccessfulRemediationRevision(t *testing.T) {
-	fixture := newRuntimeRemediationFixture(t, true)
-	evaluation := parseRemediationResult(remediationResultEvidence(fixture.failedEvidence), fixture.failedEvidence)
-	if !evaluation.Complete || evaluation.SuccessfulEvidenceRevision == "" {
-		t.Fatalf("remediation evaluation = %#v, want provider-owned success revision", evaluation)
-	}
-	request := fixture.finishRequest("compact-provider-owned-revision")
-	request.EvidenceRevision = evaluation.SuccessfulEvidenceRevision
-	result, err := fixture.store.Settle(context.Background(), CompactSettleRequest{
-		Token: request.ExpectedRevision, RequestID: request.RequestID, Outcome: request.Outcome,
-		EvidenceRevision: request.EvidenceRevision, Diagnosis: request.Diagnosis,
-		HarnessDisposition: request.HarnessDisposition, CleanupEvidence: request.CleanupEvidence,
-		ProcessEvidence: request.ProcessEvidence, SuccessorLineageID: request.SuccessorLineageID,
-		RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
-		RemediationEvidence:        remediationJSONPayload(fixture.failedEvidence),
-	})
-	if err != nil || result.State != CompactStateComplete {
-		t.Fatalf("provider-owned remediation settle = %#v err=%v", result, err)
 	}
 }
 
@@ -289,7 +270,7 @@ func TestCompactSettleDifferentValidSuccessfulRevisionPreservesActiveToken(t *te
 		HarnessDisposition: request.HarnessDisposition, CleanupEvidence: request.CleanupEvidence,
 		ProcessEvidence: request.ProcessEvidence, SuccessorLineageID: request.SuccessorLineageID,
 		RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
-		RemediationEvidence:        remediationJSONPayload(fixture.failedEvidence),
+		RemediationEvidence:        remediationJSONPayloadWithBinding(fixture.failedEvidence, fixture.predecessorBinding.Lineage, fixture.predecessorBinding.GateContext.Generation),
 	})
 	if err == nil || !strings.Contains(err.Error(), "native admission revision") {
 		t.Fatalf("mismatched successful revision error = %v", err)
@@ -300,6 +281,62 @@ func TestCompactSettleDifferentValidSuccessfulRevisionPreservesActiveToken(t *te
 	}
 	if status.ActiveAttempt == nil || status.ActiveAttempt.Ordinal != fixture.active.ActiveAttempt.Ordinal {
 		t.Fatalf("mismatched successful revision changed active token state: %#v", status)
+	}
+}
+
+func TestCompactSettleReplaysCanonicalLegacyInterruptedRequest(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "compact-legacy-interrupted-replay")
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		RequestID: "legacy-begin", WorkUnit: "unit", EvidenceGoal: "goal", MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beginRecord, err := store.loadRecord(started.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := runtimeRecord{Schema: runtimeRecordSchema, Change: store.Change, PreviousRevision: started.Revision,
+		Operation: runtimeOperationFinish, RequestID: "legacy-finish", Finish: &runtimeFinishEvent{
+			Ordinal: 1, FinishCandidateIdentity: beginRecord.Begin.BeginCandidateIdentity,
+			FinishCandidateTree: beginRecord.Begin.BeginCandidateTree, Outcome: AttemptInterrupted,
+			ChangedLines: 0, EvidenceRevision: runtimeTestHash('a'), Diagnosis: "legacy interrupted record",
+			HarnessDisposition: HarnessInvalidated, CleanupEvidence: "clean", ProcessEvidence: "none",
+		}}
+	legacy.RequestDigest = runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", FinishAttemptRequest{
+		ExpectedRevision: legacy.PreviousRevision, RequestID: legacy.RequestID, Outcome: legacy.Finish.Outcome,
+		EvidenceRevision: legacy.Finish.EvidenceRevision, Diagnosis: legacy.Finish.Diagnosis,
+		HarnessDisposition: legacy.Finish.HarnessDisposition, CleanupEvidence: legacy.Finish.CleanupEvidence,
+		ProcessEvidence: legacy.Finish.ProcessEvidence,
+	})
+	revision, payload, err := runtimeRecordRevision(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishRecord(revision, payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.publishHead(revision); err != nil {
+		t.Fatal(err)
+	}
+	beforeRecords := countRuntimeRecords(t, store.Dir)
+
+	result, err := store.Settle(context.Background(), CompactSettleRequest{
+		Token: started.Revision, RequestID: legacy.RequestID, Outcome: AttemptInterrupted,
+		EvidenceRevision: legacy.Finish.EvidenceRevision, Diagnosis: legacy.Finish.Diagnosis,
+		HarnessDisposition: legacy.Finish.HarnessDisposition, CleanupEvidence: legacy.Finish.CleanupEvidence,
+		ProcessEvidence: legacy.Finish.ProcessEvidence,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != CompactStateProceed || status.Revision != revision || countRuntimeRecords(t, store.Dir) != beforeRecords {
+		t.Fatalf("legacy interrupted compact replay result=%#v status=%#v records=%d", result, status, countRuntimeRecords(t, store.Dir))
 	}
 }
 
@@ -315,7 +352,7 @@ func TestCompactSettleReviewDisabledClosesOrdinaryWithoutAdvancingBinding(t *tes
 		EvidenceRevision: legacy.EvidenceRevision, Diagnosis: legacy.Diagnosis,
 		HarnessDisposition: legacy.HarnessDisposition, CleanupEvidence: legacy.CleanupEvidence,
 		ProcessEvidence:     legacy.ProcessEvidence,
-		RemediationEvidence: remediationJSONPayload(fixture.failedEvidence),
+		RemediationEvidence: remediationJSONPayloadWithBinding(fixture.failedEvidence, fixture.predecessorBinding.Lineage, fixture.predecessorBinding.GateContext.Generation),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -343,7 +380,7 @@ func TestCompactSettleTokenSurvivesBindingCASAndDerivesSelfSuccessor(t *testing.
 		t.Fatal("fixture did not advance runtime HEAD after acquire")
 	}
 	legacy := fixture.finishRequest("compact-self-remediation")
-	evidence := remediationJSONPayload(fixture.failedEvidence)
+	evidence := remediationJSONPayloadWithBinding(fixture.failedEvidence, fixture.binding.Lineage, fixture.binding.GateContext.Generation)
 	legacy.EvidenceRevision, _ = AdmitRemediationEvidence(evidence, fixture.failedEvidence)
 	result, err := fixture.store.Settle(context.Background(), CompactSettleRequest{
 		Token: fixture.active.Revision, RequestID: legacy.RequestID, Outcome: legacy.Outcome,

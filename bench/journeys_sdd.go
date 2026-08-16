@@ -86,6 +86,7 @@ type sddRuntimeStatus struct {
 		ObjectiveGeneration        int    `json:"objective_generation"`
 		BeginCandidateTree         string `json:"begin_candidate_tree"`
 		FinishCandidateTree        string `json:"finish_candidate_tree"`
+		AttestedVerifyReportDigest string `json:"attested_verify_report_digest"`
 		Outcome                    string `json:"outcome"`
 		EvidenceRevision           string `json:"evidence_revision"`
 		RemediatesEvidenceRevision string `json:"remediates_evidence_revision"`
@@ -133,6 +134,7 @@ type sddStatusV1 struct {
 	} `json:"reviewOffer"`
 	BlockedReasons    []string `json:"blockedReasons"`
 	PhaseInstructions struct {
+		Verify    []string `json:"verify"`
 		Remediate []string `json:"remediate"`
 	} `json:"phaseInstructions"`
 	TaskProgress struct {
@@ -1106,7 +1108,7 @@ func sddBeginThenInterrupt(r *journeyRun) error {
 		return err
 	}
 	r.run(sddAttemptArgs(r, "finish", status.Revision, "bench-finish-one",
-		append([]string{"--outcome", "interrupted", "--evidence-revision", sddFailedEvidence}, sddTerminalEvidence...)...), false)
+		append([]string{"--outcome", "interrupted"}, sddTerminalEvidence...)...), false)
 
 	final, err := proveRuntime(r.sandbox)
 	if err != nil {
@@ -1204,6 +1206,34 @@ func sddBoundPassingFinishCloses(r *journeyRun) error {
 	// being tracked, and the delivery gates read it from here.
 	if settled.BindingRevision == "" {
 		return errors.New("the finish dropped the review binding; it must stay recorded on the ledger")
+	}
+	return nil
+}
+
+// sddDriftAfterApproval moves the candidate AFTER the review approved and bound
+// it, which is the exact state the removed #2956 gate used to intercept: bytes
+// the approved review never saw, about to be settled as passed.
+func sddDriftAfterApproval(sandbox *Sandbox) error {
+	return sandbox.write(filepath.Join(sandbox.Repo, "docs", "attempt.md"),
+		"# attempt\n\nplain prose, no executable content.\nbytes the approved review never saw.\n")
+}
+
+// sddDecoyUnreviewedCandidateIsRefusedAtDelivery is the decoy for #2956.
+//
+// Removing the bound-passing-finish gate rested on one argument: the delivery
+// gates re-derive their verdict from the candidate actually being delivered, so
+// an unreviewed candidate is still refused there, after SDD finishes. That is a
+// claim about a NEGATIVE. gateVerdict's 35-cell table already proves the
+// `changed` relation denies; what it cannot prove is REACHABILITY — that a
+// candidate settled past the removed gate actually arrives at that denial
+// instead of taking a branch where no receipt is evaluated at all.
+//
+// So this plants exactly what the removed guard caught, drift after approval,
+// and measures the live gate. If it ever allows, the justification for removing
+// that gate was wrong and this is where it says so.
+func sddDecoyUnreviewedCandidateIsRefusedAtDelivery(r *journeyRun) error {
+	if provePostApplyAllows(r.sandbox) {
+		return errors.New("the post-apply gate ALLOWS a candidate the approved review never saw; #2956 removed the ledger-side guard on the argument that delivery still refuses this, and it does not")
 	}
 	return nil
 }
@@ -1689,7 +1719,10 @@ func sddJourneys() []Journey {
 				{Name: "review start on the corrected candidate", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
 				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberLineage},
 				{Name: "bind the approved review to the change", Requires: bindSDDCapability, Composite: sddBindApprovedReview},
+				{Name: "fixture: the candidate drifts AFTER the review approved it", Fixture: sddDriftAfterApproval},
 				{Name: "the plain passing finish closes over the changed candidate, and keeps the binding", Requires: sddAttemptFinishCapability, Composite: sddBoundPassingFinishCloses},
+				{Name: "decoy: delivery still refuses the unreviewed candidate", Composite: sddDecoyUnreviewedCandidateIsRefusedAtDelivery},
+				{Name: "decoy: delivery still refuses the unreviewed candidate", Composite: sddDecoyUnreviewedCandidateIsRefusedAtDelivery},
 			},
 		},
 		{

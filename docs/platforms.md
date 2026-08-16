@@ -16,6 +16,14 @@ Derivatives are detected via `ID_LIKE` in `/etc/os-release` (Linux Mint, Pop!_OS
 
 Release archives are currently produced for macOS and Linux only. Windows source compatibility remains supported, but official Windows executable/archive assets and Scoop publication are temporarily unavailable pending the [Authenticode restoration gate](release-signing.md#windows-distribution-restoration-gate).
 
+## OpenCode Managed Launcher
+
+When OpenCode background subagents are enabled through `gentle-ai install` or `gentle-ai sync`, Gentle AI writes only its own launcher files under `~/.gentle-ai/bin/`. POSIX systems use `~/.gentle-ai/bin/opencode`; Windows uses `opencode.cmd` and `opencode.ps1`. The launcher sets `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` only when the variable is not already defined, so an explicit `false` always selects foreground execution.
+
+Deactivation removes managed launcher files but may leave `~/.gentle-ai/bin/` in `PATH`; Gentle AI does not clean up shell profiles.
+
+Restart OpenCode after enabling managed activation. Restart the shell if the launcher directory has not entered PATH. OpenCode `serve`, `attach`, Desktop, or any session started outside the managed launcher uses foreground fallback rather than receiving an unsafe partial activation.
+
 ---
 
 ## Windows Notes

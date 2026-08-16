@@ -105,14 +105,11 @@ func TestNegotiatedRouteWithoutRuntimeIdentityReachesStart(t *testing.T) {
 // and fails with the same reviewImmutableTransportUnsupportedCode, unlike Pi,
 // which fails earlier with reviewTransportCapabilityUnsupportedCode.
 //
-// Codex used to stand here too. Its organic runtime proof
-// (TestRealCodexReviewerOrdinarySessionAdmitsRawOutput, e2e/organicruntime)
-// gave it a genuine immutable transport as well (its CodexAdapter's empty
-// scratch-directory boundary), so it is no longer an instance of the class
-// this test is about either. The unknown identity is unchanged, so the
-// property this test exists to protect -- a declared identity is validated
-// exactly as before, and every unsupported one still stops -- is still
-// proven by two runtimes.
+// Codex also reaches the shared provider contract through its native adapter,
+// so it is not an instance of the unsupported class either. The unknown
+// identity is unchanged, so the property this test protects -- a declared
+// identity is validated exactly as before, and every unsupported one still
+// stops -- is still proven by two runtimes.
 func TestDeclaredUnsupportedRuntimeStillRefusesNegotiatedStatus(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	for _, runtime := range []string{string(model.AgentKilocode), "unknown-runtime"} {
@@ -133,11 +130,9 @@ func TestDeclaredUnsupportedRuntimeStillRefusesNegotiatedStatus(t *testing.T) {
 
 // TestDeclaredBuiltInRuntimeUsesProvenExecutorBoundary prevents the capability
 // declaration from drifting from the supported fresh reviewer paths. Claude
-// and OpenCode use their tool-free fresh agent in an ordinary session, neither
-// depending on OPENCODE_DISABLE_PROJECT_CONFIG or OPENCODE_DISABLE_EXTERNAL_SKILLS
-// (deliberately left unset); Codex uses CodexAdapter's empty scratch-directory
-// process, proven organically by
-// TestRealCodexReviewerOrdinarySessionAdmitsRawOutput (e2e/organicruntime).
+// and OpenCode use their native provider contract in an ordinary session,
+// without `OPENCODE_DISABLE_*` environment controls; Codex invokes its native
+// provider adapter through the same Go-owned contract.
 func TestDeclaredBuiltInRuntimeUsesProvenExecutorBoundary(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	for _, test := range []struct {

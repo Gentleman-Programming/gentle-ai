@@ -9,11 +9,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/advisoryreview"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -153,6 +154,7 @@ func TestReviewLensContextRefusesUnboundInput(t *testing.T) {
 		{name: "positional", argv: []string{"lens-context", "--repository-context", handle, "--lens", lens, "HEAD"}, want: "requires the exact provider-issued"},
 		{name: "unknown flag", argv: []string{"lens-context", "--repository-context", handle, "--lens", lens, "--order", "0"}, want: "flag provided but not defined"},
 		{name: "unknown delivery", argv: []string{"lens-context", "--repository-context", handle, "--lens", lens, "--delivery", "hand-wave"}, want: "unknown reviewer context delivery"},
+		{name: "caller provider contract", argv: []string{"lens-context", "--repository-context", handle, "--lens", lens, "--delivery", string(reviewtransaction.ReviewerContextLevelProviderContract)}, want: "reserved for Go-owned provider execution"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -282,13 +284,96 @@ func TestReviewLensContextRefusesManifestOverAdvisoryCapacityBeforePatchInspecti
 	}
 }
 
+func TestNegotiatedStatusStopsDeterministicLensContextBudgetWithoutMutation(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	for index := range reviewProviderMaxEvidenceEntries + 1 {
+		writeReviewStartCandidate(t, repo, "path-"+strconv.Itoa(index)+".txt", "candidate\n", 0o644)
+	}
+	started := runNegotiatedReviewStart(t, repo, "lens-context-status-budget")
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := readLegacyAuthorityTree(t, reviewCLIAuthorityRoot(t, repo))
+	homeBefore := readLegacyAuthorityTree(t, home)
+	worktreeBefore := runReviewCLIGit(t, repo, "status", "--porcelain=v2", "--untracked-files=all")
+
+	var context bytes.Buffer
+	err = RunReview([]string{
+		"lens-context", "--repository-context", started.RepositoryContext.Handle, "--lens", started.SelectedLenses[0],
+	}, &context)
+	if err == nil || !strings.Contains(err.Error(), "lens_context_budget_exceeded") {
+		t.Fatalf("lens-context refusal = %v, want deterministic budget exhaustion", err)
+	}
+	if context.Len() != 0 {
+		t.Fatalf("lens-context emitted %d bytes after budget refusal", context.Len())
+	}
+	if after := readLegacyAuthorityTree(t, reviewCLIAuthorityRoot(t, repo)); !reflect.DeepEqual(before, after) {
+		t.Fatalf("lens-context budget refusal mutated authority: before=%#v after=%#v", before, after)
+	}
+	if after := readLegacyAuthorityTree(t, home); !reflect.DeepEqual(homeBefore, after) {
+		t.Fatalf("lens-context budget refusal persisted an artifact: before=%#v after=%#v", homeBefore, after)
+	}
+
+	status := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+	if status.Action != reviewtransaction.TargetStatusActionStop ||
+		status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "lens_context_budget_exceeded" ||
+		status.NextTransition.Execute != nil || status.NextTransition.Collect != nil ||
+		status.Forecast == nil || status.Forecast.Horizon != ForecastHorizonTerminal {
+		t.Fatalf("STATUS reoffered a deterministically impossible reviewer slot: %#v", status)
+	}
+	if status.Authority == nil || status.Authority.Revision != record.Revision ||
+		status.Authority.State != reviewtransaction.StateReviewing || status.Receipt.Status != ReviewReceiptExpectedMissing ||
+		status.Frozen == nil || status.Frozen.CorrectionBudget != record.State.CorrectionBudget {
+		t.Fatalf("terminal STATUS changed frozen review truth: %#v", status)
+	}
+	if after := readLegacyAuthorityTree(t, reviewCLIAuthorityRoot(t, repo)); !reflect.DeepEqual(before, after) {
+		t.Fatalf("STATUS budget classification mutated authority: before=%#v after=%#v", before, after)
+	}
+	if after := readLegacyAuthorityTree(t, home); !reflect.DeepEqual(homeBefore, after) {
+		t.Fatalf("STATUS budget classification persisted an artifact: before=%#v after=%#v", homeBefore, after)
+	}
+	if worktreeAfter := runReviewCLIGit(t, repo, "status", "--porcelain=v2", "--untracked-files=all"); worktreeAfter != worktreeBefore {
+		t.Fatalf("STATUS budget classification changed the worktree: before=%q after=%q", worktreeBefore, worktreeAfter)
+	}
+}
+
+func TestNegotiatedStatusReoffersEmptyReviewerResultWithoutBudgetTerminal(t *testing.T) {
+	reviewModeHome(t)
+	repo, started, _, record := newArtifactReview(t, false)
+	input := filepath.Join(t.TempDir(), "empty-reviewer-result.json")
+	if err := os.WriteFile(input, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("empty reviewer result was accepted")
+	}
+
+	status := explicitFrozenReviewingStatus(t, repo, started.LineageID)
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "reviewer_results_required" || status.NextTransition.Collect == nil ||
+		len(status.NextTransition.Collect.Inputs) != 1 || status.NextTransition.Collect.Inputs[0].Name != "reviewer_result" {
+		t.Fatalf("empty reviewer result STATUS = %#v, want fresh collect continuity", status)
+	}
+}
+
 func TestReviewLensContextRecoveryGuidanceRefreshesThenExecutesNextTransition(t *testing.T) {
 	tests := []struct {
 		name   string
 		action string
 	}{
 		{name: "evidence capacity", action: reviewLensContextBudgetAction},
-		{name: "entry capacity", action: reviewLensContextCapacityAction(advisoryreview.MaxEvidenceEntries + 1)},
+		{name: "entry capacity", action: reviewLensContextCapacityAction(reviewProviderMaxEvidenceEntries + 1)},
 		{name: "deadline", action: reviewLensContextDeadlineAction},
 	}
 	for _, test := range tests {
@@ -347,9 +432,9 @@ func TestReviewLensContextCallersFailClosedOnInspectorCleanupFailure(t *testing.
 			payload, err := runReviewLensContext([]string{"--repository-context", handle, "--lens", lens}, io.Discard, deps)
 			return err, payload == nil
 		}},
-		{"advisory request", func(deps reviewLensContextDeps, handle, lens string) (error, bool) {
-			request, err := resolveAdvisoryRequest(context.Background(), deps, handle, lens)
-			return err, request.ArtifactSubject == (reviewtransaction.ArtifactSubject{}) && request.ChangedPathManifest == nil && request.Evidence == nil
+		{"provider materialization", func(deps reviewLensContextDeps, handle, lens string) (error, bool) {
+			request, err := reviewProviderMaterialize(context.Background(), deps, handle, lens)
+			return err, request.Store.Dir == "" && request.Binding == (reviewLensContextBinding{}) && request.Subject == (reviewtransaction.ArtifactSubject{}) && len(request.Invocation.Prompt()) == 0
 		}},
 	} {
 		for _, operation := range []bool{false, true} {
@@ -475,6 +560,17 @@ func TestReviewLensContextRefusesConflictingDeliveryForOneSlot(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "lens_context_emission_conflict") {
 		t.Fatalf("conflicting delivery error = %v", err)
 	}
+	// The exit has to name the mechanism the slot actually recorded: "use the
+	// same mechanism" is not runnable if the operator cannot tell which one
+	// that was (issue #2850).
+	for _, want := range []string{
+		string(reviewtransaction.ReviewerContextLevelProviderCommand),
+		"--delivery " + string(reviewtransaction.ReviewerContextLevelProviderCommand),
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("conflict refusal does not name a runnable exit (%q): %v", want, err)
+		}
+	}
 	if output.Len() != 0 {
 		t.Fatalf("conflicting delivery emitted %d bytes", output.Len())
 	}
@@ -563,7 +659,18 @@ func TestReviewLensContextStandsAloneAsTheReviewerInstruction(t *testing.T) {
 			}
 			// The reviewer must know the evidence in the block is the whole
 			// candidate, and that reading anything else is not permitted.
-			for _, required := range []string{"complete and only", "working tree", "subject_hash", "complete unique unordered set", "path:line or path:start-end"} {
+			// The citation discipline must warn that free-text evidence and
+			// proof_refs tokens shaped like path:line are validated against
+			// the frozen repository, since one unknown path rejects the
+			// entire result, and that a candidate-causal finding must anchor
+			// its span entirely within candidate-changed lines, since one
+			// unchanged context line in the span rejects the result too.
+			for _, required := range []string{
+				"complete and only", "working tree", "subject_hash", "complete unique unordered set", "path:line or path:start-end",
+				"exactly as it appears in the changed-path manifest", "host:port", "validated against the frozen repository",
+				"entirely within lines this candidate changed", "one unchanged context line in the span",
+				"never reproduce that token", "describe it in words and cite the manifest file and line",
+			} {
 				if !strings.Contains(instruction, required) {
 					t.Fatalf("instruction omits %q:\n%s", required, instruction)
 				}

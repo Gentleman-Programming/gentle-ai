@@ -57,19 +57,42 @@ func TestCompactUncorrectedGateOmitsRedundantReceiptBaseTree(t *testing.T) {
 	}
 }
 
-// TestCompactPrePRBaseMismatchNamesExpectedAndActualBase rebuilds the community
-// fixture: a correction receipt whose publication base is the pre-correction
-// candidate — the exact tree the pre-commit allow envelope reported. The gate is
-// right to refuse, but the refusal published only what it found and never what
-// it required, so the operator read their own value echoed back with no
-// expectation anywhere in the envelope.
-func TestCompactPrePRBaseMismatchNamesExpectedAndActualBase(t *testing.T) {
-	repo, state, receipt, baseRef := approvedCompactFixDiffFixture(t, "compact-pre-pr-base-mismatch")
+// TestCompactPrePRAllowsCorrectionOnlyDeliveryOverPreCorrectionBase is issue
+// #2017 at the unit level. The publication base is the pre-correction
+// candidate — the receipt-derived correction-only projection. This used to be
+// framed as an operator error ("took the base from the pre-commit allow
+// envelope"), and the gate refused it; the maintainer decision on #2017
+// reverses that judgment: the receipt covers the original candidate plus its
+// one bounded correction, so the correction-only publication over the merged
+// original is exactly what the receipt approves. No other base is relaxed.
+func TestCompactPrePRAllowsCorrectionOnlyDeliveryOverPreCorrectionBase(t *testing.T) {
+	repo, state, receipt, baseRef := approvedCompactFixDiffFixture(t, "compact-pre-pr-correction-only")
 	remote := strings.TrimSpace(gitSnapshot(t, repo, "remote", "get-url", "origin"))
 	preCorrection := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
 	gitSnapshot(t, repo, "add", "-A")
 	gitSnapshot(t, repo, "commit", "-m", "deliver corrected candidate")
 	gitSnapshot(t, repo, "--git-dir", remote, "update-ref", "refs/heads/"+strings.TrimPrefix(baseRef, "origin/"), preCorrection)
+
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{
+		Gate: GatePrePR, LineageID: state.LineageID, BaseRef: baseRef,
+	})
+	if got.Result != GateAllow {
+		t.Fatalf("correction-only delivery over the pre-correction candidate = %#v, want allow (#2017)", got)
+	}
+}
+
+// TestCompactPrePRBaseMismatchNamesExpectedAndActualBase pins the denial
+// diagnostics contract: a refusal must publish what the gate required, not
+// just what it found. Pre-PR derives its base as the merge-base with HEAD,
+// so the reachable foreign base is an OLDER ancestor — a stale mainline
+// behind the reviewed base. That base is neither the reviewed base nor the
+// #2017 receipt-derived correction-only base, and must still deny.
+func TestCompactPrePRBaseMismatchNamesExpectedAndActualBase(t *testing.T) {
+	repo, state, receipt, baseRef := approvedCompactFixDiffFixture(t, "compact-pre-pr-base-mismatch")
+	stale := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD~2"))
+	gitSnapshot(t, repo, "add", "-A")
+	gitSnapshot(t, repo, "commit", "-m", "deliver corrected candidate")
+	gitSnapshot(t, repo, "push", "-q", "-f", "origin", stale+":refs/heads/"+strings.TrimPrefix(baseRef, "origin/"))
 
 	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{
 		Gate: GatePrePR, LineageID: state.LineageID, BaseRef: baseRef,
@@ -84,8 +107,8 @@ func TestCompactPrePRBaseMismatchNamesExpectedAndActualBase(t *testing.T) {
 	if got.Context.BaseMismatch.Expected != receipt.BaseTree {
 		t.Fatalf("expected base = %q, want the reviewed base %q", got.Context.BaseMismatch.Expected, receipt.BaseTree)
 	}
-	if got.Context.BaseMismatch.Actual != got.Context.BaseTree || got.Context.BaseMismatch.Actual != state.InitialSnapshot.CandidateTree {
-		t.Fatalf("actual base = %q, want the live derived base %q", got.Context.BaseMismatch.Actual, got.Context.BaseTree)
+	if got.Context.BaseMismatch.Actual != got.Context.BaseTree || got.Context.BaseMismatch.Actual == state.InitialSnapshot.CandidateTree {
+		t.Fatalf("actual base = %q, want the live foreign base %q", got.Context.BaseMismatch.Actual, got.Context.BaseTree)
 	}
 	if got.Context.ReceiptBaseTree != receipt.BaseTree {
 		t.Fatalf("denial receipt_base_tree = %q, want the reviewed base %q", got.Context.ReceiptBaseTree, receipt.BaseTree)

@@ -97,7 +97,10 @@ func requireDisabledUnmanagedSDDStatus(t *testing.T, status sddstatus.Status) {
 // The switch becomes unreadable, which is not the same as being off.
 func corruptCloneLocalReviewMode(t *testing.T, repo string) {
 	t.Helper()
-	root := filepath.Join(repo, ".git", "gentle-ai", "review-transactions")
+	// #2882 moved the switch out of the review authority tree so a damaged
+	// authority can no longer make the kill switch unreachable. The record
+	// this helper corrupts is the switch's own, wherever it now lives.
+	root := filepath.Join(repo, ".git", "gentle-ai", "review-mode")
 	corrupted := 0
 	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {

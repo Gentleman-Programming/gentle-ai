@@ -872,6 +872,22 @@ func reviewGateContentionError(evaluation reviewtransaction.NativeGateEvaluation
 	)
 }
 
+// reviewRetrySafeDenialAction overrides the result-derived gate action for
+// the two retry-safe receipt-discovery denials (issue #3342). Both stay
+// denied (allowed=false), but their action is "retry": the reason already
+// names the runnable continuation, and routing either to
+// explicit-maintainer-action escalated conditions that clear themselves.
+func reviewRetrySafeDenialAction(denial *reviewtransaction.GateDenial) string {
+	if denial == nil || denial.Stage != "receipt-discovery" {
+		return ""
+	}
+	switch ReviewReceiptDiscoveryKind(denial.Code) {
+	case ReviewGateRemoteFetchRequired, ReviewAuthorityInventoryBusy:
+		return "retry"
+	}
+	return ""
+}
+
 func reviewGateAction(result reviewtransaction.GateResult) string {
 	switch result {
 	case reviewtransaction.GateAllow:

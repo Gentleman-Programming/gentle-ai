@@ -250,3 +250,55 @@ func TestNegotiatedStatusRecoversApprovedFeatureOntoCurrentBase(t *testing.T) {
 		t.Fatalf("successor did not bind only the rebased feature on the current base: %#v", recovered.State)
 	}
 }
+
+func TestNegotiatedStatusCollectsEscalatedChangedScopeRecovery(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	attempt := filepath.Join(repo, "internal", "auth", "session.go")
+	writeCLIAttemptFile(t, attempt, "package auth\n\nfunc CheckToken(token string) bool { return token != \"\" }\n")
+	runReviewCLIGit(t, repo, "add", ".")
+	var startedOut bytes.Buffer
+	if err := RunReview([]string{"start", "--cwd", repo}, &startedOut); err != nil {
+		t.Fatalf("review start: %v\n%s", err, startedOut.String())
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedOut.Bytes(), &started)
+	resultPaths := make([]string, len(started.SelectedLenses))
+	for index, lens := range started.SelectedLenses {
+		resultPaths[index] = filepath.Join(t.TempDir(), lens+".json")
+		writeReviewCLIJSON(t, resultPaths[index], facadeReviewerResult{Lens: lens, Findings: []facadeFinding{}, Evidence: []string{"reviewed exact candidate"}})
+	}
+	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, resultPaths); err != nil {
+		t.Fatalf("capture reviewer results: %v", err)
+	}
+	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID, "--captured-results=true"}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("finalize reviewer results: %v", err)
+	}
+	evidence := filepath.Join(repo, "failed-verification.txt")
+	writeCLIAttemptFile(t, evidence, "go test ./... FAIL\n")
+	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID, "--evidence", evidence, "--failed=true"}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("failed final verification: %v", err)
+	}
+
+	writeCLIAttemptFile(t, attempt, "package auth\n\nfunc CheckToken(token string) bool { return len(token) >= 16 }\n")
+	writeCLIAttemptFile(t, filepath.Join(repo, "docs", "added.md"), "# added scope\n")
+	runReviewCLIGit(t, repo, "add", ".")
+	var statusOut bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition", "--action-eligibility", "--lineage", started.LineageID,
+	}, &statusOut); err != nil {
+		t.Fatalf("review status: %v\n%s", err, statusOut.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, statusOut.Bytes(), &status)
+	if status.Action != reviewtransaction.TargetStatusActionRecover || status.ActionDisposition != reviewtransaction.RecoveryEscalated ||
+		status.Authority == nil || status.Authority.LineageID != started.LineageID || status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.ReasonCode != "recovery_authorization_required" ||
+		status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("escalated changed-scope status did not collect recovery authorization:\n%s", statusOut.String())
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	if input.Schema != "gentle-ai.review-recovery-authorization/v1" || input.CaptureOperation != "external.authorize_recovery" {
+		t.Fatalf("recovery authorization input = %#v", input)
+	}
+}

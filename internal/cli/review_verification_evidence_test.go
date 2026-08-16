@@ -178,10 +178,14 @@ func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing
 		afterFailure.State.CumulativeCorrectionLines != 0 || afterFailure.State.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("failed repository verification consumed correction: %#v, %v", afterFailure, err)
 	}
-	firstRaw := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir,
-		strings.TrimPrefix(firstTarget, "sha256:"), reviewtransaction.CompactFinalEvidenceFile)
-	if _, err := os.Stat(firstRaw); err != nil {
-		t.Fatalf("first candidate evidence was not retained: %v", err)
+	// The evidence directory is candidate-and-revision-addressed (issue #2623),
+	// so assert the retained property rather than one exact revision segment:
+	// the first candidate still owns evidence of its own.
+	firstCandidateDir := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir,
+		strings.TrimPrefix(firstTarget, "sha256:"))
+	retained, err := filepath.Glob(filepath.Join(firstCandidateDir, "*", reviewtransaction.CompactFinalEvidenceFile))
+	if err != nil || len(retained) == 0 {
+		t.Fatalf("first candidate evidence was not retained under %s: %v", firstCandidateDir, err)
 	}
 
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
@@ -229,8 +233,8 @@ func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing
 		terminal.State.EvidenceOutcome != reviewtransaction.VerificationOutcomePassed || terminal.State.EvidenceTargetIdentity != secondTarget {
 		t.Fatalf("atomic correction terminal = %#v, %v", terminal, err)
 	}
-	if _, err := os.Stat(firstRaw); err != nil {
-		t.Fatalf("accepted candidate replaced prior failed evidence: %v", err)
+	if still, err := filepath.Glob(filepath.Join(firstCandidateDir, "*", reviewtransaction.CompactFinalEvidenceFile)); err != nil || len(still) != len(retained) {
+		t.Fatalf("accepted candidate replaced prior failed evidence under %s: %v", firstCandidateDir, err)
 	}
 }
 

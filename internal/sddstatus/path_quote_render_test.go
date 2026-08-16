@@ -55,8 +55,8 @@ func TestNativeRuntimeInstructionsRenderWindowsPathVerbatim(t *testing.T) {
 	status.ActionContext.WorkspaceRoot = `C:\Users\dev\repo`
 	got := strings.Join(nativeRuntimeInstructions(status, "my-change"), "\n")
 	want := `--cwd "C:\Users\dev\repo"`
-	if occurrences := strings.Count(got, want); occurrences != 3 {
-		t.Fatalf("acquire, settle, and correction-acquire instructions must all carry the verbatim path:\nwant 3 occurrences of %s, got %d\ngot: %s", want, occurrences, got)
+	if occurrences := strings.Count(got, want); occurrences != 4 {
+		t.Fatalf("runtime instructions must all carry the verbatim path:\nwant 4 occurrences of %s, got %d\ngot: %s", want, occurrences, got)
 	}
 }
 

@@ -26,6 +26,7 @@ var linearRoutes = map[Screen]Route{
 	ScreenDependencyTree:                 {Forward: ScreenReview, Backward: ScreenPreset},
 	ScreenSkillPicker:                    {Forward: ScreenReview, Backward: ScreenDependencyTree},
 	ScreenReview:                         {Forward: ScreenInstalling, Backward: ScreenDependencyTree},
+	ScreenOpenCodeBackground:             {Forward: ScreenInstalling, Backward: ScreenReview},
 	ScreenInstalling:                     {Forward: ScreenComplete, Backward: ScreenReview},
 	ScreenComplete:                       {Backward: ScreenInstalling},
 	ScreenBackups:                        {Backward: ScreenWelcome},

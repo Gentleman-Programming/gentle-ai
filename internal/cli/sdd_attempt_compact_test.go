@@ -306,15 +306,12 @@ func TestRunSDDAttemptTransportsAdmittedEvidenceRevisionToSettle(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	const change = "admitted-evidence-handoff"
 	failed := cliAttemptHash('a')
-	payload, err := json.Marshal(map[string]any{
+	evidence := map[string]any{
 		"schema":                   "gentle-ai.remediation-evidence/v1",
 		"failed_evidence_revision": failed,
 		"commands":                 []map[string]any{{"command": "go test ./internal/example", "exit_code": 0, "result": "1 test passed"}},
 		"runtime_harness":          map[string]any{"status": "not_applicable", "command": "", "result": "", "na_reason": "No runtime boundary exists because this change only tightens a report parser."},
 		"rollback":                 map[string]any{"boundary": "runtime handoff", "evidence": "The active attempt remains the rollback boundary."},
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	changeRoot := filepath.Join(repo, "openspec", "changes", change)
 	if err := os.MkdirAll(changeRoot, 0o755); err != nil {
@@ -328,10 +325,6 @@ func TestRunSDDAttemptTransportsAdmittedEvidenceRevisionToSettle(t *testing.T) {
 	}
 	runReviewCLIGit(t, repo, "add", ".")
 	runReviewCLIGit(t, repo, "commit", "-qm", "seed remediation change")
-	admitted, err := sddstatus.AdmitRemediationEvidence(payload, failed)
-	if err != nil {
-		t.Fatal(err)
-	}
 	failedAcquire, _ := runCompactSDDAttempt(t, compactAcquireArgs(repo, change, "admitted-failed-acquire", 2))
 	_, _ = runCompactSDDAttempt(t, []string{
 		"settle", "--cwd", repo, "--change", change, "--token", failedAcquire.Token,
@@ -348,7 +341,14 @@ func TestRunSDDAttemptTransportsAdmittedEvidenceRevisionToSettle(t *testing.T) {
 	}
 	const lineage = "admitted-remediation-lineage"
 	writeCLIApprovedCompactAuthority(t, repo, lineage)
-	if _, err := sddstatus.BindApprovedReview(context.Background(), repo, change, lineage, ""); err != nil {
+	binding, err := sddstatus.BindApprovedReview(context.Background(), repo, change, lineage, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence["lineage_id"], evidence["generation"], evidence["fix_batch"] = binding.Lineage, binding.GateContext.Generation, 1
+	payload, _ := json.Marshal(evidence)
+	admitted, err := sddstatus.AdmitRemediationEvidence(payload, failed)
+	if err != nil {
 		t.Fatal(err)
 	}
 	evidenceFile := filepath.Join(repo, "remediation-evidence.json")

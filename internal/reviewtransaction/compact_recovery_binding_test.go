@@ -507,6 +507,7 @@ type attestedRecoveryAdvanceFixture struct {
 
 func newAttestedRecoveryAdvanceFixture(t *testing.T) *attestedRecoveryAdvanceFixture {
 	t.Helper()
+	requireMergeTreeWriteTree(t)
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)

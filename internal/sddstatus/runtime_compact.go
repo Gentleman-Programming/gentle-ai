@@ -264,9 +264,6 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 // the authority; callers name a successor only when review approved a distinct
 // lineage.
 func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleRequest) (CompactAttemptResult, error) {
-	if err := normalizeCompactSettleRequest(request); err != nil {
-		return CompactAttemptResult{}, err
-	}
 	replay, err := store.load()
 	if err != nil {
 		return compactBlockedByUnreadableAuthority(err), nil
@@ -284,18 +281,6 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 	remediation := request.RemediatesEvidenceRevision != "" ||
 		(request.Outcome == AttemptPassed && status.Binding != nil && failedEvidence != "" &&
 			(!store.ReviewDisabled || explicitSuccessor || request.RemediatesEvidenceRevision != ""))
-	if remediation {
-		if len(request.RemediationEvidence) == 0 {
-			return CompactAttemptResult{}, errors.New("remediation evidence is required; rerun `gentle-ai sdd-attempt settle` with --remediation-evidence-file <path-to-the-exact-gentle-ai.remediation-evidence-v1-json>")
-		}
-		admittedRevision, admissionErr := AdmitRemediationEvidence(request.RemediationEvidence, failedEvidence)
-		if admissionErr != nil {
-			return CompactAttemptResult{}, fmt.Errorf("remediation evidence admission failed before settlement: %w", admissionErr)
-		}
-		if admittedRevision != request.EvidenceRevision {
-			return CompactAttemptResult{}, fmt.Errorf("successful evidence revision %q does not match native admission revision %q; active attempt preserved; rerun `gentle-ai sdd-attempt settle` with --evidence-revision %s", request.EvidenceRevision, admittedRevision, admittedRevision)
-		}
-	}
 	if receipt, exists := replay.Requests[request.RequestID]; exists {
 		record, loadErr := store.loadRecord(receipt.Revision)
 		if loadErr != nil {
@@ -309,6 +294,29 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 			return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
 		}
 		return store.compactSettleResult()
+	}
+	if err := normalizeCompactSettleRequest(request); err != nil {
+		return CompactAttemptResult{}, err
+	}
+	if remediation {
+		if len(request.RemediationEvidence) == 0 {
+			return CompactAttemptResult{}, errors.New("remediation evidence is required; rerun `gentle-ai sdd-attempt settle` with --remediation-evidence-file <path-to-the-exact-gentle-ai.remediation-evidence-v1-json>")
+		}
+		bindings := []RemediationBinding(nil)
+		if !store.ReviewDisabled && status.Binding != nil {
+			bindings = []RemediationBinding{{
+				LineageID:  status.Binding.Lineage,
+				Generation: status.Binding.GateContext.Generation,
+				FixBatch:   1,
+			}}
+		}
+		admittedRevision, admissionErr := AdmitRemediationEvidence(request.RemediationEvidence, failedEvidence, bindings...)
+		if admissionErr != nil {
+			return CompactAttemptResult{}, fmt.Errorf("remediation evidence admission failed before settlement: %w", admissionErr)
+		}
+		if admittedRevision != request.EvidenceRevision {
+			return CompactAttemptResult{}, fmt.Errorf("successful evidence revision %q does not match native admission revision %q; active attempt preserved; rerun `gentle-ai sdd-attempt settle` with --evidence-revision %s", request.EvidenceRevision, admittedRevision, admittedRevision)
+		}
 	}
 
 	// Settle asks the same predicate the same question and interprets the same
@@ -379,6 +387,9 @@ func unmanagedRemediationSettleable(status RuntimeStatus, failedEvidence string)
 }
 
 func normalizeCompactSettleRequest(request CompactSettleRequest) error {
+	if request.Outcome == AttemptInterrupted && request.EvidenceRevision != "" {
+		return errors.New("interrupted evidence_revision must be empty; rerun `gentle-ai sdd-attempt settle` without --evidence-revision")
+	}
 	_, err := normalizeFinishAttemptRequest(FinishAttemptRequest{
 		ExpectedRevision: request.Token, RequestID: request.RequestID, Outcome: request.Outcome,
 		EvidenceRevision: request.EvidenceRevision, Diagnosis: request.Diagnosis,
@@ -636,7 +647,7 @@ func runtimeSettleObligation(status RuntimeStatus, reviewDisabled bool) string {
 	}
 	return "this attempt's passing settle is already bound to the chain's unremediated failed verification " +
 		failed.EvidenceRevision + ": settle it passed with `--remediates-evidence-revision \"" + failed.EvidenceRevision +
-		"\"`, and with verification evidence distinct from it, over a candidate this attempt actually changed. " +
+		"\"`, and with verification evidence distinct from it, over a correction candidate that no longer matches the state that failed. " +
 		"An audited reset or an interrupted settlement between that failure and this correction does not release the " +
 		"binding — only a passing settlement that names it does."
 }

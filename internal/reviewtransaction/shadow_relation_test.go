@@ -253,6 +253,7 @@ func TestShadowRelateAmendmentBDegradesContractionOnExcludedFinding(t *testing.T
 // deriveBaseAdvanceCompatibility fails closed on that one condition.
 func buildShadowBaseAdvanceFixture(t *testing.T, breakMergeBasePreservation bool) (string, Receipt, GateRequest, Snapshot, *resolvedPrePRRefs, gateArtifactPreimages) {
 	t.Helper()
+	requireMergeTreeWriteTree(t)
 	ctx := context.Background()
 	repo := initSnapshotRepo(t)
 	baseCommit := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))

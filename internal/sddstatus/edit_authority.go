@@ -12,15 +12,17 @@ import (
 )
 
 // Issue #2547 (S1 of #2540): work units carry no structured target field, so
-// the only honest signal that a task plan edits another repository is the
-// prose itself. Detection is deliberately conservative: it inspects only
-// backticked tokens inside markdown checkbox lines, and it flags a token only
-// when the token resolves to a real Git repository different from the
-// planning repository and outside every authorized edit root. It catches the
-// reported scenario (explicit `../sibling/...` and absolute paths); it cannot
-// catch pure prose ("update the billing service"), and a context reference
-// can raise a false block — acceptable because the consequence is an honest
-// blocked status naming its exits, never silent authority.
+// the only honest signal that a task plan names an edit path outside its
+// authorized roots is the prose itself. Detection is deliberately
+// conservative: it inspects only backticked tokens inside markdown checkbox
+// lines, and it flags a token only when it resolves to a path in a Git
+// repository outside every authorized edit root. Different repositories are
+// represented by their Git roots; targets inside the planning repository are
+// narrowed to their containing edit roots. It catches the reported scenario
+// (explicit `../sibling/...` and absolute paths); it cannot catch pure prose
+// ("update the billing service"), and a context reference can raise a false
+// block — acceptable because the consequence is an honest blocked status
+// naming its exits, never silent authority.
 //
 // This derivation deliberately lives outside the #2515 runtime-readiness
 // triple (RuntimeStatus.Complete/DecisionRequired/ActiveAttempt): edit
@@ -32,15 +34,21 @@ var backtickedSpan = regexp.MustCompile("`([^`]+)`")
 // detectUnauthorizedEditRoots scans tasks text (both status paths have text;
 // the Engram store has no tasks.md path) for path-like tokens in checkbox
 // lines, resolves each against workspaceRoot to its nearest existing
-// ancestor, and reports every resolved Git root that is neither the planning
-// repository's own Git root nor inside allowedEditRoots. allowedEditRoots is
-// a parameter so a later slice can extend it with persisted per-change
-// grants without touching detection (#2540 S2-S4).
+// ancestor, and reports every resolved edit root outside allowedEditRoots.
+// Targets in a different Git repository are represented by that repository's
+// Git root; targets sharing the planning repository are narrowed by
+// sameRepositoryEditRoot. allowedEditRoots is a parameter so a later slice can
+// extend it with persisted per-change grants without touching detection
+// (#2540 S2-S4).
 func detectUnauthorizedEditRoots(tasksText string, workspaceRoot string, allowedEditRoots []string) []string {
 	planningGitRoot := gitRootOf(resolveExistingPath(workspaceRoot))
 	allowed := make([]string, 0, len(allowedEditRoots))
 	for _, root := range allowedEditRoots {
-		allowed = append(allowed, resolveExistingPath(root))
+		root = filepath.Clean(root)
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			root = resolved
+		}
+		allowed = append(allowed, root)
 	}
 
 	unauthorized := map[string]bool{}
@@ -55,10 +63,17 @@ func detectUnauthorizedEditRoots(tasksText string, workspaceRoot string, allowed
 			}
 			resolved = resolveExistingPath(filepath.Clean(resolved))
 			target := gitRootOf(resolved)
-			if target == "" || target == planningGitRoot || withinAnyRoot(target, allowed) {
+			if target == "" {
 				continue
 			}
-			unauthorized[target] = true
+			missing := target
+			if target == planningGitRoot {
+				missing = sameRepositoryEditRoot(resolved)
+			}
+			if withinAnyRoot(missing, allowed) {
+				continue
+			}
+			unauthorized[missing] = true
 		}
 	}
 
@@ -68,6 +83,16 @@ func detectUnauthorizedEditRoots(tasksText string, workspaceRoot string, allowed
 	}
 	sort.Strings(roots)
 	return roots
+}
+
+// sameRepositoryEditRoot narrows a target inside the planning repository to
+// the smallest existing canonical directory the grant ledger can persist. A
+// different repository remains represented by its Git root above.
+func sameRepositoryEditRoot(path string) string {
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return filepath.Dir(path)
+	}
+	return path
 }
 
 // pathLikeTokens extracts the conservative candidate set from one checkbox
@@ -141,17 +166,16 @@ func withinAnyRoot(target string, roots []string) bool {
 	return false
 }
 
-// editAuthorityBlockedReason names each unauthorized root and both exits:
-// keep the plan inside the authorized roots, or grant authority (the grant
-// command is a later slice of #2540; until it exists the only authorized
-// root is the planning repository).
+// editAuthorityBlockedReason names each unauthorized edit root and both exits:
+// keep the plan inside the authorized edit roots, or grant authority for the
+// named paths (the grant command is a later slice of #2540).
 func editAuthorityBlockedReason(roots []string) string {
 	quoted := make([]string, 0, len(roots))
 	for _, root := range roots {
 		quoted = append(quoted, pathquote.Quote(root))
 	}
 	return fmt.Sprintf(
-		"blocked(edit_authority_missing): tasks.md targets repositories outside the authorized edit roots: %s; edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority for those repositories",
+		"blocked(edit_authority_missing): tasks.md targets edit paths outside the authorized edit roots: %s; edit tasks.md so every work unit stays inside the authorized edit roots, or grant this change edit authority for the named paths",
 		strings.Join(quoted, ", "),
 	)
 }
@@ -161,7 +185,7 @@ func editAuthorityBlockedReason(roots []string) string {
 // outside-root guard would refuse never reports ready/apply. It runs only
 // when apply would otherwise be ready: completed work needs no forward edit
 // authority, and planning-blocked changes already carry their own reasons.
-// It also returns the unauthorized roots so the caller can raise the typed
+// It also returns the unauthorized edit roots so the caller can raise the typed
 // consent question naming exactly them (#2563, S4b of #2540).
 func applyEditAuthorityBlock(applyState ApplyState, reasons *blockerReasons, tasksText string, workspaceRoot string, allowedEditRoots []string) (ApplyState, []string) {
 	if applyState != ApplyReady {

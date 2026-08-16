@@ -120,16 +120,15 @@ if not dist.is_absolute():
 artifacts_path = dist / "artifacts.json"
 artifacts = json.loads(artifacts_path.read_text(encoding="utf-8"))
 archives = [artifact for artifact in artifacts if artifact.get("type") == "Archive"]
+platform_archives = [artifact for artifact in archives if artifact.get("goos") and artifact.get("goarch")]
 expected_platforms = {
     ("darwin", "amd64"),
     ("darwin", "arm64"),
     ("linux", "amd64"),
     ("linux", "arm64"),
-    ("windows", "amd64"),
-    ("windows", "arm64"),
 }
-platforms = {(item.get("goos"), item.get("goarch")) for item in archives}
-assert platforms == expected_platforms and len(archives) == len(expected_platforms), (
+platforms = {(item.get("goos"), item.get("goarch")) for item in platform_archives}
+assert platforms == expected_platforms and len(platform_archives) == len(expected_platforms), (
     f"release archive matrix mismatch: {sorted(platforms)}"
 )
 
@@ -161,7 +160,7 @@ def archive_payloads(path):
             for member in members
         }
 
-for artifact in archives:
+for artifact in platform_archives:
     path = archive_path(artifact)
     names, payloads = archive_payloads(path)
     packaged_contract = sorted(name for name in names if any(name.startswith(root.as_posix() + "/") for root in (contract_root, current_contract_root)))
@@ -179,5 +178,5 @@ for artifact in archives:
     archive_hash = hashlib.sha256(path.read_bytes()).hexdigest()
     assert checksums.get(path.name) == archive_hash, f"{path.name} is missing or incorrect in checksums.txt"
 
-print(f"review contract release archives: PASS ({len(archives)} archives, {len(expected_names)} contract files each)")
+print(f"review contract release archives: PASS ({len(platform_archives)} archives, {len(expected_names)} contract files each)")
 PY

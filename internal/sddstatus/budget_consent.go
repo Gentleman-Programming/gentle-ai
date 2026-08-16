@@ -1,6 +1,8 @@
 package sddstatus
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -114,8 +116,9 @@ func BudgetConsentEnvelope(in BudgetConsentInput) (BudgetConsentResult, error) {
 				Label:  "Open a fresh budget and keep going",
 				Effect: "Resets this objective to a fresh bounded budget. Every attempt already recorded stays in the immutable chain, nothing is erased, and no verification, review or receipt is fabricated.",
 				Invocation: fmt.Sprintf(
-					"gentle-ai sdd-attempt reset --cwd %s --change %s --expected-revision %q --request-id \"<unique-request-id>\" --reason %q --actor \"<actor>\"",
-					pathquote.Quote(in.Repo), in.Change, in.Revision, sddBudgetConsentReason(in)),
+					"gentle-ai sdd-attempt reset --cwd %s --change %s --expected-revision %q --request-id %s --reason %q --actor %s",
+					pathquote.Quote(in.Repo), in.Change, in.Revision,
+					sddBudgetConsentResetRequestID(in), sddBudgetConsentReason(in), sddRuntimeAuditActor),
 			},
 			{
 				Answer: sddBudgetConsentDeclined,
@@ -140,6 +143,34 @@ func BudgetConsentEnvelope(in BudgetConsentInput) (BudgetConsentResult, error) {
 		Headline: core.Headline, Reason: core.Reason, Value: core.Value,
 		Evidence: core.Evidence, Choices: core.Choices, OffPath: core.OffPath,
 	}, nil
+}
+
+// sddRuntimeAuditActor is the actor the runtime records for a reset it
+// materialized itself.
+//
+// The actor field is audit metadata, not authenticated human authority:
+// nothing downstream treats it as proof of who decided. #2959 emitted a
+// literal "<actor>" here, which forced the caller either to invent a value
+// inside a provider-owned command the relay contract forbids rewriting, or to
+// stop. A transparent fixed literal is honest about what the field is and
+// keeps the invocation executable exactly as returned. The human decision
+// itself is recorded by --reason, which still says a maintainer authorized it.
+const sddRuntimeAuditActor = "gentle-ai-runtime"
+
+// sddBudgetConsentResetRequestID derives the reset's request ID from the exact
+// objective it resets: the change, the expected revision, and the operation.
+//
+// Deterministic rather than random, because the relay contract permits
+// executing the returned command exactly once and a retry after an ambiguous
+// outcome must be the SAME request, not a second budget. Bound to the expected
+// revision, because a grant captured before authority moved must not be
+// replayable onto the new state; --expected-revision already fails CAS there,
+// and a distinct ID keeps the audit trail from claiming the stale decision was
+// the current one. Hashed rather than composed from the change name, so the
+// result satisfies runtimeRequestIDPattern for every change name that exists.
+func sddBudgetConsentResetRequestID(in BudgetConsentInput) string {
+	sum := sha256.Sum256([]byte("gentle-ai.sdd-budget-consent-reset/v1\x00" + in.Change + "\x00" + in.Revision))
+	return "reset-" + hex.EncodeToString(sum[:16])
 }
 
 func sddBudgetConsentReason(in BudgetConsentInput) string {

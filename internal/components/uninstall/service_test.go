@@ -17,9 +17,77 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodeactivation "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 type stubSnapshotter struct{}
+
+func TestBuildPlanRemovesOnlyOwnedOpenCodeLaunchers(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)
+	ownedPath := paths[0]
+	userPath := filepath.Join(opencodeactivation.BinDir(homeDir), "user-opencode-launcher")
+	for index, path := range []string{ownedPath, userPath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := []byte("user launcher")
+		if index == 0 {
+			content = []byte("#!/bin/sh\n# " + opencodeactivation.OwnershipMarker + "\n")
+		}
+		if err := os.WriteFile(path, content, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.executePlan(plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ownedPath); !os.IsNotExist(err) {
+		t.Fatalf("owned launcher stat error = %v, want absent", err)
+	}
+	if data, err := os.ReadFile(userPath); err != nil || string(data) != "user launcher" {
+		t.Fatalf("user launcher = %q, error = %v; want preserved", data, err)
+	}
+	if !slices.Contains(result.RemovedFiles, ownedPath) {
+		t.Fatalf("removed files = %v, want %q", result.RemovedFiles, ownedPath)
+	}
+}
+
+func TestUninstallOpenCodeClearsBackgroundIntent(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := state.Write(homeDir, state.InstallState{
+		InstalledAgents:  []string{"opencode"},
+		BackgroundIntent: model.OpenCodeBackgroundOn,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+	if _, err := svc.PartialUninstall([]model.AgentID{model.AgentOpenCode}, allManagedComponents); err != nil {
+		t.Fatal(err)
+	}
+	got, err := state.Read(homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BackgroundIntent != "" || len(got.InstalledAgents) != 0 {
+		t.Fatalf("state after uninstall = %#v, want no OpenCode intent or installed agent", got)
+	}
+}
 
 func TestBuildPlanSnapshotsPiManifestAndOwnedOverlay(t *testing.T) {
 	homeDir := t.TempDir()

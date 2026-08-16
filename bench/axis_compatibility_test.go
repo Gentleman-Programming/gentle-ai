@@ -45,9 +45,13 @@ func TestCompatibilityAxisDeclaresItselfAndItsJourneys(t *testing.T) {
 			"cw01-direct-start-refuses-uncompletable-base-diff":       true,
 			"cw02-hyphenated-review-start-always-refuses":             true,
 			"cw03-negotiated-start-then-direct-cwd-capture-completes": true,
+			"cw04-unbound-recovery-executes-without-agent-guess":      true,
 		}
 		for _, journey := range journeys {
 			delete(want, journey.ID)
+			if journey.ID == "cw04-unbound-recovery-executes-without-agent-guess" && journey.Source != "https://github.com/Gentleman-Programming/gentle-ai/issues/2885" {
+				t.Fatalf("cw04 source = %q", journey.Source)
+			}
 		}
 		if len(want) != 0 {
 			t.Fatalf("expected compatibility journeys not found: %v", want)

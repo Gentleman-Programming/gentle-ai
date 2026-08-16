@@ -630,8 +630,9 @@ func reviewConsoleTerminal(file *os.File) bool {
 // A consent declaration selects candidate-scoped negotiated semantics: relay
 // always returns the typed question, while granted and declined apply only to
 // the exact frozen candidate and never touch the legacy clone-wide latch. An
-// undeclared START keeps the one-time console behavior unchanged.
-func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode) error {
+// undeclared plain START keeps the one-time console behavior unchanged; an
+// undeclared negotiated START authorizes silently (see below).
+func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode, negotiated bool) error {
 	global, err := readGlobalRDDMode()
 	if err != nil {
 		return err
@@ -669,6 +670,20 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		return nil
 	}
 	console := reviewConsole()
+	if negotiated && !console.Interactive {
+		// A non-interactive negotiated invocation is machine-readable end to
+		// end: stdout carries the typed envelope and a successful operation
+		// writes zero bytes to stderr (gentle-pi fails closed on any stderr a
+		// successful START writes), and machine listeners only ever spawn
+		// non-interactive processes. Negotiated consent is carried by the
+		// typed consent envelope (--consent relay/granted/declined), so this
+		// route returns before the latch read: neither the one-time consent
+		// latch nor the once-per-clone notice marker is consumed, and a later
+		// plain start in this clone can still ask and still announce. A human
+		// at a real terminal falls through to the unchanged one-time ceremony
+		// below and keeps the power to refuse.
+		return nil
+	}
 	asked, err := reviewtransaction.RDDConsentAsked(ctx, repo)
 	if err != nil {
 		// A damaged latch must neither block the review nor silently disable it:

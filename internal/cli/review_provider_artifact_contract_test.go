@@ -79,8 +79,17 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 		// Deliberate, not drift.
 		"fixtures/consent-v3.fixture.json":      "feb1dc7705f7da6490698ef48021bb7730de154ae23ec73d033d8d96fa996a21",
 		"schemas/capabilities-v2.1.schema.json": "9ede8ebbe3e169cf6ca4f4a6882c9c4e588a6d1073d8e22a155649cd41d38cd0",
-		"schemas/consent-v3.schema.json":        "80915f5f4f43a494826253d1e7251fc463989f41d2cf163a6a52a8b4328c023c",
-		"schemas/status.schema.json":            "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
+		// Cross-lane battery conformance fix: the schema pinned the choice
+		// invocations to `--agent claude-code`, but the live emitter omits the
+		// agent token when the caller declared no runtime (the pinned fixture
+		// itself carries no --agent), and #2676 binds the declared runtime
+		// (claude-code, opencode, codex) when there is one. The schema now
+		// follows the emitter. The agent enum also admits "pi": the Pi host
+		// relay drives consent with its own declared runtime identity, which
+		// the emitter legitimately publishes once the relay handshake is
+		// declared. Deliberate, not drift.
+		"schemas/consent-v3.schema.json": "f56b1809c1bff21713795ef37a095c6ecfdbbb3cf928bcf604b8d5f33be3dea5",
+		"schemas/status.schema.json":     "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -98,7 +107,43 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/status-v5.fixture.json": "1a6d002c9691c87e50687f8d5f3e59013e9229d93004028f746bfcda7947d5fc",
-		"schemas/status-v5.schema.json":   "32dd99042d11c06cc4dbc1f9f8396b5e32ea9ded7f2177a97b90398923d282b3",
+		// Cross-lane battery conformance fix: live negotiated STATUS publishes
+		// the top-level repository_context reference (review_status_contract.go's
+		// ReviewTargetStatusResult, populated since the recovered-units merges),
+		// which the schema did not admit; and targeted_validation_required also
+		// arrives as the provider-task (external.run_provider_role) and pi
+		// host-relay (review.capture-validation) shapes, which the schema
+		// rejected as missing the generic submission; and the negotiated-route
+		// disposition preview (ReviewRepairDispositionProviderInputs) is real
+		// optional emitter output the strict schema must admit; and the pi
+		// host-relay materialize path renders the reviewer_result collect
+		// input with a capture-result submission descriptor, which the
+		// submission oneOf and the no-submission allOf rule both rejected.
+		// Deliberate, not drift.
+		"schemas/status-v5.schema.json": "4dd17e863725edb20e9cbb85d9614dfdc07ef6c9257aa789f4c9e8835400483e",
+	}
+	for name, expected := range want {
+		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		if actual := hex.EncodeToString(digest[:]); actual != expected {
+			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
+		}
+	}
+}
+
+// TestReviewProviderArtifactConformanceSchemasArePinned pins the schemas the
+// cross-lane battery conformance work first published: the delivery gate
+// result (gentle-ai.review-gate-result/v1) and the OpenCode provider-role
+// capture acknowledgement (gentle-ai.opencode-review-provider-role/v1). Both
+// envelopes already shipped on the wire; only their published schemas are new.
+func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
+	want := map[string]string{
+		"schemas/gate-result.schema.json":            "38aa37bdea8bdc8ea664d888f7c7217beac7e34c43a95a3ed7d9354bf76709ed",
+		"schemas/opencode-provider-role.schema.json": "c6b9f216f89c044f8e844b55e7200114850cfbc16642bca0677f30a399d8aa9b",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -220,6 +265,8 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "failure.schema.json", id: ReviewIntegrationFailureSchemaIDV2},
 		{name: "operation.schema.json", id: ReviewIntegrationOperationSchemaIDV2},
 		{name: "repair.schema.json", id: ReviewIntegrationRepairSchemaIDV2},
+		{name: "gate-result.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/gate-result.schema.json"},
+		{name: "opencode-provider-role.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/opencode-provider-role.schema.json"},
 	}
 	v2Documents := make(map[string]map[string]any, len(v2Schemas))
 	for _, tt := range v2Schemas {

@@ -116,7 +116,7 @@ Four mechanical guards now cover that class, all derived from source rather than
 | `TestEveryNamedReviewContinuationIsStructurallyReal` | AST-walks refusal strings; every named verb and flag resolves against the real dispatch and `FlagSet` |
 | mode parity in `review_preflight_reason_test.go` | every distinguishing token of the human refusal is recoverable from the negotiated envelope |
 | `scripts/deadcode-ratchet.sh` | fails on a new unreachable function; the 230 already present are frozen |
-| [guard population declarations](guard-population.md) | AST-binds eight scoped population claims to production guards and rejects exact registry drift |
+| [guard population declarations](guard-population.md) | AST-binds ten scoped population claims to production guards and rejects exact registry drift |
 
 The ratchet is a ratchet on purpose. Demanding zero before it could exist would have meant it never existed.
 

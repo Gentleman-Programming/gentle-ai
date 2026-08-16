@@ -262,6 +262,34 @@ func ResolveReviewRepositoryContextBinding(ctx context.Context, handle string) (
 }
 
 func resolveReviewRepositoryContext(ctx context.Context, handle string) (string, ReviewRepositoryContextBinding, error) {
+	root, binding, err := resolveOpaqueReviewRepositoryContext(ctx, handle)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
+	}
+	store, err := CompactAuthoritativeStore(ctx, root, binding.LineageID)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
+	}
+	record, err := store.LoadContext(ctx)
+	if err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
+	}
+	resolveReviewRepositoryContextLoadedHook()
+	if err := validateReviewRepositoryContextRecord(ctx, root, binding, record); err != nil {
+		return "", ReviewRepositoryContextBinding{}, err
+	}
+	binding.Revision = record.Revision
+	return root, binding, nil
+}
+
+// resolveReviewRepositoryContextLoadedHook is a test-only observation hook for
+// the post-load window. Tests replacing this mutable package variable must not
+// run in parallel.
+var resolveReviewRepositoryContextLoadedHook = func() {}
+
+// resolveOpaqueReviewRepositoryContext proves the private locator still names
+// its original Git worktree without reading compact authority or Git content.
+func resolveOpaqueReviewRepositoryContext(ctx context.Context, handle string) (string, ReviewRepositoryContextBinding, error) {
 	if err := ctx.Err(); err != nil {
 		return "", ReviewRepositoryContextBinding{}, err
 	}
@@ -324,9 +352,6 @@ func resolveReviewRepositoryContext(ctx context.Context, handle string) (string,
 		!sameLocatorDirectory(stored.GitDir, live.GitDir) || live.RepositoryIdentity != stored.RepositoryIdentity {
 		return "", empty, errors.New("review repository context identity changed") // refusal:by-design world-action: the bound Git worktree was replaced outside this product and only restoring or re-creating that exact repository resolves it
 	}
-	if err := validateLiveReviewRepositoryContext(ctx, live.RepositoryRoot, binding); err != nil {
-		return "", empty, err
-	}
 	return live.RepositoryRoot, binding, nil
 }
 
@@ -351,8 +376,21 @@ func validateLiveReviewRepositoryContext(ctx context.Context, repo string, bindi
 	if err != nil {
 		return err
 	}
-	if record.Revision != binding.Revision || record.State.LineageID != binding.LineageID {
+	return validateReviewRepositoryContextRecord(ctx, repo, binding, record)
+}
+
+func validateReviewRepositoryContextRecord(ctx context.Context, repo string, binding ReviewRepositoryContextBinding, record CompactRecord) error {
+	if record.State.LineageID != binding.LineageID {
 		return errors.New("review repository context is stale or has no live matching authority")
+	}
+	if record.Revision != binding.Revision {
+		matched := false
+		for _, intent := range record.EffectIntents {
+			matched = matched || intent.Class == CompactEffectClassRepositoryContext && intent.BindingRevision == binding.Revision
+		}
+		if !matched {
+			return errors.New("review repository context is stale or has no live matching authority")
+		}
 	}
 	switch record.State.State {
 	case StateReviewing:
@@ -474,7 +512,7 @@ func publishReviewRepositoryContext(path string, payload []byte) error {
 	existing, err := readReviewRepositoryContext(path)
 	if err == nil {
 		if !reviewRepositoryContextPayloadEqual(existing, payload) {
-			return errors.New("existing review repository context differs")
+			return &RARAuthorityConflictError{Slot: path}
 		}
 		return SyncReviewDirectory(filepath.Dir(path))
 	}
@@ -502,8 +540,11 @@ func publishReviewRepositoryContext(path string, payload []byte) error {
 		return err
 	}
 	existing, err = readReviewRepositoryContext(path)
-	if err != nil || !reviewRepositoryContextPayloadEqual(existing, payload) {
-		return errors.New("concurrent review repository context differs")
+	if err != nil {
+		return err
+	}
+	if !reviewRepositoryContextPayloadEqual(existing, payload) {
+		return &RARAuthorityConflictError{Slot: path}
 	}
 	return SyncReviewDirectory(filepath.Dir(path))
 }
@@ -521,7 +562,7 @@ func readReviewRepositoryContext(path string) ([]byte, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || !privateLocatorFileModeSafe(info.Mode()) {
 		return nil, errors.New("review repository context is not a private regular file")
 	}
-	file, err := os.Open(path)
+	file, err := openReviewRepositoryContext(path)
 	if err != nil {
 		return nil, err
 	}

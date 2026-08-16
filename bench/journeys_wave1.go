@@ -45,6 +45,12 @@ type waveOperationResult struct {
 	TargetIdentity       string `json:"target_identity"`
 }
 
+type waveTransitionArgument struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Token string `json:"token"`
+}
+
 type waveCorrectionStatus struct {
 	Schema         string `json:"schema"`
 	TargetIdentity string `json:"target_identity"`
@@ -77,13 +83,19 @@ type waveCorrectionStatus struct {
 		ReasonCode string `json:"reason_code"`
 		Collect    *struct {
 			Inputs []struct {
-				Name             string                    `json:"name"`
-				CaptureOperation string                    `json:"capture_operation"`
-				Submission       *waveSubmissionDescriptor `json:"submission"`
+				Name             string                         `json:"name"`
+				CaptureOperation string                         `json:"capture_operation"`
+				Arguments        []struct{ Name, Value string } `json:"arguments"`
+				Submission       *waveSubmissionDescriptor      `json:"submission"`
+				ProviderTask     *struct {
+					Prompt string `json:"prompt"`
+					Role   string `json:"role"`
+				} `json:"provider_task"`
 			} `json:"inputs"`
 		} `json:"collect"`
 		Execute *struct {
-			Operation string `json:"operation"`
+			Operation string                   `json:"operation"`
+			Arguments []waveTransitionArgument `json:"arguments"`
 		} `json:"execute"`
 	} `json:"next_transition"`
 }

@@ -630,6 +630,21 @@ func (err *GateTargetResolutionError) Unwrap() error {
 	return err.Err
 }
 
+// GateRemoteFetchRequiredError reports that boundary selection resolved an
+// advertised remote tip whose commit is absent from the local object store
+// (issue #3342). The review authority store is untouched by this condition:
+// the local clone is merely behind the remote it publishes to, and
+// `git fetch <remote>` followed by re-running the identical gate resolves it.
+// It is typed so receipt discovery can classify the denial as retry-safe
+// instead of collapsing it into authority corruption.
+type GateRemoteFetchRequiredError struct {
+	Remote string
+}
+
+func (err *GateRemoteFetchRequiredError) Error() string {
+	return "advertised base commit is not available locally; fetch before validation"
+}
+
 // baseRefTargetResolutionError types a publication-boundary failure the caller
 // resolves by supplying --base-ref <remote>/<branch>. Every producer of that
 // sentence types itself here: an untyped one is classified downstream as an
@@ -639,6 +654,21 @@ func (err *GateTargetResolutionError) Unwrap() error {
 func baseRefTargetResolutionError(message string) error {
 	return &GateTargetResolutionError{RequiredInput: "base_ref", Err: errors.New(message)}
 }
+
+// refusal:by-design world-action: malformed remote output cannot be repaired by a review command; the operator must correct the remote boundary.
+var ErrMalformedAdvertisedRemoteOutput = errors.New("malformed advertised remote output")
+
+type GitAdvertisedRemoteOutputError struct {
+	Remote string
+	Ref    string
+	Output string
+}
+
+func (err *GitAdvertisedRemoteOutputError) Error() string {
+	return fmt.Sprintf("git ls-remote --heads %s %s returned malformed advertised remote output: %q", err.Remote, err.Ref, err.Output)
+}
+
+func (err *GitAdvertisedRemoteOutputError) Unwrap() error { return ErrMalformedAdvertisedRemoteOutput }
 
 func resolveTrackingUpstreamBase(ctx context.Context, repo string) (string, string, string, error) {
 	branchOutput, err := runGit(ctx, repo, nil, nil, "symbolic-ref", "--quiet", "--short", "HEAD")
@@ -677,11 +707,8 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 	}
 	remotes := strings.Fields(string(output))
 	matches := []PrePRBoundarySelection{}
+	operationalErrors := []error{}
 	for _, remote := range remotes {
-		identity, identityErr := remoteRepositoryIdentity(ctx, repo, remote)
-		if identityErr != nil {
-			continue
-		}
 		branch := selector
 		if strings.HasPrefix(selector, remote+"/") {
 			branch = strings.TrimPrefix(selector, remote+"/")
@@ -691,23 +718,43 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 		if _, err := runGit(ctx, repo, nil, nil, "check-ref-format", "--branch", branch); err != nil {
 			continue
 		}
-		remoteOutput, queryErr := runGit(ctx, repo, nil, nil, "ls-remote", "--heads", remote, branch)
-		if queryErr != nil {
+		identity, identityErr := remoteRepositoryIdentity(ctx, repo, remote)
+		if identityErr != nil {
+			if strings.Contains(selector, "/") {
+				return PrePRBoundarySelection{}, identityErr
+			}
+			operationalErrors = append(operationalErrors, identityErr)
 			continue
 		}
-		for _, line := range strings.Split(string(remoteOutput), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) == 2 && strings.HasPrefix(fields[1], "refs/heads/") && fields[1] == "refs/heads/"+branch {
-				matches = append(matches, PrePRBoundarySelection{Source: source, Selector: selector, Commit: fields[0], Remote: remote, RemoteRef: fields[1], RemoteIdentity: identity})
+		remoteOutput, queryErr := runGit(ctx, repo, nil, nil, "ls-remote", "--heads", remote, branch)
+		if queryErr != nil {
+			if strings.Contains(selector, "/") {
+				return PrePRBoundarySelection{}, queryErr
 			}
+			operationalErrors = append(operationalErrors, queryErr)
+			continue
 		}
+		advertisedOutput := strings.TrimSpace(string(remoteOutput))
+		if advertisedOutput == "" {
+			continue
+		}
+		for _, line := range strings.Split(advertisedOutput, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) != 2 || !validGitTree(fields[0]) || fields[1] != "refs/heads/"+branch {
+				return PrePRBoundarySelection{}, &GitAdvertisedRemoteOutputError{Remote: remote, Ref: branch, Output: strings.TrimSpace(line)}
+			}
+			matches = append(matches, PrePRBoundarySelection{Source: source, Selector: selector, Commit: fields[0], Remote: remote, RemoteRef: fields[1], RemoteIdentity: identity})
+		}
+	}
+	if len(matches) == 0 && len(operationalErrors) > 0 {
+		return PrePRBoundarySelection{}, errors.Join(operationalErrors...)
 	}
 	if len(matches) != 1 {
 		return PrePRBoundarySelection{}, baseRefTargetResolutionError(fmt.Sprintf("explicit pre-PR base %q is missing or ambiguous on advertised remote branches; pass --base-ref <remote>/<branch>", selector))
 	}
 	local, err := resolveCommit(ctx, repo, matches[0].Commit)
 	if err != nil || local != matches[0].Commit {
-		return PrePRBoundarySelection{}, errors.New("advertised base commit is not available locally; fetch before validation")
+		return PrePRBoundarySelection{}, &GateRemoteFetchRequiredError{Remote: matches[0].Remote}
 	}
 	return matches[0], nil
 }
@@ -721,20 +768,32 @@ func advertisedRemoteRef(ctx context.Context, repo, remote, ref, selector string
 	if err != nil {
 		return PrePRBoundarySelection{}, fmt.Errorf("query base remote %q: %w", remote, err)
 	}
-	fields := strings.Fields(string(output))
-	if len(fields) != 2 || fields[1] != ref || !validGitTree(fields[0]) {
+	advertisedOutput := strings.TrimSpace(string(output))
+	if advertisedOutput == "" {
 		return PrePRBoundarySelection{}, baseRefTargetResolutionError(fmt.Sprintf("base selector %q is not a current advertised remote branch; pass --base-ref <remote>/<branch>", selector))
+	}
+	// A direct lookup must receive one complete record; strings.Fields would
+	// otherwise merge an OID and ref split across record separators.
+	if strings.ContainsAny(advertisedOutput, "\r\n\x00") {
+		return PrePRBoundarySelection{}, &GitAdvertisedRemoteOutputError{Remote: remote, Ref: ref, Output: advertisedOutput}
+	}
+	fields := strings.Fields(advertisedOutput)
+	if len(fields) != 2 || fields[1] != ref || !validGitTree(fields[0]) {
+		return PrePRBoundarySelection{}, &GitAdvertisedRemoteOutputError{Remote: remote, Ref: ref, Output: advertisedOutput}
 	}
 	local, err := resolveCommit(ctx, repo, fields[0])
 	if err != nil || local != fields[0] {
-		return PrePRBoundarySelection{}, errors.New("advertised base commit is not available locally; fetch before validation")
+		return PrePRBoundarySelection{}, &GateRemoteFetchRequiredError{Remote: remote}
 	}
 	return PrePRBoundarySelection{Source: source, Selector: selector, Commit: fields[0], Remote: remote, RemoteRef: ref, RemoteIdentity: identity}, nil
 }
 
 func remoteRepositoryIdentity(ctx context.Context, repo, remote string) (string, error) {
 	output, err := runGit(ctx, repo, nil, nil, "config", "--get", "remote."+remote+".url")
-	if err != nil || strings.TrimSpace(string(output)) == "" {
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(string(output)) == "" {
 		return "", errors.New("publication remote URL is not configured")
 	}
 	return repositoryLocationIdentity(ctx, repo, strings.TrimSpace(string(output)))

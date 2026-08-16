@@ -79,6 +79,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "help", "--help", "-h":
 			printHelp(stdout, Version)
 			return nil
+		case "bench-model-picker":
+			if handled, err := runBenchModelPickerCommand(args[1:], stdout); handled {
+				return err
+			}
 		case "uninstall":
 			if len(args) >= 2 && args[1] == "opencode-plugin" {
 				_, err := cli.RunUninstallOpenCodePlugin(args[2:], stdout)
@@ -122,7 +126,27 @@ func RunArgs(args []string, stdout io.Writer) error {
 				cli.PrintInstallHelp(stdout)
 				return nil
 			}
+		case "sync":
+			if hasHelpFlag(args[1:]) {
+				cli.PrintSyncHelp(stdout)
+				return nil
+			}
 		}
+	}
+
+	// Issue #535: parse the upgrade command's arguments exactly once, before
+	// any platform validation, system detection, self-update, update check,
+	// backup, or execution effect. Unsupported pre-delimiter dash arguments
+	// are rejected here with zero effects. The parsed value is forwarded to
+	// runUpgrade below so the executor never reparses raw CLI args. The
+	// help selection branch is added in the follow-up help-behavior change.
+	var parsedUpgrade *upgradeArgs
+	if len(args) > 0 && args[0] == "upgrade" {
+		parsed, err := parseUpgradeArgs(args[1:])
+		if err != nil {
+			return err
+		}
+		parsedUpgrade = &parsed
 	}
 
 	if err := ensureCurrentOSSupported(); err != nil {
@@ -190,10 +214,16 @@ func RunArgs(args []string, stdout io.Writer) error {
 					_, _ = fmt.Fprintf(stdout, "Warning: failed to clear PendingSync flag: %v\n", writeErr)
 				}
 			}
+			// TUI self-update path: the previous launch completed a gentle-ai
+			// self-upgrade under the old binary and set PendingSync=true. We are
+			// now running under the new binary; print the doctor advisory so the
+			// user can verify ecosystem health against the post-upgrade state.
+			// Print regardless of sync outcome — the advisory is informational.
+			printPostUpgradeDoctorAdvisory(stdout)
 		}
 
 		m := tui.NewModel(result, Version, installedState)
-		m.ExecuteFn = tuiExecute
+		m.ExecuteFn = tuiExecuteWithBackground
 		m.RestoreFn = tuiRestore
 		m.DeleteBackupFn = func(manifest backup.Manifest) error {
 			return backup.DeleteBackup(manifest)
@@ -230,7 +260,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 	case "update":
 		return runUpdate(context.Background(), Version, resolveProfile(), stdout)
 	case "upgrade":
-		return runUpgrade(context.Background(), args[1:], result, stdout)
+		return runUpgrade(context.Background(), *parsedUpgrade, result, stdout)
 	case "install":
 		installResult, err := cli.RunInstall(args[1:], result)
 		if err != nil {
@@ -352,6 +382,16 @@ func runSkillRegistryRefresh(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// Startup hooks run refresh from whatever directory the host resolved; a
+	// brand-new non-project directory can resolve to "/", $HOME, or a
+	// markerless folder. Never initialize there: skip silently under --quiet
+	// (a startup hook must not scream) and with a one-line notice otherwise.
+	if reason := skillregistry.RefreshSkip(cwd, home); reason != skillregistry.SkipNone {
+		if !quiet {
+			_, _ = fmt.Fprintf(stdout, "Skill registry refresh skipped (%s): %s is not a project root; run it from a project directory (one containing .git or .atl), or create the project first.\n", reason, cwd)
+		}
+		return nil
+	}
 	if ensureGitignore {
 		if err := skillregistry.EnsureATLIgnored(cwd); err != nil {
 			return err
@@ -442,21 +482,14 @@ func runUpdate(ctx context.Context, currentVersion string, profile system.Platfo
 //   - Executes binary-only upgrades; does NOT invoke install or sync pipelines
 //   - Skips gentle-ai itself when running as a dev build (version="dev")
 //   - Falls back to source-install guidance where official binaries are unavailable
-func runUpgrade(ctx context.Context, args []string, detection system.DetectionResult, stdout io.Writer) error {
-	dryRun := false
-	noBackup := false
-	var toolFilter []string
-
-	for _, arg := range args {
-		switch {
-		case arg == "--dry-run" || arg == "-n":
-			dryRun = true
-		case arg == "--no-backup":
-			noBackup = true
-		case !strings.HasPrefix(arg, "-"):
-			toolFilter = append(toolFilter, arg)
-		}
-	}
+//
+// Issue #535: runUpgrade consumes a structured upgradeArgs value parsed once
+// in RunArgs. It forwards the parsed flags and tool filters to the update
+// check and executor exactly once and never reparses raw CLI arguments.
+func runUpgrade(ctx context.Context, args upgradeArgs, detection system.DetectionResult, stdout io.Writer) error {
+	dryRun := args.dryRun
+	noBackup := args.noBackup
+	toolFilter := args.toolFilter
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -499,7 +532,14 @@ func runUpgrade(ctx context.Context, args []string, detection system.DetectionRe
 	}
 	if !dryRun {
 		if latestVersion, ok := gentleAIUpgradeSucceeded(report); ok {
-			return restartAfterGentleAIUpgrade(latestVersion, stdout)
+			if err := restartAfterGentleAIUpgrade(latestVersion, stdout); err != nil {
+				return err
+			}
+			// CLI upgrade path: print the doctor advisory so the user can verify
+			// ecosystem health against the post-upgrade state. Informational only;
+			// does not run any checks or change exit status.
+			printPostUpgradeDoctorAdvisory(stdout)
+			return nil
 		}
 	}
 	return nil
@@ -515,16 +555,22 @@ func updateCheckError(results []update.UpdateResult) error {
 }
 
 // tuiExecute creates a real install runtime and runs the pipeline with progress reporting.
-func tuiExecute(
+var appUserHomeDir = os.UserHomeDir
+
+func tuiExecuteWithBackground(
 	selection model.Selection,
 	resolved planner.ResolvedPlan,
 	detection system.DetectionResult,
+	background model.OpenCodeBackgroundIntent,
+	backgroundPersist model.OpenCodeBackgroundIntent,
+	piBackground model.PiBackgroundIntent,
+	piBackgroundPersist model.PiBackgroundIntent,
 	onProgress pipeline.ProgressFunc,
 ) pipeline.ExecutionResult {
 	restoreCommandOutput := cli.SetCommandOutputStreaming(false)
 	defer restoreCommandOutput()
 
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := appUserHomeDir()
 	if err != nil {
 		return pipeline.ExecutionResult{Err: fmt.Errorf("resolve user home directory: %w", err)}
 	}
@@ -532,7 +578,7 @@ func tuiExecute(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	execResult := cli.ExecuteTUIInstall(homeDir, selection, resolved, profile, onProgress)
+	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, piBackground, onProgress)
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
@@ -541,23 +587,46 @@ func tuiExecute(
 			agentIDs = append(agentIDs, string(a))
 		}
 		claudePhaseState := claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
-		installState := state.InstallState{
-			InstalledAgents:             agentIDs,
-			CommunityTools:              appCommunityToolIDsToStrings(selection.CommunityTools),
-			CommunityToolsConfigured:    true,
-			ClaudeModelAssignments:      claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState),
-			ClaudePhaseAssignments:      claudePhaseState,
-			KiroModelAssignments:        kiroAliasesToStrings(selection.KiroModelAssignments),
-			CodexModelAssignments:       codexEffortsToStrings(selection.CodexModelAssignments),
-			CodexOrchestratorAssignment: codexOrchestratorToState(selection.CodexOrchestratorAssignment),
-			CodexCarrilModelAssignments: selection.CodexCarrilModelAssignments,
-			CodexPhaseModelAssignments:  selection.CodexPhaseModelAssignments,
-			ModelAssignments:            modelAssignmentsToState(selection.ModelAssignments),
-			Persona:                     string(selection.Persona),
+		installState, readErr := state.Read(homeDir)
+		if errors.Is(readErr, os.ErrNotExist) {
+			installState = state.InstallState{}
+		} else if readErr != nil {
+			execResult.Err = fmt.Errorf("read persisted install state: %w", readErr)
+			if orchestrator != nil {
+				rollback := orchestrator.Rollback(execResult)
+				if rollback.Err != nil {
+					execResult.Err = errors.Join(execResult.Err, rollback.Err)
+				}
+			}
+			return execResult
 		}
+		installState.InstalledAgents = agentIDs
+		installState.CommunityTools = appCommunityToolIDsToStrings(selection.CommunityTools)
+		installState.CommunityToolsConfigured = true
+		installState.ClaudeModelAssignments = claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState)
+		installState.ClaudePhaseAssignments = claudePhaseState
+		installState.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+		installState.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
+		installState.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
+		installState.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
+		installState.CodexPhaseModelAssignments = selection.CodexPhaseModelAssignments
+		installState.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+		installState.Persona = string(selection.Persona)
 		installState.SetSelection(selection)
-		if writeErr := state.Write(homeDir, installState); writeErr != nil {
+		if backgroundPersist != "" {
+			installState.BackgroundIntent = backgroundPersist
+		}
+		if piBackgroundPersist != "" {
+			installState.PiBackgroundIntent = piBackgroundPersist
+		}
+		if writeErr := state.WriteReconciled(homeDir, installState); writeErr != nil {
 			execResult.Err = fmt.Errorf("persist install state: %w", writeErr)
+			if orchestrator != nil {
+				rollback := orchestrator.Rollback(execResult)
+				if rollback.Err != nil {
+					execResult.Err = errors.Join(execResult.Err, rollback.Err)
+				}
+			}
 		}
 	}
 

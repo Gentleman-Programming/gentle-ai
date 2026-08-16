@@ -44,6 +44,10 @@ func Validate(root, markerPath, runID string) error {
 	if err := validateYAMLSemantics("release workflow", workflow, expectedReleaseWorkflowYAML); err != nil {
 		return err
 	}
+	contractSemver, err := readProviderContractSemver(filepath.Join(root, "contracts", "review-provider-contract", "CONTRACT_SEMVER"))
+	if err != nil {
+		return err
+	}
 
 	artifactsPath := filepath.Join(root, "dist", "artifacts.json")
 	if err := validateSnapshotFile(root, "dist/artifacts.json", markerTime); err != nil {
@@ -53,10 +57,22 @@ func Validate(root, markerPath, runID string) error {
 	if err != nil {
 		return fmt.Errorf("read GoReleaser snapshot metadata: %w", err)
 	}
-	if err := validateArtifacts(root, artifacts, markerTime); err != nil {
+	if err := validateArtifacts(root, artifacts, markerTime, contractSemver); err != nil {
 		return err
 	}
 	return nil
+}
+
+func readProviderContractSemver(filename string) (string, error) {
+	payload, err := readRegularFile(filename)
+	if err != nil {
+		return "", fmt.Errorf("read provider contract semver: %w", err)
+	}
+	semver := strings.TrimSpace(string(payload))
+	if string(payload) != semver+"\n" || !validSnapshotContractSemver(semver) {
+		return "", errors.New("provider contract semver must be exact MAJOR.MINOR.PATCH")
+	}
+	return semver, nil
 }
 
 func canonicalDirectory(dir string) (string, error) {
@@ -284,7 +300,7 @@ type artifact struct {
 	Extra  map[string]any `json:"extra"`
 }
 
-func validateArtifacts(root string, payload []byte, markerTime time.Time) error {
+func validateArtifacts(root string, payload []byte, markerTime time.Time, contractSemver string) error {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	var artifacts []artifact
 	if err := decoder.Decode(&artifacts); err != nil {
@@ -293,7 +309,7 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time) error 
 	if err := requireJSONEOF(decoder); err != nil {
 		return err
 	}
-	expectedCounts := map[string]int{"Metadata": 1, "Binary": 4, "Archive": 4, "Checksum": 1, "Homebrew Formula": 1}
+	expectedCounts := map[string]int{"Metadata": 1, "Binary": 4, "Archive": 5, "Checksum": 1, "Homebrew Formula": 1}
 	byType := make(map[string][]artifact)
 	counts := make(map[string]int)
 	paths := make(map[string]struct{})
@@ -340,7 +356,16 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time) error 
 
 	seenArchives := make(map[string]struct{})
 	snapshotVersion := ""
+	providerArchive := false
 	for _, item := range byType["Archive"] {
+		if strings.HasPrefix(item.Name, "gentle-ai-review-provider-contract-") {
+			artifactSemver := strings.TrimSuffix(strings.TrimPrefix(item.Name, "gentle-ai-review-provider-contract-"), ".tar.gz")
+			if artifactSemver != contractSemver || item.Path != "dist/"+item.Name || item.GOOS != "" || item.GOARCH != "" || item.Target != "" || extraString(item.Extra, "Format") != "tar.gz" || extraString(item.Extra, "ID") != "review-provider-contract" || !reflect.DeepEqual(extraStrings(item.Extra, "Binaries"), []string{}) || providerArchive {
+				return errors.New("resolved provider contract archive identity changed")
+			}
+			providerArchive = true
+			continue
+		}
 		platform := item.GOOS + "/" + item.GOARCH
 		target, ok := expectedTargets[platform]
 		if !ok || item.Target != target {
@@ -366,6 +391,9 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time) error 
 	}
 	if len(seenArchives) != len(expectedTargets) {
 		return errors.New("resolved archive matrix is incomplete")
+	}
+	if !providerArchive {
+		return errors.New("resolved provider contract archive is missing")
 	}
 
 	if item := byType["Checksum"][0]; item.Name != "checksums.txt" || item.Path != "dist/checksums.txt" {
@@ -396,6 +424,24 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time) error 
 		}
 	}
 	return nil
+}
+
+func validSnapshotContractSemver(version string) bool {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || (len(part) > 1 && part[0] == '0') {
+			return false
+		}
+		for _, character := range part {
+			if character < '0' || character > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validSnapshotVersion(version string) bool {
@@ -495,6 +541,9 @@ func validateSnapshotFile(root, artifactPath string, markerTime time.Time) error
 
 const expectedGoReleaserYAML = `version: 2
 project_name: gentle-ai
+before:
+  hooks:
+    - go run ./internal/providercontractbundlecmd generate --out .goreleaser-provider-contract
 builds:
   - main: ./cmd/gentle-ai
     binary: gentle-ai
@@ -526,6 +575,34 @@ archives:
       - contracts/review-integration/v1/fixtures/*.fixture.json
       - contracts/review-integration/v2/schemas/*.schema.json
       - contracts/review-integration/v2/fixtures/*.fixture.json
+  - id: review-provider-contract
+    meta: true
+    formats:
+      - tar.gz
+    name_template: "gentle-ai-review-provider-contract-{{ .Env.PROVIDER_CONTRACT_SEMVER }}"
+    files:
+      - src: .goreleaser-provider-contract/README.md
+        strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
+      - src: .goreleaser-provider-contract/manifest.json
+        strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
+      - src: .goreleaser-provider-contract/schemas/*.schema.json
+        dst: schemas
+        strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
+      - src: .goreleaser-provider-contract/vectors/*.json
+        dst: vectors
+        strip_parent: true
+        info:
+          mode: 0644
+          mtime: "1970-01-01T00:00:00Z"
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
@@ -611,6 +688,9 @@ jobs:
           printf '%s\n' "$run_id" >"$marker"
           printf 'RELEASE_POLICY_SNAPSHOT_MARKER=%s\n' "$marker" >>"$GITHUB_ENV"
           printf 'RELEASE_POLICY_SNAPSHOT_RUN_ID=%s\n' "$run_id" >>"$GITHUB_ENV"
+          PROVIDER_CONTRACT_SEMVER=$(tr -d '\n' < contracts/review-provider-contract/CONTRACT_SEMVER)
+          [[ "$PROVIDER_CONTRACT_SEMVER" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          printf 'PROVIDER_CONTRACT_SEMVER=%s\n' "$PROVIDER_CONTRACT_SEMVER" >>"$GITHUB_ENV"
       - name: Resolve release distribution plan without publishing
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94
         with:
@@ -620,6 +700,8 @@ jobs:
           MINISIGN_PUBLIC_KEYS_CANONICAL: release-policy-validation-only
       - name: Verify release distribution policy
         run: ./scripts/verify-release-distribution-policy.sh
+      - name: Verify provider contract bundle
+        run: go run ./internal/providercontractbundlecmd verify --archive "dist/gentle-ai-review-provider-contract-${PROVIDER_CONTRACT_SEMVER}.tar.gz"
       - name: Verify tag, main, trust anchors, and module immutability
         run: ./scripts/release-preflight.sh
       - name: Unit tests
@@ -662,6 +744,9 @@ jobs:
         run: |
           printf 'MINISIGN_SECRET_KEY_FILE=%s/gentle-ai-release.key\n' "$RUNNER_TEMP" >>"$GITHUB_ENV"
           printf 'MINISIGN_SIGNING_PUBLIC_KEY_FILE=%s/gentle-ai-release-signing.pub\n' "$RUNNER_TEMP" >>"$GITHUB_ENV"
+          PROVIDER_CONTRACT_SEMVER=$(tr -d '\n' < contracts/review-provider-contract/CONTRACT_SEMVER)
+          [[ "$PROVIDER_CONTRACT_SEMVER" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          printf 'PROVIDER_CONTRACT_SEMVER=%s\n' "$PROVIDER_CONTRACT_SEMVER" >>"$GITHUB_ENV"
       - name: Install Minisign
         run: |
           sudo apt-get update

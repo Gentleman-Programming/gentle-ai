@@ -228,6 +228,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 
 		// OpenCode agent files
 		"opencode/persona-gentleman.md",
+		"opencode/background-subagents.md",
 		"opencode/sdd-orchestrator.md",
 		"opencode/sdd-overlay-single.json",
 		"opencode/sdd-overlay-multi.json",
@@ -432,7 +433,7 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 		seen[entry.Name()] = true
 	}
 
-	for _, name := range []string{"commands", "plugins", "persona-gentleman.md", "sdd-orchestrator.md", "sdd-overlay-single.json", "sdd-overlay-multi.json"} {
+	for _, name := range []string{"commands", "plugins", "persona-gentleman.md", "background-subagents.md", "sdd-orchestrator.md", "sdd-overlay-single.json", "sdd-overlay-multi.json"} {
 		if !seen[name] {
 			t.Fatalf("opencode embedded assets missing %q", name)
 		}
@@ -457,10 +458,10 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/plugins) error = %v", err)
 	}
-	if len(pluginEntries) != 3 {
-		t.Fatalf("opencode plugins count = %d, want 3", len(pluginEntries))
+	if len(pluginEntries) != 4 {
+		t.Fatalf("opencode plugins count = %d, want 4", len(pluginEntries))
 	}
-	wantPlugins := map[string]bool{"model-variants.ts": true, "review-result-artifacts.ts": true, "skill-registry.ts": true}
+	wantPlugins := map[string]bool{"model-variants.ts": true, "opencode-review-transport.ts": true, "sdd-task-result-artifacts.ts": true, "skill-registry.ts": true}
 	for _, entry := range pluginEntries {
 		if !wantPlugins[entry.Name()] {
 			t.Fatalf("unexpected plugin entry = %q", entry.Name())
@@ -468,105 +469,60 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	}
 }
 
-// TestReviewResultArtifactsPluginContract pins the reduced transport-only
-// contract (rdd-advisory-transport SKILL.md): the plugin's only job is to
-// detect a reviewer task launch carrying the opaque binding, fetch the
-// finished provider context via `gentle-ai review lens-context`, inject that
-// block as the task prompt, and hand the model's raw final text back
-// unmodified. It never parses a binding field beyond the one it needs to
-// route the call, never rebuilds a prompt, never applies a local budget,
-// never captures or preserves a result, and never decides admission.
-func TestReviewResultArtifactsPluginContract(t *testing.T) {
-	source, err := Read("opencode/plugins/review-result-artifacts.ts")
+func TestOpenCodeBackgroundPolicyMarkersAreBalanced(t *testing.T) {
+	content := MustRead("opencode/background-subagents.md")
+	const (
+		start = "<!-- gentle-ai:opencode-background-subagents -->"
+		end   = "<!-- /gentle-ai:opencode-background-subagents -->"
+	)
+	trimmed := strings.TrimSpace(content)
+	if strings.Count(trimmed, start) != 1 || strings.Count(trimmed, end) != 1 {
+		t.Fatalf("background policy marker cardinality = (%d, %d), want (1, 1)", strings.Count(trimmed, start), strings.Count(trimmed, end))
+	}
+	if !strings.HasPrefix(trimmed, start+"\n") || !strings.HasSuffix(trimmed, "\n"+end) {
+		t.Fatalf("background policy markers are not balanced around the complete asset")
+	}
+}
+
+// TestOpenCodeReviewTransportPluginContract pins the adapter-minimality
+// boundary: the plugin correlates one host Task with one Go process, while Go
+// owns all prompt, schema, admission, and capture semantics.
+func TestOpenCodeReviewTransportPluginContract(t *testing.T) {
+	source, err := Read("opencode/plugins/opencode-review-transport.ts")
 	if err != nil {
-		t.Fatalf("Read(review-result-artifacts.ts) error = %v", err)
+		t.Fatal(err)
 	}
-	for _, want := range []string{
-		`spawn("gentle-ai"`,
-		`"review", "lens-context",`,
-		`"--repository-context", repositoryContext`,
-		// `--delivery runtime_interception` is not cosmetic: it is the
-		// mechanism the provider records on the receipt beside the captured
-		// results, and it is what distinguishes a block a runtime adapter
-		// substituted for whatever the caller produced from one a caller
-		// merely relayed. Declaring the relayed level from here would
-		// permanently record a weaker claim than what actually happened.
-		`const LENS_CONTEXT_DELIVERY = "runtime_interception"`,
-		`"--delivery", LENS_CONTEXT_DELIVERY`,
-		`GENTLE_AI_REVIEW_CONTEXT_END`,
-		`partial provider context is never injected`,
-		`Split this candidate into smaller reviewable commits`,
-		`function bindingRepositoryContext(`,
-		`output.args.prompt = await injectReviewerContext(`,
-		`"tool.execute.before"`,
-		`output.args.background === true`,
-		`!BINDING.test(input.args.prompt)`,
-		// The lens routed to the native call is always the launched
-		// subagent_type, never a field parsed out of the binding: the binding
-		// is opaque provider data the plugin passes through, never
-		// interprets (#2442's resolution under the shared contract).
-		`async function injectReviewerContext(prompt: string, lens: string, cwd: string)`,
-		"output.args.prompt,\n      subagent,",
-		`output.output = reviewerResult(output.output)`,
-		`function taskResult(output: unknown, subject: string, classification?: string)`,
-		"function reviewerResult(output: unknown): string {\n  return taskResult(output, \"reviewer\")\n}",
-		"`${subject} task result is empty`",
-		"`${subject} task result contains a nested task envelope`",
-		`const SDD_PHASES`,
-		`const SDD_TASK_FAILURE_PREFIX`,
-		`"gentle-ai.sdd-task-result-failure/v1"`,
-		`"sdd_task_result_empty"`,
-		`"sdd_task_result_malformed"`,
-		`failedSDDSessions`,
-		`extractionClass(cause, "sddClass")`,
-		// #2677: an empty result means the child produced no output at all
-		// (for example a provider rejection before generation), and the
-		// handoff must say so and carry the one causal fact the hook
-		// receives -- the child's provider/model route -- after validation.
-		`function taskRouteModel(`,
-		`produced no task output at all`,
-		`provider rejected the request before generation (authentication, region, or model access)`,
-		`taskRouteModel(metadata)`,
-		`export default ReviewResultArtifactsPlugin`,
-	} {
+	for _, want := range []string{`gentle-ai.provider-transport/v1`, `"review", "opencode-transport"`, `RELAY_REGISTRY_KEY`, `reviewRelayRegistry()`, `output.args.prompt = (await relay.prompt).prompt`, `output.output = await registration.relay.complete(output.output)`, `"tool.execute.before"`, `"tool.execute.after"`,
+		// A refused relay start must fail the Task loudly and never launch an
+		// unbound child: the before hook poisons the Task prompt and the after
+		// hook replaces child output with the typed refusal, so a host runtime
+		// that swallows hook errors still cannot deliver an unbound child's
+		// prose as a reviewer completion.
+		`opencode_review_transport_relay_refused`, `refused.set(key, reason)`, `output.args.prompt = relayRefusedPrompt(reason)`, `output.output = relayRefusedOutput(refusal)`} {
 		if !strings.Contains(source, want) {
-			t.Fatalf("review-result-artifacts.ts missing %q", want)
+			t.Fatalf("transport plugin missing %q", want)
 		}
 	}
-	// The obsolete isolation/session claim, the field-by-field binding
-	// parser, and native result capture/preservation/retry are gone, not
-	// merely unused: an ordinary already-running OpenCode session is
-	// sufficient under the advisory boundary (SKILL.md), the binding is
-	// opaque provider data the plugin never interprets, and raw text goes
-	// back to Go, which owns validation and capture policy.
-	for _, superseded := range []string{
-		"REQUIRED_ISOLATION_ENVIRONMENT", "missingIsolationEnvironment", "OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS",
-		"remoteInstructionsEntries", "client.config.get",
-		"type ReviewBinding", "function parseBinding(", "function bindingRefusal(", "function verifiedLensContext(",
-		"function captureResult(", "function preserveResult(", "function repositoryBindingArgs(",
-		"admissionRecoveries", "AdmissionRecoveryStore", "claimAdmissionRecovery", "clearAdmissionRecovery",
-		"MAX_ADMISSION_RECOVERY_SESSIONS", "MAX_ADMISSION_RECOVERIES_PER_SESSION",
-		"function sessionErrorMessage(", "admissionRejection(", "ADMISSION_DIAGNOSTIC",
-		"function preservedCaptureFailure(", "function preservedReference(", "PRESERVE_EMBED_LIMIT",
-		"GENTLE_AI_REVIEW_CWD", "GENTLE_AI_FROZEN_CANDIDATE_CONTEXT", "candidate_diff",
-		"inspect-candidate", "materializeReviewEvidence", "inspectionArgs",
-		"REVIEW_CONTEXT_BYTE_BUDGET", "preflightCapture", "validManifest", "--preflight",
-	} {
-		if strings.Contains(source, superseded) {
-			t.Fatalf("review-result-artifacts.ts still carries the superseded mechanism %q", superseded)
-		}
-	}
-	if strings.Contains(source, `.slice("review-".length)`) {
-		t.Fatal("review-result-artifacts.ts must preserve the exact full selected lens; found review- prefix stripping")
-	}
-	// Pin the split: the previously conflated empty/nested-envelope message
-	// must never regress back into one indistinguishable free-text throw.
-	if strings.Contains(source, `reviewer task result is empty or contains a nested envelope`) {
-		t.Fatal("review-result-artifacts.ts regressed to the conflated empty/nested-envelope error message")
-	}
-	for _, forbidden := range []string{"writeFile", "link(", "chmod(", "createHash", "export {", "export const"} {
+	for _, forbidden := range []string{"GENTLE_AI_REVIEW_BINDING", "repository_context", "review lens-context", "capture-result", "preserve-result", "opencode_runtime_provenance", "JSON.parse(output.output)", "writeFile", "link(", "chmod("} {
 		if strings.Contains(source, forbidden) {
-			t.Fatalf("review-result-artifacts.ts must delegate native persistence; found %q", forbidden)
+			t.Fatalf("transport plugin retains Go-owned behavior %q", forbidden)
+		}
+	}
+}
+
+func TestSDDTaskResultArtifactsPluginContract(t *testing.T) {
+	source, err := Read("opencode/plugins/sdd-task-result-artifacts.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`const SDD_PHASES`, `const SDD_TASK_FAILURE_PREFIX`, `failedSDDSessions`, `export default SDDTaskResultArtifactsPlugin`} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("SDD task plugin missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"GENTLE_AI_REVIEW_BINDING", "opencode-transport", "review lens-context", "capture-result"} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("SDD task plugin retains reviewer transport %q", forbidden)
 		}
 	}
 }
@@ -676,6 +632,14 @@ func TestSkillRegistryPluginContract(t *testing.T) {
 		"input.worktree",
 		"timeout: 30_000",
 		"console.error",
+		// Non-project guard: a fresh OpenCode directory can resolve to "/" or
+		// another non-project location; the plugin must skip silently instead
+		// of spawning a refresh that pollutes or fails at startup (#skill-registry-root-guard).
+		"isProjectRoot",
+		"homedir()",
+		".git",
+		".atl",
+		"console.info",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("skill-registry.ts missing %q", want)
@@ -683,6 +647,17 @@ func TestSkillRegistryPluginContract(t *testing.T) {
 	}
 	if strings.Contains(src, "exec(") {
 		t.Fatal("skill-registry.ts must use execFile, not shell exec")
+	}
+	if guardIdx, spawnIdx := strings.Index(src, "isProjectRoot"), strings.Index(src, "execFileAsync("); guardIdx == -1 || spawnIdx == -1 || guardIdx >= spawnIdx {
+		t.Fatalf("skill-registry.ts must guard before spawning; isProjectRoot@%d execFileAsync(@%d", guardIdx, spawnIdx)
+	}
+	worktreeIdx := strings.Index(src, "input.worktree")
+	directoryIdx := strings.Index(src, "input.directory")
+	if worktreeIdx == -1 || directoryIdx == -1 {
+		t.Fatal("skill-registry.ts must contain both input.worktree and input.directory")
+	}
+	if worktreeIdx >= directoryIdx {
+		t.Errorf("skill-registry.ts must use input.worktree before input.directory; got worktree@%d >= directory@%d", worktreeIdx, directoryIdx)
 	}
 }
 

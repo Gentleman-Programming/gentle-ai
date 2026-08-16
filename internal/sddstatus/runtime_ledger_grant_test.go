@@ -203,7 +203,7 @@ func TestRuntimeLedgerLegacyChainWithoutGrantsReplaysUnchanged(t *testing.T) {
 	}
 	finished, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: started.Revision, RequestID: "legacy-finish-1", Outcome: AttemptInterrupted,
-		EvidenceRevision: runtimeTestHash('7'), Diagnosis: "interrupted with the workspace unchanged",
+		Diagnosis:          "interrupted with the workspace unchanged",
 		HarnessDisposition: HarnessInvalidated, CleanupEvidence: "no executor process was ever spawned",
 		ProcessEvidence: "pre-launch process scan found no descendants",
 	})

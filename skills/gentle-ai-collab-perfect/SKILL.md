@@ -27,21 +27,20 @@ The skill assumes the contributor is working from wherever they push — a fork,
 
 ---
 
-## Source of truth — read the repo, don't infer
+## Source of truth — inspect the repo, don't infer
 
-Before recommending any contribution action, read the relevant local file. The repo documents every constraint; pulling rules verbatim beats guessing.
+Before recommending any contribution action, inspect the relevant current source. The repo documents every constraint; pulling rules verbatim beats guessing.
 
-| File | What it tells you |
+| Source | What it tells you |
 |---|---|
 | `CONTRIBUTING.md` | Issue-first workflow, label taxonomy, branch naming regex `^(feat\|fix\|chore\|docs\|style\|refactor\|perf\|test\|build\|ci\|revert)\/[a-z0-9._-]+$`, Conventional Commits format, 400-line review budget |
 | `.github/PULL_REQUEST_TEMPLATE.md` | Required PR body sections (Linked Issue, PR Type, Summary, Changes, Test Plan, Automated Checks, Contributor Checklist, Notes for Reviewers) |
-| `.github/ISSUE_TEMPLATE/bug_report.yml` | Bug report structure + `status:needs-review` auto-label + `status:approved` blocking gate |
-| `.github/ISSUE_TEMPLATE/feature_request.yml` | Feature request structure + same gates |
+| `.github/ISSUE_TEMPLATE` | Current issue templates, forms, and routing policy |
+| Discovered GitHub labels | Current label names and availability; do not infer them from this skill |
 | `.github/workflows/pr-check.yml` | Automated gates: `Check Issue Reference`, `Check Issue Has status:approved`, `Check PR Has type:* Label`, `Check PR Cognitive Load` |
-| `.github/ISSUE_TEMPLATE/config.yml` | Issue-template routing rules; do not bypass |
 | `skills/branch-pr/SKILL.md` | Branch + PR creation mechanics |
 | `skills/chained-pr/SKILL.md` | Chained vs Stacked PR strategy mechanics |
-| `skills/issue-creation/SKILL.md` | Issue creation mechanics |
+| `internal/assets/skills/issue-creation/SKILL.md` | Canonical issue discovery, drafting, privacy review, and publication authority |
 | `skills/cognitive-doc-design/SKILL.md` | Doc-writing principles |
 | `skills/comment-writer/SKILL.md` | Tone for comment replies |
 
@@ -89,13 +88,9 @@ If the contributor's PR is "stuck" on something, the next step is almost always 
 
 ## Issue workflow
 
-End-to-end steps to open an issue that becomes a viable PR.
+Use the canonical `issue-creation` skill at `internal/assets/skills/issue-creation/SKILL.md` for duplicate discovery, template handling, privacy review, and publication. Apply Gentle AI's current repository policy from `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE`, and discovered GitHub labels rather than copying form fields, label names, or commands here.
 
-1. **Search first.** Confirm the issue does not already exist (`gh search issues` or the issue list). Avoid duplicates — `CONTRIBUTING.md` says PRs on duplicates will be rejected.
-2. **Pick the template.** `.github/ISSUE_TEMPLATE/bug_report.yml` for bugs, `feature_request.yml` for changes. Each auto-applies `status:needs-review` via the template's `labels:` field.
-3. **Fill every required field.** Don't skip the Pre-flight Checklist. The two self-attestations (not a duplicate; understand `status:approved` is required) are present for a reason.
-4. **After submission, watch for `status:approved`.** Comment clarifications promptly. This is the gate before any PR opens.
-5. **If the maintainer asks for technical sub-slices** (e.g. `slice/journal-cas`, `slice/four-layer-engine`, `slice/tui-cli`), keep them as technical slices of one approved issue. The umbrella issue keeps `status:approved`; the sub-issues should also get approved if you want `Check Issue Has status:approved` to pass per slice.
+After submission, return to this collaboration workflow for the contributor/maintainer boundary and the approved-issue gate before PR work. If a maintainer requests technical sub-slices, keep them within the approved issue structure required by the current repository policy and checks.
 
 ---
 
@@ -289,11 +284,11 @@ When in doubt, the right move is more verification, less action.
 
 - `CONTRIBUTING.md` — full workflow, label taxonomy, branch naming, commit format, review budget.
 - `.github/PULL_REQUEST_TEMPLATE.md` — PR body structure.
-- `.github/ISSUE_TEMPLATE/bug_report.yml`, `feature_request.yml` — issue body structures.
+- `.github/ISSUE_TEMPLATE` — current issue templates, forms, and routing policy.
 - `.github/workflows/pr-check.yml` — automated gates.
 - `skills/branch-pr/SKILL.md` — branch + PR creation mechanics in detail.
 - `skills/chained-pr/SKILL.md` — chained vs stacked PR strategy mechanics in detail.
-- `skills/issue-creation/SKILL.md` — issue creation mechanics in detail.
+- `internal/assets/skills/issue-creation/SKILL.md` — canonical issue-creation authority.
 - `skills/cognitive-doc-design/SKILL.md` — doc-writing principles (low cognitive load).
 - `skills/comment-writer/SKILL.md` — tone and structure for PR comments and issue replies.
 - `skills/work-unit-commits/SKILL.md` — splitting commits for review-friendly PRs.

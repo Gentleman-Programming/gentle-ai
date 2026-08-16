@@ -48,9 +48,9 @@ const (
 	sddConsentStatusInvocationPrefix = "gentle-ai sdd-status "
 )
 
-// SDDIntegrationConsentResult is the typed blocking consent question a
-// multi-repository SDD change raises when its task plan targets repository
-// roots outside the authorized edit roots (#2540). Like the review consent
+// SDDIntegrationConsentResult is the typed blocking consent question an SDD
+// change raises when its task plan targets edit paths outside the authorized
+// edit roots (#2540). Like the review consent
 // envelope it is a Lossless Blocking Prompt: WHY input is required, the
 // COMPLETE choice set, and the EXACT runnable way to answer, scoped to one
 // change. The identity block is the change name plus the missing roots.
@@ -66,7 +66,7 @@ type SDDIntegrationConsentResult struct {
 	// apply can proceed; nothing has been persisted.
 	Blocking bool `json:"blocking"`
 	// Change and MissingRoots are the identity block: which change is blocked
-	// and which resolved repository roots no edit authority covers.
+	// and which resolved edit roots no edit authority covers.
 	Change       string   `json:"change"`
 	MissingRoots []string `json:"missing_roots"`
 	Headline     string   `json:"headline"`
@@ -78,8 +78,8 @@ type SDDIntegrationConsentResult struct {
 	// the status re-entry that shows the block again.
 	Choices []consentenvelope.Choice `json:"choices"`
 	// OffPath documents the deliberate alternative outside the choice set:
-	// keep the change single-repository by editing its tasks.md, then
-	// re-enter through native status.
+	// keep the change inside its authorized edit roots by editing its tasks.md,
+	// then re-enter through native status.
 	OffPath consentenvelope.OffPath `json:"off_path"`
 }
 
@@ -94,7 +94,7 @@ func (result SDDIntegrationConsentResult) Validate() error {
 		return errors.New("SDD consent question requires the blocked change name") // refusal:by-design world-action: this envelope is built and validated by the same package; the exit is a code fix, not a command
 	}
 	if len(result.MissingRoots) == 0 {
-		return errors.New("SDD consent question requires the missing repository roots") // refusal:by-design world-action: this envelope is built and validated by the same package; the exit is a code fix, not a command
+		return errors.New("SDD consent question requires the missing edit roots") // refusal:by-design world-action: this envelope is built and validated by the same package; the exit is a code fix, not a command
 	}
 	for _, root := range result.MissingRoots {
 		if strings.TrimSpace(root) == "" {
@@ -108,7 +108,7 @@ func (result SDDIntegrationConsentResult) Validate() error {
 	if err := core.ValidateCompleteness(sddConsentAnswerGranted, sddConsentAnswerDeclined); err != nil {
 		return err
 	}
-	// The missing roots ARE the evidence: every root the human is asked to
+	// The missing edit roots ARE the evidence: every root the human is asked to
 	// authorize must appear in the evidence the envelope shows them.
 	for _, root := range result.MissingRoots {
 		if !sddConsentEvidenceNames(result.Evidence, root) {

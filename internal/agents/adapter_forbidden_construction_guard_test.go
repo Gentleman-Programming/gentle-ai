@@ -27,8 +27,7 @@ import (
 //     (ReviewBinding, binding.json, gentle-ai.sdd-review-binding).
 //
 // Scope: this guard covers only the in-repo Go adapter dispatch surfaces
-// (CON-09/10/11). The known violations in the bundled OpenCode plugin asset
-// (internal/assets/opencode/plugins/review-result-artifacts.ts) and the
+// (CON-09/10/11). The retired bundled OpenCode plugin asset and the
 // Claude/OpenCode sdd-apply.md contract-pin text are tracked separately by
 // slices S3/S4/S7 — they are asset text, not Go adapter dispatch code, and
 // are intentionally out of this guard's file set.

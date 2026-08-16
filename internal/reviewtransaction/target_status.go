@@ -123,6 +123,7 @@ type targetStatusCandidate struct {
 	correctionRecovery          bool
 	frozenReviewing             bool
 	frozenReviewingPendingSlots bool
+	frozenReviewingDrifted      bool
 	// selectorFreeAccountingOnlyRecovery is carried from the eligibility
 	// predicate so projection never guesses it from snapshot identity domains.
 	selectorFreeAccountingOnlyRecovery bool
@@ -244,6 +245,9 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			if eligible {
 				candidate.frozenReviewing = true
 				candidate.frozenReviewingPendingSlots = pendingSlots
+				if !pendingSlots {
+					candidate.frozenReviewingDrifted = frozenReviewingCandidateDrifted(ctx, repo, state)
+				}
 				candidates = append(candidates, candidate)
 				continue
 			}
@@ -304,13 +308,16 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			}
 		}
 		if state.State == StateEscalated {
+			if compactEscalatedRecoveryTargetChanged(state.CurrentSnapshot, live) {
+				candidate.correctionRecovery = true
+				candidate.recoveryDisposition = RecoveryEscalated
+				candidates = append(candidates, candidate)
+				continue
+			}
 			requested := state
 			requested.InitialSnapshot = live
 			if compactStartDeliveryScopeMatches(state, requested) {
-				candidate.correctionRecovery = compactEscalatedRecoveryTargetChanged(state.CurrentSnapshot, live)
-				if candidate.correctionRecovery {
-					candidate.recoveryDisposition = RecoveryEscalated
-				} else if compactAccountingOnlyEscalation(state) {
+				if compactAccountingOnlyEscalation(state) {
 					// An accounting-only escalation (both original review and
 					// correction regression passed; only the cumulative
 					// correction line count crossed the budget) has a native
@@ -382,6 +389,21 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			candidates = append(candidates, candidate)
 		}
 	}
+	if len(candidates) == 0 && request.LineageID != "" {
+		_, compactExists := view.compact[request.LineageID]
+		_, legacyExists := view.legacy[request.LineageID]
+		if !compactExists && !legacyExists {
+			// #2645: an explicitly requested lineage that owns no authority at
+			// all must not reclassify the live target as fresh. START's own
+			// discovery resolves whatever authority exactly governs this
+			// candidate regardless of the requested name, so STATUS has to
+			// advertise that same decision — one recursion with the
+			// restriction lifted keeps the answer in this single place.
+			unrestricted := request
+			unrestricted.LineageID = ""
+			return assessTargetStatusSnapshot(ctx, repo, unrestricted, live)
+		}
+	}
 	if len(candidates) == 0 && len(approvedScopeRecovery) == 1 {
 		// START answers recover for exactly one approved delivery-scope
 		// predecessor with no other claimant, so status must bind that same
@@ -412,6 +434,8 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		base.Action, base.Replayability = TargetStatusActionStart, ReplayabilityNotReplayable
 		if live.Kind == TargetBaseWorkspaceOverlay && live.Projection == ProjectionStaged {
 			base.Action, base.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+		} else if live.Kind == TargetBaseDiff && len(live.Paths) == 0 {
+			base.Action, base.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
 		}
 		for _, candidate := range scopeChangedCandidates {
 			base.CandidateLineageIDs = append(base.CandidateLineageIDs, candidate.lineage)
@@ -423,6 +447,8 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		base.Applicability = TargetApplicabilityUnrelated
 		base.Action, base.Replayability = TargetStatusActionStart, ReplayabilityNotReplayable
 		if live.Kind == TargetBaseWorkspaceOverlay && live.Projection == ProjectionStaged {
+			base.Action, base.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+		} else if live.Kind == TargetBaseDiff && len(live.Paths) == 0 {
 			base.Action, base.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
 		}
 		return base, nil
@@ -476,6 +502,21 @@ func explicitReviewingCompactCandidate(ctx context.Context, repo string, candida
 		}
 	}
 	return true, pending, nil
+}
+
+// frozenReviewingCandidateDrifted reports whether the live worktree, projected
+// through the frozen candidate's own selector, no longer reproduces the frozen
+// candidate tree. A fully captured frozen review continues generically to
+// finalize only while that candidate stays coherent; post-capture worktree
+// drift keeps the stop, and any projection failure fails closed as drift.
+func frozenReviewingCandidateDrifted(ctx context.Context, repo string, state CompactState) bool {
+	frozen := state.InitialSnapshot
+	target := Target{Kind: frozen.Kind, Projection: frozen.Projection, IntendedUntracked: append([]string{}, frozen.IntendedUntracked...)}
+	if target.Kind == TargetBaseDiff || target.Kind == TargetBaseWorkspaceOverlay {
+		target.BaseRef = frozen.BaseTree
+	}
+	live, err := (SnapshotBuilder{Repo: repo}).Build(ctx, target)
+	return err != nil || live.CandidateTree != frozen.CandidateTree
 }
 
 func compactLocalBaseAdvanceCompatibility(ctx context.Context, repo string, state CompactState, target Target, live Snapshot) *BaseAdvanceCompatibility {
@@ -546,7 +587,11 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 			return result
 		}
 		if candidate.frozenReviewing && !candidate.frozenReviewingPendingSlots {
-			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+			if candidate.frozenReviewingDrifted {
+				result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+				return result
+			}
+			result.Action, result.Replayability = TargetStatusActionFinalize, ReplayabilityNotReplayable
 			return result
 		}
 		if candidate.finalVerificationRetry != nil {

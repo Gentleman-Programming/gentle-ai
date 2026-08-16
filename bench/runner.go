@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +17,10 @@ import (
 // repository, and (when the journey needs one) a local bare remote. Nothing
 // here ever touches the user's real config or repositories.
 type Sandbox struct {
-	Binary                   string
+	Binary string
+	// PathOverride is prepended to PATH for journeys that need a deterministic
+	// local runtime probe without depending on the host installation.
+	PathOverride             string
 	Root                     string
 	Home                     string
 	Repo                     string
@@ -76,8 +81,12 @@ func newSandbox(binary, root string) (*Sandbox, error) {
 // env is a closed environment: only what the product legitimately needs.
 // PATH is inherited because the product shells out to git.
 func (s *Sandbox) env() []string {
+	path := os.Getenv("PATH")
+	if s.PathOverride != "" {
+		path = s.PathOverride + string(os.PathListSeparator) + path
+	}
 	env := []string{
-		"PATH=" + os.Getenv("PATH"),
+		"PATH=" + path,
 		"HOME=" + s.Home,
 		"USERPROFILE=" + s.Home,
 		"XDG_CONFIG_HOME=" + filepath.Join(s.Home, ".config"),
@@ -238,6 +247,50 @@ func (s *Sandbox) invokeAt(dir string, args []string) Observation {
 		StdoutCaptured: true,
 		StderrCaptured: true,
 	}
+}
+
+func (s *Sandbox) invokeInteractive(dir string, args []string, exchange func(*bufio.Reader, io.WriteCloser) error) (Observation, error) {
+	cmd := exec.Command(s.Binary, args...)
+	cmd.Dir = dir
+	cmd.Env = s.env()
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return interactiveObservation(args, -1, "", "bench: "+err.Error()), err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return interactiveObservation(args, -1, "", "bench: "+err.Error()), err
+	}
+	var output, stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return interactiveObservation(args, -1, "", "bench: "+err.Error()), err
+	}
+	reader := bufio.NewReader(io.TeeReader(stdout, &output))
+	exchangeErr := exchange(reader, stdin)
+	_ = stdin.Close()
+	_, readErr := io.Copy(io.Discard, reader)
+	waitErr := cmd.Wait()
+	exitCode := 0
+	var exitErr *exec.ExitError
+	if errors.As(waitErr, &exitErr) {
+		exitCode = exitErr.ExitCode()
+	} else if waitErr != nil {
+		exitCode = -1
+		stderr.WriteString("\nbench: " + waitErr.Error())
+	}
+	observation := interactiveObservation(args, exitCode, output.String(), stderr.String())
+	if exchangeErr != nil {
+		return observation, exchangeErr
+	}
+	if readErr != nil {
+		return observation, readErr
+	}
+	return observation, nil
+}
+
+func interactiveObservation(args []string, exitCode int, stdout, stderr string) Observation {
+	return Observation{Args: args, ExitCode: exitCode, Stdout: stdout, Stderr: stderr, StdoutCaptured: true, StderrCaptured: true}
 }
 
 // readBack runs the product for a fixture proof, a capability probe or an
@@ -471,6 +524,17 @@ func (r *journeyRun) runAt(dir string, args []string, modelRun bool) Observation
 	record := r.accumulator.observe(r.step, observation, r.sandbox.gitCallsSince(), modelRun)
 	r.accumulator.records = append(r.accumulator.records, record)
 	return observation
+}
+
+// runInteractive drives a native command that publishes an intermediate frame
+// before it can accept its continuation. It records one real product command;
+// the exchange is limited to transport framing and never manufactures review
+// authority or provider output.
+func (r *journeyRun) runInteractive(args []string, modelRun bool, exchange func(*bufio.Reader, io.WriteCloser) error) (Observation, error) {
+	observation, err := r.sandbox.invokeInteractive(r.sandbox.Repo, args, exchange)
+	record := r.accumulator.observe(r.step, observation, r.sandbox.gitCallsSince(), modelRun)
+	r.accumulator.records = append(r.accumulator.records, record)
+	return observation, err
 }
 
 func runJourney(binary string, journey Journey) JourneyResult {

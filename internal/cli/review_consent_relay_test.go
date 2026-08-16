@@ -46,11 +46,90 @@ func decodeConsentQuestion(t *testing.T, payload []byte) ReviewIntegrationConsen
 // literally runnable rather than merely descriptive.
 func invocationArgs(t *testing.T, invocation string) []string {
 	t.Helper()
-	fields := strings.Fields(invocation)
-	if len(fields) < 3 || fields[0] != "gentle-ai" || fields[1] != "review" || fields[2] != "start" {
+	words, err := SplitPrintedCommandWords(invocation)
+	if err != nil {
+		t.Fatalf("parse consent invocation: %v", err)
+	}
+	if len(words) < 3 || words[0] != "gentle-ai" || words[1] != "review" || words[2] != "start" {
 		t.Fatalf("consent invocation is not a runnable gentle-ai review start command: %q", invocation)
 	}
-	return fields[2:]
+	return words[2:]
+}
+
+func normalizeConsentFixtureCWD(t *testing.T, payload []byte, root string) []byte {
+	t.Helper()
+	var envelope struct {
+		Choices []struct {
+			Invocation string `json:"invocation"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		t.Fatalf("decode consent fixture: %v", err)
+	}
+
+	normalized := append([]byte(nil), payload...)
+	for _, choice := range envelope.Choices {
+		args := invocationArgs(t, choice.Invocation)
+		cwd := -1
+		for index, arg := range args {
+			if arg != "--cwd" {
+				continue
+			}
+			if cwd >= 0 {
+				t.Fatalf("consent invocation repeats --cwd: %q", choice.Invocation)
+			}
+			cwd = index
+		}
+		if cwd < 0 || cwd+1 >= len(args) || args[cwd+1] != root {
+			t.Fatalf("consent invocation CWD = %q, want %q: %q", args, root, choice.Invocation)
+		}
+		args[cwd+1] = "/repo"
+
+		words := append([]string{"gentle-ai", "review"}, args...)
+		for index, word := range words {
+			words[index] = reviewTransitionShellWord(word)
+		}
+		normalizedInvocation := strings.Join(words, " ")
+		encodedInvocation, err := json.Marshal(choice.Invocation)
+		if err != nil {
+			t.Fatalf("encode consent invocation: %v", err)
+		}
+		encodedNormalizedInvocation, err := json.Marshal(normalizedInvocation)
+		if err != nil {
+			t.Fatalf("encode normalized consent invocation: %v", err)
+		}
+		if next := bytes.ReplaceAll(normalized, encodedInvocation, encodedNormalizedInvocation); bytes.Equal(next, normalized) {
+			t.Fatalf("consent invocation not found in fixture payload: %q", choice.Invocation)
+		} else {
+			normalized = next
+		}
+	}
+	return normalized
+}
+
+func TestInvocationArgsParsesQuotedWindowsConsentFollowUp(t *testing.T) {
+	root := `C:\Users\Jane Doe\repo`
+	invocation := "gentle-ai review start --cwd '" + root + "' --contract " + ReviewIntegrationContractV1
+
+	want := []string{"start", "--cwd", root, "--contract", ReviewIntegrationContractV1}
+	if got := invocationArgs(t, invocation); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("invocation args = %#v, want %#v", got, want)
+	}
+}
+
+func TestConsentFixtureNormalizationStripsRenderedWindowsCWDQuoting(t *testing.T) {
+	root := `C:\Users\Jane Doe\repo`
+	payload, err := json.Marshal(ReviewIntegrationConsentResult{Choices: []ReviewIntegrationConsentChoice{{
+		Invocation: "gentle-ai review start --cwd '" + root + "' --contract " + ReviewIntegrationContractV1,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	normalized := normalizeConsentFixtureCWD(t, payload, root)
+	if !bytes.Contains(normalized, []byte("--cwd /repo")) || bytes.Contains(normalized, []byte("--cwd '/repo'")) {
+		t.Fatalf("normalized fixture CWD = %s, want canonical --cwd /repo", normalized)
+	}
 }
 
 func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion(t *testing.T) {
@@ -284,9 +363,12 @@ func TestRelayedConsentDeclineIsScopedToTheCandidate(t *testing.T) {
 
 // TestNegotiatedStartWithoutConsentDeclarationKeepsTodaysEnvelope pins the
 // no-declaration path: the negotiated envelope carries no consent fields (the
-// strict decoder refuses unknown fields), the start completes, and the
-// skip-and-notice behavior stays on the console. Byte-identity of the envelope
-// itself is pinned by TestNegotiatedReviewStartMatchesVersionedFixture.
+// strict decoder refuses unknown fields), the start completes in the
+// fail-safe direction, and the console stays byte-silent — the skip notices
+// are a human surface reserved for plain (non-negotiated) starts, because a
+// successful negotiated operation writes zero bytes to stderr. Byte-identity
+// of the envelope itself is pinned by
+// TestNegotiatedReviewStartMatchesVersionedFixture.
 func TestNegotiatedStartWithoutConsentDeclarationKeepsTodaysEnvelope(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
@@ -304,8 +386,8 @@ func TestNegotiatedStartWithoutConsentDeclarationKeepsTodaysEnvelope(t *testing.
 	if strings.Contains(output.String(), "consent") {
 		t.Fatalf("undeclared negotiated START leaked consent fields:\n%s", output.String())
 	}
-	if !strings.Contains(console.String(), reviewConsentSkippedNotice) {
-		t.Fatalf("undeclared headless START must keep the skip notice:\n%s", console.String())
+	if console.Len() != 0 {
+		t.Fatalf("undeclared negotiated START must stay silent on the console:\n%s", console.String())
 	}
 }
 
@@ -443,11 +525,7 @@ func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
 			if err := question.Validate(); err != nil {
 				t.Fatal(err)
 			}
-			encodedRoot, err := json.Marshal(root)
-			if err != nil {
-				t.Fatalf("encode fixture repository root: %v", err)
-			}
-			normalized := bytes.ReplaceAll(output.Bytes(), encodedRoot[1:len(encodedRoot)-1], []byte("/repo"))
+			normalized := normalizeConsentFixtureCWD(t, output.Bytes(), root)
 			fixturePath := filepath.Join("..", "..", "contracts", "review-integration", tt.fixture)
 			if os.Getenv("GENTLE_AI_CONSENT_FIXTURE_UPDATE") == "1" {
 				if err := os.WriteFile(fixturePath, normalized, 0o644); err != nil {

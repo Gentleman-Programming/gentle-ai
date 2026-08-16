@@ -37,7 +37,7 @@ const (
 
 // readChangeInstanceMarker loads the persisted change-instance token, or ""
 // when none has been minted. It never mints: an ordinary status on a
-// single-repository change must leave zero filesystem footprint.
+// change with no missing edit roots must leave zero filesystem footprint.
 func readChangeInstanceMarker(changeRoot string) (string, error) {
 	payload, err := os.ReadFile(filepath.Join(changeRoot, changeInstanceMarkerFile))
 	if errors.Is(err, os.ErrNotExist) {
@@ -85,7 +85,7 @@ func sddConsentGrantRequestID(change, instance, expectedRevision string, roots [
 }
 
 // newEditAuthorityConsent builds the typed blocking consent question for one
-// blocked(edit_authority_missing) status: the missing roots are the evidence,
+// blocked(edit_authority_missing) status: the missing edit roots are the evidence,
 // the granted choice names the exact runnable grant invocation (including the
 // persisted change-instance token and, when the ledger already has a head,
 // the compare-and-swap revision a widening grant must chain on), and the
@@ -95,7 +95,7 @@ func newEditAuthorityConsent(change, workspaceRoot string, missingRoots []string
 	statusInvocation := fmt.Sprintf("gentle-ai sdd-status %s --cwd %s", change, pathquote.Quote(workspaceRoot))
 	evidence := make([]string, 0, len(missingRoots))
 	for _, root := range missingRoots {
-		evidence = append(evidence, fmt.Sprintf("%s is a Git repository root outside the authorized edit roots", root))
+		evidence = append(evidence, fmt.Sprintf("%s is outside the authorized edit roots", root))
 	}
 	var grant strings.Builder
 	fmt.Fprintf(&grant, "%s--cwd %s --change %s", sddConsentGrantInvocationPrefix, pathquote.Quote(workspaceRoot), change)
@@ -117,25 +117,25 @@ func newEditAuthorityConsent(change, workspaceRoot string, missingRoots []string
 		Change:       change,
 		MissingRoots: append([]string{}, missingRoots...),
 		Headline:     "This change plans work outside its authorized edit roots.",
-		Reason:       "the task plan targets repository roots that no edit authority covers, so apply stays blocked until a human decides.",
-		Value:        "Granting scopes edit authority to this change alone: the grant is recorded in the change's ledger, auditable, and dies with archive.",
+		Reason:       "the task plan targets edit paths that no edit authority covers, so apply stays blocked until a human decides.",
+		Value:        "Granting edit authority to this change alone: the grant is recorded in the change's ledger, auditable, and dies with archive.",
 		Evidence:     evidence,
 		Choices: []consentenvelope.Choice{
 			{
 				Answer:     sddConsentAnswerGranted,
-				Label:      "Grant this change edit authority over the named roots",
-				Effect:     "This change's apply actor may edit the named repositories. The grant is per-change, audited (who, when, which roots), and dies with archive; nothing is granted to any other change.",
+				Label:      "Grant this change edit authority over the named edit roots",
+				Effect:     "This change's apply actor may edit paths under the named edit roots. The grant is per-change, audited (who, when, which roots), and dies with archive; nothing is granted to any other change.",
 				Invocation: grant.String(),
 			},
 			{
 				Answer:     sddConsentAnswerDeclined,
 				Label:      "Keep the change blocked",
-				Effect:     "The change stays blocked(edit_authority_missing) and nothing is persisted. Both exits stay open: edit the change's tasks.md so no work unit targets an unauthorized root, or grant authority with the named grant invocation.",
+				Effect:     "The change stays blocked(edit_authority_missing) and nothing is persisted. Both exits stay open: edit the change's tasks.md so no work unit targets an unauthorized edit path, or grant edit authority for the named edit roots with the named grant invocation.",
 				Invocation: statusInvocation,
 			},
 		},
 		OffPath: consentenvelope.OffPath{
-			Note:    fmt.Sprintf("To keep this change single-repository instead, edit its tasks.md so no work unit targets an unauthorized root, then re-enter through '%s'.", statusInvocation),
+			Note:    fmt.Sprintf("To keep this change inside its authorized edit roots instead, edit its tasks.md so no work unit targets an unauthorized edit path, then re-enter through '%s'.", statusInvocation),
 			Command: statusInvocation,
 		},
 	}

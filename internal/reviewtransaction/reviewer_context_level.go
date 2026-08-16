@@ -34,6 +34,11 @@ const (
 	// whatever the caller produced with the provider's own output before the
 	// reviewer ran, so relaying is not trusted at all.
 	ReviewerContextLevelRuntimeInterception ReviewerContextLevel = "runtime_interception"
+	// ReviewerContextLevelProviderContract records Go-materialized and
+	// Go-admitted output delivered through the live provider transport after its
+	// immutable slot is durable. It records transport provenance, not UI
+	// provenance or a claim about how a user interface displayed the result.
+	ReviewerContextLevelProviderContract ReviewerContextLevel = "provider_contract"
 )
 
 // reviewerContextLevelShape bounds what may be persisted and read back. It
@@ -47,7 +52,7 @@ var reviewerContextLevelShape = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}[a-z0-9
 // release does not implement would record a claim nothing produced.
 func ReviewerContextLevelAccepted(level ReviewerContextLevel) bool {
 	switch level {
-	case ReviewerContextLevelProviderCommand, ReviewerContextLevelRuntimeInterception:
+	case ReviewerContextLevelProviderCommand, ReviewerContextLevelRuntimeInterception, ReviewerContextLevelProviderContract:
 		return true
 	default:
 		return false

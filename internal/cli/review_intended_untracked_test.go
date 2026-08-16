@@ -232,3 +232,43 @@ func TestIntendedUntrackedConsentFollowUpPreservesSelectedScope(t *testing.T) {
 		t.Fatalf("consent START target = %s, selected status target = %s", negotiatedStartTarget(started), status.TargetIdentity)
 	}
 }
+
+func TestConsentFollowUpPrintedPathFlagsRoundTripWindowsNativePaths(t *testing.T) {
+	for _, test := range []struct {
+		name, cwd, policy, trace string
+	}{
+		{name: "cwd", cwd: `C:\Users\reviewer\gentle ai`},
+		{name: "policy", cwd: "/repo", policy: `C:\Users\reviewer\policy files\review policy.json`},
+		{name: "trace", cwd: "/repo", trace: `C:\Users\reviewer\traces\operation trace.json`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			command := reviewConsentFollowUpBase(
+				test.cwd, "sha256:target", reviewtransaction.ProjectionWorkspace,
+				"windows-path-roundtrip", "", test.policy, "reliability", test.trace, false, false,
+				ReviewIntegrationContractV2, "", "", reviewIntendedUntrackedScope{},
+			)
+
+			words, err := SplitPrintedCommandWords(command)
+			if err != nil {
+				t.Fatalf("split printed consent follow-up: %v", err)
+			}
+			want := []string{
+				"gentle-ai", "review", "start",
+				"--contract", ReviewIntegrationContractV2,
+				"--cwd", test.cwd,
+				"--target", "sha256:target",
+				"--projection", string(reviewtransaction.ProjectionWorkspace),
+				"--lineage", "windows-path-roundtrip",
+			}
+			if test.policy != "" {
+				want = append(want, "--policy", test.policy)
+			}
+			if test.trace != "" {
+				want = append(want, "--trace", test.trace)
+			}
+			if !reflect.DeepEqual(words, want) {
+				t.Fatalf("printed consent follow-up words = %#v, want %#v\ncommand: %q", words, want, command)
+			}
+		})
+	}
+}

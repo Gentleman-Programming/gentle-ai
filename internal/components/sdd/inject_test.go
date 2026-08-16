@@ -69,13 +69,14 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				"exactly three semantic choices in this order",
 				"`report_and_continue`, `continue_without_reporting`, `stop_here`",
 				"Only after explicit consent and that final privacy scan",
+				"If no equivalent exists, create a new automated provider-defect report.",
 				"search open and closed issues",
-				"confirms a newly-created issue identity/URL",
-				"Only a completed duplicate lookup with a definitive result may branch to a write",
-				"Do not create, comment, update, or label any issue",
-				"do not add, remove, or change any labels on it",
-				"label application fails or has an ambiguous outcome",
-				"re-resolve that exact created issue identity",
+				"newly-created issue identity/URL",
+				"Only a definitive lookup may branch to GitHub mutation",
+				"If search, comment, or creation fails, is ambiguous, incomplete, times out, lacks permission, or has an unknown outcome",
+				"perform no further GitHub mutation and no blind retry",
+				"use the uncertainty continuation below",
+				"After a definitive successful report outcome, or any report-side uncertainty after stopping further GitHub mutation, execute the shared candidate-scoped continuation below.",
 				"Both continue choices execute that exact captured decline invocation exactly once",
 				"`consent: \"declined_this_candidate\"`",
 				"native negotiated STATUS",
@@ -83,6 +84,9 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				if !strings.Contains(renderSDDOrchestratorAsset(tc.agent), required) {
 					t.Fatalf("rendered %s orchestrator missing provider-defect handoff clause %q", tc.agent, required)
 				}
+			}
+			if strings.Contains(renderSDDOrchestratorAsset(tc.agent), "gentle-"+"report") {
+				t.Fatalf("rendered %s orchestrator retains report label", tc.agent)
 			}
 		})
 	}
@@ -2209,10 +2213,10 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Multi overlay must contain gentle-orchestrator + 10 SDD sub-agents +
-	// 3 JD agents + 4 review agents + 1 batched refuter = 19 agents.
-	if len(agentMap) != 19 {
-		t.Fatalf("agent count = %d, want 19", len(agentMap))
+	// Multi overlay must contain gentle-orchestrator + 2 native fallback agents +
+	// 10 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 22 agents.
+	if len(agentMap) != 22 {
+		t.Fatalf("agent count = %d, want 22", len(agentMap))
 	}
 
 	// Verify gentle-orchestrator is present.
@@ -2236,7 +2240,7 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	}
 
 	// Verify representative sub-agents are present.
-	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter"} {
+	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator"} {
 		if _, ok := agentMap[subAgent]; !ok {
 			t.Fatalf("missing sub-agent %q", subAgent)
 		}
@@ -2597,13 +2601,13 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Empty mode defaults to single — gentle-orchestrator + 10 SDD sub-agents +
-	// 3 JD agents + 4 review agents + 1 batched refuter = 19 agents.
+	// Empty mode defaults to single — gentle-orchestrator + 2 native fallback agents +
+	// 10 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 22 agents.
 	if _, ok := agentMap["gentle-orchestrator"]; !ok {
 		t.Fatal("missing gentle-orchestrator agent")
 	}
-	if len(agentMap) != 19 {
-		t.Fatalf("agent count = %d, want 19", len(agentMap))
+	if len(agentMap) != 22 {
+		t.Fatalf("agent count = %d, want 22", len(agentMap))
 	}
 
 	// Verify orchestrator mode is "primary".
@@ -2632,7 +2636,7 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 	}
 
 	// Verify sub-agents are present with mode "subagent".
-	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter"} {
+	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator"} {
 		raw, ok := agentMap[subAgent]
 		if !ok {
 			t.Fatalf("missing sub-agent %q", subAgent)
@@ -2655,6 +2659,125 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 	}
 	refuterTools := agentMap["review-refuter"].(map[string]any)["tools"].(map[string]any)
 	assertOpenCodeRefuterToolsReadOnly(t, "rendered single-mode OpenCode config", refuterTools)
+}
+
+func TestInjectOpenCodeNativeFallbackAgentsPromptsAlignedWithGentlePi(t *testing.T) {
+	mockNoPackageManager(t)
+
+	for _, sddMode := range []string{"multi", ""} {
+		t.Run("sddMode="+sddMode, func(t *testing.T) {
+			home := t.TempDir()
+			result, err := Inject(home, opencodeAdapter(), model.SDDModeID(sddMode))
+			if err != nil {
+				t.Fatalf("Inject failed: %v", err)
+			}
+			if !result.Changed {
+				t.Fatal("expected injection to change configuration")
+			}
+
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			data, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var root map[string]any
+			if err := json.Unmarshal(data, &root); err != nil {
+				t.Fatal(err)
+			}
+
+			agentMap := root["agent"].(map[string]any)
+			if rootTools, ok := root["tools"].(map[string]any); ok {
+				for _, forbidden := range []string{"codegraph_*", "codegraph_codegraph_explore"} {
+					if _, exists := rootTools[forbidden]; exists {
+						t.Fatalf("root tools unexpectedly grant %q", forbidden)
+					}
+				}
+			}
+			for _, fallbackAgent := range []string{"general", "explore"} {
+				agent, ok := agentMap[fallbackAgent].(map[string]any)
+				if !ok {
+					t.Fatalf("agent %q missing from overlay for mode %q", fallbackAgent, sddMode)
+				}
+				if mode, _ := agent["mode"].(string); mode != "subagent" {
+					t.Errorf("agent %q mode = %q, want subagent", fallbackAgent, mode)
+				}
+				if hidden, _ := agent["hidden"].(bool); !hidden {
+					t.Errorf("agent %q hidden = %v, want true", fallbackAgent, hidden)
+				}
+				prompt, ok := agent["prompt"].(string)
+				if !ok || strings.TrimSpace(prompt) == "" {
+					t.Fatalf("agent %q missing non-empty prompt for mode %q", fallbackAgent, sddMode)
+				}
+				if fallbackAgent == "general" {
+					if !strings.Contains(prompt, "empirical verification") || !strings.Contains(prompt, "Do NOT launch child sub-agents") {
+						t.Fatalf("general fallback agent prompt is missing its bounded auxiliary-task contract: %s", prompt)
+					}
+				} else {
+					if !strings.Contains(prompt, "gentle-pi") || !strings.Contains(prompt, "Do not create, edit, or delete files") {
+						t.Fatalf("explore fallback agent prompt is missing its read-only contract: %s", prompt)
+					}
+					description, _ := agent["description"].(string)
+					if strings.Contains(strings.ToLower(description+" "+prompt), "web search") {
+						t.Fatalf("explore fallback agent advertises an unavailable web-search tool: %s", description)
+					}
+				}
+				tools, ok := agent["tools"].(map[string]any)
+				if !ok {
+					t.Fatalf("agent %q tools have type %T, want object", fallbackAgent, agent["tools"])
+				}
+				wantTools := map[string]bool{
+					"read":  true,
+					"write": fallbackAgent == "general",
+					"edit":  fallbackAgent == "general",
+					"bash":  fallbackAgent == "general",
+					"task":  false,
+				}
+				if fallbackAgent == "explore" {
+					wantTools["codegraph_codegraph_explore"] = true
+				}
+				for tool, want := range wantTools {
+					got, exists := tools[tool].(bool)
+					if !exists || got != want {
+						t.Errorf("agent %q tool %q = %v, want %t", fallbackAgent, tool, tools[tool], want)
+					}
+				}
+				if fallbackAgent == "explore" {
+					for _, forbidden := range []string{"codegraph_*", "apply_patch"} {
+						if _, exists := tools[forbidden]; exists {
+							t.Errorf("explore tools unexpectedly configure %q", forbidden)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestInjectOpenCodePreservesExploreCodeGraphDenyAndCustomTool(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"agent":{"explore":{"tools":{"custom_readonly":true},"permission":{"codegraph_codegraph_explore":"deny"}}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeSingle); err != nil {
+		t.Fatal(err)
+	}
+
+	explore := readOpenCodeAgents(t, settingsPath)["explore"].(map[string]any)
+	tools := explore["tools"].(map[string]any)
+	if tools["codegraph_codegraph_explore"] != true || tools["custom_readonly"] != true {
+		t.Fatalf("explore tools lost managed or custom key: %#v", tools)
+	}
+	// OpenCode 1.18.18 normalizes agent tools before agent permission.
+	if got := explore["permission"].(map[string]any)["codegraph_codegraph_explore"]; got != "deny" {
+		t.Fatalf("agent CodeGraph permission = %v, want deny", got)
+	}
 }
 
 func TestInjectClaudeIgnoresSDDMode(t *testing.T) {
@@ -3006,6 +3129,7 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 		"review-reliability": {ProviderID: "openai", ModelID: "gpt-5"},
 		"review-resilience":  {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		"review-refuter":     {ProviderID: "openai", ModelID: "gpt-5", Effort: "high"},
+		"review-validator":   {ProviderID: "openai", ModelID: "gpt-5-mini"},
 	}
 
 	result, err := Inject(home, opencodeAdapter(), "multi", InjectOptions{OpenCodeModelAssignments: assignments})
@@ -3061,8 +3185,12 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 		"review-reliability": "openai/gpt-5",
 		"review-resilience":  "anthropic/claude-sonnet-4",
 		"review-refuter":     "openai/gpt-5",
+		"review-validator":   "openai/gpt-5-mini",
 	} {
-		definition := agentMap[agent].(map[string]any)
+		definition, ok := agentMap[agent].(map[string]any)
+		if !ok {
+			t.Fatalf("%s agent definition = %#v, want object", agent, agentMap[agent])
+		}
 		if got := definition["model"]; got != want {
 			t.Fatalf("%s model = %q, want %q", agent, got, want)
 		}
@@ -3079,6 +3207,72 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 	}
 	if _, hasModel := verifyAgent["model"]; hasModel {
 		t.Fatal("sdd-verify should not have a model field (unassigned phase)")
+	}
+}
+
+func TestInjectOpenCodeMultiModeWithCustomAgentModelAssignment(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	seed := `{"agent":{"custom-refactor":{"mode":"subagent","model":"old/provider-model","description":"preserve me","variant":"high"}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	assignments := map[string]model.ModelAssignment{
+		"custom-refactor": {ProviderID: "openai", ModelID: "gpt-5-mini"},
+		"missing-custom":  {ProviderID: "openai", ModelID: "gpt-5"},
+	}
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: assignments}); err != nil {
+		t.Fatalf("Inject(multi, custom assignment) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	agents, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+	custom, ok := agents["custom-refactor"].(map[string]any)
+	if !ok {
+		t.Fatal("custom-refactor agent missing after sync")
+	}
+	if custom["model"] != "openai/gpt-5-mini" {
+		t.Fatalf("custom-refactor model = %v, want openai/gpt-5-mini", custom["model"])
+	}
+	if custom["description"] != "preserve me" || custom["mode"] != "subagent" {
+		t.Fatalf("custom-refactor settings were not preserved: %v", custom)
+	}
+	if variant, ok := custom["variant"].(string); !ok || variant != "" {
+		t.Fatalf("custom-refactor variant = %v, want empty string", custom["variant"])
+	}
+	if _, exists := agents["missing-custom"]; exists {
+		t.Fatal("inject must not create a missing custom agent definition")
+	}
+
+	firstContent := append([]byte(nil), content...)
+	secondResult, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: assignments})
+	if err != nil {
+		t.Fatalf("repeat Inject(multi, custom assignment) error = %v", err)
+	}
+	if secondResult.Changed {
+		t.Fatal("repeat Inject(multi, custom assignment) changed = true")
+	}
+	secondContent, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) after repeat sync error = %v", err)
+	}
+	if !bytes.Equal(secondContent, firstContent) {
+		t.Fatalf("repeat sync changed opencode.json bytes:\nfirst:\n%s\nsecond:\n%s", firstContent, secondContent)
 	}
 }
 
@@ -4187,6 +4381,37 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 	}
 	if _, err := os.Stat(reviewPluginPath); !os.IsNotExist(err) {
 		t.Fatalf("OpenCode-only review plugin remains installed for Kilo: %v", err)
+	}
+	settings, err := os.ReadFile(filepath.Join(home, ".config", "kilo", "opencode.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(Kilocode settings) error = %v", err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(settings, &root); err != nil {
+		t.Fatalf("Unmarshal(Kilocode settings) error = %v", err)
+	}
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("Kilocode settings missing agent map: %v", root)
+	}
+	if _, exists := agentMap["gentle-orchestrator"]; !exists {
+		t.Fatalf("Kilocode settings must retain gentle-orchestrator agent: %v", agentMap)
+	}
+	if strings.Contains(string(settings), "codegraph_codegraph_explore") {
+		t.Fatal("Kilocode settings must not receive the OpenCode CodeGraph grant")
+	}
+	for _, openCodeOnlyAgent := range []string{"general", "explore", opencodemodel.ReviewValidatorAgent} {
+		if _, exists := agentMap[openCodeOnlyAgent]; exists {
+			t.Fatalf("Kilocode settings must not receive OpenCode-only agent %q", openCodeOnlyAgent)
+		}
+	}
+	orchestrator := agentMap["gentle-orchestrator"].(map[string]any)
+	taskPermissions := orchestrator["permission"].(map[string]any)["task"].(map[string]any)
+	if replacement, ok := taskPermissions["__replace__"].(map[string]any); ok {
+		taskPermissions = replacement
+	}
+	if _, exists := taskPermissions[opencodemodel.ReviewValidatorAgent]; exists {
+		t.Fatalf("Kilocode settings must not authorize OpenCode-only agent %q", opencodemodel.ReviewValidatorAgent)
 	}
 }
 
@@ -6909,7 +7134,7 @@ func TestRefreshInstalledOpenCodePluginsSkipsSymlinksAndDirectories(t *testing.T
 	if err := os.WriteFile(userFile, userContent, 0o644); err != nil {
 		t.Fatalf("WriteFile(user file) error = %v", err)
 	}
-	symlinkPath := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+	symlinkPath := filepath.Join(pluginsDir, "opencode-review-transport.ts")
 	if err := os.Symlink(userFile, symlinkPath); err != nil {
 		t.Skipf("symlinks not supported on this platform: %v", err)
 	}

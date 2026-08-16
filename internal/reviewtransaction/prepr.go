@@ -142,7 +142,7 @@ func deriveBaseAdvanceCompatibility(ctx context.Context, repo string, receipt Re
 	}
 	mergedOutput, err := runGit(ctx, repo, nil, nil, "merge-tree", "--write-tree", refs.Selection.Commit, reviewedHead)
 	if err != nil {
-		return BaseAdvanceCompatibility{}, errors.New("merge against new base is not conflict-free")
+		return BaseAdvanceCompatibility{}, fmt.Errorf("merge against new base is not conflict-free: %w", err)
 	}
 	mergedFields := strings.Fields(string(mergedOutput))
 	if len(mergedFields) == 0 || !validGitTree(mergedFields[0]) {
@@ -334,7 +334,7 @@ func deriveCurrentChangesBoundaryCompatibility(ctx context.Context, repo string,
 	}
 	mergedOutput, err := runGit(ctx, repo, nil, nil, "merge-tree", "--write-tree", refs.Selection.Commit, refs.HeadCommit)
 	if err != nil {
-		return BaseAdvanceCompatibility{}, errors.New("merge against the advanced boundary is not conflict-free")
+		return BaseAdvanceCompatibility{}, fmt.Errorf("merge against the advanced boundary is not conflict-free: %w", err)
 	}
 	mergedFields := strings.Fields(string(mergedOutput))
 	if len(mergedFields) == 0 || !validGitTree(mergedFields[0]) {

@@ -207,7 +207,7 @@ func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 	// The orchestrator contract is the source for the current immutable
 	// inspection route that rendered reviewer prompts must preserve.
 	contract := assets.MustRead(boundedReviewContractAsset)
-	if !strings.Contains(contract, "Claude Code, OpenCode, and Codex advertise immutable reviewer execution") ||
+	if !strings.Contains(contract, "Claude Code, OpenCode, Codex, and Pi advertise immutable reviewer execution") ||
 		!strings.Contains(contract, "read-only native Git commands") {
 		t.Fatalf("%s no longer requires native-Git frozen-tree inspection; update the guard's derivation", boundedReviewContractAsset)
 	}

@@ -970,15 +970,12 @@ func TestReviewStatusValidateRejectsMalformedForecast(t *testing.T) {
 	}
 }
 
-func TestNegotiatedStatusForecastStaysOnStderrAndV1StaysFrozen(t *testing.T) {
+func TestNegotiatedStatusForecastStaysStructuralAndV1StaysFrozen(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("forecast\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	previous := reviewNarrationOutput
-	var stderr bytes.Buffer
-	reviewNarrationOutput = &stderr
-	t.Cleanup(func() { reviewNarrationOutput = previous })
+	stderr := captureReviewProcessStderr(t)
 
 	var stdout bytes.Buffer
 	if err := RunReviewStatus([]string{"--cwd", repo, "--contract", ReviewIntegrationContractV2, "--next-transition"}, &stdout); err != nil {
@@ -998,10 +995,11 @@ func TestNegotiatedStatusForecastStaysOnStderrAndV1StaysFrozen(t *testing.T) {
 	if status.Forecast.Horizon != ForecastHorizonPartial || step.Step != 1 || step.Kind != status.NextTransition.Kind || step.ReasonCode != status.NextTransition.ReasonCode || strings.TrimSpace(step.Description) == "" {
 		t.Fatalf("status forecast = %#v, transition = %#v", status.Forecast, status.NextTransition)
 	}
-	for _, want := range []string{"Forecast horizon: partial", "step 1", step.Kind, step.ReasonCode, step.Description, "Re-query STATUS"} {
-		if !strings.Contains(stderr.String(), want) {
-			t.Errorf("stderr forecast missing %q:\n%s", want, stderr.String())
-		}
+	// The forecast is structural only: a successful negotiated STATUS writes
+	// zero bytes to stderr (gentle-pi fails closed on any stderr a successful
+	// native process writes).
+	if got := stderr(); got != "" {
+		t.Errorf("negotiated STATUS narrated the forecast to stderr, want zero bytes:\n%q", got)
 	}
 
 	var legacy bytes.Buffer
