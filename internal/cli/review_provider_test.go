@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -323,4 +324,99 @@ func providerTargetedValidationPayload(t *testing.T, request reviewtransaction.T
 		t.Fatal(err)
 	}
 	return payload
+}
+
+func TestReviewProviderTargetedValidatorPromptNamesInspectionRecipe(t *testing.T) {
+	contract, err := reviewerprovider.ContractFor(reviewerprovider.RoleTargetedValidator)
+	if err != nil {
+		t.Fatalf("targeted validator contract: %v", err)
+	}
+	instruction := contract.PromptInstruction
+	for _, needle := range []string{
+		"gentle-ai review inspect-candidate",
+		"--purpose targeted-validation",
+		"--request-hash",
+		"name-status",
+		"numstat",
+		"patch --path-index",
+		"object --path-index",
+		"could not inspect",
+	} {
+		if !strings.Contains(instruction, needle) {
+			t.Errorf("targeted validator PromptInstruction missing %q", needle)
+		}
+	}
+	if !strings.Contains(instruction, "Do not pass --lens or --order") {
+		t.Error("targeted validator PromptInstruction must explicitly prohibit --lens and --order")
+	}
+}
+
+func TestReviewProviderTargetedValidatorOverlayAgentDefinition(t *testing.T) {
+	for _, overlayPath := range []string{
+		"opencode/sdd-overlay-single.json",
+		"opencode/sdd-overlay-multi.json",
+	} {
+		t.Run(overlayPath, func(t *testing.T) {
+			raw := assets.MustRead(overlayPath)
+			var overlay map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(raw), &overlay); err != nil {
+				t.Fatalf("unmarshal overlay: %v", err)
+			}
+			var agents map[string]json.RawMessage
+			if err := json.Unmarshal(overlay["agent"], &agents); err != nil {
+				t.Fatalf("unmarshal agent block: %v", err)
+			}
+			validatorRaw, ok := agents["review-validator"]
+			if !ok {
+				t.Fatal("review-validator agent is absent from overlay")
+			}
+			var validator struct {
+				Mode        string                    `json:"mode"`
+				Hidden      bool                      `json:"hidden"`
+				Description string                    `json:"description"`
+				Prompt      string                    `json:"prompt"`
+				Tools       map[string]json.RawMessage `json:"tools"`
+			}
+			if err := json.Unmarshal(validatorRaw, &validator); err != nil {
+				t.Fatalf("unmarshal review-validator agent: %v", err)
+			}
+			if validator.Mode != "subagent" || !validator.Hidden {
+				t.Errorf("review-validator mode=%s hidden=%v, want subagent/true", validator.Mode, validator.Hidden)
+			}
+			bashRaw, bashPresent := validator.Tools["bash"]
+			if !bashPresent {
+				t.Fatal("review-validator tools must declare bash")
+			}
+			var bashEnabled bool
+			if err := json.Unmarshal(bashRaw, &bashEnabled); err != nil {
+				t.Fatalf("unmarshal review-validator bash: %v", err)
+			}
+			if !bashEnabled {
+				t.Error("review-validator bash must be true, got false")
+			}
+			writeRaw, writePresent := validator.Tools["write"]
+			if writePresent {
+				var writeEnabled bool
+				if err := json.Unmarshal(writeRaw, &writeEnabled); err == nil && writeEnabled {
+					t.Error("review-validator write must be false")
+				}
+			}
+			editRaw, editPresent := validator.Tools["edit"]
+			if editPresent {
+				var editEnabled bool
+				if err := json.Unmarshal(editRaw, &editEnabled); err == nil && editEnabled {
+					t.Error("review-validator edit must be false")
+				}
+			}
+			for _, needle := range []string{
+				"gentle-ai review inspect-candidate",
+				"--purpose targeted-validation",
+				"could not inspect",
+			} {
+				if !strings.Contains(validator.Prompt, needle) {
+					t.Errorf("review-validator prompt missing %q", needle)
+				}
+			}
+		})
+	}
 }
