@@ -686,7 +686,8 @@ func evidenceReportsUnavailableInspection(value string) bool {
 	for _, phrase := range []string{
 		"inspection blocked", "inspection was blocked", "access denied", "permission denied",
 		"candidate unavailable", "candidate was unavailable", "immutable candidate unavailable",
-		"could not inspect", "unable to inspect", "was not inspected", "not inspected",
+		"could not inspect", "could not be inspected", "unable to inspect", "unable to be inspected",
+		"was not inspected", "not inspected", "was not able to inspect",
 		"no candidate contents were available", "no candidate content was available",
 	} {
 		if strings.Contains(value, phrase) {

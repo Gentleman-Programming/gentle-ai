@@ -122,6 +122,8 @@ var reviewStopReasonNarration = map[string]string{
 	"captured_artifacts_unverifiable": "A previously captured review result failed verification, so this review cannot continue on its own. " +
 		"Ask a maintainer to inspect the review record directly, or run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
+	"targeted_validation_inconclusive": "The targeted validator could not inspect the immutable corrected candidate, so no verdict was produced and the correction attempt was not consumed. " +
+		"Restore validator access to the frozen trees and capture the same validation again.",
 	"captured_result_selection_unavailable": "This run reached a state that should never happen: every review result it expected was already present. " +
 		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",

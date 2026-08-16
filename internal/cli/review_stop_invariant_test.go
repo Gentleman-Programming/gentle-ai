@@ -63,6 +63,10 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		// with — a maintainer decision, not an automatic one.
 		ToolFault: reviewStopToolFault(false),
 	},
+	"targeted_validation_inconclusive": {
+		Terminal:      false,
+		Justification: "caller-continuable: the targeted validator could not inspect the frozen candidate, so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees and capture the same validation again",
+	},
 	"captured_result_selection_unavailable": {
 		Terminal:      true,
 		Justification: "internal invariant violation — every selected lens already reports a captured artifact yet the caller was routed here anyway; no caller-side retry exists",

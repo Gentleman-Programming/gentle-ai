@@ -200,6 +200,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	}
 	binding := reviewTransitionBinding(status.Authority, bindingTarget, input.RepositoryContext)
 	if status.Authority.State == reviewtransaction.StateReviewing && artifactErr != nil {
+		if reviewArtifactErrIsInconclusive(artifactErr) {
+			return reviewStopTransition("targeted_validation_inconclusive")
+		}
 		return reviewStopTransition("captured_artifacts_unverifiable")
 	}
 	if status.Authority.State == reviewtransaction.StateReviewing && input.LensContextBudgetExceeded {
@@ -220,6 +223,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	switch status.Authority.State {
 	case reviewtransaction.StateReviewing:
 		if artifactErr != nil {
+			if reviewArtifactErrIsInconclusive(artifactErr) {
+				return reviewStopTransition("targeted_validation_inconclusive")
+			}
 			return reviewStopTransition("captured_artifacts_unverifiable")
 		}
 		if len(artifacts) != len(selectedLenses) {
@@ -1102,6 +1108,19 @@ func reviewStopTransition(reason string) ReviewNextTransition {
 	return ReviewNextTransition{Kind: reviewNextTransitionStop, ReasonCode: reason}
 }
 
+// reviewArtifactErrIsInconclusive reports whether an artifact error from a
+// captured targeted-validator result represents an inconclusive validation
+// (the validator could not inspect the frozen trees) rather than genuine
+// corruption. An inconclusive result must not consume the single correction
+// attempt or stop terminally; the validator should regain access to the
+// frozen trees and capture the same validation again.
+func reviewArtifactErrIsInconclusive(err error) bool {
+	if err == nil {
+		return false
+	}
+	return reviewtransaction.InconclusiveValidationEvidence([]string{err.Error()})
+}
+
 func reviewReasonDescription(reason string) string {
 	switch reason {
 	case "fresh_target_ready":
@@ -1146,6 +1165,8 @@ func reviewReasonDescription(reason string) string {
 		return "Native stop transition required by authority"
 	case "captured_artifacts_unverifiable":
 		return "Captured artifacts failed verification or are missing"
+	case "targeted_validation_inconclusive":
+		return "Targeted validation is inconclusive because the validator could not inspect the frozen candidate"
 	case "corrected_candidate_unavailable":
 		return "Corrected candidate is unavailable for forecasted correction"
 	case "pre_pr_selector_unrepresentable":
