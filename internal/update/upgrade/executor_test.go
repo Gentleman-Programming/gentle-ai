@@ -724,9 +724,11 @@ func TestConfigPathsForBackup_CoversManagedAgentPaths(t *testing.T) {
 		".claude/CLAUDE.md":              "# Claude",
 		".config/opencode/AGENTS.md":     "# OpenCode",
 		".config/opencode/opencode.json": `{"model":"claude"}`,
+		".config/opencode/tui.json":      `{"theme":"gentleman"}`,
 		".gemini/GEMINI.md":              "# Gemini",
 		".cursor/rules/gentle-ai.mdc":    "# Cursor rules",
 	}
+	managedFiles[".config/opencode/themes/gentleman.json"] = `{"$schema":"https://opencode.ai/theme.json"}`
 	unmanagedFile := filepath.Join(homeDir, ".claude", "conversation-transcript.md")
 
 	for relPath, content := range managedFiles {

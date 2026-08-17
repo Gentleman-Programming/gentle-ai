@@ -14,9 +14,26 @@ func DependencyTreeOptions() []string {
 	return []string{"Continue", "Back"}
 }
 
-// AllComponents returns the full list of available components for the custom picker.
-func AllComponents() []catalog.Component {
-	return catalog.MVPComponents()
+// AllComponents returns components available to the selected agents. With no
+// agent filter it returns the complete catalog for callers that need inventory.
+func AllComponents(agents ...model.AgentID) []catalog.Component {
+	components := catalog.MVPComponents()
+	for _, agent := range agents {
+		if agent == model.AgentOpenCode {
+			return components
+		}
+	}
+	if len(agents) == 0 {
+		return components
+	}
+
+	available := make([]catalog.Component, 0, len(components)-1)
+	for _, component := range components {
+		if component.ID != model.ComponentTheme {
+			available = append(available, component)
+		}
+	}
+	return available
 }
 
 // RenderDependencyTree shows the install plan. For custom presets, it shows
@@ -130,7 +147,7 @@ func renderCustomPicker(selection model.Selection, cursor int) string {
 	b.WriteString(styles.SubtextStyle.Render("Toggle components with enter or space."))
 	b.WriteString("\n\n")
 
-	allComps := AllComponents()
+	allComps := AllComponents(selection.Agents...)
 	selectedSet := make(map[model.ComponentID]struct{}, len(selection.Components))
 	for _, c := range selection.Components {
 		selectedSet[c] = struct{}{}

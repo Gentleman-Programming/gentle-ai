@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -15,6 +16,20 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
+
+func TestComponentPathsThemeUsesOpenCodeTUIAndThemeFileOnly(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode, model.AgentClaudeCode})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentTheme)
+	want := []string{
+		filepath.Join(home, ".config", "opencode", "tui.json"),
+		filepath.Join(home, ".config", "opencode", "themes", "gentleman.json"),
+	}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("componentPaths(theme) = %v, want %v", paths, want)
+	}
+}
 
 func TestComponentPathsSDDIncludesSystemPromptForAllSupportedAgents(t *testing.T) {
 	home := t.TempDir()

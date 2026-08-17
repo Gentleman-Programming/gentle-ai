@@ -16,8 +16,6 @@ Toggle components with enter or space.
     Security-first defaults and guardrails
   [ ] gga
     Gentleman Guardian Angel — AI provider switcher
-  [ ] theme
-    Visual polish: OpenCode color theme
   [ ] claude-theme
     Visual polish: Claude Code color theme
   [ ] opencode-gentle-logo

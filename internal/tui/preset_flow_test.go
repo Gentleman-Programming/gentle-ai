@@ -175,7 +175,7 @@ func TestCustomPresetPostComponentFlowMatrix(t *testing.T) {
 			m.Selection.Preset = model.PresetCustom
 			m.Selection.Agents = tt.agents
 			m.Selection.Components = tt.components
-			m.Cursor = len(screens.AllComponents())
+			m.Cursor = len(screens.AllComponents(m.Selection.Agents...))
 
 			state := m
 			for _, action := range tt.actions {
@@ -334,7 +334,7 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 				m.Selection.Preset = model.PresetCustom
 				m.Selection.Agents = []model.AgentID{model.AgentCursor}
 				m.Selection.Components = []model.ComponentID{model.ComponentSDD, model.ComponentSkills}
-				m.Cursor = len(screens.AllComponents())
+				m.Cursor = len(screens.AllComponents(m.Selection.Agents...))
 				return m
 			},
 			forwardActions: []flowAction{
@@ -352,7 +352,7 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 				m.Selection.Preset = model.PresetCustom
 				m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
 				m.Selection.Components = []model.ComponentID{model.ComponentSDD, model.ComponentSkills}
-				m.Cursor = len(screens.AllComponents())
+				m.Cursor = len(screens.AllComponents(m.Selection.Agents...))
 				return m
 			},
 			forwardActions: []flowAction{
@@ -372,7 +372,7 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 				m.Selection.Preset = model.PresetCustom
 				m.Selection.Agents = []model.AgentID{model.AgentCursor}
 				m.Selection.Components = []model.ComponentID{model.ComponentEngram}
-				m.Cursor = len(screens.AllComponents())
+				m.Cursor = len(screens.AllComponents(m.Selection.Agents...))
 				return m
 			},
 			forwardActions: []flowAction{{key: tea.KeyMsg{Type: tea.KeyEnter}}},

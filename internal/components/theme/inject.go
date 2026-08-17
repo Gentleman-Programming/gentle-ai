@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
@@ -17,6 +18,8 @@ type InjectionResult struct {
 }
 
 var themeOverlayJSON = []byte("{\n  \"theme\": \"gentleman\"\n}\n")
+
+const openCodeThemeAsset = "opencode/themes/gentleman.json"
 
 type claudeTheme struct {
 	Name      string            `json:"name"`
@@ -40,17 +43,31 @@ var gentlemanClaudeTheme = claudeTheme{
 }
 
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	settingsPath := adapter.SettingsPath(homeDir)
-	if settingsPath == "" {
+	if adapter.Agent() != model.AgentOpenCode {
 		return InjectionResult{}, nil
 	}
 
-	writeResult, err := mergeJSONFile(settingsPath, themeOverlayJSON)
+	configDir := adapter.GlobalConfigDir(homeDir)
+	tuiPath := filepath.Join(configDir, "tui.json")
+	themePath := filepath.Join(configDir, "themes", "gentleman.json")
+	themeContent, err := assets.Read(openCodeThemeAsset)
 	if err != nil {
-		return InjectionResult{}, err
+		return InjectionResult{}, fmt.Errorf("read bundled OpenCode theme: %w", err)
 	}
 
-	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
+	themeResult, err := filemerge.WriteFileAtomic(themePath, []byte(themeContent), 0o644)
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("write OpenCode theme: %w", err)
+	}
+	tuiResult, err := mergeJSONFile(tuiPath, themeOverlayJSON)
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("merge OpenCode tui theme: %w", err)
+	}
+
+	return InjectionResult{
+		Changed: themeResult.Changed || tuiResult.Changed,
+		Files:   []string{tuiPath, themePath},
+	}, nil
 }
 
 func InjectClaudeTheme(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
