@@ -361,7 +361,146 @@ type RuntimeStatus struct {
 	// instead of dead-ending in prose (#2588, and the same dead end #2902 and
 	// #2913 died in). Populated only by AdmissionStatus, and only while the
 	// ledger actually requires that decision.
-	Consent *BudgetConsentResult `json:"consent,omitempty"`
+	Consent   *BudgetConsentResult `json:"consent,omitempty"`
+	ownership runtimeOwnership
+}
+
+// runtimeOwnership is replay's sole mutable representation of objective and
+// attempt ownership. RuntimeStatus retains the legacy fields as projections so
+// existing callers and persisted JSON remain unchanged while later admission
+// work can target ownership by objective or attempt ordinal.
+type runtimeOwnership struct {
+	objectives map[string]*runtimeObjectiveOwnership
+	active     map[int]string
+	current    string
+}
+
+type runtimeObjectiveOwnership struct {
+	objective *RuntimeObjective
+	active    *RuntimeAttempt
+}
+
+func newRuntimeOwnership() runtimeOwnership {
+	return runtimeOwnership{objectives: map[string]*runtimeObjectiveOwnership{}, active: map[int]string{}}
+}
+
+func (status *RuntimeStatus) initializeRuntimeOwnership() {
+	if status.ownership.objectives != nil {
+		return
+	}
+	status.ownership = newRuntimeOwnership()
+	if status.Objective != nil {
+		status.ownership.current = status.Objective.ID
+		status.ownership.objectives[status.Objective.ID] = &runtimeObjectiveOwnership{objective: status.Objective}
+	}
+	if status.ActiveAttempt != nil && status.Objective != nil {
+		status.ownership.active[status.ActiveAttempt.Ordinal] = status.Objective.ID
+		status.ownership.objectives[status.Objective.ID].active = status.ActiveAttempt
+	}
+}
+
+func (status RuntimeStatus) runtimeObjective() *RuntimeObjective {
+	if status.ownership.objectives == nil {
+		return status.Objective
+	}
+	owner := status.ownership.objectives[status.ownership.current]
+	if owner == nil {
+		return nil
+	}
+	return owner.objective
+}
+
+func (status RuntimeStatus) runtimeActiveAttempt() *RuntimeAttempt {
+	if status.ownership.active == nil {
+		return status.ActiveAttempt
+	}
+	if len(status.ownership.active) != 1 {
+		return nil
+	}
+	for _, objectiveID := range status.ownership.active {
+		return status.ownership.objectives[objectiveID].active
+	}
+	return nil
+}
+
+func (status RuntimeStatus) runtimeActiveAttemptForOrdinal(ordinal int) *RuntimeAttempt {
+	if status.ownership.active == nil {
+		if status.ActiveAttempt != nil && status.ActiveAttempt.Ordinal == ordinal {
+			return status.ActiveAttempt
+		}
+		return nil
+	}
+	objectiveID := status.ownership.active[ordinal]
+	if objectiveID == "" || status.ownership.objectives[objectiveID] == nil {
+		return nil
+	}
+	return status.ownership.objectives[objectiveID].active
+}
+
+func cloneRuntimeObjective(objective *RuntimeObjective) *RuntimeObjective {
+	if objective == nil {
+		return nil
+	}
+	clone := *objective
+	clone.ItemEditRoots = append([]string(nil), objective.ItemEditRoots...)
+	return &clone
+}
+
+func cloneRuntimeAttempt(attempt *RuntimeAttempt) *RuntimeAttempt {
+	if attempt == nil {
+		return nil
+	}
+	clone := *attempt
+	clone.ItemEditRoots = append([]string(nil), attempt.ItemEditRoots...)
+	if attempt.Handoff != nil {
+		handoff := *attempt.Handoff
+		clone.Handoff = &handoff
+	}
+	return &clone
+}
+
+func (status *RuntimeStatus) materializeRuntimeOwnership() {
+	status.Objective = nil
+	if owner := status.ownership.objectives[status.ownership.current]; owner != nil {
+		status.Objective = cloneRuntimeObjective(owner.objective)
+	}
+	status.ActiveAttempt = nil
+	if active := status.runtimeActiveAttempt(); active != nil {
+		status.ActiveAttempt = cloneRuntimeAttempt(active)
+	}
+}
+
+func (status *RuntimeStatus) setRuntimeObjective(objective *RuntimeObjective) {
+	status.initializeRuntimeOwnership()
+	if objective == nil {
+		status.ownership.current = ""
+		status.materializeRuntimeOwnership()
+		return
+	}
+	status.ownership.current = objective.ID
+	status.ownership.objectives[objective.ID] = &runtimeObjectiveOwnership{objective: objective}
+	status.materializeRuntimeOwnership()
+}
+
+func (status *RuntimeStatus) setRuntimeActiveAttempt(attempt *RuntimeAttempt) {
+	status.initializeRuntimeOwnership()
+	objective := status.runtimeObjective()
+	if objective == nil || objective.ID != attempt.ObjectiveID {
+		panic("runtime active attempt has no current objective")
+	}
+	status.ownership.objectives[objective.ID].active = attempt
+	status.ownership.active[attempt.Ordinal] = objective.ID
+	status.materializeRuntimeOwnership()
+}
+
+func (status *RuntimeStatus) clearRuntimeActiveAttempt(ordinal int) {
+	status.initializeRuntimeOwnership()
+	objectiveID := status.ownership.active[ordinal]
+	if objectiveID != "" && status.ownership.objectives[objectiveID] != nil {
+		status.ownership.objectives[objectiveID].active = nil
+	}
+	delete(status.ownership.active, ordinal)
+	status.materializeRuntimeOwnership()
 }
 
 type BeginAttemptRequest struct {
@@ -748,11 +887,12 @@ func (store RuntimeStore) Status() (RuntimeStatus, error) {
 // inspecting the last recorded attempt, which would still belong to the
 // objective THIS one just superseded.
 func runtimeObjectiveHasRecordedAttempt(status RuntimeStatus) bool {
-	if status.Objective == nil {
+	objective := status.runtimeObjective()
+	if objective == nil {
 		return false
 	}
 	for index := len(status.Attempts) - 1; index >= 0; index-- {
-		if status.Attempts[index].ObjectiveID == status.Objective.ID {
+		if status.Attempts[index].ObjectiveID == objective.ID {
 			return true
 		}
 	}
@@ -777,8 +917,8 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		}
 		advancing, generation, snapshot := admission.Advancing, admission.Generation, admission.Snapshot
 		objectiveID := runtimeObjectiveIDForBinding(store.Change, request.WorkUnit, request.EvidenceGoal, snapshot.Identity, generation, request.ItemID, request.ItemEditRoots)
-		if status.Objective != nil && !advancing {
-			objectiveID = status.Objective.ID
+		if objective := status.runtimeObjective(); objective != nil && !advancing {
+			objectiveID = objective.ID
 		}
 		event := &runtimeBeginEvent{
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
@@ -789,8 +929,8 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		}
 		if advancing {
 			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
-				PreviousObjectiveID: status.Objective.ID, PreviousGeneration: status.Objective.Generation,
-				PreviousWorkUnit: status.Objective.WorkUnit,
+				PreviousObjectiveID: status.runtimeObjective().ID, PreviousGeneration: status.runtimeObjective().Generation,
+				PreviousWorkUnit: status.runtimeObjective().WorkUnit,
 			}}, nil
 		}
 		return runtimeRecord{Operation: runtimeOperationBegin, Begin: event}, nil
@@ -805,7 +945,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
-		active := status.ActiveAttempt
+		active := status.runtimeActiveAttempt()
 		if active == nil {
 			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
 		}
@@ -946,7 +1086,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			Diagnosis: request.Diagnosis, HarnessDisposition: request.HarnessDisposition,
 			CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
 			RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
-			ChangedLineBudgetExceeded:  status.CumulativeChangedLines+changedLines > status.Objective.MaxChangedLines,
+			ChangedLineBudgetExceeded:  status.CumulativeChangedLines+changedLines > status.runtimeObjective().MaxChangedLines,
 		}
 		if remediation {
 			prepared, prepareErr := prepareApprovedRuntimeSuccessorBinding(ctx, store.Repo, store.Workspace, store.Change, request.SuccessorLineageID)
@@ -1074,7 +1214,7 @@ func (store RuntimeStore) Handoff(ctx context.Context, request HandoffAttemptReq
 	}
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-handoff-request/v1", request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
-		active := replay.Status.ActiveAttempt
+		active := replay.Status.runtimeActiveAttempt()
 		if active == nil {
 			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
 		}
@@ -1140,7 +1280,7 @@ func (store RuntimeStore) Handoff(ctx context.Context, request HandoffAttemptReq
 // remaining attempts honestly, which is what reaches decision-required, where
 // this same reset is admitted and opens a fresh budget.
 func (store RuntimeStore) runtimeZeroDriftResetRefusal(status RuntimeStatus) error {
-	objective := status.Objective
+	objective := status.runtimeObjective()
 	return fmt.Errorf(
 		"%w: this objective's candidate has not drifted and it still has attempts left, so resetting it now would launder the per-objective budget. If the failed evidence proves this OBJECTIVE is wrong rather than under-attempted, a maintainer may open a narrower successor scope instead — `gentle-ai sdd-attempt rescope --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --work-unit \"<narrower-work-unit>\" --evidence-goal \"<narrower-evidence-goal>\" --max-attempts \"<n, at most %d>\" --max-changed-lines \"<n, at most %d>\" --reason \"<why-the-objective-is-narrowing>\" --actor \"<actor>\"`; rescope carries cumulative_attempts and cumulative_changed_lines forward unchanged and never widens a budget, so if the successor needs MORE than %d changed lines, spend this objective's remaining attempts first: the run that exhausts them reaches decision-required, where this reset is admitted",
 		ErrRuntimeResetNotAllowed, store.Workspace, store.Change, status.Revision,
@@ -1160,7 +1300,7 @@ func (store RuntimeStore) runtimeZeroDriftResetRefusal(status RuntimeStatus) err
 // not weaken the narrowing rule, which exists so a successor scope cannot
 // launder a consumed budget.
 func (store RuntimeStore) runtimeRescopeWidenedRefusal(status RuntimeStatus, flag string, requested, allowed int) error {
-	remaining := status.Objective.MaxAttempts - status.CumulativeAttempts
+	remaining := status.runtimeObjective().MaxAttempts - status.CumulativeAttempts
 	return fmt.Errorf(
 		"%w: received %s %d, the current objective allows %d. A wider successor scope is reached by finishing this objective rather than by rescoping it: spend its %d remaining attempt(s), and the run that exhausts them reaches decision-required, where `gentle-ai sdd-attempt reset --cwd %q --change %q --expected-revision \"<revision-from-status>\" --request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"` opens a fresh budget of any size",
 		ErrRuntimeRescopeWidened, flag, requested, allowed, remaining, store.Workspace, store.Change)
@@ -1259,7 +1399,7 @@ func (store RuntimeStore) runtimeObjectiveChangeRefusal(ctx context.Context, sta
 // candidate capture that fails all answer false, and the caller then names the
 // begin the ledger already accepts instead of a command refused one layer in.
 func (store RuntimeStore) runtimeObjectiveResetAdmissible(ctx context.Context, status RuntimeStatus) bool {
-	if status.ActiveAttempt != nil || status.Objective == nil || !runtimeResetStructurallyPermitted(status) {
+	if status.runtimeActiveAttempt() != nil || status.runtimeObjective() == nil || !runtimeResetStructurallyPermitted(status) {
 		return false
 	}
 	if status.DecisionRequired || status.Complete {
@@ -1282,7 +1422,7 @@ func (store RuntimeStore) runtimeObjectiveResetAdmissible(ctx context.Context, s
 // last attempt, or a candidate capture that fails all answer false; a
 // candidate that captured successfully and did NOT drift answers true.
 func (store RuntimeStore) runtimeObjectiveRescopeAdmissible(ctx context.Context, status RuntimeStatus) bool {
-	if status.ActiveAttempt != nil || status.Objective == nil || !runtimeObjectiveRescopeStructurallyPermitted(status) {
+	if status.runtimeActiveAttempt() != nil || status.runtimeObjective() == nil || !runtimeObjectiveRescopeStructurallyPermitted(status) {
 		return false
 	}
 	last := status.Attempts[len(status.Attempts)-1]
@@ -1305,18 +1445,19 @@ func (store RuntimeStore) runtimeObjectiveRescopeAdmissible(ctx context.Context,
 // validator re-checks, so an admitted advance can only be one the ledger
 // accepts.
 func runtimeObjectiveAdvanceAdmissible(status RuntimeStatus, request BeginAttemptRequest) bool {
-	if !status.Complete || status.DecisionRequired || status.ActiveAttempt != nil ||
-		status.Objective == nil || len(status.Attempts) == 0 {
+	objective := status.runtimeObjective()
+	if !status.Complete || status.DecisionRequired || status.runtimeActiveAttempt() != nil ||
+		objective == nil || len(status.Attempts) == 0 {
 		return false
 	}
-	if request.WorkUnit == status.Objective.WorkUnit {
+	if request.WorkUnit == objective.WorkUnit {
 		return false
 	}
-	if status.Objective.ItemID != "" && (request.ItemID == "" || request.ItemID == status.Objective.ItemID) {
+	if objective.ItemID != "" && (request.ItemID == "" || request.ItemID == objective.ItemID) {
 		return false
 	}
 	last := status.Attempts[len(status.Attempts)-1]
-	return last.ObjectiveID == status.Objective.ID && last.Outcome == AttemptPassed &&
+	return last.ObjectiveID == objective.ID && last.Outcome == AttemptPassed &&
 		!last.ChangedLineBudgetExceeded && last.FinishCandidateIdentity != "" && last.FinishCandidateTree != ""
 }
 
@@ -1361,10 +1502,10 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-reset-request/v1", request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
-		if status.ActiveAttempt != nil {
+		if status.runtimeActiveAttempt() != nil {
 			return runtimeRecord{}, ErrRuntimeAttemptActive
 		}
-		if status.Objective == nil {
+		if status.runtimeObjective() == nil {
 			return runtimeRecord{}, ErrRuntimeNoObjective
 		}
 		if !runtimeResetStructurallyPermitted(status) {
@@ -1391,7 +1532,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective reset: %w", err)
 		}
 		return runtimeRecord{Operation: runtimeOperationReset, Reset: &runtimeResetEvent{
-			PreviousObjectiveID: status.Objective.ID, PreviousGeneration: status.Objective.Generation,
+			PreviousObjectiveID: status.runtimeObjective().ID, PreviousGeneration: status.runtimeObjective().Generation,
 			ResetCandidateIdentity: snapshot.Identity, ResetCandidateTree: snapshot.CandidateTree,
 			Reason: request.Reason, Actor: request.Actor,
 		}}, nil
@@ -1412,14 +1553,15 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 // replaying one from the immutable chain (applyRuntimeRecord), so a
 // committed rescope always replays deterministically.
 func runtimeObjectiveRescopeStructurallyPermitted(status RuntimeStatus) bool {
-	if status.Objective == nil || status.DecisionRequired || status.Complete {
+	objective := status.runtimeObjective()
+	if objective == nil || status.DecisionRequired || status.Complete {
 		return false
 	}
 	if len(status.Attempts) == 0 {
 		return false
 	}
 	last := status.Attempts[len(status.Attempts)-1]
-	return last.ObjectiveID == status.Objective.ID &&
+	return last.ObjectiveID == objective.ID &&
 		(last.Outcome == AttemptFailed || last.Outcome == AttemptInterrupted)
 }
 
@@ -1441,10 +1583,10 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-rescope-request/v1", request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
-		if status.ActiveAttempt != nil {
+		if status.runtimeActiveAttempt() != nil {
 			return runtimeRecord{}, ErrRuntimeAttemptActive
 		}
-		objective := status.Objective
+		objective := status.runtimeObjective()
 		if objective == nil {
 			return runtimeRecord{}, ErrRuntimeNoObjective
 		}
@@ -1824,7 +1966,7 @@ func (store RuntimeStore) loadRevision(head string) (runtimeReplay, error) {
 	replay := runtimeReplay{
 		Status: RuntimeStatus{
 			Schema: RuntimeStatusSchema, Change: store.Change, Attempts: []RuntimeAttempt{},
-			NextOrdinal: 1, NextAction: RuntimeActionBegin,
+			NextOrdinal: 1, NextAction: RuntimeActionBegin, ownership: newRuntimeOwnership(),
 		},
 		Requests:      map[string]runtimeRequestReceipt{},
 		AttemptTokens: map[int]string{},
@@ -1927,15 +2069,15 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 
 	case runtimeOperationReset:
 		event := record.Reset
-		objective := replay.Status.Objective
-		if replay.Status.ActiveAttempt != nil || objective == nil || !runtimeResetStructurallyPermitted(replay.Status) {
+		objective := replay.Status.runtimeObjective()
+		if replay.Status.runtimeActiveAttempt() != nil || objective == nil || !runtimeResetStructurallyPermitted(replay.Status) {
 			return errors.New("objective reset is not a valid successor")
 		}
 		if event.PreviousObjectiveID != objective.ID || event.PreviousGeneration != objective.Generation ||
 			event.PreviousGeneration != replay.Status.ObjectiveGeneration {
 			return errors.New("objective reset does not match the terminal objective")
 		}
-		replay.Status.Objective = nil
+		replay.Status.setRuntimeObjective(nil)
 		replay.Status.CumulativeAttempts = 0
 		replay.Status.CumulativeChangedLines = 0
 		replay.Status.EvidenceRevision = ""
@@ -1983,14 +2125,14 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 	generation := event.ObjectiveGeneration
 	if generation == 0 {
 		generation = replay.Status.ObjectiveGeneration + 1
-		if replay.Status.Objective != nil {
-			generation = replay.Status.Objective.Generation
+		if objective := replay.Status.runtimeObjective(); objective != nil {
+			generation = objective.Generation
 		}
 	}
-	if replay.Status.ActiveAttempt != nil || replay.Status.Complete || replay.Status.DecisionRequired {
+	if replay.Status.runtimeActiveAttempt() != nil || replay.Status.Complete || replay.Status.DecisionRequired {
 		return errors.New("begin record is not a valid successor")
 	}
-	if replay.Status.Objective == nil {
+	if replay.Status.runtimeObjective() == nil {
 		expectedObjectiveID := runtimeObjectiveIDForBinding(record.Change, event.WorkUnit, event.EvidenceGoal, event.BeginCandidateIdentity, generation, event.ItemID, event.ItemEditRoots)
 		if event.ObjectiveGeneration == 0 {
 			expectedObjectiveID = legacyRuntimeObjectiveID(record.Change, event.EvidenceGoal)
@@ -2001,15 +2143,15 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 		if event.Ordinal != replay.Status.NextOrdinal || generation != replay.Status.ObjectiveGeneration+1 || !validObjectiveID {
 			return errors.New("initial objective identity or ordinal is invalid")
 		}
-		replay.Status.Objective = &RuntimeObjective{
+		replay.Status.setRuntimeObjective(&RuntimeObjective{
 			ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 			InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree,
 			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
 			ItemID: event.ItemID, ItemEditRoots: event.ItemEditRoots,
-		}
+		})
 		replay.Status.ObjectiveGeneration = generation
 	} else {
-		objective := replay.Status.Objective
+		objective := replay.Status.runtimeObjective()
 		if event.ObjectiveID != objective.ID || generation != objective.Generation || event.EvidenceGoal != objective.EvidenceGoal ||
 			event.WorkUnit != objective.WorkUnit ||
 			event.MaxAttempts != objective.MaxAttempts || event.MaxChangedLines != objective.MaxChangedLines ||
@@ -2042,7 +2184,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 	replay.Status.Attempts = append(replay.Status.Attempts, attempt)
 	replay.AttemptTokens[event.Ordinal] = revision
 	active := attempt
-	replay.Status.ActiveAttempt = &active
+	replay.Status.setRuntimeActiveAttempt(&active)
 	replay.Status.CumulativeAttempts++
 	replay.Status.LifetimeAttempts++
 	replay.Status.NextOrdinal = event.Ordinal + 1
@@ -2051,7 +2193,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 }
 
 func applyRuntimeHandoffEvent(replay *runtimeReplay, event *RuntimeHandoff) error {
-	active := replay.Status.ActiveAttempt
+	active := replay.Status.runtimeActiveAttempt()
 	if active == nil || active.Ordinal != event.Ordinal || active.EffectiveWorktree == "" ||
 		active.EffectiveWorktree != event.SourceWorktree || active.Handoff != nil ||
 		len(replay.Status.Attempts) == 0 || replay.Status.Attempts[len(replay.Status.Attempts)-1].Outcome != AttemptRunning {
@@ -2062,7 +2204,7 @@ func applyRuntimeHandoffEvent(replay *runtimeReplay, event *RuntimeHandoff) erro
 	attempt.EffectiveWorktree = event.DestinationWorktree
 	attempt.Handoff = &handoff
 	activeCopy := *attempt
-	replay.Status.ActiveAttempt = &activeCopy
+	replay.Status.setRuntimeActiveAttempt(&activeCopy)
 	return nil
 }
 
@@ -2077,8 +2219,8 @@ func applyRuntimeHandoffEvent(replay *runtimeReplay, event *RuntimeHandoff) erro
 // fooled by a forged event.PreviousMaxAttempts.
 func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record runtimeRecord) error {
 	event := record.Rescope
-	objective := replay.Status.Objective
-	if replay.Status.ActiveAttempt != nil || objective == nil || !runtimeObjectiveRescopeStructurallyPermitted(replay.Status) {
+	objective := replay.Status.runtimeObjective()
+	if replay.Status.runtimeActiveAttempt() != nil || objective == nil || !runtimeObjectiveRescopeStructurallyPermitted(replay.Status) {
 		return errors.New("objective rescope is not a valid successor") // refusal:by-design world-action: a replayed chain that contradicts its own write-time state is damaged authority; the exit is restoring the Git-common-dir store, not a command
 	}
 	// The real narrowing guard runs FIRST and is recomputed against the
@@ -2115,11 +2257,11 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 	if generation != replay.Status.ObjectiveGeneration+1 || event.ObjectiveID != expectedObjectiveID {
 		return errors.New("objective rescope identity is invalid") // refusal:by-design world-action: the successor identity is derived deterministically at publication, so a mismatch is a mutated record and the exit is restoring the store
 	}
-	replay.Status.Objective = &RuntimeObjective{
+	replay.Status.setRuntimeObjective(&RuntimeObjective{
 		ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 		InitialCandidateIdentity: event.RescopeCandidateIdentity, InitialCandidateTree: event.RescopeCandidateTree,
 		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
-	}
+	})
 	replay.Status.ObjectiveGeneration = generation
 	replay.Status.EvidenceRevision = ""
 	replay.Status.DecisionRequired = false
@@ -2146,8 +2288,8 @@ func validateConsecutiveRescopeRepairCandidate(replay runtimeReplay, poisoned ru
 	if poisoned.Operation != runtimeOperationRescope || poisoned.Rescope == nil || poisoned.PreviousRevision != replay.Status.Revision {
 		return errors.New("record is not a rescope directly following the valid prefix") // refusal:by-design world-action: a repair cannot safely bypass a different immutable chain edge
 	}
-	objective := replay.Status.Objective
-	if replay.Status.ActiveAttempt != nil || objective == nil || replay.Status.DecisionRequired || replay.Status.Complete || len(replay.Status.Attempts) == 0 {
+	objective := replay.Status.runtimeObjective()
+	if replay.Status.runtimeActiveAttempt() != nil || objective == nil || replay.Status.DecisionRequired || replay.Status.Complete || len(replay.Status.Attempts) == 0 {
 		return errors.New("record does not meet the historical writer preconditions") // refusal:by-design world-action: a non-exact damaged record has no safe self-service repair
 	}
 	last := replay.Status.Attempts[len(replay.Status.Attempts)-1]
@@ -2185,8 +2327,8 @@ func applyRuntimeConsecutiveRescopeRepairEvent(store RuntimeStore, replay *runti
 		Revision: revision, ReplacedRevision: event.ReplacedRevision, RestoredRevision: event.RestoredRevision,
 		Reason: event.Reason, Actor: event.Actor,
 	}
-	if replay.Status.CumulativeAttempts >= replay.Status.Objective.MaxAttempts ||
-		replay.Status.CumulativeChangedLines >= replay.Status.Objective.MaxChangedLines {
+	if objective := replay.Status.runtimeObjective(); replay.Status.CumulativeAttempts >= objective.MaxAttempts ||
+		replay.Status.CumulativeChangedLines >= objective.MaxChangedLines {
 		replay.Status.DecisionRequired = true
 		replay.Status.NextAction = RuntimeActionReset
 	}
@@ -2199,11 +2341,11 @@ func applyRuntimeConsecutiveRescopeRepairEvent(store RuntimeStore, replay *runti
 // can never admit an advance the authority would have refused.
 func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record runtimeRecord) error {
 	event := record.Advance
-	objective := replay.Status.Objective
+	objective := replay.Status.runtimeObjective()
 	// Every refusal below re-checks an invariant the authority already enforced
 	// before publishing this record, so reaching one means the persisted chain
 	// was damaged or forged after the fact.
-	if replay.Status.ActiveAttempt != nil || objective == nil || !replay.Status.Complete || replay.Status.DecisionRequired {
+	if replay.Status.runtimeActiveAttempt() != nil || objective == nil || !replay.Status.Complete || replay.Status.DecisionRequired {
 		return errors.New("objective advance is not a valid successor") // refusal:by-design world-action: a replayed chain that contradicts its own write-time state is damaged authority; the exit is restoring the Git-common-dir store, not a command
 	}
 	if event.PreviousObjectiveID != objective.ID || event.PreviousGeneration != objective.Generation ||
@@ -2228,7 +2370,7 @@ func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record run
 		Revision: revision, PreviousObjectiveID: objective.ID, PreviousGeneration: objective.Generation,
 		PreviousWorkUnit: objective.WorkUnit, PreviousEvidenceRevision: replay.Status.EvidenceRevision,
 	}
-	replay.Status.Objective = nil
+	replay.Status.setRuntimeObjective(nil)
 	replay.Status.CumulativeAttempts = 0
 	replay.Status.CumulativeChangedLines = 0
 	replay.Status.EvidenceRevision = ""
@@ -2237,12 +2379,13 @@ func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record run
 }
 
 func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, unmanagedRemediation bool) error {
-	active := replay.Status.ActiveAttempt
+	active := replay.Status.runtimeActiveAttemptForOrdinal(event.Ordinal)
 	if active == nil || active.Ordinal != event.Ordinal || len(replay.Status.Attempts) == 0 ||
 		replay.Status.Attempts[len(replay.Status.Attempts)-1].Outcome != AttemptRunning {
 		return errors.New("finish record does not match the active attempt")
 	}
-	budgetExceeded := replay.Status.CumulativeChangedLines+event.ChangedLines > replay.Status.Objective.MaxChangedLines
+	objective := replay.Status.runtimeObjective()
+	budgetExceeded := replay.Status.CumulativeChangedLines+event.ChangedLines > objective.MaxChangedLines
 	if event.ChangedLineBudgetExceeded != budgetExceeded {
 		return errors.New("finish record changed-line budget decision does not match replay state")
 	}
@@ -2290,15 +2433,15 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	attempt.ProcessEvidence = event.ProcessEvidence
 	attempt.RemediatesEvidenceRevision = event.RemediatesEvidenceRevision
 	attempt.ChangedLineBudgetExceeded = event.ChangedLineBudgetExceeded
-	replay.Status.ActiveAttempt = nil
+	replay.Status.clearRuntimeActiveAttempt(event.Ordinal)
 	replay.Status.CumulativeChangedLines += event.ChangedLines
 	replay.Status.LifetimeChangedLines += event.ChangedLines
 	replay.Status.EvidenceRevision = event.EvidenceRevision
 	if event.Outcome == AttemptPassed && !event.ChangedLineBudgetExceeded {
 		replay.Status.Complete = true
 		replay.Status.NextAction = RuntimeActionComplete
-	} else if event.ChangedLineBudgetExceeded || replay.Status.CumulativeAttempts >= replay.Status.Objective.MaxAttempts ||
-		replay.Status.CumulativeChangedLines >= replay.Status.Objective.MaxChangedLines {
+	} else if event.ChangedLineBudgetExceeded || replay.Status.CumulativeAttempts >= objective.MaxAttempts ||
+		replay.Status.CumulativeChangedLines >= objective.MaxChangedLines {
 		replay.Status.DecisionRequired = true
 		replay.Status.NextAction = RuntimeActionReset
 	} else {

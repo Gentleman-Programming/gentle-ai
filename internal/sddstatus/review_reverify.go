@@ -305,7 +305,7 @@ func archiveReVerifyContinuation(workspaceRoot, changeName string, runtimeStatus
 		"gentle-ai sdd-attempt finish --cwd %s --change %q --expected-revision %s --request-id \"<unique-request-id>\" --outcome passed --evidence-revision \"<fresh-evidence-sha256>\" --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<cleanup-evidence>\" --process-evidence \"<process-evidence>\"",
 		pathquote.Quote(workspaceRoot), changeName, runtimeStatus.Revision,
 	)
-	if runtimeStatus.ActiveAttempt != nil {
+	if runtimeStatus.runtimeActiveAttempt() != nil {
 		return finish
 	}
 	begin := fmt.Sprintf(

@@ -2159,8 +2159,8 @@ func nativeRuntimeInstructions(status Status, change string) []string {
 		launchable := !terminal || readiness.Reason == CompactBlockActiveAttempt
 		chainEvidence, chainHasFailedEvidence := runtimeChainFailedEvidence(runtime.Attempts)
 		switch {
-		case chainHasFailedEvidence && runtime.Objective != nil && launchable:
-			objective := runtime.Objective
+		case chainHasFailedEvidence && runtime.runtimeObjective() != nil && launchable:
+			objective := runtime.runtimeObjective()
 			instructions = append(instructions,
 				fmt.Sprintf("Disabled/unmanaged remediation has one bounded correction attempt: run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d --remediates-evidence-revision %s`.", pathquote.Quote(workspace), change, objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines, chainEvidence),
 				fmt.Sprintf("After the candidate changes, settle that token with `--remediates-evidence-revision %s`; a fresh independent verification is required before archive.", chainEvidence),

@@ -164,9 +164,10 @@ type runtimeReadinessInput struct {
 // Complete or DecisionRequired and clears ActiveAttempt in both branches, so
 // checking Complete first is not a precedence choice among reachable states.
 func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
+	active := in.Status.runtimeActiveAttempt()
 	activeToken := ""
-	if in.Status.ActiveAttempt != nil {
-		activeToken = in.AttemptTokens[in.Status.ActiveAttempt.Ordinal]
+	if active != nil {
+		activeToken = in.AttemptTokens[active.Ordinal]
 	}
 
 	// Zero-mutation ownership check (#2291): a distinct call or process launched
@@ -174,7 +175,7 @@ func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
 	// token to prove it continues the SAME attempt rather than colliding with
 	// it. A non-matching token falls to the ordinary block naming the REAL
 	// active token. An empty token leaves every other path unchanged.
-	if in.PresentedToken != "" && in.Status.ActiveAttempt != nil {
+	if in.PresentedToken != "" && active != nil {
 		if in.PresentedToken == activeToken {
 			return CompactAttemptResult{State: CompactStateProceed, Token: activeToken}, true
 		}
@@ -194,7 +195,7 @@ func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
 		return CompactAttemptResult{State: CompactStateComplete}, true
 	case in.Status.DecisionRequired:
 		return compactBlocked(CompactBlockMaintainerDecision, ""), true
-	case in.Status.ActiveAttempt != nil:
+	case active != nil:
 		return compactBlocked(CompactBlockActiveAttempt, activeToken), true
 	default:
 		return CompactAttemptResult{}, false
@@ -471,12 +472,12 @@ func (store RuntimeStore) compactSettleResult(request *CompactSettleRequest, exp
 
 func compactItemSettlement(replay runtimeReplay, request CompactSettleRequest) *ItemSettlement {
 	status := replay.Status
-	if request.Outcome != AttemptPassed || status.Objective == nil ||
+	if request.Outcome != AttemptPassed || status.runtimeObjective() == nil ||
 		replay.Requests[request.RequestID].Revision != status.Revision || len(status.Attempts) == 0 {
 		return nil
 	}
 	attempt := status.Attempts[len(status.Attempts)-1]
-	objective := status.Objective
+	objective := status.runtimeObjective()
 	if attempt.Outcome != AttemptPassed || attempt.ItemID == "" || attempt.EvidenceRevision != request.EvidenceRevision ||
 		attempt.ObjectiveID != objective.ID || attempt.ObjectiveGeneration != objective.Generation || attempt.WorkUnit != objective.WorkUnit ||
 		attempt.ItemID != objective.ItemID {

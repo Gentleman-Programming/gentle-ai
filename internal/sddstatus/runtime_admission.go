@@ -37,7 +37,7 @@ type runtimeBeginAdmissionResult struct {
 func (store RuntimeStore) runtimeBeginAdmission(
 	ctx context.Context, status RuntimeStatus, request BeginAttemptRequest,
 ) (runtimeBeginAdmissionResult, error) {
-	if status.ActiveAttempt != nil {
+	if status.runtimeActiveAttempt() != nil {
 		return runtimeBeginAdmissionResult{}, ErrRuntimeAttemptActive
 	}
 	// A passed objective terminates its own scope, not the change. When the
@@ -59,11 +59,11 @@ func (store RuntimeStore) runtimeBeginAdmission(
 	var snapshot reviewtransaction.Snapshot
 	var err error
 	switch {
-	case status.Objective != nil && !advancing && runtimeObjectiveHasRecordedAttempt(status):
+	case status.runtimeObjective() != nil && !advancing && runtimeObjectiveHasRecordedAttempt(status):
 		// The ordinary continuing-objective path: at least one attempt is
 		// already recorded under this exact objective ID, so its terminal
 		// Finish is the candidate provenance to chase.
-		generation = status.Objective.Generation
+		generation = status.runtimeObjective().Generation
 		if runtimeObjectiveScopeChanged(status, request) {
 			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 		}
@@ -75,7 +75,7 @@ func (store RuntimeStore) runtimeBeginAdmission(
 		if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
 			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 		}
-	case status.Objective != nil && !advancing:
+	case status.runtimeObjective() != nil && !advancing:
 		// A freshly opened objective (Rescope) with no attempt recorded
 		// under its own ID yet: there is no terminal Finish belonging to
 		// THIS objective to chase, so capture a fresh candidate the same
@@ -86,12 +86,13 @@ func (store RuntimeStore) runtimeBeginAdmission(
 		// Finish record. Chasing the LAST recorded attempt here would find
 		// one that belongs to the objective THIS one superseded (#2298,
 		// #2296 part 2's landmine) and wrongly refuse.
-		generation = status.Objective.Generation
+		objective := status.runtimeObjective()
+		generation = objective.Generation
 		if runtimeObjectiveScopeChanged(status, request) {
 			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 		}
 		snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
-		if err == nil && (snapshot.Identity != status.Objective.InitialCandidateIdentity || snapshot.CandidateTree != status.Objective.InitialCandidateTree) {
+		if err == nil && (snapshot.Identity != objective.InitialCandidateIdentity || snapshot.CandidateTree != objective.InitialCandidateTree) {
 			return runtimeBeginAdmissionResult{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 		}
 	default:
@@ -112,11 +113,12 @@ func (store RuntimeStore) runtimeBeginAdmission(
 // continuing-objective branches make. It was written out twice, which is how a
 // scope field could be added to one branch and forgotten in the other.
 func runtimeObjectiveScopeChanged(status RuntimeStatus, request BeginAttemptRequest) bool {
-	return request.WorkUnit != status.Objective.WorkUnit ||
-		request.EvidenceGoal != status.Objective.EvidenceGoal ||
-		request.MaxAttempts != status.Objective.MaxAttempts ||
-		request.MaxChangedLines != status.Objective.MaxChangedLines ||
-		!runtimeItemBindingEqual(request.ItemID, request.ItemEditRoots, status.Objective.ItemID, status.Objective.ItemEditRoots)
+	objective := status.runtimeObjective()
+	return request.WorkUnit != objective.WorkUnit ||
+		request.EvidenceGoal != objective.EvidenceGoal ||
+		request.MaxAttempts != objective.MaxAttempts ||
+		request.MaxChangedLines != objective.MaxChangedLines ||
+		!runtimeItemBindingEqual(request.ItemID, request.ItemEditRoots, objective.ItemID, objective.ItemEditRoots)
 }
 
 // AdmissionStatus is the read-only surface's answer to the question consumers
@@ -182,10 +184,10 @@ func (store RuntimeStore) budgetConsentInput(status RuntimeStatus) BudgetConsent
 		Repo: store.Workspace, Change: store.Change, Revision: status.Revision,
 		CumulativeAttempts: status.CumulativeAttempts, CumulativeLines: status.CumulativeChangedLines,
 	}
-	if status.Objective != nil {
-		in.MaxAttempts, in.MaxChangedLines = status.Objective.MaxAttempts, status.Objective.MaxChangedLines
+	if objective := status.runtimeObjective(); objective != nil {
+		in.MaxAttempts, in.MaxChangedLines = objective.MaxAttempts, objective.MaxChangedLines
 		for _, attempt := range status.Attempts {
-			if attempt.ObjectiveID == status.Objective.ID &&
+			if attempt.ObjectiveID == objective.ID &&
 				attempt.Outcome != AttemptPassed && attempt.HarnessDisposition == HarnessInvalidated {
 				in.HarnessFailures++
 			}

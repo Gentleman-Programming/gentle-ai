@@ -146,12 +146,12 @@ func projectWorkItems(tasks string, status Status) ([]WorkItem, bool, error) {
 		runtimeMatch := !item.Done && workItemRuntimeMatches(declared, status.ActionContext.WorkspaceRoot, status.RuntimeStatus)
 		if runtimeMatch {
 			item.EvidenceRevision = status.RuntimeStatus.EvidenceRevision
-			if status.RuntimeStatus.ActiveAttempt != nil {
-				item.Active, item.RuntimeAttempt = true, status.RuntimeStatus.ActiveAttempt
+			if active := status.RuntimeStatus.runtimeActiveAttempt(); active != nil {
+				item.Active, item.RuntimeAttempt = true, active
 			}
 		}
-		otherActive := status.RuntimeStatus != nil && status.RuntimeStatus.ActiveAttempt != nil && !runtimeMatch
-		terminalRuntime := runtimeMatch && status.RuntimeStatus.ActiveAttempt == nil && (status.RuntimeStatus.Complete || status.RuntimeStatus.DecisionRequired || lastWorkItemAttemptFailed(status.RuntimeStatus))
+		otherActive := status.RuntimeStatus != nil && status.RuntimeStatus.runtimeActiveAttempt() != nil && !runtimeMatch
+		terminalRuntime := runtimeMatch && status.RuntimeStatus.runtimeActiveAttempt() == nil && (status.RuntimeStatus.Complete || status.RuntimeStatus.DecisionRequired || lastWorkItemAttemptFailed(status.RuntimeStatus))
 		item.Blocked = !item.Done && (!scopeAllowed || !dependenciesDone || otherActive || terminalRuntime || status.Dependencies.Apply != DependencyReady)
 		item.Ready = !item.Done && !item.Active && !item.Blocked
 		result = append(result, item)
@@ -160,10 +160,10 @@ func projectWorkItems(tasks string, status Status) ([]WorkItem, bool, error) {
 }
 
 func workItemRuntimeMatches(item workItemMetadata, workspace string, runtime *RuntimeStatus) bool {
-	if runtime == nil || runtime.Objective == nil {
+	if runtime == nil || runtime.runtimeObjective() == nil {
 		return false
 	}
-	objective := runtime.Objective
+	objective := runtime.runtimeObjective()
 	if objective.ItemID == "" {
 		return objective.WorkUnit == item.WorkUnit
 	}
@@ -274,10 +274,10 @@ func ResolveItemAcquire(options ResolveOptions, itemID, requestID string) (Begin
 }
 
 func itemSelectedActiveBindingMatches(item WorkItem, roots []string, runtime *RuntimeStatus) bool {
-	if runtime == nil || runtime.Objective == nil || runtime.ActiveAttempt == nil {
+	if runtime == nil || runtime.runtimeObjective() == nil || runtime.runtimeActiveAttempt() == nil {
 		return false
 	}
-	objective, attempt := runtime.Objective, runtime.ActiveAttempt
+	objective, attempt := runtime.runtimeObjective(), runtime.runtimeActiveAttempt()
 	return objective.WorkUnit == item.WorkUnit && objective.EvidenceGoal == item.EvidenceGoal &&
 		objective.MaxAttempts == item.MaxAttempts && objective.MaxChangedLines == item.MaxChangedLines &&
 		runtimeItemBindingEqual(item.ID, roots, objective.ItemID, objective.ItemEditRoots) &&
