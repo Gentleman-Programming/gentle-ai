@@ -251,9 +251,9 @@ func reviewProviderMaterializeEvidence(ctx context.Context, repo string, snapsho
 	}
 	defer deps.close(inspector)
 	frozen := inspector.FrozenCandidateContext()
-	if len(frozen.ChangedPathManifest) > reviewProviderMaxEvidenceEntries {
-		return nil, reviewLensContextRefusal("lens_context_budget_exceeded", reviewLensContextCapacityAction(len(frozen.ChangedPathManifest)))
-	}
+	// The aggregate byte budget is the whole bound. The 32-entry cap that used
+	// to sit above it measured the wrong thing and is gone (issue #3367); this
+	// role request is additionally bounded by its contract's prompt limit.
 	budget := reviewLensContextByteBudget
 	evidence := make([]reviewProviderEvidence, 0, len(frozen.ChangedPathManifest))
 	for index, entry := range frozen.ChangedPathManifest {

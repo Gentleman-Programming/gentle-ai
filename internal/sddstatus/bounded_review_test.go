@@ -918,7 +918,7 @@ func TestCompactAuthorityPathBindingRejectsForeignAndTraversalOpenSpecPaths(t *t
 		{name: "traversal", paths: []string{"openspec/changes/thin/../other/tasks.md"}, wantReason: true},
 		{name: "dot segment", paths: []string{"openspec/changes/thin/./tasks.md"}, wantReason: true},
 		{name: "duplicate separator", paths: []string{"openspec/changes/thin//tasks.md"}, wantReason: true},
-		{name: "mixed foreign path", paths: []string{"openspec/changes/thin/tasks.md", "openspec/config.yaml"}, wantReason: true},
+		{name: "mixed unexpected config", paths: []string{"openspec/changes/thin/tasks.md", "openspec/config.yml"}, wantReason: true},
 		{name: "mixed foreign change", paths: []string{"openspec/changes/thin/tasks.md", "openspec/changes/other/tasks.md"}, wantReason: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1787,6 +1787,10 @@ func writeApprovedCompactAuthorityForChange(t *testing.T, repo, changeRoot, line
 }
 
 func writeApprovedCompactAuthorityForChangeWithTasks(t *testing.T, repo, changeRoot, lineage, tasks string) {
+	writeApprovedCompactAuthorityForChangeWithCandidate(t, repo, changeRoot, lineage, tasks, nil)
+}
+
+func writeApprovedCompactAuthorityForChangeWithCandidate(t *testing.T, repo, changeRoot, lineage, tasks string, prepareCandidate func()) {
 	t.Helper()
 	runSDDStatusGit(t, repo, "init", "-q")
 	runSDDStatusGit(t, repo, "config", "user.email", "status@example.com")
@@ -1794,6 +1798,9 @@ func writeApprovedCompactAuthorityForChangeWithTasks(t *testing.T, repo, changeR
 	runSDDStatusGit(t, repo, "add", ".")
 	runSDDStatusGit(t, repo, "commit", "-qm", "base")
 	write(t, filepath.Join(changeRoot, "tasks.md"), tasks)
+	if prepareCandidate != nil {
+		prepareCandidate()
+	}
 	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{}})
 	if err != nil {
 		t.Fatal(err)

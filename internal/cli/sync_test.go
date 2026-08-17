@@ -2124,6 +2124,11 @@ func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 	if err := os.WriteFile(legacyPluginPath, []byte("legacy background agents plugin"), 0o644); err != nil {
 		t.Fatalf("WriteFile(background-agents.ts) error = %v", err)
 	}
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	seed := `{"theme":"user-theme","agent":{"user-helper":{"mode":"subagent","description":"preserve me"}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
 
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
@@ -2151,9 +2156,35 @@ func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 	}
 
 	// SDD assets should exist.
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if _, err := os.Stat(settingsPath); err != nil {
 		t.Errorf("expected SDD inject to create %q: %v", settingsPath, err)
+	}
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	if root["theme"] != "user-theme" {
+		t.Fatalf("sync discarded unrelated theme: %#v", root["theme"])
+	}
+	agentsMap := root["agent"].(map[string]any)
+	if helper, ok := agentsMap["user-helper"].(map[string]any); !ok || helper["description"] != "preserve me" {
+		t.Fatalf("sync discarded unrelated user agent: %#v", agentsMap["user-helper"])
+	}
+	if _, ok := agentsMap["review-validator"].(map[string]any); !ok {
+		t.Fatalf("sync did not add review-validator: %#v", agentsMap)
+	}
+	orchestrator := agentsMap["gentle-orchestrator"].(map[string]any)
+	permission := orchestrator["permission"].(map[string]any)
+	allowlist := permission["task"].(map[string]any)
+	if replacement, ok := allowlist["__replace__"].(map[string]any); ok {
+		allowlist = replacement
+	}
+	if allowlist["review-validator"] != "allow" {
+		t.Fatalf("sync did not authorize gentle-orchestrator -> review-validator: %#v", allowlist)
 	}
 	if _, err := os.Stat(legacyPluginPath); !os.IsNotExist(err) {
 		t.Errorf("expected sync to remove legacy OpenCode plugin %q; stat err = %v", legacyPluginPath, err)

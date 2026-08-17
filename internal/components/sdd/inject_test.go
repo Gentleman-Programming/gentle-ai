@@ -2214,9 +2214,9 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	}
 
 	// Multi overlay must contain gentle-orchestrator + 2 native fallback agents +
-	// 10 SDD sub-agents + 3 JD agents + 4 review agents + 1 batched refuter = 21 agents.
-	if len(agentMap) != 21 {
-		t.Fatalf("agent count = %d, want 21", len(agentMap))
+	// 10 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 22 agents.
+	if len(agentMap) != 22 {
+		t.Fatalf("agent count = %d, want 22", len(agentMap))
 	}
 
 	// Verify gentle-orchestrator is present.
@@ -2240,7 +2240,7 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	}
 
 	// Verify representative sub-agents are present.
-	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter"} {
+	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator"} {
 		if _, ok := agentMap[subAgent]; !ok {
 			t.Fatalf("missing sub-agent %q", subAgent)
 		}
@@ -2602,12 +2602,12 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 	}
 
 	// Empty mode defaults to single — gentle-orchestrator + 2 native fallback agents +
-	// 10 SDD sub-agents + 3 JD agents + 4 review agents + 1 batched refuter = 21 agents.
+	// 10 SDD sub-agents + 3 JD agents + 4 review agents + refuter + validator = 22 agents.
 	if _, ok := agentMap["gentle-orchestrator"]; !ok {
 		t.Fatal("missing gentle-orchestrator agent")
 	}
-	if len(agentMap) != 21 {
-		t.Fatalf("agent count = %d, want 21", len(agentMap))
+	if len(agentMap) != 22 {
+		t.Fatalf("agent count = %d, want 22", len(agentMap))
 	}
 
 	// Verify orchestrator mode is "primary".
@@ -2636,7 +2636,7 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 	}
 
 	// Verify sub-agents are present with mode "subagent".
-	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter"} {
+	for _, subAgent := range []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator"} {
 		raw, ok := agentMap[subAgent]
 		if !ok {
 			t.Fatalf("missing sub-agent %q", subAgent)
@@ -3129,6 +3129,7 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 		"review-reliability": {ProviderID: "openai", ModelID: "gpt-5"},
 		"review-resilience":  {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		"review-refuter":     {ProviderID: "openai", ModelID: "gpt-5", Effort: "high"},
+		"review-validator":   {ProviderID: "openai", ModelID: "gpt-5-mini"},
 	}
 
 	result, err := Inject(home, opencodeAdapter(), "multi", InjectOptions{OpenCodeModelAssignments: assignments})
@@ -3184,8 +3185,12 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 		"review-reliability": "openai/gpt-5",
 		"review-resilience":  "anthropic/claude-sonnet-4",
 		"review-refuter":     "openai/gpt-5",
+		"review-validator":   "openai/gpt-5-mini",
 	} {
-		definition := agentMap[agent].(map[string]any)
+		definition, ok := agentMap[agent].(map[string]any)
+		if !ok {
+			t.Fatalf("%s agent definition = %#v, want object", agent, agentMap[agent])
+		}
 		if got := definition["model"]; got != want {
 			t.Fatalf("%s model = %q, want %q", agent, got, want)
 		}
@@ -4395,10 +4400,18 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReview
 	if strings.Contains(string(settings), "codegraph_codegraph_explore") {
 		t.Fatal("Kilocode settings must not receive the OpenCode CodeGraph grant")
 	}
-	for _, fallbackAgent := range []string{"general", "explore"} {
-		if _, exists := agentMap[fallbackAgent]; exists {
-			t.Fatalf("Kilocode settings must not receive OpenCode-only fallback agent %q", fallbackAgent)
+	for _, openCodeOnlyAgent := range []string{"general", "explore", opencodemodel.ReviewValidatorAgent} {
+		if _, exists := agentMap[openCodeOnlyAgent]; exists {
+			t.Fatalf("Kilocode settings must not receive OpenCode-only agent %q", openCodeOnlyAgent)
 		}
+	}
+	orchestrator := agentMap["gentle-orchestrator"].(map[string]any)
+	taskPermissions := orchestrator["permission"].(map[string]any)["task"].(map[string]any)
+	if replacement, ok := taskPermissions["__replace__"].(map[string]any); ok {
+		taskPermissions = replacement
+	}
+	if _, exists := taskPermissions[opencodemodel.ReviewValidatorAgent]; exists {
+		t.Fatalf("Kilocode settings must not authorize OpenCode-only agent %q", opencodemodel.ReviewValidatorAgent)
 	}
 }
 

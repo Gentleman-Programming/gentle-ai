@@ -377,6 +377,10 @@ func TestFindingAdmissionDiagnosticRequiresCompatibleLocation(t *testing.T) {
 		{"candidate range", "candidate_causality_unproven", "internal/a.go:7-9", "line_not_changed_by_candidate", true},
 		{"invalid valid line", "invalid_finding_location", "internal/a.go:7", "line_suffix_not_integer", false},
 		{"invalid reason mismatch", "invalid_finding_location", "internal/a.go:7-9", "line_must_be_positive", false},
+		{"evidence unknown path", "evidence_path_out_of_scope", "bogus.go:7", "unknown_or_malformed_repository_path", true},
+		{"proof unknown path", "proof_path_out_of_scope", "bogus.go:7", "unknown_or_malformed_repository_path", true},
+		{"evidence reason mismatch", "evidence_path_out_of_scope", "bogus.go:7", "line_not_changed_by_candidate", false},
+		{"proof malformed shape", "proof_path_out_of_scope", "/home/private/leak.go:5", "unknown_or_malformed_repository_path", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -386,6 +390,69 @@ func TestFindingAdmissionDiagnosticRequiresCompatibleLocation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAdmitArtifactNamesOutOfScopeCitationToken is the RED-first proof for the
+// undiagnosable out_of_scope rejection: a free-text evidence or proof_refs
+// token shaped like path:line that names an unknown or malformed repository
+// path rejected the entire reviewer result without naming the offending
+// token, so the incident could not be diagnosed after the fact.
+func TestAdmitArtifactNamesOutOfScopeCitationToken(t *testing.T) {
+	t.Run("evidence rejection names the offending token", func(t *testing.T) {
+		_, _, request := admittedArtifactFixture(t)
+		request.Result.Evidence = append(request.Result.Evidence, "helper moved: bogus.go:7")
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		wantMessage := "reviewer evidence references a path outside the frozen repository"
+		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope || admission.Diagnostic != wantMessage {
+			t.Fatalf("AdmitArtifact() = %q, %q, %v; want out-of-scope %q", admission.Decision, admission.Diagnostic, err, wantMessage)
+		}
+		var admissionErr *ArtifactAdmissionError
+		if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil {
+			t.Fatalf("evidence rejection carries no structured diagnostic: %v", err)
+		}
+		if admissionErr.Diagnostic.Code != "evidence_path_out_of_scope" ||
+			admissionErr.Diagnostic.FindingID != "" ||
+			admissionErr.Diagnostic.Location != "bogus.go:7" ||
+			admissionErr.Diagnostic.Reason != "unknown_or_malformed_repository_path" {
+			t.Fatalf("evidence diagnostic = %#v", admissionErr.Diagnostic)
+		}
+		if !strings.Contains(err.Error(), "bogus.go:7") {
+			t.Fatalf("error surface does not name the offending token: %v", err)
+		}
+	})
+	t.Run("proof rejection names the offending token and finding", func(t *testing.T) {
+		_, _, request := admittedArtifactFixture(t)
+		request.Result.Findings[0].ProofRefs = []string{"diff: bogus.go:7"}
+		_, admission, err := AdmitArtifact(t.Context(), request)
+		wantMessage := "reviewer proof references a path outside the frozen repository"
+		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope || admission.Diagnostic != wantMessage {
+			t.Fatalf("AdmitArtifact() = %q, %q, %v; want out-of-scope %q", admission.Decision, admission.Diagnostic, err, wantMessage)
+		}
+		var admissionErr *ArtifactAdmissionError
+		if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil {
+			t.Fatalf("proof rejection carries no structured diagnostic: %v", err)
+		}
+		if admissionErr.Diagnostic.Code != "proof_path_out_of_scope" ||
+			admissionErr.Diagnostic.FindingID != "R3-001" ||
+			admissionErr.Diagnostic.Location != "bogus.go:7" ||
+			admissionErr.Diagnostic.Reason != "unknown_or_malformed_repository_path" {
+			t.Fatalf("proof diagnostic = %#v", admissionErr.Diagnostic)
+		}
+		if !strings.Contains(err.Error(), "bogus.go:7") {
+			t.Fatalf("error surface does not name the offending token: %v", err)
+		}
+	})
+	t.Run("unsafe offending token stays out of the error surface", func(t *testing.T) {
+		_, _, request := admittedArtifactFixture(t)
+		request.Result.Evidence = append(request.Result.Evidence, "read /home/private/leak.go:5")
+		_, _, err := AdmitArtifact(t.Context(), request)
+		var admissionErr *ArtifactAdmissionError
+		if !errors.As(err, &admissionErr) || admissionErr.Diagnostic == nil ||
+			admissionErr.Diagnostic.Code != "evidence_path_out_of_scope" ||
+			admissionErr.Diagnostic.Location != "" || strings.Contains(err.Error(), "/home/private/leak.go") {
+			t.Fatalf("unsafe token escaped the structured diagnostic: %#v, %v", admissionErr.Diagnostic, err)
+		}
+	})
 }
 
 // TestAdmitArtifactOmittedSubjectDiagnosticNamesContinuation pins the
@@ -451,7 +518,7 @@ func TestReferenceOutsideRepositoryRecognizesOnlyCanonicalRepositoryPaths(t *tes
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := referenceOutsideRepository(tt.value, lookup)
+			got, _, err := referenceOutsideRepository(tt.value, lookup)
 			if err != nil {
 				t.Fatal(err)
 			}

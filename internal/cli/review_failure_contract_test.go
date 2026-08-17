@@ -294,6 +294,34 @@ func TestReviewIntegrationOperationRegistryOwnsPublishedAndFailurePolicy(t *test
 			t.Fatalf("operation metadata does not drive every policy lookup: %#v", metadata)
 		}
 		byCommand, commandOK := reviewIntegrationOperationByCommand(metadata.Command)
+		if metadata.Negotiated && metadata.CollectCapture {
+			t.Fatalf("operation %q claims both the negotiated and collect-capture row classes", metadata.Operation)
+		}
+		if metadata.CollectCapture {
+			// A collect-capture row owns a plain-dispatched collect-satisfying
+			// capture verb. It stays off the negotiated command route and out
+			// of the published capabilities `operations` array (a pinned-length
+			// contract), but it DOES join the v2 failure envelope's operation
+			// vocabulary: its refusals emit typed envelopes on stdout, and its
+			// flag metadata is consumed by safe lineage extraction while
+			// MutatesAuthority is consumed by timeout classification.
+			if commandOK {
+				t.Fatalf("collect-capture operation %q is routed as a negotiated command", metadata.Operation)
+			}
+			if !validReviewIntegrationFailureOperation(metadata.Operation) {
+				t.Fatalf("collect-capture operation %q is missing from the failure operation vocabulary", metadata.Operation)
+			}
+			if capture, ok := reviewCollectCaptureOperationByCommand(metadata.Command); !ok || capture.Operation != metadata.Operation {
+				t.Fatalf("collect-capture operation %q does not resolve its own envelope route", metadata.Operation)
+			}
+			if len(metadata.ValueFlags) == 0 || !metadata.MutatesAuthority {
+				t.Fatalf("collect-capture operation %q is missing the consumed flag or mutation metadata: %#v", metadata.Operation, metadata)
+			}
+			if metadata.JoinOnTimeout || metadata.TimeoutRetryable {
+				t.Fatalf("collect-capture operation %q carries negotiated timeout metadata nothing consumes: %#v", metadata.Operation, metadata)
+			}
+			continue
+		}
 		if !metadata.Negotiated {
 			// A non-negotiated row exists for exactly one reason: to own the
 			// runnable CLI verb for an operation the status schemas publish as

@@ -199,7 +199,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		bindingTarget = reviewAuthorityTargetIdentity(status)
 	}
 	binding := reviewTransitionBinding(status.Authority, bindingTarget, input.RepositoryContext)
-	if status.Authority.State == reviewtransaction.StateReviewing && artifactErr != nil {
+	if artifactErr != nil && (status.Authority.State == reviewtransaction.StateReviewing || input.ValidationRequest != nil) {
 		return reviewStopTransition("captured_artifacts_unverifiable")
 	}
 	if status.Authority.State == reviewtransaction.StateReviewing && input.LensContextBudgetExceeded {
@@ -256,6 +256,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			}
 			if input.ProviderRole == reviewerprovider.RoleTargetedValidator {
 				return reviewProviderRoleTransition("targeted_validation_required", validationBinding, input.ProviderRole, input.RuntimeAgent, input.ValidationRequest)
+			}
+			if input.CapturedProviderTargetedValidator {
+				return reviewCapturedProviderTargetedValidatorFinalizeTransition(input.Contract, validationBinding, *input.ValidationRequest)
 			}
 			if capturedEvidence == nil {
 				return reviewCollectTransition("correction_repository_verification_required", reviewCaptureEvidenceInput(input.Contract, validationBinding))
@@ -394,6 +397,17 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	}
 }
 
+// reviewProviderRoleInputName renders the published collection-input name for
+// one provider role. Input names are contract identifiers, not role tokens:
+// the published transition_input schema (status-v5.schema.json) and gentle-pi's
+// runtime decoder both pin them to ^[a-z0-9_]+$, so the hyphen the
+// targeted-validator role token carries must project to an underscore here
+// (cross-lane battery finding; the completed-input echo already published
+// "provider_targeted_validator").
+func reviewProviderRoleInputName(role reviewProviderRole) string {
+	return "provider_" + strings.ReplaceAll(string(role), "-", "_")
+}
+
 func reviewProviderRoleTransition(reason string, binding ReviewTransitionBinding, role reviewProviderRole, runtime model.AgentID, validation *reviewtransaction.TargetedValidationRequest) ReviewNextTransition {
 	if reviewProviderHostRelayMaterializeRuntime(runtime) {
 		input, err := reviewProviderHostRelayRoleInput(binding, role, runtime, validation)
@@ -407,7 +421,7 @@ func reviewProviderRoleTransition(reason string, binding ReviewTransitionBinding
 		return reviewStopTransition("captured_artifacts_unverifiable")
 	}
 	return reviewCollectTransition(reason, ReviewTransitionInput{
-		Name: "provider_" + string(role), Schema: reviewProviderRoleTaskSchema(role), CaptureOperation: "external.run_provider_role",
+		Name: reviewProviderRoleInputName(role), Schema: reviewProviderRoleTaskSchema(role), CaptureOperation: "external.run_provider_role",
 		Arguments: append(reviewBindingArguments(binding),
 			ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext},
 			ReviewTransitionArgument{Name: "agent", Value: string(model.AgentOpenCode)},
@@ -439,7 +453,7 @@ func reviewProviderHostRelayRoleInput(binding ReviewTransitionBinding, role revi
 	}
 	arguments := append(reviewBindingArguments(binding),
 		ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext})
-	input := ReviewTransitionInput{Name: "provider_" + string(role)}
+	input := ReviewTransitionInput{Name: reviewProviderRoleInputName(role)}
 	switch role {
 	case reviewerprovider.RoleRefuter:
 		input.Schema, input.CaptureOperation = reviewRefuterSchemaID, reviewCaptureRefuterCaptureOperation
@@ -637,6 +651,7 @@ type reviewNextTransitionInput struct {
 	StartLineage                                   string
 	RuntimeAgent                                   model.AgentID
 	ProviderRole                                   reviewProviderRole
+	CapturedProviderTargetedValidator              bool
 	Contract                                       string
 	RepositoryContext                              string
 	ValidationRequest                              *reviewtransaction.TargetedValidationRequest
@@ -650,6 +665,26 @@ type reviewNextTransitionInput struct {
 	RDDModeResolved                                bool
 	LensContextBudgetExceeded                      bool
 	PreCommitDeliveryAssessment                    *reviewtransaction.CompactGateTargetApplicability
+}
+
+func reviewCapturedProviderTargetedValidatorFinalizeTransition(contract string, binding ReviewTransitionBinding, request reviewtransaction.TargetedValidationRequest) ReviewNextTransition {
+	if contract != ReviewIntegrationContractV2 || binding.RepositoryContext == "" {
+		return reviewStopTransition("captured_artifacts_unverifiable")
+	}
+	arguments := []ReviewTransitionArgument{
+		{Name: "contract", Value: contract},
+		{Name: "lineage", Value: binding.LineageID},
+		{Name: "expected-revision", Value: binding.Revision},
+		{Name: "target", Value: binding.TargetIdentity},
+		{Name: "request-hash", Value: request.RequestHash},
+		{Name: "repository-context", Value: binding.RepositoryContext},
+		{Name: "captured-evidence", Value: "true"},
+	}
+	return reviewExecuteTransition("captured_provider_targeted_validation_ready", "review.finalize", arguments, []ReviewTransitionArgument{
+		{Name: "state", Value: "correction_required"},
+		{Name: "verification_outcome", Value: string(reviewtransaction.VerificationOutcomePassed)},
+		{Name: "provider_targeted_validator", Value: "captured"},
+	}, binding, nil)
 }
 
 const reviewSubmissionValuePlaceholder = "{{value}}"
@@ -905,7 +940,7 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 			return reviewStopTransition("recovery_scope_unchanged")
 		}
 		var representable bool
-		selectorArguments, representable = input.Selector.recoveryArguments()
+		selectorArguments, representable = input.Selector.recoveryArguments(input.IntendedUntracked)
 		if !representable {
 			// Root 7 (#2471): the selector the caller supplied cannot be
 			// represented as a recovery target, so the missing thing is a
@@ -930,7 +965,7 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 	})
 }
 
-func (selector reviewTransitionSelector) recoveryArguments() ([]ReviewTransitionArgument, bool) {
+func (selector reviewTransitionSelector) recoveryArguments(scope reviewIntendedUntrackedScope) ([]ReviewTransitionArgument, bool) {
 	if selector.Recovery == nil {
 		return nil, false
 	}
@@ -943,6 +978,26 @@ func (selector reviewTransitionSelector) recoveryArguments() ([]ReviewTransition
 	case reviewtransaction.TargetCurrentChanges:
 		if target.Projection == reviewtransaction.ProjectionStaged {
 			arguments = append(arguments, ReviewTransitionArgument{Name: "projection", Value: string(target.Projection)})
+			break
+		}
+		// Issue #1972: STATUS authorized a target derived from the caller's
+		// declared untracked selection, so the rendered RECOVER must replay
+		// that exact selection. Without it, `review recover` re-derives the
+		// successor target from predecessor inheritance alone and refuses
+		// its own authorization whenever the recovery-time selection
+		// diverges from the predecessor's frozen declaration. A declared
+		// selection without its validated inventory digest cannot be
+		// replayed and fails closed instead of rendering a partial selector.
+		if scope.Declared {
+			if scope.Digest == "" {
+				return nil, false
+			}
+			arguments = append(arguments,
+				ReviewTransitionArgument{Name: "untracked-scope", Value: map[bool]string{true: "select", false: "exclude"}[len(target.IntendedUntracked) != 0]},
+				ReviewTransitionArgument{Name: "expected-untracked-inventory", Value: scope.Digest})
+			for _, path := range target.IntendedUntracked {
+				arguments = append(arguments, ReviewTransitionArgument{Name: "intended-untracked", Value: path})
+			}
 		}
 	case reviewtransaction.TargetBaseDiff:
 		if target.BaseRef == "" || target.Projection != reviewtransaction.ProjectionWorkspace {

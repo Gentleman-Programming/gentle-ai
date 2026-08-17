@@ -246,6 +246,13 @@ func exerciseFrozenLineageResume(r *journeyRun) error {
 	if occupied.NextTransition.Kind != "stop" || occupied.NextTransition.ReasonCode != "native_stop_required" {
 		return fmt.Errorf("drifted occupied frozen status = %+v", occupied.NextTransition)
 	}
+	// The drift guard must hold end to end: finalizing the drifted candidate
+	// directly must refuse instead of publishing a receipt for bytes nobody
+	// reviewed.
+	if observation := r.run([]string{"review", "finalize", "--cwd", r.sandbox.Repo,
+		"--lineage", r.sandbox.Lineage, "--captured-results=true"}, false); observation.ExitCode == 0 {
+		return fmt.Errorf("drifted frozen finalize must refuse, got exit 0")
+	}
 	if err := r.sandbox.write(filepath.Join(r.sandbox.Repo, frozenLineageTracked), frozenLineageSource); err != nil {
 		return err
 	}

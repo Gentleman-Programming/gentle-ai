@@ -66,8 +66,11 @@
         "capability": {"const": "review.opaque_repository_context"},
         "handle": {"type": "string", "pattern": "^rctx1_[0-9a-f]{64}$"},
         "revision": {"$ref": "#/$defs/sha256"},
-        "target_identity": {"$ref": "#/$defs/sha256"}
-      }
+        "target_identity": {"$ref": "#/$defs/sha256"},
+        "event_id": {"$ref": "#/$defs/sha256"},
+        "outcome": {"enum": ["applied", "pending", "blocked_conflict", "durability_limited"]}
+      },
+      "dependentRequired": {"event_id": ["outcome"], "outcome": ["event_id"]}
     }
   },
   "$defs": {

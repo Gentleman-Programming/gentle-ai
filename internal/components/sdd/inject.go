@@ -1739,6 +1739,20 @@ func stripOpenCodeNativeFallbackAgents(overlayBytes []byte) ([]byte, error) {
 	}
 	delete(agents, "general")
 	delete(agents, "explore")
+	// Kilocode does not host the OpenCode provider relay that issues the opaque
+	// validator task, so it must not expose or authorize that OpenCode-only role.
+	delete(agents, opencode.ReviewValidatorAgent)
+	if orchestrator, ok := agents["gentle-orchestrator"].(map[string]any); ok {
+		if permission, ok := orchestrator["permission"].(map[string]any); ok {
+			if task, ok := permission["task"].(map[string]any); ok {
+				if replacement, ok := task["__replace__"].(map[string]any); ok {
+					delete(replacement, opencode.ReviewValidatorAgent)
+				} else {
+					delete(task, opencode.ReviewValidatorAgent)
+				}
+			}
+		}
+	}
 	result, err := json.MarshalIndent(overlay, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal overlay: %w", err)

@@ -86,6 +86,7 @@ type sddRuntimeStatus struct {
 		ObjectiveGeneration        int    `json:"objective_generation"`
 		BeginCandidateTree         string `json:"begin_candidate_tree"`
 		FinishCandidateTree        string `json:"finish_candidate_tree"`
+		AttestedVerifyReportDigest string `json:"attested_verify_report_digest"`
 		Outcome                    string `json:"outcome"`
 		EvidenceRevision           string `json:"evidence_revision"`
 		RemediatesEvidenceRevision string `json:"remediates_evidence_revision"`
@@ -133,6 +134,7 @@ type sddStatusV1 struct {
 	} `json:"reviewOffer"`
 	BlockedReasons    []string `json:"blockedReasons"`
 	PhaseInstructions struct {
+		Verify    []string `json:"verify"`
 		Remediate []string `json:"remediate"`
 	} `json:"phaseInstructions"`
 	TaskProgress struct {

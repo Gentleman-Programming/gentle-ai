@@ -99,21 +99,46 @@ func TestExplicitFrozenReviewingStatusRejectsPartialSlotsAndStaleStartLineages(t
 		}
 	})
 
-	t.Run("occupied slots retain the selected lineage", func(t *testing.T) {
-		repo, _, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, nil)
-		captureFrozenReviewerResults(t, repo, record, len(record.State.SelectedLenses))
-		writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'live drift'\n", 0o644)
-		stale := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
-		if stale.Applicability != reviewtransaction.TargetApplicabilityCurrent || stale.Authority == nil ||
-			stale.Authority.LineageID != record.State.LineageID || stale.Action != reviewtransaction.TargetStatusActionStop ||
-			stale.Replayability != reviewtransaction.ReplayabilityManualActionRequired || stale.NextTransition == nil ||
-			stale.NextTransition.Kind != reviewNextTransitionStop || stale.NextTransition.ReasonCode != "native_stop_required" {
-			t.Fatalf("occupied stale status = %#v", stale)
+	t.Run("occupied intended-untracked slots finalize through the selected OpenCode lineage", func(t *testing.T) {
+		repo, _, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, []string{"frozen-untracked.txt"})
+		for order, lens := range record.State.SelectedLenses {
+			result := admittedReviewerResultForTest(t, repo, record, lens, order)
+			if order == 0 {
+				result.Findings = []facadeFinding{{
+					ID: "R1-001", Location: "service-token.ts:1", Severity: "CRITICAL", Claim: "frozen candidate failure",
+					ProofRefs: []string{"service-token.ts:1 candidate-specific proof"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+					CausalDisposition: reviewtransaction.CausalIntroduced,
+				}}
+			}
+			input := filepath.Join(t.TempDir(), lens+".json")
+			writeReviewCLIJSON(t, input, result)
+			if err := RunReviewCaptureResult([]string{"--cwd", repo, "--lineage", record.State.LineageID,
+				"--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", strconv.Itoa(order), "--input", input}, &bytes.Buffer{}); err != nil {
+				t.Fatal(err)
+			}
 		}
-		fresh := explicitFrozenReviewingStatus(t, repo, "requested-new-lineage")
-		if fresh.NextTransition == nil || fresh.NextTransition.Execute == nil ||
-			fresh.NextTransition.Execute.Binding.LineageID != "requested-new-lineage" {
-			t.Fatalf("unknown requested lineage = %#v", fresh)
+		var output bytes.Buffer
+		if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition", "--cwd", repo, "--lineage", record.State.LineageID}, &output); err != nil {
+			t.Fatalf("selected OpenCode STATUS: %v\n%s", err, output.String())
+		}
+		var status ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &status)
+		if status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
+			status.Authority.LineageID != record.State.LineageID || status.Action != reviewtransaction.TargetStatusActionFinalize ||
+			status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionExecute ||
+			status.NextTransition.ReasonCode != "captured_results_ready" || status.NextTransition.Execute == nil ||
+			status.NextTransition.Execute.Operation != "review.finalize" || len(status.NextTransition.Execute.Artifacts) != len(record.State.SelectedLenses) {
+			t.Fatalf("occupied frozen STATUS = %#v\n%s", status, output.String())
+		}
+		var finalized bytes.Buffer
+		if err := RunReviewFacadeFinalize([]string{"--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", repo,
+			"--lineage", record.State.LineageID, "--captured-results"}, &finalized); err != nil {
+			t.Fatalf("finalize selected OpenCode lineage: %v\n%s", err, finalized.String())
+		}
+		var result ReviewIntegrationFinalizeResult
+		decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, finalized.Bytes()).Result, &result)
+		if result.State != reviewtransaction.StateCorrectionRequired {
+			t.Fatalf("selected OpenCode finalize state = %q, want correction_required", result.State)
 		}
 	})
 

@@ -492,7 +492,13 @@ func TestOpenCodeReviewTransportPluginContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`gentle-ai.provider-transport/v1`, `"review", "opencode-transport"`, `const relays = new Map<string, Relay>()`, `output.args.prompt = (await relay.prompt).prompt`, `output.output = await relay.complete(output.output)`, `"tool.execute.before"`, `"tool.execute.after"`} {
+	for _, want := range []string{`gentle-ai.provider-transport/v1`, `"review", "opencode-transport"`, `RELAY_REGISTRY_KEY`, `reviewRelayRegistry()`, `output.args.prompt = (await relay.prompt).prompt`, `output.output = await registration.relay.complete(output.output)`, `"tool.execute.before"`, `"tool.execute.after"`,
+		// A refused relay start must fail the Task loudly and never launch an
+		// unbound child: the before hook poisons the Task prompt and the after
+		// hook replaces child output with the typed refusal, so a host runtime
+		// that swallows hook errors still cannot deliver an unbound child's
+		// prose as a reviewer completion.
+		`opencode_review_transport_relay_refused`, `refused.set(key, reason)`, `output.args.prompt = relayRefusedPrompt(reason)`, `output.output = relayRefusedOutput(refusal)`} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("transport plugin missing %q", want)
 		}
@@ -626,6 +632,14 @@ func TestSkillRegistryPluginContract(t *testing.T) {
 		"input.worktree",
 		"timeout: 30_000",
 		"console.error",
+		// Non-project guard: a fresh OpenCode directory can resolve to "/" or
+		// another non-project location; the plugin must skip silently instead
+		// of spawning a refresh that pollutes or fails at startup (#skill-registry-root-guard).
+		"isProjectRoot",
+		"homedir()",
+		".git",
+		".atl",
+		"console.info",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("skill-registry.ts missing %q", want)
@@ -633,6 +647,9 @@ func TestSkillRegistryPluginContract(t *testing.T) {
 	}
 	if strings.Contains(src, "exec(") {
 		t.Fatal("skill-registry.ts must use execFile, not shell exec")
+	}
+	if guardIdx, spawnIdx := strings.Index(src, "isProjectRoot"), strings.Index(src, "execFileAsync("); guardIdx == -1 || spawnIdx == -1 || guardIdx >= spawnIdx {
+		t.Fatalf("skill-registry.ts must guard before spawning; isProjectRoot@%d execFileAsync(@%d", guardIdx, spawnIdx)
 	}
 	worktreeIdx := strings.Index(src, "input.worktree")
 	directoryIdx := strings.Index(src, "input.directory")

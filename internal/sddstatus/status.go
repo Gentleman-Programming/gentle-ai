@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -406,6 +407,44 @@ func listActiveOpenSpecChanges(workspaceRoot string) ([]string, error) {
 	return changes, nil
 }
 
+// selectableOpenSpecChanges filters exploration-only directories out of the
+// auto-selection candidates (#3278 claim C). A stale sdd-explore directory
+// holding only exploration.md is not an active change: counting it made
+// selection ambiguous beside the one genuinely active change, and the SDD
+// task-failure continuation (which carries no selector) could never resolve
+// that ambiguity. Exploration-only directories stay addressable when
+// explicitly named — listActiveOpenSpecChanges still returns them — and
+// directories with no SDD artifacts at all keep their historical behavior as
+// candidates.
+func selectableOpenSpecChanges(changesDir string, changes []string) []string {
+	selectable := make([]string, 0, len(changes))
+	for _, change := range changes {
+		if explorationOnlyChangeDir(filepath.Join(changesDir, change)) {
+			continue
+		}
+		selectable = append(selectable, change)
+	}
+	return selectable
+}
+
+// explorationOnlyChangeDir reports whether the change directory's only SDD
+// artifact is an exploration artifact: exploration.md is present and none of
+// proposal.md, design.md, tasks.md, or specs/ exist. Only os.ErrNotExist
+// proves a marker absent; any other stat error makes the classification
+// unprovable, so the directory stays an active-change candidate (failing
+// toward visibility, never toward silent exclusion from selection).
+func explorationOnlyChangeDir(changeRoot string) bool {
+	if _, err := os.Stat(filepath.Join(changeRoot, "exploration.md")); err != nil {
+		return false
+	}
+	for _, marker := range []string{"proposal.md", "design.md", "tasks.md", "specs"} {
+		if _, err := os.Stat(filepath.Join(changeRoot, marker)); !errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+	}
+	return true
+}
+
 func Resolve(options ResolveOptions) (Status, error) {
 	workspaceRoot, err := resolveWorkspaceRoot(options)
 	if err != nil {
@@ -427,16 +466,30 @@ func Resolve(options ResolveOptions) (Status, error) {
 
 	changeName := strings.TrimSpace(options.ChangeName)
 	if changeName == "" {
-		switch len(activeChanges) {
+		candidates := selectableOpenSpecChanges(changesDir, activeChanges)
+		switch len(candidates) {
 		case 0:
+			if len(activeChanges) > 0 {
+				// Every directory is exploration-only. This is an OpenSpec
+				// workspace mid-exploration, not an empty one, so do not fall
+				// through to Engram: report it honestly and keep the
+				// directories addressable by explicit name.
+				return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "sdd-new", []string{
+					"No active OpenSpec changes found under openspec/changes.",
+					fmt.Sprintf(
+						"Exploration-only directories are not active changes: %s. Run `gentle-ai sdd-status <change-name> --cwd %s` to inspect one explicitly.",
+						strings.Join(activeChanges, ", "), workspaceRoot,
+					),
+				}, options.IncludeInstructions), nil
+			}
 			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 				return status, err
 			}
 			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
 		case 1:
-			changeName = activeChanges[0]
+			changeName = candidates[0]
 		default:
-			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", ambiguousChangeSelectionReasons("Change", workspaceRoot, activeChanges), options.IncludeInstructions), nil
+			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", ambiguousChangeSelectionReasons("Change", workspaceRoot, candidates), options.IncludeInstructions), nil
 		}
 	}
 
@@ -487,7 +540,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, instance)
+	runtimeStatus, runtimeAttemptTokens, repositoryRoot, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, instance)
 	var grantedRoots []string
 	if runtimeStatus != nil {
 		grantedRoots = runtimeStatus.GrantedRoots
@@ -601,11 +654,22 @@ func Resolve(options ResolveOptions) (Status, error) {
 		nextRecommended = "resolve-review"
 	}
 	var boundGate *ReviewGateState
+	legacyVerifyReportAttestationRequired := false
 	bridge := compactPreVerifyBridge{}
 	recoverable := authorityOnlyFailedReport(readText(firstPath(artifactPaths.VerifyReport)))
 	if governingRef != nil {
 		if !reviewDisabled {
 			result, reason, err := reviewtransaction.ValidateSDDReceiptRef(context.Background(), workspaceRoot, *governingRef)
+			allowReason := "explicit bound compact authority exactly matches the current repository"
+			if err == nil && result == reviewtransaction.GateScopeChanged {
+				switch classifyPostReviewVerifyReportAttestation(context.Background(), repositoryRoot, workspaceRoot, changeName, *governingRef, runtimeStatus, specCounts) {
+				case postReviewVerifyReportBound:
+					result = reviewtransaction.GateAllow
+					allowReason = "bound receipt differs only by the native-settlement-attested canonical passing verify report"
+				case postReviewVerifyReportRequired:
+					legacyVerifyReportAttestationRequired = true
+				}
+			}
 			if err == nil && result == reviewtransaction.GateAllow {
 				staleEvidence := artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale && reviewState == nil
 				if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || staleEvidence || runtimeRemediationComplete) {
@@ -616,7 +680,11 @@ func Resolve(options ResolveOptions) (Status, error) {
 						remediationState = RemediationState{}
 					}
 				}
-				boundGate = &ReviewGateState{Result: result, Reason: "explicit bound compact authority exactly matches the current repository"}
+				boundGate = &ReviewGateState{Result: result, Reason: allowReason}
+			} else if legacyVerifyReportAttestationRequired {
+				dependencies.Verify = DependencyReady
+				dependencies.Archive = DependencyBlocked
+				nextRecommended = string(PhaseVerify)
 			} else {
 				dependencies.Verify = DependencyBlocked
 				dependencies.Archive = DependencyBlocked
@@ -694,6 +762,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
 	}
+	if legacyVerifyReportAttestationRequired {
+		status.verifyRefreshReason = legacyVerifyReportAttestationInstruction(workspaceRoot, changeName)
+	}
 	if options.IncludeInstructions {
 		instructions := renderPhaseInstructions(status)
 		status.PhaseInstructions = &instructions
@@ -707,32 +778,34 @@ func Resolve(options ResolveOptions) (Status, error) {
 // attempt's own token as the caller's continuation (#2463). A non-empty
 // instance binds the read to one change-instance identity (#2563, S4b of
 // #2540) so replay projects that instance's granted roots; an empty instance
-// keeps #2557's conservative containment and projects none.
-func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName, instance string) (*RuntimeStatus, map[int]string, error) {
+// keeps #2557's conservative containment and projects none. The resolved
+// repository root rides along (empty without Git) to avoid re-deriving it.
+func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName, instance string) (*RuntimeStatus, map[int]string, string, error) {
 	// SDD status remains useful for non-Git planning fixtures and repositories.
 	// A native runtime chain cannot exist without a Git common-dir, so the
 	// absence of a repository means there is no runtime authority to embed.
-	if _, err := (reviewtransaction.SnapshotBuilder{Repo: workspaceRoot}).ResolveRepositoryRoot(ctx); err != nil {
+	repositoryRoot, err := (reviewtransaction.SnapshotBuilder{Repo: workspaceRoot}).ResolveRepositoryRoot(ctx)
+	if err != nil {
 		if workspaceHasGitMetadata(workspaceRoot) {
-			return nil, nil, fmt.Errorf("resolve Git repository for native SDD runtime authority: %w", err)
+			return nil, nil, "", fmt.Errorf("resolve Git repository for native SDD runtime authority: %w", err)
 		}
-		return nil, nil, nil
+		return nil, nil, "", nil
 	}
 	store, err := OpenRuntimeStore(ctx, workspaceRoot, changeName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open native SDD runtime authority: %w", err)
+		return nil, nil, "", fmt.Errorf("open native SDD runtime authority: %w", err)
 	}
 	if instance != "" {
 		if store, err = store.ForInstance(instance); err != nil {
-			return nil, nil, fmt.Errorf("bind native SDD runtime authority to the change instance: %w", err)
+			return nil, nil, "", fmt.Errorf("bind native SDD runtime authority to the change instance: %w", err)
 		}
 	}
 	replay, err := store.load()
 	if err != nil {
-		return nil, nil, fmt.Errorf("read native SDD runtime authority: %w", err)
+		return nil, nil, "", fmt.Errorf("read native SDD runtime authority: %w", err)
 	}
 	status := replay.Status
-	return &status, replay.AttemptTokens, nil
+	return &status, replay.AttemptTokens, repositoryRoot, nil
 }
 
 func workspaceHasGitMetadata(workspaceRoot string) bool {
@@ -953,7 +1026,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	// resurrection hazard. The Engram path therefore keeps S1's honest block
 	// (naming both exits) without a consent envelope, and its runtime read
 	// stays instance-less, projecting no granted roots (#2563).
-	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, "")
+	runtimeStatus, runtimeAttemptTokens, _, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName, "")
 	reviewState, reviewStateReason := readReviewTransaction("", artifactsByType["review/transaction"].Content)
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
@@ -1562,13 +1635,21 @@ func absOrCWD(path string) (string, error) {
 // that listed options and named no command. The list stays first because it is
 // what a human scanning the refusal wants; the commands follow because that is
 // what makes the refusal runnable.
+//
+// The selector is positional: ParseCommandArgs has no --change flag, so the
+// emitted spelling must be `gentle-ai sdd-status <change> --cwd <root>`. The
+// first shipped spelling used `--change` and every emitted command was
+// rejected by the very parser it targets (#3278, #2790), burning the
+// operator's single sanctioned observation on a syntax error. The guard test
+// in selection_continuation_test.go feeds every emitted continuation back
+// through ParseCommandArgs so the spelling cannot drift from the parser again.
 func ambiguousChangeSelectionReasons(subject, workspaceRoot string, changes []string) []string {
 	reasons := make([]string, 0, len(changes)+1)
 	reasons = append(reasons, fmt.Sprintf("%s selection is ambiguous: %s.", subject, strings.Join(changes, ", ")))
 	for _, change := range changes {
 		reasons = append(reasons, fmt.Sprintf(
-			"Run `gentle-ai sdd-status --cwd %s --change %s` to continue with %s.",
-			workspaceRoot, change, change,
+			"Run `gentle-ai sdd-status %s --cwd %s` to continue with %s.",
+			change, workspaceRoot, change,
 		))
 	}
 	return reasons
@@ -1997,6 +2078,13 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, ve
 }
 
 const runtimeRemediationVerifyRefreshInstruction = "A passing native remediation settlement completed after the persisted verification report; run fresh verification and persist a report bound after that settlement before archive."
+
+func legacyVerifyReportAttestationInstruction(workspaceRoot, changeName string) string {
+	return fmt.Sprintf(
+		"verification attestation required: persist the exact canonical passing verify-report, then run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit \"%s\" --evidence-goal \"attest final verification report\" --max-attempts 1 --max-changed-lines 20`; after state proceed, settle that token with the report's evidence_revision. This distinct current-binary settlement records the required native report digest.",
+		pathquote.Quote(workspaceRoot), changeName, finalVerifyAttestationWorkUnit,
+	)
+}
 
 func renderPhaseInstructions(status Status) PhaseInstructions {
 	change := "<unresolved>"

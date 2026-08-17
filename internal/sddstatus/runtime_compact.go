@@ -613,7 +613,7 @@ func runtimeSettleObligation(status RuntimeStatus, reviewDisabled bool) string {
 	}
 	return "this attempt's passing settle is already bound to the chain's unremediated failed verification " +
 		failed.EvidenceRevision + ": settle it passed with `--remediates-evidence-revision \"" + failed.EvidenceRevision +
-		"\"`, and with verification evidence distinct from it, over a candidate this attempt actually changed. " +
+		"\"`, and with verification evidence distinct from it, over a correction candidate that no longer matches the state that failed. " +
 		"An audited reset or an interrupted settlement between that failure and this correction does not release the " +
 		"binding — only a passing settlement that names it does."
 }
