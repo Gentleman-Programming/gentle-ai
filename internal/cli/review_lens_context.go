@@ -495,7 +495,7 @@ func reviewLensContextBlock(
 	// The budget bounds the whole delivered block, not only the evidence: at
 	// this level the block IS the reviewer's prompt, so the instruction and the
 	// result schema are part of what has to fit.
-	budget := reviewLensContextByteBudget - block.Len()
+	budget := reviewLensContextByteBudget - block.Len() - len(marker.Terminator) - 1
 	consume := func(header, footer string, body []byte) error {
 		rendered := header + "\n" + string(bytes.TrimSpace(body)) + "\n" + footer + "\n"
 		budget -= len(rendered)
