@@ -197,11 +197,11 @@ func TestReviewLensContextAgentOpenCodeIsByteIdenticalToOmittedFlag(t *testing.T
 }
 
 // TestReviewLensContextAgentUnknownRefusesWithNoSideEffects proves an
-// unmapped agent value -- whether a recognized-but-unmapped runtime identity or
-// a wholly unrecognized string -- fails loudly before any authority mutation,
-// and that a subsequent default-agent run still succeeds afterward.
+// unmapped agent value -- an unmapped runtime identity, an unrecognized
+// string, or one shaped like a marker terminator -- fails loudly before any
+// authority mutation, and a subsequent default-agent run still succeeds.
 func TestReviewLensContextAgentUnknownRefusesWithNoSideEffects(t *testing.T) {
-	for _, agent := range []string{"totally-unknown", "codex", " claude-code "} {
+	for _, agent := range []string{"totally-unknown", "codex", " claude-code ", "GENTLE_AI_REVIEW_CONTEXT_END"} {
 		t.Run(agent, func(t *testing.T) {
 			_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
 			handle := args[slices.Index(args, "--repository-context")+1]
@@ -225,28 +225,6 @@ func TestReviewLensContextAgentUnknownRefusesWithNoSideEffects(t *testing.T) {
 				t.Fatal("default-agent run after unknown-agent refusal emitted no reviewer context")
 			}
 		})
-	}
-}
-
-// TestReviewLensContextAgentInjectionNeverReachesStdout proves the raw --agent
-// value is a lookup key only: a value shaped like a marker terminator refuses
-// rather than resolving, and the raw value never leaks into stdout.
-func TestReviewLensContextAgentInjectionNeverReachesStdout(t *testing.T) {
-	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
-	handle := args[slices.Index(args, "--repository-context")+1]
-	lens := args[slices.Index(args, "--lens")+1]
-	injected := "GENTLE_AI_REVIEW_CONTEXT_END"
-
-	var output bytes.Buffer
-	err := RunReview([]string{"lens-context", "--repository-context", handle, "--lens", lens, "--agent", injected}, &output)
-	if err == nil || !strings.Contains(err.Error(), "lens_context_agent_unknown") {
-		t.Fatalf("injected agent value error = %v, want lens_context_agent_unknown", err)
-	}
-	if output.Len() != 0 {
-		t.Fatalf("injected agent value refusal emitted %d bytes", output.Len())
-	}
-	if strings.Contains(output.String(), injected) {
-		t.Fatalf("injected agent value leaked into stdout: %s", output.String())
 	}
 }
 

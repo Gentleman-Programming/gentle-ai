@@ -39,10 +39,7 @@ var reviewerContextMarkers = map[string]ReviewerContextMarker{
 }
 
 // ReviewerContextMarkerFor resolves the header/terminator pair a caller's
-// generated reviewer expects, keyed by the exact agent identity string. It
-// fails closed for any value with no table entry rather than falling back to
-// the generic marker: a runtime this release has never generated a reviewer
-// for gets no guessed marker at all.
+// generated reviewer expects, keyed by the exact agent identity string.
 func ReviewerContextMarkerFor(agent string) (ReviewerContextMarker, bool) {
 	marker, found := reviewerContextMarkers[agent]
 	return marker, found

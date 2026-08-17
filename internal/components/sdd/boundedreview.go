@@ -202,10 +202,8 @@ func mustReviewerContextMarker(agent string) reviewtransaction.ReviewerContextMa
 	return marker
 }
 
-// claudeReviewerContextMarker and openCodeReviewerContextMarker are sourced
-// from the single shared resolver in reviewtransaction, so this file and
-// internal/cli/review_lens_context.go can never carry two independently
-// drifting copies of the same marker pair.
+// Sourced from the single shared resolver so this file and
+// internal/cli/review_lens_context.go can never drift apart.
 var claudeReviewerContextMarker = mustReviewerContextMarker("claude-code")
 var openCodeReviewerContextMarker = mustReviewerContextMarker("opencode")
 
