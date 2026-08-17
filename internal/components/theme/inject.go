@@ -86,18 +86,40 @@ var gentlemanCuteOpenCodeTheme = openCodeTheme{
 	),
 }
 
+func marshalTheme(value any) ([]byte, error) {
+	content, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(content, '\n'), nil
+}
+
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	settingsPath := adapter.SettingsPath(homeDir)
-	if settingsPath == "" {
+	if adapter.Agent() != model.AgentOpenCode {
 		return InjectionResult{}, nil
 	}
 
-	writeResult, err := mergeJSONFile(settingsPath, themeOverlayJSON)
+	configDir := adapter.GlobalConfigDir(homeDir)
+	tuiPath := filepath.Join(configDir, "tui.json")
+	themePath := filepath.Join(configDir, "themes", "gentleman.json")
+	themeContent, err := marshalTheme(gentlemanOpenCodeTheme)
 	if err != nil {
-		return InjectionResult{}, err
+		return InjectionResult{}, fmt.Errorf("marshal OpenCode theme: %w", err)
 	}
 
-	return InjectionResult{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
+	themeResult, err := filemerge.WriteFileAtomic(themePath, themeContent, 0o644)
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("write OpenCode theme: %w", err)
+	}
+	tuiResult, err := mergeJSONFile(tuiPath, themeOverlayJSON)
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("merge OpenCode tui theme: %w", err)
+	}
+
+	return InjectionResult{
+		Changed: themeResult.Changed || tuiResult.Changed,
+		Files:   []string{tuiPath, themePath},
+	}, nil
 }
 
 // InjectVisualThemes writes the managed visual theme assets without selecting one
@@ -118,11 +140,10 @@ func InjectVisualThemes(homeDir string, adapter agents.Adapter) (InjectionResult
 
 	result := InjectionResult{Files: make([]string, 0, len(paths))}
 	for i, path := range paths {
-		content, err := json.MarshalIndent(values[i], "", "  ")
+		content, err := marshalTheme(values[i])
 		if err != nil {
 			return InjectionResult{}, fmt.Errorf("marshal visual theme %q: %w", filepath.Base(path), err)
 		}
-		content = append(content, '\n')
 		writeResult, err := filemerge.WriteFileAtomic(path, content, 0o644)
 		if err != nil {
 			return InjectionResult{}, err

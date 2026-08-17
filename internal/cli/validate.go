@@ -47,7 +47,7 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	}
 	selection.Preset = preset
 
-	components, err := normalizeComponents(flags.Components, selection.Preset, selection.Persona)
+	components, err := normalizeComponents(flags.Components, selection.Preset, selection.Persona, selection.Agents)
 	if err != nil {
 		return InstallInput{}, err
 	}
@@ -121,9 +121,9 @@ func normalizePreset(value string) (model.PresetID, error) {
 	}
 }
 
-func normalizeComponents(values []string, preset model.PresetID, persona model.PersonaID) ([]model.ComponentID, error) {
+func normalizeComponents(values []string, preset model.PresetID, persona model.PersonaID, agents []model.AgentID) ([]model.ComponentID, error) {
 	if len(values) == 0 {
-		return componentsForPreset(preset, persona), nil
+		return componentsForPreset(preset, persona, agents...), nil
 	}
 
 	allowed := map[model.ComponentID]struct{}{}
@@ -178,8 +178,8 @@ func normalizeSDDMode(value string) (model.SDDModeID, error) {
 	}
 }
 
-func componentsForPreset(preset model.PresetID, persona model.PersonaID) []model.ComponentID {
-	return model.ComponentsForPreset(preset, persona)
+func componentsForPreset(preset model.PresetID, persona model.PersonaID, agents ...model.AgentID) []model.ComponentID {
+	return model.ComponentsForPreset(preset, persona, agents...)
 }
 
 func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentID {
