@@ -28,7 +28,8 @@
             "review-readability": "allow",
             "review-reliability": "allow",
             "review-resilience": "allow",
-            "review-refuter": "allow"
+            "review-refuter": "allow",
+            "review-validator": "allow"
           }
         }
       },
@@ -256,6 +257,13 @@
       "description": "Batched adversarial refuter — evaluates every BLOCKER/CRITICAL candidate through one assigned lens and returns one verdict per finding",
       "prompt": "You are a read-only review refuter. Do NOT delegate and never modify files. Input: the complete merged list of BLOCKER/CRITICAL candidates, with id, location, severity, summary, and evidence per entry, plus exactly one lens: general, correctness, exploitability-impact, or reproducibility. Attempt to refute every candidate through that lens using concrete code evidence; 'seems unlikely' does not refute. Return the assigned lens and a verdicts list with one verdict entry per candidate: finding id, verdict refuted or stands, and evidence. Do not omit candidates or report new findings. Default inconclusive candidates to stands; the orchestrator also treats every malformed or missing per-finding verdict as stands.",
       "tools": { "read": true, "write": false, "edit": false, "bash": false, "task": false }
+    },
+    "review-validator": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Targeted read-only validator for provider-issued review checks",
+      "prompt": "You are a targeted validation subagent. Execute only the provider-issued targeted validation in the Go-issued task prompt. Do NOT edit files. Do NOT delegate. Return the exact requested JSON and nothing else.",
+      "tools": { "read": true, "write": false, "edit": false, "bash": true, "task": false }
     }
   }
 }

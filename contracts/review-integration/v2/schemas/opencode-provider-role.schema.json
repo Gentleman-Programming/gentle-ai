@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/review-integration/v2/schemas/opencode-provider-role.schema.json",
+  "title": "Gentle AI OpenCode transport provider-role capture acknowledgement",
+  "description": "The gentle-ai.opencode-review-provider-role/v1 envelope the OpenCode review transport returns after natively capturing one provider role result (refuter or targeted-validator). Derived from internal/cli/review_opencode_transport.go's openCodeProviderRoleResultEnvelope.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "role", "captured"],
+  "properties": {
+    "schema": {"const": "gentle-ai.opencode-review-provider-role/v1"},
+    "role": {"enum": ["refuter", "targeted-validator"]},
+    "captured": {"const": true}
+  }
+}

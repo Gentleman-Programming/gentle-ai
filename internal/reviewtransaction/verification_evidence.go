@@ -86,7 +86,17 @@ func NewVerificationEvidenceRecord(lineageID, authorityRevision string, target S
 		Schema: VerificationEvidenceRecordSchema, Version: VerificationEvidenceRecordVersion,
 		LineageID: lineageID, AuthorityRevision: authorityRevision, TargetIdentity: target.Identity,
 		CandidateTree: target.CandidateTree, PathsDigest: target.PathsDigest,
-		Paths: append([]string(nil), target.Paths...), LedgerIDs: append([]string(nil), target.LedgerIDs...),
+		// LedgerIDs stays a JSON array even on the clean path (no correction,
+		// so no ledger): the published verification-evidence/v2 schema types
+		// it as an array, and a nil slice here marshaled as `null` (cross-lane
+		// battery finding). This also shifts the record DIGEST domain: a
+		// ledger-free record now canonicalizes as `"ledger_ids":[]`, so this
+		// binary's digest for the same logical record differs from the
+		// null-form digest an older binary produced. That is safe because
+		// each digest validates over its OWN record's persisted canonical
+		// bytes: legacy null-form records round-trip byte-identical through
+		// the nil slice and keep their original digests.
+		Paths: append([]string(nil), target.Paths...), LedgerIDs: append([]string{}, target.LedgerIDs...),
 		RawPayloadSHA256: finalVerificationPayloadDigest(payload), RawPayloadBytes: int64(len(payload)), Outcome: outcome,
 	}
 	record.RecordDigest = verificationEvidenceRecordDigest(record)

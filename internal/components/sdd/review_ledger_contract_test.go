@@ -154,6 +154,7 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 			}
 			agentsMap := root["agent"].(map[string]any)
 			expandOpenCodeBoundedReviewAgents(agentsMap)
+			assertOpenCodeTargetedValidator(t, path, agentsMap)
 			for _, name := range []string{"review-risk", "review-readability", "review-reliability", "review-resilience"} {
 				agent := agentsMap[name].(map[string]any)
 				prompt := agent["prompt"].(string)
@@ -179,6 +180,58 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 			assertNoReviewerLifecycleInstructions(t, path+" refuter", refuterPrompt)
 			assertOpenCodeReadOnlyTools(t, path+" refuter", refuter["tools"].(map[string]any), true, false)
 		})
+	}
+}
+
+func assertOpenCodeTargetedValidator(t *testing.T, label string, agents map[string]any) {
+	t.Helper()
+
+	orchestrator, ok := agents["gentle-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s missing gentle-orchestrator", label)
+	}
+	permission, ok := orchestrator["permission"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s gentle-orchestrator permission = %#v, want object", label, orchestrator["permission"])
+	}
+	task, ok := permission["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s gentle-orchestrator permission.task = %#v, want object", label, permission["task"])
+	}
+	allowlist, ok := task["__replace__"].(map[string]any)
+	if !ok || allowlist["review-validator"] != "allow" {
+		t.Fatalf("%s gentle-orchestrator does not allow task review-validator: %#v", label, task)
+	}
+
+	validator, ok := agents["review-validator"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s missing review-validator subagent", label)
+	}
+	if validator["mode"] != "subagent" || validator["hidden"] != true {
+		t.Fatalf("%s review-validator visibility = mode:%#v hidden:%#v, want hidden subagent", label, validator["mode"], validator["hidden"])
+	}
+	prompt, ok := validator["prompt"].(string)
+	if !ok {
+		t.Fatalf("%s review-validator prompt = %#v, want string", label, validator["prompt"])
+	}
+	for _, required := range []string{"provider-issued targeted validation", "Do NOT edit", "Do NOT delegate", "exact requested JSON"} {
+		if !strings.Contains(prompt, required) {
+			t.Errorf("%s review-validator prompt missing %q: %s", label, required, prompt)
+		}
+	}
+
+	tools, ok := validator["tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s review-validator tools = %#v, want object", label, validator["tools"])
+	}
+	wantTools := map[string]bool{"read": true, "bash": true, "write": false, "edit": false, "task": false}
+	if len(tools) != len(wantTools) {
+		t.Errorf("%s review-validator tool count = %d, want %d: %#v", label, len(tools), len(wantTools), tools)
+	}
+	for name, want := range wantTools {
+		if got, exists := tools[name]; !exists || got != want {
+			t.Errorf("%s review-validator tool %q = %#v, want %t", label, name, got, want)
+		}
 	}
 }
 

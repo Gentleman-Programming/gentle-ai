@@ -16,13 +16,13 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
 	want := map[string]string{
 		"fixtures/capabilities-v1.4.fixture.json": "84e0db457b76b97b35c2be772dfc647f9eab66810ea98f64fed85645c3c266ba",
-		"fixtures/start.fixture.json":             "f369160ac26eb3427b57de2dd01c9d8c81e51c8a2bd546446780129d31b1945b",
+		"fixtures/start.fixture.json":             "3b963b221cd1560eb8872cbabbb5407096f593ced2f13eb9cb06eb61e4cca4d1",
 		// issue #2659: start-v2/status-v2 embed a freshly minted target_identity,
 		// and the purified identity domain legitimately changed that hash for
 		// every new snapshot. Deliberate, not drift.
-		"fixtures/start-v2.fixture.json":         "cc229f42781add54a86d904e913bb72e1373f04e7520a28fb3d245674bf703b5",
+		"fixtures/start-v2.fixture.json":         "2699660832c0d944184d5d314f08774ab9a02f5b8a7a4c2a07983440e0e346ad",
 		"fixtures/status.fixture.json":           "555054d8046a896162995dcb117752f9cd1ef903fb9ebaad29af1b7e7f319bb3",
-		"fixtures/status-v2.fixture.json":        "d0dbcddc5bf8947de314f3a9e938b094627b0f01ab3bfaa10a79b3b27fda7a76",
+		"fixtures/status-v2.fixture.json":        "33c5032dcd5d916b4bff73781495640da83893b2f2b334465cbb40c18e1b85f4",
 		"fixtures/status-ambiguous.fixture.json": "ee695fd58ba72adfb3b51dfd16432a177498173a45bfcb594d6bdc53bfa32e6e",
 		"fixtures/status-corrupted.fixture.json": "4cfc0048c28a39cec8a32fecfaad66e56e5c1248263ceb4ce66b6717981880b2",
 		"fixtures/status-recover.fixture.json":   "714f762f72380ce93d567626cafbaa536ab3aae02af73d3d40ca123f1f30d8b0",
@@ -53,7 +53,7 @@ func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 	want := map[string]string{
 		"fixtures/capabilities.fixture.json": "17c150d851c15b3f0c20d18c2e2741eb2232ffa24f35aa71d6d30e90a85e42b7",
 		"fixtures/consent.fixture.json":      "203cc96d5c29ba0f27b5c4db04c2e88566e0a923d3a0cdb317f78d9065349075",
-		"fixtures/status.fixture.json":       "d5438578f2969f17635fecea94c7ef46d14c78fa668e50df48c4254254d5e935",
+		"fixtures/status.fixture.json":       "4cd77906bacdca35d8f99773de147211d2b05fe34dd1b999011ead09e84be7a5",
 		"schemas/capabilities.schema.json":   "7ab061ed27bd3b929d6033cc20f56097e851f4454ca14a815255748b50191248",
 		"schemas/consent.schema.json":        "b2b4465338497f11927de91cb2e5da12b6cb4a1039afe05aebe1abbf53b21858",
 		"schemas/status.schema.json":         "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
@@ -79,8 +79,17 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 		// Deliberate, not drift.
 		"fixtures/consent-v3.fixture.json":      "feb1dc7705f7da6490698ef48021bb7730de154ae23ec73d033d8d96fa996a21",
 		"schemas/capabilities-v2.1.schema.json": "9ede8ebbe3e169cf6ca4f4a6882c9c4e588a6d1073d8e22a155649cd41d38cd0",
-		"schemas/consent-v3.schema.json":        "80915f5f4f43a494826253d1e7251fc463989f41d2cf163a6a52a8b4328c023c",
-		"schemas/status.schema.json":            "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
+		// Cross-lane battery conformance fix: the schema pinned the choice
+		// invocations to `--agent claude-code`, but the live emitter omits the
+		// agent token when the caller declared no runtime (the pinned fixture
+		// itself carries no --agent), and #2676 binds the declared runtime
+		// (claude-code, opencode, codex) when there is one. The schema now
+		// follows the emitter. The agent enum also admits "pi": the Pi host
+		// relay drives consent with its own declared runtime identity, which
+		// the emitter legitimately publishes once the relay handshake is
+		// declared. Deliberate, not drift.
+		"schemas/consent-v3.schema.json": "f56b1809c1bff21713795ef37a095c6ecfdbbb3cf928bcf604b8d5f33be3dea5",
+		"schemas/status.schema.json":     "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -98,7 +107,43 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/status-v5.fixture.json": "1a6d002c9691c87e50687f8d5f3e59013e9229d93004028f746bfcda7947d5fc",
-		"schemas/status-v5.schema.json":   "fac52b56d7ec927e3b7e0f41d5af2ea4c2a221e4912b0b4d4f70485d3bf2b60b",
+		// Cross-lane battery conformance fix: live negotiated STATUS publishes
+		// the top-level repository_context reference (review_status_contract.go's
+		// ReviewTargetStatusResult, populated since the recovered-units merges),
+		// which the schema did not admit; and targeted_validation_required also
+		// arrives as the provider-task (external.run_provider_role) and pi
+		// host-relay (review.capture-validation) shapes, which the schema
+		// rejected as missing the generic submission; and the negotiated-route
+		// disposition preview (ReviewRepairDispositionProviderInputs) is real
+		// optional emitter output the strict schema must admit; and the pi
+		// host-relay materialize path renders the reviewer_result collect
+		// input with a capture-result submission descriptor, which the
+		// submission oneOf and the no-submission allOf rule both rejected.
+		// Deliberate, not drift.
+		"schemas/status-v5.schema.json": "4dd17e863725edb20e9cbb85d9614dfdc07ef6c9257aa789f4c9e8835400483e",
+	}
+	for name, expected := range want {
+		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		if actual := hex.EncodeToString(digest[:]); actual != expected {
+			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
+		}
+	}
+}
+
+// TestReviewProviderArtifactConformanceSchemasArePinned pins the schemas the
+// cross-lane battery conformance work first published: the delivery gate
+// result (gentle-ai.review-gate-result/v1) and the OpenCode provider-role
+// capture acknowledgement (gentle-ai.opencode-review-provider-role/v1). Both
+// envelopes already shipped on the wire; only their published schemas are new.
+func TestReviewProviderArtifactConformanceSchemasArePinned(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
+	want := map[string]string{
+		"schemas/gate-result.schema.json":            "38aa37bdea8bdc8ea664d888f7c7217beac7e34c43a95a3ed7d9354bf76709ed",
+		"schemas/opencode-provider-role.schema.json": "c6b9f216f89c044f8e844b55e7200114850cfbc16642bca0677f30a399d8aa9b",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -220,6 +265,8 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "failure.schema.json", id: ReviewIntegrationFailureSchemaIDV2},
 		{name: "operation.schema.json", id: ReviewIntegrationOperationSchemaIDV2},
 		{name: "repair.schema.json", id: ReviewIntegrationRepairSchemaIDV2},
+		{name: "gate-result.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/gate-result.schema.json"},
+		{name: "opencode-provider-role.schema.json", id: "https://gentle-ai.dev/contracts/review-integration/v2/schemas/opencode-provider-role.schema.json"},
 	}
 	v2Documents := make(map[string]map[string]any, len(v2Schemas))
 	for _, tt := range v2Schemas {
