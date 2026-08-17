@@ -372,6 +372,8 @@ type RuntimeStatus struct {
 type runtimeOwnership struct {
 	objectives map[string]*runtimeObjectiveOwnership
 	active     map[int]string
+	parents    map[string]string
+	roots      map[string]bool
 	current    string
 }
 
@@ -381,7 +383,7 @@ type runtimeObjectiveOwnership struct {
 }
 
 func newRuntimeOwnership() runtimeOwnership {
-	return runtimeOwnership{objectives: map[string]*runtimeObjectiveOwnership{}, active: map[int]string{}}
+	return runtimeOwnership{objectives: map[string]*runtimeObjectiveOwnership{}, active: map[int]string{}, parents: map[string]string{}, roots: map[string]bool{}}
 }
 
 func (status *RuntimeStatus) initializeRuntimeOwnership() {
@@ -392,6 +394,7 @@ func (status *RuntimeStatus) initializeRuntimeOwnership() {
 	if status.Objective != nil {
 		status.ownership.current = status.Objective.ID
 		status.ownership.objectives[status.Objective.ID] = &runtimeObjectiveOwnership{objective: status.Objective}
+		status.ownership.roots[status.Objective.ID] = true
 	}
 	if status.ActiveAttempt != nil && status.Objective != nil {
 		status.ownership.active[status.ActiveAttempt.Ordinal] = status.Objective.ID
@@ -471,6 +474,10 @@ func (status *RuntimeStatus) materializeRuntimeOwnership() {
 }
 
 func (status *RuntimeStatus) setRuntimeObjective(objective *RuntimeObjective) {
+	status.setRuntimeObjectiveWithParent(objective, "")
+}
+
+func (status *RuntimeStatus) setRuntimeObjectiveWithParent(objective *RuntimeObjective, parent string) {
 	status.initializeRuntimeOwnership()
 	if objective == nil {
 		status.ownership.current = ""
@@ -479,6 +486,13 @@ func (status *RuntimeStatus) setRuntimeObjective(objective *RuntimeObjective) {
 	}
 	status.ownership.current = objective.ID
 	status.ownership.objectives[objective.ID] = &runtimeObjectiveOwnership{objective: objective}
+	if parent != "" {
+		status.ownership.parents[objective.ID] = parent
+		delete(status.ownership.roots, objective.ID)
+	} else {
+		delete(status.ownership.parents, objective.ID)
+		status.ownership.roots[objective.ID] = true
+	}
 	status.materializeRuntimeOwnership()
 }
 
@@ -992,7 +1006,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		// honest interrupted settlement between the failure and its correction
 		// is an audit record, not a semantic successor, so neither severs the
 		// binding; the first passed settlement after the failure does.
-		chainFailedAttempt, chainHasFailedEvidence := runtimeChainFailedAttempt(status.Attempts)
+		chainFailedAttempt, chainHasFailedEvidence := runtimeLineageFailedAttempt(status)
 		chainFailedEvidence := chainFailedAttempt.EvidenceRevision
 		if unmanagedRemediation {
 			if !store.ReviewDisabled {
@@ -1011,7 +1025,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				// slice already repaired it. Blaming their input sent the
 				// reporter looking for authority to guess at; the state is what
 				// changed, and the exit is to stop claiming a remediation.
-				if discharged, ordinal, ok := runtimeDischargedFailure(status.Attempts, request.RemediatesEvidenceRevision); ok {
+				if discharged, ordinal, ok := runtimeLineageDischargedFailure(status, request.RemediatesEvidenceRevision); ok {
 					return runtimeRecord{}, runtimeDischargedFailureRefusal(discharged, ordinal)
 				}
 				// No by-design marker: this names a runnable continuation inline.
@@ -2002,6 +2016,9 @@ func (store RuntimeStore) loadRevision(head string) (runtimeReplay, error) {
 			return runtimeReplay{}, fmt.Errorf("replay SDD runtime revision %s: %w", entry.revision, err)
 		}
 	}
+	if err := replay.Status.validateRuntimeLineage(); err != nil {
+		return runtimeReplay{}, fmt.Errorf("replay SDD runtime lineage: %w", err)
+	}
 	if head != "" && replay.Status.Revision != head {
 		return runtimeReplay{}, errors.New("SDD runtime HEAD does not equal replayed revision")
 	}
@@ -2143,12 +2160,16 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 		if event.Ordinal != replay.Status.NextOrdinal || generation != replay.Status.ObjectiveGeneration+1 || !validObjectiveID {
 			return errors.New("initial objective identity or ordinal is invalid")
 		}
-		replay.Status.setRuntimeObjective(&RuntimeObjective{
+		parent := ""
+		if reset := replay.Status.LastReset; reset != nil && reset.Revision == record.PreviousRevision {
+			parent = reset.PreviousObjectiveID
+		}
+		replay.Status.setRuntimeObjectiveWithParent(&RuntimeObjective{
 			ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 			InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree,
 			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
 			ItemID: event.ItemID, ItemEditRoots: event.ItemEditRoots,
-		})
+		}, parent)
 		replay.Status.ObjectiveGeneration = generation
 	} else {
 		objective := replay.Status.runtimeObjective()
@@ -2257,11 +2278,11 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 	if generation != replay.Status.ObjectiveGeneration+1 || event.ObjectiveID != expectedObjectiveID {
 		return errors.New("objective rescope identity is invalid") // refusal:by-design world-action: the successor identity is derived deterministically at publication, so a mismatch is a mutated record and the exit is restoring the store
 	}
-	replay.Status.setRuntimeObjective(&RuntimeObjective{
+	replay.Status.setRuntimeObjectiveWithParent(&RuntimeObjective{
 		ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 		InitialCandidateIdentity: event.RescopeCandidateIdentity, InitialCandidateTree: event.RescopeCandidateTree,
 		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
-	})
+	}, event.PreviousObjectiveID)
 	replay.Status.ObjectiveGeneration = generation
 	replay.Status.EvidenceRevision = ""
 	replay.Status.DecisionRequired = false
@@ -2375,7 +2396,12 @@ func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record run
 	replay.Status.CumulativeChangedLines = 0
 	replay.Status.EvidenceRevision = ""
 	replay.Status.Complete = false
-	return applyRuntimeBeginEvent(replay, revision, record)
+	if err := applyRuntimeBeginEvent(replay, revision, record); err != nil {
+		return err
+	}
+	replay.Status.ownership.parents[record.Begin.ObjectiveID] = objective.ID
+	delete(replay.Status.ownership.roots, record.Begin.ObjectiveID)
+	return nil
 }
 
 func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, unmanagedRemediation bool) error {
@@ -2398,7 +2424,7 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		// from the immutable chain, so replayed corrections recorded across an
 		// audited reset stay valid. The chain walk requires a settled failed
 		// predecessor, which subsumes the former len(Attempts) < 2 conjunct.
-		chainFailedAttempt, chainHasFailedEvidence := runtimeChainFailedAttempt(replay.Status.Attempts)
+		chainFailedAttempt, chainHasFailedEvidence := runtimeLineageFailedAttempt(replay.Status)
 		// #2621 lockstep twin: an audited reset or rescope that terminated the
 		// failing objective against these exact bytes authorizes one evidence-only
 		// retry, so a replayed correction may leave the candidate unchanged.
@@ -3342,6 +3368,130 @@ func runtimeChainFailedAttempt(attempts []RuntimeAttempt) (RuntimeAttempt, bool)
 		}
 	}
 	return RuntimeAttempt{}, false
+}
+
+// runtimeLineageFailedAttempt derives the one unresolved remediation obligation
+// visible to the current objective. Reset, rescope, and advance successors keep
+// their predecessor lineage; unrelated objectives never enter this set.
+func runtimeLineageFailedAttempt(status RuntimeStatus) (RuntimeAttempt, bool) {
+	lineage, ok := runtimeObjectiveLineage(status)
+	if !ok {
+		return RuntimeAttempt{}, false
+	}
+	var failed RuntimeAttempt
+	for _, attempt := range status.Attempts {
+		if !lineage[attempt.ObjectiveID] {
+			continue
+		}
+		switch attempt.Outcome {
+		case AttemptFailed:
+			failed = attempt
+		case AttemptPassed:
+			if failed.EvidenceRevision != "" && attempt.RemediatesEvidenceRevision == failed.EvidenceRevision {
+				failed = RuntimeAttempt{}
+			}
+		}
+	}
+	return failed, failed.EvidenceRevision != ""
+}
+
+func runtimeObjectiveLineage(status RuntimeStatus) (map[string]bool, bool) {
+	objective := status.runtimeObjective()
+	if objective == nil {
+		if status.ownership.objectives == nil || status.LastReset == nil {
+			return nil, false
+		}
+		owner := status.ownership.objectives[status.LastReset.PreviousObjectiveID]
+		if owner == nil || owner.objective == nil {
+			return nil, false
+		}
+		objective = owner.objective
+	}
+	if status.ownership.objectives == nil {
+		return map[string]bool{objective.ID: true}, true
+	}
+	if status.validateRuntimeLineage() != nil {
+		return nil, false
+	}
+	lineage := map[string]bool{}
+	for id := objective.ID; ; {
+		lineage[id] = true
+		if status.ownership.roots[id] {
+			return lineage, true
+		}
+		id = status.ownership.parents[id]
+	}
+}
+
+func (status RuntimeStatus) validateRuntimeLineage() error {
+	if status.ownership.objectives == nil {
+		return nil
+	}
+	for start := range status.ownership.objectives {
+		seen := map[string]bool{}
+		for id := start; ; {
+			if seen[id] || status.ownership.objectives[id] == nil {
+				return errors.New("runtime objective lineage is contradictory") // refusal:by-design world-action: immutable replay ancestry disagrees with its own transition records and requires authority restoration
+			}
+			seen[id] = true
+			if status.ownership.roots[id] {
+				break
+			}
+			parent, ok := status.ownership.parents[id]
+			if !ok || parent == "" {
+				return errors.New("runtime objective lineage is incomplete") // refusal:by-design world-action: immutable replay ancestry is missing a required transition and requires authority restoration
+			}
+			id = parent
+		}
+	}
+	return nil
+}
+
+func runtimeLineageFailedEvidence(status RuntimeStatus) (string, bool) {
+	failed, ok := runtimeLineageFailedAttempt(status)
+	return failed.EvidenceRevision, ok
+}
+
+func runtimeLineageDischargedFailure(status RuntimeStatus, named string) (string, int, bool) {
+	if named == "" {
+		return "", 0, false
+	}
+	lineage, ok := runtimeObjectiveLineage(status)
+	if !ok {
+		return "", 0, false
+	}
+	for _, attempt := range status.Attempts {
+		if lineage[attempt.ObjectiveID] && attempt.Outcome == AttemptPassed && attempt.RemediatesEvidenceRevision == named {
+			return named, attempt.Ordinal, true
+		}
+	}
+	return "", 0, false
+}
+
+func runtimeLineageCorrection(status RuntimeStatus) (RuntimeAttempt, RuntimeAttempt, bool) {
+	objective := status.runtimeObjective()
+	lineage, ok := runtimeObjectiveLineage(status)
+	if !ok {
+		return RuntimeAttempt{}, RuntimeAttempt{}, false
+	}
+	var failed RuntimeAttempt
+	for _, attempt := range status.Attempts {
+		if !lineage[attempt.ObjectiveID] {
+			continue
+		}
+		if attempt.Outcome == AttemptFailed {
+			failed = attempt
+			continue
+		}
+		if attempt.Outcome == AttemptPassed && failed.EvidenceRevision != "" &&
+			attempt.RemediatesEvidenceRevision == failed.EvidenceRevision {
+			if attempt.ObjectiveID == objective.ID {
+				return failed, attempt, true
+			}
+			failed = RuntimeAttempt{}
+		}
+	}
+	return RuntimeAttempt{}, RuntimeAttempt{}, false
 }
 
 // runtimeEvidenceOnlyRetryAuthorized reports whether an audited reset or rescope

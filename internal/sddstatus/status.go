@@ -848,14 +848,12 @@ func nativeRuntimeCompletesRemediation(runtimeStatus *RuntimeStatus, attemptToke
 // record Finish admits only while review authority is disabled: a direct failed
 // attempt followed by a changed, distinct-evidence correction with no binding.
 func nativeRuntimeCompletedUnmanagedCorrection(runtimeStatus *RuntimeStatus) bool {
-	if runtimeStatus == nil || runtimeStatus.Binding != nil || runtimeStatus.Receipt != nil || len(runtimeStatus.Attempts) < 2 {
+	if runtimeStatus == nil || runtimeStatus.Binding != nil || runtimeStatus.Receipt != nil {
 		return false
 	}
-	correction := runtimeStatus.Attempts[len(runtimeStatus.Attempts)-1]
-	failed := runtimeStatus.Attempts[len(runtimeStatus.Attempts)-2]
-	return failed.Outcome == AttemptFailed && correction.Outcome == AttemptPassed &&
-		correction.RemediatesEvidenceRevision != "" && correction.RemediatesEvidenceRevision == failed.EvidenceRevision &&
-		correction.EvidenceRevision != "" && correction.EvidenceRevision == runtimeStatus.EvidenceRevision &&
+	failed, correction, ok := runtimeLineageCorrection(*runtimeStatus)
+	return ok && correction.EvidenceRevision != "" && correction.RemediatesEvidenceRevision == failed.EvidenceRevision &&
+		correction.EvidenceRevision == runtimeStatus.EvidenceRevision &&
 		correction.FinishCandidateIdentity != correction.BeginCandidateIdentity && correction.FinishCandidateTree != correction.BeginCandidateTree
 }
 
@@ -2157,7 +2155,7 @@ func nativeRuntimeInstructions(status Status, change string) []string {
 			Status: *runtime, AttemptTokens: status.runtimeAttemptTokens,
 		})
 		launchable := !terminal || readiness.Reason == CompactBlockActiveAttempt
-		chainEvidence, chainHasFailedEvidence := runtimeChainFailedEvidence(runtime.Attempts)
+		chainEvidence, chainHasFailedEvidence := runtimeLineageFailedEvidence(*runtime)
 		switch {
 		case chainHasFailedEvidence && runtime.runtimeObjective() != nil && launchable:
 			objective := runtime.runtimeObjective()

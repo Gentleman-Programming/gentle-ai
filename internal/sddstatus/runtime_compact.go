@@ -164,6 +164,9 @@ type runtimeReadinessInput struct {
 // Complete or DecisionRequired and clears ActiveAttempt in both branches, so
 // checking Complete first is not a precedence choice among reachable states.
 func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
+	if in.Status.validateRuntimeLineage() != nil {
+		return compactBlocked(CompactBlockCorruptAuthority, ""), true
+	}
 	active := in.Status.runtimeActiveAttempt()
 	activeToken := ""
 	if active != nil {
@@ -321,7 +324,7 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		ProcessEvidence: request.ProcessEvidence,
 	}
 	explicitSuccessor := request.SuccessorLineageID != ""
-	failedEvidence, _ := runtimeChainFailedEvidence(status.Attempts)
+	failedEvidence, _ := runtimeLineageFailedEvidence(status)
 	if request.RemediatesEvidenceRevision != "" && failedEvidence != request.RemediatesEvidenceRevision {
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}
@@ -369,7 +372,7 @@ func (store RuntimeStore) HandoffCompact(ctx context.Context, request CompactHan
 // stays runtimeReadiness's question alone -- this reads only the immutable
 // attempt chain.
 func unmanagedRemediationSettleable(status RuntimeStatus, failedEvidence string) bool {
-	chainEvidence, chainHasFailedEvidence := runtimeChainFailedEvidence(status.Attempts)
+	chainEvidence, chainHasFailedEvidence := runtimeLineageFailedEvidence(status)
 	return chainHasFailedEvidence && failedEvidence != "" && chainEvidence == failedEvidence
 }
 
@@ -652,7 +655,7 @@ func runtimeSettleObligation(status RuntimeStatus, reviewDisabled bool) string {
 	if !reviewDisabled || status.Binding != nil {
 		return ""
 	}
-	failed, ok := runtimeChainFailedAttempt(status.Attempts)
+	failed, ok := runtimeLineageFailedAttempt(status)
 	if !ok || failed.EvidenceRevision == "" {
 		return ""
 	}

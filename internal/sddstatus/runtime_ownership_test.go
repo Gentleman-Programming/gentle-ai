@@ -110,3 +110,100 @@ func TestRuntimeOwnershipRetainsSingleActiveAdmission(t *testing.T) {
 		t.Fatalf("serialized ownership = %#v, %v", status, err)
 	}
 }
+
+func TestRuntimeLineageFailedEvidenceScopesAndDischargesObligations(t *testing.T) {
+	status := RuntimeStatus{ownership: newRuntimeOwnership()}
+	objectiveA := &RuntimeObjective{ID: "objective-a"}
+	objectiveB := &RuntimeObjective{ID: "objective-b"}
+	status.setRuntimeObjective(objectiveA)
+	status.setRuntimeObjective(objectiveB)
+	failed := RuntimeAttempt{Ordinal: 1, ObjectiveID: objectiveA.ID, Outcome: AttemptFailed, EvidenceRevision: runtimeTestHash('a')}
+	status.Attempts = []RuntimeAttempt{failed}
+
+	for _, tt := range []struct {
+		name     string
+		parent   string
+		attempts []RuntimeAttempt
+		want     string
+	}{
+		{name: "unrelated objective cannot inherit", want: ""},
+		{name: "reset successor inherits", parent: objectiveA.ID, want: failed.EvidenceRevision},
+		{name: "explicit correction discharges once", parent: objectiveA.ID, attempts: []RuntimeAttempt{{Ordinal: 2, ObjectiveID: objectiveB.ID, Outcome: AttemptPassed, RemediatesEvidenceRevision: failed.EvidenceRevision}}, want: ""},
+		{name: "unknown parent fails closed", parent: "missing", want: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			delete(status.ownership.parents, objectiveB.ID)
+			status.ownership.roots[objectiveB.ID] = true
+			if tt.parent != "" {
+				status.ownership.parents[objectiveB.ID] = tt.parent
+				delete(status.ownership.roots, objectiveB.ID)
+			}
+			status.Attempts = append([]RuntimeAttempt{failed}, tt.attempts...)
+			got, ok := runtimeLineageFailedEvidence(status)
+			if got != tt.want || ok != (tt.want != "") {
+				t.Fatalf("lineage failed evidence = %q, %v; want %q", got, ok, tt.want)
+			}
+			if tt.parent == "" && unmanagedRemediationSettleable(status, failed.EvidenceRevision) {
+				t.Fatal("unrelated objective accepted predecessor remediation evidence")
+			}
+		})
+	}
+	status.ownership.parents[objectiveB.ID] = objectiveA.ID
+	delete(status.ownership.roots, objectiveB.ID)
+	status.Attempts = []RuntimeAttempt{failed, {Ordinal: 2, ObjectiveID: objectiveB.ID, Outcome: AttemptPassed, RemediatesEvidenceRevision: failed.EvidenceRevision}}
+	if evidence, ordinal, ok := runtimeLineageDischargedFailure(status, failed.EvidenceRevision); !ok || evidence != failed.EvidenceRevision || ordinal != 2 {
+		t.Fatalf("discharged lineage failure = %q, %d, %v", evidence, ordinal, ok)
+	}
+}
+
+func TestRuntimeLineageRejectsIncompleteAndCyclicOwnership(t *testing.T) {
+	for _, mutate := range []func(*RuntimeStatus){
+		func(status *RuntimeStatus) { delete(status.ownership.roots, "objective-b") },
+		func(status *RuntimeStatus) {
+			status.ownership.parents["objective-a"] = "objective-b"
+			delete(status.ownership.roots, "objective-a")
+			status.ownership.parents["objective-b"] = "objective-a"
+			delete(status.ownership.roots, "objective-b")
+		},
+	} {
+		status := RuntimeStatus{ownership: newRuntimeOwnership()}
+		status.setRuntimeObjective(&RuntimeObjective{ID: "objective-a"})
+		status.setRuntimeObjective(&RuntimeObjective{ID: "objective-b"})
+		mutate(&status)
+		if err := status.validateRuntimeLineage(); err == nil {
+			t.Fatal("corrupt runtime lineage was accepted")
+		}
+		if result, terminal := runtimeReadiness(runtimeReadinessInput{Status: status}); !terminal || result.Reason != CompactBlockCorruptAuthority {
+			t.Fatalf("corrupt lineage readiness = %#v, %v", result, terminal)
+		}
+	}
+}
+
+func TestRuntimeLineageDischargeAndCompletionIgnoreUnrelatedAttempts(t *testing.T) {
+	status := RuntimeStatus{ownership: newRuntimeOwnership()}
+	for _, id := range []string{"objective-a", "objective-b", "objective-c"} {
+		status.setRuntimeObjective(&RuntimeObjective{ID: id})
+	}
+	status.setRuntimeObjectiveWithParent(&RuntimeObjective{ID: "objective-b"}, "objective-a")
+	failed := RuntimeAttempt{Ordinal: 1, ObjectiveID: "objective-a", Outcome: AttemptFailed, EvidenceRevision: runtimeTestHash('a')}
+	unrelated := RuntimeAttempt{Ordinal: 2, ObjectiveID: "objective-c", Outcome: AttemptPassed, RemediatesEvidenceRevision: failed.EvidenceRevision}
+	status.Attempts = []RuntimeAttempt{failed, unrelated}
+	if _, _, ok := runtimeLineageDischargedFailure(status, failed.EvidenceRevision); ok {
+		t.Fatal("unrelated passed remediation discharged current-lineage failure")
+	}
+	if got, ok := runtimeLineageFailedEvidence(status); !ok || got != failed.EvidenceRevision {
+		t.Fatalf("unrelated remediation hid current failure: %q, %v", got, ok)
+	}
+
+	correction := RuntimeAttempt{Ordinal: 3, ObjectiveID: "objective-b", Outcome: AttemptPassed,
+		RemediatesEvidenceRevision: failed.EvidenceRevision, EvidenceRevision: runtimeTestHash('b'),
+		BeginCandidateIdentity: "before", FinishCandidateIdentity: "after", BeginCandidateTree: "before", FinishCandidateTree: "after"}
+	status.Attempts = append(status.Attempts, correction)
+	status.EvidenceRevision = correction.EvidenceRevision
+	if evidence, ordinal, ok := runtimeLineageDischargedFailure(status, failed.EvidenceRevision); !ok || evidence != failed.EvidenceRevision || ordinal != correction.Ordinal {
+		t.Fatalf("lineage correction did not discharge exactly once: %q, %d, %v", evidence, ordinal, ok)
+	}
+	if !nativeRuntimeCompletedUnmanagedCorrection(&status) {
+		t.Fatal("lineage correction with unrelated intervening attempt was not recognized")
+	}
+}
