@@ -194,7 +194,7 @@ func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State != CompactStateComplete || result.Reason != "" || result.Token != "" {
+	if result.State != CompactStateComplete || result.Reason != "" || result.Token != "" || result.ItemSettlement != nil {
 		t.Fatalf("compact remediation result = %#v", result)
 	}
 	status, err := fixture.store.Status()
@@ -224,7 +224,7 @@ func TestCompactSettlePreservesAtomicRemediationAndReplay(t *testing.T) {
 			conflict.SuccessorLineageID = test.successor
 			conflict.RemediatesEvidenceRevision = test.evidence
 			blocked, settleErr := fixture.store.Settle(context.Background(), conflict)
-			if settleErr != nil || blocked.State != CompactStateBlocked || blocked.Reason != CompactBlockInvalidContinuation ||
+			if settleErr != nil || blocked.State != CompactStateBlocked || blocked.Reason != CompactBlockInvalidContinuation || blocked.ItemSettlement != nil ||
 				countRuntimeRecords(t, fixture.store.Dir) != before+1 {
 				t.Fatalf("conflicting replay = %#v err=%v records=%d", blocked, settleErr, countRuntimeRecords(t, fixture.store.Dir))
 			}

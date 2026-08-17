@@ -24,7 +24,8 @@ type compactAttemptOutput struct {
 	// SettleObligation rides the proceed envelope (#2912): what this attempt's
 	// passing settle will already owe, named while the attempt is still
 	// unspent.
-	SettleObligation string `json:"settle_obligation,omitempty"`
+	SettleObligation string                    `json:"settle_obligation,omitempty"`
+	ItemSettlement   *sddstatus.ItemSettlement `json:"item_settlement,omitempty"`
 }
 
 func TestRunSDDAttemptCompactOutputStaysBoundedAcrossHistory(t *testing.T) {
@@ -412,9 +413,18 @@ func TestRunSDDAttemptAcquireProjectedItemDerivesAndSettlesBoundScope(t *testing
 		t.Fatalf("metadata drift replay error = %v", err)
 	}
 	writeProjectedItemTasks(t, repo, change, false)
-	settled, _ := runCompactSDDAttempt(t, compactSettleArgs(repo, change, result.Token, "item-settle", "passed"))
-	if settled.State != "complete" {
+	settleArgs := compactSettleArgs(repo, change, result.Token, "item-settle", "passed")
+	settled, settlePayload := runCompactSDDAttempt(t, settleArgs)
+	if settled.State != "complete" || settled.ItemSettlement == nil || settled.ItemSettlement.ItemID != "build" ||
+		settled.ItemSettlement.WorkUnit != "build" || settled.ItemSettlement.ObjectiveID != status.Objective.ID ||
+		settled.ItemSettlement.ObjectiveGeneration != status.Objective.Generation || settled.ItemSettlement.AttemptOrdinal != 1 ||
+		settled.ItemSettlement.EvidenceRevision != cliAttemptHash('e') || settled.ItemSettlement.SettlementRequestID != "item-settle" {
 		t.Fatalf("item settle = %#v", settled)
+	}
+	assertCompactPayloadKeys(t, settlePayload, "state", "item_settlement")
+	replayed, replayPayload := runCompactSDDAttempt(t, settleArgs)
+	if !reflect.DeepEqual(replayed, settled) || !bytes.Equal(replayPayload, settlePayload) {
+		t.Fatalf("item settle replay = %#v %s, want %#v %s", replayed, replayPayload, settled, settlePayload)
 	}
 	projected, err := sddstatus.Resolve(sddstatus.ResolveOptions{CWD: repo, ChangeName: change, ReviewDisabled: true})
 	if err != nil || !projected.Items[0].Blocked || projected.Items[0].Ready || projected.Items[0].Done || projected.Items[0].EvidenceRevision == "" {

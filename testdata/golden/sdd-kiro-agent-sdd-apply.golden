@@ -30,8 +30,8 @@ Execute all steps from the skill directly in this context window:
 5. Detect TDD mode from config or existing test patterns
 6. Implement assigned tasks: in TDD mode follow RED → GREEN → REFACTOR; in standard mode write code then verify
 7. Match existing code patterns and conventions
-8. Mark each task `[x]` complete as you finish it
-9. Persist progress to active backend
+8. In item-selected mode, settle before projection and return the result; never write OpenSpec/Engram or mark tasks
+9. The coordinator alone re-resolves status and idempotently merges apply-progress plus OpenSpec/Engram/hybrid task updates; stop on any partial failure
 
 ## Engram Save (mandatory)
 

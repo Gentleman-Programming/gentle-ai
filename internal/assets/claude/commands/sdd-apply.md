@@ -45,6 +45,8 @@ For each task:
 4. Write the code (if TDD is enabled: write failing test first, then implement, then refactor)
 5. Mark the task as complete [x]
 
+ITEM-SELECTED SETTLEMENT: the worker settles before projection and never writes OpenSpec/Engram, task marks, or an RDD lifecycle. A successful `item_settlement` is projected only by the coordinator, which re-resolves status and merges apply-progress plus OpenSpec/Engram/hybrid updates idempotently. Stop on any failure before another item.
+
 Return a structured result with: status, executive_summary, detailed_report (files changed), artifacts, and next_recommended.
 
 REVIEW ROUTING (post-verify, not post-apply):

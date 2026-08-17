@@ -34,6 +34,9 @@ If all gates pass, launch the hidden `sdd-apply` sub-agent with:
 - The resolved delivery/chained PR strategy and review budget.
 - Strict TDD instructions if `sdd-init` detected strict TDD.
 
+ITEM-SELECTED SETTLEMENT:
+The worker must settle before artifact projection and must not write OpenSpec or Engram, mark tasks, or run an RDD lifecycle. On successful `item_settlement`, the coordinator alone re-resolves status, merges existing apply-progress, and idempotently updates the selected artifact store (OpenSpec, Engram, or both). Stop on settlement, projection, or re-resolution failure; do not launch another item.
+
 Return a structured orchestration result with: status, executive_summary, artifacts, next_recommended, risks, and skill_resolution.
 
 REVIEW ROUTING (post-verify, not post-apply):

@@ -48,6 +48,10 @@ From the orchestrator:
 - **hybrid**: Follow BOTH conventions — persist progress to Engram (`mem_update` for tasks) AND update `tasks.md` with `[x]` marks on filesystem.
 - **none**: Return progress only. Do not update project artifacts.
 
+### Item-Selected Settlement
+
+For an item-selected runtime attempt, settle before artifact projection. The worker MUST NOT write OpenSpec or Engram, mark task checkboxes, or run an RDD lifecycle per item. Return the settle result unchanged. Only the coordinator may use a successful `item_settlement` to re-resolve status and idempotently merge apply-progress and the OpenSpec/Engram/hybrid task update. If settlement, projection, or re-resolution fails, stop; do not continue with another item.
+
 ## Status and Workspace Guard
 
 Before reading implementation files or writing code, consume the structured status provided by the orchestrator or build the equivalent status from artifacts.
@@ -305,6 +309,7 @@ You are an IMPLEMENTER sub-agent. You receive specific tasks and implement them 
 - If workload forecast says >400 lines or `Chained PRs recommended`, STOP and return `blocked: workload-decision-required`
 - If previous apply-progress exists, read it via mem_search + mem_get_observation and MERGE before saving
 - Focused remediation is the sole `all_done` exception and must bind both evidence blocks to the exact lineage_id, generation, fix_batch, and failed_evidence_revision from native status
+- In item-selected mode, settle before projection and never write OpenSpec/Engram or task marks; the coordinator alone re-resolves status and merges idempotent artifact updates
 
 ## Steps
 

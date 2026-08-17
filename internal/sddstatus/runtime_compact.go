@@ -60,6 +60,22 @@ type CompactAttemptResult struct {
 	// the token is real. Empty whenever the chain holds nothing, because a
 	// field that is always populated is noise.
 	SettleObligation string `json:"settle_obligation,omitempty"`
+	// ItemSettlement is present only after a passed, item-bound settle reaches
+	// this request's immutable terminal record.
+	ItemSettlement *ItemSettlement `json:"item_settlement,omitempty"`
+}
+
+// ItemSettlement is the immutable authority for a coordinator to project one
+// completed item into shared artifacts. It is not an artifact write or a Done
+// claim: only the coordinator may perform and verify that projection.
+type ItemSettlement struct {
+	ItemID              string `json:"item_id"`
+	WorkUnit            string `json:"work_unit"`
+	ObjectiveID         string `json:"objective_id"`
+	ObjectiveGeneration int    `json:"objective_generation"`
+	AttemptOrdinal      int    `json:"attempt_ordinal"`
+	EvidenceRevision    string `json:"evidence_revision"`
+	SettlementRequestID string `json:"settlement_request_id"`
 }
 
 // CompactAcquireRequest is the bounded orchestration projection of
@@ -276,7 +292,7 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		if _, err := store.Finish(ctx, finish); err != nil {
 			return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
 		}
-		return store.compactSettleResult()
+		return store.compactSettleResult(&request)
 	}
 	if err := normalizeCompactSettleRequest(request); err != nil {
 		return CompactAttemptResult{}, err
@@ -321,9 +337,13 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}
 	if _, err := store.Finish(ctx, finish); err != nil {
-		return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
+		result := store.compactMutationFailure(err, true, BeginAttemptRequest{})
+		if result.State == CompactStateComplete {
+			return store.compactSettleResult(&request)
+		}
+		return result, nil
 	}
-	return store.compactSettleResult()
+	return store.compactSettleResult(&request)
 }
 
 func (store RuntimeStore) HandoffCompact(ctx context.Context, request CompactHandoffRequest) (CompactAttemptResult, error) {
@@ -430,7 +450,7 @@ func compactAcquireResult(replay runtimeReplay, request BeginAttemptRequest, own
 	return compactBlocked(CompactBlockInvalidContinuation, "")
 }
 
-func (store RuntimeStore) compactSettleResult(expected ...string) (CompactAttemptResult, error) {
+func (store RuntimeStore) compactSettleResult(request *CompactSettleRequest, expected ...string) (CompactAttemptResult, error) {
 	replay, err := store.load()
 	if err != nil {
 		return compactBlockedByUnreadableAuthority(err), nil
@@ -441,16 +461,37 @@ func (store RuntimeStore) compactSettleResult(expected ...string) (CompactAttemp
 	if result, terminal := runtimeReadiness(runtimeReadinessInput{
 		Status: replay.Status, AttemptTokens: replay.AttemptTokens,
 	}); terminal {
+		if result.State == CompactStateComplete && request != nil {
+			result.ItemSettlement = compactItemSettlement(replay, *request)
+		}
 		return result, nil
 	}
 	return CompactAttemptResult{State: CompactStateProceed}, nil
+}
+
+func compactItemSettlement(replay runtimeReplay, request CompactSettleRequest) *ItemSettlement {
+	status := replay.Status
+	if request.Outcome != AttemptPassed || status.Objective == nil ||
+		replay.Requests[request.RequestID].Revision != status.Revision || len(status.Attempts) == 0 {
+		return nil
+	}
+	attempt := status.Attempts[len(status.Attempts)-1]
+	objective := status.Objective
+	if attempt.Outcome != AttemptPassed || attempt.ItemID == "" || attempt.EvidenceRevision != request.EvidenceRevision ||
+		attempt.ObjectiveID != objective.ID || attempt.ObjectiveGeneration != objective.Generation || attempt.WorkUnit != objective.WorkUnit ||
+		attempt.ItemID != objective.ItemID {
+		return nil
+	}
+	return &ItemSettlement{ItemID: attempt.ItemID, WorkUnit: attempt.WorkUnit, ObjectiveID: attempt.ObjectiveID,
+		ObjectiveGeneration: attempt.ObjectiveGeneration, AttemptOrdinal: attempt.Ordinal, EvidenceRevision: attempt.EvidenceRevision,
+		SettlementRequestID: request.RequestID}
 }
 
 func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin BeginAttemptRequest) CompactAttemptResult {
 	var publication *RuntimePublicationError
 	if errors.As(err, &publication) && publication.Committed {
 		if settle {
-			result, _ := store.compactSettleResult(publication.Revision)
+			result, _ := store.compactSettleResult(nil, publication.Revision)
 			return result
 		}
 		replay, loadErr := store.load()
