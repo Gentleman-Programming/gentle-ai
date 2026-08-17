@@ -205,9 +205,9 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 		return nil, err
 	}
 	// dispositionSeed names the one seed successor (if any) whose closed
-	// content-mismatch classification both derives an AuthorityDispositionPlan
-	// and admits through admitClosureDisposition (N=1 leaf or a Wave 6 N>=2
-	// closure). A derivation refusal (no eligible edge, more than one, or an
+	// disposition classification both derives an AuthorityDispositionPlan and
+	// admits through admitClosureDisposition (N=1 leaf or a Wave 6 N>=2 closure).
+	// A derivation refusal (no eligible edge, more than one, or an
 	// incomplete inspection) is not propagated —
 	// it just means no edge advertises review repair this round, exactly like
 	// InspectCompactPristineAbandonment's per-edge eligibility below never
@@ -243,7 +243,7 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 		case dispositionSeed != "" && edge.SuccessorLineageID == dispositionSeed:
 			// Only reached once abandon's own prediction refuses — a
 			// non-pristine (captured review or correction data) successor
-			// whose recovery edge closes on the content-mismatch class.
+			// whose recovery edge closes on a disposition class.
 			// This is #2014's "nothing applies" gap: neither reconcile nor
 			// abandon accepted the edge before Wave 2's disposition plan.
 			exit.Operation = CompactRecoveryEdgeExitRepair
@@ -346,8 +346,8 @@ func compactStartInvalidGraphRefusal(ctx context.Context, repo string, records m
 			if planErr != nil || admitClosureDisposition(plan) != nil || len(plan.SeedSet) != 1 || plan.SeedSet[0] != exit.SuccessorLineageID {
 				continue
 			}
-			fmt.Fprintf(&continuation, " Successor %q closes the content-mismatched-recovery-authorization class, so `review repair` quarantines it whole without discarding its captured review data: %s",
-				exit.SuccessorLineageID, compactRepairCommandText(repo, plan))
+			fmt.Fprintf(&continuation, " Successor %q closes the %q disposition class, so `review repair` quarantines it whole without discarding its captured review data: %s",
+				exit.SuccessorLineageID, plan.AnomalyClass, compactRepairCommandText(repo, plan))
 		}
 	}
 	return fmt.Errorf("%v.%s Capture the complete machine-readable diagnosis for every affected lineage with `gentle-ai review inspect-authority --cwd %s`",

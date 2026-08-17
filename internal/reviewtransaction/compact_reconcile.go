@@ -32,11 +32,11 @@ type compactRecoveryEdgeClassification struct {
 	ValidationError             error
 	RecordedAuthorizationSHA256 string
 	NonReconcilableError        error
-	// DispositionClass names the one closed anomaly class Wave 2's
-	// AuthorityDispositionPlan derivation targets
-	// (authority_disposition_plan.go): a schema-prefixed maintainer
-	// authorization bound to different content than the successor's own
-	// recorded fields. It is deliberately NOT surfaced on
+	// DispositionClass names a closed anomaly class targeted by
+	// AuthorityDispositionPlan derivation (authority_disposition_plan.go).
+	// The original class is a schema-prefixed maintainer authorization bound
+	// to different content than the successor's own recorded fields. It is
+	// deliberately NOT surfaced on
 	// CompactRecoveryEdgeInspection.AnomalyClasses -- that would advertise a
 	// continuation outside that inspection vocabulary (design decision 2) -- so
 	// CompactRecoveryEdgeInspection's JSON stays byte-identical. A caller that
@@ -71,9 +71,8 @@ type CompactMalformedRecoveryAuthorizationProof struct {
 }
 
 // classifyCompactRecoveryEdgeAnomalies re-derives one recovery edge and
-// admits only the two historical anomaly classes reconciliation used to
-// support. It is pure and records a malformed authorization only by
-// SHA-256 digest.
+// admits only explicitly closed historical anomaly classes. It is pure and
+// records a malformed authorization only by SHA-256 digest.
 func classifyCompactRecoveryEdgeAnomalies(predecessor, successor CompactRecord) compactRecoveryEdgeClassification {
 	edgeErr := validateCompactRecoveryEdge(predecessor, successor.State)
 	if edgeErr == nil {
@@ -129,6 +128,17 @@ func classifyCompactRecoveryEdgeAnomalies(predecessor, successor CompactRecord) 
 		classification.Anomalies = []string{compactRecoveryEdgeMalformedAuthorization}
 		recorded := sha256.Sum256([]byte(recovery.MaintainerAuthorization))
 		classification.RecordedAuthorizationSHA256 = "sha256:" + hex.EncodeToString(recorded[:])
+		return classification
+	case errors.Is(edgeErr, errCompactCorrectionRequiredScopeInvalid):
+		exactBinding := compactRecoveryAuthorizationBinding(
+			predecessor.State.LineageID, predecessor.Revision, successor.State.InitialSnapshot.Identity,
+			recovery.Actor, recovery.Reason)
+		if recovery.MaintainerAuthorization != exactBinding {
+			classification.NonReconcilableError = fmt.Errorf("successor %q records an invalid correction-required scope recovery without the exact historical authorization binding: %w", successor.State.LineageID, edgeErr)
+			return classification
+		}
+		classification.NonReconcilableError = fmt.Errorf("successor %q records an invalid historical correction-required scope recovery: %w", successor.State.LineageID, edgeErr)
+		classification.DispositionClass = compactInvalidCorrectionRequiredScopeRecoveryClass
 		return classification
 	default:
 		classification.NonReconcilableError = fmt.Errorf("recovery edge fails outside the unchanged-target class and the pre-contract authorization class: %v", edgeErr)

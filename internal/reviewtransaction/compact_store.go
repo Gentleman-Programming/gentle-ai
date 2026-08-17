@@ -45,6 +45,10 @@ var ErrLegacyReadOnly = errors.New("legacy v1 review lineage is read-only")
 // anomaly so reconcile-authority can gate quarantine to exactly this class.
 var errCompactRecoveryTargetUnchanged = errors.New("escalated recovery successor target has not changed")
 
+// errCompactCorrectionRequiredScopeInvalid identifies the historical #1589
+// edge shape without relaxing the identical creation-time refusal.
+var errCompactCorrectionRequiredScopeInvalid = errors.New("correction-required scope recovery requires repository-derived path expansion or pure genesis-scope contraction")
+
 // RecoveryTargetUnchanged reports whether err is the unchanged-target escalated
 // recovery refusal.
 //
@@ -652,7 +656,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 			}
 			if !compactRecoveryAddsGenesisPath(predecessor.State, successor.InitialSnapshot) &&
 				!compactRecoveryContractsGenesisPaths(predecessor.State, successor.InitialSnapshot) {
-				return errors.New("correction-required scope recovery requires repository-derived path expansion or pure genesis-scope contraction")
+				return errCompactCorrectionRequiredScopeInvalid
 			}
 		default:
 			return errors.New("scope-changed recovery requires an approved or correction-required predecessor")

@@ -205,7 +205,7 @@ func (err *reviewRepairOperationError) Error() string {
 func (err *reviewRepairOperationError) Unwrap() error { return err.cause }
 
 func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only one provider-owned classified repair. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. A maintainer supplies actor, reason, and an exact gentle-ai.review-repair-authorization/v1 binding. When multiple content-mismatched leaves exist, --preflight enumerates exact predecessor/successor selectors; re-run it with one selector before executing its plan.")
+	flags := newReviewFlagSet("review repair", stdout, "Assess the complete review authority inventory and execute only one provider-owned classified repair. Run --preflight first. It emits bounded path-free provider inputs, never an authorization template. A maintainer supplies actor, reason, and an exact gentle-ai.review-repair-authorization/v1 binding. When multiple closed disposition edges exist, --preflight enumerates exact predecessor/successor selectors; re-run it with one selector before executing its plan.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", ReviewIntegrationContractV1, "review integration contract")
 	preflight := flags.Bool("preflight", false, "perform deterministic read-only classification without authority mutation")
@@ -221,10 +221,10 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 	planDigest := flags.String("plan-digest", "", "exact provider-owned leaf authority disposition plan digest")
 	inventoryRevision := flags.String("inventory-revision", "", "exact provider-owned authority inventory revision the plan is bound to")
 	dispositionAuthorization := flags.String("authorization", "", "exact maintainer authorization binding for an eligible leaf authority disposition plan; never emitted in public output")
-	predecessorLineage := flags.String("predecessor-lineage", "", "exact predecessor lineage for a selected content-mismatched edge")
-	predecessorRevision := flags.String("predecessor-revision", "", "exact predecessor revision for a selected content-mismatched edge")
-	successorLineage := flags.String("successor-lineage", "", "exact successor lineage for a selected content-mismatched edge")
-	successorRevision := flags.String("successor-revision", "", "exact successor revision for a selected content-mismatched edge")
+	predecessorLineage := flags.String("predecessor-lineage", "", "exact predecessor lineage for a selected disposition edge")
+	predecessorRevision := flags.String("predecessor-revision", "", "exact predecessor revision for a selected disposition edge")
+	successorLineage := flags.String("successor-lineage", "", "exact successor lineage for a selected disposition edge")
+	successorRevision := flags.String("successor-revision", "", "exact successor revision for a selected disposition edge")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}

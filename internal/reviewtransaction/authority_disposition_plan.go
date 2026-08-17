@@ -72,7 +72,16 @@ type AuthorityDispositionSelector struct {
 // — a dead end (design decision 2).
 const compactContentMismatchedRecoveryAuthorizationClass = "content_mismatched_recovery_authorization"
 
+// compactInvalidCorrectionRequiredScopeRecoveryClass is the exact-binding,
+// disjoint-scope historical edge shape made invalid by #1589's retention rule.
+const compactInvalidCorrectionRequiredScopeRecoveryClass = "invalid_correction_required_scope_recovery"
+
 const compactHistoricalSnapshotIdentityClass = "retired_compact_snapshot_identity"
+
+func isCompactAuthorityDispositionClass(class string) bool {
+	return class == compactContentMismatchedRecoveryAuthorizationClass ||
+		class == compactInvalidCorrectionRequiredScopeRecoveryClass
+}
 
 // errAuthorityDispositionPlanNotDerivable is returned, always wrapped with a
 // specific cause, whenever derivation refuses to produce a plan: an
@@ -90,7 +99,7 @@ func authorityDispositionSelectors(report CompactRecoveryInspectionReport, recor
 		predecessor, foundPredecessor := records[edge.PredecessorLineageID]
 		successor, foundSuccessor := records[edge.SuccessorLineageID]
 		if !foundPredecessor || !foundSuccessor ||
-			classifyCompactRecoveryEdgeAnomalies(predecessor, successor).DispositionClass != compactContentMismatchedRecoveryAuthorizationClass {
+			!isCompactAuthorityDispositionClass(classifyCompactRecoveryEdgeAnomalies(predecessor, successor).DispositionClass) {
 			continue
 		}
 		selectors = append(selectors, AuthorityDispositionSelector{
@@ -110,11 +119,11 @@ func authorityDispositionSelectors(report CompactRecoveryInspectionReport, recor
 // second, independent record-loading path ever feeds derivation (mandatory
 // obligation (a)). It refuses (no plan) unless the inspection that produced
 // selected closure carries no entry diagnostics and exactly one report edge
-// re-derives into the one closed content_mismatched_recovery_authorization
-// class, except one forensic historical entry whose only diagnostic is outdated.
+// re-derives into a closed authority disposition class, except one forensic
+// historical entry whose only diagnostic is outdated.
 func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, records map[string]CompactRecord, binding, actor, reason string, requested ...AuthorityDispositionSelector) (AuthorityDispositionPlan, error) {
 	if len(requested) > 1 {
-		return AuthorityDispositionPlan{}, fmt.Errorf("%w: multiple exact content-mismatch selectors supplied", errAuthorityDispositionPlanNotDerivable)
+		return AuthorityDispositionPlan{}, fmt.Errorf("%w: multiple exact disposition selectors supplied", errAuthorityDispositionPlanNotDerivable)
 	}
 	selectors, err := authorityDispositionSelectors(report, records)
 	if err != nil {
@@ -141,12 +150,21 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 			selector = &selectors[index]
 		}
 		if selector == nil {
-			return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact content-mismatch selector no longer matches the inspected graph", ErrConcurrentUpdate)
+			return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact disposition selector no longer matches the inspected graph", ErrConcurrentUpdate)
 		}
 	} else if len(selectors) == 1 {
 		selector = &selectors[0]
 	} else {
-		return AuthorityDispositionPlan{}, fmt.Errorf("%w: found %d closed content-mismatch edge(s), want exactly 1 or an exact selector", errAuthorityDispositionPlanNotDerivable, len(selectors))
+		return AuthorityDispositionPlan{}, fmt.Errorf("%w: found %d closed disposition edge(s), want exactly 1 or an exact selector", errAuthorityDispositionPlanNotDerivable, len(selectors))
+	}
+	predecessor, foundPredecessor := records[selector.PredecessorLineageID]
+	successor, foundSuccessor := records[selector.SuccessorLineageID]
+	if !foundPredecessor || !foundSuccessor {
+		return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact disposition selector records are no longer loaded", ErrConcurrentUpdate)
+	}
+	anomalyClass := classifyCompactRecoveryEdgeAnomalies(predecessor, successor).DispositionClass
+	if !isCompactAuthorityDispositionClass(anomalyClass) {
+		return AuthorityDispositionPlan{}, fmt.Errorf("%w: exact disposition selector no longer has a closed class", ErrConcurrentUpdate)
 	}
 	seed := selector.SuccessorLineageID
 	closure := authorityDispositionClosure(report, seed)
@@ -173,7 +191,7 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 	}
 	plan := AuthorityDispositionPlan{
 		Schema: AuthorityDispositionPlanSchema, RepositoryBinding: binding,
-		AuthorityInventoryRevision: inventoryRevision, AnomalyClass: compactContentMismatchedRecoveryAuthorizationClass,
+		AuthorityInventoryRevision: inventoryRevision, AnomalyClass: anomalyClass,
 		SeedSet: []string{seed}, Closure: closure, ExpectedRevisions: expectedRevisions,
 		Actor: strings.TrimSpace(actor), Reason: strings.TrimSpace(reason),
 	}
@@ -406,7 +424,7 @@ func DeriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reas
 	return deriveAuthorityDispositionPlanAtRepo(ctx, repo, actor, reason, requested...)
 }
 
-// ListAuthorityDispositionSelectorsAtRepo exposes exact choices for multi-edge content mismatch.
+// ListAuthorityDispositionSelectorsAtRepo exposes exact choices for multiple closed disposition edges.
 func ListAuthorityDispositionSelectorsAtRepo(ctx context.Context, repo string) ([]AuthorityDispositionSelector, error) {
 	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
