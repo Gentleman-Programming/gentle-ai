@@ -210,7 +210,7 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	if !reviewtransaction.ReviewerContextLevelAccepted(level) {
 		return nil, reviewPreflightError(fmt.Errorf("unknown reviewer context delivery %q; run `gentle-ai review lens-context --help` for the closed command form", *delivery))
 	}
-	marker, ok := reviewtransaction.ReviewerContextMarkerFor(strings.TrimSpace(*agent))
+	marker, ok := reviewtransaction.ReviewerContextMarkerFor(*agent)
 	if !ok {
 		return nil, reviewLensContextRefusal("lens_context_agent_unknown", reviewLensContextAgentAction)
 	}

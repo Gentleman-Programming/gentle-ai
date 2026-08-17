@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -43,7 +44,7 @@ func TestReviewProviderMaterializationMatchesNativeLensContext(t *testing.T) {
 	handle := args[slices.Index(args, "--repository-context")+1]
 	lens := args[slices.Index(args, "--lens")+1]
 
-	request, err := reviewProviderMaterialize(context.Background(), reviewLensContextDependencies(), handle, lens)
+	request, err := reviewProviderMaterialize(context.Background(), reviewLensContextDependencies(), handle, lens, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,6 +54,114 @@ func TestReviewProviderMaterializationMatchesNativeLensContext(t *testing.T) {
 	}
 	if got := request.Invocation.Prompt(); !bytes.Equal(got, native.Bytes()) {
 		t.Fatalf("provider materialization diverged from native lens context\nprovider:\n%s\nnative:\n%s", got, native.Bytes())
+	}
+}
+
+// TestReviewProviderMaterializeResolvesAgentAwareContextMarker proves the
+// compiled-adapter reviewer path (Claude Code's subprocess adapter, routed
+// through reviewProviderMaterialize) frames the marker for the exact runtime
+// agent invoking it, instead of always pinning the generic marker regardless
+// of which agent is running (issue #2777 reproduced through this path).
+// Codex and OpenCode have no explicit reviewerContextMarkers table entry, so
+// they must keep receiving the byte-identical generic marker unchanged.
+func TestReviewProviderMaterializeResolvesAgentAwareContextMarker(t *testing.T) {
+	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+	handle := args[slices.Index(args, "--repository-context")+1]
+	lens := args[slices.Index(args, "--lens")+1]
+
+	claudeRequest, err := reviewProviderMaterialize(context.Background(), reviewLensContextDependencies(), handle, lens, model.AgentClaudeCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(claudeRequest.Invocation.Prompt(), []byte("GENTLE_AI_CLAUDE_REVIEW_CONTEXT")) {
+		t.Fatalf("claude-code provider materialization did not carry the claude-code marker:\n%s", claudeRequest.Invocation.Prompt())
+	}
+
+	for _, agent := range []model.AgentID{model.AgentCodex, model.AgentOpenCode, ""} {
+		request, err := reviewProviderMaterialize(context.Background(), reviewLensContextDependencies(), handle, lens, agent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(request.Invocation.Prompt(), []byte("GENTLE_AI_CLAUDE_REVIEW_CONTEXT")) {
+			t.Fatalf("agent %q provider materialization unexpectedly carried the claude-code marker:\n%s", agent, request.Invocation.Prompt())
+		}
+		if !bytes.Contains(request.Invocation.Prompt(), []byte("GENTLE_AI_REVIEW_CONTEXT")) {
+			t.Fatalf("agent %q provider materialization did not carry the generic marker:\n%s", agent, request.Invocation.Prompt())
+		}
+	}
+}
+
+// TestReviewProviderNegotiatedCaptureResultCarriesClaudeMarker is the
+// end-to-end proof PR #3398's review requested: it drives the real negotiated
+// v2 STATUS transition with --agent claude-code, runs the exact capture-result
+// invocation that transition hands back through the compiled Claude adapter
+// path, and asserts the prompt the adapter actually receives carries the
+// Claude-specific marker. TestReviewProviderMaterializeResolvesAgentAwareContextMarker
+// above proves reviewProviderMaterialize alone; this proves the full field
+// path -- negotiated collect transition to capture-result to compiled adapter
+// -- because the unit-level proof does not show the rendered transition
+// actually carries --agent through to the adapter that #2777 reports on.
+func TestReviewProviderNegotiatedCaptureResultCarriesClaudeMarker(t *testing.T) {
+	repo, started, _, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--lineage", started.LineageID, "--contract", ReviewIntegrationContractV2,
+		"--agent", string(model.AgentClaudeCode), "--next-transition",
+	}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) == 0 {
+		t.Fatalf("next transition = %#v", status.NextTransition)
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	if input.CaptureOperation != reviewCaptureResultCaptureOperation {
+		t.Fatalf("capture operation = %q, want %q", input.CaptureOperation, reviewCaptureResultCaptureOperation)
+	}
+	var agentRendered bool
+	var orderValue string
+	args := make([]string, 0, len(input.Arguments))
+	for _, argument := range input.Arguments {
+		if argument.Token == "" {
+			t.Fatalf("collect argument %q carries no runnable token", argument.Name)
+		}
+		if argument.Name == "agent" {
+			agentRendered = argument.Value == string(model.AgentClaudeCode)
+		}
+		if argument.Name == "order" {
+			orderValue = argument.Value
+		}
+		args = append(args, argument.Token)
+	}
+	if !agentRendered {
+		t.Fatalf("negotiated collect transition did not render --agent=%s for capture-result: %#v", model.AgentClaudeCode, input.Arguments)
+	}
+	order, err := strconv.Atoi(orderValue)
+	if err != nil {
+		t.Fatalf("collect transition order argument = %q: %v", orderValue, err)
+	}
+
+	previous := reviewProviderAdapterFor
+	t.Cleanup(func() { reviewProviderAdapterFor = previous })
+	var capturedPrompt []byte
+	reviewProviderAdapterFor = func(_ reviewerprovider.Contract, agent model.AgentID) (reviewerprovider.Adapter, error) {
+		if agent != model.AgentClaudeCode {
+			return nil, errors.New("unexpected runtime")
+		}
+		return providerTestAdapterFunc(func(_ context.Context, invocation reviewerprovider.Invocation) ([]byte, error) {
+			capturedPrompt = invocation.Prompt()
+			return admittedReviewerPayloadForTest(t, repo, record, lens, order), nil
+		}), nil
+	}
+
+	if err := RunReviewCaptureResult(args, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(capturedPrompt, []byte("GENTLE_AI_CLAUDE_REVIEW_CONTEXT")) {
+		t.Fatalf("compiled Claude adapter did not receive the claude-code marker through the negotiated transition:\n%s", capturedPrompt)
 	}
 }
 

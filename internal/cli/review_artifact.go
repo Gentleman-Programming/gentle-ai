@@ -404,7 +404,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	}
 	var rawPayload []byte
 	if providerExecution {
-		request, materializeErr := reviewProviderMaterialize(ctx, reviewLensContextDependencies(), contextHandle, *lens)
+		request, materializeErr := reviewProviderMaterialize(ctx, reviewLensContextDependencies(), contextHandle, *lens, providerRuntime)
 		if materializeErr != nil {
 			return reviewPreflightError(materializeErr)
 		}

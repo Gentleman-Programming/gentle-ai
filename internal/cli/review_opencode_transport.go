@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
@@ -347,7 +348,7 @@ func openCodeTransportStartBound(ctx context.Context, taskPrompt string) (openCo
 		if !slices.Contains(record.State.SelectedLenses, binding.Lens) {
 			return openCodeTransportSession{}, openCodeTransportBindingInvalid("Task lens is not a provider-selected lens for this review")
 		}
-		request, err := reviewProviderMaterialize(ctx, reviewLensContextDependencies(), binding.RepositoryContext, binding.Lens)
+		request, err := reviewProviderMaterialize(ctx, reviewLensContextDependencies(), binding.RepositoryContext, binding.Lens, model.AgentOpenCode)
 		if err != nil || request.Binding.Revision != record.Revision || request.Binding.Lineage != record.State.LineageID {
 			return openCodeTransportSession{}, openCodeTransportFailure("opencode_review_transport_materialization_unavailable")
 		}

@@ -201,7 +201,7 @@ func TestReviewLensContextAgentOpenCodeIsByteIdenticalToOmittedFlag(t *testing.T
 // a wholly unrecognized string -- fails loudly before any authority mutation,
 // and that a subsequent default-agent run still succeeds afterward.
 func TestReviewLensContextAgentUnknownRefusesWithNoSideEffects(t *testing.T) {
-	for _, agent := range []string{"totally-unknown", "codex"} {
+	for _, agent := range []string{"totally-unknown", "codex", " claude-code "} {
 		t.Run(agent, func(t *testing.T) {
 			_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
 			handle := args[slices.Index(args, "--repository-context")+1]
@@ -550,7 +550,7 @@ func TestReviewLensContextCallersFailClosedOnInspectorCleanupFailure(t *testing.
 			return err, payload == nil
 		}},
 		{"provider materialization", func(deps reviewLensContextDeps, handle, lens string) (error, bool) {
-			request, err := reviewProviderMaterialize(context.Background(), deps, handle, lens)
+			request, err := reviewProviderMaterialize(context.Background(), deps, handle, lens, "")
 			return err, request.Store.Dir == "" && request.Binding == (reviewLensContextBinding{}) && request.Subject == (reviewtransaction.ArtifactSubject{}) && len(request.Invocation.Prompt()) == 0
 		}},
 	} {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewerprovider"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
@@ -60,18 +61,29 @@ type reviewProviderAdmittedResult struct {
 	Admission                 reviewtransaction.ArtifactAdmission
 }
 
+// reviewProviderContextMarkerFor resolves the marker for the exact runtime
+// agent invoking Go-owned provider materialization, falling back to the
+// generic marker for any agent identity with no explicit table entry. This
+// keeps every runtime the shared table has never mapped (for example Codex)
+// on today's byte-identical generic-marker behavior; only an agent with its
+// own table entry (currently Claude Code) changes what it receives.
+func reviewProviderContextMarkerFor(agent model.AgentID) reviewtransaction.ReviewerContextMarker {
+	if marker, ok := reviewtransaction.ReviewerContextMarkerFor(string(agent)); ok {
+		return marker
+	}
+	generic, _ := reviewtransaction.ReviewerContextMarkerFor("")
+	return generic
+}
+
 // reviewProviderMaterialize deliberately delegates to the current lens-context
 // assembly. It does not emit a delivery descriptor or mutate review authority.
-func reviewProviderMaterialize(ctx context.Context, deps reviewLensContextDeps, repositoryContext, lens string) (request reviewProviderRequest, err error) {
+func reviewProviderMaterialize(ctx context.Context, deps reviewLensContextDeps, repositoryContext, lens string, agent model.AgentID) (request reviewProviderRequest, err error) {
 	authority, err := resolveReviewLensAuthority(ctx, deps, repositoryContext, lens)
 	if err != nil {
 		return reviewProviderRequest{}, err
 	}
-	// The Go-owned provider transport is not a caller-declared --agent: it
-	// always frames the generic marker, byte-identical to today, exactly as
-	// every live provider transport already expects.
-	genericMarker, _ := reviewtransaction.ReviewerContextMarkerFor("")
-	prompt, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen, genericMarker)
+	marker := reviewProviderContextMarkerFor(agent)
+	prompt, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen, marker)
 	if err != nil {
 		return reviewLensContextCleanup(ctx, reviewProviderRequest{}, err, func() error { return deps.close(authority.Inspector) })
 	}
