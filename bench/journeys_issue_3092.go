@@ -126,11 +126,13 @@ func issue3092AdvanceUpstream(sandbox *Sandbox) error {
 	if err := sandbox.git(sandbox.Repo, "merge", "--no-ff", "--no-edit", sandbox.Scratch["issue3092-feature-commit"]); err != nil {
 		return err
 	}
-	raw, err := gitOut(sandbox, sandbox.Repo, "rev-parse", "upstream/main")
-	if err != nil {
-		return err
+	for key, ref := range map[string]string{"raw-base": "upstream/main", "base-tree": "upstream/main^{tree}"} {
+		value, err := gitOut(sandbox, sandbox.Repo, "rev-parse", ref)
+		if err != nil {
+			return err
+		}
+		sandbox.Scratch["issue3092-"+key] = value
 	}
-	sandbox.Scratch["issue3092-raw-base"] = raw
 	return nil
 }
 
@@ -183,8 +185,9 @@ func issue3092ValidateSymbolicSelector(r *journeyRun) error {
 	}
 	if status.Authority.LineageID != issue3092Lineage || status.Authority.State != "approved" ||
 		status.NextTransition.Kind != "execute" || status.NextTransition.Execute.Operation != "review.validate" ||
+		status.Projection.BaseTree != r.sandbox.Scratch["issue3092-base-tree"] ||
 		status.executeArgument("gate") != "pre-push" || status.executeArgument("base-ref") != "upstream/main" {
-		return fmt.Errorf("symbolic pre-push STATUS = authority=%+v transition=%+v", authority, status.NextTransition)
+		return fmt.Errorf("symbolic pre-push STATUS = authority=%+v projection=%+v transition=%+v", authority, status.Projection, status.NextTransition)
 	}
 	candidate, err := issue3092Candidate(r.sandbox)
 	if err != nil {
