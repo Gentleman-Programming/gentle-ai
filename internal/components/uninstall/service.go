@@ -837,6 +837,27 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			}
 		}
 	case model.ComponentTheme:
+		if adapter.Agent() == model.AgentOpenCode {
+			configDir := adapter.GlobalConfigDir(homeDir)
+			tuiPath := filepath.Join(configDir, "tui.json")
+			themePath := filepath.Join(configDir, "themes", "gentleman.json")
+			targets = append(targets, tuiPath, themePath)
+			ops = append(ops,
+				rewriteJSONFileWithMutation(tuiPath, func(raw []byte) ([]byte, bool, error) {
+					root, err := unmarshalJSONObject(raw)
+					if err != nil {
+						return nil, false, err
+					}
+					if current, ok := root["theme"].(string); !ok || current != "gentleman" {
+						return raw, false, nil
+					}
+					return removeJSONPaths(raw, jsonPath{"theme"})
+				}),
+				removeFile(themePath),
+				removeDirIfEmpty(filepath.Dir(themePath)),
+			)
+		}
+		// Remove theme keys written by older generic installations.
 		for _, path := range settingsTargets(homeDir, adapter) {
 			targets = append(targets, path)
 			ops = append(ops, rewriteJSONFile(path, jsonPath{"theme"}))
@@ -1164,6 +1185,12 @@ func rewriteMarkdownFile(path string, mutate func(content string) (string, bool)
 }
 
 func rewriteJSONFile(path string, jsonPaths ...jsonPath) operation {
+	return rewriteJSONFileWithMutation(path, func(raw []byte) ([]byte, bool, error) {
+		return removeJSONPaths(raw, jsonPaths...)
+	})
+}
+
+func rewriteJSONFileWithMutation(path string, mutate func([]byte) ([]byte, bool, error)) operation {
 	return operation{
 		typeID: opRewriteFile,
 		path:   path,
@@ -1175,7 +1202,7 @@ func rewriteJSONFile(path string, jsonPaths ...jsonPath) operation {
 				}
 				return false, false, fmt.Errorf("read json file %q: %w", path, err)
 			}
-			updated, changed, err := removeJSONPaths(raw, jsonPaths...)
+			updated, changed, err := mutate(raw)
 			if err != nil {
 				return false, false, fmt.Errorf("clean json file %q: %w", path, err)
 			}

@@ -16,86 +16,133 @@ import (
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 
-func TestInjectMergesThemeOverlayIntoAdapterSettings(t *testing.T) {
+func TestInjectOpenCodeFirstInstallWithoutTUIConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	configDir := opencodeAdapter().GlobalConfigDir(home)
+	tuiPath := filepath.Join(configDir, "tui.json")
+	result, err := Inject(home, opencodeAdapter())
+	if err != nil || !result.Changed {
+		t.Fatalf("Inject() = %#v, %v", result, err)
+	}
+	raw, err := os.ReadFile(tuiPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(raw, &config); err != nil || config["theme"] != "gentleman" {
+		t.Fatalf("TUI config = %v, %v", config, err)
+	}
+}
+
+func TestInjectSkipsNonOpenCodeAdapter(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll(settings dir) error = %v", err)
 	}
-	if err := os.WriteFile(settingsPath, []byte("{\n  \"permissions\": {\n    \"allow\": [\"Bash(go test ./...)\"]\n  },\n  \"theme\": \"existing-theme\"\n}\n"), 0o644); err != nil {
+	before := []byte("{\n  \"theme\": \"existing-theme\"\n}\n")
+	if err := os.WriteFile(settingsPath, before, 0o644); err != nil {
 		t.Fatalf("WriteFile(settings) error = %v", err)
 	}
 
-	first, err := Inject(home, claudeAdapter())
-	if err != nil {
-		t.Fatalf("Inject() first error = %v", err)
-	}
-	if !first.Changed {
-		t.Fatalf("Inject() first changed = false")
-	}
-
-	second, err := Inject(home, claudeAdapter())
-	if err != nil {
-		t.Fatalf("Inject() second error = %v", err)
-	}
-	if second.Changed {
-		t.Fatalf("Inject() second changed = true")
-	}
-
-	if len(first.Files) != 1 || first.Files[0] != settingsPath {
-		t.Fatalf("files = %#v, want only %q", first.Files, settingsPath)
-	}
-
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(settings) error = %v", err)
-	}
-	var root struct {
-		Permissions map[string][]string `json:"permissions"`
-		Theme       string              `json:"theme"`
-	}
-	if err := json.Unmarshal(data, &root); err != nil {
-		t.Fatalf("Unmarshal(settings) error = %v", err)
-	}
-	if root.Theme != "gentleman" {
-		t.Fatalf("theme = %q, want gentleman", root.Theme)
-	}
-	if got := root.Permissions["allow"]; len(got) != 1 || got[0] != "Bash(go test ./...)" {
-		t.Fatalf("permissions.allow = %#v, want preserved existing permission", got)
-	}
-	if _, err := os.Stat(filepath.Join(home, ".claude", "themes", "gentleman.json")); !os.IsNotExist(err) {
-		t.Fatalf("Inject() should not write Claude custom theme file; stat error = %v", err)
-	}
-}
-
-func TestInjectCreatesAdapterSettingsWhenMissing(t *testing.T) {
-	home := t.TempDir()
-
-	result, err := Inject(home, opencodeAdapter())
+	result, err := Inject(home, claudeAdapter())
 	if err != nil {
 		t.Fatalf("Inject() error = %v", err)
 	}
-
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
-	if !result.Changed {
-		t.Fatalf("Inject() changed = false")
+	if result.Changed || len(result.Files) != 0 {
+		t.Fatalf("Inject() = %#v, want no-op for non-OpenCode adapter", result)
 	}
-	if len(result.Files) != 1 || result.Files[0] != settingsPath {
-		t.Fatalf("files = %#v, want only %q", result.Files, settingsPath)
+	if after, err := os.ReadFile(settingsPath); err != nil || string(after) != string(before) {
+		t.Fatalf("Claude settings changed: content=%q err=%v", after, err)
+	}
+}
+
+func TestInjectInstallsOpenCodeThemeAndMergesTUIConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	configDir := opencodeAdapter().GlobalConfigDir(home)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(config dir) error = %v", err)
+	}
+	tuiPath := filepath.Join(configDir, "tui.json")
+	if err := os.WriteFile(tuiPath, []byte("{\n  // preserve valid JSONC fields\n  \"$schema\": \"https://opencode.ai/tui.json\",\n  \"plugin\": [\"user-plugin\"],\n}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(tui) error = %v", err)
+	}
+	opencodePath := filepath.Join(configDir, "opencode.json")
+	opencodeBefore := []byte("{\n  \"model\": \"user/model\"\n}\n")
+	if err := os.WriteFile(opencodePath, opencodeBefore, 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode) error = %v", err)
 	}
 
-	data, err := os.ReadFile(settingsPath)
+	first, err := Inject(home, opencodeAdapter())
 	if err != nil {
-		t.Fatalf("ReadFile(settings) error = %v", err)
+		t.Fatalf("Inject() first error = %v", err)
 	}
-	var root struct {
-		Theme string `json:"theme"`
+	themePath := filepath.Join(configDir, "themes", "gentleman.json")
+	if len(first.Files) != 2 || first.Files[0] != tuiPath || first.Files[1] != themePath {
+		t.Fatalf("files = %#v, want [%q %q]", first.Files, tuiPath, themePath)
 	}
-	if err := json.Unmarshal(data, &root); err != nil {
-		t.Fatalf("Unmarshal(settings) error = %v", err)
+
+	tuiData, err := os.ReadFile(tuiPath)
+	if err != nil {
+		t.Fatalf("ReadFile(tui) error = %v", err)
 	}
-	if root.Theme != "gentleman" {
-		t.Fatalf("theme = %q, want gentleman", root.Theme)
+	var tuiConfig struct {
+		Schema string   `json:"$schema"`
+		Plugin []string `json:"plugin"`
+		Theme  string   `json:"theme"`
+	}
+	if err := json.Unmarshal(tuiData, &tuiConfig); err != nil {
+		t.Fatalf("Unmarshal(tui) error = %v", err)
+	}
+	if tuiConfig.Schema != "https://opencode.ai/tui.json" || len(tuiConfig.Plugin) != 1 || tuiConfig.Plugin[0] != "user-plugin" || tuiConfig.Theme != "gentleman" {
+		t.Fatalf("merged tui config = %#v", tuiConfig)
+	}
+	if after, err := os.ReadFile(opencodePath); err != nil || string(after) != string(opencodeBefore) {
+		t.Fatalf("opencode.json changed: content=%q err=%v", after, err)
+	}
+}
+
+func TestInjectThenVisualThemesPreservesGeneratedOpenCodeTheme(t *testing.T) {
+	home := t.TempDir()
+	adapter := opencodeAdapter()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	if result, err := Inject(home, adapter); err != nil || !result.Changed {
+		t.Fatalf("Inject() = %#v, %v", result, err)
+	}
+	paths := VisualThemePaths(home, adapter)
+	before, err := os.Stat(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := os.ReadFile(paths[0])
+	if err != nil || !json.Valid(initial) {
+		t.Fatalf("initial Gentleman asset = %q, %v", initial, err)
+	}
+	result, err := InjectVisualThemes(home, adapter)
+	// Files lists managed paths, not changed paths; Cute is newly created.
+	if err != nil || !result.Changed || len(result.Files) != 2 {
+		t.Fatalf("InjectVisualThemes() = %#v, %v", result, err)
+	}
+	if got, err := os.ReadFile(paths[0]); err != nil || !bytes.Equal(got, initial) {
+		t.Fatalf("Gentleman bytes changed: %v", err)
+	}
+	after, err := os.Stat(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatal("Gentleman was rewritten or replaced")
+	}
+	if _, err := os.Stat(paths[1]); err != nil {
+		t.Fatalf("Gentleman Cute missing: %v", err)
+	}
+	if result, err := InjectVisualThemes(home, adapter); err != nil || result.Changed {
+		t.Fatalf("repeated visual injection = %#v, %v", result, err)
+	}
+	if result, err := Inject(home, adapter); err != nil || result.Changed {
+		t.Fatalf("repeated activation = %#v, %v", result, err)
 	}
 }
 
