@@ -16,8 +16,6 @@ const boundedReviewContractAsset = "skills/_shared/review-ledger-contract.md"
 // prompt is what lets a reviewer resolve subject_hash from its own instructions
 // instead of depending on whatever context the orchestrator happened to carry.
 const reviewerBindingEnvironmentVariable = "GENTLE_AI_REVIEW_BINDING"
-const claudeReviewerContextMarker = "GENTLE_AI_CLAUDE_REVIEW_CONTEXT"
-const openCodeReviewContextMarker = "GENTLE_AI_REVIEW_CONTEXT"
 
 const nativeReviewerResultSchema = `{"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
 const providerReviewerResultSchema = `{"subject_hash":"<artifact_subject.subject_hash>","inspection":{"status":"completed","paths":["<complete unique unordered set>"]},"findings":[{"location":"path:line or path:start-end","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
@@ -190,8 +188,29 @@ type reviewerTransportInvocation struct {
 	supplier      string
 }
 
+// mustReviewerContextMarker resolves a marker this package compiles a
+// constant reference to. Both keys are part of the closed table in
+// reviewtransaction, so a missing entry here is a build-time programmer
+// error, not a runtime possibility -- it panics at package init rather than
+// silently falling back, exactly like reviewerRoleFor's found check does for
+// an unmapped lens.
+func mustReviewerContextMarker(agent string) reviewtransaction.ReviewerContextMarker {
+	marker, ok := reviewtransaction.ReviewerContextMarkerFor(agent)
+	if !ok {
+		panic("reviewtransaction has no reviewer context marker for " + agent)
+	}
+	return marker
+}
+
+// claudeReviewerContextMarker and openCodeReviewerContextMarker are sourced
+// from the single shared resolver in reviewtransaction, so this file and
+// internal/cli/review_lens_context.go can never carry two independently
+// drifting copies of the same marker pair.
+var claudeReviewerContextMarker = mustReviewerContextMarker("claude-code")
+var openCodeReviewerContextMarker = mustReviewerContextMarker("opencode")
+
 var claudeReviewerInvocation = reviewerTransportInvocation{
-	contextMarker: claudeReviewerContextMarker,
+	contextMarker: claudeReviewerContextMarker.Header,
 	supplier:      "the parent",
 }
 
@@ -199,7 +218,7 @@ var claudeReviewerInvocation = reviewerTransportInvocation{
 // relays a Task to Go, which materializes the canonical context before the
 // reviewer launches. The generated agent holds no bash and no read tool.
 var openCodeReviewerInvocation = reviewerTransportInvocation{
-	contextMarker: openCodeReviewContextMarker,
+	contextMarker: openCodeReviewerContextMarker.Header,
 	supplier:      "the OpenCode host process",
 }
 

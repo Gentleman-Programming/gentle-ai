@@ -44,13 +44,11 @@ const reviewLensContextByteBudget = reviewtransaction.MaxFrozenCandidateDiffByte
 
 const (
 	reviewLensContextBindingHeader = "GENTLE_AI_REVIEW_BINDING"
-	reviewLensContextContextHeader = "GENTLE_AI_REVIEW_CONTEXT"
 	reviewLensContextNameStatus    = "GENTLE_AI_REVIEW_NAME_STATUS"
 	reviewLensContextNumstat       = "GENTLE_AI_REVIEW_NUMSTAT"
 	reviewLensContextInstruction   = "GENTLE_AI_REVIEW_INSTRUCTION"
 	reviewLensContextResultSchema  = "GENTLE_AI_REVIEW_RESULT_SCHEMA"
 	reviewLensContextPatch         = "GENTLE_AI_REVIEW_PATCH"
-	reviewLensContextTerminator    = "GENTLE_AI_REVIEW_CONTEXT_END"
 )
 
 // reviewLensContextBinding is the machine data a relaying orchestrator used to
@@ -100,6 +98,9 @@ const (
 	reviewLensContextConflictAction = "this frozen lens slot already recorded a reviewer context produced by a different mechanism, and audit history is never rewritten; " +
 		"produce this lens context by the same mechanism that already recorded one, or start a review for a fresh candidate by running " +
 		reviewNextTransitionRefreshCommandV21
+	reviewLensContextAgentAction = "this runtime has no provider-injected reviewer context marker in this release, " +
+		"so no block can be framed for it; re-run with --agent set to a runtime this release generates a reviewer for, " +
+		"or omit --agent to emit the generic marker every relay-agnostic reviewer expects"
 )
 
 // reviewLensContextConflictActionFor names the mechanism the slot really
@@ -187,11 +188,12 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	ctx, cancel := context.WithTimeout(context.Background(), deps.timeout)
 	defer cancel()
 	flags := newReviewFlagSet("review lens-context", help,
-		"Emit the finished reviewer lens context for one selected lens.\n\nForm: --repository-context <handle> --lens <lens> [--delivery provider_command|runtime_interception]\n\nBoth tokens are carried verbatim by the collect transition; nothing else is accepted, and nothing is left for the caller to assemble.")
+		"Emit the finished reviewer lens context for one selected lens.\n\nForm: --repository-context <handle> --lens <lens> [--delivery provider_command|runtime_interception] [--agent <id>]\n\nBoth --repository-context and --lens are carried verbatim by the collect transition; nothing else is accepted, and nothing is left for the caller to assemble.")
 	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context")
 	lens := flags.String("lens", "", "exact selected lens")
 	delivery := flags.String("delivery", string(reviewtransaction.ReviewerContextLevelProviderCommand),
 		"how this context reaches the reviewer: provider_command when a caller relays it, runtime_interception when a runtime adapter injects it")
+	agent := flags.String("agent", "", "optional runtime identity whose generated reviewer consumes this block; omitted emits the generic marker")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return nil, err
 	}
@@ -208,6 +210,10 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	if !reviewtransaction.ReviewerContextLevelAccepted(level) {
 		return nil, reviewPreflightError(fmt.Errorf("unknown reviewer context delivery %q; run `gentle-ai review lens-context --help` for the closed command form", *delivery))
 	}
+	marker, ok := reviewtransaction.ReviewerContextMarkerFor(strings.TrimSpace(*agent))
+	if !ok {
+		return nil, reviewLensContextRefusal("lens_context_agent_unknown", reviewLensContextAgentAction)
+	}
 
 	authority, err := resolveReviewLensAuthority(ctx, deps, strings.TrimSpace(*repositoryContext), strings.TrimSpace(*lens))
 	if err != nil {
@@ -216,7 +222,7 @@ func runReviewLensContext(args []string, help io.Writer, deps reviewLensContextD
 	defer func() {
 		payload, err = reviewLensContextCleanup(ctx, payload, err, func() error { return deps.close(authority.Inspector) })
 	}()
-	block, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen)
+	block, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -285,6 +291,11 @@ func reviewLensContextBudgetProbe(
 	if err != nil {
 		return reviewLensContextUnproven, err
 	}
+	// The probe always measures with the generic marker: START has no agent
+	// identity (it is deliberately not persisted), and probing with the
+	// widest registered marker would refuse candidates that review fine
+	// generically.
+	genericMarker, _ := reviewtransaction.ReviewerContextMarkerFor("")
 	for order, lens := range state.SelectedLenses {
 		subject, subjectErr := reviewtransaction.NewArtifactSubject(state, revision, frozen, lens, order, "")
 		if subjectErr != nil {
@@ -293,7 +304,7 @@ func reviewLensContextBudgetProbe(
 		_, assemblyErr := reviewLensContextBlock(assemblyContext, deps, inspector, reviewLensContextBinding{
 			Lineage: state.LineageID, Target: state.InitialSnapshot.Identity, Lens: lens, Order: order,
 			Revision: revision, RepositoryContext: repositoryContext, SubjectHash: subject.SubjectHash,
-		}, subject, frozen)
+		}, subject, frozen, genericMarker)
 		var refusal *reviewLensContextError
 		if errors.As(assemblyErr, &refusal) && refusal.Code == "lens_context_budget_exceeded" {
 			return reviewLensContextOverBudget, nil
@@ -463,6 +474,7 @@ func reviewLensContextSelectedOrder(selected []string, lens string) (int, error)
 func reviewLensContextBlock(
 	ctx context.Context, deps reviewLensContextDeps, inspector reviewLensCandidateInspector,
 	binding reviewLensContextBinding, subject reviewtransaction.ArtifactSubject, frozen reviewtransaction.FrozenCandidateContext,
+	marker reviewtransaction.ReviewerContextMarker,
 ) ([]byte, error) {
 	// RepositoryRoot stays empty: this block is produced only for an opaque
 	// binding, and a reviewer transcript never carries a provider path.
@@ -476,7 +488,7 @@ func reviewLensContextBlock(
 	if err := reviewLensContextWriteLine(&block, reviewLensContextBindingHeader, binding); err != nil {
 		return nil, err
 	}
-	if err := reviewLensContextWriteLine(&block, reviewLensContextContextHeader, preflight); err != nil {
+	if err := reviewLensContextWriteLine(&block, marker.Header, preflight); err != nil {
 		return nil, err
 	}
 
@@ -493,7 +505,7 @@ func reviewLensContextBlock(
 		block.WriteString(rendered)
 		return nil
 	}
-	instruction, err := reviewLensContextInstructionText(binding, len(frozen.ChangedPathManifest))
+	instruction, err := reviewLensContextInstructionText(binding, len(frozen.ChangedPathManifest), marker)
 	if err != nil {
 		return nil, err
 	}
@@ -533,7 +545,7 @@ func reviewLensContextBlock(
 			return nil, err
 		}
 	}
-	block.WriteString(reviewLensContextTerminator + "\n")
+	block.WriteString(marker.Terminator + "\n")
 	return block.Bytes(), nil
 }
 
@@ -546,7 +558,7 @@ func reviewLensContextBlock(
 // The lens mandate is read from the one canonical source every installed agent
 // definition also renders from, so a reviewer's charge never depends on which
 // surface launched it.
-func reviewLensContextInstructionText(binding reviewLensContextBinding, paths int) (string, error) {
+func reviewLensContextInstructionText(binding reviewLensContextBinding, paths int, marker reviewtransaction.ReviewerContextMarker) (string, error) {
 	title, focus, found := reviewtransaction.LensMandate(binding.Lens)
 	if !found {
 		return "", reviewLensContextRefusal("lens_context_lens_not_selected", reviewLensContextRefreshAction)
@@ -562,7 +574,7 @@ Return. Emit exactly one JSON object and nothing else: no prose before or after 
 Citations. Every finding location, and every path cited inside an evidence string or a proof_refs entry, must be a repository-relative path exactly as it appears in the changed-path manifest, optionally with :line or :start-end. Never cite absolute paths, bare file basenames without their directory, or non-path colon-number shapes such as host:port. Any token shaped like path:line is validated against the frozen repository, and one unknown path rejects the entire result. A finding whose causal_disposition is introduced, behavior-activated, or worsened must anchor its location entirely within lines this candidate changed: every line of a path:start-end span is validated as candidate-changed, one unchanged context line in the span rejects the entire result, and observations about unchanged code belong under pre-existing or base-only instead. When the candidate's own content contains a path-shaped literal that is not a real repository path (for example a traversal or fixture token inside a test), never reproduce that token in evidence or proof_refs: describe it in words and cite the manifest file and line that contain it.
 
 Honesty. If you could not inspect the candidate, say so in evidence and do not return a clean result: an access failure is not a completed inspection, and reporting one as clean is the single outcome this review cannot recover from.`,
-		title, focus, reviewLensContextPatch, paths, reviewLensContextContextHeader,
+		title, focus, reviewLensContextPatch, paths, marker.Header,
 		reviewLensContextResultSchema, binding.SubjectHash), nil
 }
 

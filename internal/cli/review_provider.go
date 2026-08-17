@@ -67,7 +67,11 @@ func reviewProviderMaterialize(ctx context.Context, deps reviewLensContextDeps, 
 	if err != nil {
 		return reviewProviderRequest{}, err
 	}
-	prompt, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen)
+	// The Go-owned provider transport is not a caller-declared --agent: it
+	// always frames the generic marker, byte-identical to today, exactly as
+	// every live provider transport already expects.
+	genericMarker, _ := reviewtransaction.ReviewerContextMarkerFor("")
+	prompt, err := reviewLensContextBlock(ctx, deps, authority.Inspector, authority.Binding, authority.Subject, authority.Frozen, genericMarker)
 	if err != nil {
 		return reviewLensContextCleanup(ctx, reviewProviderRequest{}, err, func() error { return deps.close(authority.Inspector) })
 	}

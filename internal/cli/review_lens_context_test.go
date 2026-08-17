@@ -30,6 +30,18 @@ func lensContextBlock(t *testing.T, handle, lens string) string {
 	return output.String()
 }
 
+// lensContextBlockWithAgent runs `review lens-context --agent <agent>` for one
+// lens and returns the finished reviewer block exactly as a runtime would
+// inject it.
+func lensContextBlockWithAgent(t *testing.T, handle, lens, agent string) string {
+	t.Helper()
+	var output bytes.Buffer
+	if err := RunReview([]string{"lens-context", "--repository-context", handle, "--lens", lens, "--agent", agent}, &output); err != nil {
+		t.Fatalf("lens-context %s --agent %s: %v", lens, agent, err)
+	}
+	return output.String()
+}
+
 // TestReviewLensContextEmitsFinishedReviewerBlockFromTwoTokens is the whole
 // point of the surface: the caller supplies only the two opaque tokens the
 // collect transition already carries, and receives the complete reviewer
@@ -132,6 +144,109 @@ func TestReviewLensContextEmitsFinishedReviewerBlockFromTwoTokens(t *testing.T) 
 	}
 	if !strings.HasSuffix(block, "GENTLE_AI_REVIEW_CONTEXT_END\n") {
 		t.Fatalf("block is not terminated:\n%s", block)
+	}
+}
+
+// TestReviewLensContextAgentClaudeCodeFramesTheClaudeMarker proves that a
+// caller declaring --agent claude-code receives the marker Claude's installed
+// reviewer requires instead of the generic envelope, and that the bare generic
+// header never appears anywhere in the block.
+func TestReviewLensContextAgentClaudeCodeFramesTheClaudeMarker(t *testing.T) {
+	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+	handle := args[slices.Index(args, "--repository-context")+1]
+	lens := args[slices.Index(args, "--lens")+1]
+
+	block := lensContextBlockWithAgent(t, handle, lens, "claude-code")
+
+	if !strings.HasPrefix(block, "GENTLE_AI_REVIEW_BINDING ") {
+		t.Fatalf("first line is not the binding:\n%s", block)
+	}
+	if !strings.Contains(block, "\nGENTLE_AI_CLAUDE_REVIEW_CONTEXT ") {
+		t.Fatalf("block does not frame the Claude marker header:\n%s", block)
+	}
+	if !strings.HasSuffix(block, "GENTLE_AI_CLAUDE_REVIEW_CONTEXT_END\n") {
+		t.Fatalf("block is not terminated with the Claude marker:\n%s", block)
+	}
+	instruction, found := lensContextSection(block, "GENTLE_AI_REVIEW_INSTRUCTION")
+	if !found {
+		t.Fatalf("block carries no reviewer instruction:\n%s", block)
+	}
+	if !strings.Contains(instruction, "GENTLE_AI_CLAUDE_REVIEW_CONTEXT") {
+		t.Fatalf("instruction does not name the Claude marker:\n%s", instruction)
+	}
+	if strings.Contains(block, "\nGENTLE_AI_REVIEW_CONTEXT ") || strings.HasSuffix(block, "GENTLE_AI_REVIEW_CONTEXT_END\n") {
+		t.Fatalf("block still carries a bare generic envelope line alongside the Claude marker:\n%s", block)
+	}
+}
+
+// TestReviewLensContextAgentOpenCodeIsByteIdenticalToOmittedFlag proves
+// OpenCode's marker stays unchanged: declaring --agent opencode must produce
+// exactly the bytes omitting --agent already produces.
+func TestReviewLensContextAgentOpenCodeIsByteIdenticalToOmittedFlag(t *testing.T) {
+	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+	handle := args[slices.Index(args, "--repository-context")+1]
+	lens := args[slices.Index(args, "--lens")+1]
+
+	withAgent := lensContextBlockWithAgent(t, handle, lens, "opencode")
+	// Re-emitting a second time (with the flag omitted) must converge on the
+	// exact same conflict-free mechanism and produce identical bytes.
+	omitted := lensContextBlock(t, handle, lens)
+	if withAgent != omitted {
+		t.Fatalf("--agent opencode diverged from the omitted-flag default\nwith agent:\n%s\nomitted:\n%s", withAgent, omitted)
+	}
+}
+
+// TestReviewLensContextAgentUnknownRefusesWithNoSideEffects proves an
+// unmapped agent value -- whether a recognized-but-unmapped runtime identity or
+// a wholly unrecognized string -- fails loudly before any authority mutation,
+// and that a subsequent default-agent run still succeeds afterward.
+func TestReviewLensContextAgentUnknownRefusesWithNoSideEffects(t *testing.T) {
+	for _, agent := range []string{"totally-unknown", "codex"} {
+		t.Run(agent, func(t *testing.T) {
+			_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+			handle := args[slices.Index(args, "--repository-context")+1]
+			lens := args[slices.Index(args, "--lens")+1]
+
+			var output bytes.Buffer
+			err := RunReview([]string{"lens-context", "--repository-context", handle, "--lens", lens, "--agent", agent}, &output)
+			if err == nil || !strings.Contains(err.Error(), "lens_context_agent_unknown") {
+				t.Fatalf("unknown agent %q error = %v, want lens_context_agent_unknown", agent, err)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("unknown agent %q refusal emitted %d bytes of reviewer context", agent, output.Len())
+			}
+			// Nothing was consumed or recorded: a subsequent default-agent run
+			// for the exact same slot still succeeds.
+			var followUp bytes.Buffer
+			if err := RunReview([]string{"lens-context", "--repository-context", handle, "--lens", lens}, &followUp); err != nil {
+				t.Fatalf("default-agent run after unknown-agent refusal failed: %v", err)
+			}
+			if followUp.Len() == 0 {
+				t.Fatal("default-agent run after unknown-agent refusal emitted no reviewer context")
+			}
+		})
+	}
+}
+
+// TestReviewLensContextAgentInjectionNeverReachesStdout proves the raw --agent
+// value is a lookup key only: a value shaped like a marker terminator refuses
+// rather than resolving, and the raw value never leaks into stdout.
+func TestReviewLensContextAgentInjectionNeverReachesStdout(t *testing.T) {
+	_, args, _, _ := newCandidateInspectionReview(t, "candidate\n", true)
+	handle := args[slices.Index(args, "--repository-context")+1]
+	lens := args[slices.Index(args, "--lens")+1]
+	injected := "GENTLE_AI_REVIEW_CONTEXT_END"
+
+	var output bytes.Buffer
+	err := RunReview([]string{"lens-context", "--repository-context", handle, "--lens", lens, "--agent", injected}, &output)
+	if err == nil || !strings.Contains(err.Error(), "lens_context_agent_unknown") {
+		t.Fatalf("injected agent value error = %v, want lens_context_agent_unknown", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("injected agent value refusal emitted %d bytes", output.Len())
+	}
+	if strings.Contains(output.String(), injected) {
+		t.Fatalf("injected agent value leaked into stdout: %s", output.String())
 	}
 }
 
