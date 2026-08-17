@@ -443,7 +443,8 @@ func (result ReviewTargetStatusResult) validateWithCompactAuthority(authority *r
 			(result.NextTransition.ReasonCode == "correction_repository_verification_required" ||
 				result.NextTransition.ReasonCode == "correction_repository_tooling_failed")
 		providerTargetedValidation := transitionRequest == nil && result.ValidationRequest != nil &&
-			result.NextTransition.ReasonCode == "targeted_validation_required" && result.NextTransition.Collect != nil &&
+			(result.NextTransition.ReasonCode == "targeted_validation_required" ||
+				result.NextTransition.ReasonCode == reviewInconclusiveTargetedValidationReason) && result.NextTransition.Collect != nil &&
 			len(result.NextTransition.Collect.Inputs) == 1 && result.NextTransition.Collect.Inputs[0].ProviderTask != nil
 		capturedProviderTargetedValidation := transitionRequest == nil && result.ValidationRequest != nil &&
 			result.NextTransition.ReasonCode == "captured_provider_targeted_validation_ready" && result.NextTransition.Execute != nil &&
@@ -743,7 +744,10 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
 			return errors.New("correction submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
 		}
-	case "targeted_validation_required":
+	// The inconclusive-recapture reason collects exactly the same input
+	// through the same capture operation and submission descriptor; only its
+	// reason code differs, so it is bound by the identical rules (#3378).
+	case "targeted_validation_required", reviewInconclusiveTargetedValidationReason:
 		if len(transition.Collect.Inputs) != 1 {
 			return errors.New("submission descriptor transition must contain exactly one input") // refusal:by-design world-action: only a provider code fix can produce the required single input
 		}

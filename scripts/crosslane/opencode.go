@@ -235,6 +235,75 @@ func (b *battery) runOpenCodeLane() {
 		return
 	}
 
+	// #3380: the targeted validator is the one review role expected to inspect
+	// the immutable corrected candidate itself. Prove it can, using only the
+	// bytes the real plugin hands its child. The probe returns a deliberate
+	// non-result so the relay refuses the completion and the validator slot
+	// stays open for the frames below.
+	probe, err := b.runHookCase(node, harnessCase{
+		Name:       "validator-inspection-recipe",
+		Subagent:   "review-validator",
+		Prompt:     providerPrompt,
+		TaskOutput: "probe: no verdict submitted",
+	})
+	switch {
+	case err != nil:
+		b.fail(openCodeLane, "validator inspection recipe", err.Error())
+	case !probe.BeforeOK || probe.ChildPrompt == "":
+		b.fail(openCodeLane, "validator inspection recipe", "relay materialized no child prompt: "+firstLine(probe.Error))
+	default:
+		b.checkValidatorInspectionRecipe(repo, probe.ChildPrompt)
+	}
+
+	// An inconclusive validator result is a non-verdict: it must never occupy
+	// the immutable slot, because admitting it as failed would spend the one
+	// correction attempt on an observation that was never made (issue #3378).
+	// This is the deterministic half of that fix; the routing half needs a
+	// slot published by a pre-fix build, which no public command can create
+	// once the detector refuses these bytes.
+	inconclusive := map[string]any{
+		"targeted_validation_request_hash": validationRequest["request_hash"],
+		"correction_target_identity":       validationRequest["correction_target_identity"],
+		"original_criteria": map[string]any{
+			"passed":   false,
+			"evidence": []string{"Immutable correction candidate tree could not be inspected with read-only Git access, so no verdict was produced"},
+		},
+		"correction_regression": map[string]any{
+			"passed":   false,
+			"evidence": []string{"Immutable correction candidate tree could not be inspected with read-only Git access, so no verdict was produced"},
+		},
+		"follow_ups": []any{},
+	}
+	inconclusiveJSON, err := json.Marshal(inconclusive)
+	if err != nil {
+		b.fail(openCodeLane, "validator frame: inconclusive refused", err.Error())
+		return
+	}
+	switch refused, err := b.runHookCase(node, harnessCase{
+		Name:       "validator-inconclusive",
+		Subagent:   "review-validator",
+		Prompt:     providerPrompt,
+		TaskOutput: string(inconclusiveJSON),
+	}); {
+	case err != nil:
+		b.fail(openCodeLane, "validator frame: inconclusive refused", err.Error())
+		return
+	case refused.AfterOK:
+		b.fail(openCodeLane, "validator frame: inconclusive refused",
+			"an uninspected-candidate validator result was admitted; it would spend the single correction attempt on a non-observation")
+		return
+	default:
+		statusDoc, stderr, _ = b.status(repo, "opencode")
+		retry := collectInput(statusDoc)
+		if retry == nil || retry["capture_operation"] != "external.run_provider_role" {
+			b.fail(openCodeLane, "validator frame: inconclusive refused",
+				fmt.Sprintf("refused inconclusive result did not leave the validator slot retryable; %s %s",
+					getString(statusDoc, "next_transition", "reason_code"), firstLine(stderr)))
+			return
+		}
+		b.pass(openCodeLane, "validator frame: inconclusive refused", "uninspected-candidate verdict refused and the validation stayed retryable")
+	}
+
 	// Host-serialized role frame: same semantic binding, re-serialized by the
 	// host (sorted keys). The Go transport currently requires the byte-exact
 	// provider-issued prompt.
@@ -396,6 +465,73 @@ func (b *battery) prepareHookHarness(repo string) (string, error) {
 
 // runHookCase executes one hook case in a fresh node process so every case
 // gets an isolated relay registry, exactly like a fresh host session.
+// checkValidatorInspectionRecipe answers the question the two #3380 field
+// reports could not: can a targeted validator reach the frozen corrected tree
+// from what it was handed, and nothing else? It parses the child prompt the
+// real plugin delivered, assembles the inspection command from that JSON alone,
+// and runs it against the binary under test. Deterministic end to end: no model
+// spend, no host application. The residual gap it does NOT cover is whether a
+// live reviewer model chooses to run the command it is now given -- that needs
+// --with-model, and no assertion here should be read as covering it.
+func (b *battery) checkValidatorInspectionRecipe(repo, childPrompt string) {
+	const name = "validator inspection recipe"
+	_, rest, found := strings.Cut(childPrompt, "\n\nInput:\n")
+	if !found {
+		b.fail(openCodeLane, name, "child prompt carries no provider Input block")
+		return
+	}
+	payload, _, found := strings.Cut(rest, "\n\nOutput schema:\n")
+	if !found {
+		b.fail(openCodeLane, name, "child prompt carries no provider Output schema block")
+		return
+	}
+	var request struct {
+		RepositoryContext string `json:"repository_context"`
+		ValidationRequest struct {
+			RequestHash              string   `json:"request_hash"`
+			LineageID                string   `json:"lineage_id"`
+			ExpectedRevision         string   `json:"expected_revision"`
+			CorrectionTargetIdentity string   `json:"correction_target_identity"`
+			CorrectionPaths          []string `json:"correction_paths"`
+		} `json:"validation_request"`
+	}
+	if err := json.Unmarshal([]byte(payload), &request); err != nil {
+		b.fail(openCodeLane, name, "child prompt Input is not decodable JSON: "+err.Error())
+		return
+	}
+	if !strings.Contains(childPrompt, "gentle-ai review inspect-candidate") {
+		b.fail(openCodeLane, name, "child prompt never names the immutable inspection command")
+		return
+	}
+	if request.RepositoryContext == "" || len(request.ValidationRequest.CorrectionPaths) == 0 {
+		b.fail(openCodeLane, name, "child prompt omits the repository context or the correction paths, so the recipe is underivable")
+		return
+	}
+	binding := []string{
+		"review", "inspect-candidate", "--purpose", "targeted-validation",
+		"--lineage", request.ValidationRequest.LineageID,
+		"--expected-revision", request.ValidationRequest.ExpectedRevision,
+		"--target", request.ValidationRequest.CorrectionTargetIdentity,
+		"--request-hash", request.ValidationRequest.RequestHash,
+		"--repository-context", request.RepositoryContext,
+	}
+	for _, operation := range [][]string{
+		{"--operation", "name-status"},
+		{"--operation", "numstat"},
+		{"--operation", "stat", "--path-index", "0"},
+		{"--operation", "patch", "--path-index", "0"},
+		{"--operation", "object", "--path-index", "0", "--side", "candidate"},
+	} {
+		stdout, stderr, code := b.run(repo, append(append([]string(nil), binding...), operation...)...)
+		if code != 0 || strings.TrimSpace(stdout) == "" {
+			b.fail(openCodeLane, name, fmt.Sprintf("inspect-candidate %v derived from the child prompt alone failed: exit=%d %s",
+				operation, code, firstLine(stderr)))
+			return
+		}
+	}
+	b.pass(openCodeLane, name, "the relayed child prompt alone reaches the frozen corrected tree through every inspection operation")
+}
+
 func (b *battery) runHookCase(harnessDir string, c harnessCase) (harnessResult, error) {
 	configPath := filepath.Join(harnessDir, c.Name+".case.json")
 	payload, err := json.Marshal(c)

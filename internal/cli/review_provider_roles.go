@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -197,9 +200,17 @@ func reviewProviderCanonicalRefuterClaims(snapshot string, claims []reviewtransa
 	return canonical, nil
 }
 
+// reviewProviderTargetedValidatorRequest carries the opaque repository context
+// because this role, alone among the provider roles, is expected to inspect
+// the immutable corrected candidate itself. The handle stays opaque and
+// path-free: it is a locator, not authorization, and resolving it revalidates
+// the repository and the current compact authority before any tree is read.
+// Without it the inspection recipe in the role's prompt would name a command
+// no validator could assemble, which is the second half of #3380.
 type reviewProviderTargetedValidatorRequest struct {
 	ValidationRequest reviewtransaction.TargetedValidationRequest `json:"validation_request"`
 	FixDeltaHash      string                                      `json:"fix_delta_hash"`
+	RepositoryContext string                                      `json:"repository_context"`
 	Evidence          []reviewProviderEvidence                    `json:"evidence"`
 	Invocation        reviewerprovider.Invocation                 `json:"-"`
 }
@@ -230,11 +241,23 @@ func reviewProviderNewTargetedValidatorRequest(ctx context.Context, repo string,
 	if !providerSHA256(fixDeltaHash) {
 		return reviewProviderTargetedValidatorRequest{}, errors.New("provider targeted validator request has an invalid fix delta hash") // refusal:by-design world-action: the provider-created validator request must carry immutable fix identity
 	}
+	// The same binding STATUS publishes for this transition, so the handle the
+	// validator is handed is byte-identical to the one the orchestrator holds
+	// and the derivation stays deterministic for the transport's re-interception
+	// byte comparison.
+	repositoryContext, err := reviewtransaction.PublishReviewRepositoryContext(ctx, repo, reviewtransaction.ReviewRepositoryContextBinding{
+		LineageID: request.LineageID, TargetIdentity: request.CorrectionTargetIdentity, Revision: request.ExpectedRevision,
+	})
+	if err != nil {
+		return reviewProviderTargetedValidatorRequest{}, err
+	}
 	evidence, err := reviewProviderMaterializeEvidence(ctx, repo, correction)
 	if err != nil {
 		return reviewProviderTargetedValidatorRequest{}, err
 	}
-	providerRequest := reviewProviderTargetedValidatorRequest{ValidationRequest: request, FixDeltaHash: fixDeltaHash, Evidence: evidence}
+	providerRequest := reviewProviderTargetedValidatorRequest{
+		ValidationRequest: request, FixDeltaHash: fixDeltaHash, RepositoryContext: repositoryContext, Evidence: evidence,
+	}
 	prompt, err := reviewProviderRolePrompt(contract, providerRequest)
 	if err != nil {
 		return reviewProviderTargetedValidatorRequest{}, err
@@ -426,6 +449,9 @@ func reviewProviderAdmitTargetedValidatorRaw(request reviewProviderTargetedValid
 	if !providerSHA256(request.FixDeltaHash) {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, errors.New("provider targeted validator request has an invalid fix delta hash") // refusal:by-design world-action: validator admission requires Go-owned immutable fix identity
 	}
+	if err := reviewtransaction.ValidateReviewRepositoryContextHandle(request.RepositoryContext); err != nil {
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, errors.New("provider targeted validator request has no opaque repository context") // refusal:by-design world-action: a validator asked to inspect the frozen candidate must be issued the locator that reaches it
+	}
 	payload, err := reviewProviderExtractRoleRaw(reviewProviderRoleTargetedValidator, raw)
 	if err != nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
@@ -473,6 +499,18 @@ func reviewProviderCaptureTargetedValidatorRaw(ctx context.Context, repo string,
 	}
 	result, native, err := reviewProviderAdmitTargetedValidatorRaw(request, raw)
 	if err != nil {
+		// Every host-mediated capture entry point funnels through here, so this
+		// is where a recapture that is itself a non-verdict spends its attempt.
+		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{},
+			reviewRecordInconclusiveTargetedValidation(store.Dir, request.ValidationRequest, raw, err)
+	}
+	// The new bytes are an admitted verdict. If the slot is still held by a
+	// non-verdict captured before this build could refuse one, archive it and
+	// vacate the slot so the immutable publication below sees an empty slot
+	// rather than a conflict it must refuse (#3378). A real verdict is never
+	// archived: the occupant has to be inadmissible for inconclusiveness and
+	// nothing else, and its exact bytes and digest are preserved first.
+	if err := reviewArchiveInconclusiveTargetedValidatorSlot(store.Dir, request); err != nil {
 		return facadeValidationResult{}, reviewtransaction.ScopedValidationResult{}, err
 	}
 	payload, err := canonicalProviderRoleResult(result)
@@ -527,6 +565,130 @@ func reviewProviderCaptureTargetedValidator(ctx context.Context, repo string, st
 	return reviewProviderCaptureTargetedValidatorRaw(ctx, repo, store, state, revision, raw)
 }
 
+// reviewTargetedValidatorSlotPath is the one place the correction-bound
+// validator slot layout is spelled out on this side of the store boundary.
+func reviewTargetedValidatorSlotPath(storeDir string, request reviewtransaction.TargetedValidationRequest) string {
+	return filepath.Join(storeDir, "targeted-validator-results",
+		strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:"),
+		strings.TrimPrefix(request.ExpectedRevision, "sha256:"), "result.json")
+}
+
+// maxInconclusiveTargetedValidations bounds the non-verdicts one correction may
+// accumulate: one "I could not inspect it" deserves a re-run, a validator still
+// blind after that reports an environmental failure no recapture resolves.
+const maxInconclusiveTargetedValidations = 3
+
+// reviewQuarantinedTargetedValidatorPath names one preserved validator result
+// under the store's existing quarantine root. The empty suffix is the single
+// superseded legacy occupant, whose fixed name keeps the supersede publish
+// content-idempotent; "-attempt-<n>" is one rejected recapture.
+func reviewQuarantinedTargetedValidatorPath(storeDir string, request reviewtransaction.TargetedValidationRequest, suffix string) string {
+	return filepath.Join(storeDir, reviewtransaction.CompactQuarantinedReviewerResultsDir,
+		strings.TrimPrefix(request.ExpectedRevision, "sha256:")[:16],
+		"targeted-validator-"+strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:")[:16]+suffix+".json")
+}
+
+func reviewInconclusiveTargetedValidationAttempt(attempt int) string {
+	return "-attempt-" + strconv.Itoa(attempt)
+}
+
+// reviewInconclusiveTargetedValidationAttempts is the persisted retry ledger. It
+// counts rejected recaptures, the only event a repeatedly blind validator can
+// produce: this build refuses to publish a non-verdict, so the occupied slot
+// never changes, and the supersede archive is written only once an admitted
+// verdict has already ended this route.
+func reviewInconclusiveTargetedValidationAttempts(storeDir string, request reviewtransaction.TargetedValidationRequest) int {
+	attempts := 0
+	for attempts < maxInconclusiveTargetedValidations {
+		if _, err := os.Lstat(reviewQuarantinedTargetedValidatorPath(storeDir, request, reviewInconclusiveTargetedValidationAttempt(attempts+1))); err != nil {
+			break
+		}
+		attempts++
+	}
+	return attempts
+}
+
+// reviewRecordInconclusiveTargetedValidation appends one rejected non-verdict to
+// that ledger and returns the refusal unchanged, so every capture route records
+// the attempt by wrapping its own admission error. Each record takes a fresh
+// ordinal and content is never deduplicated: identical bytes are the expected
+// shape of a deterministically blind validator, so reading them as a crash
+// replay would swallow real attempts. The record is one atomic publish with
+// nothing else to reconcile, so a crash before it leaves an attempt uncounted,
+// which errs toward more retries rather than fewer.
+func reviewRecordInconclusiveTargetedValidation(storeDir string, request reviewtransaction.TargetedValidationRequest, rejected []byte, err error) error {
+	if !errors.Is(err, errReviewTargetedValidationInconclusive) {
+		return err
+	}
+	path := reviewQuarantinedTargetedValidatorPath(storeDir, request,
+		reviewInconclusiveTargetedValidationAttempt(reviewInconclusiveTargetedValidationAttempts(storeDir, request)+1))
+	for _, dir := range []string{filepath.Join(storeDir, reviewtransaction.CompactQuarantinedReviewerResultsDir), filepath.Dir(path)} {
+		if dirErr := ensureReviewerArtifactDir(dir); dirErr != nil {
+			return errors.Join(err, dirErr)
+		}
+	}
+	if publishErr := publishImmutableReviewerFile(path, rejected); publishErr != nil {
+		return errors.Join(err, publishErr)
+	}
+	return err
+}
+
+// reviewArchiveInconclusiveTargetedValidatorSlot vacates a correction-bound
+// validator slot occupied by a captured non-verdict, preserving its exact
+// bytes and digest under the store's existing quarantine root first. It is a
+// no-op for an empty slot and for any occupant that is admissible or that
+// fails admission for any reason other than inconclusiveness, so an immutable
+// verdict -- passed or failed -- can never be replaced through this path.
+// Archive-then-remove converges on retry: a crash after the archive leaves the
+// preserved copy, and the next attempt finds it already published.
+func reviewArchiveInconclusiveTargetedValidatorSlot(storeDir string, request reviewProviderTargetedValidatorRequest) error {
+	slot, err := reviewtransaction.ReadCompactTargetedValidatorResultSlot(storeDir, request.ValidationRequest)
+	if err != nil || !slot.Occupied {
+		// A slot this build cannot even read back is corruption, not a
+		// non-verdict: leave it exactly as it is for maintainer inspection.
+		return nil
+	}
+	occupant, _, admitErr := reviewProviderAdmitTargetedValidatorRaw(request, slot.Payload)
+	if !errors.Is(admitErr, errReviewTargetedValidationInconclusive) {
+		_ = occupant
+		return nil
+	}
+	path := reviewTargetedValidatorSlotPath(storeDir, request.ValidationRequest)
+	digestPath := path + ".sha256"
+	payload, payloadInfo, payloadErr := readPrivateReviewerFile(path, reviewResultArtifactLimit)
+	if payloadErr != nil {
+		return fmt.Errorf("read superseded targeted validator result: %w", payloadErr)
+	}
+	_, digestInfo, digestErr := readPrivateReviewerFile(digestPath, 256)
+	if digestErr != nil {
+		return fmt.Errorf("read superseded targeted validator result digest: %w", digestErr)
+	}
+	archiveRoot := filepath.Join(storeDir, reviewtransaction.CompactQuarantinedReviewerResultsDir)
+	if err := ensureReviewerArtifactDir(archiveRoot); err != nil {
+		return err
+	}
+	archivePath := reviewQuarantinedTargetedValidatorPath(storeDir, request.ValidationRequest, "")
+	if err := ensureReviewerArtifactDir(filepath.Dir(archivePath)); err != nil {
+		return err
+	}
+	if err := publishImmutableReviewerFile(archivePath, payload); err != nil {
+		return fmt.Errorf("archive superseded targeted validator result: %w", err)
+	}
+	if err := publishImmutableReviewerFile(archivePath+".sha256", []byte(slot.Digest+"\n")); err != nil {
+		return fmt.Errorf("archive superseded targeted validator result digest: %w", err)
+	}
+	for _, owned := range []struct {
+		path string
+		info os.FileInfo
+	}{{path: path, info: payloadInfo}, {path: digestPath, info: digestInfo}} {
+		removeOwnedArtifact(owned.path, owned.info)
+		if _, err := os.Lstat(owned.path); !os.IsNotExist(err) {
+			return errors.New("superseded targeted validator result changed before removal") // refusal:by-design human-authority: a validator slot that changes mid-supersede requires maintainer inspection
+		}
+	}
+	return syncReviewerArtifactDirectoryCompatible(filepath.Dir(path))
+}
+
 func readCapturedProviderTargetedValidatorResult(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) (facadeValidationResult, error) {
 	correction, err := reviewProviderTargetedValidatorCorrection(ctx, repo, state)
 	if err != nil {
@@ -545,6 +707,15 @@ func readCapturedProviderTargetedValidatorResult(ctx context.Context, repo, stor
 	}
 	result, _, err := reviewProviderAdmitTargetedValidatorRaw(request, slot.Payload)
 	if err != nil {
+		// A non-verdict stays retryable only while the ledger has room. Once it
+		// does not, this slot is what captured_artifacts_unverifiable already
+		// names -- a captured artifact no routing can turn into a result -- so
+		// the exhausted error drops the retryable sentinel and the caller's
+		// default branch reaches that terminal instead of recapturing forever.
+		if errors.Is(err, errReviewTargetedValidationInconclusive) &&
+			reviewInconclusiveTargetedValidationAttempts(storeDir, request.ValidationRequest)+1 >= maxInconclusiveTargetedValidations {
+			return facadeValidationResult{}, fmt.Errorf("captured provider targeted validator produced no verdict on %d consecutive attempts: %s", maxInconclusiveTargetedValidations, err) // refusal:by-design human-authority: the captured_artifacts_unverifiable stop this routes to names the continuation, and a permanently blind validator needs maintainer inspection
+		}
 		return facadeValidationResult{}, fmt.Errorf("captured provider targeted validator result is no longer admitted: %w", err)
 	}
 	payload, err := canonicalProviderRoleResult(result)

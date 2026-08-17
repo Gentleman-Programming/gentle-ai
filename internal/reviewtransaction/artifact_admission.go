@@ -714,6 +714,13 @@ func evidenceReportsUnavailableInspection(value string) bool {
 		"inspection blocked", "inspection was blocked", "access denied", "permission denied",
 		"candidate unavailable", "candidate was unavailable", "immutable candidate unavailable",
 		"could not inspect", "unable to inspect", "was not inspected", "not inspected",
+		// Passive constructions (issue #3378). "not inspected" cannot cover
+		// these: every one of them puts an auxiliary verb between the two
+		// words. They are still narrow enough that a completed inspection
+		// reporting a real defect ("Inspected the tree: the loop still stops
+		// one entry short") never matches.
+		"could not be inspected", "cannot be inspected", "can not be inspected",
+		"was not able to be inspected", "were not able to be inspected",
 		"no candidate contents were available", "no candidate content was available",
 	} {
 		if strings.Contains(value, phrase) {
