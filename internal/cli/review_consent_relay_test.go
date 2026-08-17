@@ -363,9 +363,12 @@ func TestRelayedConsentDeclineIsScopedToTheCandidate(t *testing.T) {
 
 // TestNegotiatedStartWithoutConsentDeclarationKeepsTodaysEnvelope pins the
 // no-declaration path: the negotiated envelope carries no consent fields (the
-// strict decoder refuses unknown fields), the start completes, and the
-// skip-and-notice behavior stays on the console. Byte-identity of the envelope
-// itself is pinned by TestNegotiatedReviewStartMatchesVersionedFixture.
+// strict decoder refuses unknown fields), the start completes in the
+// fail-safe direction, and the console stays byte-silent — the skip notices
+// are a human surface reserved for plain (non-negotiated) starts, because a
+// successful negotiated operation writes zero bytes to stderr. Byte-identity
+// of the envelope itself is pinned by
+// TestNegotiatedReviewStartMatchesVersionedFixture.
 func TestNegotiatedStartWithoutConsentDeclarationKeepsTodaysEnvelope(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
@@ -383,8 +386,8 @@ func TestNegotiatedStartWithoutConsentDeclarationKeepsTodaysEnvelope(t *testing.
 	if strings.Contains(output.String(), "consent") {
 		t.Fatalf("undeclared negotiated START leaked consent fields:\n%s", output.String())
 	}
-	if !strings.Contains(console.String(), reviewConsentSkippedNotice) {
-		t.Fatalf("undeclared headless START must keep the skip notice:\n%s", console.String())
+	if console.Len() != 0 {
+		t.Fatalf("undeclared negotiated START must stay silent on the console:\n%s", console.String())
 	}
 }
 

@@ -1443,6 +1443,19 @@ func TestExplicitReviewingStatusRejectsSemanticAndIneligibleFrozenCandidates(t *
 			t.Fatalf("fully occupied frozen status = %#v, %v", status, err)
 		}
 	})
+	t.Run("fully occupied undrifted candidate finalizes", func(t *testing.T) {
+		fixture := newCompactReviewerCaptureFixture(t, "frozen-complete-undrifted")
+		if _, err := fixture.store.CaptureAdmittedReviewerResult(context.Background(), fixture.request); err != nil {
+			t.Fatal(err)
+		}
+		status, err := AssessTargetStatus(context.Background(), fixture.store.repo, TargetStatusRequest{
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: fixture.state.LineageID,
+		})
+		if err != nil || status.Applicability != TargetApplicabilityCurrent || status.LineageID != fixture.state.LineageID ||
+			status.Action != TargetStatusActionFinalize || status.Replayability != ReplayabilityNotReplayable {
+			t.Fatalf("fully occupied undrifted frozen status = %#v, %v", status, err)
+		}
+	})
 
 	t.Run("semantic frozen evidence", func(t *testing.T) {
 		repo := initSnapshotRepo(t)

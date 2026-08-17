@@ -1,6 +1,6 @@
 # Contributing to Gentle AI
 
-Thank you for your interest in contributing to **Gentle AI** (`gga`) — a Go TUI installer for AI agent environments.
+Thank you for your interest in contributing to **Gentle AI** (`gentle-ai`) — a Go CLI/TUI ecosystem configurator for AI coding agents.
 
 Before you dive in, please read this guide fully. We have a structured workflow to keep the project organized and maintainable.
 
@@ -13,6 +13,7 @@ Before you dive in, please read this guide fully. We have a structured workflow 
 - [Label System](#label-system)
 - [Development Setup](#development-setup)
 - [Testing](#testing)
+- [Running the Cross-Lane Battery](#running-the-cross-lane-battery)
 - [Commit Convention](#commit-convention)
 - [Delivery Strategy for SDD Changes](#delivery-strategy-for-sdd-changes)
 - [Pull Request Rules](#pull-request-rules)
@@ -111,13 +112,13 @@ For disclosure boundaries, required details, attribution rules, and reviewer exp
 ```bash
 git clone https://github.com/Gentleman-Programming/gentle-ai.git
 cd gentle-ai
-go build -o gga .
+go build -o gentle-ai ./cmd/gentle-ai
 ```
 
 ### Run Locally
 
 ```bash
-./gga
+./gentle-ai
 ```
 
 ---
@@ -155,6 +156,33 @@ chmod +x docker-test.sh
 ```
 
 > ⚠️ E2E tests spin up containers to simulate real installation environments. They may take a few minutes to complete.
+
+### Running the Cross-Lane Battery
+
+The cross-lane battery ([`scripts/cross-lane-battery.sh`](scripts/cross-lane-battery.sh), implemented in [`scripts/crosslane/`](scripts/crosslane/)) is a local, out-of-CI regression net. It drives one real `gentle-ai` binary end to end across the supported agent-host review integration boundaries. It is deliberately not wired into CI because its optional tiers spend real reviewer model runs and real host sessions.
+
+Build a binary first, then run the tier you can afford:
+
+```bash
+go build -o /tmp/gentle-ai ./cmd/gentle-ai
+./scripts/cross-lane-battery.sh --binary /tmp/gentle-ai [--with-model] [--with-host] [--keep-work]
+```
+
+| Tier | Flags | Cost profile | What it covers |
+|------|-------|--------------|----------------|
+| Deterministic | none (always runs) | Free and fast | The real OpenCode transport plugin bytes through an emulated Task hook surface (host-frame emulation), one full Claude-lane lifecycle plus a medium-candidate consent round-trip, and schema conformance of every captured envelope against `contracts/review-integration/`. |
+| Model | `--with-model` | Real reviewer model runs (model spend) | Additionally runs the real compiled claude-code reviewer runtime. |
+| Host | `--with-host` | Real host sessions plus model spend | Spawns real host applications: `codex exec` through the compiled Codex adapter, the installed `gentle-pi` print-mode Pi relay, and a headless `opencode run` session in a sandboxed HOME with the real transport plugin. |
+
+Behavior to expect:
+
+- Every host command is bounded (12 minutes per host command, 20 minutes per non-host command), so a hung host surfaces as a bounded lane failure instead of hanging the battery.
+- The run prints a PASS/FAIL/SKIP table per check and the real model runs spent; any failing check makes the battery exit non-zero. Known-red checks still fail — red at the exact seam where a defect escaped is the battery working.
+- The scratch work root is removed on every exit, including failing ones; pass `--keep-work` to keep it for inspection.
+
+Run the battery before merging changes that touch a review-lifecycle surface (facade, transports, contracts, host adapters) and after building a new binary you intend to exercise. Running it and reporting red checks is itself a valuable contribution — open an issue with the PASS/FAIL/SKIP table and the binary/commit you tested.
+
+The sibling `gentle-pi` repository carries its own battery: `pnpm test:cross-lane` in [Gentleman-Programming/gentle-pi](https://github.com/Gentleman-Programming/gentle-pi).
 
 ### Benchmark Validation
 

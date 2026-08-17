@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -872,6 +873,22 @@ func reviewGateContentionError(evaluation reviewtransaction.NativeGateEvaluation
 	)
 }
 
+// reviewRetrySafeDenialAction overrides the result-derived gate action for
+// the two retry-safe receipt-discovery denials (issue #3342). Both stay
+// denied (allowed=false), but their action is "retry": the reason already
+// names the runnable continuation, and routing either to
+// explicit-maintainer-action escalated conditions that clear themselves.
+func reviewRetrySafeDenialAction(denial *reviewtransaction.GateDenial) string {
+	if denial == nil || denial.Stage != "receipt-discovery" {
+		return ""
+	}
+	switch ReviewReceiptDiscoveryKind(denial.Code) {
+	case ReviewGateRemoteFetchRequired, ReviewAuthorityInventoryBusy:
+		return "retry"
+	}
+	return ""
+}
+
 func reviewGateAction(result reviewtransaction.GateResult) string {
 	switch result {
 	case reviewtransaction.GateAllow:
@@ -888,8 +905,175 @@ func reviewGateAction(result reviewtransaction.GateResult) string {
 	}
 }
 
+// reviewManifestArrayKey is the one emitted object key whose array elements are
+// written one per line instead of one field per line.
+//
+// The changed-path manifest is the only field this product emits whose size is
+// proportional to the candidate's changed-file count and whose shape it cannot
+// reduce: the published contract fixes its eight required per-entry fields and
+// forbids additional ones (contracts/review-integration/v2/schemas/
+// start.schema.json#/$defs/changed_path), and every negotiated route that
+// carries reviewer context is required to carry it. What this product does own
+// is how many lines those fixed fields are spread across. Indented per field
+// they cost ten lines per entry, which is how a 149-path candidate reached a
+// 1,505-line payload in a consumer's conversation (issue #3281). One line per
+// entry is the floor that keeps the field intact.
+//
+// This is insignificant whitespace only. The emitted bytes decode to exactly
+// the same value, so every published-schema validation, every artifact-subject
+// digest taken over the manifest, and every consumer that parses rather than
+// pattern-matches the payload are unaffected.
+const reviewManifestArrayKey = `"changed_path_manifest": [`
+
 func encodeReviewJSON(stdout io.Writer, value any) error {
-	encoder := json.NewEncoder(stdout)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(value)
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	// json.Encoder.SetIndent is exactly Marshal followed by Indent, so keeping
+	// both steps explicit leaves every non-manifest envelope byte-identical to
+	// the encoder this product has always used.
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, payload, "", "  "); err != nil {
+		return err
+	}
+	emitted := append(compactReviewChangedPathManifests(indented.Bytes()), '\n')
+	_, err = stdout.Write(emitted)
+	return err
+}
+
+// compactReviewChangedPathManifests rewrites every changed-path manifest array
+// in already-indented JSON so each entry occupies one line. Any array it cannot
+// fully account for is copied through untouched, because emitting a payload
+// this pass only partly understood would be worse than emitting a verbose one.
+func compactReviewChangedPathManifests(indented []byte) []byte {
+	var out bytes.Buffer
+	out.Grow(len(indented))
+	cursor := 0
+	for cursor < len(indented) {
+		key := indexReviewManifestArrayKey(indented, cursor)
+		if key < 0 {
+			break
+		}
+		open := key + len(reviewManifestArrayKey) - 1
+		end := reviewJSONArrayEnd(indented, open)
+		var entries []json.RawMessage
+		if end < 0 || json.Unmarshal(indented[open:end+1], &entries) != nil {
+			out.Write(indented[cursor : open+1])
+			cursor = open + 1
+			continue
+		}
+		compacted, ok := compactReviewManifestEntries(entries, reviewJSONLineIndent(indented, key))
+		if !ok {
+			out.Write(indented[cursor : end+1])
+			cursor = end + 1
+			continue
+		}
+		out.Write(indented[cursor:open])
+		out.Write(compacted)
+		cursor = end + 1
+	}
+	out.Write(indented[cursor:])
+	return out.Bytes()
+}
+
+// compactReviewManifestEntries renders one manifest array in the exact layout
+// json.Indent would use for the array itself, with each entry on a single line.
+func compactReviewManifestEntries(entries []json.RawMessage, indent string) ([]byte, bool) {
+	var out bytes.Buffer
+	out.WriteByte('[')
+	for index, entry := range entries {
+		if index > 0 {
+			out.WriteByte(',')
+		}
+		out.WriteByte('\n')
+		out.WriteString(indent)
+		out.WriteString("  ")
+		if err := json.Compact(&out, entry); err != nil {
+			return nil, false
+		}
+	}
+	if len(entries) > 0 {
+		out.WriteByte('\n')
+		out.WriteString(indent)
+	}
+	out.WriteByte(']')
+	return out.Bytes(), true
+}
+
+// indexReviewManifestArrayKey finds the next manifest array key that is a real
+// object key rather than text inside a string value. Indented JSON always
+// precedes an object key with a line break and its indent, and a raw line break
+// can never appear inside a JSON string, so that prefix is proof of position.
+func indexReviewManifestArrayKey(indented []byte, from int) int {
+	for cursor := from; cursor < len(indented); {
+		offset := bytes.Index(indented[cursor:], []byte(reviewManifestArrayKey))
+		if offset < 0 {
+			return -1
+		}
+		match := cursor + offset
+		if reviewJSONLineStart(indented, match) >= 0 {
+			return match
+		}
+		cursor = match + 1
+	}
+	return -1
+}
+
+// reviewJSONLineStart reports the offset just past the line break preceding
+// position, provided only indent spaces separate them, and -1 otherwise.
+func reviewJSONLineStart(indented []byte, position int) int {
+	for cursor := position - 1; cursor >= 0; cursor-- {
+		switch indented[cursor] {
+		case ' ':
+		case '\n':
+			return cursor + 1
+		default:
+			return -1
+		}
+	}
+	return -1
+}
+
+// reviewJSONLineIndent returns the indent of the line holding position.
+func reviewJSONLineIndent(indented []byte, position int) string {
+	start := reviewJSONLineStart(indented, position)
+	if start < 0 {
+		return ""
+	}
+	return string(indented[start:position])
+}
+
+// reviewJSONArrayEnd returns the offset of the bracket closing the array that
+// opens at open, or -1 when the input is not a balanced array from there.
+func reviewJSONArrayEnd(indented []byte, open int) int {
+	if open >= len(indented) || indented[open] != '[' {
+		return -1
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for cursor := open; cursor < len(indented); cursor++ {
+		character := indented[cursor]
+		switch {
+		case escaped:
+			escaped = false
+		case inString && character == '\\':
+			escaped = true
+		case character == '"':
+			inString = !inString
+		case inString:
+		case character == '[' || character == '{':
+			depth++
+		case character == ']' || character == '}':
+			depth--
+			if depth == 0 {
+				if character != ']' {
+					return -1
+				}
+				return cursor
+			}
+		}
+	}
+	return -1
 }

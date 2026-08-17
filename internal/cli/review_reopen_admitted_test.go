@@ -221,10 +221,11 @@ func TestReviewReopenResultsRecoversContaminatedAdmittedReviewFromCorrectionRequ
 	if transition == nil || transition.Kind != reviewNextTransitionStop || transition.ReasonCode != "corrected_candidate_unavailable" {
 		t.Fatalf("post-forecast transition = %#v, want corrected_candidate_unavailable stop", transition)
 	}
-	statement, ok := reviewStopReasonStatement("corrected_candidate_unavailable")
+	emission, ok := reviewNarrationRegistry["stop:corrected_candidate_unavailable"]
 	if !ok {
 		t.Fatal("corrected_candidate_unavailable has no narration statement")
 	}
+	statement := emission.Statement
 	if !strings.Contains(statement, "Change the candidate content") {
 		t.Fatalf("narration lost the real-findings truth: %q", statement)
 	}

@@ -55,6 +55,12 @@ type CompactSemanticStateError struct {
 	// damaged: diagnostics classify it historical instead of malformed, and
 	// no scoped walk lets it block another lineage's operation.
 	OutdatedIdentity bool
+	// PriorSchemaPredecessorLineageID names the recovery predecessor an
+	// OutdatedIdentity record froze, recovered through the same read-only
+	// forensic parse that proved the prior-schema classification. It lets a
+	// scoped ancestry audit keep walking past inert prior-schema history; it
+	// is forensic classification only and never live authority.
+	PriorSchemaPredecessorLineageID string
 }
 
 func (err *CompactSemanticStateError) Error() string {

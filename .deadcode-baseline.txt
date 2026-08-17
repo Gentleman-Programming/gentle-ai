@@ -149,6 +149,7 @@ internal/reviewtransaction/transaction.go	CanonicalLensResult
 internal/reviewtransaction/transaction.go	NewLineage
 internal/reviewtransaction/transaction.go	NewTransaction
 internal/reviewtransaction/transaction.go	Transaction.addFixFinding
+internal/reviewtransaction/tree_blob.go	RestoreTreeBlob
 internal/reviewtransaction/verification_contract.go	AggregateVerificationCost
 internal/reviewtransaction/verification_contract.go	BuildCorrectionImpactClosure
 internal/reviewtransaction/verification_contract.go	BuildVerificationPlan

@@ -113,6 +113,16 @@ func safeAdmissionLocation(code, value, reason string) string {
 		}
 		return value
 	}
+	if code == "evidence_path_out_of_scope" || code == "proof_path_out_of_scope" {
+		// The offending citation names an unknown repository path, so the token
+		// itself must still parse as a clean path:line shape before it may be
+		// echoed; malformed tokens (absolute paths, traversal, punctuation) stay
+		// scrubbed and are named only by the generic reason.
+		if reason != "unknown_or_malformed_repository_path" || locationErr != nil {
+			return ""
+		}
+		return value
+	}
 	var typedLocationErr *FindingLocationError
 	if code != "invalid_finding_location" || !errors.As(locationErr, &typedLocationErr) ||
 		typedLocationErr == nil || reason != string(typedLocationErr.Reason) {
@@ -359,12 +369,14 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 		if evidenceReportsUnavailableInspection(evidence) {
 			return fail(ArtifactAdmissionIncomplete, "reviewer evidence reports that candidate inspection was unavailable")
 		}
-		outside, lookupErr := referenceOutsideRepository(evidence, repository.contains)
+		outside, offender, lookupErr := referenceOutsideRepository(evidence, repository.contains)
 		if lookupErr != nil {
 			return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup failed")
 		}
 		if outside {
-			return fail(ArtifactAdmissionOutOfScope, "reviewer evidence references a path outside the frozen repository")
+			detail := findingAdmissionDiagnostic("evidence_path_out_of_scope", "", offender, "unknown_or_malformed_repository_path")
+			return failFinding(ArtifactAdmissionOutOfScope, "reviewer evidence references a path outside the frozen repository",
+				detail, outOfScopeCitationCause(detail.Location))
 		}
 	}
 	for _, finding := range canonical.Findings {
@@ -386,12 +398,14 @@ func AdmitArtifact(ctx context.Context, request ArtifactAdmissionRequest) (LensR
 			return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
 		}
 		for _, proof := range finding.ProofRefs {
-			outside, lookupErr := referenceOutsideRepository(proof, repository.contains)
+			outside, offender, lookupErr := referenceOutsideRepository(proof, repository.contains)
 			if lookupErr != nil {
 				return fail(ArtifactAdmissionBindingMismatch, "frozen repository path lookup failed")
 			}
 			if outside {
-				return fail(ArtifactAdmissionOutOfScope, "reviewer proof references a path outside the frozen repository")
+				detail := findingAdmissionDiagnostic("proof_path_out_of_scope", finding.ID, offender, "unknown_or_malformed_repository_path")
+				return failFinding(ArtifactAdmissionOutOfScope, "reviewer proof references a path outside the frozen repository",
+					detail, outOfScopeCitationCause(detail.Location))
 			}
 		}
 		if !isSevereSeverity(finding.Severity) {
@@ -568,24 +582,37 @@ func (lookup *frozenRepositoryPathLookup) contains(logicalPath string) (bool, er
 // universe. Bare root names need a dot; extensionless root paths remain
 // available through quoting. This keeps status:500 and digest/timestamp labels
 // out of the path grammar while rejecting malformed or unknown path claims.
-func referenceOutsideRepository(value string, lookup func(string) (bool, error)) (bool, error) {
+// The offender return names the first malformed or unknown token verbatim so
+// a rejection is diagnosable after the fact; detection semantics are
+// unchanged.
+func referenceOutsideRepository(value string, lookup func(string) (bool, error)) (outside bool, offender string, err error) {
 	for _, token := range artifactReferenceTokens(value) {
 		path, malformed := artifactRepositoryPathReference(token)
 		if malformed {
-			return true, nil
+			return true, token.value, nil
 		}
 		if path == "" {
 			continue
 		}
 		known, err := lookup(path)
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
 		if !known {
-			return true, nil
+			return true, token.value, nil
 		}
 	}
-	return false, nil
+	return false, "", nil
+}
+
+// outOfScopeCitationCause names the already-scrubbed offending citation in the
+// admission error chain. It receives the bounded safeAdmissionLocation output,
+// never the raw token, so an unsafe token degrades to the generic message.
+func outOfScopeCitationCause(safeToken string) error {
+	if safeToken == "" {
+		return errors.New("reviewer citation names an unknown or malformed repository path") // refusal:by-design world-action: the reviewer's free text cited a path the frozen repository does not contain; only a re-run lens with corrected citations can continue
+	}
+	return fmt.Errorf("reviewer citation %q names an unknown or malformed repository path", safeToken) // refusal:by-design world-action: the reviewer's free text cited a path the frozen repository does not contain; only a re-run lens with corrected citations can continue
 }
 
 func artifactRepositoryPathReference(token artifactReferenceToken) (string, bool) {

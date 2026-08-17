@@ -123,6 +123,7 @@ type targetStatusCandidate struct {
 	correctionRecovery          bool
 	frozenReviewing             bool
 	frozenReviewingPendingSlots bool
+	frozenReviewingDrifted      bool
 	// selectorFreeAccountingOnlyRecovery is carried from the eligibility
 	// predicate so projection never guesses it from snapshot identity domains.
 	selectorFreeAccountingOnlyRecovery bool
@@ -244,6 +245,9 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			if eligible {
 				candidate.frozenReviewing = true
 				candidate.frozenReviewingPendingSlots = pendingSlots
+				if !pendingSlots {
+					candidate.frozenReviewingDrifted = frozenReviewingCandidateDrifted(ctx, repo, state)
+				}
 				candidates = append(candidates, candidate)
 				continue
 			}
@@ -500,6 +504,21 @@ func explicitReviewingCompactCandidate(ctx context.Context, repo string, candida
 	return true, pending, nil
 }
 
+// frozenReviewingCandidateDrifted reports whether the live worktree, projected
+// through the frozen candidate's own selector, no longer reproduces the frozen
+// candidate tree. A fully captured frozen review continues generically to
+// finalize only while that candidate stays coherent; post-capture worktree
+// drift keeps the stop, and any projection failure fails closed as drift.
+func frozenReviewingCandidateDrifted(ctx context.Context, repo string, state CompactState) bool {
+	frozen := state.InitialSnapshot
+	target := Target{Kind: frozen.Kind, Projection: frozen.Projection, IntendedUntracked: append([]string{}, frozen.IntendedUntracked...)}
+	if target.Kind == TargetBaseDiff || target.Kind == TargetBaseWorkspaceOverlay {
+		target.BaseRef = frozen.BaseTree
+	}
+	live, err := (SnapshotBuilder{Repo: repo}).Build(ctx, target)
+	return err != nil || live.CandidateTree != frozen.CandidateTree
+}
+
 func compactLocalBaseAdvanceCompatibility(ctx context.Context, repo string, state CompactState, target Target, live Snapshot) *BaseAdvanceCompatibility {
 	if state.CurrentSnapshot.Kind != TargetBaseDiff || state.Recovery != nil || target.Kind != TargetBaseDiff || strings.TrimSpace(target.BaseRef) == "" {
 		return nil
@@ -568,7 +587,11 @@ func targetStatusForCandidate(result TargetStatusResult, candidate targetStatusC
 			return result
 		}
 		if candidate.frozenReviewing && !candidate.frozenReviewingPendingSlots {
-			result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+			if candidate.frozenReviewingDrifted {
+				result.Action, result.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+				return result
+			}
+			result.Action, result.Replayability = TargetStatusActionFinalize, ReplayabilityNotReplayable
 			return result
 		}
 		if candidate.finalVerificationRetry != nil {

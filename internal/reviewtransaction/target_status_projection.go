@@ -83,13 +83,34 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 		// validating every recovery edge in the selected lineage's ancestry.
 		cursor := store
 		selected = append(selected, store)
+		priorSchema := map[string]bool{}
 		for {
-			if _, seen := records[cursor.lineageID]; seen {
+			if _, seen := records[cursor.lineageID]; seen || priorSchema[cursor.lineageID] {
 				return nil, errors.New("invalid compact authority graph: recovery cycle")
 			}
 			record, loadErr := cursor.LoadContext(ctx)
 			if loadErr != nil {
-				return nil, loadErr
+				semantic, priorSchemaRecord := compactPriorSchemaLoadFailure(loadErr)
+				if !priorSchemaRecord {
+					return nil, loadErr
+				}
+				// A prior-schema record — provably frozen by an earlier
+				// release under the retired snapshot-identity formula and
+				// still self-consistent under it — is inert history, not
+				// damage. It cannot govern this target, so it never fails the
+				// selection closed by itself; the walk keeps auditing the
+				// rest of the ancestry so any genuinely corrupted deeper
+				// record still does.
+				priorSchema[cursor.lineageID] = true
+				if semantic.PriorSchemaPredecessorLineageID == "" {
+					break
+				}
+				predecessor, exists := storeByLineage[semantic.PriorSchemaPredecessorLineageID]
+				if !exists {
+					return nil, fmt.Errorf("invalid compact authority graph: dangling predecessor for %q", cursor.lineageID)
+				}
+				cursor = predecessor
+				continue
 			}
 			records[record.State.LineageID] = record
 			if record.State.Recovery == nil {
@@ -105,8 +126,27 @@ func loadCompactTargetStatusCandidates(ctx context.Context, repo, lineageID stri
 		// Scoping the refusal is not relaxing it: what changes is whose
 		// business a defect is, never whether a defect is tolerated.
 		violations, _ := compactAuthorityGraphViolations(records)
+		for lineage, record := range records {
+			// Tolerate exactly the one violation a prior-schema gap explains:
+			// the dangling-predecessor defect for that proven absence. Every
+			// other violation on the same lineage keeps blocking.
+			if violation, carried := violations[lineage]; carried && compactPriorSchemaToleratedViolation(lineage, violation, record, priorSchema) {
+				delete(violations, lineage)
+			}
+		}
 		if carrier, cause := compactAuthorityBlockingCause(records, violations, lineageID); cause != nil {
 			return nil, compactBlockedLineageError(lineageID, carrier, cause)
+		}
+		if priorSchema[lineageID] {
+			// The named lineage ITSELF is prior-schema history, so it owns no
+			// live authority: report no candidate and let status reclassify
+			// the live target through its one lifted-restriction recursion
+			// (#2645), which lands on the same fresh-start route any
+			// unrelated target takes. A live current-schema lineage whose
+			// ancestors are prior-schema falls through and keeps its
+			// authority. The prior-schema records stay untouched on disk as
+			// inert history.
+			return map[string]targetStatusCandidate{}, nil
 		}
 	}
 
@@ -348,6 +388,33 @@ func classifyCompactCorrectionTargetForStatus(ctx context.Context, repo string, 
 	requested := existing
 	requested.InitialSnapshot = live
 	return classifyCompactCorrectionTarget(ctx, repo, existing, requested, true)
+}
+
+// compactPriorSchemaLoadFailure classifies one load failure as provably
+// prior-schema: parseCompactRecord's forensic pass (#2743) confirmed the
+// stored snapshot identities equal the retired pre-fbb55080 formula's own
+// recomputation and the state validates once coherently re-minted. Anything
+// else — unrecognized identities, structural damage, IO failure — is not
+// prior schema and keeps failing closed exactly as before.
+func compactPriorSchemaLoadFailure(err error) (*CompactSemanticStateError, bool) {
+	var semantic *CompactSemanticStateError
+	if !errors.As(err, &semantic) || !semantic.OutdatedIdentity {
+		return nil, false
+	}
+	return semantic, true
+}
+
+// compactPriorSchemaToleratedViolation reports whether one carried violation
+// is exactly the dangling-predecessor defect a proven prior-schema gap
+// explains: the record's recovery predecessor is prior-schema, and the
+// violation is the one compactAuthorityGraphViolations records for that
+// missing predecessor. Any other violation on the same lineage keeps
+// blocking.
+func compactPriorSchemaToleratedViolation(lineage string, violation error, record CompactRecord, priorSchema map[string]bool) bool {
+	if record.State.Recovery == nil || !priorSchema[record.State.Recovery.PredecessorLineageID] {
+		return false
+	}
+	return violation != nil && violation.Error() == fmt.Sprintf("dangling predecessor for %q", lineage)
 }
 
 func targetStatusFailure(base TargetStatusResult, err error) (TargetStatusResult, error) {

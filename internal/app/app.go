@@ -382,6 +382,16 @@ func runSkillRegistryRefresh(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// Startup hooks run refresh from whatever directory the host resolved; a
+	// brand-new non-project directory can resolve to "/", $HOME, or a
+	// markerless folder. Never initialize there: skip silently under --quiet
+	// (a startup hook must not scream) and with a one-line notice otherwise.
+	if reason := skillregistry.RefreshSkip(cwd, home); reason != skillregistry.SkipNone {
+		if !quiet {
+			_, _ = fmt.Fprintf(stdout, "Skill registry refresh skipped (%s): %s is not a project root; run it from a project directory (one containing .git or .atl), or create the project first.\n", reason, cwd)
+		}
+		return nil
+	}
 	if ensureGitignore {
 		if err := skillregistry.EnsureATLIgnored(cwd); err != nil {
 			return err

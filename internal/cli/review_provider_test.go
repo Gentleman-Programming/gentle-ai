@@ -248,6 +248,305 @@ func TestReviewProviderOpenCodeStatusIssuesBoundRefuterTask(t *testing.T) {
 	}
 }
 
+func TestReviewProviderOpenCodeStatusIssuesBoundTargetedValidatorTask(t *testing.T) {
+	repo, lineage, request := providerCorrectionReady(t)
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--lineage", lineage, "--contract", ReviewIntegrationContractV2,
+		"--agent", string(model.AgentOpenCode), "--next-transition",
+	}, &output); err != nil {
+		t.Fatalf("OpenCode targeted-validator STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatalf("OpenCode targeted-validator status is invalid: %v", err)
+	}
+	if status.Schema != ReviewIntegrationStatusSchemaV5 || status.Authority == nil || status.ValidationRequest == nil ||
+		status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "targeted_validation_required" || status.NextTransition.Collect == nil ||
+		len(status.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("OpenCode targeted-validator transition = %#v", status)
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	arguments, err := reviewTransitionArgumentMap(input.Arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Name != "provider_targeted_validator" || input.CaptureOperation != "external.run_provider_role" ||
+		input.Submission != nil || input.ValidationRequest != nil || input.ProviderTask == nil ||
+		input.ProviderTask.Agent != "review-validator" || input.ProviderTask.Role != string(reviewerprovider.RoleTargetedValidator) ||
+		arguments["lineage"] != status.Authority.LineageID || arguments["expected-revision"] != status.Authority.Revision ||
+		arguments["target"] != request.CorrectionTargetIdentity || arguments["target"] != status.ValidationRequest.CorrectionTargetIdentity {
+		t.Fatalf("OpenCode targeted-validator task = %#v", input)
+	}
+	// The provider-task validator slot is one of the shapes the published
+	// status-v5 schema admits for targeted_validation_required (cross-lane
+	// battery finding: the schema used to force the generic
+	// external.run_targeted_validation submission shape onto this input).
+	transitionPayload, err := json.Marshal(status.NextTransition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateAgainstPublishedNextTransitionSchemaV5(t, transitionPayload)
+
+	cloneInput := func() (ReviewTargetStatusResult, *ReviewTransitionInput) {
+		malformed := status
+		transition := *status.NextTransition
+		collection := *transition.Collect
+		collection.Inputs = append([]ReviewTransitionInput(nil), collection.Inputs...)
+		transition.Collect = &collection
+		malformed.NextTransition = &transition
+		return malformed, &malformed.NextTransition.Collect.Inputs[0]
+	}
+	resetTask := func(t *testing.T, input *ReviewTransitionInput) {
+		t.Helper()
+		arguments, err := reviewTransitionArgumentMap(input.Arguments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		task, err := newReviewProviderTask(reviewerprovider.RoleTargetedValidator, ReviewTransitionBinding{
+			LineageID: arguments["lineage"], Revision: arguments["expected-revision"],
+			TargetIdentity: arguments["target"], RepositoryContext: arguments["repository-context"],
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		input.ProviderTask = &task
+	}
+	setArgument := func(t *testing.T, input *ReviewTransitionInput, name, value string) {
+		t.Helper()
+		for index := range input.Arguments {
+			if input.Arguments[index].Name == name {
+				input.Arguments[index].Value = value
+				return
+			}
+		}
+		t.Fatalf("missing provider task argument %q", name)
+	}
+
+	t.Run("refuses a mismatched provider role", func(t *testing.T) {
+		malformed, input := cloneInput()
+		task := *input.ProviderTask
+		task.Role = string(reviewerprovider.RoleRefuter)
+		input.ProviderTask = &task
+		if err := malformed.Validate(); err == nil {
+			t.Fatal("targeted-validator STATUS accepted a refuter task")
+		}
+	})
+	t.Run("refuses a task bound to another correction target", func(t *testing.T) {
+		malformed, input := cloneInput()
+		setArgument(t, input, "target", status.TargetIdentity)
+		resetTask(t, input)
+		if err := malformed.Validate(); err == nil {
+			t.Fatal("targeted-validator STATUS accepted a task bound to another target")
+		}
+	})
+	t.Run("refuses a task bound to another authority", func(t *testing.T) {
+		malformed, input := cloneInput()
+		setArgument(t, input, "lineage", "foreign-lineage")
+		resetTask(t, input)
+		if err := malformed.Validate(); err == nil {
+			t.Fatal("targeted-validator STATUS accepted a task bound to another authority")
+		}
+	})
+}
+
+func TestReviewProviderStatusFinalizesCapturedTargetedValidatorWithoutSecondProvider(t *testing.T) {
+	repo, lineage, request := providerCorrectionReady(t)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readStatus := func() ReviewTargetStatusResult {
+		t.Helper()
+		var output bytes.Buffer
+		if err := RunReview([]string{
+			"status", "--cwd", repo, "--lineage", lineage, "--contract", ReviewIntegrationContractV2,
+			"--next-transition",
+		}, &output); err != nil {
+			var direct bytes.Buffer
+			directErr := runReviewStatus(t.Context(), []string{
+				"--cwd", repo, "--lineage", lineage, "--contract", ReviewIntegrationContractV2,
+				"--next-transition",
+			}, &direct)
+			t.Fatalf("captured provider targeted-validator STATUS: %v\ndirect=%v\n%s", err, directErr, output.String())
+		}
+		var status ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, output.Bytes(), &status)
+		if err := status.Validate(); err != nil {
+			t.Fatalf("captured provider targeted-validator STATUS validation: %v", err)
+		}
+		return status
+	}
+	before := readStatus()
+	if before.NextTransition == nil || before.NextTransition.Kind != reviewNextTransitionCollect ||
+		before.NextTransition.ReasonCode != "targeted_validation_required" || before.NextTransition.Collect == nil ||
+		len(before.NextTransition.Collect.Inputs) != 1 || before.NextTransition.Collect.Inputs[0].ProviderTask != nil {
+		t.Fatalf("uncaptured provider validator status = %#v", before.NextTransition)
+	}
+	if _, _, err := reviewProviderCaptureTargetedValidatorRaw(t.Context(), repo, store, record.State, record.Revision, providerTargetedValidationPayload(t, request)); err != nil {
+		t.Fatal(err)
+	}
+
+	after := readStatus()
+	if after.NextTransition == nil || after.NextTransition.Kind != reviewNextTransitionExecute ||
+		after.NextTransition.ReasonCode != "captured_provider_targeted_validation_ready" || after.NextTransition.Execute == nil ||
+		after.NextTransition.Execute.Operation != "review.finalize" || after.ValidationRequest == nil ||
+		after.ValidationRequest.RequestHash != request.RequestHash {
+		t.Fatalf("captured provider validator status = %#v", after)
+	}
+	transitionPayload, err := json.Marshal(after.NextTransition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateAgainstPublishedNextTransitionSchemaV5(t, transitionPayload)
+	transition := after.NextTransition.Execute
+	if transition.Binding.LineageID != lineage || transition.Binding.Revision != record.Revision ||
+		transition.Binding.TargetIdentity != request.CorrectionTargetIdentity || transition.Binding.RepositoryContext == "" {
+		t.Fatalf("captured provider validator binding = %#v", transition.Binding)
+	}
+	wantTokens := []string{
+		"--contract=" + ReviewIntegrationContractV2,
+		"--lineage=" + lineage,
+		"--expected-revision=" + record.Revision,
+		"--target=" + request.CorrectionTargetIdentity,
+		"--request-hash=" + request.RequestHash,
+		"--repository-context=" + transition.Binding.RepositoryContext,
+		"--captured-evidence=true",
+	}
+	gotTokens := make([]string, len(transition.Arguments))
+	for index, argument := range transition.Arguments {
+		gotTokens[index] = argument.Token
+	}
+	if !slices.Equal(gotTokens, wantTokens) || slices.Contains(gotTokens, "--validation={{value}}") {
+		t.Fatalf("captured provider validator finalize tokens = %#v, want %#v", gotTokens, wantTokens)
+	}
+
+	previous := reviewProviderAdapterFor
+	t.Cleanup(func() { reviewProviderAdapterFor = previous })
+	providerCalls := 0
+	reviewProviderAdapterFor = func(reviewerprovider.Contract, model.AgentID) (reviewerprovider.Adapter, error) {
+		providerCalls++
+		return nil, errors.New("captured provider slot finalization must not launch another provider")
+	}
+	if err := RunReviewFacadeFinalize(gotTokens, &bytes.Buffer{}); err != nil {
+		t.Fatalf("execute captured provider validator finalize: %v", err)
+	}
+	if providerCalls != 0 {
+		t.Fatalf("captured provider finalization launched %d provider(s), want none", providerCalls)
+	}
+	terminal, err := store.Load()
+	if err != nil || terminal.State.State != reviewtransaction.StateApproved || len(terminal.State.CorrectionAttempts) != 1 {
+		t.Fatalf("captured provider validator terminal authority = %#v, %v", terminal, err)
+	}
+}
+
+func TestReviewProviderStatusSurfacesUnreadableCapturedValidatorSlot(t *testing.T) {
+	repo, lineage, request := providerCorrectionReady(t)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := reviewProviderCaptureTargetedValidatorRaw(t.Context(), repo, store, record.State, record.Revision, providerTargetedValidationPayload(t, request)); err != nil {
+		t.Fatal(err)
+	}
+	slotPath := filepath.Join(store.Dir, "targeted-validator-results", strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:"),
+		strings.TrimPrefix(request.ExpectedRevision, "sha256:"), "result.json")
+	if err := os.WriteFile(slotPath, []byte(`{"targeted_validation_request_hash":"sha256:forged"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--lineage", lineage, "--contract", ReviewIntegrationContractV2,
+		"--next-transition",
+	}, &output); err != nil {
+		t.Fatalf("captured provider corrupted-slot STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatalf("captured provider corrupted-slot STATUS validation: %v", err)
+	}
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "captured_artifacts_unverifiable" ||
+		status.NextTransition.Execute != nil || status.NextTransition.Collect != nil {
+		t.Fatalf("captured provider corrupted-slot transition = %#v", status.NextTransition)
+	}
+	after, err := store.Load()
+	if err != nil || after.State.State != reviewtransaction.StateCorrectionRequired || len(after.State.CorrectionAttempts) != 0 {
+		t.Fatalf("corrupted validator slot changed authority: %#v, %v", after, err)
+	}
+}
+
+func TestReviewProviderStatusRequiresPassedEvidenceBeforeSlotConsumption(t *testing.T) {
+	repo, lineage, request := providerCorrectionReady(t)
+	store, err := reviewtransaction.CompactAuthoritativeStore(t.Context(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := reviewProviderCaptureTargetedValidatorRaw(t.Context(), repo, store, record.State, record.Revision, providerTargetedValidationPayload(t, request)); err != nil {
+		t.Fatal(err)
+	}
+	var readyOutput bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--lineage", lineage, "--contract", ReviewIntegrationContractV2,
+		"--next-transition",
+	}, &readyOutput); err != nil {
+		t.Fatalf("captured provider slot STATUS: %v\n%s", err, readyOutput.String())
+	}
+	var ready ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, readyOutput.Bytes(), &ready)
+	if ready.NextTransition == nil || ready.NextTransition.Execute == nil {
+		t.Fatalf("captured provider slot transition = %#v", ready.NextTransition)
+	}
+	staleTokens := make([]string, len(ready.NextTransition.Execute.Arguments))
+	for index, argument := range ready.NextTransition.Execute.Arguments {
+		staleTokens[index] = argument.Token
+	}
+	evidenceDir := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir, strings.TrimPrefix(request.CorrectionTargetIdentity, "sha256:"),
+		strings.TrimPrefix(record.Revision, "sha256:"))
+	if err := os.RemoveAll(evidenceDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize(staleTokens, &bytes.Buffer{}); err == nil {
+		t.Fatal("stale captured-provider slot-consumption transition finalized without its passed verification evidence")
+	}
+	var output bytes.Buffer
+	if err := RunReview([]string{
+		"status", "--cwd", repo, "--lineage", lineage, "--contract", ReviewIntegrationContractV2,
+		"--next-transition",
+	}, &output); err != nil {
+		t.Fatalf("captured provider missing-evidence STATUS: %v\n%s", err, output.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, output.Bytes(), &status)
+	if err := status.Validate(); err != nil {
+		t.Fatalf("captured provider missing-evidence STATUS validation: %v", err)
+	}
+	if status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+		status.NextTransition.ReasonCode != "correction_repository_verification_required" || status.NextTransition.Collect == nil ||
+		len(status.NextTransition.Collect.Inputs) != 1 || status.NextTransition.Collect.Inputs[0].ProviderTask != nil {
+		t.Fatalf("captured provider missing-evidence transition = %#v", status.NextTransition)
+	}
+	after, err := store.Load()
+	if err != nil || after.State.State != reviewtransaction.StateCorrectionRequired || len(after.State.CorrectionAttempts) != 0 {
+		t.Fatalf("missing verification evidence changed authority: %#v, %v", after, err)
+	}
+}
+
 func reviewProviderRequestHashForTest(t *testing.T, prompt []byte) string {
 	t.Helper()
 	input := bytes.SplitN(prompt, []byte("\n\nInput:\n"), 2)

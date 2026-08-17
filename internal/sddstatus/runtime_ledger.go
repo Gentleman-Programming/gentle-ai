@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -47,6 +48,8 @@ const (
 	runtimeOperationGrant                    = "authority/grant"
 	maximumRuntimeGrantRoots                 = 32
 	runtimeLockAcquireAttempts               = 3
+	finalVerifyWorkUnit                      = "verify"
+	finalVerifyAttestationWorkUnit           = "verify-attestation"
 
 	// runtimeLedgerStatusPointer suffixes every ledger refusal an ordinary
 	// caller can hit (budget exhausted, active attempt, no active attempt,
@@ -225,6 +228,7 @@ type RuntimeAttempt struct {
 	Handoff                    *RuntimeHandoff    `json:"handoff,omitempty"`
 	FinishCandidateIdentity    string             `json:"finish_candidate_identity,omitempty"`
 	FinishCandidateTree        string             `json:"finish_candidate_tree,omitempty"`
+	AttestedVerifyReportDigest string             `json:"attested_verify_report_digest,omitempty"`
 	Outcome                    AttemptOutcome     `json:"outcome"`
 	ChangedLines               int                `json:"changed_lines"`
 	EvidenceRevision           string             `json:"evidence_revision,omitempty"`
@@ -622,6 +626,7 @@ type runtimeFinishEvent struct {
 	Ordinal                    int                `json:"ordinal"`
 	FinishCandidateIdentity    string             `json:"finish_candidate_identity"`
 	FinishCandidateTree        string             `json:"finish_candidate_tree"`
+	AttestedVerifyReportDigest string             `json:"attested_verify_report_digest,omitempty"`
 	Outcome                    AttemptOutcome     `json:"outcome"`
 	ChangedLines               int                `json:"changed_lines"`
 	EvidenceRevision           string             `json:"evidence_revision"`
@@ -907,8 +912,16 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		}
 		if unmanagedRemediation {
 			evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(status.LastReset, status.LastRescope, chainFailedAttempt, snapshot.CandidateTree)
-			if !evidenceOnly && (snapshot.Identity == active.BeginCandidateIdentity || snapshot.CandidateTree == active.BeginCandidateTree) {
-				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed by the active correction attempt, or an audited reset or rescope authorizing this exact unchanged candidate.
+			// #3073: "changed" is judged against the failed evidence's candidate
+			// snapshot, not the attempt's begin snapshot. A correction applied
+			// between the audited reset and the acquire lives inside the begin
+			// snapshot already, so the begin-relative comparison refused a
+			// candidate that genuinely no longer matches the state that failed.
+			// Records committed under this predicate require a reader deciding
+			// the same predicate (applyRuntimeFinishEvent): replay compatibility
+			// is forward-only, the store's standard schema-evolution discipline.
+			if !evidenceOnly && runtimeRemediationCandidateUnchanged(chainFailedAttempt, *active, snapshot.Identity, snapshot.CandidateTree) {
+				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed relative to the state that failed verification, or an audited reset or rescope authorizing this exact unchanged candidate.
 				return runtimeRecord{}, errors.New("unmanaged remediation requires a changed correction candidate")
 			}
 			if request.EvidenceRevision == request.RemediatesEvidenceRevision {
@@ -916,9 +929,11 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				return runtimeRecord{}, errors.New("unmanaged remediation requires fresh corrected evidence")
 			}
 		}
+		attestedVerifyReport := store.captureFinalVerifyReport(ctx, *active, request, snapshot.CandidateTree)
 		event := &runtimeFinishEvent{
 			Ordinal: active.Ordinal, FinishCandidateIdentity: snapshot.Identity, FinishCandidateTree: snapshot.CandidateTree,
-			Outcome: request.Outcome, ChangedLines: changedLines, EvidenceRevision: request.EvidenceRevision,
+			AttestedVerifyReportDigest: attestedVerifyReport,
+			Outcome:                    request.Outcome, ChangedLines: changedLines, EvidenceRevision: request.EvidenceRevision,
 			Diagnosis: request.Diagnosis, HarnessDisposition: request.HarnessDisposition,
 			CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
 			RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
@@ -975,6 +990,82 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		}
 		return runtimeRecord{Operation: runtimeOperationFinish, Finish: event}, nil
 	})
+}
+
+// captureFinalVerifyReport derives the final verification attestation from the
+// candidate tree being settled. It deliberately never accepts a caller digest:
+// the native finish record binds the exact report bytes it read itself.
+// Attestation derivation never aborts a passing settlement: an underivable
+// attestation degrades like the missing-blob branch below (empty attestation,
+// archive stays fail-closed), so the derivation cannot fail and returns only
+// the attested digest. Only writing the ledger itself remains fatal.
+func (store RuntimeStore) captureFinalVerifyReport(ctx context.Context, active RuntimeAttempt, request FinishAttemptRequest, candidateTree string) string {
+	if request.Outcome != AttemptPassed || !isFinalVerifyWorkUnit(active.WorkUnit) {
+		return ""
+	}
+	openSpecRoot := filepath.Join(store.Workspace, "openspec")
+	if _, err := os.Stat(openSpecRoot); os.IsNotExist(err) {
+		// Runtime attempts are also used outside OpenSpec. Without an active
+		// OpenSpec root there is no canonical verify-report to attest.
+		return ""
+	} else if err != nil {
+		return ""
+	}
+	changeRoot, err := resolveBindingChangeRoot(ctx, store.Repo, store.Workspace, store.Change)
+	if err != nil {
+		return ""
+	}
+	reportPath := filepath.Join(changeRoot, "verify-report.md")
+	// The canonical report path is anchored at the planning workspace (--cwd),
+	// never at the Git repository root: a workspace that is a subdirectory of
+	// its repository still owns exactly one canonical active-change report.
+	workspacePath, err := filepath.Rel(store.Workspace, reportPath)
+	if err != nil {
+		return ""
+	}
+	wantPath := path.Join("openspec", "changes", store.Change, "verify-report.md")
+	if filepath.ToSlash(workspacePath) != wantPath {
+		return ""
+	}
+	// The settled candidate tree is built at the repository root, so the blob
+	// read addresses the same report through its repository-relative path.
+	logicalPath, err := filepath.Rel(store.Repo, reportPath)
+	if err != nil {
+		return ""
+	}
+	logicalPath = filepath.ToSlash(logicalPath)
+	artifactPaths, err := resolveArtifactPaths(changeRoot)
+	if err != nil {
+		return ""
+	}
+	specCounts, err := readSpecCounts(artifactPaths.Specs)
+	if err != nil {
+		return ""
+	}
+	payload, err := reviewtransaction.ReadTreeBlob(ctx, store.Repo, candidateTree, logicalPath, MaxVerifyReportBytes)
+	if errors.Is(err, reviewtransaction.ErrTreeArtifactMissing) {
+		// A report outside the settled candidate is not final verification
+		// evidence. Preserve the generic runtime settlement, but it carries no
+		// archive-status exception and therefore remains fail-closed later.
+		return ""
+	}
+	if err != nil {
+		return ""
+	}
+	admission := ValidateVerifyReportAdmission(string(payload), specCounts)
+	if !admission.Valid || admission.Verdict != "pass" || admission.EvidenceRevision != request.EvidenceRevision {
+		return ""
+	}
+	return verifyReportDigest(payload)
+}
+
+func verifyReportDigest(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func isFinalVerifyWorkUnit(workUnit string) bool {
+	return workUnit == finalVerifyWorkUnit || workUnit == finalVerifyAttestationWorkUnit
 }
 
 func (store RuntimeStore) Handoff(ctx context.Context, request HandoffAttemptRequest) (RuntimeStatus, error) {
@@ -2145,6 +2236,10 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	if event.ChangedLineBudgetExceeded != budgetExceeded {
 		return errors.New("finish record changed-line budget decision does not match replay state")
 	}
+	if event.AttestedVerifyReportDigest != "" &&
+		(event.Outcome != AttemptPassed || !isFinalVerifyWorkUnit(active.WorkUnit) || !runtimeRevisionPattern.MatchString(event.AttestedVerifyReportDigest)) {
+		return errors.New("finish record verify-report attestation is invalid") // refusal:by-design world-action: a malformed immutable attestation record requires restoring provider-owned authority
+	}
 	if unmanagedRemediation {
 		// Lockstep twin of the write-time guard in Finish: the binding derives
 		// from the immutable chain, so replayed corrections recorded across an
@@ -2155,8 +2250,10 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		// failing objective against these exact bytes authorizes one evidence-only
 		// retry, so a replayed correction may leave the candidate unchanged.
 		evidenceOnly := runtimeEvidenceOnlyRetryAuthorized(replay.Status.LastReset, replay.Status.LastRescope, chainFailedAttempt, event.FinishCandidateTree)
-		unchangedCandidate := event.FinishCandidateIdentity == active.BeginCandidateIdentity ||
-			event.FinishCandidateTree == active.BeginCandidateTree
+		// #3073 lockstep twin: replay decides the exact write-guard predicate;
+		// the helper falls back to the begin comparison only for a legacy
+		// failed record that carries no finish snapshot.
+		unchangedCandidate := runtimeRemediationCandidateUnchanged(chainFailedAttempt, *active, event.FinishCandidateIdentity, event.FinishCandidateTree)
 		// A binding is deliberately NOT checked here. The write path stopped
 		// treating a leftover binding as a blocker (the kill switch must have
 		// no implications while it is off), and this replay mirror has to agree
@@ -2173,6 +2270,7 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	attempt := &replay.Status.Attempts[len(replay.Status.Attempts)-1]
 	attempt.FinishCandidateIdentity = event.FinishCandidateIdentity
 	attempt.FinishCandidateTree = event.FinishCandidateTree
+	attempt.AttestedVerifyReportDigest = event.AttestedVerifyReportDigest
 	attempt.Outcome = event.Outcome
 	attempt.ChangedLines = event.ChangedLines
 	attempt.EvidenceRevision = event.EvidenceRevision
@@ -2315,7 +2413,8 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			!runtimeRevisionPattern.MatchString(event.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.FinishCandidateTree) ||
 			validateRuntimeText(event.Diagnosis, 500) != nil || !validHarnessDisposition(event.HarnessDisposition) ||
 			validateRuntimeText(event.CleanupEvidence, 500) != nil || validateRuntimeText(event.ProcessEvidence, 500) != nil ||
-			(event.RemediatesEvidenceRevision != "" && (!runtimeRevisionPattern.MatchString(event.RemediatesEvidenceRevision) || event.Outcome != AttemptPassed)) {
+			(event.RemediatesEvidenceRevision != "" && (!runtimeRevisionPattern.MatchString(event.RemediatesEvidenceRevision) || event.Outcome != AttemptPassed)) ||
+			(event.AttestedVerifyReportDigest != "" && (!runtimeRevisionPattern.MatchString(event.AttestedVerifyReportDigest) || event.Outcome != AttemptPassed)) {
 			return errors.New("invalid SDD runtime finish event")
 		}
 		request := FinishAttemptRequest{
@@ -2353,6 +2452,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			finish.ChangedLines > maximumRuntimeChangedLines || !runtimeRevisionPattern.MatchString(finish.EvidenceRevision) ||
 			!runtimeRevisionPattern.MatchString(finish.RemediatesEvidenceRevision) ||
 			!runtimeRevisionPattern.MatchString(finish.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(finish.FinishCandidateTree) ||
+			(finish.AttestedVerifyReportDigest != "" && !runtimeRevisionPattern.MatchString(finish.AttestedVerifyReportDigest)) ||
 			validateRuntimeText(finish.Diagnosis, 500) != nil || !validHarnessDisposition(finish.HarnessDisposition) ||
 			validateRuntimeText(finish.CleanupEvidence, 500) != nil || validateRuntimeText(finish.ProcessEvidence, 500) != nil {
 			return errors.New("invalid atomic SDD runtime remediation finish event")
@@ -3073,6 +3173,25 @@ func runtimeEvidenceOnlyRetryAuthorized(reset *RuntimeReset, rescope *RuntimeRes
 	return rescope != nil && rescope.Actor != "" && rescope.Reason != "" &&
 		rescope.PreviousObjectiveID == failed.ObjectiveID && rescope.PreviousGeneration == failed.ObjectiveGeneration &&
 		rescope.RescopeCandidateTree == candidateTree
+}
+
+// runtimeRemediationCandidateUnchanged judges whether a settling unmanaged
+// remediation still presents the state that FAILED (#3073). The laundering
+// baseline is the remediated failed evidence's candidate snapshot — the exact
+// bytes the failure was recorded over — not the correction attempt's begin
+// snapshot: a correction applied between the audited reset and the acquire is
+// already inside the begin snapshot, so judging against begin refused a
+// genuinely changed candidate, while a revert to the failed bytes after
+// acquire counted as "changed" against begin despite re-presenting exactly
+// what failed. Failed attempts recorded before the finish candidate snapshot
+// existed carry no baseline of their own, so those legacy records fall back
+// to the pre-#3073 begin-relative comparison.
+func runtimeRemediationCandidateUnchanged(failed, active RuntimeAttempt, identity, tree string) bool {
+	baselineIdentity, baselineTree := failed.FinishCandidateIdentity, failed.FinishCandidateTree
+	if baselineIdentity == "" && baselineTree == "" {
+		baselineIdentity, baselineTree = active.BeginCandidateIdentity, active.BeginCandidateTree
+	}
+	return identity == baselineIdentity || tree == baselineTree
 }
 
 func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int) string {
