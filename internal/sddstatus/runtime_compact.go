@@ -365,7 +365,7 @@ func (store RuntimeStore) HandoffCompact(ctx context.Context, request CompactHan
 // unmanagedRemediationSettleable reports whether a settle carrying
 // --remediates-evidence-revision failedEvidence can structurally succeed
 // against this ledger state: the immutable attempt chain must still hold that
-// exact failed evidence unremediated, per runtimeChainFailedEvidence, the
+// exact failed evidence unremediated, per runtimeLineageFailedEvidence, the
 // same chain-derived binding Finish's unmanaged guard enforces (#1974 slice
 // 2). A changed candidate and fresh distinct evidence remain settle-time
 // facts and are not judged here; nor is "may this work proceed?", which
@@ -648,7 +648,7 @@ func compactBlockedByUnreadableAuthority(cause error) CompactAttemptResult {
 // surface that speaks earliest is the one that ends up lying.
 //
 // It reads the same chain-derived binding the settle itself enforces
-// (runtimeChainFailedAttempt, #1974 slice 2 / #2565), so the notice cannot
+// (runtimeLineageFailedAttempt, #1974 slice 2 / #2565), so the notice cannot
 // promise something the settle will not demand, or stay silent about
 // something it will.
 func runtimeSettleObligation(status RuntimeStatus, reviewDisabled bool) string {

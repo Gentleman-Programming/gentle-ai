@@ -50,31 +50,3 @@ func runtimeBoundPredecessorRefusal(lineage, boundRevision, currentRevision stri
 		"this change is bound to review %s at revision %s, and that revision is not in an approved state, so it cannot authorize a settlement; run `gentle-ai review status --cwd <repo> --contract %s --next-transition` to see what that lineage still owes before it can approve",
 		lineage, boundRevision, runtimeReviewIntegrationContract)
 }
-
-// runtimeDischargedFailure answers the question #2881's refusal could not:
-// was the failure this correction names real, and already repaired?
-//
-// It walks the same immutable chain the binding derives from, looking for the
-// named failure and then for the passing settlement that discharged it. A hit
-// means the operator's input was correct and merely obsolete, which is a very
-// different thing to be told than "your input is wrong".
-func runtimeDischargedFailure(attempts []RuntimeAttempt, named string) (string, int, bool) {
-	if named == "" {
-		return "", 0, false
-	}
-	failedAt := -1
-	for index, attempt := range attempts {
-		if attempt.Outcome == AttemptFailed && attempt.EvidenceRevision == named {
-			failedAt = index
-		}
-	}
-	if failedAt < 0 {
-		return "", 0, false
-	}
-	for _, attempt := range attempts[failedAt+1:] {
-		if attempt.Outcome == AttemptPassed {
-			return named, attempt.Ordinal, true
-		}
-	}
-	return "", 0, false
-}

@@ -3332,44 +3332,6 @@ func runtimeResetStructurallyPermitted(status RuntimeStatus) bool {
 	return last.Outcome == AttemptFailed || last.Outcome == AttemptInterrupted
 }
 
-// runtimeChainFailedEvidence derives the unmanaged-remediation binding from
-// the immutable attempt chain (#1974 slice 2): the most recent settled
-// AttemptFailed attempt's EvidenceRevision, provided no AttemptPassed
-// settlement follows it. Running and interrupted attempts between the failure
-// and its correction are honest audit records, not semantic successors, and
-// audited resets, rescopes, and advances never appear in the chain at all, so
-// none of them sever the binding. The first passed settlement after the
-// failure DOES sever it: that pass is the one correction the failed evidence
-// admits, so a later correction claiming the same revision finds no failed
-// evidence in the chain and is refused -- the same anti-laundering budget the
-// live evidence pointer used to enforce, now immune to that pointer being
-// wiped. Evaluated by RuntimeStore.Finish and applyRuntimeFinishEvent in
-// lockstep, so a committed correction always replays deterministically.
-func runtimeChainFailedEvidence(attempts []RuntimeAttempt) (string, bool) {
-	failed, ok := runtimeChainFailedAttempt(attempts)
-	if !ok {
-		return "", false
-	}
-	return failed.EvidenceRevision, true
-}
-
-// runtimeChainFailedAttempt is runtimeChainFailedEvidence's whole record. The
-// evidence revision alone answers "which failure does this correction repair";
-// #2621 also has to answer "which objective was that failure recorded under",
-// so the authority a reset carries can be matched against the exact failure it
-// terminated rather than against any failure that happens to precede it.
-func runtimeChainFailedAttempt(attempts []RuntimeAttempt) (RuntimeAttempt, bool) {
-	for index := len(attempts) - 1; index >= 0; index-- {
-		switch attempts[index].Outcome {
-		case AttemptPassed:
-			return RuntimeAttempt{}, false
-		case AttemptFailed:
-			return attempts[index], true
-		}
-	}
-	return RuntimeAttempt{}, false
-}
-
 // runtimeLineageFailedAttempt derives the one unresolved remediation obligation
 // visible to the current objective. Reset, rescope, and advance successors keep
 // their predecessor lineage; unrelated objectives never enter this set.
