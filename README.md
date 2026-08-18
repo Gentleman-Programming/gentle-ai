@@ -24,9 +24,24 @@ Gentle-AI is a Go CLI/TUI that configures supported AI coding agents. It install
 
 ## Supported agent integrations
 
-Gentle-AI currently has adapters for:
-
-Claude Code, OpenCode, Kilo Code, Gemini CLI, Cursor, VS Code Copilot, Codex, Windsurf, Antigravity, Kimi Code, Qwen Code, Kiro IDE, OpenClaw, Trae, Pi, and Hermes.
+| Agent               |         Delegation Model         | Key Feature                                                     |
+| ------------------- | :------------------------------: | --------------------------------------------------------------- |
+| **Claude Code**     |         Full (Task tool)         | Sub-agents, output styles                                       |
+| **OpenCode**        |    Full (multi-mode overlay)     | Per-phase model routing                                         |
+| **Kilo Code**       |    Full (multi-mode overlay)     | OpenCode-compatible config in `~/.config/kilo`                  |
+| **Gemini CLI**      |       Full (experimental)        | Custom agents in `~/.gemini/agents/`                            |
+| **Cursor**          |     Full (native subagents)      | Native agents in `~/.cursor/agents/`                            |
+| **VS Code Copilot** |        Full (runSubagent)        | Parallel execution                                              |
+| **Codex**           | Native multi-agent + solo fallback | CLI-native, TOML config                                       |
+| **Windsurf**        |            Solo-agent            | Plan Mode, Code Mode, native workflows                          |
+| **Antigravity**     |   Solo-agent + Mission Control   | Built-in Browser/Terminal sub-agents                            |
+| **Kimi Code**       |   Full (native custom agents)    | Modular prompt templates in `~/.kimi`                           |
+| **Kiro IDE**        |     Full (native subagents)      | Native `~/.kiro/agents/` + steering orchestration               |
+| **Qwen Code**       |     Full (native sub-agents)     | Slash commands, `~/.qwen/commands/`, `auto_edit` mode           |
+| **OpenClaw**        |            Solo-agent            | Workspace-first `AGENTS.md` / `SOUL.md` with global MCP config  |
+| **Trae**            |            Solo-agent            | Desktop app by ByteDance; `~/.trae/skills/` + OS-specific rules |
+| **Pi**              | Full (package-managed subagents) | First-class `gentle-pi` harness                                 |
+| **Hermes**          | Full (`delegate_task` ephemeral) | Native delegation with YAML MCP and `SOUL.md` persona           |
 
 Capabilities differ by runtime. See [Supported Agents](docs/agents.md) for detection rules, delegation models, config paths, and feature support. For Pi's package-managed workflow, see [Pi Agent](docs/pi.md).
 
