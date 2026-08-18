@@ -249,6 +249,22 @@ func TestWindowsLauncherContents(t *testing.T) {
 	}
 }
 
+func TestWindowsPercentTargetsAreUnsupported(t *testing.T) {
+	for _, target := range []string{`C:\%USERPROFILE%\opencode.exe`, `C:\one%\opencode.exe`, `C:\Program Files\O'Brien\opencode.exe`, `C:\Program Files\OpenCode\opencode.exe`} {
+		plan, err := PrepareActivation(t.TempDir(), ActivationOptions{OS: "windows", Path: `C:\tools`, RunVersion: func(string) (string, error) { return "1.15.11", nil }, ResolveTarget: func(string, string, string) (string, error) { return target, nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantUnsupported := strings.Contains(target, "%")
+		if (plan.Capability().Status == CapabilityUnsupported) != wantUnsupported {
+			t.Fatalf("target %q capability = %#v", target, plan.Capability())
+		}
+		if wantUnsupported && IsManagedLauncher("opencode.cmd", []byte(windowsCMDLauncher(target))) {
+			t.Fatalf("unsafe CMD target accepted: %q", target)
+		}
+	}
+}
+
 func TestIsManagedLauncherRejectsIncidentalAndMalformedMarkers(t *testing.T) {
 	for _, tt := range []struct {
 		name, path, content string
@@ -310,6 +326,22 @@ func TestManagedLauncherOwnershipRejectsSymlinksAndNonRegularPaths(t *testing.T)
 	}
 	if owned, err := ManagedLauncherOwnership(launcher); err == nil || owned {
 		t.Fatalf("symlink ownership = %t, %v; want rejected", owned, err)
+	}
+	options := ActivationOptions{OS: "linux", Shell: "/bin/zsh", Path: BinDir(home), RunVersion: func(string) (string, error) { return "1.15.11", nil }, ResolveTarget: func(string, string, string) (string, error) { return "/real/opencode", nil }}
+	if plan, err := PrepareActivation(home, options); err == nil || plan != nil {
+		t.Fatalf("activation plan = %v, %v; want symlink refusal", plan, err)
+	}
+	if plan, err := PrepareDeactivation(home, options); err == nil || plan != nil {
+		t.Fatalf("deactivation plan = %v, %v; want symlink preservation", plan, err)
+	}
+	if got, err := os.Readlink(launcher); err != nil || got != target {
+		t.Fatalf("managed launcher link = %q, %v; want preserved target", got, err)
+	}
+	if err := os.Remove(launcher); err != nil || os.Symlink(filepath.Join(home, "missing"), launcher) != nil {
+		t.Fatal("create broken launcher symlink")
+	}
+	if owned, err := ManagedLauncherOwnership(launcher); err == nil || owned {
+		t.Fatalf("broken symlink ownership = %t, %v; want rejected", owned, err)
 	}
 	if err := os.Remove(launcher); err != nil || os.Mkdir(launcher, 0o755) != nil {
 		t.Fatal("create launcher directory")

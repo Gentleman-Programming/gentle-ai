@@ -679,6 +679,7 @@ func TestTUIExecuteWithBackgroundPublishesChoiceAndPreservesState(t *testing.T) 
 }
 
 func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.T) {
+	t.Setenv("SHELL", "/bin/zsh")
 	home := t.TempDir()
 	previousUserHomeDir := appUserHomeDir
 	appUserHomeDir = func() (string, error) { return home, nil }
@@ -702,7 +703,7 @@ func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.
 	if !strings.Contains(string(before), "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS") {
 		t.Fatalf("TUI install launcher missing background environment: %s", before)
 	}
-	stale := strings.Replace(string(before), "=true", "=stale", 1)
+	stale := strings.Replace(string(before), binDir, t.TempDir(), 1)
 	if err := os.WriteFile(launcher, []byte(stale), 0o755); err != nil {
 		t.Fatalf("WriteFile(stale launcher): %v", err)
 	}

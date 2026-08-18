@@ -16,6 +16,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 // --- checkOneTool ---
@@ -804,6 +805,33 @@ func TestRunDoctor_HomeDirError(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when home dir fails")
 	}
+}
+
+func TestCheckManagedOpenCodeActivationRequiresOwnedLauncherResolution(t *testing.T) {
+	original := lookPathFn
+	t.Cleanup(func() { lookPathFn = original })
+	home := t.TempDir()
+	managed := filepath.Join(home, ".gentle-ai", "bin", "opencode")
+	lookPathFn = func(string) (string, error) { return managed, nil }
+	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managed, []byte("#!/bin/sh\n# "+opencode.OwnershipMarker+"\necho user\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusFail {
+		t.Fatalf("incidental marker result = %#v", got)
+	}
+	if err := os.WriteFile(managed, ownedDoctorOpenCodeLauncher(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusPass {
+		t.Fatalf("managed launcher result = %#v", got)
+	}
+}
+
+func ownedDoctorOpenCodeLauncher() []byte {
+	return []byte("#!/bin/sh\n# " + opencode.OwnershipMarker + "\nset -eu\nif [ -z \"${OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS+x}\" ]; then\n  export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\nfi\nexec '/old/opencode' \"$@\"\n")
 }
 
 // --- #709: derive required agents from state.json ---

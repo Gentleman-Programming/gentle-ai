@@ -612,11 +612,13 @@ func (p *ActivationPlan) Report() ActivationReport {
 		Applied:          p.applied,
 		Effective:        p.Effective(),
 		ActivationReason: p.activationReason,
-		ChangedPaths:     append([]string(nil), p.changed...),
+		ChangedPaths:     p.ChangedPaths(),
 		LauncherPaths:    append([]string(nil), p.paths...),
 	}
 }
 
+// Effective reports whether the current shell resolves the managed launcher.
+// Version eligibility alone cannot prove that a bare `opencode` command uses it.
 func (p *ActivationPlan) Effective() bool {
 	if p == nil || !p.capability.Ready() {
 		return false
@@ -833,6 +835,7 @@ const (
 	profileEnd   = "# <<< gentle-ai managed OpenCode launcher <<<"
 )
 
+// ManagedProfilePaths returns the only POSIX login profiles Gentle AI may edit.
 func ManagedProfilePaths(homeDir string) []string {
 	return []string{filepath.Join(homeDir, ".zprofile"), filepath.Join(homeDir, ".bash_profile")}
 }
@@ -890,6 +893,8 @@ func removeProfileChange(path, binDir string) (profileChange, error) {
 	return profileChange{path: path, before: before, desired: desired, changed: true}, nil
 }
 
+// RemoveManagedProfileBlock removes exact Gentle AI profile blocks while
+// preserving malformed markers, unrelated content, and existing permissions.
 func RemoveManagedProfileBlock(path, binDir string) (bool, error) {
 	change, err := removeProfileChange(path, binDir)
 	if err != nil || !change.changed {
@@ -899,6 +904,16 @@ func RemoveManagedProfileBlock(path, binDir string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func pathResolvesTo(pathValue, launcher, goos string) bool {
+	for _, entry := range splitPath(pathValue, goos) {
+		if samePath(filepath.Join(entry, "opencode"), launcher, goos) {
+			owned, err := ManagedLauncherOwnership(launcher)
+			return err == nil && owned
+		}
+	}
+	return false
 }
 
 func (p *ActivationPlan) applyProfiles() error {
@@ -940,6 +955,7 @@ func profileMode(change *profileChange) os.FileMode {
 	}
 	return change.before.mode
 }
+
 func requireSnapshot(path string, expected launcherSnapshot) error {
 	current, err := readLauncherSnapshot(path)
 	if err != nil {
@@ -953,6 +969,7 @@ func requireSnapshot(path string, expected launcherSnapshot) error {
 	}
 	return nil
 }
+
 func requireWrittenLauncher(path string, desired []byte) error {
 	current, err := readLauncherSnapshot(path)
 	if err != nil {
@@ -983,6 +1000,9 @@ func readLauncherSnapshot(path string) (launcherSnapshot, error) {
 	return launcherSnapshot{exists: true, data: data, mode: info.Mode().Perm(), owned: owned}, nil
 }
 
+// ManagedLauncherOwnership applies the one ownership rule at every launcher
+// boundary: only a non-symlink regular file with canonical generated content
+// is managed.
 func ManagedLauncherOwnership(path string) (bool, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -998,6 +1018,8 @@ func ManagedLauncherOwnership(path string) (bool, error) {
 	return IsManagedLauncher(path, data), nil
 }
 
+// IsManagedLauncher accepts only a byte-for-byte canonical launcher generated
+// by Gentle AI. Historical targets remain valid because only that field varies.
 func IsManagedLauncher(path string, data []byte) bool {
 	base := strings.ToLower(filepath.Base(path))
 	text := string(data)
@@ -1017,17 +1039,6 @@ func IsManagedLauncher(path string, data []byte) bool {
 	default:
 		return false
 	}
-}
-
-func windowsTargetSafe(target string) bool { return !strings.Contains(target, "%") }
-func pathResolvesTo(pathValue, launcher, goos string) bool {
-	for _, entry := range splitPath(pathValue, goos) {
-		if samePath(filepath.Join(entry, "opencode"), launcher, goos) {
-			owned, err := ManagedLauncherOwnership(launcher)
-			return err == nil && owned
-		}
-	}
-	return false
 }
 
 func canonicalTarget(text, prefix, suffix, quote, escapedQuote string) (string, bool) {
@@ -1065,6 +1076,8 @@ func canonicalCMDTarget(text, prefix string) (string, bool) {
 	}
 	return "", false
 }
+
+func windowsTargetSafe(target string) bool { return !strings.Contains(target, "%") }
 
 func launcherContent(goos, target string) map[string]string {
 	if goos == "windows" {

@@ -172,7 +172,15 @@ func withOpenCodeBackgroundPending(report verify.Report, resolution OpenCodeBack
 	case opencodeactivation.CapabilityUnknown:
 		report.FinalNote += fmt.Sprintf(" OpenCode background activation status is unknown (%s); execution stays foreground.", capability.Reason)
 	default:
-		report.FinalNote += " OpenCode background policy is prepared but runtime activation remains pending; execution stays foreground until managed activation succeeds."
+		reason := capability.Reason
+		if resolution.Activation.ActivationReason != "" {
+			reason = resolution.Activation.ActivationReason
+		}
+		report.FinalNote += " OpenCode background policy is prepared but runtime activation remains pending"
+		if reason != "" {
+			report.FinalNote += " (" + reason + ")"
+		}
+		report.FinalNote += "; execution stays foreground until managed activation succeeds."
 	}
 	return report
 }
@@ -198,6 +206,9 @@ func renderOpenCodeBackgroundActivation(resolution OpenCodeBackgroundResolution)
 	if status == "" {
 		status = "unknown"
 	}
+	if activation.Capability.Ready() && !activation.Effective {
+		status = "pending"
+	}
 	paths := "none"
 	if len(activation.LauncherPaths) > 0 {
 		paths = strings.Join(activation.LauncherPaths, ", ")
@@ -209,6 +220,9 @@ func renderOpenCodeBackgroundActivation(resolution OpenCodeBackgroundResolution)
 	lines := fmt.Sprintf("OpenCode background activation status: %s\nOpenCode background launcher paths: %s\nOpenCode background restart required: %s", status, paths, restart)
 	if activation.Capability.Reason != "" {
 		lines += "\nOpenCode background capability reason: " + activation.Capability.Reason
+	}
+	if activation.ActivationReason != "" {
+		lines += "\nOpenCode background activation reason: " + activation.ActivationReason
 	}
 	if activation.Capability.RestartGuidance != "" {
 		lines += "\nOpenCode background restart guidance: " + activation.Capability.RestartGuidance

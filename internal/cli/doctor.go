@@ -15,6 +15,8 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/storage"
 )
@@ -94,7 +96,8 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
-	installedAgents, _ := readDoctorInstalledAgents(homeDir)
+	installedState, _ := state.Read(homeDir)
+	installedAgents := installedState.InstalledAgents
 	// A state read failure (missing/malformed file) is surfaced separately by
 	// checkStateJSON. Here we fall back to an empty list so the doctor only
 	// reports the always-required core tools — preserving the first-time-install
@@ -115,10 +118,25 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx, homeDir, installedAgents) }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
 	)
+	if installedState.BackgroundIntent == model.OpenCodeBackgroundOn && doctorGOOS != "windows" {
+		checks = append(checks, doctor.Check{ID: doctor.CheckOpenCodeActivation, Run: func(context.Context) doctor.Result {
+			return checkManagedOpenCodeActivation(homeDir)
+		}})
+	}
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
 
 	renderDoctorReport(w, report)
 	return nil
+}
+
+func checkManagedOpenCodeActivation(homeDir string) CheckResult {
+	resolved, err := lookPathFn("opencode")
+	expected := opencode.POSIXLauncherPath(homeDir)
+	owned, ownershipErr := opencode.ManagedLauncherOwnership(expected)
+	if err == nil && ownershipErr == nil && filepath.Clean(resolved) == filepath.Clean(expected) && owned {
+		return CheckResult{Status: CheckStatusPass, Detail: "managed OpenCode launcher resolves at " + resolved}
+	}
+	return CheckResult{Status: CheckStatusFail, Detail: "OpenCode background policy is on, but bare opencode does not resolve to managed launcher " + expected + "; start a new supported login shell, then rerun doctor"}
 }
 
 // readDoctorInstalledAgents returns the agent IDs persisted in state.json.
