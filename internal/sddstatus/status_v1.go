@@ -56,10 +56,17 @@ type StatusV1Projection struct {
 	// nil Consent — every status that is not blocked(edit_authority_missing),
 	// which is every legacy shape the freeze tests exercise — produces
 	// byte-identical output to before this field existed.
-	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
-	PhaseInstructions *phaseInstructionsV1         `json:"phaseInstructions,omitempty"`
-	NextRecommended   string                       `json:"nextRecommended"`
-	BlockedReasons    []string                     `json:"blockedReasons"`
+	Consent *SDDIntegrationConsentResult `json:"consent,omitempty"`
+	// RepoProgress projects Status.RepoProgress (Slice 4 of
+	// dev-orchestrator-p1-foundations, design.md Decision 1) onto the wire
+	// under the same omitempty-pointer discipline as ReviewOffer/ReVerify/
+	// Consent above: nil for every change declaring zero or one repo slug --
+	// every legacy shape the freeze tests exercise -- produces byte-identical
+	// output to before this field existed.
+	RepoProgress      *RepoProgress        `json:"repoProgress,omitempty"`
+	PhaseInstructions *phaseInstructionsV1 `json:"phaseInstructions,omitempty"`
+	NextRecommended   string               `json:"nextRecommended"`
+	BlockedReasons    []string             `json:"blockedReasons"`
 }
 
 type planningHomeV1 struct {
@@ -200,6 +207,7 @@ func ProjectStatusV1(status Status) (StatusV1Projection, error) {
 	projected.ReviewOffer = status.ReviewOffer
 	projected.ReVerify = status.ReVerify
 	projected.Consent = status.Consent
+	projected.RepoProgress = status.RepoProgress
 	if status.PhaseInstructions != nil {
 		projected.PhaseInstructions = &phaseInstructionsV1{
 			Apply:     status.PhaseInstructions.Apply,

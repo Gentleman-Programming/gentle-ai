@@ -234,10 +234,19 @@ type Status struct {
 	// granted choice names the exact runnable grant invocation. Structural
 	// absence (nil, omitempty) everywhere else — the same optional-block
 	// discipline ReviewOffer established.
-	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
-	PhaseInstructions *PhaseInstructions           `json:"phaseInstructions,omitempty"`
-	NextRecommended   string                       `json:"nextRecommended"`
-	BlockedReasons    []string                     `json:"blockedReasons"`
+	Consent *SDDIntegrationConsentResult `json:"consent,omitempty"`
+	// RepoProgress is Slice 4's multi-repo apply-progress block (design.md
+	// Decision 1): present exactly when declaredRepoSlugs finds more than one
+	// repository slug in the tasks artifact, following the same
+	// structural-absence discipline ReviewOffer/ReVerify/Consent already
+	// established. Nil (and omitempty) for every change that declares zero or
+	// one repo -- which is every legacy fixture -- so the wire is
+	// byte-identical to before this field existed. See
+	// applyMultiRepoApplyGate.
+	RepoProgress      *RepoProgress      `json:"repoProgress,omitempty"`
+	PhaseInstructions *PhaseInstructions `json:"phaseInstructions,omitempty"`
+	NextRecommended   string             `json:"nextRecommended"`
+	BlockedReasons    []string           `json:"blockedReasons"`
 	// runtimeAttemptTokens carries the ledger's live attempt tokens alongside
 	// RuntimeStatus so status can ask the one readiness predicate the same
 	// question compact acquire asks, and name the same continuation acquire
@@ -457,7 +466,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 		Specs:         multiArtifactState(artifactPaths.Specs, filepath.Join(changeRoot, "specs")),
 		Design:        singleArtifactState(artifactPaths.Design),
 		Tasks:         singleArtifactState(artifactPaths.Tasks),
-		ApplyProgress: singleArtifactState(artifactPaths.ApplyProgress),
+		ApplyProgress: multiArtifactState(artifactPaths.ApplyProgress, filepath.Join(changeRoot, "apply-progress")),
 		VerifyReport:  singleArtifactState(artifactPaths.VerifyReport),
 		ReviewPolicy:  singleArtifactState(artifactPaths.ReviewPolicy),
 		ReviewLedger:  singleArtifactState(artifactPaths.ReviewLedger),
@@ -587,6 +596,8 @@ func Resolve(options ResolveOptions) (Status, error) {
 	)
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
+	repoProgress := buildRepoProgress(declaredRepoSlugs(readText(firstPath(artifactPaths.Tasks))), applyProgressStateBySlug(artifactPaths.ApplyProgress))
+	applyMultiRepoApplyGate(&dependencies, &nextRecommended, &blockedReasons, repoProgress)
 	if staleAllowAuthority != nil || staleEvidenceUnmanaged || (reviewDisabled && runtimeRemediationComplete) {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
@@ -664,6 +675,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	status.RuntimeStatus = runtimeStatus
 	status.runtimeAttemptTokens = runtimeAttemptTokens
 	status.ReviewTransaction = reviewState
+	status.RepoProgress = repoProgress
 	if governingRef == nil {
 		if staleReviewAuthority != nil {
 			applyReviewGateEvaluation(&status, *staleReviewAuthority)
@@ -1016,6 +1028,8 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
+	repoProgress := buildRepoProgress(declaredRepoSlugs(artifactsByType["tasks"].Content), engramApplyProgressStateBySlug(artifactsByType))
+	applyMultiRepoApplyGate(&dependencies, &nextRecommended, &blockedReasons, repoProgress)
 	if staleAllowAuthority != nil || staleEvidenceUnmanaged || (reviewDisabled && runtimeRemediationComplete) {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
@@ -1068,6 +1082,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	status.RuntimeStatus = runtimeStatus
 	status.runtimeAttemptTokens = runtimeAttemptTokens
 	status.ReviewTransaction = reviewState
+	status.RepoProgress = repoProgress
 	if governingRef == nil {
 		if staleReviewAuthority != nil {
 			applyReviewGateEvaluation(&status, *staleReviewAuthority)
@@ -1254,7 +1269,17 @@ func projectFromGitConfig(content string) string {
 	return ""
 }
 
-var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress|verify-report|review/(?:transaction|policy|ledger|receipt|chain-bundle|gate-context)|state|archive-report)$`)
+// engramTitlePattern's apply-progress alternative gained an OPTIONAL,
+// non-capturing `/{repo-slug}` suffix so `sdd/{change}/apply-progress`
+// (bare, single-repo) and `sdd/{change}/apply-progress/{repo-slug}` (scoped,
+// multi-repo) both match. Because the slug lives inside a non-capturing
+// group, matches[2] is still the ONE thing it always was -- either
+// "apply-progress" or "apply-progress/{slug}" as a whole string -- so the
+// two-capture-group shape (and therefore every `len(matches) != 3` guard
+// downstream) is completely unchanged. This is deliberate: a naive third
+// capture group would turn `len(matches)` into 4 and silently blind both
+// guards to every legitimate match, bare or scoped alike.
+var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress(?:/[a-z0-9][a-z0-9-]*)?|verify-report|review/(?:transaction|policy|ledger|receipt|chain-bundle|gate-context)|state|archive-report)$`)
 
 func collectEngramChanges(observations []engramObservation, project string) []string {
 	// An Engram-backed change has no directory to move, so nothing about the
@@ -1335,8 +1360,21 @@ func engramArtifactPaths(changeName string, artifacts map[string]engramObservati
 	if _, ok := artifacts["tasks"]; ok {
 		paths.Tasks = []string{fmt.Sprintf("sdd/%s/tasks", changeName)}
 	}
-	if _, ok := artifacts["apply-progress"]; ok {
-		paths.ApplyProgress = []string{fmt.Sprintf("sdd/%s/apply-progress", changeName)}
+	// Bare "apply-progress" (single-repo, legacy) and scoped
+	// "apply-progress/{slug}" (multi-repo) keys both land here, sorted by
+	// slug so per-repo paths are deterministic.
+	applyProgressKeys := make([]string, 0, 1)
+	for key := range artifacts {
+		if key == "apply-progress" || strings.HasPrefix(key, "apply-progress/") {
+			applyProgressKeys = append(applyProgressKeys, key)
+		}
+	}
+	if len(applyProgressKeys) > 0 {
+		sort.Strings(applyProgressKeys)
+		paths.ApplyProgress = make([]string, 0, len(applyProgressKeys))
+		for _, key := range applyProgressKeys {
+			paths.ApplyProgress = append(paths.ApplyProgress, fmt.Sprintf("sdd/%s/%s", changeName, key))
+		}
 	}
 	if _, ok := artifacts["verify-report"]; ok {
 		paths.VerifyReport = []string{fmt.Sprintf("sdd/%s/verify-report", changeName)}
@@ -1643,6 +1681,15 @@ func resolveArtifactPaths(changeRoot string) (ArtifactPaths, error) {
 	paths.Design = existingPath(filepath.Join(changeRoot, "design.md"))
 	paths.Tasks = existingPath(filepath.Join(changeRoot, "tasks.md"))
 	paths.ApplyProgress = existingPath(filepath.Join(changeRoot, "apply-progress.md"))
+	if repoFiles, err := findApplyProgressRepoFiles(filepath.Join(changeRoot, "apply-progress")); err != nil {
+		return ArtifactPaths{}, err
+	} else if len(repoFiles) > 0 {
+		// Multi-repo layout: changeRoot/apply-progress/{slug}.md files take
+		// over from the flat single-file probe above (F4: ApplyProgress is
+		// already []string on the frozen wire, so this needs no projection
+		// change).
+		paths.ApplyProgress = repoFiles
+	}
 	paths.VerifyReport = existingPath(filepath.Join(changeRoot, "verify-report.md"))
 	paths.ReviewLedger = existingPath(filepath.Join(changeRoot, "reviews", "ledger.json"))
 	paths.ReviewPolicy = existingPath(filepath.Join(changeRoot, "reviews", "policy.md"))
@@ -1705,6 +1752,29 @@ func findSpecFiles(specsRoot string) ([]string, error) {
 			return []string{}, nil
 		}
 		return nil, err
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// findApplyProgressRepoFiles globs changeRoot/apply-progress/*.md for the
+// multi-repo layout. A missing directory (the legacy single-repo case,
+// which never creates one) is not an error -- it simply means "no scoped
+// files", and the flat apply-progress.md probe stands.
+func findApplyProgressRepoFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var files []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		files = append(files, filepath.Join(dir, entry.Name()))
 	}
 	sort.Strings(files)
 	return files, nil
