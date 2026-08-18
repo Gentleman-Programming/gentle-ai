@@ -1156,7 +1156,7 @@ func TestStartCompactAuthorityFailsClosedOnExplicitLineageForeignRecoveryMultiCa
 
 // TestStartCompactAuthorityFailsClosedOnExplicitLineageForeignRecoveryMapping pins
 // the failure-envelope mapping for issue #1987: the typed refusal must be reachable
-// through the exported sentinel AND the IsExplicitLineageForeignRecovery predicate
+// through the exported sentinel
 // so the not_started branch in newReviewIntegrationFailure fires reliably.
 func TestStartCompactAuthorityFailsClosedOnExplicitLineageForeignRecoveryMapping(t *testing.T) {
 	repo, _, _, _ := correctionContractionRecoveryFixture(t, "compact-1987-mapping-predecessor")
@@ -1164,9 +1164,6 @@ func TestStartCompactAuthorityFailsClosedOnExplicitLineageForeignRecoveryMapping
 	_, startErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{
 		State: requested, ExplicitLineage: true,
 	})
-	if !IsExplicitLineageForeignRecovery(startErr) {
-		t.Fatalf("IsExplicitLineageForeignRecovery = false; want true for %v", startErr)
-	}
 	if !errors.Is(startErr, ExplicitLineageForeignRecoveryErr) {
 		t.Fatalf("errors.Is(startErr, ExplicitLineageForeignRecoveryErr) = false; want true for %v", startErr)
 	}

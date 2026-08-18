@@ -115,13 +115,6 @@ var errExplicitLineageForeignRecovery = errors.New("explicit --lineage selector 
 // variable.
 var ExplicitLineageForeignRecoveryErr = errExplicitLineageForeignRecovery
 
-// IsExplicitLineageForeignRecovery reports whether err was produced by the
-// hoisted foreign-lineage refusal. Exported so callers that cannot import
-// the package-private sentinel can still test for the failure shape.
-func IsExplicitLineageForeignRecovery(err error) bool {
-	return errors.Is(err, errExplicitLineageForeignRecovery)
-}
-
 // ApprovedRecoveryScopeUnchanged reports whether err is the refusal of a
 // scope-changed recovery whose approved predecessor already approved exactly
 // the candidate the successor would freeze.
