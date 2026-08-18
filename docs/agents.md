@@ -71,6 +71,16 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - Phase-specific tools are preserved (`sdd-explore` and `sdd-verify` use read/shell/context7 as required)
 - Orchestrator remains in steering (`~/.kiro/steering/gentle-ai.md`) and delegates execution to native subagents
 
+### OpenCode headless delegation on Windows
+
+Windows users without WSL, tmux, or zellij can route headless OpenCode work into a persistent, identifiable terminal window using Windows Terminal (`wt.exe`, ships with Windows Terminal):
+
+```bash
+wt -w orquestador-gentleman new-tab --title "OpenCode" opencode run --agent gentle-orchestrator "<task>"
+```
+
+`wt -w <name>` reuses an existing named window if one is already open, or creates it if not — the closest native Windows equivalent to targeting a persistent tmux pane by name. Combined with `opencode run --agent <name> "<task>"` headless mode (no TUI interaction required), this gives Windows users a scriptable delegation path with zero extra dependencies (no WSL, no tmux port).
+
 ---
 
 ## SDD Mode Support
