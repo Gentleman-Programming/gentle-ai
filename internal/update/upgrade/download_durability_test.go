@@ -14,6 +14,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 )
 
 func digestOf(data []byte) string {
@@ -271,4 +273,130 @@ func TestDownloadToFileRemovesPartialArchiveWhenTheBodyIsTruncated(t *testing.T)
 		t.Fatal("downloadToFile: want the truncated-body error, got nil")
 	}
 	assertNoLeftovers(t, dir)
+}
+
+// TestAtomicReplacePreservesDisplacedBackupOnReadbackFailure pins decode2's
+// 2026-08-18 PR #2715 review: when the read-back after a move disagrees
+// with the staged bytes, the displacement backup at <dst><DisplacedSuffix>
+// MUST stay on disk. The pre-fix code removed the displacement inside the
+// move call (before read-back), so a successful-looking move that "applied"
+// an unverified binary left the user with no recovery path. The new
+// behavior preserves the displaced file whenever atomicReplace returns a
+// non-nil error.
+//
+// This test runs the download path's atomicReplace with the renameFn
+// stubbed to a no-op. The dst retains its pre-existing content, so the
+// read-back runs against bytes that disagree with what src claims. We then
+// pre-stage a <dst>.gentle-ai-displaced file and assert it survives the
+// failure.
+func TestAtomicReplacePreservesDisplacedBackupOnReadbackFailure(t *testing.T) {
+	tmp := t.TempDir()
+	dst := filepath.Join(tmp, "gentle-ai")
+	src := filepath.Join(tmp, "staged-gentle-ai")
+
+	if err := os.WriteFile(dst, []byte("INSTALLED\n"), 0o755); err != nil {
+		t.Fatalf("seed dst: %v", err)
+	}
+	if err := os.WriteFile(src, []byte("STAGED-but-different\n"), 0o755); err != nil {
+		t.Fatalf("seed src: %v", err)
+	}
+	displacedPath := dst + filemerge.DisplacedSuffix
+	if err := os.WriteFile(displacedPath, []byte("RECOVER-ME\n"), 0o644); err != nil {
+		t.Fatalf("seed displaced: %v", err)
+	}
+
+	// Stub renameFn to a no-op so dst retains its pre-existing bytes and
+	// the read-back sees the disagreement.
+	original := renameFn
+	t.Cleanup(func() { renameFn = original })
+	renameFn = func(string, string) error { return nil }
+
+	err := atomicReplace(src, dst)
+	if err == nil {
+		t.Fatal("atomicReplace: want digest-mismatch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "was not replaced") {
+		t.Errorf("atomicReplace err = %q, want the digest-mismatch refusal", err.Error())
+	}
+
+	// The displaced backup MUST persist after a failed read-back.
+	if _, statErr := os.Stat(displacedPath); statErr != nil {
+		t.Fatalf("displaced backup was removed despite read-back failure: %v", statErr)
+	}
+	contents, readErr := os.ReadFile(displacedPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile(displaced) after failed atomicReplace: %v", readErr)
+	}
+	if string(contents) != "RECOVER-ME\n" {
+		t.Errorf("displaced backup content = %q, want %q (recovery path must be intact)", string(contents), "RECOVER-ME\n")
+	}
+}
+
+// TestAtomicReplaceRemovesDisplacedBackupAfterReadbackSuccess pins the
+// happy path: when the read-back verifies dst holds the staged bytes, the
+// cleanup of <dst><DisplacedSuffix> runs. Pre-stages a displaced file with
+// junk content; after a successful atomicReplace (stubbed renameFn) the
+// file must be gone so a later run does not accumulate leftover displacement
+// files from prior successful runs.
+func TestAtomicReplaceRemovesDisplacedBackupAfterReadbackSuccess(t *testing.T) {
+	tmp := t.TempDir()
+	dst := filepath.Join(tmp, "gentle-ai")
+	src := filepath.Join(tmp, "staged-gentle-ai")
+
+	staged := []byte("STAGED\n")
+	if err := os.WriteFile(src, staged, 0o755); err != nil {
+		t.Fatalf("seed src: %v", err)
+	}
+	if err := os.WriteFile(dst, staged, 0o755); err != nil {
+		t.Fatalf("seed dst: %v", err)
+	}
+	displacedPath := dst + filemerge.DisplacedSuffix
+	if err := os.WriteFile(displacedPath, []byte("leftover-from-prior-run\n"), 0o644); err != nil {
+		t.Fatalf("seed displaced: %v", err)
+	}
+
+	original := renameFn
+	t.Cleanup(func() { renameFn = original })
+	renameFn = func(string, string) error { return nil }
+
+	if err := atomicReplace(src, dst); err != nil {
+		t.Fatalf("atomicReplace: unexpected error: %v", err)
+	}
+
+	if _, statErr := os.Stat(displacedPath); !os.IsNotExist(statErr) {
+		t.Errorf("displaced backup should have been removed after successful read-back; got err=%v", statErr)
+	}
+}
+
+// TestAtomicReplaceNoDisplacedBeforeNoCleanup prunes the obvious
+// asymmetry: when no displacement ever happened (a clean rename on the
+// first attempt) there is nothing to clean, and the cleanup is a no-op
+// rather than an error. This is a regression guard against the cleanup
+// branch throwing on a non-existent path.
+func TestAtomicReplaceNoDisplacedBeforeNoCleanup(t *testing.T) {
+	tmp := t.TempDir()
+	dst := filepath.Join(tmp, "gentle-ai")
+	src := filepath.Join(tmp, "staged-gentle-ai")
+
+	staged := []byte("STAGED\n")
+	if err := os.WriteFile(src, staged, 0o755); err != nil {
+		t.Fatalf("seed src: %v", err)
+	}
+	if err := os.WriteFile(dst, staged, 0o755); err != nil {
+		t.Fatalf("seed dst: %v", err)
+	}
+
+	original := renameFn
+	t.Cleanup(func() { renameFn = original })
+	renameFn = func(string, string) error { return nil }
+
+	if err := atomicReplace(src, dst); err != nil {
+		t.Fatalf("atomicReplace on a clean rename: unexpected error: %v", err)
+	}
+	// Sanity: <dst><DisplacedSuffix> never existed, and atomicReplace must
+	// not have created it as a side effect.
+	displaced := dst + filemerge.DisplacedSuffix
+	if _, statErr := os.Stat(displaced); !os.IsNotExist(statErr) {
+		t.Errorf("clean rename should not produce a displacement file at %q; stat err = %v", displaced, statErr)
+	}
 }

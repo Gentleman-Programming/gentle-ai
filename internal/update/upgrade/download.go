@@ -450,6 +450,16 @@ func atomicReplace(src, dst string) error {
 	if err := filemerge.SyncDir(filepath.Dir(dst)); err != nil {
 		return fmt.Errorf("sync install directory for %s: %w", dst, err)
 	}
+
+	// Read-back verified: it is now safe to remove the Windows
+	// displacement backup at <dst>.gentle-ai-displaced (if present).
+	// decode2 (2026-08-18) review of PR #2715: the cleanup is the
+	// caller's privilege, never the move's, so a future move that
+	// returns nil but whose read-back mismatches cannot have left
+	// the operator without a recovery path. The cleanup runs only
+	// after fileDigest matches the staged payload; on non-Windows
+	// the path never exists, so this is a no-op there.
+	_ = os.Remove(dst + filemerge.DisplacedSuffix)
 	return nil
 }
 

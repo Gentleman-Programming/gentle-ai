@@ -12,10 +12,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// displacedSuffix names the destination that was moved out of the way so a held
-// file could be replaced. It is deterministic rather than random so a later run
-// can clear a leftover instead of accumulating one per attempt.
-const displacedSuffix = ".gentle-ai-displaced"
+// displacedSuffixLocal is the package-private alias for filemerge.DisplacedSuffix.
+// The suffix value lives in move.go so non-Windows callers (and tests) can
+// reference it without dragging in <golang.org/x/sys/windows>; the build-tagged
+// file here just reads from the public constant.
+const displacedSuffixLocal = DisplacedSuffix
 
 // moveFileReplace publishes src over dst on Windows.
 //
@@ -38,6 +39,15 @@ const displacedSuffix = ".gentle-ai-displaced"
 // failure while a mutation is silently pending, or claim a success it cannot
 // verify. Both are the #2319 defect with extra steps, so a swap that cannot be
 // proven now fails now.
+//
+// The displacement rung (3) leaves the prior binary at <dst><DisplacedSuffix>
+// until the CALLER proves the swap. The displacement cleanup is the
+// caller's privilege, never the move's (decode2 2026-08-18 PR #2715
+// review): the move returning nil is not yet evidence the new bytes are
+// on disk, so the displaced file is preserved through read-back. If
+// read-back fails, the displaced file remains a recovery path for an
+// operator who can decide by hand. If read-back succeeds, the caller
+// deletes <dst><DisplacedSuffix> because dst is now verified.
 //
 // Every failure path leaves the installed file where it was, and names the cause
 // so the caller can tell "held by another process" apart from "the directory
@@ -69,7 +79,7 @@ func moveFileReplace(src, dst string) error {
 // via errors.Is without string-scraping.
 func displaceAndMove(src, dst string, hold error) error {
 	const replace = windows.MOVEFILE_REPLACE_EXISTING | windows.MOVEFILE_WRITE_THROUGH
-	displaced := dst + displacedSuffix
+	displaced := dst + displacedSuffixLocal
 	_ = os.Remove(displaced)
 
 	if err := moveFileEx(dst, displaced, replace); err != nil {
@@ -85,10 +95,16 @@ func displaceAndMove(src, dst string, hold error) error {
 		return fmt.Errorf("%q is held by another process (%v) and could not be replaced: %w", dst, hold, err)
 	}
 
-	// The new bytes are published. Whoever holds the old file still holds it, so
-	// removing it is best effort — a leftover displaced file is not a failed
-	// replacement and must not be reported as one.
-	_ = os.Remove(displaced)
+	// The new bytes are published. Whoever holds the old file still holds it,
+	// so the prior binary MUST stay at `<dst><displacedSuffixLocal>` until the
+	// caller proves the swap via read-back. Removing it here would be the
+	// #2319 defect with extra steps — a swap that LOOKED successful from
+	// the move call but whose read-back turned out to disagree with the
+	// staged bytes would have left the user with no recovery path. The
+	// caller (atomicReplace in internal/update/upgrade/download.go) deletes
+	// `<dst><displacedSuffixLocal>` only AFTER fileDigest matches the staged
+	// payload. If read-back fails, the displaced file persists, so an operator
+	// can recover by hand.
 	return nil
 }
 
