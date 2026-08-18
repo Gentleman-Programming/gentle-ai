@@ -1420,3 +1420,64 @@ func TestByDesignEnvelopeVocabularyMatch(t *testing.T) {
 		}
 	}
 }
+
+// TestParseByDesignEnvelopeRejectsNonDispatchableVerb: a verb captured by
+// byDesignVerbRegexp that is NOT in ReviewDispatchableReviewVerbs must fail
+// closed. The envelope promises dispatchability; the parser must enforce it.
+// decode2 2026-08-18 review on PR #2994.
+func TestParseByDesignEnvelopeRejectsNonDispatchableVerb(t *testing.T) {
+	dispatched, err := ReviewDispatchableReviewVerbs()
+	if err != nil {
+		t.Fatalf("ReviewDispatchableReviewVerbs: %v", err)
+	}
+	// pick a deterministic non-dispatchable verb.
+	candidates := []string{"definitely-not-a-real-verb", "garbage-verb", "made-up-command"}
+	var verb string
+	for _, c := range candidates {
+		if !dispatched[c] {
+			verb = c
+			break
+		}
+	}
+	if verb == "" {
+		t.Fatalf("could not find a non-dispatchable candidate; the dispatched set is unexpectedly large: %v", dispatched)
+	}
+	env, err := ParseByDesignEnvelope("Run `gentle-ai review "+verb+" --lineage L` here.", 1)
+	if err == nil {
+		t.Fatalf("expected dispatchability error for non-dispatchable verb %q, got env=%+v", verb, env)
+	}
+	if !strings.Contains(err.Error(), "not in the dispatchable set") {
+		t.Errorf("error message must call out the dispatchable set check, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), verb) {
+		t.Errorf("error message must name the verb %q, got: %v", verb, err)
+	}
+}
+
+// TestParseByDesignEnvelopeAcceptsDispatchableVerb: explicit positive test
+// that a known-dispatchable verb parses successfully. Pairs with the
+// rejection test above so the new dispatchability check has both arms.
+func TestParseByDesignEnvelopeAcceptsDispatchableVerb(t *testing.T) {
+	dispatched, err := ReviewDispatchableReviewVerbs()
+	if err != nil {
+		t.Fatalf("ReviewDispatchableReviewVerbs: %v", err)
+	}
+	var verb string
+	for v := range dispatched {
+		verb = v
+		break
+	}
+	if verb == "" {
+		t.Fatal("dispatched set is empty; cannot pick a positive verb")
+	}
+	env, err := ParseByDesignEnvelope("Run `gentle-ai review "+verb+" --lineage L` here.", 7)
+	if err != nil {
+		t.Fatalf("dispatchable verb %q rejected: %v", verb, err)
+	}
+	if env.Verb != verb {
+		t.Errorf("env.Verb = %q, want %q", env.Verb, verb)
+	}
+	if env.Line != 7 {
+		t.Errorf("env.Line = %d, want 7", env.Line)
+	}
+}

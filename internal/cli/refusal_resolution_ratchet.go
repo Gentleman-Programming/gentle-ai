@@ -115,6 +115,18 @@ func ParseByDesignEnvelope(line string, lineNo int) (ByDesignEnvelope, error) {
 	}
 	if verb != nil {
 		env.Verb = verb[1]
+		// Enforce dispatchability: the ByDesignEnvelope type documents that
+		// "Verb is the dispatched review verb iff the directive names one".
+		// A verb that is not in ReviewDispatchableReviewVerbs is a fixture
+		// bug — the directive claims a runnable exit that does not exist.
+		dispatched, err := ReviewDispatchableReviewVerbs()
+		if err != nil {
+			return ByDesignEnvelope{}, fmt.Errorf("line %d: dispatchability check failed: %w", lineNo, err)
+		}
+		if !dispatched[env.Verb] {
+			// refusal:by-design world-action: a non-dispatchable verb in a directive is a fixture bug; repair the markdown or the dispatch surface, no command can fix it
+			return ByDesignEnvelope{}, fmt.Errorf("line %d: directive names review verb %q which is not in the dispatchable set; the directive claims a runnable exit that does not exist", lineNo, env.Verb)
+		}
 	}
 
 	if env.IsNamed() && env.IsAnnotated() {
