@@ -1843,6 +1843,17 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	} else {
 		command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
 	}
+
+	// Legacy migration: on Windows, the canonical command differs from the
+	// pre-fix POSIX literal. Pruning must run BEFORE the canonical-existence
+	// early return; otherwise a settings file that already has the canonical
+	// entry but still carries the legacy would never get cleaned up, leaving
+	// both hooks active and triggering two refresh runs.
+	if runtime.GOOS == "windows" {
+		const legacy = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+		pruneLegacyClaudeHook(root, legacy)
+	}
+
 	if claudeHookExists(root, command) {
 		return false, nil
 	}
@@ -1854,56 +1865,6 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	}
 	if hooksMap == nil {
 		hooksMap = map[string]any{}
-	}
-
-	// Legacy migration: on Windows, the canonical command differs from the
-	// pre-fix POSIX literal. Remove any prior POSIX entry before appending the
-	// canonical one, otherwise sync produces two UserPromptSubmit entries
-	// (one broken, one new). On non-Windows the canonical IS the legacy, so
-	// claudeHookExists already short-circuited above.
-	if runtime.GOOS == "windows" {
-		const legacy = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
-		if ups, ok := hooksMap["UserPromptSubmit"].([]any); ok {
-			var pruned []any
-			for _, item := range ups {
-				itemMap, ok := item.(map[string]any)
-				if !ok {
-					pruned = append(pruned, item)
-					continue
-				}
-				innerHooks, ok := itemMap["hooks"].([]any)
-				if !ok {
-					pruned = append(pruned, item)
-					continue
-				}
-				var kept []any
-				for _, h := range innerHooks {
-					hMap, ok := h.(map[string]any)
-					if ok && hMap["command"] == legacy {
-						continue
-					}
-					kept = append(kept, h)
-				}
-				if len(kept) == len(innerHooks) {
-					pruned = append(pruned, item)
-					continue
-				}
-				if len(kept) == 0 {
-					continue
-				}
-				copy := make(map[string]any, len(itemMap))
-				for k, v := range itemMap {
-					copy[k] = v
-				}
-				copy["hooks"] = kept
-				pruned = append(pruned, copy)
-			}
-			if len(pruned) == 0 {
-				delete(hooksMap, "UserPromptSubmit")
-			} else {
-				hooksMap["UserPromptSubmit"] = pruned
-			}
-		}
 	}
 
 	promptRaw, hasUserPromptSubmit := hooksMap["UserPromptSubmit"]
@@ -2046,6 +2007,67 @@ func claudeHookExists(root map[string]any, command string) bool {
 		}
 	}
 	return false
+}
+
+// pruneLegacyClaudeHook removes any inner-hook entry whose `command` matches
+// `legacy` from the UserPromptSubmit and SessionStart hooks in root, mutating
+// the structure in place. Called from ensureClaudeSkillRegistryHook before
+// the canonical-existence early return so a settings file that already has
+// the canonical entry but still carries the legacy gets cleaned up.
+func pruneLegacyClaudeHook(root map[string]any, legacy string) {
+	hooksRaw, ok := root["hooks"].(map[string]any)
+	if !ok {
+		return
+	}
+	for _, key := range []string{"UserPromptSubmit", "SessionStart"} {
+		upsRaw, ok := hooksRaw[key]
+		if !ok {
+			continue
+		}
+		ups, ok := upsRaw.([]any)
+		if !ok {
+			continue
+		}
+		var pruned []any
+		for _, item := range ups {
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				pruned = append(pruned, item)
+				continue
+			}
+			innerHooks, ok := itemMap["hooks"].([]any)
+			if !ok {
+				pruned = append(pruned, item)
+				continue
+			}
+			var kept []any
+			for _, h := range innerHooks {
+				hMap, ok := h.(map[string]any)
+				if ok && hMap["command"] == legacy {
+					continue
+				}
+				kept = append(kept, h)
+			}
+			if len(kept) == len(innerHooks) {
+				pruned = append(pruned, item)
+				continue
+			}
+			if len(kept) == 0 {
+				continue
+			}
+			copyMap := make(map[string]any, len(itemMap))
+			for k, v := range itemMap {
+				copyMap[k] = v
+			}
+			copyMap["hooks"] = kept
+			pruned = append(pruned, copyMap)
+		}
+		if len(pruned) == 0 {
+			delete(hooksRaw, key)
+		} else {
+			hooksRaw[key] = pruned
+		}
+	}
 }
 
 func claudeHookListContains(hookEntries []any, command string) bool {
