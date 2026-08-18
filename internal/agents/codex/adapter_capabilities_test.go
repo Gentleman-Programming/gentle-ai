@@ -384,11 +384,11 @@ func TestAdapterCapabilitiesPerModelEnvelope(t *testing.T) {
 			wantMultiAgentVer: "",
 		},
 		{
-			name:             "model absent from runtime catalog: curated fallback for modelID",
-			modelID:          "gpt-5.6-some-future-model",
-			envelope:         realEnvelopeFixture,
-			wantSource:       model.SourceCurated,
-			wantReasoning:    []string{"low", "medium", "high"},
+			name:          "model absent from runtime catalog: curated fallback for modelID",
+			modelID:       "gpt-5.6-some-future-model",
+			envelope:      realEnvelopeFixture,
+			wantSource:    model.SourceCurated,
+			wantReasoning: []string{"low", "medium", "high"},
 		},
 		{
 			name:              "empty modelID with envelope: legacy flat-fallback path",

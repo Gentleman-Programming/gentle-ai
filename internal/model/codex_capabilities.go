@@ -62,11 +62,11 @@ type runtimeDebugPayload struct {
 // CLI uses different field names, this struct is the ONE place to update;
 // RunCodexCapabilityForModel re-derives everything from it.
 type runtimeModelEnvelope struct {
-	Slug             string   `json:"slug"`
-	Reasoning        []string `json:"reasoning"`
-	SpeedTiers       []string `json:"speed_tiers"`
-	ServiceTiers     []string `json:"service_tiers"`
-	MultiAgentVer    string   `json:"multi_agent_version"`
+	Slug          string   `json:"slug"`
+	Reasoning     []string `json:"reasoning"`
+	SpeedTiers    []string `json:"speed_tiers"`
+	ServiceTiers  []string `json:"service_tiers"`
+	MultiAgentVer string   `json:"multi_agent_version"`
 }
 
 // runtimeEnvelope is the wrapping shape returned by `codex debug models`:
