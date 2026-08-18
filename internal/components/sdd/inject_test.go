@@ -7151,7 +7151,7 @@ func TestEnsureClaudeSkillRegistryHookWritesPlatformAwareCommand(t *testing.T) {
 
 	var wantCmd string
 	if runtime.GOOS == "windows" {
-		wantCmd = "powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd $dir; exit 0'"
+		wantCmd = `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
 	} else {
 		wantCmd = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
 	}

@@ -1834,7 +1834,12 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	// form elsewhere.
 	var command string
 	if runtime.GOOS == "windows" {
-		command = "powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd $dir; exit 0'"
+		// Quote $dir so paths containing spaces (common on Windows: e.g.
+		// "C:\Users\John Doe\project", "OneDrive - Company Name") survive
+		// PowerShell's native-command argument reconstruction instead of being
+		// split or corrupted before reaching gentle-ai. Single quotes around the
+		// whole -Command argument keep the embedded double quotes literal.
+		command = `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
 	} else {
 		command = `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
 	}
