@@ -73,13 +73,13 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 
 ### OpenCode headless delegation on Windows
 
-Windows users without WSL, tmux, or zellij can route headless OpenCode work into a persistent, identifiable terminal window using Windows Terminal (`wt.exe`, ships with Windows Terminal):
+Windows users without WSL, tmux, or zellij can run headless OpenCode work in a stable, named terminal window using Windows Terminal (`wt.exe`, ships with Windows Terminal):
 
 ```bash
-wt -w orquestador-gentleman new-tab --title "OpenCode" opencode run --agent gentle-orchestrator "<task>"
+wt --suppressApplicationTitle -w orquestador-gentleman new-tab --title "OpenCode" opencode run --agent gentle-orchestrator "<task>"
 ```
 
-`wt -w <name>` reuses an existing named window if one is already open, or creates it if not — the closest native Windows equivalent to targeting a persistent tmux pane by name. Combined with `opencode run --agent <name> "<task>"` headless mode (no TUI interaction required), this gives Windows users a scriptable delegation path with zero extra dependencies (no WSL, no tmux port).
+`wt -w <name>` reuses an existing named window if one is already open, or creates one if not; `new-tab` adds a fresh tab in it on each invocation. Each task lands in its own tab inside the named window — this is not a persistent pane or session like `tmux send-keys`. `--suppressApplicationTitle` keeps the `OpenCode` tab title stable across invocations. Combined with `opencode run --agent <name> "<task>"` headless mode (no TUI interaction required), this gives Windows users a scriptable delegation path with zero extra dependencies (no WSL, no tmux port).
 
 ---
 
