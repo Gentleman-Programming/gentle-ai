@@ -1661,23 +1661,6 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 		return result, persistErr
 	}
 
-	// Record which version of the binary last completed a successful sync.
-	// This allows a future invocation to detect "sync has not run since upgrade".
-	// Re-read state after persistSyncManagedAssetState so we capture the
-	// InstallState it just stamped (InstalledBinaryVersion, ManagedAssetDigest,
-	// etc.) instead of clobbering the on-disk file with the stale snapshot.
-	if persistedStateErr == nil {
-		latest, err := state.Read(homeDir)
-		if err != nil {
-			return result, fmt.Errorf("re-read state for sync version metadata: %w", err)
-		}
-		latest.LastSyncedVersion = AppVersion
-		latest.LastSyncedAt = func() *time.Time { t := time.Now().UTC(); return &t }()
-		if err := state.Write(homeDir, latest); err != nil {
-			return result, fmt.Errorf("persist sync version metadata: %w", err)
-		}
-	}
-
 	return result, nil
 }
 
@@ -1698,6 +1681,19 @@ func persistSyncManagedAssetStateWithBackground(homeDir string, selection model.
 		// the user discovering the skew mid-review at START preflight.
 		if latest.InstalledBinaryVersion != AppVersion {
 			latest.InstalledBinaryVersion = AppVersion
+			shouldWrite = true
+		}
+		// #1978: stamp the version + UTC timestamp of the most recent successful
+		// sync so a future invocation can detect "sync has not run since this
+		// binary upgrade". Always stamped here — runs for fresh-state installs
+		// (where os.IsNotExist was just translated to an empty InstallState)
+		// and zero-agent no-op runs (managed assets unchanged), unlike the
+		// unlocked outside-the-closure write which only ran when persistedState
+		// had already succeeded at function entry.
+		syncNow := time.Now().UTC()
+		if latest.LastSyncedVersion != AppVersion || latest.LastSyncedAt == nil {
+			latest.LastSyncedVersion = AppVersion
+			latest.LastSyncedAt = &syncNow
 			shouldWrite = true
 		}
 		if latest.ManagedAssetDigest != writer {
