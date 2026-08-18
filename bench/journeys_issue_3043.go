@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+var issue3043LookPath = exec.LookPath
+
+const (
+	issue3043SyncMarker   = "issue3043:sync"
+	issue3043DoctorMarker = "issue3043:doctor"
+)
+
 func issue3043OpenCodeRuntime(sandbox *Sandbox) error {
 	if err := baseRepo(sandbox); err != nil {
 		return err
@@ -49,32 +56,101 @@ func issue3043VerifyInstall(sandbox *Sandbox, observation Observation) error {
 	if err != nil || !strings.Contains(string(data), "gentle-ai:managed-opencode-launcher/v1") {
 		return fmt.Errorf("managed launcher missing or unowned: %q, %v", data, err)
 	}
-	cmd := issue3043LoginShell("command -v opencode; opencode")
-	cmd.Dir = sandbox.Repo
-	cmd.Env = sandbox.env()
-	output, err := cmd.Output()
-	if err != nil || !strings.Contains(string(output), launcher) || !strings.HasSuffix(strings.TrimSpace(string(output)), "runtime:true") {
-		return fmt.Errorf("fresh login shell did not resolve managed launcher with background env: %q, %v", output, err)
+	output, err := issue3043RunLoginShell(sandbox, `printf 'profile:%s\n' "$BENCH_PROFILE"; command -v opencode; opencode`)
+	if err != nil || !strings.Contains(output, "profile:1") || !strings.Contains(output, launcher) || !strings.HasSuffix(strings.TrimSpace(output), "runtime:true") {
+		return fmt.Errorf("fresh zsh login shell did not source the real profile and resolve managed launcher with background env: %q, %v", output, err)
 	}
-	cmd = issue3043LoginShell("opencode")
-	cmd.Dir = sandbox.Repo
-	cmd.Env = append(sandbox.env(), "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=false")
-	output, err = cmd.Output()
-	if err != nil || strings.TrimSpace(string(output)) != "runtime:false" {
+	output, err = issue3043RunLoginShell(sandbox, "opencode", "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=false")
+	if err != nil || strings.TrimSpace(output) != "runtime:false" {
 		return fmt.Errorf("managed launcher overwrote explicit false: %q, %v", output, err)
 	}
 	return nil
 }
 
-// CI images may omit zsh. The fallback starts a fresh shell that explicitly
-// sources .zprofile, proving the product selected and wrote the zsh profile and
-// that bare opencode resolves through it; a real zsh login shell is exercised
-// whenever available.
-func issue3043LoginShell(command string) *exec.Cmd {
-	if zsh, err := exec.LookPath("zsh"); err == nil {
-		return exec.Command(zsh, "-l", "-c", command)
+func issue3043ZshUnavailable(*Sandbox) string {
+	if _, err := issue3043LookPath("zsh"); err != nil {
+		return "zsh is unavailable"
 	}
-	return exec.Command("sh", "-c", ". \"$HOME/.zprofile\"; "+command)
+	return ""
+}
+
+func issue3043LoginShell(command string) (*exec.Cmd, error) {
+	zsh, err := issue3043LookPath("zsh")
+	if err != nil {
+		return nil, fmt.Errorf("zsh is unavailable: %w", err)
+	}
+	return exec.Command(zsh, "-l", "-c", command), nil
+}
+
+func issue3043RunLoginShell(sandbox *Sandbox, command string, extraEnv ...string) (string, error) {
+	cmd, err := issue3043LoginShell(command)
+	if err != nil {
+		return "", err
+	}
+	cmd.Dir = sandbox.Repo
+	cmd.Env = append(sandbox.env(), extraEnv...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("fresh zsh shell failed: %w", err)
+	}
+	return string(output), nil
+}
+
+func issue3043FreshShellCommand(binary string) string {
+	quotedBinary := shellQuote(binary)
+	return fmt.Sprintf("printf '%s\\n'; %s sync && printf '%s\\n'; %s doctor", issue3043SyncMarker, quotedBinary, issue3043DoctorMarker, quotedBinary)
+}
+
+func issue3043AssertFreshShellOutput(output string) error {
+	syncMarker := issue3043SyncMarker + "\n"
+	doctorMarker := issue3043DoctorMarker + "\n"
+	syncStart := strings.Index(output, syncMarker)
+	doctorStart := strings.Index(output, doctorMarker)
+	if syncStart < 0 || doctorStart < 0 || doctorStart <= syncStart {
+		return fmt.Errorf("fresh zsh shell did not run sync followed by doctor: %q", output)
+	}
+
+	syncOutput := output[syncStart+len(syncMarker) : doctorStart]
+	doctorOutput := output[doctorStart+len(doctorMarker):]
+	runtimeReady := strings.Contains(syncOutput, "OpenCode background runtime ready: true")
+	runtimeNotReady := strings.Contains(syncOutput, "OpenCode background runtime ready: false")
+	if runtimeReady == runtimeNotReady {
+		return fmt.Errorf("fresh zsh sync did not report one post-Apply runtime readiness conclusion: %q", syncOutput)
+	}
+	if !strings.Contains(syncOutput, "OpenCode background activation status: ready") {
+		return fmt.Errorf("fresh zsh sync did not report ready managed activation after Apply: %q", syncOutput)
+	}
+
+	var managedActivationLine string
+	for _, line := range strings.Split(doctorOutput, "\n") {
+		if strings.Contains(line, "opencode:managed_activation") {
+			managedActivationLine = line
+			break
+		}
+	}
+	if managedActivationLine == "" {
+		return fmt.Errorf("fresh zsh doctor did not report managed OpenCode activation: %q", doctorOutput)
+	}
+	doctorReady := strings.Contains(managedActivationLine, "[ok]")
+	doctorNotReady := strings.Contains(managedActivationLine, "[xx]")
+	if doctorReady == doctorNotReady {
+		return fmt.Errorf("fresh zsh doctor did not report one managed activation conclusion: %q", managedActivationLine)
+	}
+	if runtimeReady != doctorReady {
+		return fmt.Errorf("fresh zsh sync and doctor disagree about managed activation: sync_ready=%t doctor_ready=%t", runtimeReady, doctorReady)
+	}
+	if !runtimeReady {
+		return fmt.Errorf("fresh zsh managed activation remained not ready: sync=%q doctor=%q", syncOutput, managedActivationLine)
+	}
+	return nil
+}
+
+func issue3043VerifyFreshShell(r *journeyRun) error {
+	output, err := issue3043RunLoginShell(r.sandbox, issue3043FreshShellCommand(r.sandbox.Binary))
+	if err != nil {
+		return fmt.Errorf("fresh zsh sync and doctor failed: %w: %s", err, output)
+	}
+	return issue3043AssertFreshShellOutput(output)
 }
 
 func issue3043Journeys() []Journey {
@@ -84,8 +160,9 @@ func issue3043Journeys() []Journey {
 		Title:  "OpenCode background subagents activate through a managed launcher",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/3043",
 		Steps: []Step{
-			{Name: "fixture: isolated OpenCode runtime", Fixture: issue3043OpenCodeRuntime},
+			{Name: "fixture: isolated OpenCode runtime", Skip: issue3043ZshUnavailable, Fixture: issue3043OpenCodeRuntime},
 			{Name: "install reports managed activation", Args: issue3043InstallArgs, After: issue3043VerifyInstall},
+			{Name: "fresh zsh sync and doctor agree on managed readiness", Composite: issue3043VerifyFreshShell},
 		},
 	}}
 }
