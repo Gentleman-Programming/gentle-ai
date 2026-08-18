@@ -20,7 +20,7 @@
 Gentle-AI is a Go CLI/TUI that configures supported AI coding agents. It installs and synchronizes managed prompts, skills, MCP integrations, persistent-memory wiring, optional Spec-Driven Development (SDD), model profiles, and native review controls without replacing the agent runtime itself.
 
 > [!IMPORTANT]
-> Install the AI agent runtimes you want to use before running Gentle-AI. If a selected runtime is unavailable, configuration stops and reports the required installation command. Pi is also expected on `PATH`; Gentle-AI then installs its package-managed support stack.
+> Install the AI agent runtimes you want to use before running Gentle-AI. If a selected runtime is unavailable, configuration stops and reports the required installation command. When Pi is selected, make sure `pi` is available on `PATH`; Gentle-AI then installs its package-managed support stack.
 
 ## Supported agent integrations
 
@@ -34,7 +34,7 @@ Capabilities differ by runtime. See [Supported Agents](docs/agents.md) for detec
 
 ## Install
 
-The stable channel is the default. Use `@latest` for the latest stable Go release; use `@main` only when testing unreleased development changes.
+The stable channel is the default. Use `@latest` for the latest stable Gentle-AI release; use `@main` only when testing unreleased development changes.
 
 ### macOS or Linux
 
@@ -52,7 +52,7 @@ Windows is supported through the Go toolchain:
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 ```
 
-Official Windows archives and Scoop publication are currently held until the Authenticode restoration gate is satisfied. See [Supported Platforms](docs/platforms.md) for the current distribution and upgrade policy.
+For current Windows distribution and upgrade options, see [Supported Platforms](docs/platforms.md).
 
 ### Other installation options
 
