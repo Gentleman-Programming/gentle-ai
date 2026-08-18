@@ -1,6 +1,7 @@
 package devorchestrator
 
 import (
+	stdctx "context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/batch"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/context"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/db"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/executor"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/intent"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/router"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/skill"
@@ -49,6 +51,12 @@ func (o *Orchestrator) ResolveSkills(requestedSkills []string) ([]string, error)
 // into individual ExecutionBatch instances per repository.
 func (o *Orchestrator) PrepareBatches(status sddstatus.StatusV1Projection, defaultAgent string) []batch.ExecutionBatch {
 	return batch.GenerateExecutionBatches(status, defaultAgent)
+}
+
+// ExecuteBatches distributes the given execution batches to a ConcurrentEngine.
+func (o *Orchestrator) ExecuteBatches(ctx stdctx.Context, batches []batch.ExecutionBatch, prompts map[string]string, runner executor.AgentRunner, maxWorkers int) map[string]error {
+	engine := executor.New(runner, maxWorkers)
+	return engine.ExecuteBatches(ctx, batches, prompts)
 }
 
 // GenerateContextForAgent coordinates the Skills Resolver, Repository Resolver, and Trace Resolver
