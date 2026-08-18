@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 // retiredWorkRunCeremonyTokens enumerates the managed-WorkRun control-plane
@@ -1747,6 +1749,24 @@ func TestSDDStatusContractPreservesFrozenExternalV1Projection(t *testing.T) {
 	}
 }
 
+// openCodeExecutorBoundaryPhrases are the four case-sensitive literals every
+// single-overlay subagent prompt must contain, proving it is a leaf executor
+// that never delegates, calls task, or launches sub-agents.
+var openCodeExecutorBoundaryPhrases = []string{
+	"not the orchestrator", "Do NOT delegate", "Do NOT call task", "Do NOT launch sub-agents",
+}
+
+// assertExecutorBoundaryPrompt fails the test if prompt is missing any of the
+// four executor-boundary literals required by SPEC-006.
+func assertExecutorBoundaryPrompt(t *testing.T, assetPath, name, prompt string) {
+	t.Helper()
+	for _, want := range openCodeExecutorBoundaryPhrases {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("%q agent %s prompt missing %q", assetPath, name, want)
+		}
+	}
+}
+
 func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 	for _, assetPath := range []string{"opencode/sdd-overlay-single.json", "opencode/sdd-overlay-multi.json"} {
 		t.Run(assetPath, func(t *testing.T) {
@@ -1797,14 +1817,75 @@ func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 					}
 				} else {
 					// Single overlay has inline executor-scoped prompts.
-					for _, want := range []string{"not the orchestrator", "Do NOT delegate", "Do NOT call task", "Do NOT launch sub-agents"} {
-						if !strings.Contains(prompt, want) {
-							t.Fatalf("%q phase %s prompt missing %q", assetPath, phase, want)
-						}
+					assertExecutorBoundaryPrompt(t, assetPath, phase, prompt)
+				}
+			}
+
+			// The 12 dev-orchestrator role agents are single-overlay only —
+			// multi mode is blocked by the hardcoded profilePhaseOrder, so they
+			// must never be required in the multi overlay.
+			if !isMulti {
+				for _, role := range opencode.DevRolePhases() {
+					agentDef, ok := agents[role].(map[string]any)
+					if !ok {
+						t.Fatalf("%q missing %s agent", assetPath, role)
 					}
+					prompt, _ := agentDef["prompt"].(string)
+					assertExecutorBoundaryPrompt(t, assetPath, role, prompt)
 				}
 			}
 		})
+	}
+}
+
+// TestOpenCodeSingleOverlaySubagentsAreReachable enforces that every
+// mode:subagent entry in the single overlay has an explicit "allow" entry in
+// gentle-orchestrator's task allow-list. The allow-list opens with "*": "deny",
+// so any subagent lacking an entry is silently unreachable. The subagent list
+// is derived from the overlay itself — never hardcoded — so a future subagent
+// added without an allow-list entry fails this suite instead of shipping
+// unreachable (SPEC-005).
+func TestOpenCodeSingleOverlaySubagentsAreReachable(t *testing.T) {
+	const assetPath = "opencode/sdd-overlay-single.json"
+
+	var root map[string]any
+	if err := json.Unmarshal([]byte(MustRead(assetPath)), &root); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", assetPath, err)
+	}
+
+	agents, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing agent map", assetPath)
+	}
+
+	orchestrator, ok := agents["gentle-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing gentle-orchestrator agent", assetPath)
+	}
+	permission, ok := orchestrator["permission"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q gentle-orchestrator missing permission", assetPath)
+	}
+	taskWrapper, ok := permission["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q gentle-orchestrator missing permission.task", assetPath)
+	}
+	allow, ok := taskWrapper["__replace__"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q permission.task must use __replace__ sentinel", assetPath)
+	}
+
+	for name, def := range agents {
+		agentDef, ok := def.(map[string]any)
+		if !ok {
+			continue
+		}
+		if agentDef["mode"] != "subagent" {
+			continue
+		}
+		if allow[name] != "allow" {
+			t.Fatalf("%q subagent %q is not reachable: missing \"allow\" entry in gentle-orchestrator's task allow-list", assetPath, name)
+		}
 	}
 }
 

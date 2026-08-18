@@ -100,7 +100,8 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 
 ### OpenCode
 
-- Full multi-agent overlay with 11 named agents in `opencode.json` (`gentle-orchestrator` plus 10 SDD phase agents)
+- Full multi-agent overlay with 33 named agents in `opencode.json`: `gentle-orchestrator`, 2 native fallback agents (`general`, `explore`), 10 SDD phase agents, 3 Judgment Day agents, 5 review agents, and 12 dev-orchestrator role agents
+- The 12 dev-orchestrator roles (`dev-explorer`, `dev-proposer`, `dev-specifier`, `dev-designer`, `dev-task-planner`, `solution-architect`, `project-bootstrap`, `backend-implementer`, `frontend-implementer`, `database-specialist`, `dev-verifier`, `dev-orchestrator`) ship in **single mode only**. `dev-orchestrator` runs as a planning subagent: it returns a delegation plan and `gentle-orchestrator` executes it, because OpenCode subagents cannot call `task`.
 - Slash commands for SDD phases (`/sdd-new`, `/sdd-explore`, etc.)
 - Native OpenCode `task` subagents; managed background execution is configured through `gentle-ai install` / `gentle-ai sync` with `--opencode-background-subagents=auto|on|off` or `GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS`
 - CLI precedence is flag, non-empty environment, prior managed state, then `auto`; the interactive OpenCode + SDD installer prompts only when that preference is unresolved
@@ -121,6 +122,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - Full SDD delegation is provided by the merged multi-agent overlay in `~/.config/kilo/opencode.json`, not by a separate native sub-agent directory
 - MCP servers are merged into `opencode.json`; Engram uses the OpenCode-style local MCP entry with `command` as an array
 - Auto-install is supported via npm: `npm install -g @kilocode/cli`
+- Inherits the same single-mode-only 12 dev-orchestrator role agents as OpenCode (see the OpenCode section above); `dev-orchestrator` plans, `gentle-orchestrator` executes.
 
 ### Gemini CLI
 

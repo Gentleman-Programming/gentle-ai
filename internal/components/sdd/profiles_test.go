@@ -673,8 +673,9 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 	tests := []struct {
 		name      string
 		assetPath string
+		devRoles  bool
 	}{
-		{name: "single", assetPath: "opencode/sdd-overlay-single.json"},
+		{name: "single", assetPath: "opencode/sdd-overlay-single.json", devRoles: true},
 		{name: "multi", assetPath: "opencode/sdd-overlay-multi.json"},
 	}
 
@@ -696,6 +697,11 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 			}
 
 			expected := expectedTaskPermissions("")
+			if tt.devRoles {
+				for _, role := range opencode.DevRolePhases() {
+					expected[role] = "allow"
+				}
+			}
 			assertExactTaskPermissions(t, taskMap, expected)
 		})
 	}

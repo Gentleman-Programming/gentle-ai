@@ -532,3 +532,17 @@ func ConfigurableAgentPhases() []string {
 	phases = append(phases, ReviewPhases()...)
 	return phases
 }
+
+// DevRolePhases returns the dev-orchestrator role family shipped as OpenCode
+// single-mode subagents. Deliberately NOT part of ConfigurableAgentPhases():
+// these roles exist only in the single overlay, so surfacing them in the
+// per-agent model picker would imply multi-mode support that profilePhaseOrder
+// does not provide.
+func DevRolePhases() []string {
+	return []string{
+		"dev-orchestrator", "dev-explorer", "dev-proposer", "dev-specifier",
+		"dev-designer", "dev-task-planner", "solution-architect",
+		"project-bootstrap", "backend-implementer", "frontend-implementer",
+		"database-specialist", "dev-verifier",
+	}
+}
