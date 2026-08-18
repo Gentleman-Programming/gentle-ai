@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/context"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/intent"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/router"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/skill"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/trace"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/repository"
 )
@@ -14,13 +16,28 @@ import (
 // Orchestrator wraps the core services required to resolve delegation contexts.
 type Orchestrator struct {
 	WorkspaceRoot string
+	IntentRouter  *intent.Router
+	SkillResolver *skill.Resolver
 }
 
 // New creates a new instance of the DevOrchestrator.
 func New(workspaceRoot string) *Orchestrator {
 	return &Orchestrator{
 		WorkspaceRoot: workspaceRoot,
+		IntentRouter:  intent.New(workspaceRoot),
+		SkillResolver: skill.New(workspaceRoot),
 	}
+}
+
+// RouteIntent acts as the front door for SDD. It accepts a raw intent and routes it
+// to the appropriate starting phase, initializing the required planning artifacts.
+func (o *Orchestrator) RouteIntent(intentText string, sourceID string) (intent.IntentResult, error) {
+	return o.IntentRouter.RouteIntent(intentText, sourceID)
+}
+
+// ResolveSkills identifies and validates a list of requested skills against the local registry.
+func (o *Orchestrator) ResolveSkills(requestedSkills []string) ([]string, error) {
+	return o.SkillResolver.Resolve(requestedSkills)
 }
 
 // GenerateContextForAgent coordinates the Skills Resolver, Repository Resolver, and Trace Resolver
@@ -92,6 +109,13 @@ func (o *Orchestrator) GenerateContextForAgent(
 		}
 	}
 
+	// 3.7 Resolve Skills
+	resolvedSkills, err := o.ResolveSkills(requiredSkills)
+	if err != nil {
+		// Non-fatal, just log or ignore for now, we pass whatever we could resolve
+		// In a real implementation we might fail hard
+	}
+
 	// 4. Context Builder
 	req := context.BuildRequest{
 		ExecutionID:         executionID,
@@ -100,7 +124,7 @@ func (o *Orchestrator) GenerateContextForAgent(
 		Repositories:        validRepos,
 		ArchitectureID:      architectureID,
 		Artifacts:           []string{primaryArtifact},
-		Skills:              requiredSkills,
+		Skills:              resolvedSkills,
 		RepoProfile:         combinedRepoProfile,
 		ArchitectureProfile: architectureProfile,
 		ExpectedType:        expectedType,

@@ -46,6 +46,11 @@ implements:
 	os.MkdirAll(archDir, 0755)
 	os.WriteFile(filepath.Join(archDir, "SKILL.md"), []byte("This is spring profile"), 0644)
 
+	// Setup mock skill for resolver
+	skillDir := filepath.Join(tempDir, "skills", "backend-implementer")
+	os.MkdirAll(skillDir, 0755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("backend skill"), 0644)
+
 	// Execute Test
 	pkg, err := orch.GenerateContextForAgent(
 		"EXEC-001",
