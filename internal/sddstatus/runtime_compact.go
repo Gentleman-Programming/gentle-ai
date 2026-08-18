@@ -129,6 +129,53 @@ type CompactHandoffRequest struct {
 	HandoffAttemptRequest
 }
 
+type runtimeAttemptTarget struct {
+	ObjectiveID         string
+	ObjectiveGeneration int
+	Ordinal             int
+	Token               string
+}
+
+func runtimeAttemptTargetForToken(replay runtimeReplay, token string) (runtimeAttemptTarget, RuntimeAttempt, bool) {
+	ordinal, found := 0, false
+	for candidate, candidateToken := range replay.AttemptTokens {
+		if candidateToken == token {
+			if found {
+				return runtimeAttemptTarget{}, RuntimeAttempt{}, false
+			}
+			ordinal, found = candidate, true
+		}
+	}
+	if !found {
+		return runtimeAttemptTarget{}, RuntimeAttempt{}, false
+	}
+	var resolved *RuntimeAttempt
+	for index := range replay.Status.Attempts {
+		attempt := &replay.Status.Attempts[index]
+		if attempt.Ordinal == ordinal {
+			if resolved != nil {
+				return runtimeAttemptTarget{}, RuntimeAttempt{}, false
+			}
+			owner := replay.Status.ownership.objectives[attempt.ObjectiveID]
+			if replay.Status.ownership.objectives != nil && (owner == nil || owner.objective.Generation != attempt.ObjectiveGeneration) {
+				return runtimeAttemptTarget{}, RuntimeAttempt{}, false
+			}
+			resolved = attempt
+		}
+	}
+	if resolved == nil {
+		return runtimeAttemptTarget{}, RuntimeAttempt{}, false
+	}
+	return runtimeAttemptTarget{ObjectiveID: resolved.ObjectiveID, ObjectiveGeneration: resolved.ObjectiveGeneration, Ordinal: ordinal, Token: token}, *resolved, true
+}
+
+func runtimeActiveSettleTarget(replay runtimeReplay, token string) (runtimeAttemptTarget, RuntimeAttempt, bool) {
+	target, attempt, ok := runtimeAttemptTargetForToken(replay, token)
+	active, objective := replay.Status.runtimeActiveAttempt(), replay.Status.runtimeObjective()
+	return target, attempt, ok && active != nil && objective != nil && active.Ordinal == target.Ordinal &&
+		active.ObjectiveID == target.ObjectiveID && objective.ID == target.ObjectiveID && objective.Generation == target.ObjectiveGeneration
+}
+
 // runtimeReadinessInput is everything the one readiness predicate reads. It
 // carries the whole AttemptTokens map rather than a pre-resolved token so the
 // predicate stays the only code that inspects the readiness triple; a caller
@@ -315,6 +362,9 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 	if readiness.State != CompactStateProceed {
 		return readiness, nil
 	}
+	if _, _, ok := runtimeActiveSettleTarget(replay, request.Token); !ok {
+		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+	}
 
 	status := replay.Status
 	finish := FinishAttemptRequest{
@@ -417,6 +467,10 @@ func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, requ
 		return FinishAttemptRequest{}, false
 	}
 	event := record.Finish
+	target, attempt, targetOK := runtimeAttemptTargetForToken(replay, request.Token)
+	if !targetOK || target.Ordinal != event.Ordinal || attempt.ObjectiveID != target.ObjectiveID || attempt.ObjectiveGeneration != target.ObjectiveGeneration {
+		return FinishAttemptRequest{}, false
+	}
 	finish := FinishAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Outcome: event.Outcome,
 		EvidenceRevision: event.EvidenceRevision, Diagnosis: event.Diagnosis,
@@ -432,7 +486,7 @@ func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, requ
 	if effectiveSuccessor == "" && record.Operation == runtimeOperationFinishRemediation {
 		effectiveSuccessor = replay.Requests[record.RequestID].RemediationPredecessorLineage
 	}
-	matches := request.Token == replay.AttemptTokens[event.Ordinal] && request.RequestID == finish.RequestID &&
+	matches := request.Token == target.Token && request.RequestID == finish.RequestID &&
 		request.Outcome == finish.Outcome && request.EvidenceRevision == finish.EvidenceRevision &&
 		request.Diagnosis == finish.Diagnosis && request.HarnessDisposition == finish.HarnessDisposition &&
 		request.CleanupEvidence == finish.CleanupEvidence && request.ProcessEvidence == finish.ProcessEvidence &&
@@ -479,11 +533,14 @@ func compactItemSettlement(replay runtimeReplay, request CompactSettleRequest) *
 		replay.Requests[request.RequestID].Revision != status.Revision || len(status.Attempts) == 0 {
 		return nil
 	}
-	attempt := status.Attempts[len(status.Attempts)-1]
+	target, attempt, ok := runtimeAttemptTargetForToken(replay, request.Token)
+	if !ok {
+		return nil
+	}
 	objective := status.runtimeObjective()
 	if attempt.Outcome != AttemptPassed || attempt.ItemID == "" || attempt.EvidenceRevision != request.EvidenceRevision ||
 		attempt.ObjectiveID != objective.ID || attempt.ObjectiveGeneration != objective.Generation || attempt.WorkUnit != objective.WorkUnit ||
-		attempt.ItemID != objective.ItemID {
+		attempt.ItemID != objective.ItemID || target.ObjectiveID != objective.ID || target.ObjectiveGeneration != objective.Generation {
 		return nil
 	}
 	return &ItemSettlement{ItemID: attempt.ItemID, WorkUnit: attempt.WorkUnit, ObjectiveID: attempt.ObjectiveID,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -64,6 +65,62 @@ func TestCompactAcquireCASClaimsOneAttempt(t *testing.T) {
 	}
 	if proceed != 1 || blocked != 1 || len(status.Attempts) != 1 || status.ActiveAttempt == nil || countRuntimeRecords(t, store.Dir) != 1 {
 		t.Fatalf("compact CAS proceed=%d blocked=%d status=%#v records=%d", proceed, blocked, status, countRuntimeRecords(t, store.Dir))
+	}
+}
+
+func TestRuntimeSettleTargetResolvesOnlyTheActiveToken(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "target-token")
+	started, err := store.Acquire(context.Background(), CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{RequestID: "target-acquire", WorkUnit: "apply", EvidenceGoal: "prove token target", MaxAttempts: 1, MaxChangedLines: 20}})
+	if err != nil || started.State != CompactStateProceed {
+		t.Fatalf("acquire = %#v, %v", started, err)
+	}
+	replay, err := store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, attempt, ok := runtimeActiveSettleTarget(replay, started.Token)
+	if !ok || target.Ordinal != attempt.Ordinal || target.ObjectiveID != attempt.ObjectiveID || target.Token != started.Token {
+		t.Fatalf("active target = %#v %#v %v", target, attempt, ok)
+	}
+	if _, _, ok := runtimeActiveSettleTarget(replay, runtimeTestHash('f')); ok {
+		t.Fatal("foreign token resolved a settle target")
+	}
+	// Duplicate ordinals cannot be published by the ledger; exercise the
+	// resolver boundary directly to prove corrupt replay fails closed.
+	replay.Status.Attempts = append(replay.Status.Attempts, replay.Status.Attempts[0])
+	if _, _, ok := runtimeAttemptTargetForToken(replay, started.Token); ok {
+		t.Fatal("duplicate ordinal resolved by history order")
+	}
+}
+
+func TestCompactSettleUsesTokenTargetForItemSettlement(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "target-item")
+	store.ReviewDisabled = true
+	root := filepath.Join(repo, "item")
+	mkdir(t, root)
+	acquired, err := store.Acquire(context.Background(), CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{RequestID: "item-acquire", WorkUnit: "apply", EvidenceGoal: "prove item target", MaxAttempts: 1, MaxChangedLines: 20, ItemID: "item-a", ItemEditRoots: []string{root}}})
+	if err != nil || acquired.State != CompactStateProceed {
+		t.Fatalf("item acquire = %#v, %v", acquired, err)
+	}
+	appendRuntimeLedgerFile(t, repo, "item work\n")
+	request := CompactSettleRequest{Token: acquired.Token, RequestID: "item-settle", Outcome: AttemptPassed, EvidenceRevision: runtimeTestHash('a'), Diagnosis: "passed", HarnessDisposition: HarnessReused, CleanupEvidence: "clean", ProcessEvidence: "none"}
+	beforeForeign := countRuntimeRecords(t, store.Dir)
+	foreign := request
+	foreign.RequestID, foreign.Token = "item-foreign", runtimeTestHash('f')
+	blocked, err := store.Settle(context.Background(), foreign)
+	if err != nil || blocked.State != CompactStateBlocked || countRuntimeRecords(t, store.Dir) != beforeForeign {
+		t.Fatalf("foreign settle = %#v, %v", blocked, err)
+	}
+	result, err := store.Settle(context.Background(), request)
+	if err != nil || result.ItemSettlement == nil || result.ItemSettlement.ItemID != "item-a" || result.ItemSettlement.AttemptOrdinal != 1 {
+		t.Fatalf("item settle = %#v, %v", result, err)
+	}
+	before, status := countRuntimeRecords(t, store.Dir), result
+	replayed, err := store.Settle(context.Background(), request)
+	if err != nil || !reflect.DeepEqual(replayed, status) || countRuntimeRecords(t, store.Dir) != before {
+		t.Fatalf("item settle replay = %#v, %v", replayed, err)
 	}
 }
 
