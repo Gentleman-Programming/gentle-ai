@@ -294,7 +294,8 @@ func legacyApplyState(value ApplyState) bool {
 func legacyNextRecommended(value string) bool {
 	switch value {
 	case "apply", "verify", "remediate", "archive", "review", "resolve-review",
-		"resolve-blockers", "sdd-new", "select-change", "propose", "spec", "design", "tasks":
+		"resolve-blockers", "sdd-new", "select-change", "propose", "spec", "design", "tasks",
+		"approve-gate-1", "approve-gate-2", "approve-gate-3":
 		return true
 	default:
 		return false

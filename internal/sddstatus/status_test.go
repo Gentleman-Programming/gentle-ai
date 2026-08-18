@@ -815,33 +815,59 @@ func TestResolveNextRecommendedPlanningRouting(t *testing.T) {
 			wantNext: "propose",
 		},
 		{
-			name: "proposal only routes to spec",
+			name: "proposal only routes to approve-gate-1",
 			seed: func(t *testing.T, root string) {
-				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
+			},
+			wantNext: "approve-gate-1",
+		},
+		{
+			name: "proposal and gate-1 routes to spec",
+			seed: func(t *testing.T, root string) {
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-1-scope.md"), "Aprobado\n")
 			},
 			wantNext: "spec",
 		},
 		{
-			name: "proposal and specs but no design routes to design",
+			name: "proposal specs and design but no gate-2 routes to approve-gate-2",
 			seed: func(t *testing.T, root string) {
-				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\n")
-				write(t, filepath.Join(root, "openspec", "changes", "thin", "specs", "core", "spec.md"), "# Spec\n")
-			},
-			wantNext: "design",
-		},
-		{
-			name: "proposal specs and design but no tasks routes to tasks",
-			seed: func(t *testing.T, root string) {
-				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-1-scope.md"), "Aprobado\n")
 				write(t, filepath.Join(root, "openspec", "changes", "thin", "specs", "core", "spec.md"), "# Spec\n")
 				write(t, filepath.Join(root, "openspec", "changes", "thin", "design.md"), "# Design\n")
+			},
+			wantNext: "approve-gate-2",
+		},
+		{
+			name: "all planning done with pending tasks and gate-2 routes to tasks",
+			seed: func(t *testing.T, root string) {
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-1-scope.md"), "Aprobado\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "specs", "core", "spec.md"), "# Spec\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "design.md"), "# Design\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-2-technical.md"), "Aprobado\n")
 			},
 			wantNext: "tasks",
 		},
 		{
-			name: "all planning done with pending tasks routes to apply",
+			name: "all planning done and tasks pending routes to approve-gate-3",
 			seed: func(t *testing.T, root string) {
 				seedReadyChange(t, root, "thin", "- [ ] 1.1 Work\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-1-scope.md"), "Aprobado\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-2-technical.md"), "Aprobado\n")
+			},
+			wantNext: "approve-gate-3",
+		},
+		{
+			name: "all planning done and tasks pending and gate-3 routes to apply",
+			seed: func(t *testing.T, root string) {
+				seedReadyChange(t, root, "thin", "- [ ] 1.1 Work\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-1-scope.md"), "Aprobado\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-2-technical.md"), "Aprobado\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-3-implementation.md"), "Aprobado\n")
 			},
 			wantNext: "apply",
 		},
@@ -860,12 +886,12 @@ func TestResolveNextRecommendedPlanningRouting(t *testing.T) {
 			wantNext: "propose",
 		},
 		{
-			name: "proposal and design but no specs routes to spec",
+			name: "proposal and design but no specs routes to approve-gate-1",
 			seed: func(t *testing.T, root string) {
-				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
 				write(t, filepath.Join(root, "openspec", "changes", "thin", "design.md"), "# Design\n")
 			},
-			wantNext: "spec",
+			wantNext: "approve-gate-1",
 		},
 	}
 

@@ -608,7 +608,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 		reviewStateReason,
 		readText(firstPath(artifactPaths.ApplyProgress)),
 	)
-	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
+	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete, changeOptsIntoGates(readText(firstPath(artifactPaths.Proposal))))
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
 	slugs := declaredRepoSlugs(readText(firstPath(artifactPaths.Tasks)))
 	repoProgress := buildRepoProgress(slugs, applyProgressStateBySlug(artifactPaths.ApplyProgress))
@@ -1046,7 +1046,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	if remediationState.Reason != "" {
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
 	}
-	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
+	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete, changeOptsIntoGates(artifactsByType["proposal"].Content))
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
 	slugs := declaredRepoSlugs(artifactsByType["tasks"].Content)
 	repoProgress := buildRepoProgress(slugs, engramApplyProgressStateBySlug(artifactsByType))
@@ -2025,7 +2025,23 @@ func resolveApplyState(coreReady bool, taskProgress TaskProgress) ApplyState {
 	return ApplyReady
 }
 
-func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskProgress, applyState ApplyState, coreReady, verifyReportCurrent, verifyReportPassing, remediationComplete bool) Dependencies {
+// gatesEnabledPattern matches an opt-in "Gates: required" (or "enabled")
+// declaration in a change's proposal artifact, mirroring the
+// repositoryFieldPattern convention used by declaredRepoSlugs. A change that
+// never declares this returns false, and Human Gates become a structural
+// no-op for it (see resolveDependencies).
+var gatesEnabledPattern = regexp.MustCompile(`(?im)^\s*gates:\s*(required|enabled|true)\s*$`)
+
+// changeOptsIntoGates reports whether proposalText opts this change into
+// Human Gates. Empty or non-matching input returns false.
+func changeOptsIntoGates(proposalText string) bool {
+	if strings.TrimSpace(proposalText) == "" {
+		return false
+	}
+	return gatesEnabledPattern.MatchString(proposalText)
+}
+
+func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskProgress, applyState ApplyState, coreReady, verifyReportCurrent, verifyReportPassing, remediationComplete, gatesRequired bool) Dependencies {
 	dependencies := Dependencies{
 		Proposal:            artifactDependency(artifacts["proposal"]),
 		Gate1Scope:          DependencyBlocked,
@@ -2039,8 +2055,22 @@ func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskPr
 		Archive:             DependencyBlocked,
 	}
 
+	// Human Gates are opt-in (declared via a "Gates: required" line in the
+	// change's proposal, mirroring the declaredRepoSlugs "repository:" field
+	// convention). A change that never opts in keeps Gate1Scope/Gate2Technical/
+	// Gate3Implementation at DependencyAllDone unconditionally -- a structural
+	// no-op -- so its Specs/Design/Tasks/Apply/Verify/Archive routing is
+	// byte-identical to the pre-Gates behavior. This is what keeps every
+	// existing change (and every test fixture written before Gates existed)
+	// unaffected.
+	if !gatesRequired {
+		dependencies.Gate1Scope = DependencyAllDone
+		dependencies.Gate2Technical = DependencyAllDone
+		dependencies.Gate3Implementation = DependencyAllDone
+	}
+
 	if dependencies.Proposal == DependencyAllDone {
-		if artifacts["gate-1-scope"] == ArtifactDone {
+		if !gatesRequired || artifacts["gate-1-scope"] == ArtifactDone {
 			dependencies.Gate1Scope = DependencyAllDone
 			dependencies.Specs = artifactDependency(artifacts["specs"])
 			dependencies.Design = artifactDependency(artifacts["design"])
@@ -2050,7 +2080,7 @@ func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskPr
 	}
 
 	if dependencies.Specs == DependencyAllDone && dependencies.Design == DependencyAllDone {
-		if artifacts["gate-2-technical"] == ArtifactDone {
+		if !gatesRequired || artifacts["gate-2-technical"] == ArtifactDone {
 			dependencies.Gate2Technical = DependencyAllDone
 			dependencies.Tasks = artifactDependency(artifacts["tasks"])
 		} else {
@@ -2059,26 +2089,28 @@ func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskPr
 	}
 
 	if dependencies.Tasks == DependencyAllDone {
-		if artifacts["gate-3-implementation"] == ArtifactDone {
+		if !gatesRequired || artifacts["gate-3-implementation"] == ArtifactDone {
 			dependencies.Gate3Implementation = DependencyAllDone
 		} else {
 			dependencies.Gate3Implementation = DependencyReady
 		}
 	}
 
-	if applyState == ApplyReady && dependencies.Gate3Implementation == DependencyAllDone {
-		dependencies.Apply = DependencyReady
-	} else if applyState == ApplyAllDone {
-		dependencies.Apply = DependencyAllDone
-	}
+	if dependencies.Gate3Implementation == DependencyAllDone {
+		if applyState == ApplyReady {
+			dependencies.Apply = DependencyReady
+		} else if applyState == ApplyAllDone {
+			dependencies.Apply = DependencyAllDone
+		}
 
-	if verifyReportCurrent && coreReady && taskProgress.AllComplete && verifyReportPassing {
-		dependencies.Verify = DependencyAllDone
-	} else if coreReady && applyState == ApplyAllDone && (!verifyReportCurrent || remediationComplete) {
-		dependencies.Verify = DependencyReady
-	}
-	if dependencies.Verify == DependencyAllDone && taskProgress.AllComplete {
-		dependencies.Archive = DependencyReady
+		if verifyReportCurrent && coreReady && taskProgress.AllComplete && verifyReportPassing {
+			dependencies.Verify = DependencyAllDone
+		} else if coreReady && applyState == ApplyAllDone && (!verifyReportCurrent || remediationComplete) {
+			dependencies.Verify = DependencyReady
+		}
+		if dependencies.Verify == DependencyAllDone && taskProgress.AllComplete {
+			dependencies.Archive = DependencyReady
+		}
 	}
 	return dependencies
 }
