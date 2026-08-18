@@ -166,6 +166,7 @@ func TestValidateSDDSessionPreflightProjectionRejectsMalformed(t *testing.T) {
 		{name: "non-exact body", text: "prefix\n" + nonExact + "\n" + testSDDSessionPreflightInitAnchor},
 		{name: "out-of-order canonical decisions", text: "prefix\n" + outOfOrder + "\n" + testSDDSessionPreflightInitAnchor},
 		{name: "reversed marker order", text: reversedMarkers},
+		{name: "inline init anchor", text: "prefix\n" + block + "\nprose " + testSDDSessionPreflightInitAnchor + "\npostfix"},
 		{name: "missing init anchor", text: valid[:strings.Index(valid, testSDDSessionPreflightInitAnchor)]},
 	}
 
@@ -186,6 +187,7 @@ func TestProjectSDDSessionPreflightRejectsAmbiguousAnchorOrMarkers(t *testing.T)
 	}{
 		{name: "missing anchor", input: "prefix\nno init anchor"},
 		{name: "duplicate anchor", input: "prefix\n" + testSDDSessionPreflightInitAnchor + "\n" + testSDDSessionPreflightInitAnchor},
+		{name: "incomplete anchor line", input: "prefix\n" + testSDDSessionPreflightInitAnchor + " trailing prose\n"},
 		{name: "orphan marker", input: "prefix\n<!-- gentle-ai:sdd-session-preflight -->\n" + testSDDSessionPreflightInitAnchor},
 		{name: "post-init owned range", input: "prefix\n" + testSDDSessionPreflightInitAnchor + "\n" + block},
 	}

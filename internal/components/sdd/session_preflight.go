@@ -93,7 +93,11 @@ func sddSessionPreflightAnchorIndex(rendered, anchor string) (int, error) {
 	if strings.Count(rendered, anchor) != 1 {
 		return 0, fmt.Errorf("sdd session preflight pre-init anchor must occur exactly once")
 	}
-	return strings.Index(rendered, anchor), nil
+	index := strings.Index(rendered, anchor)
+	if !sddSessionPreflightLineStart(rendered, index) || !sddSessionPreflightLineEnd(rendered, index+len(anchor)) {
+		return 0, fmt.Errorf("sdd session preflight pre-init anchor must occupy a complete line")
+	}
+	return index, nil
 }
 
 func sddSessionPreflightMarkerRange(rendered string) (int, int, error) {
