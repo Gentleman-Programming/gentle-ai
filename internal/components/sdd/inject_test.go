@@ -7227,3 +7227,128 @@ func TestInjectRefreshesStaleArchiveSkillWithFinalStateAuthority(t *testing.T) {
 		t.Fatal("installed lazy SDD workflow missing archive final-state handoff section")
 	}
 }
+
+// --- SPEC-005 / SPEC-006: dev-orchestrator install-mode opt-in ---
+//
+// These tests protect the core invariant of the dev-orchestrator install-mode
+// feature: without the opt-in, install output MUST remain byte-identical to
+// the pre-feature golden fixtures captured from main before inject.go/overlay
+// assets were touched (task 1.1, PR1). With the opt-in, dev-orchestrator must
+// flip from a hidden subagent to a visible primary agent, and the merge must
+// be idempotent.
+
+func readGoldenFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "golden", name))
+	if err != nil {
+		t.Fatalf("ReadFile(golden/%s) error = %v", name, err)
+	}
+	return data
+}
+
+func TestInjectOpenCodeOptOutMatchesGoldenSingle(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+
+	if _, err := Inject(home, opencodeAdapter(), ""); err != nil {
+		t.Fatalf("Inject(single) error = %v", err)
+	}
+
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	want := readGoldenFixture(t, "opencode-single.json")
+	if !bytes.Equal(got, want) {
+		t.Fatalf("opt-out single install diverges from golden fixture (SPEC-005); got %d bytes, want %d bytes", len(got), len(want))
+	}
+}
+
+func TestInjectOpenCodeOptOutMatchesGoldenMulti(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti); err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	want := readGoldenFixture(t, "opencode-multi.json")
+	if !bytes.Equal(got, want) {
+		t.Fatalf("opt-out multi install diverges from golden fixture (SPEC-005); got %d bytes, want %d bytes", len(got), len(want))
+	}
+}
+
+func TestInjectOpenCodeDevOrchestratorOptInFlipsToPrimary(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+
+	if _, err := Inject(home, opencodeAdapter(), "", InjectOptions{DevOrchestrator: true}); err != nil {
+		t.Fatalf("Inject(single, DevOrchestrator=true) error = %v", err)
+	}
+
+	settingsPath := opencodeAdapter().SettingsPath(home)
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent key")
+	}
+	devOrchestratorRaw, ok := agentMap["dev-orchestrator"]
+	if !ok {
+		t.Fatal("opencode.json missing dev-orchestrator agent")
+	}
+	devOrchestrator, ok := devOrchestratorRaw.(map[string]any)
+	if !ok {
+		t.Fatalf("dev-orchestrator has unexpected type: %T", devOrchestratorRaw)
+	}
+	if mode, _ := devOrchestrator["mode"].(string); mode != "primary" {
+		t.Fatalf("dev-orchestrator mode = %q, want %q", mode, "primary")
+	}
+	if hidden, _ := devOrchestrator["hidden"].(bool); hidden {
+		t.Fatal("dev-orchestrator hidden = true, want false")
+	}
+	toolsRaw, ok := devOrchestrator["tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("dev-orchestrator tools has unexpected type: %T", devOrchestrator["tools"])
+	}
+	if task, _ := toolsRaw["task"].(bool); !task {
+		t.Fatal("dev-orchestrator tools.task = false, want true")
+	}
+}
+
+func TestInjectOpenCodeDevOrchestratorOptInIsIdempotent(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+
+	opts := InjectOptions{DevOrchestrator: true}
+	first, err := Inject(home, opencodeAdapter(), "", opts)
+	if err != nil {
+		t.Fatalf("Inject(single, DevOrchestrator=true) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(single, DevOrchestrator=true) first changed = false")
+	}
+
+	second, err := Inject(home, opencodeAdapter(), "", opts)
+	if err != nil {
+		t.Fatalf("Inject(single, DevOrchestrator=true) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("Inject(single, DevOrchestrator=true) second changed = true — merge is not idempotent")
+	}
+}

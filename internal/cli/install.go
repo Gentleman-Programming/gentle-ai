@@ -8,15 +8,16 @@ import (
 )
 
 type InstallFlags struct {
-	Agents     []string
-	Components []string
-	Skills     []string
-	Persona    string
-	Preset     string
-	SDDMode    string
-	Scope      string
-	Channel    string
-	DryRun     bool
+	Agents          []string
+	Components      []string
+	Skills          []string
+	Persona         string
+	Preset          string
+	SDDMode         string
+	Scope           string
+	Channel         string
+	DevOrchestrator bool
+	DryRun          bool
 
 	OpenCodeBackgroundSubagents    string
 	OpenCodeBackgroundSubagentsSet bool
@@ -37,6 +38,7 @@ FLAGS
   --sdd-mode single|multi            SDD orchestrator mode
   --scope global|workspace           Install scope (env: GENTLE_AI_INSTALL_SCOPE)
   --channel stable|beta|nightly      Release channel; nightly is an alias for beta (env: GENTLE_AI_CHANNEL)
+  --dev-orchestrator                 Install dev-orchestrator as a second, equal primary OpenCode agent (default: off)
   --opencode-background-subagents=auto|on|off
                                      Resolve OpenCode capability and manage a launcher when eligible; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS
                                      auto inherits managed on/off, unsupported/unknown stays foreground, off removes only owned launchers
@@ -61,6 +63,7 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 	fs.StringVar(&opts.SDDMode, "sdd-mode", "", "SDD orchestrator mode: single or multi (default: single)")
 	fs.StringVar(&opts.Scope, "scope", "", "install scope: global (default) or workspace — env: GENTLE_AI_INSTALL_SCOPE")
 	fs.StringVar(&opts.Channel, "channel", "", installChannelHelp)
+	fs.BoolVar(&opts.DevOrchestrator, "dev-orchestrator", false, "install dev-orchestrator as a second, equal mode: primary OpenCode agent (default: off)")
 	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; eligible versions use a managed launcher")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
 

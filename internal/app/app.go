@@ -785,6 +785,9 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.StrictTDD != nil {
 		selection.StrictTDD = *overrides.StrictTDD
 	}
+	if overrides.DevOrchestrator != nil {
+		selection.DevOrchestrator = *overrides.DevOrchestrator
+	}
 	if len(overrides.Profiles) > 0 {
 		selection.Profiles = overrides.Profiles
 		// Profiles are an OpenCode multi-mode feature — if profiles are being

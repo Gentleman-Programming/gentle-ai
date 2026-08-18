@@ -1,14 +1,18 @@
 package model
 
 type Selection struct {
-	Agents                           []AgentID
-	Components                       []ComponentID
-	Skills                           []SkillID
-	Persona                          PersonaID
-	Preset                           PresetID
-	SDDMode                          SDDModeID
-	SDDProfileStrategy               SDDProfileStrategyID
-	StrictTDD                        bool
+	Agents             []AgentID
+	Components         []ComponentID
+	Skills             []SkillID
+	Persona            PersonaID
+	Preset             PresetID
+	SDDMode            SDDModeID
+	SDDProfileStrategy SDDProfileStrategyID
+	StrictTDD          bool
+	// DevOrchestrator opts in to installing dev-orchestrator as a second,
+	// equal mode: primary OpenCode agent alongside gentle-orchestrator.
+	// Default-off (false); flag/sync-override only for v1, no TUI screen.
+	DevOrchestrator                  bool
 	CodexMultiAgent                  bool                             // deprecated: Codex now always writes features.multi_agent = true; retained for state/back-compat
 	ModelAssignments                 map[string]ModelAssignment       // key = sub-agent name (e.g., "sdd-init")
 	ClaudeModelAssignments           map[string]ClaudeModelAlias      // key = phase name; value = fable|opus|sonnet|haiku
@@ -76,5 +80,6 @@ type SyncOverrides struct {
 	SDDMode                          SDDModeID                        // "" = no override; when non-empty, overrides the sync's default SDD mode
 	SDDProfileStrategy               SDDProfileStrategyID             // "" = auto; otherwise explicit sync profile strategy
 	StrictTDD                        *bool                            // nil = no override; non-nil = override strict TDD mode
+	DevOrchestrator                  *bool                            // nil = no override; non-nil = override dev-orchestrator install opt-in
 	Profiles                         []Profile                        // NEW: profile creation/updates during sync
 }

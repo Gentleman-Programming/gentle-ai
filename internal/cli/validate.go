@@ -68,6 +68,7 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 		return InstallInput{}, err
 	}
 	selection.SDDMode = sddMode
+	selection.DevOrchestrator = flags.DevOrchestrator
 
 	scope, err := ResolveInstallScope(flags.Scope)
 	if err != nil {
