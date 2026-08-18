@@ -820,6 +820,7 @@ type runtimeReplay struct {
 	Status        RuntimeStatus
 	Requests      map[string]runtimeRequestReceipt
 	AttemptTokens map[int]string
+	Accounting    runtimeAccounting
 	// Instance carries the store's ForInstance identity into replay (#2540
 	// S5): applyRuntimeGrantEvent projects a grant into GrantedRoots only
 	// when the record's identity equals this one. Empty projects nothing.
@@ -1986,6 +1987,7 @@ func (store RuntimeStore) loadRevision(head string) (runtimeReplay, error) {
 		AttemptTokens: map[int]string{},
 		Instance:      store.instance,
 	}
+	replay.Accounting.nextOrdinal = 1
 	type revisionRecord struct {
 		revision string
 		record   runtimeRecord
@@ -2095,8 +2097,7 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 			return errors.New("objective reset does not match the terminal objective")
 		}
 		replay.Status.setRuntimeObjective(nil)
-		replay.Status.CumulativeAttempts = 0
-		replay.Status.CumulativeChangedLines = 0
+		replay.Accounting.reset()
 		replay.Status.EvidenceRevision = ""
 		replay.Status.DecisionRequired = false
 		replay.Status.Complete = false
@@ -2130,6 +2131,7 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 		return errors.New("unsupported SDD runtime record operation")
 	}
 	replay.Status.Revision = revision
+	replay.Accounting.materialize(&replay.Status)
 	replay.Requests[record.RequestID] = runtimeRequestReceipt{
 		Digest: record.RequestDigest, Revision: revision,
 		RemediationPredecessorLineage: remediationPredecessorLineage,
@@ -2157,7 +2159,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 		legacyGeneratedID := runtimeObjectiveIDV1(record.Change, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
 		validObjectiveID := event.ObjectiveID == expectedObjectiveID ||
 			event.ItemID == "" && event.ObjectiveGeneration != 0 && event.ObjectiveID == legacyGeneratedID
-		if event.Ordinal != replay.Status.NextOrdinal || generation != replay.Status.ObjectiveGeneration+1 || !validObjectiveID {
+		if event.Ordinal != replay.Accounting.nextOrdinal || generation != replay.Status.ObjectiveGeneration+1 || !validObjectiveID {
 			return errors.New("initial objective identity or ordinal is invalid")
 		}
 		parent := ""
@@ -2177,7 +2179,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 			event.WorkUnit != objective.WorkUnit ||
 			event.MaxAttempts != objective.MaxAttempts || event.MaxChangedLines != objective.MaxChangedLines ||
 			!runtimeItemBindingEqual(event.ItemID, event.ItemEditRoots, objective.ItemID, objective.ItemEditRoots) ||
-			event.Ordinal != replay.Status.NextOrdinal {
+			event.Ordinal != replay.Accounting.nextOrdinal {
 			return errors.New("begin record changes the active objective or ordinal")
 		}
 		if runtimeObjectiveHasRecordedAttempt(replay.Status) {
@@ -2193,7 +2195,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 			return errors.New("begin record does not continue the rescoped objective's recorded candidate") // refusal:by-design world-action: this shape is constructed by the authority itself from Rescope's own recorded InitialCandidate*, so a mismatch is a mutated record and the exit is restoring the store
 		}
 	}
-	if replay.Status.CumulativeAttempts >= event.MaxAttempts || replay.Status.CumulativeChangedLines >= event.MaxChangedLines {
+	if replay.Accounting.attempts >= event.MaxAttempts || replay.Accounting.lines >= event.MaxChangedLines {
 		return errors.New("begin record exceeds the persisted objective budget")
 	}
 	attempt := RuntimeAttempt{
@@ -2206,9 +2208,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 	replay.AttemptTokens[event.Ordinal] = revision
 	active := attempt
 	replay.Status.setRuntimeActiveAttempt(&active)
-	replay.Status.CumulativeAttempts++
-	replay.Status.LifetimeAttempts++
-	replay.Status.NextOrdinal = event.Ordinal + 1
+	replay.Accounting.begin()
 	replay.Status.NextAction = RuntimeActionFinish
 	return nil
 }
@@ -2348,8 +2348,8 @@ func applyRuntimeConsecutiveRescopeRepairEvent(store RuntimeStore, replay *runti
 		Revision: revision, ReplacedRevision: event.ReplacedRevision, RestoredRevision: event.RestoredRevision,
 		Reason: event.Reason, Actor: event.Actor,
 	}
-	if objective := replay.Status.runtimeObjective(); replay.Status.CumulativeAttempts >= objective.MaxAttempts ||
-		replay.Status.CumulativeChangedLines >= objective.MaxChangedLines {
+	if objective := replay.Status.runtimeObjective(); replay.Accounting.attempts >= objective.MaxAttempts ||
+		replay.Accounting.lines >= objective.MaxChangedLines {
 		replay.Status.DecisionRequired = true
 		replay.Status.NextAction = RuntimeActionReset
 	}
@@ -2392,8 +2392,7 @@ func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record run
 		PreviousWorkUnit: objective.WorkUnit, PreviousEvidenceRevision: replay.Status.EvidenceRevision,
 	}
 	replay.Status.setRuntimeObjective(nil)
-	replay.Status.CumulativeAttempts = 0
-	replay.Status.CumulativeChangedLines = 0
+	replay.Accounting.reset()
 	replay.Status.EvidenceRevision = ""
 	replay.Status.Complete = false
 	if err := applyRuntimeBeginEvent(replay, revision, record); err != nil {
@@ -2411,7 +2410,7 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		return errors.New("finish record does not match the active attempt")
 	}
 	objective := replay.Status.runtimeObjective()
-	budgetExceeded := replay.Status.CumulativeChangedLines+event.ChangedLines > objective.MaxChangedLines
+	budgetExceeded := replay.Accounting.lines+event.ChangedLines > objective.MaxChangedLines
 	if event.ChangedLineBudgetExceeded != budgetExceeded {
 		return errors.New("finish record changed-line budget decision does not match replay state")
 	}
@@ -2460,14 +2459,13 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	attempt.RemediatesEvidenceRevision = event.RemediatesEvidenceRevision
 	attempt.ChangedLineBudgetExceeded = event.ChangedLineBudgetExceeded
 	replay.Status.clearRuntimeActiveAttempt(event.Ordinal)
-	replay.Status.CumulativeChangedLines += event.ChangedLines
-	replay.Status.LifetimeChangedLines += event.ChangedLines
+	replay.Accounting.finish(event.ChangedLines)
 	replay.Status.EvidenceRevision = event.EvidenceRevision
 	if event.Outcome == AttemptPassed && !event.ChangedLineBudgetExceeded {
 		replay.Status.Complete = true
 		replay.Status.NextAction = RuntimeActionComplete
-	} else if event.ChangedLineBudgetExceeded || replay.Status.CumulativeAttempts >= objective.MaxAttempts ||
-		replay.Status.CumulativeChangedLines >= objective.MaxChangedLines {
+	} else if event.ChangedLineBudgetExceeded || replay.Accounting.attempts >= objective.MaxAttempts ||
+		replay.Accounting.lines >= objective.MaxChangedLines {
 		replay.Status.DecisionRequired = true
 		replay.Status.NextAction = RuntimeActionReset
 	} else {
