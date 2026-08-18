@@ -286,7 +286,7 @@ func RenderRegistry(cwd string, sources []string, entries []SkillEntry) string {
 // maxSkillDirDepth bounds recursive descent under each root:
 // <root>/<skill>/SKILL.md (depth 1) or <root>/<group>/<skill>/SKILL.md
 // (depth 2). The bound also caps symlink-loop recursion.
-const maxSkillDirDepth = 2
+const maxSkillDirDepth = 4
 
 // noDescendDirs lists directory names that are never descended into while
 // looking for a nested skill group. It is consulted only when deciding
