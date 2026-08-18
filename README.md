@@ -131,7 +131,7 @@ Run `gentle-ai doctor` at any time for a read-only health check of your ecosyste
 
 ```bash
 brew tap Gentleman-Programming/homebrew-tap
-brew trust --formula gentleman-programming/tap/gentle-ai  # one-time, for Homebrew tap trust
+brew trust --tap gentleman-programming/tap  # one-time, for Homebrew tap trust
 brew install gentle-ai
 ```
 
