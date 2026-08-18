@@ -1228,6 +1228,66 @@ func equalStringPtr(left *string, right *string) bool {
 	return *left == *right
 }
 
+// TestResolveExposesDevOrchestratorEngineAndBlocksGentleOrchestrator covers
+// SPEC-002's positive path (Status.Engine == "dev-orchestrator" for a marked
+// change) together with applyForeignEngineGate's SPEC-002 Data Flow gate
+// (dependencies blocked, nextRecommended == "blocked-foreign-engine"). It
+// exists as a permanent regression guard: sdd-verify's review of
+// dev-orchestrator-installable-owner found this positive path was previously
+// exercised only by a temporary, uncommitted diagnostic test.
+func TestResolveExposesDevOrchestratorEngineAndBlocksGentleOrchestrator(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "dev-owned-change", "# Tasks\n\n- [ ] 1.1 Work\n")
+	write(t, filepath.Join(changeRoot, "proposal.md"), "---\nid: dev-owned-change\nengine: dev-orchestrator\n---\n# Proposal\n")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "dev-owned-change"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if status.Engine != "dev-orchestrator" {
+		t.Fatalf("Status.Engine = %q, want %q", status.Engine, "dev-orchestrator")
+	}
+	if status.NextRecommended != "blocked-foreign-engine" {
+		t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, "blocked-foreign-engine")
+	}
+	blockedDeps := map[string]DependencyState{
+		"Explore": status.Dependencies.Explore, "Proposal": status.Dependencies.Proposal,
+		"Specs": status.Dependencies.Specs, "Design": status.Dependencies.Design,
+		"Tasks": status.Dependencies.Tasks, "Apply": status.Dependencies.Apply,
+		"Verify": status.Dependencies.Verify, "Archive": status.Dependencies.Archive,
+	}
+	for name, state := range blockedDeps {
+		if state != DependencyBlocked {
+			t.Errorf("Dependencies.%s = %q, want %q for a foreign (dev-orchestrator-owned) change", name, state, DependencyBlocked)
+		}
+	}
+	if len(status.BlockedReasons) == 0 {
+		t.Fatal("BlockedReasons is empty, want the ownership refusal message")
+	}
+}
+
+// TestResolveUnmarkedChangeOmitsEngineAndIsUnblocked confirms SPEC-001's
+// "Unmarked legacy change" default and SPEC-002's legacy-shape-freeze
+// scenario: a change with no `engine:` marker anywhere gets Engine == "" and
+// is not affected by applyForeignEngineGate.
+func TestResolveUnmarkedChangeOmitsEngineAndIsUnblocked(t *testing.T) {
+	root := t.TempDir()
+	seedReadyChange(t, root, "unmarked-change", "# Tasks\n\n- [ ] 1.1 Work\n")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "unmarked-change"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if status.Engine != "" {
+		t.Fatalf("Status.Engine = %q, want empty for an unmarked change", status.Engine)
+	}
+	if status.NextRecommended == "blocked-foreign-engine" {
+		t.Fatal("NextRecommended = \"blocked-foreign-engine\", want an unmarked change to be unaffected by the foreign-engine gate")
+	}
+}
+
 func ptrValue(value *string) string {
 	if value == nil {
 		return "<nil>"
