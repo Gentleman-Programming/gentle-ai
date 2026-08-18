@@ -150,7 +150,7 @@ func TestAdapterCapabilitiesDiscovery(t *testing.T) {
 				statPath: func(string) statResult { return statResult{err: errors.New("unused")} },
 			}
 
-			rec, err := a.Capabilities(context.Background(), tt.lookPath)
+			rec, err := a.Capabilities(context.Background(), tt.lookPath, "")
 			if err != nil {
 				t.Fatalf("Capabilities() returned error %v, want nil (picker must never block)", err)
 			}
@@ -181,7 +181,7 @@ func TestAdapterCapabilities_NilLookupUsesAdapterField(t *testing.T) {
 		statPath: func(string) statResult { return statResult{err: errors.New("unused")} },
 	}
 
-	rec, err := a.Capabilities(context.Background(), nil)
+	rec, err := a.Capabilities(context.Background(), nil, "")
 	if err != nil {
 		t.Fatalf("Capabilities() with nil lookup returned error %v", err)
 	}
@@ -204,7 +204,7 @@ func TestAdapterCapabilities_NilAdapterLookPathCoversDefensive(t *testing.T) {
 		statPath: func(string) statResult { return statResult{err: errors.New("unused")} },
 	}
 
-	rec, err := a.Capabilities(context.Background(), nil)
+	rec, err := a.Capabilities(context.Background(), nil, "")
 	if err != nil {
 		t.Fatalf("Capabilities() returned error %v", err)
 	}
@@ -228,7 +228,7 @@ func TestAdapterCapabilities_NeverPropagatesError(t *testing.T) {
 		statPath: func(string) statResult { return statResult{err: errors.New("unused")} },
 	}
 
-	rec, err := a.Capabilities(context.Background(), nil)
+	rec, err := a.Capabilities(context.Background(), nil, "")
 	if err != nil {
 		t.Fatalf("Capabilities() returned error %v — picker contract requires nil error", err)
 	}
@@ -266,7 +266,7 @@ func TestAdapterCapabilities_CuratedFallbackMentionsSol(t *testing.T) {
 		statPath: func(string) statResult { return statResult{err: errors.New("unused")} },
 	}
 
-	rec, err := a.Capabilities(context.Background(), nil)
+	rec, err := a.Capabilities(context.Background(), nil, "")
 	if err != nil {
 		t.Fatalf("Capabilities() returned error %v", err)
 	}
@@ -303,7 +303,7 @@ func TestAdapterCapabilities_EmptyParentContextDoesNotPanic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel
 
-	rec, err := a.Capabilities(ctx, nil)
+	rec, err := a.Capabilities(ctx, nil, "")
 	if err != nil {
 		t.Fatalf("Capabilities() returned error %v", err)
 	}
@@ -312,5 +312,146 @@ func TestAdapterCapabilities_EmptyParentContextDoesNotPanic(t *testing.T) {
 	}
 	if strings.TrimSpace(rec.CapabilitySource) == "" {
 		t.Fatal("CapabilitySource is empty after pre-cancelled context")
+	}
+}
+
+// realEnvelopeFixture is the shape `codex debug models` returns when
+// invoked against a live Codex CLI: a `models` array carrying one entry
+// per model, each with the four capability fields the picker renders.
+// Field names come from the existing flat parser (reasoning/speed_tiers/
+// service_tiers/multi_agent_version) and have not been re-probed against
+// a live Codex binary in this slice; if a real CLI uses different names,
+// runtimeModelEnvelope in internal/model/codex_capabilities.go is the one
+// place to update.
+const realEnvelopeFixture = `{
+	"models": [
+		{
+			"slug": "gpt-5.6-sol",
+			"reasoning": ["low","medium","high","xhigh","max","ultra"],
+			"speed_tiers": ["fast"],
+			"service_tiers": ["priority","standard"],
+			"multi_agent_version": "0.42.0"
+		},
+		{
+			"slug": "gpt-5.6-luna",
+			"reasoning": ["low","medium","high","xhigh","max"],
+			"speed_tiers": ["fast"],
+			"service_tiers": ["priority"]
+		},
+		{
+			"slug": "gpt-5.6-terra",
+			"reasoning": ["low","medium","high","xhigh","max","ultra"],
+			"speed_tiers": ["fast","balanced"],
+			"service_tiers": ["priority","standard"],
+			"multi_agent_version": "0.42.0"
+		}
+	]
+}`
+
+// TestAdapterCapabilitiesPerModelEnvelope pins the per-model lookup:
+// when the runtime returns the real envelope `{"models":[{slug,...}]}`
+// shape, Capabilities must look up the requested modelID and return its
+// per-model capability slice. decode2 (2026-08-18) PR #2761 review.
+func TestAdapterCapabilitiesPerModelEnvelope(t *testing.T) {
+	tests := []struct {
+		name              string
+		modelID           string
+		envelope          string
+		wantSource        string
+		wantReasoning     []string
+		wantSpeedTiers    []string
+		wantServiceTiers  []string
+		wantMultiAgentVer string
+	}{
+		{
+			name:              "sol runtime: full ladder including ultra",
+			modelID:           "gpt-5.6-sol",
+			envelope:          realEnvelopeFixture,
+			wantSource:        model.SourceRuntime,
+			wantReasoning:     []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+			wantSpeedTiers:    []string{"fast"},
+			wantServiceTiers:  []string{"priority", "standard"},
+			wantMultiAgentVer: "0.42.0",
+		},
+		{
+			name:              "luna runtime: no ultra (spec regression guard)",
+			modelID:           "gpt-5.6-luna",
+			envelope:          realEnvelopeFixture,
+			wantSource:        model.SourceRuntime,
+			wantReasoning:     []string{"low", "medium", "high", "xhigh", "max"},
+			wantSpeedTiers:    []string{"fast"},
+			wantServiceTiers:  []string{"priority"},
+			wantMultiAgentVer: "",
+		},
+		{
+			name:             "model absent from runtime catalog: curated fallback for modelID",
+			modelID:          "gpt-5.6-some-future-model",
+			envelope:         realEnvelopeFixture,
+			wantSource:       model.SourceCurated,
+			wantReasoning:    []string{"low", "medium", "high"},
+		},
+		{
+			name:              "empty modelID with envelope: legacy flat-fallback path",
+			modelID:           "",
+			envelope:          `{"reasoning":["low","medium","high","xhigh","max","ultra"],"speed_tiers":["fast"],"service_tiers":["priority","standard"],"multi_agent_version":"0.42.0"}`,
+			wantSource:        model.SourceRuntime,
+			wantReasoning:     []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+			wantSpeedTiers:    []string{"fast"},
+			wantServiceTiers:  []string{"priority", "standard"},
+			wantMultiAgentVer: "0.42.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withCapabilitiesProbe(t, func(_ context.Context, _ string) ([]byte, error) {
+				return []byte(tt.envelope), nil
+			})
+			a := &Adapter{
+				lookPath: stubLookPath("/usr/local/bin/codex", nil),
+				statPath: func(string) statResult { return statResult{err: errors.New("unused")} },
+			}
+			rec, err := a.Capabilities(context.Background(), a.lookPath, tt.modelID)
+			if err != nil {
+				t.Fatalf("Capabilities(modelID=%q) returned error %v, want nil (picker must never block)", tt.modelID, err)
+			}
+			if rec.CapabilitySource != tt.wantSource {
+				t.Errorf("CapabilitySource = %q, want %q", rec.CapabilitySource, tt.wantSource)
+			}
+			if !reflect.DeepEqual(rec.Reasoning, tt.wantReasoning) {
+				t.Errorf("Reasoning = %v, want %v", rec.Reasoning, tt.wantReasoning)
+			}
+			if len(tt.wantSpeedTiers) > 0 && !reflect.DeepEqual(rec.SpeedTiers, tt.wantSpeedTiers) {
+				t.Errorf("SpeedTiers = %v, want %v", rec.SpeedTiers, tt.wantSpeedTiers)
+			}
+			if len(tt.wantSpeedTiers) == 0 && len(rec.SpeedTiers) != 0 {
+				t.Errorf("SpeedTiers = %v, want empty", rec.SpeedTiers)
+			}
+			if len(tt.wantServiceTiers) > 0 && !reflect.DeepEqual(rec.ServiceTiers, tt.wantServiceTiers) {
+				t.Errorf("ServiceTiers = %v, want %v", rec.ServiceTiers, tt.wantServiceTiers)
+			}
+			if len(tt.wantServiceTiers) == 0 && len(rec.ServiceTiers) != 0 {
+				t.Errorf("ServiceTiers = %v, want empty", rec.ServiceTiers)
+			}
+			if rec.MultiAgentVersion != tt.wantMultiAgentVer {
+				t.Errorf("MultiAgentVersion = %q, want %q", rec.MultiAgentVersion, tt.wantMultiAgentVer)
+			}
+		})
+	}
+}
+
+// TestRecordFromRuntimeForModelLookupMissing pins the lookup error path:
+// when the requested modelID is not present in the envelope the helper
+// returns a typed error and the adapter maps it to a curated fallback.
+func TestRecordFromRuntimeForModelLookupMissing(t *testing.T) {
+	_, err := model.RecordFromRuntimeForModel([]byte(realEnvelopeFixture), "gpt-5.6-does-not-exist")
+	if err == nil {
+		t.Fatal("RecordFromRuntimeForModel with unknown modelID = nil error, want an error so adapter can map to curated fallback")
+	}
+	if !strings.Contains(err.Error(), "gpt-5.6-does-not-exist") {
+		t.Errorf("error must name the requested model id, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "not present") {
+		t.Errorf("error must indicate the catalog miss, got: %v", err)
 	}
 }

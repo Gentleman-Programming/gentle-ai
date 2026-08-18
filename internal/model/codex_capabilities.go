@@ -37,8 +37,11 @@ const SourceRuntime = "runtime"
 const SourceCurated = "curated"
 
 // runtimeDebugPayload is the subset of the `codex debug models` JSON output
-// that this package parses. The full catalog is much larger; we only need
-// the slice fields and the multi_agent_version stamp.
+// that this package parses for the legacy flat shape (top-level slices).
+// The current real envelope wraps every per-model entry inside a `models`
+// array; that shape is handled by recordFromRuntimeEnvelope below. This
+// flat struct is kept only so existing legacy callers of RecordFromRuntime
+// (which feed a top-level payload) still compile.
 type runtimeDebugPayload struct {
 	Reasoning         []string `json:"reasoning"`
 	SpeedTiers        []string `json:"speed_tiers"`
@@ -46,11 +49,46 @@ type runtimeDebugPayload struct {
 	MultiAgentVersion string   `json:"multi_agent_version"`
 }
 
+// runtimeModelEnvelope is one per-model entry inside the `models` array of
+// the real `codex debug models` output. It mirrors the same fields as
+// runtimeDebugPayload but adds `slug`, which is the model identifier the
+// picker exposes.
+//
+// The field names below are best-effort: the codebase already used
+// reasoning/speed_tiers/service_tiers for the legacy flat parser, and the
+// same names appear as the natural names inside a per-model entry. The real
+// Codex CLI JSON shape is not committed anywhere in the repository and has
+// not been re-probed against a live Codex binary in this slice. If the live
+// CLI uses different field names, this struct is the ONE place to update;
+// RunCodexCapabilityForModel re-derives everything from it.
+type runtimeModelEnvelope struct {
+	Slug             string   `json:"slug"`
+	Reasoning        []string `json:"reasoning"`
+	SpeedTiers       []string `json:"speed_tiers"`
+	ServiceTiers     []string `json:"service_tiers"`
+	MultiAgentVer    string   `json:"multi_agent_version"`
+}
+
+// runtimeEnvelope is the wrapping shape returned by `codex debug models`:
+// a single `models` array carrying one entry per Codex model the CLI knows.
+// The filtering selector (`Visibility`/`SupportedInAPI`) lives in
+// internal/model/codex_model.go's codexDiscoveredModelCatalog; this struct
+// keeps the capability-relevant subset only.
+type runtimeEnvelope struct {
+	Models []runtimeModelEnvelope `json:"models"`
+}
+
 // RecordFromRuntime parses a `codex debug models` JSON payload and returns
 // a CapabilityRecord stamped with CapabilitySource = "runtime". The payload
 // must (1) decode as JSON, (2) keep Reasoning disjoint from SpeedTiers and
 // ServiceTiers, and (3) not carry "fast" or "priority" inside Reasoning —
 // those are speed/service selectors, never reasoning effort values.
+//
+// This helper still treats the payload as a flat object with top-level
+// reasoning/speed_tiers/service_tiers. The real envelope wraps per-model
+// entries inside `models: [...]`; that case is handled by
+// RecordFromRuntimeForModel. This flat parser survives for any caller that
+// feeds a hand-curated JSON literal at the flat level.
 func RecordFromRuntime(payload []byte) (CapabilityRecord, error) {
 	var raw runtimeDebugPayload
 	if err := json.Unmarshal(payload, &raw); err != nil {
@@ -69,6 +107,41 @@ func RecordFromRuntime(payload []byte) (CapabilityRecord, error) {
 		return CapabilityRecord{}, err
 	}
 	return rec, nil
+}
+
+// RecordFromRuntimeForModel parses the real `codex debug models` envelope
+// shape `{"models":[{"slug":"...","reasoning":[...],...},...]}` and
+// returns the CapabilityRecord for the entry whose slug matches modelID.
+// It returns (zero, err) on malformed JSON, missing `models` key, or no
+// matching slug so the caller can distinguish "missing model" from "empty
+// capabilities for present model" and fall back to the curated matrix.
+//
+// The matched record is stamped CapabilitySource = "runtime"; missing or
+// empty slice fields inside the entry are permitted (the CLI may omit
+// service_tiers on a model that only offers reasoning tiers, for example).
+func RecordFromRuntimeForModel(payload []byte, modelID string) (CapabilityRecord, error) {
+	var env runtimeEnvelope
+	if err := json.Unmarshal(payload, &env); err != nil {
+		return CapabilityRecord{}, fmt.Errorf("codex capabilities: parse runtime envelope: %w", err)
+	}
+
+	for _, entry := range env.Models {
+		if entry.Slug != modelID {
+			continue
+		}
+		rec := CapabilityRecord{
+			Reasoning:         append([]string(nil), entry.Reasoning...),
+			SpeedTiers:        append([]string(nil), entry.SpeedTiers...),
+			ServiceTiers:      append([]string(nil), entry.ServiceTiers...),
+			MultiAgentVersion: entry.MultiAgentVer,
+			CapabilitySource:  SourceRuntime,
+		}
+		if err := Validate(rec); err != nil {
+			return CapabilityRecord{}, fmt.Errorf("model %q in runtime envelope: %w", modelID, err)
+		}
+		return rec, nil
+	}
+	return CapabilityRecord{}, fmt.Errorf("codex capabilities: model %q not present in runtime envelope", modelID)
 }
 
 // curatedCapabilityRow is the internal shape of the embedded fallback
@@ -174,19 +247,23 @@ func Validate(cap CapabilityRecord) error {
 }
 
 // firstOverlap reports the first value (lexicographic) that appears in
-// both slices. Returns the empty string when the slices are disjoint.
-// Compares case-sensitively — the curated matrix and the runtime payload
-// both use lowercase identifiers.
+// both slices, with case-insensitive comparison so "Fast" in SpeedTiers
+// and "fast" in Reasoning are caught the same way containsValue catches
+// "Fast" alone in Reasoning. Returns the empty string when the slices
+// are disjoint. The curated matrix and the runtime payload both use
+// lowercase identifiers, so case-insensitivity makes the two
+// partition checks consistent rather than letting one slide past
+// the other.
 func firstOverlap(a, b []string) (string, string) {
 	if len(a) == 0 || len(b) == 0 {
 		return "", ""
 	}
 	seen := make(map[string]struct{}, len(b))
 	for _, v := range b {
-		seen[v] = struct{}{}
+		seen[strings.ToLower(v)] = struct{}{}
 	}
 	for _, v := range a {
-		if _, ok := seen[v]; ok {
+		if _, ok := seen[strings.ToLower(v)]; ok {
 			return v, v
 		}
 	}

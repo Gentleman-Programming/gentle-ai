@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
@@ -62,37 +63,41 @@ func (a *Adapter) Tier() model.SupportTier {
 
 // --- Capability discovery ---
 
-// Capabilities returns the Codex capability record the picker renders:
-// reasoning/speed/service tiers, the multi-agent version stamp, and the
-// provenance of the data. It is a synchronous sibling of Tier(): Tier()
-// reports agent support (Full/Partial); Capabilities reports what the
-// model itself can do. The two never share fields and never replace each
-// other.
+// Capabilities returns the Codex capability record the picker renders
+// for the requested model: reasoning/speed/service tiers, the multi-agent
+// version stamp, and the provenance of the data. It is a synchronous
+// sibling of Tier(): Tier() reports agent support (Full/Partial);
+// Capabilities reports what the model itself can do. The two never share
+// fields and never replace each other.
 //
 // Behavior:
-//   - Invoke `codex debug models` with a 2s timeout. On success, parse the
-//     JSON payload and stamp CapabilitySource = "runtime".
-//   - On any failure (lookup, timeout, non-zero exit, parse error) fall
-//     back to the curated sol row and stamp CapabilitySource = "curated".
-//     The picker MUST receive a non-nil record even when the CLI is
-//     missing or hanging — discovery never blocks the UI.
+//   - Invoke `codex debug models` with a 2s timeout. On success, parse
+//     the real envelope `{"models":[{slug, reasoning, speed_tiers,
+//     service_tiers, multi_agent_version}, ...]}` and look up the
+//     entry whose slug matches modelID. Stamp CapabilitySource = "runtime".
+//     If the model is not in the catalog, fall back to the curated row for
+//     modelID (or the conservative `unknown` row if modelID is empty).
+//   - On any runtime failure (lookup, timeout, non-zero exit, parse error,
+//     missing slug) fall back to the curated row for modelID. The picker
+//     MUST receive a non-nil record even when the CLI is missing or
+//     hanging — discovery never blocks the UI.
 //
 // The method is intentionally synchronous: no goroutines, no tea.Cmd,
 // returns before the picker's first Update(). Callers wire it into the
 // picker's initial state.
-func (a *Adapter) Capabilities(ctx context.Context, lookup func(string) (string, error)) (model.CapabilityRecord, error) {
+func (a *Adapter) Capabilities(ctx context.Context, lookup func(string) (string, error), modelID string) (model.CapabilityRecord, error) {
 	lookPath := a.lookPath
 	if lookup != nil {
 		lookPath = lookup
 	}
 
 	if lookPath == nil {
-		return curatedFallback(), nil
+		return curatedFallbackForModel(modelID), nil
 	}
 
 	binaryPath, err := lookPath("codex")
 	if err != nil || binaryPath == "" {
-		return curatedFallback(), nil
+		return curatedFallbackForModel(modelID), nil
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, capabilitiesProbeTimeout)
@@ -104,27 +109,56 @@ func (a *Adapter) Capabilities(ctx context.Context, lookup func(string) (string,
 		// context.DeadlineExceeded so future diagnostics can attribute the
 		// fallback correctly. We always fall back, regardless.
 		if errors.Is(err, context.DeadlineExceeded) {
-			return curatedFallback(), nil
+			return curatedFallbackForModel(modelID), nil
 		}
 		// Non-zero exit also falls back. The combined output may carry an
 		// error message we deliberately ignore — the picker only needs the
 		// curated matrix in this branch.
 		_ = output
-		return curatedFallback(), nil
+		return curatedFallbackForModel(modelID), nil
 	}
 
-	rec, parseErr := model.RecordFromRuntime(output)
+	// Empty modelID falls back to the legacy flat parser: the picker
+	// handed us an empty ID (pre-picker-bootstrap path), so we accept
+	// whatever flat payload the CLI returned. A real model ID requires
+	// the wrapping envelope shape; the helper returns an error that the
+	// caller maps into the curated fallback.
+	if strings.TrimSpace(modelID) == "" {
+		rec, parseErr := model.RecordFromRuntime(output)
+		if parseErr != nil {
+			return curatedFallbackForModel(modelID), nil
+		}
+		return rec, nil
+	}
+	rec, parseErr := model.RecordFromRuntimeForModel(output, modelID)
 	if parseErr != nil {
-		return curatedFallback(), nil
+		// Model missing from runtime catalog OR runtime payload failed to
+		// validate. Either way, the curated row for modelID is the right
+		// answer (defaults to the conservative unknown row when modelID
+		// has no curated entry).
+		return curatedFallbackForModel(modelID), nil
 	}
 	return rec, nil
 }
 
 // curatedFallback returns the curated CapabilityRecord stamped with
-// CapabilitySource = "curated". It is the universal fallback whenever the
-// runtime cannot answer — the picker relies on a non-nil record.
+// CapabilitySource = "curated" for the historical single-row fallback
+// (the broadest of the three Codex rails). It survives the cut-over to
+// per-model fallbacks so existing call sites stay compiling.
 func curatedFallback() model.CapabilityRecord {
 	return model.RecordFromCurated(curatedFallbackModelID)
+}
+
+// curatedFallbackForModel returns the curated CapabilityRecord stamped
+// with CapabilitySource = "curated" for the requested model id. When
+// modelID is empty or unknown to the curated matrix, it returns the
+// conservative unknown row (only low/medium/high reasoning, no speed
+// or service tiers).
+func curatedFallbackForModel(modelID string) model.CapabilityRecord {
+	if strings.TrimSpace(modelID) == "" {
+		return curatedFallback()
+	}
+	return model.RecordFromCurated(modelID)
 }
 
 // --- Detection ---

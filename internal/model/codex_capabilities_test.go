@@ -368,3 +368,60 @@ func TestCapabilityRecordSlicesAreIndependent(t *testing.T) {
 		t.Fatal("mutating one record leaked into another — slice copy is broken")
 	}
 }
+
+// TestFirstOverlapCaseInsensitive pins the partition-validation consistency
+// fix from decode2 (2026-08-18) PR #2761 review: firstOverlap and
+// containsValue must agree on case so a mixed-case payload cannot let one
+// partition check slide past while the other catches it.
+func TestFirstOverlapCaseInsensitive(t *testing.T) {
+	if _, got := firstOverlap([]string{"Fast"}, []string{"fast"}); got != "Fast" {
+		t.Fatalf("firstOverlap(Fast, fast) = %q, want %q (case-insensitive required to match containsValue)", got, "Fast")
+	}
+	if _, got := firstOverlap([]string{"low", "medium"}, []string{"Medium"}); got != "medium" {
+		t.Fatalf("firstOverlap(low/medium, Medium) = %q, want %q", got, "medium")
+	}
+	if _, got := firstOverlap([]string{"low"}, []string{"low"}); got != "low" {
+		t.Fatalf("firstOverlap(low, low) = %q, want %q", got, "low")
+	}
+	if _, got := firstOverlap([]string{"low"}, []string{"fast"}); got != "" {
+		t.Fatalf("firstOverlap(low, fast) = %q, want empty (disjoint)", got)
+	}
+}
+
+// TestRecordFromRuntimeForModelLookup pins the real-envelope parsing for
+// the wrap-around models: [{...}, {...}, {...}] (decode2 2026-08-18).
+// The fixture is the same envelope the adapter test uses; this exercises
+// the parser without the adapter's fall-back logic, so the per-model
+// shape and the missing-model error both produce deterministic results.
+func TestRecordFromRuntimeForModelLookup(t *testing.T) {
+	const fixture = `{
+		"models": [
+			{"slug":"gpt-5.6-sol",  "reasoning":["low","medium","high","xhigh","max","ultra"], "speed_tiers":["fast"], "service_tiers":["priority","standard"], "multi_agent_version":"0.42.0"},
+			{"slug":"gpt-5.6-luna", "reasoning":["low","medium","high","xhigh","max"], "speed_tiers":["fast"]}
+		]
+	}`
+	rec, err := RecordFromRuntimeForModel([]byte(fixture), "gpt-5.6-sol")
+	if err != nil {
+		t.Fatalf("RecordFromRuntimeForModel(sol) unexpected error: %v", err)
+	}
+	if rec.CapabilitySource != SourceRuntime {
+		t.Errorf("CapabilitySource = %q, want %q", rec.CapabilitySource, SourceRuntime)
+	}
+	if !reflect.DeepEqual(rec.Reasoning, []string{"low", "medium", "high", "xhigh", "max", "ultra"}) {
+		t.Errorf("sol reasoning = %v, want full ladder", rec.Reasoning)
+	}
+	if rec.MultiAgentVersion != "0.42.0" {
+		t.Errorf("MultiAgentVersion = %q, want 0.42.0", rec.MultiAgentVersion)
+	}
+
+	luna, err := RecordFromRuntimeForModel([]byte(fixture), "gpt-5.6-luna")
+	if err != nil {
+		t.Fatalf("RecordFromRuntimeForModel(luna) unexpected error: %v", err)
+	}
+	if luna.MultiAgentVersion != "" {
+		t.Errorf("luna MultiAgentVersion = %q, want empty (per-model entry omitted the field)", luna.MultiAgentVersion)
+	}
+	if len(luna.ServiceTiers) != 0 {
+		t.Errorf("luna ServiceTiers = %v, want empty (per-model entry omitted the field)", luna.ServiceTiers)
+	}
+}
