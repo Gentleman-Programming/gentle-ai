@@ -110,6 +110,56 @@ If you're working outside a git repo, engram falls back to the directory name.
 
 ---
 
+## Cloud Sync (Optional)
+
+> gentle-ai ships engram, which already supports an in-process cloud sync.
+> This page shows the one-time setup; the engine itself is maintained upstream.
+>
+> — Useful if you want your memories to follow you between machines you own.
+> — Not needed for team sharing via your repo (`engram sync --commit` does that).
+> — Skip if you only ever work on one machine — local memory is the default.
+
+### Pick your env-var carrier (persists across reboots)
+
+| OS / setup                            | Mechanism                                                 |
+|---------------------------------------|-----------------------------------------------------------|
+| macOS (LaunchAgents / GUI daemons)    | `launchctl setenv KEY VALUE`                              |
+| Linux (systemd user instance)         | `systemctl --user import-environment KEY=VALUE`           |
+| Anywhere (only this shell's children) | `export KEY=VALUE` in `~/.zshrc` / `~/.bashrc`             |
+
+### Three commands, one time
+
+```bash
+engram cloud config --server https://your-cloud-server.example
+engram cloud config --token <your-token>     # or paste at the interactive prompt
+launchctl setenv ENGRAM_CLOUD_AUTOSYNC 1     # or your carrier from the table above
+```
+
+### Verify
+
+```bash
+engram cloud status                          # "Sync readiness: ready"
+engram cloud enroll <project-name>           # one-time, per project
+engram sync --cloud --project <project-name> # first push (the loop handles the rest)
+```
+
+### Troubleshooting
+
+```bash
+engram cloud upgrade doctor --project <project-name>
+engram cloud upgrade repair --project <project-name> --apply
+```
+
+### Reference
+
+- Engram cloud docs: [github.com/Gentleman-Programming/engram/blob/main/docs/engram-cloud/README.md](https://github.com/Gentleman-Programming/engram/blob/main/docs/engram-cloud/README.md)
+- The in-process background loop: `internal/cloud/autosync/manager.go` (engram source)
+- Why this lives as a doc, not code, here: `docs/codebase/sync-and-cloud.md`
+
+> **Boundary note.** The token is passed via `engram cloud config --token`, not as an env var. Tokens in `ENGRAM_CLOUD_TOKEN` leak through `ps eww`, `log show`, `/proc/<pid>/environ` on Linux, and to any child process. The runtime resolves the token from `~/.engram/cloud.json` first; the env var is only a fallback.
+
+---
+
 ## Full Documentation
 
 For the complete source, configuration options, and contribution guide: [github.com/Gentleman-Programming/engram](https://github.com/Gentleman-Programming/engram)
