@@ -795,46 +795,16 @@ func TestFourRReviewAgentAssets(t *testing.T) {
 
 func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 	content := MustRead("opencode/sdd-orchestrator.md")
-
-	for _, required := range []string{
+	for _, retired := range []string{
 		"### SDD Session Preflight (HARD GATE)",
 		"Before executing ANY SDD command or natural-language SDD request",
-		"Execution mode",
-		"Artifact store",
-		"Chained PR strategy",
-		"Review budget",
-		"`openspec/config.yaml`, existing SDD artifacts, previous `sdd-init` results, or installed SDD assets do NOT satisfy session preflight",
 		"Use the `question` tool for SDD Session Preflight",
-		"only when it is available in the current interactive runtime and all four groups are exactly representable",
-		"follow the Lossless Blocking Prompts fallback above and STOP",
-		"When the native route is representable, ask all four preflight groups in one single `question` tool call",
-		"OpenCode can render the groups as tabs",
-		"Do NOT run this as a sequential wizard",
-		"Do NOT issue four separate `question` tool calls",
-		"The single `question` tool call must contain these four localized groups in this order",
-		"Match the user's current language and active persona",
-		"Treat the preflight UI as direct orchestrator conversation",
-		"not as a generated technical artifact",
-		"Technical artifacts still default to English",
-		"this UI follows the user's conversation language/persona",
-		"Do NOT mix languages inside one grouped question",
-		"Do NOT show option codes",
-		"Do NOT show canonical values",
-		"map the selected human labels to canonical values internally",
-		"¿Quiere ajustar algo o continuamos?",
-		"Artifacts: OpenSpec, Engram, Both",
+		"all four preflight groups in one single `question` tool call",
+		"four localized groups in this order",
 		"Review: 400 lines, 800 lines, Other",
-		"### SDD Entry Routing (MANDATORY)",
-		"Never launch `sdd-apply` just because the user asked to implement a feature",
-		"In **Interactive** mode, between phases",
-		"Ask before launching the next phase",
-		"Interactive approval is phase-scoped",
-		"approve only the immediate next phase",
-		"Before the `sdd-propose` phase in interactive mode",
-		"proposal question round",
 	} {
-		if !strings.Contains(content, required) {
-			t.Fatalf("opencode/sdd-orchestrator.md missing required preflight wording %q", required)
+		if strings.Contains(content, retired) {
+			t.Fatalf("raw opencode/sdd-orchestrator.md still owns retired preflight authority %q", retired)
 		}
 	}
 }
@@ -871,14 +841,14 @@ func TestOpenCodeSDDOrchestratorDelegationVisibility(t *testing.T) {
 func TestOpenCodeSDDOrchestratorPreflightDoesNotUseVisibleCodesOrCanonicalUIValues(t *testing.T) {
 	content := MustRead("opencode/sdd-orchestrator.md")
 	start := strings.Index(content, "User-facing preflight question format:")
-	if start < 0 {
-		t.Fatal("opencode/sdd-orchestrator.md missing preflight question format block")
+	if start >= 0 {
+		t.Fatal("raw opencode/sdd-orchestrator.md still owns the preflight question format")
 	}
-	end := strings.Index(content[start:], "Map answers to canonical values")
-	if end < 0 {
-		t.Fatal("opencode/sdd-orchestrator.md missing end of preflight question format block")
+	end := strings.Index(content, "Map answers to canonical values")
+	if end >= 0 {
+		t.Fatal("raw opencode/sdd-orchestrator.md still owns the preflight mapping block")
 	}
-	uiBlock := content[start : start+end]
+	uiBlock := strings.NewReplacer("`interactive`", "", "`openspec`", "", "`ask-on-risk`", "").Replace(content)
 
 	// `ask-always` used to sit here as a canonical value. It was never in the
 	// consumer's domain, so keeping it would have let this guard vouch for a

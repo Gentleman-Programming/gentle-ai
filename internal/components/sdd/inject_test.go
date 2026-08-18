@@ -607,7 +607,7 @@ func TestInjectOpenCodeUsesOpenCodeSpecificOrchestratorPrompt(t *testing.T) {
 			for _, wanted := range []string{
 				"Gentle AI",
 				"Read the configured models from `opencode.json`",
-				"Use the `question` tool for SDD Session Preflight only when it is available in the current interactive runtime and all four groups are exactly representable",
+				"Use the `question` tool only when available and all three groups",
 				"present the proceed/adjust/stop options through the lossless blocking-prompt route",
 				"present the correct/second-round/continue choice through the lossless blocking-prompt route",
 				"Present the two strategy options through one `question` tool call when the lossless native route is usable",

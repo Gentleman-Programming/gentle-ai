@@ -858,6 +858,7 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 	if !ok {
 		return overlayBytes, nil
 	}
+	orchestratorPrompt, err := composeOpenCodeOrchestratorPrompt(agent, renderOptions)
 	if preserveExistingOrchestratorPrompt {
 		existingPrompt, err := readOpenCodeAgentPrompt(settingsPath, "gentle-orchestrator")
 		if err != nil {
@@ -881,13 +882,13 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 					return nil, fmt.Errorf("validate preserved OpenCode background policy: %w", err)
 				}
 			}
-			orchestratorMap["prompt"] = renderPreservedOpenCodeOrchestratorPrompt(existingPrompt, agent, renderOptions)
-		} else {
-			orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent, renderOptions)
+			orchestratorPrompt = renderPreservedOpenCodeOrchestratorPrompt(existingPrompt, agent, renderOptions)
 		}
-	} else {
-		orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent, renderOptions)
 	}
+	if err != nil {
+		return nil, err
+	}
+	orchestratorMap["prompt"] = orchestratorPrompt
 
 	// Carry the organic routing guidance across the wholesale prompt assignment
 	// above. The orchestrator prompt is the only always-loaded scope OpenCode and

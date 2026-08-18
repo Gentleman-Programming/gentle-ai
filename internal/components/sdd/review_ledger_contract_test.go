@@ -402,7 +402,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// #3249 registers Pi as an immutable-reviewer runtime in the shared
 	// contract's advertised-runtimes paragraph, so the hash moved.
 	// Deliberate, not drift.
-	const want = "c478b283aeceb83e3c5d74453a0ecd7a66d154ed2d7ef84337f8ccc60a916966"
+	const want = "583742f646f506af5f6922c1684a1dad64725cd073ed7ad0a4aadfe6c5825097"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

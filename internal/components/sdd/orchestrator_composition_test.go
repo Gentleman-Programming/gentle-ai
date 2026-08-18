@@ -113,7 +113,6 @@ func TestCanonicalCompositionFeedsBaseAndNamedProfile(t *testing.T) {
 	for _, marker := range []string{
 		"### Lossless Blocking Prompts (MANDATORY)",
 		"### Native SDD Dispatcher Guard",
-		"### SDD Session Preflight (HARD GATE)",
 		"#### Review Execution Contract",
 	} {
 		if strings.Count(profile, marker) != 1 {
