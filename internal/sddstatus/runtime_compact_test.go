@@ -94,6 +94,88 @@ func TestRuntimeSettleTargetResolvesOnlyTheActiveToken(t *testing.T) {
 	}
 }
 
+func TestTargetBoundFinishRejectsInvalidTargetWithoutMutation(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "target-bound-refusal")
+	started, err := store.Acquire(context.Background(), CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{RequestID: "target-acquire", WorkUnit: "apply", EvidenceGoal: "prove target", MaxAttempts: 2, MaxChangedLines: 20}})
+	if err != nil || started.State != CompactStateProceed {
+		t.Fatalf("acquire = %#v, %v", started, err)
+	}
+	replay, err := store.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _, ok := runtimeActiveSettleTarget(replay, started.Token)
+	if !ok {
+		t.Fatal("active token did not resolve")
+	}
+	finish := FinishAttemptRequest{ExpectedRevision: replay.Status.Revision, RequestID: "target-finish", Outcome: AttemptInterrupted, Diagnosis: "stopped", HarnessDisposition: HarnessInvalidated, CleanupEvidence: "clean", ProcessEvidence: "none"}
+	for _, mutate := range []struct {
+		name  string
+		apply func(*runtimeAttemptTarget, *FinishAttemptRequest)
+	}{
+		{"token", func(target *runtimeAttemptTarget, _ *FinishAttemptRequest) { target.Token = runtimeTestHash('f') }},
+		{"ordinal", func(target *runtimeAttemptTarget, _ *FinishAttemptRequest) { target.Ordinal++ }},
+		{"objective", func(target *runtimeAttemptTarget, _ *FinishAttemptRequest) { target.ObjectiveID = runtimeTestHash('o') }},
+		{"generation", func(target *runtimeAttemptTarget, _ *FinishAttemptRequest) { target.ObjectiveGeneration++ }},
+		{"revision", func(_ *runtimeAttemptTarget, request *FinishAttemptRequest) {
+			request.ExpectedRevision = runtimeTestHash('r')
+		}},
+	} {
+		t.Run(mutate.name, func(t *testing.T) {
+			badTarget, badFinish := target, finish
+			badFinish.RequestID += "-" + mutate.name
+			mutate.apply(&badTarget, &badFinish)
+			before := countRuntimeRecords(t, store.Dir)
+			if _, err := store.finishTarget(context.Background(), badFinish, badTarget); err == nil || countRuntimeRecords(t, store.Dir) != before {
+				t.Fatalf("err=%v records=%d", err, countRuntimeRecords(t, store.Dir))
+			}
+		})
+	}
+	if _, err := store.Begin(context.Background(), BeginAttemptRequest{ExpectedRevision: replay.Status.Revision, RequestID: "second-begin", WorkUnit: "apply", EvidenceGoal: "still serial", MaxAttempts: 2, MaxChangedLines: 20}); !errors.Is(err, ErrRuntimeAttemptActive) {
+		t.Fatalf("second begin = %v", err)
+	}
+	blocked, err := store.Acquire(context.Background(), CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{RequestID: "second-acquire", WorkUnit: "apply", EvidenceGoal: "still serial", MaxAttempts: 2, MaxChangedLines: 20}})
+	if err != nil || blocked.State != CompactStateBlocked {
+		t.Fatalf("second acquire = %#v, %v", blocked, err)
+	}
+}
+
+func TestCompactSettleForwardsStaleTargetWithoutExtraMutation(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "stale-settle-target")
+	started, err := store.Acquire(context.Background(), CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{RequestID: "stale-acquire", WorkUnit: "apply", EvidenceGoal: "prove public target", MaxAttempts: 2, MaxChangedLines: 20}})
+	if err != nil || started.State != CompactStateProceed {
+		t.Fatalf("acquire = %#v, %v", started, err)
+	}
+	settle := CompactSettleRequest{Token: started.Token, RequestID: "stale-settle", Outcome: AttemptInterrupted, Diagnosis: "stopped", HarnessDisposition: HarnessInvalidated, CleanupEvidence: "clean", ProcessEvidence: "none"}
+	beforeForeign := countRuntimeRecords(t, store.Dir)
+	foreign := settle
+	foreign.RequestID, foreign.Token = "foreign-settle", runtimeTestHash('f')
+	if result, err := store.Settle(context.Background(), foreign); err != nil || result.State != CompactStateBlocked || countRuntimeRecords(t, store.Dir) != beforeForeign {
+		t.Fatalf("foreign settle = %#v, %v", result, err)
+	}
+
+	forwarded := false
+	store.finishTargetPreMutation = func(target *runtimeAttemptTarget) {
+		forwarded = target.Token == started.Token && target.Ordinal == 1
+		target.ObjectiveID = runtimeTestHash('s')
+	}
+	derived, deriveErr := store.ForInstance("target-seam-instance")
+	other := mustRuntimeStore(t, repo, "target-seam-other")
+	if deriveErr != nil || derived.finishTargetPreMutation == nil || other.finishTargetPreMutation != nil {
+		t.Fatalf("seam copy/leak = derived=%t other=%t err=%v", derived.finishTargetPreMutation != nil, other.finishTargetPreMutation != nil, deriveErr)
+	}
+	settled, err := store.Settle(context.Background(), settle)
+	if err != nil || !forwarded || settled.State != CompactStateBlocked || settled.ItemSettlement != nil || countRuntimeRecords(t, store.Dir) != beforeForeign {
+		t.Fatalf("stale settle = %#v, %v forwarded=%v records=%d", settled, err, forwarded, countRuntimeRecords(t, store.Dir))
+	}
+	status, err := store.Status()
+	if err != nil || status.ActiveAttempt == nil || len(status.Attempts) != 1 || status.Attempts[0].Outcome != AttemptRunning || status.CumulativeAttempts != 1 {
+		t.Fatalf("stale target changed owner/accounting: %#v, %v", status, err)
+	}
+}
+
 func TestCompactSettleUsesTokenTargetForItemSettlement(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
 	store := mustRuntimeStore(t, repo, "target-item")

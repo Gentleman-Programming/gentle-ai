@@ -129,13 +129,6 @@ type CompactHandoffRequest struct {
 	HandoffAttemptRequest
 }
 
-type runtimeAttemptTarget struct {
-	ObjectiveID         string
-	ObjectiveGeneration int
-	Ordinal             int
-	Token               string
-}
-
 func runtimeAttemptTargetForToken(replay runtimeReplay, token string) (runtimeAttemptTarget, RuntimeAttempt, bool) {
 	ordinal, found := 0, false
 	for candidate, candidateToken := range replay.AttemptTokens {
@@ -340,7 +333,11 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		if !ok {
 			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 		}
-		if _, err := store.Finish(ctx, finish); err != nil {
+		target, _, targetOK := runtimeAttemptTargetForToken(replay, request.Token)
+		if !targetOK {
+			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+		}
+		if _, err := store.finishTarget(ctx, finish, target); err != nil {
 			return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
 		}
 		return store.compactSettleResult(&request)
@@ -362,7 +359,8 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 	if readiness.State != CompactStateProceed {
 		return readiness, nil
 	}
-	if _, _, ok := runtimeActiveSettleTarget(replay, request.Token); !ok {
+	target, _, ok := runtimeActiveSettleTarget(replay, request.Token)
+	if !ok {
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}
 
@@ -390,7 +388,7 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 	} else if explicitSuccessor || request.RemediatesEvidenceRevision != "" {
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}
-	if _, err := store.Finish(ctx, finish); err != nil {
+	if _, err := store.finishTarget(ctx, finish, target); err != nil {
 		result := store.compactMutationFailure(err, true, BeginAttemptRequest{})
 		if result.State == CompactStateComplete {
 			return store.compactSettleResult(&request)

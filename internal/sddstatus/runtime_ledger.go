@@ -382,6 +382,40 @@ type runtimeObjectiveOwnership struct {
 	active    *RuntimeAttempt
 }
 
+// runtimeAttemptTarget is compact settlement's immutable owner selection. It
+// is private so only authority code can construct and revalidate it.
+type runtimeAttemptTarget struct {
+	ObjectiveID         string
+	ObjectiveGeneration int
+	Ordinal             int
+	Token               string
+}
+
+func runtimeActiveAttemptForTarget(replay runtimeReplay, target runtimeAttemptTarget) (*RuntimeAttempt, bool) {
+	if target.Token == "" || replay.AttemptTokens[target.Ordinal] != target.Token {
+		return nil, false
+	}
+	active := replay.Status.runtimeActiveAttemptForOrdinal(target.Ordinal)
+	if active == nil || active.ObjectiveID != target.ObjectiveID || active.ObjectiveGeneration != target.ObjectiveGeneration {
+		return nil, false
+	}
+	owner := replay.Status.ownership.objectives[target.ObjectiveID]
+	if owner == nil || owner.objective.Generation != target.ObjectiveGeneration {
+		return nil, false
+	}
+	found := false
+	for index := range replay.Status.Attempts {
+		attempt := &replay.Status.Attempts[index]
+		if attempt.Ordinal == target.Ordinal && attempt.ObjectiveID == target.ObjectiveID && attempt.ObjectiveGeneration == target.ObjectiveGeneration {
+			if found {
+				return nil, false
+			}
+			found = true
+		}
+	}
+	return active, found
+}
+
 func newRuntimeOwnership() runtimeOwnership {
 	return runtimeOwnership{objectives: map[string]*runtimeObjectiveOwnership{}, active: map[int]string{}, parents: map[string]string{}, roots: map[string]bool{}}
 }
@@ -652,6 +686,9 @@ type RuntimeStore struct {
 	// zero value is the conservative containment: a store opened without an
 	// instance identity projects no granted roots at all.
 	instance string
+	// finishTargetPreMutation is a value-scoped test seam. It is nil in
+	// production and copied only when the store value itself is copied.
+	finishTargetPreMutation func(*runtimeAttemptTarget)
 }
 
 // ForInstance derives a store bound to one change-instance identity. The
@@ -967,7 +1004,20 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 	})
 }
 
+// Finish selects the one serial active owner. Token-selected callers use
+// finishTarget so they never rely on this compatibility selection.
 func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptRequest) (RuntimeStatus, error) {
+	return store.finish(ctx, request, nil)
+}
+
+func (store RuntimeStore) finishTarget(ctx context.Context, request FinishAttemptRequest, target runtimeAttemptTarget) (RuntimeStatus, error) {
+	if store.finishTargetPreMutation != nil {
+		store.finishTargetPreMutation(&target)
+	}
+	return store.finish(ctx, request, &target)
+}
+
+func (store RuntimeStore) finish(ctx context.Context, request FinishAttemptRequest, target *runtimeAttemptTarget) (RuntimeStatus, error) {
 	request, err := normalizeFinishAttemptRequest(request)
 	if err != nil {
 		return RuntimeStatus{}, err
@@ -976,8 +1026,26 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
 		active := status.runtimeActiveAttempt()
+		if active != nil && target == nil {
+			target = &runtimeAttemptTarget{Ordinal: active.Ordinal, ObjectiveID: active.ObjectiveID, ObjectiveGeneration: active.ObjectiveGeneration, Token: replay.AttemptTokens[active.Ordinal]}
+		}
+		if target != nil {
+			var ok bool
+			active, ok = runtimeActiveAttemptForTarget(replay, *target)
+			if !ok {
+				return runtimeRecord{}, ErrRuntimeNoActiveAttempt
+			}
+		}
 		if active == nil {
 			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
+		}
+		objective := status.ownership.objectives[active.ObjectiveID]
+		if objective == nil || objective.objective.Generation != active.ObjectiveGeneration {
+			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
+		}
+		consumed, err := replay.Accounting.current(objective.objective)
+		if err != nil {
+			return runtimeRecord{}, err
 		}
 		// A canonical evidence revision is accepted through normalization so an
 		// exact retry can reach mutate's request receipt and replay a legacy
@@ -1116,7 +1184,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			Diagnosis: request.Diagnosis, HarnessDisposition: request.HarnessDisposition,
 			CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
 			RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
-			ChangedLineBudgetExceeded:  status.CumulativeChangedLines+changedLines > status.runtimeObjective().MaxChangedLines,
+			ChangedLineBudgetExceeded:  consumed.lines+changedLines > objective.objective.MaxChangedLines,
 		}
 		if remediation {
 			prepared, prepareErr := prepareApprovedRuntimeSuccessorBinding(ctx, store.Repo, store.Workspace, store.Change, request.SuccessorLineageID)
