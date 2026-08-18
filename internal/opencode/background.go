@@ -288,7 +288,7 @@ type ActivationOptions struct {
 	AddToUserPathWithResult  func(string) (system.UserPathAddition, error)
 	RollbackUserPathAddition func(string, system.UserPathAddition) error
 	ResolveTarget            func(homeDir, goos, pathValue string) (string, error)
-	WriteFile                func(path string, content []byte, mode os.FileMode) error
+	WriteFile                func(path string, content []byte, mode os.FileMode) (filemerge.WriteResult, error)
 	RemoveFile               func(path string) error
 }
 
@@ -318,10 +318,7 @@ func (o ActivationOptions) normalized() ActivationOptions {
 		o.ResolveTarget = ResolveTarget
 	}
 	if o.WriteFile == nil {
-		o.WriteFile = func(path string, content []byte, mode os.FileMode) error {
-			_, err := filemerge.WriteFileAtomic(path, content, mode)
-			return err
-		}
+		o.WriteFile = filemerge.WriteFileAtomic
 	}
 	if o.RemoveFile == nil {
 		o.RemoveFile = os.Remove
@@ -445,6 +442,11 @@ type activationAction string
 const (
 	activationActionOn  activationAction = "on"
 	activationActionOff activationAction = "off"
+
+	activationReasonReady        = "OpenCode runtime supports managed activation"
+	activationReasonApplied      = "managed OpenCode launcher activation is active"
+	activationReasonPathPending  = "managed OpenCode launcher was written but is not currently reachable through PATH"
+	activationReasonDeactivation = "deactivation does not require an OpenCode runtime probe"
 )
 
 type launcherSnapshot struct {
@@ -496,13 +498,19 @@ func PrepareActivation(homeDir string, options ActivationOptions) (*ActivationPl
 			Status: CapabilityUnknown,
 			Reason: targetErr.Error(),
 		}
+		plan.activationReason = plan.capability.Reason
 		return plan, nil
 	}
 	if options.OS == "windows" && !windowsTargetSafe(target) {
 		plan.capability = CapabilityResolution{Status: CapabilityUnsupported, TargetPath: target, Reason: "Windows OpenCode target contains %, which CMD expands; install OpenCode at a path without % and run sync again"}
+		plan.activationReason = plan.capability.Reason
 		return plan, nil
 	}
 	plan.capability = ResolveCapability(target, options.RunVersion)
+	plan.activationReason = plan.capability.Reason
+	if plan.activationReason == "" && plan.capability.Ready() {
+		plan.activationReason = activationReasonReady
+	}
 	if plan.capability.Ready() {
 		plan.capability.RestartGuidance = restartGuidance(paths)
 	}
@@ -531,12 +539,13 @@ func PrepareDeactivation(homeDir string, options ActivationOptions) (*Activation
 	options = options.normalized()
 	paths := ManagedLauncherPaths(homeDir, options.OS)
 	plan := &ActivationPlan{
-		homeDir: homeDir,
-		goos:    options.OS,
-		options: options,
-		action:  activationActionOff,
-		paths:   paths,
-		before:  make(map[string]launcherSnapshot, len(paths)),
+		homeDir:          homeDir,
+		goos:             options.OS,
+		options:          options,
+		action:           activationActionOff,
+		paths:            paths,
+		before:           make(map[string]launcherSnapshot, len(paths)),
+		activationReason: activationReasonDeactivation,
 	}
 	for _, path := range paths {
 		snapshot, err := readLauncherSnapshot(path)
@@ -564,7 +573,7 @@ func (p *ActivationPlan) Report() ActivationReport {
 	capability := p.capability
 	if p.action == activationActionOff && capability.Status == "" {
 		capability.Status = CapabilityReady
-		capability.Reason = "deactivation does not require an OpenCode runtime probe"
+		capability.Reason = activationReasonDeactivation
 	}
 	return ActivationReport{
 		Capability:       capability,
@@ -578,7 +587,7 @@ func (p *ActivationPlan) Report() ActivationReport {
 }
 
 func (p *ActivationPlan) Effective() bool {
-	if p == nil || !p.capability.Ready() {
+	if p == nil || !p.applied || !p.capability.Ready() {
 		return false
 	}
 	return p.goos == "windows" || p.effective
@@ -647,16 +656,27 @@ func (p *ActivationPlan) Apply() error {
 		for _, path := range p.paths {
 			before := p.before[path]
 			desired := p.desired[path]
-			if before.exists && bytes.Equal(before.data, desired) {
+			if before.exists && (p.goos == "windows" || before.mode == 0o755) && bytes.Equal(before.data, desired) {
 				continue
 			}
 			if err := requireSnapshot(path, before); err != nil {
-				return fmt.Errorf("revalidate managed OpenCode launcher %q before write: %w", path, err)
+				return p.failAndRollback(fmt.Errorf("revalidate managed OpenCode launcher %q before write: %w", path, err))
 			}
-			if err := p.options.WriteFile(path, desired, 0o755); err != nil {
+			result, err := p.options.WriteFile(path, desired, 0o755)
+			if result.Changed {
+				p.changed = append(p.changed, path)
+			}
+			if err != nil {
 				return p.failAndRollback(fmt.Errorf("write managed OpenCode launcher %q: %w", path, err))
 			}
-			p.changed = append(p.changed, path)
+			if p.goos != "windows" {
+				if err := os.Chmod(path, 0o755); err != nil {
+					return p.failAndRollback(fmt.Errorf("set managed OpenCode launcher mode %q: %w", path, err))
+				}
+			}
+			if !result.Changed {
+				p.changed = append(p.changed, path)
+			}
 		}
 		if p.goos == "windows" {
 			addition, err := p.options.AddToUserPathWithResult(BinDir(p.homeDir))
@@ -670,6 +690,13 @@ func (p *ActivationPlan) Apply() error {
 		}
 		if p.goos != "windows" {
 			p.effective = pathResolvesTo(os.Getenv("PATH"), POSIXLauncherPath(p.homeDir), p.goos)
+			if p.effective {
+				p.activationReason = activationReasonApplied
+			} else {
+				p.activationReason = activationReasonPathPending
+			}
+		} else {
+			p.activationReason = activationReasonApplied
 		}
 		p.applied = true
 		return nil
@@ -681,7 +708,7 @@ func (p *ActivationPlan) Apply() error {
 			continue
 		}
 		if err := requireSnapshot(path, snapshot); err != nil {
-			return fmt.Errorf("revalidate managed OpenCode launcher %q before removal: %w", path, err)
+			return p.failAndRollback(fmt.Errorf("revalidate managed OpenCode launcher %q before removal: %w", path, err))
 		}
 		if err := p.options.RemoveFile(path); err != nil && !os.IsNotExist(err) {
 			return p.failAndRollback(fmt.Errorf("remove managed OpenCode launcher %q: %w", path, err))
@@ -719,8 +746,18 @@ func (p *ActivationPlan) Rollback() error {
 			}
 			continue
 		}
-		if err := p.options.WriteFile(path, snapshot.data, snapshot.mode); err != nil {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback restore managed OpenCode launcher %q: %w", path, err))
+		result, err := p.options.WriteFile(path, snapshot.data, snapshot.mode)
+		if err != nil {
+			if result.Changed {
+				if chmodErr := os.Chmod(path, snapshot.mode); chmodErr != nil {
+					rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback restore managed OpenCode launcher mode %q: %w", path, chmodErr))
+				}
+			}
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback restore managed OpenCode launcher %q (changed=%t): %w", path, result.Changed, err))
+			continue
+		}
+		if err := os.Chmod(path, snapshot.mode); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback restore managed OpenCode launcher mode %q: %w", path, err))
 		}
 	}
 	if p.pathAdded {
@@ -747,7 +784,7 @@ func (p *ActivationPlan) requireRollbackLauncher(path string) error {
 		}
 		return errors.New("path changed after activation removal")
 	}
-	return requireWrittenLauncher(path, p.desired[path])
+	return requireWrittenLauncher(path, p.desired[path], p.goos)
 }
 func requireSnapshot(path string, expected launcherSnapshot) error {
 	current, err := readLauncherSnapshot(path)
@@ -762,49 +799,46 @@ func requireSnapshot(path string, expected launcherSnapshot) error {
 	}
 	return nil
 }
-func requireWrittenLauncher(path string, desired []byte) error {
+func requireWrittenLauncher(path string, desired []byte, goos string) error {
 	current, err := readLauncherSnapshot(path)
 	if err != nil {
 		return err
 	}
-	if !current.exists || current.mode != 0o755 || !bytes.Equal(current.data, desired) {
+	if !current.exists || goos != "windows" && current.mode != 0o755 || !bytes.Equal(current.data, desired) {
 		return errors.New("path changed after activation write")
 	}
 	return nil
 }
 
 func readLauncherSnapshot(path string) (launcherSnapshot, error) {
-	owned, err := ManagedLauncherOwnership(path)
+	info, data, owned, err := inspectLauncher(path)
 	if os.IsNotExist(err) {
 		return launcherSnapshot{}, nil
 	}
 	if err != nil {
 		return launcherSnapshot{}, fmt.Errorf("inspect managed OpenCode launcher %q: %w", path, err)
 	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		return launcherSnapshot{}, fmt.Errorf("inspect managed OpenCode launcher %q: %w", path, err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return launcherSnapshot{}, fmt.Errorf("read managed OpenCode launcher %q: %w", path, err)
-	}
 	return launcherSnapshot{exists: true, data: data, mode: info.Mode().Perm(), owned: owned}, nil
 }
 
-func ManagedLauncherOwnership(path string) (bool, error) {
+func inspectLauncher(path string) (os.FileInfo, []byte, bool, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return false, err
+		return nil, nil, false, err
 	}
 	if !info.Mode().IsRegular() {
-		return false, fmt.Errorf("refusing non-regular OpenCode launcher collision")
+		return nil, nil, false, fmt.Errorf("refusing non-regular OpenCode launcher collision")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false, err
+		return nil, nil, false, err
 	}
-	return IsManagedLauncher(path, data), nil
+	return info, data, IsManagedLauncher(path, data), nil
+}
+
+func ManagedLauncherOwnership(path string) (bool, error) {
+	_, _, owned, err := inspectLauncher(path)
+	return owned, err
 }
 
 func IsManagedLauncher(path string, data []byte) bool {
@@ -829,14 +863,36 @@ func IsManagedLauncher(path string, data []byte) bool {
 }
 
 func windowsTargetSafe(target string) bool { return !strings.Contains(target, "%") }
+
 func pathResolvesTo(pathValue, launcher, goos string) bool {
 	for _, entry := range splitPath(pathValue, goos) {
-		if samePath(filepath.Join(entry, "opencode"), launcher, goos) {
-			owned, err := ManagedLauncherOwnership(launcher)
-			return err == nil && owned
+		entry = strings.Trim(strings.TrimSpace(entry), `"`)
+		if entry == "" {
+			continue
+		}
+		for _, name := range targetNames(goos) {
+			candidate := filepath.Join(entry, name)
+			if samePath(candidate, launcher, goos) {
+				info, _, owned, err := inspectLauncher(candidate)
+				if err != nil || info == nil || goos != "windows" && info.Mode().Perm()&0o111 == 0 {
+					return false
+				}
+				return owned
+			}
+			if pathEntryExecutable(candidate, goos) {
+				return false
+			}
 		}
 	}
 	return false
+}
+
+func pathEntryExecutable(path, goos string) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	return goos == "windows" || info.Mode().Perm()&0o111 != 0
 }
 
 func canonicalTarget(text, prefix, suffix, quote, escapedQuote string) (string, bool) {
