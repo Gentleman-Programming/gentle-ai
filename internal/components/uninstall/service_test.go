@@ -152,6 +152,40 @@ func TestUninstallOpenCodeClearsBackgroundIntent(t *testing.T) {
 	}
 }
 
+func TestUninstallOpenCodeRemovesOnlyManagedProfileBlock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX profile activation is not used on Windows")
+	}
+	homeDir := t.TempDir()
+	profile := filepath.Join(homeDir, ".zprofile")
+	if err := os.WriteFile(profile, []byte("export USER_SETTING=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := opencodeactivation.PrepareActivation(homeDir, opencodeactivation.ActivationOptions{OS: runtime.GOOS, Shell: "/bin/zsh", Path: filepath.Dir(target), AddToUserPath: func(string) error { return nil }, RunVersion: func(string) (string, error) { return "1.15.11", nil }, ResolveTarget: func(string, string, string) (string, error) { return target, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+	if _, err := svc.PartialUninstall([]model.AgentID{model.AgentOpenCode}, allManagedComponents); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(profile)
+	if err != nil || string(data) != "export USER_SETTING=1\n" {
+		t.Fatalf("profile after uninstall = %q, %v", data, err)
+	}
+}
+
 func TestBuildPlanSnapshotsPiManifestAndOwnedOverlay(t *testing.T) {
 	homeDir := t.TempDir()
 	svc, err := NewService(homeDir, t.TempDir(), "dev")

@@ -282,6 +282,7 @@ func RunVersion(target string) (string, error) {
 type ActivationOptions struct {
 	OS                       string
 	Path                     string
+	Shell                    string
 	RunVersion               VersionRunner
 	AddToUserPath            func(string) error
 	RemoveFromUserPath       func(string) error
@@ -298,6 +299,9 @@ func (o ActivationOptions) normalized() ActivationOptions {
 	}
 	if o.Path == "" {
 		o.Path = os.Getenv("PATH")
+	}
+	if o.Shell == "" {
+		o.Shell = os.Getenv("SHELL")
 	}
 	if o.RunVersion == nil {
 		o.RunVersion = RunVersion
@@ -454,6 +458,14 @@ type launcherSnapshot struct {
 	owned  bool
 }
 
+type profileChange struct {
+	path    string
+	before  launcherSnapshot
+	desired []byte
+	changed bool
+	applied bool
+}
+
 // ActivationPlan is a prepared, reversible launcher transaction. Preparation
 // resolves the target, checks capability, and rejects collisions before Apply
 // mutates any launcher or PATH state.
@@ -469,6 +481,7 @@ type ActivationPlan struct {
 	changed          []string
 	pathAddition     system.UserPathAddition
 	pathAdded        bool
+	profiles         []profileChange
 	effective        bool
 	activationReason string
 	applied          bool
@@ -509,6 +522,22 @@ func PrepareActivation(homeDir string, options ActivationOptions) (*ActivationPl
 	if !plan.capability.Ready() {
 		return plan, nil
 	}
+	if options.OS != "windows" {
+		profile, ok := loginProfile(homeDir, options.Shell)
+		if !ok {
+			plan.activationReason = "managed launcher activation requires zsh, or an existing bash login profile; start a supported login shell and run sync again"
+			return plan, nil
+		}
+		change, err := addProfileChange(profile, BinDir(homeDir))
+		if err != nil {
+			return nil, err
+		}
+		plan.profiles = []profileChange{change}
+		plan.effective = pathResolvesTo(options.Path, POSIXLauncherPath(homeDir), options.OS)
+		if !plan.effective {
+			plan.activationReason = "managed launcher is persisted for future login shells; start a new login shell before running opencode"
+		}
+	}
 	for _, path := range paths {
 		snapshot, err := readLauncherSnapshot(path)
 		if err != nil {
@@ -544,6 +573,17 @@ func PrepareDeactivation(homeDir string, options ActivationOptions) (*Activation
 			return nil, err
 		}
 		plan.before[path] = snapshot
+	}
+	if options.OS != "windows" {
+		for _, profile := range ManagedProfilePaths(homeDir) {
+			change, err := removeProfileChange(profile, BinDir(homeDir))
+			if err != nil {
+				return nil, err
+			}
+			if change.changed {
+				plan.profiles = append(plan.profiles, change)
+			}
+		}
 	}
 	return plan, nil
 }
@@ -628,7 +668,13 @@ func (p *ActivationPlan) ChangedPaths() []string {
 	if p == nil {
 		return nil
 	}
-	return append([]string(nil), p.changed...)
+	paths := append([]string(nil), p.changed...)
+	for _, change := range p.profiles {
+		if change.changed {
+			paths = append(paths, change.path)
+		}
+	}
+	return paths
 }
 
 // Apply writes or removes the prepared owned launchers. A failure restores all
@@ -641,6 +687,10 @@ func (p *ActivationPlan) Apply() error {
 	p.applied = false
 	if p.action == activationActionOn {
 		if !p.capability.Ready() {
+			p.applied = true
+			return nil
+		}
+		if p.goos != "windows" && len(p.profiles) == 0 {
 			p.applied = true
 			return nil
 		}
@@ -658,6 +708,9 @@ func (p *ActivationPlan) Apply() error {
 			}
 			p.changed = append(p.changed, path)
 		}
+		if err := p.applyProfiles(); err != nil {
+			return p.failAndRollback(err)
+		}
 		if p.goos == "windows" {
 			addition, err := p.options.AddToUserPathWithResult(BinDir(p.homeDir))
 			p.pathAddition = addition
@@ -670,6 +723,9 @@ func (p *ActivationPlan) Apply() error {
 		}
 		if p.goos != "windows" {
 			p.effective = pathResolvesTo(os.Getenv("PATH"), POSIXLauncherPath(p.homeDir), p.goos)
+			if p.effective {
+				p.activationReason = ""
+			}
 		}
 		p.applied = true
 		return nil
@@ -687,6 +743,9 @@ func (p *ActivationPlan) Apply() error {
 			return p.failAndRollback(fmt.Errorf("remove managed OpenCode launcher %q: %w", path, err))
 		}
 		p.changed = append(p.changed, path)
+	}
+	if err := p.applyProfiles(); err != nil {
+		return p.failAndRollback(err)
 	}
 	p.applied = true
 	return nil
@@ -723,6 +782,25 @@ func (p *ActivationPlan) Rollback() error {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback restore managed OpenCode launcher %q: %w", path, err))
 		}
 	}
+	for i := len(p.profiles) - 1; i >= 0; i-- {
+		change := p.profiles[i]
+		if !change.applied {
+			continue
+		}
+		if err := requireSnapshot(change.path, launcherSnapshot{exists: true, data: change.desired, mode: profileMode(&change)}); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback preserve changed OpenCode shell profile %q: %w", change.path, err))
+			continue
+		}
+		if !change.before.exists {
+			if err := p.options.RemoveFile(change.path); err != nil && !os.IsNotExist(err) {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback remove managed OpenCode shell profile block %q: %w", change.path, err))
+			}
+			continue
+		}
+		if err := p.options.WriteFile(change.path, change.before.data, change.before.mode); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback restore OpenCode shell profile %q: %w", change.path, err))
+		}
+	}
 	if p.pathAdded {
 		if err := p.options.RollbackUserPathAddition(BinDir(p.homeDir), p.pathAddition); err != nil {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("rollback remove managed OpenCode bin directory %q from PATH: %w", BinDir(p.homeDir), err))
@@ -748,6 +826,119 @@ func (p *ActivationPlan) requireRollbackLauncher(path string) error {
 		return errors.New("path changed after activation removal")
 	}
 	return requireWrittenLauncher(path, p.desired[path])
+}
+
+const (
+	profileStart = "# >>> gentle-ai managed OpenCode launcher >>>"
+	profileEnd   = "# <<< gentle-ai managed OpenCode launcher <<<"
+)
+
+func ManagedProfilePaths(homeDir string) []string {
+	return []string{filepath.Join(homeDir, ".zprofile"), filepath.Join(homeDir, ".bash_profile")}
+}
+
+func loginProfile(homeDir, shell string) (string, bool) {
+	switch filepath.Base(shell) {
+	case "zsh":
+		return filepath.Join(homeDir, ".zprofile"), true
+	case "bash":
+		path := filepath.Join(homeDir, ".bash_profile")
+		_, err := os.Stat(path)
+		return path, err == nil
+	default:
+		return "", false
+	}
+}
+
+func profileBlock(binDir string, endings ...string) string {
+	eol := "\n"
+	if len(endings) > 0 {
+		eol = endings[0]
+	}
+	return profileStart + eol + "export PATH=" + shellQuote(binDir) + ":\"$PATH\"" + eol + profileEnd + eol
+}
+
+func addProfileChange(path, binDir string) (profileChange, error) {
+	before, err := readLauncherSnapshot(path)
+	if err != nil {
+		return profileChange{}, err
+	}
+	if hasProfileBlock(before.data, binDir) {
+		return profileChange{path: path, before: before}, nil
+	}
+	desired := append([]byte(nil), before.data...)
+	eol := profileLineEnding(desired)
+	if len(desired) > 0 && !bytes.HasSuffix(desired, []byte(eol)) {
+		desired = append(desired, eol...)
+	}
+	desired = append(desired, profileBlock(binDir, eol)...)
+	return profileChange{path: path, before: before, desired: desired, changed: true}, nil
+}
+
+func removeProfileChange(path, binDir string) (profileChange, error) {
+	before, err := readLauncherSnapshot(path)
+	if err != nil || !before.exists {
+		return profileChange{}, err
+	}
+	desired := append([]byte(nil), before.data...)
+	for _, eol := range []string{"\n", "\r\n"} {
+		desired = []byte(strings.ReplaceAll(string(desired), profileBlock(binDir, eol), ""))
+	}
+	if bytes.Equal(desired, before.data) {
+		return profileChange{path: path, before: before, desired: before.data}, nil
+	}
+	return profileChange{path: path, before: before, desired: desired, changed: true}, nil
+}
+
+func RemoveManagedProfileBlock(path, binDir string) (bool, error) {
+	change, err := removeProfileChange(path, binDir)
+	if err != nil || !change.changed {
+		return false, err
+	}
+	if err := writeProfile(change); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (p *ActivationPlan) applyProfiles() error {
+	for i := range p.profiles {
+		change := &p.profiles[i]
+		if !change.changed {
+			continue
+		}
+		if err := requireSnapshot(change.path, change.before); err != nil {
+			return fmt.Errorf("revalidate OpenCode shell profile %q before write: %w", change.path, err)
+		}
+		if err := p.options.WriteFile(change.path, change.desired, profileMode(change)); err != nil {
+			return fmt.Errorf("write managed OpenCode shell profile block %q: %w", change.path, err)
+		}
+		change.applied = true
+	}
+	return nil
+}
+
+func writeProfile(change profileChange) error {
+	_, err := filemerge.WriteFileAtomic(change.path, change.desired, profileMode(&change))
+	return err
+}
+
+func profileLineEnding(data []byte) string {
+	if bytes.Contains(data, []byte("\r\n")) {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+func hasProfileBlock(data []byte, binDir string) bool {
+	return bytes.Contains(data, []byte(profileBlock(binDir))) || bytes.Contains(data, []byte(profileBlock(binDir, "\r\n")))
+}
+
+func profileMode(change *profileChange) os.FileMode {
+	if !change.before.exists {
+		return 0o644
+	}
+	return change.before.mode
 }
 func requireSnapshot(path string, expected launcherSnapshot) error {
 	current, err := readLauncherSnapshot(path)
