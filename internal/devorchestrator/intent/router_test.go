@@ -43,6 +43,37 @@ func TestRouteIntent(t *testing.T) {
 		}
 	})
 
+	t.Run("Greenfield feature routes to explore and writes the reported path", func(t *testing.T) {
+		intentText := "Set up a new project for the payments dashboard."
+		sourceID := "greenfield-payments"
+
+		res, err := router.RouteIntent(intentText, sourceID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if res.Phase != "DISCOVERY" {
+			t.Errorf("expected DISCOVERY phase, got %s", res.Phase)
+		}
+		if !strings.HasSuffix(res.ArtifactPath, "explore.md") {
+			t.Errorf("expected explore.md, got %s", res.ArtifactPath)
+		}
+
+		// The file must actually exist at the reported ArtifactPath, not at
+		// whatever path was computed before the greenfield reassignment.
+		content, err := os.ReadFile(filepath.Join(tempDir, res.ArtifactPath))
+		if err != nil {
+			t.Fatalf("expected artifact at reported ArtifactPath %s: %v", res.ArtifactPath, err)
+		}
+		if !strings.Contains(string(content), "type: greenfield") {
+			t.Errorf("expected greenfield frontmatter, got \n%s", content)
+		}
+
+		if _, err := os.Stat(filepath.Join(tempDir, "openspec", "changes", res.ChangeID, "proposal.md")); !os.IsNotExist(err) {
+			t.Errorf("greenfield intent must not also write proposal.md, stat err = %v", err)
+		}
+	})
+
 	t.Run("Standard feature routes to proposal", func(t *testing.T) {
 		intentText := "Add a new button to the dashboard."
 		sourceID := "feature 123" // Should be normalized

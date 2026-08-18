@@ -14,6 +14,8 @@ package sddstatus
 // as a build-time input rather than a post-hoc relabel, removes the ability
 // for the two to disagree instead of teaching the projection to tolerate it.
 type artifactStates struct {
+	Explore             ArtifactState
+	Blueprint           ArtifactState
 	Proposal            ArtifactState
 	Gate1Scope          ArtifactState
 	Gate2Technical      ArtifactState
@@ -64,6 +66,8 @@ func (field artifactStateField) declaredBy(store ArtifactStore) bool {
 // and contextFiles, while "its artifact-state entry is present only for Engram
 // status and omitted otherwise".
 var artifactStateFields = []artifactStateField{
+	{key: "explore", field: func(states *artifactStates) *ArtifactState { return &states.Explore }},
+	{key: "blueprint", field: func(states *artifactStates) *ArtifactState { return &states.Blueprint }},
 	{key: "proposal", field: func(states *artifactStates) *ArtifactState { return &states.Proposal }},
 	{key: "gate-1-scope", field: func(states *artifactStates) *ArtifactState { return &states.Gate1Scope }},
 	{key: "gate-2-technical", field: func(states *artifactStates) *ArtifactState { return &states.Gate2Technical }},

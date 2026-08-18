@@ -32,12 +32,14 @@ func New(workspaceRoot string) *Router {
 // the first tracking artifact in openspec/changes/<changeID>/.
 func (r *Router) RouteIntent(intentText string, sourceID string) (IntentResult, error) {
 	// 1. Determine Change ID
-	changeID := strings.TrimSpace(sourceID)
+	rawSource := strings.TrimSpace(sourceID)
+	changeID := rawSource
 	if changeID == "" {
 		// A real implementation might hash the intentText or ask an LLM to generate a slug
 		changeID = "feature-auto-generated"
 	} else {
-		// Normalize ID for filesystem
+		// Normalize ID for filesystem, especially if it contains a timestamp (e.g., BS-42@2026-...)
+		changeID = strings.Split(changeID, "@")[0] // Use just the prefix for the folder
 		changeID = strings.ReplaceAll(changeID, " ", "-")
 		changeID = strings.ToLower(changeID)
 	}
@@ -60,12 +62,10 @@ func (r *Router) RouteIntent(intentText string, sourceID string) (IntentResult, 
 		return IntentResult{}, fmt.Errorf("failed to create changes directory: %w", err)
 	}
 
-	artifactPath := filepath.Join(changesDir, artifactName)
-
 	// 2.5 Greenfield detection
 	intentLower := strings.ToLower(intentText)
 	isGreenfield := strings.Contains(intentLower, "greenfield") || strings.Contains(intentLower, "new project") || strings.Contains(intentLower, "nuevo proyecto")
-	
+
 	frontmatterType := ""
 	if isGreenfield {
 		frontmatterType = "type: greenfield\n"
@@ -74,10 +74,12 @@ func (r *Router) RouteIntent(intentText string, sourceID string) (IntentResult, 
 		phase = "DISCOVERY"
 	}
 
+	artifactPath := filepath.Join(changesDir, artifactName)
+
 	// Create YAML frontmatter
 	// "originates-from" matches trace.Node's yaml tag exactly (internal/devorchestrator/trace/resolver.go),
 	// so a freshly routed intent's provenance survives into GenerateContextForAgent's Trace Resolver step.
-	frontmatter := fmt.Sprintf("---\nid: %s\n%soriginates-from: [%s]\n---\n", changeID, frontmatterType, sourceID)
+	frontmatter := fmt.Sprintf("---\nid: %s\n%soriginates-from:\n  - %s\n---\n", changeID, frontmatterType, rawSource)
 	content := frontmatter + "# Intake Request\n\n" + intentText + "\n"
 
 	err = os.WriteFile(artifactPath, []byte(content), 0644)
