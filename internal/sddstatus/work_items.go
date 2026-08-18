@@ -64,8 +64,11 @@ type itemPlanCandidate struct {
 }
 
 type itemPlanEntry struct {
-	ID              string   `json:"id"`
-	DependsOn       []string `json:"depends_on"`
+	ID        string   `json:"id"`
+	DependsOn []string `json:"depends_on"`
+	// InitiallyDone is present for every v2 entry and absent from v1. A pointer
+	// keeps historical plan bytes and their digests unchanged.
+	InitiallyDone   *bool    `json:"initially_done,omitempty"`
 	WorkUnit        string   `json:"work_unit"`
 	EvidenceGoal    string   `json:"evidence_goal"`
 	MaxAttempts     int      `json:"max_attempts"`
@@ -83,7 +86,10 @@ type itemPlanBinding struct {
 	Change      string
 }
 
-const itemPlanVersion = "gentle-ai.sdd-item-plan/v1"
+const (
+	itemPlanVersionV1 = "gentle-ai.sdd-item-plan/v1"
+	itemPlanVersionV2 = "gentle-ai.sdd-item-plan/v2"
+)
 
 func applyWorkItemProjection(status *Status, tasks string) {
 	items, present, err := projectWorkItems(tasks, *status)
@@ -181,7 +187,7 @@ func projectWorkItems(tasks string, status Status) ([]WorkItem, bool, error) {
 		}
 		runtimeMatch := !item.Done && workItemRuntimeMatches(declared, status.ActionContext.WorkspaceRoot, status.RuntimeStatus)
 		itemPassed := status.RuntimeStatus != nil && status.RuntimeStatus.itemPlan != nil &&
-			runtimePlanItemPassedProof(runtimeReplay{Status: *status.RuntimeStatus, itemPlan: status.RuntimeStatus.itemPlan}, *status.RuntimeStatus.itemPlan, declared.ID)
+			runtimePlanItemCompleteProof(runtimeReplay{Status: *status.RuntimeStatus, itemPlan: status.RuntimeStatus.itemPlan}, *status.RuntimeStatus.itemPlan, declared.ID)
 		if runtimeMatch {
 			item.EvidenceRevision = status.RuntimeStatus.EvidenceRevision
 			if len(status.RuntimeStatus.ownership.active) == 0 && status.RuntimeStatus.ActiveAttempt != nil {
@@ -362,7 +368,7 @@ func ResolveItemAcquire(options ResolveOptions, itemID, requestID string) (Begin
 			// refusal:by-design operator-knowledge: the coordinator must update prerequisites or the checkbox before this item can open.
 			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: item %q is not ready", itemID)
 		}
-		plan, err := newItemPlanCandidate(status.Items)
+		plan, err := newItemPlanCandidate(status.Items, retainedItemPlan(status.RuntimeStatus))
 		if err != nil {
 			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: invalid item plan candidate: %w", err)
 		}
@@ -379,8 +385,15 @@ func ResolveItemAcquire(options ResolveOptions, itemID, requestID string) (Begin
 	return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: projected item %q was not found", itemID)
 }
 
-func newItemPlanCandidate(items []WorkItem) (itemPlanCandidate, error) {
-	plan := itemPlanCandidate{Version: itemPlanVersion, Items: make([]itemPlanEntry, 0, len(items))}
+func retainedItemPlan(runtime *RuntimeStatus) *itemPlanCandidate {
+	if runtime == nil || runtime.itemPlan == nil || runtime.itemPlan.Version != itemPlanVersionV2 {
+		return nil
+	}
+	return runtime.itemPlan
+}
+
+func newItemPlanCandidate(items []WorkItem, retained *itemPlanCandidate) (itemPlanCandidate, error) {
+	plan := itemPlanCandidate{Version: itemPlanVersionV2, Items: make([]itemPlanEntry, 0, len(items))}
 	for _, item := range items {
 		dependsOn := append([]string(nil), item.DependsOn...)
 		roots := append([]string(nil), item.EditRoots...)
@@ -389,7 +402,16 @@ func newItemPlanCandidate(items []WorkItem) (itemPlanCandidate, error) {
 			roots[index] = filepath.ToSlash(filepath.Clean(roots[index]))
 		}
 		sort.Strings(roots)
-		plan.Items = append(plan.Items, itemPlanEntry{ID: item.ID, DependsOn: dependsOn, WorkUnit: item.WorkUnit,
+		initiallyDone := item.Done
+		if retained != nil {
+			entry, ok := itemPlanEntryForID(*retained, item.ID)
+			if !ok || entry.InitiallyDone == nil {
+				// refusal:by-design world-action: retained immutable authority is incomplete and must be restored.
+				return itemPlanCandidate{}, errors.New("retained item plan has no initial completion snapshot")
+			}
+			initiallyDone = *entry.InitiallyDone
+		}
+		plan.Items = append(plan.Items, itemPlanEntry{ID: item.ID, DependsOn: dependsOn, InitiallyDone: boolPointer(initiallyDone), WorkUnit: item.WorkUnit,
 			EvidenceGoal: item.EvidenceGoal, MaxAttempts: item.MaxAttempts, MaxChangedLines: item.MaxChangedLines, EditRoots: roots})
 	}
 	sort.Slice(plan.Items, func(left, right int) bool { return plan.Items[left].ID < plan.Items[right].ID })
@@ -399,6 +421,8 @@ func newItemPlanCandidate(items []WorkItem) (itemPlanCandidate, error) {
 	plan.Digest = itemPlanDigest(plan)
 	return plan, nil
 }
+
+func boolPointer(value bool) *bool { return &value }
 
 func itemSelectedActiveBindingMatches(item WorkItem, roots []string, runtime *RuntimeStatus) bool {
 	if runtime == nil || runtime.runtimeObjective() == nil || runtime.runtimeActiveAttempt() == nil {

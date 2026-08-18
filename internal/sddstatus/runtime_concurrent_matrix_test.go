@@ -16,8 +16,8 @@ func concurrentPlan(t *testing.T) itemPlanCandidate {
 	plan, err := newItemPlanCandidate([]WorkItem{
 		{ID: "a", WorkUnit: "a", EvidenceGoal: "a", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"a"}},
 		{ID: "b", WorkUnit: "b", EvidenceGoal: "b", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"b"}},
-		{ID: "c", DependsOn: []string{"a"}, WorkUnit: "c", EvidenceGoal: "c", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"c"}},
-	})
+		{ID: "c", DependsOn: []string{"a", "b"}, WorkUnit: "c", EvidenceGoal: "c", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"c"}},
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,8 +66,9 @@ func TestConcurrentItemDependencyProvenanceMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, store, plan := concurrentStore(t)
 			a := concurrentAcquire(t, ctx, store, plan, "a", "a")
-			concurrentAcquire(t, ctx, store, plan, "b", "b")
+			b := concurrentAcquire(t, ctx, store, plan, "b", "b")
 			concurrentSettle(t, ctx, store, a.Token, "a-settle")
+			concurrentSettle(t, ctx, store, b.Token, "b-settle")
 			request := runtimePlanRequest(t, store, plan, "c", "c")
 			if tc.mutate != nil {
 				tc.mutate(&request)
@@ -95,7 +96,7 @@ func TestConcurrentItemDependencyProvenanceMatrix(t *testing.T) {
 		{"cyclic dependency", []WorkItem{{ID: "a", DependsOn: []string{"b"}, WorkUnit: "a", EvidenceGoal: "a", MaxAttempts: 1, MaxChangedLines: 1, EditRoots: []string{"a"}}, {ID: "b", DependsOn: []string{"a"}, WorkUnit: "b", EvidenceGoal: "b", MaxAttempts: 1, MaxChangedLines: 1, EditRoots: []string{"b"}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := newItemPlanCandidate(tc.items); err == nil {
+			if _, err := newItemPlanCandidate(tc.items, nil); err == nil {
 				t.Fatal("invalid dependency plan accepted")
 			}
 		})
@@ -110,11 +111,14 @@ func TestConcurrentCompatibilityProjectionAndWorkItems(t *testing.T) {
 		t.Fatalf("projection=%#v %v", status, err)
 	}
 	concurrentSettle(t, ctx, store, a.Token, "a-settle")
-	if c := concurrentAcquire(t, ctx, store, plan, "c", "c"); c.State != CompactStateProceed {
-		t.Fatalf("ready dependency acquire=%#v", c)
+	if c := concurrentAcquire(t, ctx, store, plan, "c", "c-before-b"); c.State != CompactStateBlocked {
+		t.Fatalf("incomplete dependency acquire=%#v", c)
 	}
 	if result := concurrentSettle(t, ctx, store, b.Token, "b-settle"); result.ItemSettlement == nil {
 		t.Fatalf("non-projected settle=%#v", result)
+	}
+	if c := concurrentAcquire(t, ctx, store, plan, "c", "c"); c.State != CompactStateProceed {
+		t.Fatalf("ready dependency acquire=%#v", c)
 	}
 	status, err = store.Status()
 	if err != nil || status.runtimeActiveCount() != 1 || status.runtimeActiveAttemptForOrdinal(3) == nil {
@@ -128,7 +132,7 @@ func TestConcurrentWorkItemProjectionUsesRetainedPlanAuthority(t *testing.T) {
 		if aChecked {
 			checked = "x"
 		}
-		return fmt.Sprintf("- [%s] a: A\n- [ ] b: B\n- [ ] c: C\n<!-- gentle-ai.sdd-items/v1\n{\"items\":[{\"id\":\"a\",\"dependsOn\":[],\"workUnit\":\"a\",\"editRoots\":[\"a\"],\"maxAttempts\":2,\"maxChangedLines\":20,\"evidenceGoal\":\"a\"},{\"id\":\"b\",\"dependsOn\":[],\"workUnit\":\"b\",\"editRoots\":[\"b\"],\"maxAttempts\":2,\"maxChangedLines\":20,\"evidenceGoal\":\"b\"},{\"id\":\"c\",\"dependsOn\":[\"a\"],\"workUnit\":\"c\",\"editRoots\":[\"c\"],\"maxAttempts\":2,\"maxChangedLines\":20,\"evidenceGoal\":\"c\"}]}\n-->", checked)
+		return fmt.Sprintf("- [%s] a: A\n- [ ] b: B\n- [ ] c: C\n<!-- gentle-ai.sdd-items/v1\n{\"items\":[{\"id\":\"a\",\"dependsOn\":[],\"workUnit\":\"a\",\"editRoots\":[\"a\"],\"maxAttempts\":2,\"maxChangedLines\":20,\"evidenceGoal\":\"a\"},{\"id\":\"b\",\"dependsOn\":[],\"workUnit\":\"b\",\"editRoots\":[\"b\"],\"maxAttempts\":2,\"maxChangedLines\":20,\"evidenceGoal\":\"b\"},{\"id\":\"c\",\"dependsOn\":[\"a\",\"b\"],\"workUnit\":\"c\",\"editRoots\":[\"c\"],\"maxAttempts\":2,\"maxChangedLines\":20,\"evidenceGoal\":\"c\"}]}\n-->", checked)
 	}
 	project := func(t *testing.T, store RuntimeStore, runtime RuntimeStatus, checked bool) []WorkItem {
 		t.Helper()
@@ -147,6 +151,7 @@ func TestConcurrentWorkItemProjectionUsesRetainedPlanAuthority(t *testing.T) {
 		ctx, store, plan := concurrentStore(t)
 		a, b := concurrentAcquire(t, ctx, store, plan, "a", "projection-a"), concurrentAcquire(t, ctx, store, plan, "b", "projection-b")
 		concurrentSettle(t, ctx, store, a.Token, "a-settle-projection")
+		concurrentSettle(t, ctx, store, b.Token, "b-settle-projection")
 		runtime, err := store.Status()
 		if err != nil {
 			t.Fatal(err)
@@ -158,7 +163,7 @@ func TestConcurrentWorkItemProjectionUsesRetainedPlanAuthority(t *testing.T) {
 		before := countRuntimeRecords(t, store.Dir)
 		aRetry := runtimePlanRequest(t, store, plan, "a", "projection-a-reacquire")
 		aRetry.ExpectedRevision = runtime.Revision
-		if result, err := store.Acquire(ctx, CompactAcquireRequest{BeginAttemptRequest: aRetry}); err != nil || result.Reason != CompactBlockActiveAttempt || countRuntimeRecords(t, store.Dir) != before {
+		if result, err := store.Acquire(ctx, CompactAcquireRequest{BeginAttemptRequest: aRetry}); err != nil || result.State != CompactStateComplete || countRuntimeRecords(t, store.Dir) != before {
 			t.Fatalf("passed item reacquire=%#v err=%v records=%d", result, err, countRuntimeRecords(t, store.Dir))
 		}
 		changeRoot := filepath.Join(store.Repo, "openspec", "changes", store.Change)
@@ -170,9 +175,6 @@ func TestConcurrentWorkItemProjectionUsesRetainedPlanAuthority(t *testing.T) {
 		}
 		if result := concurrentAcquire(t, ctx, store, plan, "c", "projection-c"); result.State != CompactStateProceed {
 			t.Fatalf("runtime-proven acquire=%#v", result)
-		}
-		if b.Token == "" {
-			t.Fatal("active disjoint owner lost its token")
 		}
 	})
 
@@ -301,7 +303,7 @@ func TestConcurrentItemReplayRejectsPlanEntryProvenanceForgery(t *testing.T) {
 				mkdir(t, filepath.Join(repo, root))
 			}
 			store := mustRuntimeStore(t, repo, "provenance-forgery")
-			plan, err := newItemPlanCandidate([]WorkItem{{ID: "a", WorkUnit: "a", EvidenceGoal: "a", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"a"}}, {ID: "b", WorkUnit: "b", EvidenceGoal: "b", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"b"}}})
+			plan, err := newItemPlanCandidate([]WorkItem{{ID: "a", WorkUnit: "a", EvidenceGoal: "a", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"a"}}, {ID: "b", WorkUnit: "b", EvidenceGoal: "b", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"b"}}}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -359,7 +361,7 @@ func TestConcurrentSymlinkSettlementRetryAndCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	symlinkStore := mustRuntimeStore(t, repo, "symlink")
-	symlinkPlan, err := newItemPlanCandidate([]WorkItem{{ID: "a", WorkUnit: "a", EvidenceGoal: "a", MaxAttempts: 1, MaxChangedLines: 20, EditRoots: []string{"a"}}, {ID: "b", WorkUnit: "b", EvidenceGoal: "b", MaxAttempts: 1, MaxChangedLines: 20, EditRoots: []string{"alias"}}})
+	symlinkPlan, err := newItemPlanCandidate([]WorkItem{{ID: "a", WorkUnit: "a", EvidenceGoal: "a", MaxAttempts: 1, MaxChangedLines: 20, EditRoots: []string{"a"}}, {ID: "b", WorkUnit: "b", EvidenceGoal: "b", MaxAttempts: 1, MaxChangedLines: 20, EditRoots: []string{"alias"}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +392,7 @@ func TestConcurrentItemReplayRejectsSemanticForgery(t *testing.T) {
 				{ID: "a", WorkUnit: "a", EvidenceGoal: "a", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{tc.aRoot}},
 				{ID: "b", DependsOn: tc.dependsOn, WorkUnit: "b", EvidenceGoal: "b", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{tc.bRoot}},
 				{ID: "c", WorkUnit: "c", EvidenceGoal: "c", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"c"}},
-			})
+			}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -440,7 +442,7 @@ func TestConcurrentItemReplayRejectsPlanlessPassedDependencyForgery(t *testing.T
 		{ID: "a", WorkUnit: "a", EvidenceGoal: "a", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"a"}},
 		{ID: "b", WorkUnit: "b", EvidenceGoal: "b", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"b"}},
 		{ID: "c", DependsOn: []string{"a"}, WorkUnit: "c", EvidenceGoal: "c", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"c"}},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

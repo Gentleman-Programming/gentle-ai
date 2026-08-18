@@ -415,7 +415,7 @@ func TestRunSDDAttemptAcquireProjectedItemDerivesAndSettlesBoundScope(t *testing
 	writeProjectedItemTasks(t, repo, change, false)
 	settleArgs := compactSettleArgs(repo, change, result.Token, "item-settle", "passed")
 	settled, settlePayload := runCompactSDDAttempt(t, settleArgs)
-	if settled.State != "complete" || settled.ItemSettlement == nil || settled.ItemSettlement.ItemID != "build" ||
+	if settled.State != "proceed" || settled.ItemSettlement == nil || settled.ItemSettlement.ItemID != "build" ||
 		settled.ItemSettlement.WorkUnit != "build" || settled.ItemSettlement.ObjectiveID != status.Objective.ID ||
 		settled.ItemSettlement.ObjectiveGeneration != status.Objective.Generation || settled.ItemSettlement.AttemptOrdinal != 1 ||
 		settled.ItemSettlement.EvidenceRevision != cliAttemptHash('e') || settled.ItemSettlement.SettlementRequestID != "item-settle" {
@@ -466,7 +466,7 @@ func TestRunSDDAttemptConcurrentDisjointItemsSettleByToken(t *testing.T) {
 	}
 
 	second, _ := runCompactSDDAttempt(t, compactSettleArgs(repo, change, b.Token, "concurrent-b-settle", "passed"))
-	if second.State != "complete" || second.ItemSettlement == nil || second.ItemSettlement.ItemID != "b" || second.ItemSettlement.AttemptOrdinal != 2 {
+	if second.State != "proceed" || second.ItemSettlement == nil || second.ItemSettlement.ItemID != "b" || second.ItemSettlement.AttemptOrdinal != 2 {
 		t.Fatalf("remaining settlement=%#v", second)
 	}
 	recordsDir := filepath.Join(repo, ".git", "gentle-ai", "sdd-runtime", "v1", change, "records")

@@ -1609,6 +1609,11 @@ func runtimeObjectiveAdvanceAdmissible(status RuntimeStatus, request BeginAttemp
 		objective == nil || len(status.Attempts) == 0 {
 		return false
 	}
+	if status.itemPlan != nil && request.itemPlan != nil && request.ItemID != "" &&
+		runtimePlanDependenciesSatisfied(runtimeReplay{Status: status, itemPlan: status.itemPlan}, *status.itemPlan, request.ItemID) &&
+		!runtimePlanItemPassedProof(runtimeReplay{Status: status, itemPlan: status.itemPlan}, *status.itemPlan, request.ItemID) {
+		return true
+	}
 	if request.WorkUnit == objective.WorkUnit {
 		return false
 	}
@@ -2575,16 +2580,25 @@ func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record run
 	if replay.Status.runtimeActiveCount() > 1 || replay.Status.runtimeActiveAttempt() != nil || objective == nil || !replay.Status.Complete || replay.Status.DecisionRequired {
 		return errors.New("objective advance is not a valid successor") // refusal:by-design world-action: a replayed chain that contradicts its own write-time state is damaged authority; the exit is restoring the Git-common-dir store, not a command
 	}
+	concurrentPlanAdvance := replay.itemPlan != nil && record.Begin.ItemID != "" &&
+		runtimePlanDependenciesSatisfied(*replay, *replay.itemPlan, record.Begin.ItemID)
 	if event.PreviousObjectiveID != objective.ID || event.PreviousGeneration != objective.Generation ||
-		event.PreviousGeneration != replay.Status.ObjectiveGeneration || event.PreviousWorkUnit != objective.WorkUnit {
+		(!concurrentPlanAdvance && event.PreviousGeneration != replay.Status.ObjectiveGeneration) || event.PreviousWorkUnit != objective.WorkUnit {
 		return errors.New("objective advance does not match the terminal objective") // refusal:by-design world-action: the predecessor identity was frozen at publication, so a mismatch is a mutated record and the exit is restoring the store
 	}
 	if len(replay.Status.Attempts) == 0 {
 		return errors.New("objective advance has no terminal candidate provenance") // refusal:by-design world-action: an advance can only follow a settled attempt, so an empty history is a truncated chain and the exit is restoring the store
 	}
 	last := replay.Status.Attempts[len(replay.Status.Attempts)-1]
-	if last.ObjectiveID != objective.ID || last.Outcome != AttemptPassed || last.ChangedLineBudgetExceeded ||
-		last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
+	predecessor := last
+	for _, attempt := range replay.Status.Attempts {
+		if attempt.ObjectiveID == objective.ID {
+			predecessor = attempt
+		}
+	}
+	if (predecessor.ObjectiveID != objective.ID || predecessor.Outcome != AttemptPassed || predecessor.ChangedLineBudgetExceeded ||
+		predecessor.FinishCandidateIdentity == "" || predecessor.FinishCandidateTree == "") ||
+		(!concurrentPlanAdvance && last.ObjectiveID != objective.ID) {
 		return errors.New("objective advance does not follow a passed terminal objective") // refusal:by-design world-action: the passed predecessor was verified before publication, so this is a mutated record and the exit is restoring the store
 	}
 	if record.Begin.WorkUnit == objective.WorkUnit {
@@ -3118,7 +3132,7 @@ func validateRuntimeItemBinding(itemID string, roots []string) error {
 }
 
 func validateItemPlan(plan itemPlanCandidate) error {
-	if plan.Version != itemPlanVersion || len(plan.Items) == 0 || len(plan.Items) > 256 {
+	if (plan.Version != itemPlanVersionV1 && plan.Version != itemPlanVersionV2) || len(plan.Items) == 0 || len(plan.Items) > 256 {
 		return errors.New("invalid item plan") // refusal:by-design operator-knowledge: artifact metadata must declare a non-empty supported plan
 	}
 	for index, item := range plan.Items {
@@ -3127,6 +3141,11 @@ func validateItemPlan(plan itemPlanCandidate) error {
 			item.MaxChangedLines < 1 || item.MaxChangedLines > maximumRuntimeChangedLines || len(item.EditRoots) == 0 ||
 			(index > 0 && plan.Items[index-1].ID >= item.ID) {
 			return errors.New("noncanonical item plan") // refusal:by-design operator-knowledge: artifact metadata must use canonical item ordering and limits
+		}
+		if (plan.Version == itemPlanVersionV1 && item.InitiallyDone != nil) ||
+			(plan.Version == itemPlanVersionV2 && item.InitiallyDone == nil) {
+			// refusal:by-design world-action: immutable plan history has an invalid versioned snapshot shape.
+			return errors.New("invalid item plan initial completion snapshot")
 		}
 		for rootIndex, root := range item.EditRoots {
 			if root == "" || filepath.IsAbs(root) || filepath.ToSlash(filepath.Clean(root)) != root || root == "." ||
@@ -3209,6 +3228,9 @@ func cloneItemPlan(plan *itemPlanCandidate) *itemPlanCandidate {
 		clone.Items[index] = item
 		clone.Items[index].DependsOn = append([]string(nil), item.DependsOn...)
 		clone.Items[index].EditRoots = append([]string(nil), item.EditRoots...)
+		if item.InitiallyDone != nil {
+			clone.Items[index].InitiallyDone = boolPointer(*item.InitiallyDone)
+		}
 	}
 	return &clone
 }

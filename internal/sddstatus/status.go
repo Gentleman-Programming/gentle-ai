@@ -763,6 +763,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 		applyNativeRuntimeRouting(&status)
 	}
 	applyWorkItemProjection(&status, readText(firstPath(artifactPaths.Tasks)))
+	applyRetainedItemPlanJoinRouting(&status)
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
@@ -775,6 +776,46 @@ func Resolve(options ResolveOptions) (Status, error) {
 		status.PhaseInstructions = &instructions
 	}
 	return status, nil
+}
+
+// applyRetainedItemPlanJoinRouting prevents mutable task checkboxes from
+// advancing a v2 item plan before immutable execution and coordinator
+// projection agree. Older plans predate the snapshot authority and retain
+// their established routing semantics.
+func applyRetainedItemPlanJoinRouting(status *Status) {
+	if status == nil || status.RuntimeStatus == nil || status.RuntimeStatus.itemPlan == nil ||
+		status.RuntimeStatus.itemPlan.Version != itemPlanVersionV2 || retainedItemPlanJoined(status) {
+		return
+	}
+	if status.Dependencies.Apply == DependencyAllDone {
+		status.Dependencies.Apply = DependencyReady
+	}
+	if status.Dependencies.Apply == DependencyBlocked {
+		return
+	}
+	status.Dependencies.Verify = DependencyBlocked
+	status.Dependencies.Archive = DependencyBlocked
+	status.NextRecommended = string(PhaseApply)
+	status.BlockedReasons = append(status.BlockedReasons, "retained item plan join is incomplete: wait for every required item to pass, settle, and be projected into tasks.")
+}
+
+func retainedItemPlanJoined(status *Status) bool {
+	runtime, plan := status.RuntimeStatus, status.RuntimeStatus.itemPlan
+	if runtime.runtimeActiveCount() != 0 || len(status.Items) != len(plan.Items) {
+		return false
+	}
+	items := make(map[string]WorkItem, len(status.Items))
+	for _, item := range status.Items {
+		items[item.ID] = item
+	}
+	replay := runtimeReplay{Status: *runtime, itemPlan: plan}
+	for _, entry := range plan.Items {
+		item, ok := items[entry.ID]
+		if !ok || !item.Done || !runtimePlanItemCompleteProof(replay, *plan, entry.ID) {
+			return false
+		}
+	}
+	return true
 }
 
 // loadNativeRuntimeStatus returns the runtime status together with the ledger's

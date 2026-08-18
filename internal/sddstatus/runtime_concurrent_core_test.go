@@ -16,7 +16,7 @@ func TestConcurrentPlanBoundCore(t *testing.T) {
 		{ID: "a", DependsOn: []string{}, WorkUnit: "a", EvidenceGoal: "a", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"a"}},
 		{ID: "b", DependsOn: []string{}, WorkUnit: "b", EvidenceGoal: "b", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"b"}},
 		{ID: "overlap", DependsOn: []string{}, WorkUnit: "overlap", EvidenceGoal: "overlap", MaxAttempts: 2, MaxChangedLines: 20, EditRoots: []string{"a/child"}},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

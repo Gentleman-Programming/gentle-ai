@@ -275,6 +275,8 @@ func TestRuntimeItemPlanForgedRecordsFailReplay(t *testing.T) {
 	}
 	for _, mutate := range []func(*runtimeBeginEvent){
 		func(event *runtimeBeginEvent) { event.ItemPlan.Items[0].EditRoots[0] = "verify" },
+		func(event *runtimeBeginEvent) { event.ItemPlan.Items[0].InitiallyDone = nil },
+		func(event *runtimeBeginEvent) { event.ItemPlan.Items[0].InitiallyDone = boolPointer(true) },
 		func(event *runtimeBeginEvent) { event.ItemPlanDigest = runtimeTestHash('d') },
 		func(event *runtimeBeginEvent) { event.ItemPlanEntryDigest = runtimeTestHash('e') },
 		func(event *runtimeBeginEvent) { event.ItemID = "verify" },
@@ -494,7 +496,7 @@ func runtimeTestItemPlan(t *testing.T) itemPlanCandidate {
 	plan, err := newItemPlanCandidate([]WorkItem{
 		{ID: "build", WorkUnit: "build", EvidenceGoal: "compile", MaxAttempts: 1, MaxChangedLines: 20, EditRoots: []string{"src"}},
 		{ID: "verify", DependsOn: []string{"build"}, WorkUnit: "verify", EvidenceGoal: "test", MaxAttempts: 1, MaxChangedLines: 20, EditRoots: []string{"verify"}},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -584,6 +584,12 @@ func (store RuntimeStore) compactSettleResult(request *CompactSettleRequest, exp
 		Status: replay.Status, AttemptTokens: replay.AttemptTokens,
 	}); terminal {
 		if settlement != nil {
+			// A v2 retained plan is globally joined only after the coordinator
+			// projects every settlement into tasks. Compact Settle cannot observe
+			// that write, so it must never claim terminal completion here.
+			if replay.itemPlan != nil && replay.itemPlan.Version == itemPlanVersionV2 {
+				return CompactAttemptResult{State: CompactStateProceed, ItemSettlement: settlement}, nil
+			}
 			if result.State == CompactStateComplete {
 				result.ItemSettlement = settlement
 				return result, nil

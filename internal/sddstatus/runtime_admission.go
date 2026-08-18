@@ -226,11 +226,22 @@ func runtimePlanDependenciesSatisfied(replay runtimeReplay, plan itemPlanCandida
 		if !ok {
 			return false
 		}
-		if !runtimePlanItemPassedProof(replay, plan, dependency) {
+		if !runtimePlanItemCompleteProof(replay, plan, dependency) {
 			return false
 		}
 	}
 	return true
+}
+
+func runtimePlanItemCompleteProof(replay runtimeReplay, plan itemPlanCandidate, itemID string) bool {
+	entry, ok := itemPlanEntryForID(plan, itemID)
+	if !ok {
+		return false
+	}
+	if plan.Version == itemPlanVersionV2 && entry.InitiallyDone != nil && *entry.InitiallyDone {
+		return true
+	}
+	return runtimePlanItemPassedProof(replay, plan, itemID)
 }
 
 // runtimePlanItemPassedProof is the immutable authority shared by dependency
