@@ -331,6 +331,21 @@ func TestRunArgsSDDVerifyValidateHelpTokensCanBeInputValues(t *testing.T) {
 	}
 }
 
+func TestRunArgsSDDVerifyGateIsDispatchedBeforePlatformValidation(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := filepath.Join(root, "openspec", "changes", "gate-change")
+	writeAppSDDStatusFile(t, filepath.Join(changeRoot, "proposal.md"), "# Proposal\n")
+	writeAppSDDStatusFile(t, filepath.Join(changeRoot, "spec.md"), "# Spec\n")
+	writeAppSDDStatusFile(t, filepath.Join(changeRoot, "design.md"), "# Design\n")
+	writeAppSDDStatusFile(t, filepath.Join(changeRoot, "tasks.md"), "- [x] 1.1 Work\n")
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{"sdd-verify-gate", "gate-change", "--cwd", root}, &buf)
+	if err == nil || !strings.Contains(err.Error(), "gate-change") {
+		t.Fatalf("RunArgs(sdd-verify-gate) error = %v, want a blocked-verdict error naming the change", err)
+	}
+}
+
 func TestRunArgsSDDAttemptIsDispatchedBeforePlatformValidation(t *testing.T) {
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })

@@ -153,6 +153,45 @@ jobs:
       - name: Check for new unreachable functions
         run: ./scripts/deadcode-ratchet.sh
 
+  sdd-verify-gate:
+    name: SDD Verify Gate (Advisory)
+    runs-on: ubuntu-latest
+    # Advisory-first per design.md Decision 4: this job never blocks the
+    # pipeline in this change, so — like claude-network-none below — it does
+    # not carry the go-format fail-closed guard those tests
+    # (TestRequiredChecksFailClosedWhenFormatFails) reserve for required
+    # status checks. A consumer repository opts into enforcement by invoking
+    # `sdd-verify-gate` without --advisory once it trusts the signal. Not
+    # added to required status checks here on purpose.
+    steps:
+      - name: Checkout exact event candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build gentle-ai
+        run: go build -trimpath -o "$RUNNER_TEMP/gentle-ai" ./cmd/gentle-ai
+
+      - name: Run sdd-verify-gate --advisory against a sample change
+        # This job proves the CI bridge itself runs cleanly; it does not gate
+        # on gentle-ai's own SDD change state. A consumer repository points
+        # --cwd at its real workspace and drops --advisory once it trusts the
+        # signal enough to enforce it.
+        run: |
+          sample="$RUNNER_TEMP/sdd-verify-gate-sample"
+          mkdir -p "$sample/openspec/changes/sample/specs/sample"
+          printf '# Proposal\n' > "$sample/openspec/changes/sample/proposal.md"
+          printf '### Requirement: sample\n#### Scenario: present\n' > "$sample/openspec/changes/sample/specs/sample/spec.md"
+          printf '# Design\n' > "$sample/openspec/changes/sample/design.md"
+          printf -- '- [ ] 1.1 Work\n' > "$sample/openspec/changes/sample/tasks.md"
+          "$RUNNER_TEMP/gentle-ai" sdd-verify-gate sample --cwd "$sample" --advisory
+
   claude-network-none:
     name: Claude Network-None Runtime (Required)
     runs-on: ubuntu-latest
