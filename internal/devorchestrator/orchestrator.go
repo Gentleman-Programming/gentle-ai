@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/batch"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/context"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/db"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/intent"
@@ -12,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/skill"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/trace"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/repository"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
 // Orchestrator wraps the core services required to resolve delegation contexts.
@@ -41,6 +43,12 @@ func (o *Orchestrator) RouteIntent(intentText string, sourceID string) (intent.I
 // ResolveSkills identifies and validates a list of requested skills against the local registry.
 func (o *Orchestrator) ResolveSkills(requestedSkills []string) ([]string, error) {
 	return o.SkillResolver.Resolve(requestedSkills)
+}
+
+// PrepareBatches takes a projected SDD status and splits the pending apply tasks
+// into individual ExecutionBatch instances per repository.
+func (o *Orchestrator) PrepareBatches(status sddstatus.StatusV1Projection, defaultAgent string) []batch.ExecutionBatch {
+	return batch.GenerateExecutionBatches(status, defaultAgent)
 }
 
 // GenerateContextForAgent coordinates the Skills Resolver, Repository Resolver, and Trace Resolver
