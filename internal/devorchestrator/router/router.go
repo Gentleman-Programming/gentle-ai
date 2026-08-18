@@ -34,6 +34,9 @@ trace:
 {{- end }}
 {{- end }}
 scope:
+{{- if .Pkg.Scope.Architecture }}
+  architecture: {{ .Pkg.Scope.Architecture }}
+{{- end }}
   repositories:
 {{- range .Pkg.Scope.Repositories }}
     - {{ . }}
@@ -43,9 +46,17 @@ permissions:
   git: {{ .Pkg.Permissions.Git }}
 </context_package>
 
+{{- if .Pkg.RepoProfile }}
 <repo_profiles>
 {{ .Pkg.RepoProfile }}
 </repo_profiles>
+{{- end }}
+
+{{- if .Pkg.ArchitectureProfile }}
+<architecture_profile>
+{{ .Pkg.ArchitectureProfile }}
+</architecture_profile>
+{{- end }}
 `
 
 // FormatPromptSignature takes a base instruction and a structured Context Package,

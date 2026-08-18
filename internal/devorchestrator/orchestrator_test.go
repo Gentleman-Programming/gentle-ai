@@ -3,6 +3,7 @@ package devorchestrator
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -40,12 +41,18 @@ implements:
 	os.MkdirAll(profileDir, 0755)
 	os.WriteFile(filepath.Join(profileDir, "SKILL.md"), []byte("This is repo-a profile"), 0644)
 
+	// Setup mock architecture-profile
+	archDir := filepath.Join(tempDir, "skills", "architecture", "spring-rest")
+	os.MkdirAll(archDir, 0755)
+	os.WriteFile(filepath.Join(archDir, "SKILL.md"), []byte("This is spring profile"), 0644)
+
 	// Execute Test
 	pkg, err := orch.GenerateContextForAgent(
 		"EXEC-001",
 		"backend-implementer",
 		artifactPath,
 		[]string{"repo-a", "repo-c"}, // repo-c is invalid, should be filtered
+		"spring-rest",
 		[]string{"java-spring"},
 		"APPLY",
 		"APPLY-123",
@@ -73,6 +80,14 @@ implements:
 
 	if len(pkg.Scope.Repositories) != 1 || pkg.Scope.Repositories[0] != "repo-a" {
 		t.Errorf("Expected only valid repo-a in scope, got %v", pkg.Scope.Repositories)
+	}
+
+	if pkg.Scope.Architecture != "spring-rest" {
+		t.Errorf("Expected spring-rest in architecture scope, got %s", pkg.Scope.Architecture)
+	}
+
+	if !strings.Contains(pkg.ArchitectureProfile, "This is spring profile") {
+		t.Errorf("Expected ArchitectureProfile to contain 'This is spring profile'")
 	}
 
 	if pkg.Permissions.Code != "write" {

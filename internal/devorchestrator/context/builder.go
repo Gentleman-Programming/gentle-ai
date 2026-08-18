@@ -11,14 +11,16 @@ type Package struct {
 	Trace          trace.Node  `json:"trace" yaml:"trace"`
 	Scope          Scope       `json:"scope" yaml:"scope"`
 	Inputs         Inputs      `json:"inputs" yaml:"inputs"`
-	Skills         []string    `json:"skills" yaml:"skills"`
-	RepoProfile    string      `json:"repo_profile" yaml:"repo_profile"`
-	Permissions    Permissions `json:"permissions" yaml:"permissions"`
-	ExpectedOutput Output      `json:"expected_output" yaml:"expected_output"`
+	Skills              []string    `json:"skills" yaml:"skills"`
+	RepoProfile         string      `json:"repo_profile" yaml:"repo_profile"`
+	ArchitectureProfile string      `json:"architecture_profile" yaml:"architecture_profile"`
+	Permissions         Permissions `json:"permissions" yaml:"permissions"`
+	ExpectedOutput      Output      `json:"expected_output" yaml:"expected_output"`
 }
 
 type Scope struct {
 	Repositories []string `json:"repositories" yaml:"repositories"`
+	Architecture string   `json:"architecture,omitempty" yaml:"architecture,omitempty"`
 }
 
 type Inputs struct {
@@ -37,15 +39,17 @@ type Output struct {
 
 // BuildRequest contains the necessary information to construct a Context Package.
 type BuildRequest struct {
-	ExecutionID  string
-	AgentName    string
-	Trace        trace.Node
-	Repositories []string
-	Artifacts    []string
-	Skills       []string
-	RepoProfile  string
-	ExpectedType string
-	ExpectedID   string
+	ExecutionID         string
+	AgentName           string
+	Trace               trace.Node
+	Repositories        []string
+	ArchitectureID      string
+	Artifacts           []string
+	Skills              []string
+	RepoProfile         string
+	ArchitectureProfile string
+	ExpectedType        string
+	ExpectedID          string
 }
 
 // Build creates a new Context Package based on the provided request.
@@ -56,12 +60,14 @@ func Build(req BuildRequest) Package {
 		Trace:       req.Trace,
 		Scope: Scope{
 			Repositories: req.Repositories,
+			Architecture: req.ArchitectureID,
 		},
 		Inputs: Inputs{
 			Artifacts: req.Artifacts,
 		},
-		Skills:      req.Skills,
-		RepoProfile: req.RepoProfile,
+		Skills:              req.Skills,
+		RepoProfile:         req.RepoProfile,
+		ArchitectureProfile: req.ArchitectureProfile,
 		Permissions: Permissions{
 			Code: "read", // default to read, orchestrator overrides if execution
 			Git:  "read",

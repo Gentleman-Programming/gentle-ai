@@ -30,6 +30,7 @@ func (o *Orchestrator) GenerateContextForAgent(
 	agentName string,
 	primaryArtifact string, // e.g. "openspec/changes/multi-repo-status/proposal.md"
 	repoNames []string,
+	architectureID string,
 	requiredSkills []string,
 	expectedType string,
 	expectedID string,
@@ -81,17 +82,29 @@ func (o *Orchestrator) GenerateContextForAgent(
 		}
 	}
 
+	// 3.5 Load Architecture Profile (Greenfield)
+	var architectureProfile string
+	if architectureID != "" {
+		archPath := filepath.Join(o.WorkspaceRoot, "skills", "architecture", architectureID, "SKILL.md")
+		data, err := os.ReadFile(archPath)
+		if err == nil {
+			architectureProfile = fmt.Sprintf("## Architecture Profile for %s\n%s\n\n", architectureID, string(data))
+		}
+	}
+
 	// 4. Context Builder
 	req := context.BuildRequest{
-		ExecutionID:  executionID,
-		AgentName:    agentName,
-		Trace:        traceNode,
-		Repositories: validRepos,
-		Artifacts:    []string{primaryArtifact},
-		Skills:       requiredSkills,
-		RepoProfile:  combinedRepoProfile,
-		ExpectedType: expectedType,
-		ExpectedID:   expectedID,
+		ExecutionID:         executionID,
+		AgentName:           agentName,
+		Trace:               traceNode,
+		Repositories:        validRepos,
+		ArchitectureID:      architectureID,
+		Artifacts:           []string{primaryArtifact},
+		Skills:              requiredSkills,
+		RepoProfile:         combinedRepoProfile,
+		ArchitectureProfile: architectureProfile,
+		ExpectedType:        expectedType,
+		ExpectedID:          expectedID,
 	}
 
 	pkg := context.Build(req)
@@ -120,13 +133,14 @@ func (o *Orchestrator) GenerateAgentPrompt(
 	agentName string,
 	primaryArtifact string,
 	repoNames []string,
+	architectureID string,
 	requiredSkills []string,
 	expectedType string,
 	expectedID string,
 	baseInstruction string,
 ) (string, error) {
 	pkg, err := o.GenerateContextForAgent(
-		executionID, agentName, primaryArtifact, repoNames, requiredSkills, expectedType, expectedID,
+		executionID, agentName, primaryArtifact, repoNames, architectureID, requiredSkills, expectedType, expectedID,
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate context package: %w", err)

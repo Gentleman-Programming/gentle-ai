@@ -10,16 +10,18 @@ import (
 
 func TestFormatPromptSignature(t *testing.T) {
 	pkg := &context.Package{
-		ExecutionID: "EXEC-001",
-		Agent:       "dev-explorer",
+		ExecutionID: "exec-1",
+		Agent:       "frontend-implementer",
 		Trace: trace.Node{
-			ID: "feature-123",
+			ID:         "feature-123",
 			Implements: []string{"spec-001"},
 		},
 		Scope: context.Scope{
 			Repositories: []string{"repo-a"},
+			Architecture: "spring-rest-service",
 		},
-		RepoProfile: "## Profile for repo-a\nProfile contents here.",
+		RepoProfile:         "## Profile for repo-a\nProfile contents here.",
+		ArchitectureProfile: "## Profile for spring\nArchitecture contents here.",
 		Permissions: context.Permissions{
 			Code: "read",
 			Git:  "read",
@@ -43,10 +45,10 @@ func TestFormatPromptSignature(t *testing.T) {
 	if !strings.Contains(out, "<context_package>") {
 		t.Errorf("Expected output to contain context_package tag")
 	}
-	if !strings.Contains(out, "execution_id: EXEC-001") {
+	if !strings.Contains(out, "execution_id: exec-1") {
 		t.Errorf("Expected output to contain execution_id")
 	}
-	if !strings.Contains(out, "agent: dev-explorer") {
+	if !strings.Contains(out, "agent: frontend-implementer") {
 		t.Errorf("Expected output to contain agent name")
 	}
 	if !strings.Contains(out, "- spec-001") {
@@ -60,6 +62,12 @@ func TestFormatPromptSignature(t *testing.T) {
 	}
 	if !strings.Contains(out, "<repo_profiles>") {
 		t.Errorf("Expected output to contain repo_profiles tag")
+	}
+	if !strings.Contains(out, "<architecture_profile>") {
+		t.Errorf("Expected output to contain architecture_profile tag")
+	}
+	if !strings.Contains(out, "architecture: spring-rest-service") {
+		t.Errorf("Expected output to contain architecture in scope")
 	}
 	if !strings.Contains(out, "Profile contents here.") {
 		t.Errorf("Expected output to contain repo profile contents")
