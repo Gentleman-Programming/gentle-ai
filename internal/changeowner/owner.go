@@ -99,12 +99,58 @@ var artifactCandidates = []string{"explore.md", "proposal.md"}
 // Resolve returns ErrUnknownEngine immediately; it does not fall through to
 // the next candidate or to the default.
 func Resolve(changeRoot string) (Engine, error) {
+	engine, _, err := ResolveMarked(changeRoot)
+	return engine, err
+}
+
+// ResolveMarked behaves exactly like Resolve, but additionally reports
+// whether an explicit, recognized `engine:` marker was found on any
+// candidate artifact (marked == true) versus the change having no marker
+// anywhere yet, in which case Resolve's EngineGentle default applies
+// (marked == false).
+//
+// This distinction matters for a phase-advance ownership check (SPEC-007):
+// RouteIntent always stamps `engine: dev-orchestrator` into the first
+// artifact it writes, so a change legitimately owned by dev-orchestrator is
+// always marked == true by the time GenerateContextForAgent runs against it.
+// An unmarked change was created by a path that does not stamp
+// (gentle-orchestrator, or a manual/legacy artifact) and is deliberately left
+// for RouteIntent/AssertCanWrite's creation-time check rather than refused
+// here -- refusing every unmarked change at phase-advance time would also
+// refuse every legacy change ever created before this feature existed.
+func ResolveMarked(changeRoot string) (Engine, bool, error) {
 	for _, name := range artifactCandidates {
 		content, err := os.ReadFile(filepath.Join(changeRoot, name))
 		if err != nil {
 			continue
 		}
 		engine, found, err := Parse(string(content))
+		if err != nil {
+			return "", true, err
+		}
+		if found {
+			return engine, true, nil
+		}
+	}
+	return EngineGentle, false, nil
+}
+
+// ResolveFromContents applies the exact same explore-before-proposal
+// precedence as Resolve, but against in-memory artifact contents rather than
+// files on disk. Callers whose artifacts live in a non-filesystem backend
+// (e.g. Engram-backed sddstatus) use this instead of Resolve so both
+// backends share one precedence implementation and cannot drift apart.
+//
+// contents must be supplied in the same precedence order as
+// artifactCandidates (explore.md's content first, then proposal.md's). An
+// empty string is treated the same as "artifact does not exist" and is
+// skipped.
+func ResolveFromContents(contents ...string) (Engine, error) {
+	for _, content := range contents {
+		if content == "" {
+			continue
+		}
+		engine, found, err := Parse(content)
 		if err != nil {
 			return "", err
 		}

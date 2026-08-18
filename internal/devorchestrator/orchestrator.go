@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/changeowner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/agent"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/batch"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/context"
@@ -25,15 +27,29 @@ type Orchestrator struct {
 	IntentRouter  *intent.Router
 	SkillResolver *skill.Resolver
 	DBRouter      *db.Router
+	// agentRegistry is loaded once from the canonical claude/agents/*.md files
+	// embedded in internal/assets.FS. It is the single source of truth for
+	// agent permissions — no static map to drift.
+	agentRegistry map[string]agent.Contract
 }
 
 // New creates a new instance of the DevOrchestrator.
+// It eagerly loads the agent registry from the embedded canonical agent
+// definitions so that GenerateContextForAgent never touches the filesystem
+// for permission checks.
 func New(workspaceRoot string) *Orchestrator {
+	registry, err := agent.LoadRegistryFromFS(assets.FS, "claude/agents")
+	if err != nil {
+		// Fallback to empty registry — orchestrator will reject unknown agents
+		// gracefully at call time.
+		registry = map[string]agent.Contract{}
+	}
 	return &Orchestrator{
 		WorkspaceRoot: workspaceRoot,
 		IntentRouter:  intent.New(workspaceRoot),
 		SkillResolver: skill.New(workspaceRoot),
 		DBRouter:      db.New(),
+		agentRegistry: registry,
 	}
 }
 
@@ -154,10 +170,35 @@ func (o *Orchestrator) GenerateContextForAgent(
 		// In a real implementation we might fail hard
 	}
 
-	// 3.9 Validate Agent Contract
-	contract, exists := agent.Registry[agentName]
+	// 3.9 Validate Agent Contract — derived from canonical claude/agents/*.md
+	contract, exists := o.agentRegistry[agentName]
 	if !exists {
-		return nil, fmt.Errorf("strict enforcement: agent '%s' is not registered in the agent contract registry", agentName)
+		return nil, fmt.Errorf("strict enforcement: agent '%s' is not registered in the agent contract registry (derived from internal/assets/claude/agents/)", agentName)
+	}
+
+	// 3.95 Validate Change Ownership (SPEC-007, defense in depth). This rides
+	// the exact chokepoint and error style the be3909ab strict-registry check
+	// above already established: every agent invocation passes through here,
+	// so the ownership check runs on every phase advance, not only at
+	// RouteIntent creation time.
+	//
+	// changeowner.ResolveMarked (not Resolve) is used deliberately: an
+	// unmarked change proceeds unchanged (marked == false), matching the
+	// design's Data Flow/Testing Strategy ("own/unmarked-default" proceeds)
+	// and the pre-existing TestGenerateContextForAgent fixture, which writes
+	// an unmarked proposal.md and expects success. Only an explicit,
+	// recognized marker naming a different engine is refused -- RouteIntent
+	// always stamps its own changes, so a legitimately dev-owned change is
+	// always marked by the time it reaches this check.
+	if primaryArtifact != "" {
+		changeRoot := filepath.Dir(filepath.Join(o.WorkspaceRoot, primaryArtifact))
+		owner, marked, err := changeowner.ResolveMarked(changeRoot)
+		if err != nil {
+			return nil, fmt.Errorf("strict enforcement: %w", err)
+		}
+		if marked && owner != changeowner.EngineDev {
+			return nil, fmt.Errorf("strict enforcement: %s", changeowner.RefusalMessage(filepath.Base(changeRoot), owner, changeowner.EngineDev))
+		}
 	}
 
 	// In a real implementation, we would filter `Artifacts` based on `contract.Inputs.AllowedArtifactTypes`

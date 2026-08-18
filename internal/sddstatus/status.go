@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/changeowner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/repository"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -262,6 +263,15 @@ type Status struct {
 	RepoProgress      *RepoProgress      `json:"repoProgress,omitempty"`
 	PhaseInstructions *PhaseInstructions `json:"phaseInstructions,omitempty"`
 	TargetRepositories []repository.Repository `json:"targetRepositories,omitempty"`
+	// Engine is dev-orchestrator-installable-owner's change-engine-ownership
+	// field (SPEC-002): additive and `omitempty`, set only when
+	// changeowner.Resolve names an explicit, recognized dev-orchestrator
+	// marker. Every change with no marker, or an explicit gentle-orchestrator
+	// marker -- which is every legacy fixture the freeze tests exercise --
+	// leaves Engine as the empty string, so the wire is byte-identical to
+	// before this field existed. See applyForeignEngineGate for the
+	// dependency-blocking gate this field feeds.
+	Engine            string             `json:"engine,omitempty"`
 	NextRecommended   string             `json:"nextRecommended"`
 	BlockedReasons    []string           `json:"blockedReasons"`
 	// runtimeAttemptTokens carries the ledger's live attempt tokens alongside
@@ -688,6 +698,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
 	}
 	status := baseStatus(ArtifactStoreOpenSpec, workspaceRoot, grantedRoots, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
+	if owner, engineErr := changeowner.Resolve(changeRoot); engineErr == nil && owner == changeowner.EngineDev {
+		status.Engine = string(changeowner.EngineDev)
+	}
 	status.Consent = consent
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
@@ -727,6 +740,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	} else {
 		applyNativeRuntimeRouting(&status)
 	}
+	applyForeignEngineGate(&status)
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
@@ -834,6 +848,43 @@ func applyEnabledUnmanagedRemediationAuthorityRouting(status *Status, reviewDisa
 	}
 	blockReviewGate(status, reviewtransaction.GateInvalidated,
 		"a disabled/unmanaged correction repaired failed evidence without a bounded review transaction or receipt; enabled receipt-driven delivery requires bounded review authority for the corrected candidate; "+reviewGateFreshReviewContinuation)
+}
+
+// applyForeignEngineGate is change-engine-ownership's sddstatus-side
+// enforcement point (SPEC-002's Data Flow): when Status.Engine names
+// dev-orchestrator, gentle-orchestrator's own status gate refuses to route
+// any further work into a change it does not own, mirroring the two Go-side
+// checks dev-orchestrator itself already enforces (RouteIntent's
+// AssertCanWrite, GenerateContextForAgent's ResolveMarked check). It runs
+// last, immediately before BlockedReasons.finalize, so it overrides every
+// other next-recommended decision computed earlier in Resolve --
+// foreign-engine ownership is an absolute block, not one signal among many.
+//
+// A change with Engine == "" (no marker, or an explicit
+// gentle-orchestrator marker) is unaffected: this only gates changes
+// dev-orchestrator explicitly claimed.
+func applyForeignEngineGate(status *Status) {
+	if status == nil || status.Engine != string(changeowner.EngineDev) {
+		return
+	}
+	status.Dependencies.Explore = DependencyBlocked
+	status.Dependencies.Blueprint = DependencyBlocked
+	status.Dependencies.Proposal = DependencyBlocked
+	status.Dependencies.Gate1Scope = DependencyBlocked
+	status.Dependencies.Gate2Technical = DependencyBlocked
+	status.Dependencies.Gate3Implementation = DependencyBlocked
+	status.Dependencies.Specs = DependencyBlocked
+	status.Dependencies.Design = DependencyBlocked
+	status.Dependencies.Tasks = DependencyBlocked
+	status.Dependencies.Apply = DependencyBlocked
+	status.Dependencies.Verify = DependencyBlocked
+	status.Dependencies.Archive = DependencyBlocked
+	status.NextRecommended = "blocked-foreign-engine"
+	change := "<unresolved>"
+	if status.ChangeName != nil {
+		change = *status.ChangeName
+	}
+	status.BlockedReasons = append(status.BlockedReasons, changeowner.RefusalMessage(change, changeowner.EngineDev, changeowner.EngineGentle))
 }
 
 func applyNativeRuntimeErrorRouting(status *Status, runtimeErr error) {
@@ -1103,6 +1154,14 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 
 	changeRoot := fmt.Sprintf("engram:sdd/%s", changeName)
 	status := baseStatus(ArtifactStoreEngram, workspaceRoot, nil, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
+	// The Engram backend has no filesystem changeRoot for changeowner.Resolve
+	// to read, so ResolveFromContents applies the exact same
+	// explore-before-proposal precedence against the artifact contents
+	// already fetched from Engram, sharing one precedence implementation with
+	// the OpenSpec path above instead of re-deriving it here.
+	if owner, engineErr := changeowner.ResolveFromContents(artifactsByType["explore"].Content, artifactsByType["proposal"].Content); engineErr == nil && owner == changeowner.EngineDev {
+		status.Engine = string(changeowner.EngineDev)
+	}
 	status.PlanningHome = PlanningHome{Mode: ActionModeRepoLocal, Path: "engram:sdd"}
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
@@ -1142,6 +1201,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	} else {
 		applyNativeRuntimeRouting(&status)
 	}
+	applyForeignEngineGate(&status)
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction

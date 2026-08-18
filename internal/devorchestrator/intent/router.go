@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/changeowner"
 )
 
 // IntentResult represents the outcome of an intent routing operation.
@@ -57,6 +59,17 @@ func (r *Router) RouteIntent(intentText string, sourceID string) (IntentResult, 
 
 	// 3. Create the directory and artifact
 	changesDir := filepath.Join(r.WorkspaceRoot, "openspec", "changes", changeID)
+
+	// changeowner.AssertCanWrite runs BEFORE any filesystem mutation
+	// (SPEC-003): a foreign-owned or unrecognized-marker changeRoot must be
+	// refused with zero side effects -- no MkdirAll, no WriteFile. A
+	// non-existent changeRoot (brand-new change) and a changeRoot already
+	// owned by dev-orchestrator (same-engine re-route, SPEC-003's "Same-engine
+	// write proceeds normally" scenario) both return nil here.
+	if err := changeowner.AssertCanWrite(changesDir, changeowner.EngineDev); err != nil {
+		return IntentResult{}, err
+	}
+
 	err := os.MkdirAll(changesDir, 0755)
 	if err != nil {
 		return IntentResult{}, fmt.Errorf("failed to create changes directory: %w", err)
@@ -79,7 +92,16 @@ func (r *Router) RouteIntent(intentText string, sourceID string) (IntentResult, 
 	// Create YAML frontmatter
 	// "originates-from" matches trace.Node's yaml tag exactly (internal/devorchestrator/trace/resolver.go),
 	// so a freshly routed intent's provenance survives into GenerateContextForAgent's Trace Resolver step.
-	frontmatter := fmt.Sprintf("---\nid: %s\n%soriginates-from:\n  - %s\n---\n", changeID, frontmatterType, rawSource)
+	//
+	// The `engine: dev-orchestrator` line is stamped via changeowner.Stamp
+	// (not hand-formatted) so the ownership marker's exact grammar can never
+	// drift from the one changeowner.Parse/Resolve read back later (SPEC-001).
+	// Stamp is idempotent, so re-routing an already-stamped, same-engine
+	// change (the AssertCanWrite same-engine pass-through above) does not
+	// duplicate or corrupt the marker line.
+	frontmatterBody := fmt.Sprintf("id: %s\n%soriginates-from:\n  - %s\n", changeID, frontmatterType, rawSource)
+	frontmatterBody = changeowner.Stamp(frontmatterBody, changeowner.EngineDev)
+	frontmatter := "---\n" + frontmatterBody + "---\n"
 	content := frontmatter + "# Intake Request\n\n" + intentText + "\n"
 
 	err = os.WriteFile(artifactPath, []byte(content), 0644)

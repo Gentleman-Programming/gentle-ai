@@ -1,10 +1,14 @@
 package intent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/changeowner"
 )
 
 func TestRouteIntent(t *testing.T) {
@@ -93,4 +97,101 @@ func TestRouteIntent(t *testing.T) {
 			t.Errorf("expected proposal.md, got %s", res.ArtifactPath)
 		}
 	})
+
+	t.Run("New change is stamped engine: dev-orchestrator", func(t *testing.T) {
+		intentText := "Add a new export button."
+		sourceID := "stamped-change"
+
+		res, err := router.RouteIntent(intentText, sourceID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		content, err := os.ReadFile(filepath.Join(tempDir, res.ArtifactPath))
+		if err != nil {
+			t.Fatalf("failed to read created artifact: %v", err)
+		}
+		engine, found, err := changeowner.Parse(string(content))
+		if err != nil {
+			t.Fatalf("Parse(written artifact) error = %v", err)
+		}
+		if !found || engine != changeowner.EngineDev {
+			t.Fatalf("expected engine: dev-orchestrator marker, found=%v engine=%q\n%s", found, engine, content)
+		}
+	})
+}
+
+// TestRouteIntentRefusesForeignOwnedChange covers SPEC-003: RouteIntent
+// (dev-orchestrator's write path) must refuse to write into a change already
+// owned by gentle-orchestrator, and must leave the existing artifact's bytes
+// and mtime byte-for-byte unchanged -- no MkdirAll, no WriteFile on refusal.
+func TestRouteIntentRefusesForeignOwnedChange(t *testing.T) {
+	tempDir := t.TempDir()
+	router := New(tempDir)
+
+	changeDir := filepath.Join(tempDir, "openspec", "changes", "gentle-owned")
+	if err := os.MkdirAll(changeDir, 0755); err != nil {
+		t.Fatalf("failed to seed change dir: %v", err)
+	}
+	proposalPath := filepath.Join(changeDir, "proposal.md")
+	original := "---\nid: gentle-owned\nengine: gentle-orchestrator\n---\n# Proposal\n"
+	if err := os.WriteFile(proposalPath, []byte(original), 0644); err != nil {
+		t.Fatalf("failed to seed proposal.md: %v", err)
+	}
+	// Force a distinguishable mtime so any rewrite is detectable even on
+	// filesystems with coarse mtime resolution.
+	pastMtime := time.Now().Add(-1 * time.Hour)
+	if err := os.Chtimes(proposalPath, pastMtime, pastMtime); err != nil {
+		t.Fatalf("failed to set mtime: %v", err)
+	}
+	originalInfo, err := os.Stat(proposalPath)
+	if err != nil {
+		t.Fatalf("failed to stat seeded proposal.md: %v", err)
+	}
+
+	_, err = router.RouteIntent("Add a feature to the gentle-owned change.", "gentle-owned")
+	if !errors.Is(err, changeowner.ErrForeignEngine) {
+		t.Fatalf("RouteIntent() error = %v, want ErrForeignEngine", err)
+	}
+
+	rewritten, readErr := os.ReadFile(proposalPath)
+	if readErr != nil {
+		t.Fatalf("failed to re-read proposal.md after refused write: %v", readErr)
+	}
+	if string(rewritten) != original {
+		t.Fatalf("proposal.md content changed after refused write:\nwant: %q\ngot:  %q", original, string(rewritten))
+	}
+
+	newInfo, statErr := os.Stat(proposalPath)
+	if statErr != nil {
+		t.Fatalf("failed to re-stat proposal.md: %v", statErr)
+	}
+	if !newInfo.ModTime().Equal(originalInfo.ModTime()) {
+		t.Fatalf("proposal.md mtime changed after refused write: want %v, got %v", originalInfo.ModTime(), newInfo.ModTime())
+	}
+}
+
+// TestRouteIntentSameEngineProceeds covers SPEC-003's "Same-engine write
+// proceeds normally" scenario: re-routing an already dev-orchestrator-owned
+// change must succeed exactly as before this feature existed.
+func TestRouteIntentSameEngineProceeds(t *testing.T) {
+	tempDir := t.TempDir()
+	router := New(tempDir)
+
+	changeDir := filepath.Join(tempDir, "openspec", "changes", "dev-owned")
+	if err := os.MkdirAll(changeDir, 0755); err != nil {
+		t.Fatalf("failed to seed change dir: %v", err)
+	}
+	proposalPath := filepath.Join(changeDir, "proposal.md")
+	if err := os.WriteFile(proposalPath, []byte("---\nid: dev-owned\nengine: dev-orchestrator\n---\n# Proposal\n"), 0644); err != nil {
+		t.Fatalf("failed to seed proposal.md: %v", err)
+	}
+
+	// RouteIntent always writes artifactName == "proposal.md" for non-bug,
+	// non-greenfield intent text, which overwrites the seeded file in place
+	// -- exactly the pre-existing, expected re-route behavior.
+	_, err := router.RouteIntent("Add another field to the dev-owned change.", "dev-owned")
+	if err != nil {
+		t.Fatalf("RouteIntent() error = %v, want nil for same-engine re-route", err)
+	}
 }

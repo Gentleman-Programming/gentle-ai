@@ -170,7 +170,9 @@ func TestGenerateContextForAgent_StrictRegistryEnforcement(t *testing.T) {
 	tempDir := t.TempDir()
 	orch := New(tempDir)
 
-	// Valid agent (dev-specifier) should get read-only permissions
+	// dev-specifier canonical tools: Read, Edit, Write, Grep, Glob, mcp__...
+	// Has Edit+Write → Code: "write" (derived from the canonical .md — no manual override)
+	// This is intentional: specifiers write their spec artifacts to engram/openspec.
 	pkg, err := orch.GenerateContextForAgent(
 		"EXEC-VALID",
 		"dev-specifier",
@@ -184,11 +186,16 @@ func TestGenerateContextForAgent_StrictRegistryEnforcement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error for valid agent: %v", err)
 	}
-	if pkg.Permissions.Code != "none" || pkg.Permissions.Git != "none" {
-		t.Errorf("expected dev-specifier to have none permissions, got code:%s git:%s", pkg.Permissions.Code, pkg.Permissions.Git)
+	// Permissions are derived from the canonical claude/agents/dev-specifier.md tools list.
+	// dev-specifier has Edit+Write but no Bash → Code: write, Git: read
+	if pkg.Permissions.Code != "write" {
+		t.Errorf("expected dev-specifier Code=write (derived from canonical .md), got %s", pkg.Permissions.Code)
+	}
+	if pkg.Permissions.Git != "read" {
+		t.Errorf("expected dev-specifier Git=read (no Bash in tools), got %s", pkg.Permissions.Git)
 	}
 
-	// Invalid agent should fail
+	// Invalid agent should fail with strict enforcement error
 	_, err = orch.GenerateContextForAgent(
 		"EXEC-INVALID",
 		"custom-unknown-agent",
@@ -205,4 +212,52 @@ func TestGenerateContextForAgent_StrictRegistryEnforcement(t *testing.T) {
 	if !strings.Contains(err.Error(), "strict enforcement") {
 		t.Errorf("expected error to mention strict enforcement, got: %v", err)
 	}
+}
+
+// TestGenerateContextForAgent_OwnershipEnforcement covers SPEC-007: phase
+// advances are refused when the change is explicitly, recognizably owned by
+// a different engine, and proceed for own or unmarked-default changes
+// (matching design.md's Data Flow/Testing Strategy and the pre-existing
+// TestGenerateContextForAgent fixture, which already exercises the
+// unmarked-proceeds case).
+func TestGenerateContextForAgent_OwnershipEnforcement(t *testing.T) {
+	t.Run("refuses a change explicitly owned by gentle-orchestrator", func(t *testing.T) {
+		tempDir := t.TempDir()
+		orch := New(tempDir)
+
+		artifactPath := "openspec/changes/gentle-owned/proposal.md"
+		absArtifactPath := filepath.Join(tempDir, artifactPath)
+		os.MkdirAll(filepath.Dir(absArtifactPath), 0755)
+		os.WriteFile(absArtifactPath, []byte("---\nid: gentle-owned\nengine: gentle-orchestrator\n---\n# Proposal\n"), 0644)
+
+		_, err := orch.GenerateContextForAgent(
+			"EXEC-FOREIGN", "dev-explorer", artifactPath, nil, "", nil, "", "",
+		)
+		if err == nil {
+			t.Fatalf("expected error for gentle-orchestrator-owned change, got nil")
+		}
+		if !strings.Contains(err.Error(), "strict enforcement") {
+			t.Errorf("expected error to mention strict enforcement, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "gentle-owned") || !strings.Contains(err.Error(), "gentle-orchestrator") {
+			t.Errorf("expected refusal message to name the change and its owner, got: %v", err)
+		}
+	})
+
+	t.Run("proceeds for a change explicitly owned by dev-orchestrator", func(t *testing.T) {
+		tempDir := t.TempDir()
+		orch := New(tempDir)
+
+		artifactPath := "openspec/changes/dev-owned/proposal.md"
+		absArtifactPath := filepath.Join(tempDir, artifactPath)
+		os.MkdirAll(filepath.Dir(absArtifactPath), 0755)
+		os.WriteFile(absArtifactPath, []byte("---\nid: dev-owned\nengine: dev-orchestrator\n---\n# Proposal\n"), 0644)
+
+		_, err := orch.GenerateContextForAgent(
+			"EXEC-OWN", "dev-explorer", artifactPath, nil, "", nil, "", "",
+		)
+		if err != nil {
+			t.Fatalf("expected no error for dev-orchestrator-owned change, got: %v", err)
+		}
+	})
 }
