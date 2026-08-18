@@ -263,7 +263,7 @@ func TestCommentWriterLanguageContractSources(t *testing.T) {
 		content string
 	}{
 		{name: "embedded", content: MustRead("skills/comment-writer/SKILL.md")},
-		{name: "root", content: readRepoRootFile(t, "skills/comment-writer/SKILL.md")},
+		{name: "root", content: readRepoRootFile(t, "skills/legacy/comment-writer/SKILL.md")},
 	}
 
 	for _, tc := range tests {

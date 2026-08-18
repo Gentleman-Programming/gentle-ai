@@ -1,0 +1,83 @@
+---
+name: erp-mf-root-config-profile
+description: "Agent execution contract and architectural invariant enforcement for the erp-mf-root-config orchestrator. Trigger: orchestrator launches code implementation in erp-mf-root-config."
+disable-model-invocation: true
+user-invocable: false
+license: Apache-2.0
+metadata:
+  author: Jhunior Gutierrez
+  version: "3.0"
+  delegate_only: true
+---
+
+## Execution Role
+
+Confirm your role before acting. You are the dedicated `frontend-implementer` sub-agent for the **erp-mf-root-config** repository unless you loaded this skill directly through the `skill()` tool.
+
+- If you are the `frontend-implementer` sub-agent, continue with the phase work below. Do not delegate.
+- If you loaded this skill through the `skill()` tool, you are the orchestrator. Stop here and delegate to the dedicated `frontend-implementer` sub-agent.
+
+## Language Domain Contract
+
+- **Code:** JavaScript, Webpack, EJS.
+- **Commits & PRs:** Must be written in Spanish using standard semantic commit types (`feat`, `fix`, `refactor`).
+- **Artifacts:** Generated technical artifacts (like `apply-progress`) default to English.
+
+## Purpose
+
+You are a sub-agent responsible for implementing changes in the `erp-mf-root-config` Single-SPA orchestrator.
+
+## What You Receive
+
+From the orchestrator:
+- The exact SDD tasks list to implement.
+- Target branch and target environment.
+
+## Execution and Persistence Contract
+
+> Follow **Section B** (retrieval) and **Section C** (persistence) from your agent's own `_shared/sdd-phase-common.md` (e.g. `~/.claude/skills/_shared/...` for Claude Code, `~/.gemini/skills/_shared/...` for Gemini, `~/.codex/skills/_shared/...` for Codex — resolve via your own agent's skills root, not necessarily Claude's).
+
+- **engram**: Read `sdd/{change-name}/tasks` (required) and `sdd/{change-name}/spec` (required). Save your progress as `sdd/{change-name}/apply-progress`.
+
+## What to Do
+
+### Step 1: Load Dependencies
+Read `package.json` to confirm Webpack configuration.
+
+### Step 2: Enforce Architectural Invariants (Root Orchestrator)
+This is the root orchestrator for Single-SPA.
+1. Do NOT introduce UI framework code here (no Vue, no React, no Angular).
+2. Changes should be limited to `importmap.json`, `index.ejs`, or `main.js`.
+
+### Step 3: Implement Configuration Changes
+- Modify the routing logic or import map as required.
+- Be extremely careful: an error here breaks ALL microfrontends.
+
+### Step 4: Test & Verify
+Ensure Webpack compiles successfully.
+
+## Code Writing Rules
+
+| Criteria | Example ✅ | Anti-example ❌ |
+|----------|-----------|----------------|
+| **Scope** | Modifying `importmap-prd.json` | Adding a Vue component |
+
+## Step 6: Return Summary
+
+Return to the orchestrator:
+
+```markdown
+## Implementation Report
+
+**Repository**: erp-mf-root-config
+**Change**: {change-name}
+
+### Completed Tasks
+- [x] 1.1 {Concrete action}
+
+### Architectural Verification
+- Confirmed changes are limited to orchestrator configuration.
+
+### Next Step
+{Ready for sdd-verify OR specify remaining tasks}
+```

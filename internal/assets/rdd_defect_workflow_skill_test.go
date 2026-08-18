@@ -16,7 +16,7 @@ func TestRDDDefectWorkflowSkillContract(t *testing.T) {
 		t.Fatalf("Read(%q) error = %v", embeddedPath, err)
 	}
 
-	source, err := os.ReadFile(filepath.Join("..", "..", "skills", "rdd-defect-workflow", "SKILL.md"))
+	source, err := os.ReadFile(filepath.Join("..", "..", "skills", "legacy", "rdd-defect-workflow", "SKILL.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(source skill) error = %v", err)
 	}
