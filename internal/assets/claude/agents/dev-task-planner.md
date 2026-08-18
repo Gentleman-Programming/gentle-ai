@@ -25,6 +25,14 @@ via your own skills root, not necessarily Claude's).
   `acceptance_criteria`, and `verification`.
 - Every task's `repository` field is load-bearing: it is what tells implementers which
   `apply-progress/{repo-slug}` to write to. Never leave it implicit or omit it.
+- **MANDATORY**: You must declare the database impact of these tasks in a YAML frontmatter
+  block at the very top of the file using the `db_impact` field. Valid values are `none`,
+  `simple`, or `high-risk`. Example:
+  ```yaml
+  ---
+  db_impact: simple
+  ---
+  ```
 
 ## Decision Gates
 

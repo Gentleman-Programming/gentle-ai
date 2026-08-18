@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/context"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/db"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/intent"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/router"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/skill"
@@ -18,6 +19,7 @@ type Orchestrator struct {
 	WorkspaceRoot string
 	IntentRouter  *intent.Router
 	SkillResolver *skill.Resolver
+	DBRouter      *db.Router
 }
 
 // New creates a new instance of the DevOrchestrator.
@@ -26,6 +28,7 @@ func New(workspaceRoot string) *Orchestrator {
 		WorkspaceRoot: workspaceRoot,
 		IntentRouter:  intent.New(workspaceRoot),
 		SkillResolver: skill.New(workspaceRoot),
+		DBRouter:      db.New(),
 	}
 }
 
@@ -116,7 +119,18 @@ func (o *Orchestrator) GenerateContextForAgent(
 		}
 	}
 
-	// 3.7 Resolve Skills
+	// 3.7 Evaluate DB Impact and Resolve Skills
+	if primaryArtifact != "" {
+		absPath := filepath.Join(o.WorkspaceRoot, primaryArtifact)
+		data, err := os.ReadFile(absPath)
+		if err == nil {
+			impact := o.DBRouter.EvaluateImpact(string(data))
+			if impact == db.ImpactSimple && agentName == "backend-implementer" {
+				requiredSkills = append(requiredSkills, "database-specialist")
+			}
+		}
+	}
+
 	resolvedSkills, err := o.ResolveSkills(requiredSkills)
 	if err != nil {
 		// Non-fatal, just log or ignore for now, we pass whatever we could resolve

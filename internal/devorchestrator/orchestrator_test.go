@@ -33,6 +33,7 @@ func TestGenerateContextForAgent(t *testing.T) {
 id: feature-123
 implements:
   - spec-01
+db_impact: simple
 ---
 # Proposal content
 `
@@ -56,6 +57,11 @@ implements:
 	os.MkdirAll(skillDir, 0755)
 	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("backend skill"), 0644)
 
+	// Setup mock DB skill for resolver (injected by db_impact)
+	dbSkillDir := filepath.Join(tempDir, "skills", "database-specialist")
+	os.MkdirAll(dbSkillDir, 0755)
+	os.WriteFile(filepath.Join(dbSkillDir, "SKILL.md"), []byte("db skill"), 0644)
+
 	// Execute Test
 	pkg, err := orch.GenerateContextForAgent(
 		"EXEC-001",
@@ -63,13 +69,28 @@ implements:
 		artifactPath,
 		[]string{"repo-a", "repo-c"}, // repo-c is invalid, should be filtered
 		"spring-rest",
-		[]string{"java-spring"},
+		[]string{"backend-implementer"},
 		"APPLY",
 		"APPLY-123",
 	)
 
 	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify DB skill was injected
+	if len(pkg.Skills) != 2 {
+		t.Fatalf("expected 2 resolved skills (backend + db), got %d", len(pkg.Skills))
+	}
+	hasDB := false
+	for _, s := range pkg.Skills {
+		if strings.Contains(s, "database-specialist") {
+			hasDB = true
+			break
+		}
+	}
+	if !hasDB {
+		t.Errorf("expected database-specialist skill to be injected due to DB impact: simple")
 	}
 
 	if pkg == nil {
