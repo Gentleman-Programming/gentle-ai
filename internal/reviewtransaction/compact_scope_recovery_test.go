@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1084,4 +1085,100 @@ func TestStartCompactAuthorityFailsClosedOnExplicitLineageForeignCorrectionRecov
 		// Defensive: the typed error must NOT leak into the unqualified path.
 		t.Fatalf("unqualified path leaked errExplicitLineageForeignRecovery: %v", unqErr)
 	}
+}
+
+// TestStartCompactAuthorityFailsClosedOnExplicitLineageForeignRecoveryMultiCandidate
+// pins a decode2 (2026-08-18) negative control for issue #1987: the foreign-lineage
+// refusal must fire when there are MULTIPLE foreign correction-required predecessors,
+// not only in the single-candidate path. The hoisted guard runs BEFORE the
+// candidate-count branching, so multi-candidate must also fail closed. Without the
+// hoist, the previous code returned the first candidate's record silently bound
+// to the requested lineage.
+func TestStartCompactAuthorityFailsClosedOnExplicitLineageForeignRecoveryMultiCandidate(t *testing.T) {
+	repo, _, _, _ := correctionContractionRecoveryFixture(t, "compact-1987-multi-predecessor-a")
+	_, _, storeB, _ := correctionContractionRecoveryFixture(t, "compact-1987-multi-predecessor-b")
+	_ = storeB // second foreign correction-required predecessor now on disk alongside the first
+
+	stateBeforeA, _ := os.ReadFile(predecessorStorePath(t, repo, "compact-1987-multi-predecessor-a"))
+	stateBeforeB, _ := os.ReadFile(predecessorStorePath(t, repo, "compact-1987-multi-predecessor-b"))
+
+	requested := newCompactTestState(t, repo, "compact-1987-multi-probe")
+	if requested.LineageID == "compact-1987-multi-predecessor-a" || requested.LineageID == "compact-1987-multi-predecessor-b" {
+		t.Fatal("fixture collision: requested lineage collides with a foreign predecessor")
+	}
+
+	started, startErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{
+		State: requested, ExplicitLineage: true,
+	})
+
+	if startErr == nil {
+		t.Fatalf("explicit START returned %#v with nil error; want errExplicitLineageForeignRecovery", started)
+	}
+	if !errors.Is(startErr, errExplicitLineageForeignRecovery) {
+		t.Fatalf("error = %v, want errors.Is(_, errExplicitLineageForeignRecovery)", startErr)
+	}
+	if !strings.Contains(startErr.Error(), "compact-1987-multi-probe") {
+		t.Fatalf("error must name the requested lineage id, got: %q", startErr.Error())
+	}
+	if !strings.Contains(startErr.Error(), "recovered-revision=") {
+		t.Fatalf("error must carry --expected-predecessor-revision guidance, got: %q", startErr.Error())
+	}
+	if !strings.Contains(startErr.Error(), "--disposition=<scope-changed|invalidated|escalated>") {
+		t.Fatalf("error must carry --disposition choices, got: %q", startErr.Error())
+	}
+	if started.Action != "" || started.Record.State.LineageID != "" {
+		t.Fatalf("partial result returned on failure: %#v", started)
+	}
+
+	stateAfterA, _ := os.ReadFile(predecessorStorePath(t, repo, "compact-1987-multi-predecessor-a"))
+	stateAfterB, _ := os.ReadFile(predecessorStorePath(t, repo, "compact-1987-multi-predecessor-b"))
+	if !bytes.Equal(stateBeforeA, stateAfterA) {
+		t.Fatal("predecessor A state bytes changed on multi-candidate foreign-lineage refusal")
+	}
+	if !bytes.Equal(stateBeforeB, stateAfterB) {
+		t.Fatal("predecessor B state bytes changed on multi-candidate foreign-lineage refusal")
+	}
+
+	unqualified, unqErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{
+		State: newCompactTestState(t, repo, "compact-1987-multi-unqualified-probe"),
+	})
+	if unqErr != nil {
+		t.Fatalf("unqualified START error = %v, want either Recover or Blocked under multi-candidate", unqErr)
+	}
+	unqualifiedID := unqualified.Record.State.LineageID
+	if unqualifiedID != "compact-1987-multi-predecessor-a" && unqualifiedID != "compact-1987-multi-predecessor-b" {
+		t.Fatalf("unqualified should land on one of the existing correction-required predecessors, got %#v", unqualified)
+	}
+	if errors.Is(unqErr, errExplicitLineageForeignRecovery) {
+		t.Fatalf("unqualified path leaked errExplicitLineageForeignRecovery: %v", unqErr)
+	}
+}
+
+// TestStartCompactAuthorityFailsClosedOnExplicitLineageForeignRecoveryMapping pins
+// the failure-envelope mapping for issue #1987: the typed refusal must be reachable
+// through the exported sentinel AND the IsExplicitLineageForeignRecovery predicate
+// so the not_started branch in newReviewIntegrationFailure fires reliably.
+func TestStartCompactAuthorityFailsClosedOnExplicitLineageForeignRecoveryMapping(t *testing.T) {
+	repo, _, _, _ := correctionContractionRecoveryFixture(t, "compact-1987-mapping-predecessor")
+	requested := newCompactTestState(t, repo, "compact-1987-mapping-probe")
+	_, startErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{
+		State: requested, ExplicitLineage: true,
+	})
+	if !IsExplicitLineageForeignRecovery(startErr) {
+		t.Fatalf("IsExplicitLineageForeignRecovery = false; want true for %v", startErr)
+	}
+	if !errors.Is(startErr, ExplicitLineageForeignRecoveryErr) {
+		t.Fatalf("errors.Is(startErr, ExplicitLineageForeignRecoveryErr) = false; want true for %v", startErr)
+	}
+}
+
+// predecessorStorePath resolves the on-disk state path for a lineage id, mirroring
+// the path used inside CompactStore.StatePath without needing a Store handle.
+func predecessorStorePath(t *testing.T, repo, lineageID string) string {
+	t.Helper()
+	base, _, err := reviewAuthorityRoot(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("authority root: %v", err)
+	}
+	return filepath.Join(base, "v2", lineageID, "state.json")
 }

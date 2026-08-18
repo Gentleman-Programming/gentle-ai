@@ -588,6 +588,27 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		}
 		return failure
 	}
+	// Foreign-lineage refusal (issue #1987): provably non-mutating because
+	// the refused operation is a foreign predecessor's recovery check that
+	// ran BEFORE any compaction step. Map to not_started so the caller does
+	// not have to retry STATUS to learn the operation never committed; the
+	// canonical recovery command in the wrapped sentinel is the operator's
+	// runnable next move.
+	if errors.Is(runErr, reviewtransaction.ExplicitLineageForeignRecoveryErr) {
+		failure.Phase = "pre_native"
+		failure.Code = "explicit_lineage_foreign_recovery"
+		failure.Message = "An explicit --lineage selector recovered a foreign correction-required predecessor; the requested lineage remains absent."
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.AuthorityApplicability = "not_evaluated"
+		failure.RetrySafe = true
+		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
+		failure.RequiredInputs = []string{"lineage"}
+		// NextAction deliberately points at the runnable next step (review.recover
+		// with the four flags the wrapped error names) so the operator does not
+		// have to retype the failure message.
+		failure.NextAction = "review.recover"
+		return failure
+	}
 	var bindingConflict *sddstatus.BindingRevisionConflictError
 	if errors.As(runErr, &bindingConflict) {
 		failure.Phase = "pre_native"

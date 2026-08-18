@@ -1327,3 +1327,34 @@ func TestNewReviewIntegrationFailureCauseIsUniversal(t *testing.T) {
 		t.Fatalf("read-only catch-all = %#v, want content-free", readOnly)
 	}
 }
+
+// TestReviewStartFailureEnvelopeForExplicitForeignRecovery pins the failure-
+// envelope mapping for issue #1987 added by decode2's 2026-08-18 review on
+// PR #2932: when StartCompactAuthority returns errExplicitLineageForeignRecovery
+// the failure envelope must classify as `not_started` (not
+// operation_outcome_unknown), because the hoisted check runs BEFORE the
+// compact-state lock and therefore provably committed no record. The canonical
+// recovery command (with --predecessor-lineage / --expected-predecessor-revision /
+// --successor-lineage / --disposition / scope-changed|invalidated|escalated)
+// must be reachable through errors.Is on the typed sentinel.
+func TestReviewStartFailureEnvelopeForExplicitForeignRecovery(t *testing.T) {
+	err := fmt.Errorf("provoke: %w: requested=%q recovered=%q recovered-revision=%q",
+		reviewtransaction.ExplicitLineageForeignRecoveryErr,
+		"requested-lineage-id", "recovered-lineage-id", "deadbeef-rev")
+	failure := newReviewIntegrationFailure("review.start", []string{"--lineage", "requested-lineage-id"}, err)
+	if failure.Code != "explicit_lineage_foreign_recovery" {
+		t.Fatalf("failure code = %q, want %q", failure.Code, "explicit_lineage_foreign_recovery")
+	}
+	if failure.Phase != "pre_native" {
+		t.Fatalf("failure phase = %q, want pre_native (the refusal runs before the compact lock, so it must not be classified as native_running)", failure.Phase)
+	}
+	if failure.MutationOutcome != ReviewMutationNotStarted {
+		t.Fatalf("failure MutationOutcome = %v, want ReviewMutationNotStarted (decode2 2026-08-18: provably non-mutating refusal)", failure.MutationOutcome)
+	}
+	if failure.NextAction != "review.recover" {
+		t.Fatalf("failure NextAction = %q, want %q", failure.NextAction, "review.recover")
+	}
+	if !failure.RetrySafe {
+		t.Error("retry must be safe: the hoisted check never reached the compact lock, so retrying with --lineage=<whatever> is harmless")
+	}
+}

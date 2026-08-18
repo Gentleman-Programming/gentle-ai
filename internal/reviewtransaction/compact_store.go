@@ -70,15 +70,57 @@ var errCompactApprovedRecoveryScopeUnchanged = errors.New("approved predecessor 
 
 var errCompactRecoveryPredecessorNotInvalidated = errors.New("recovery requires an invalidated predecessor")
 
+// findForeignCorrectionRequiredPredecessor scans recoveryCandidates and
+// claimants for a record in StateCorrectionRequired whose lineage id differs
+// from the requested one. Returns the foreign lineage id or "" if no such
+// predecessor was found. Used by StartCompactAuthority's hoisted foreign-
+// lineage refusal to fail closed before any candidate-count branching.
+// Regression class for issue #1987.
+func findForeignCorrectionRequiredPredecessor(recoveryCandidates, claimants []CompactStore, records map[string]CompactRecord, requestedLineageID string) string {
+	scan := func(stores []CompactStore) string {
+		for _, store := range stores {
+			rec, ok := records[store.lineageID]
+			if !ok {
+				continue
+			}
+			if rec.State.State == StateCorrectionRequired && store.lineageID != requestedLineageID {
+				return store.lineageID
+			}
+		}
+		return ""
+	}
+	if foreign := scan(recoveryCandidates); foreign != "" {
+		return foreign
+	}
+	return scan(claimants)
+}
+
 // errExplicitLineageForeignRecovery identifies the fail-closed case where an
 // explicit --lineage selector names an absent lineage while a foreign
 // correction-required predecessor exists. START must not silently recover the
 // foreign predecessor on behalf of the named lineage; it must fail closed and
 // name both ids so the operator can issue `gentle-ai review recover
-// --predecessor-lineage=<recovered> --successor-lineage=<requested>` to bind
-// the named lineage as a successor of the existing one. Regression class for
-// issue #1987.
-var errExplicitLineageForeignRecovery = errors.New("explicit --lineage selector recovered a foreign correction-required lineage; the requested lineage remains absent — run `gentle-ai review recover --predecessor-lineage=<recovered> --successor-lineage=<requested>` to bind it")
+// --predecessor-lineage=<recovered> --expected-predecessor-revision=<recovered-revision>
+// --successor-lineage=<requested> --disposition=<scope-changed|invalidated|escalated>`
+// to bind the named lineage as a successor of the existing one. The wrapped
+// sentinel carries the canonical recovery command so the failure envelope's
+// NextAction can echo it; the `not_started` mapping in newReviewIntegrationFailure
+// ensures the caller knows nothing was committed. Regression class for issue #1987.
+var errExplicitLineageForeignRecovery = errors.New("explicit --lineage selector recovered a foreign correction-required lineage; the requested lineage remains absent — run `gentle-ai review recover --predecessor-lineage=<recovered> --expected-predecessor-revision=<recovered-revision> --successor-lineage=<requested> --disposition=<scope-changed|invalidated|escalated>` to bind it")
+
+// ExplicitLineageForeignRecoveryErr is the package-exported sentinel that
+// newReviewIntegrationFailure uses to map this refusal to the
+// `not_started` failure envelope. It aliases errExplicitLineageForeignRecovery
+// so errors.Is at the call site matches without exposing the package-private
+// variable.
+var ExplicitLineageForeignRecoveryErr = errExplicitLineageForeignRecovery
+
+// IsExplicitLineageForeignRecovery reports whether err was produced by the
+// hoisted foreign-lineage refusal. Exported so callers that cannot import
+// the package-private sentinel can still test for the failure shape.
+func IsExplicitLineageForeignRecovery(err error) bool {
+	return errors.Is(err, errExplicitLineageForeignRecovery)
+}
 
 // ApprovedRecoveryScopeUnchanged reports whether err is the refusal of a
 // scope-changed recovery whose approved predecessor already approved exactly
@@ -1320,22 +1362,31 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 			requestedClaims = requestedClaims || store.lineageID == request.State.LineageID
 		}
 	}
+	// Hoisted foreign-lineage refusal: apply BEFORE candidate-count
+	// branching so a foreign correction-required predecessor still
+	// fails closed even when (a) there are multiple recovery candidates,
+	// or (b) the predecessor lands in the claimants slice rather than
+	// recoveryCandidates. Scoped to StateCorrectionRequired because
+	// approved-scope-changed and escalated-target-changed recovery remain
+	// the documented contract
+	// (TestStartCompactAuthorityRequiresRecoveryForApprovedSameScopeChangedCandidate
+	// pins both shapes). Regression class for issue #1987.
+	if request.ExplicitLineage {
+		if foreign := findForeignCorrectionRequiredPredecessor(recoveryCandidates, claimants, records, request.State.LineageID); foreign != "" {
+			recoveredRec := records[foreign]
+			return CompactStartResult{}, fmt.Errorf("%w: requested=%q recovered=%q recovered-revision=%q",
+				errExplicitLineageForeignRecovery, request.State.LineageID, foreign, recoveredRec.Revision)
+		}
+	}
+
 	if len(recoveryCandidates) > 0 {
 		if len(recoveryCandidates) == 1 && len(claimants) == 0 {
-			// Fail-closed when an explicit --lineage selector names an absent
-			// lineage and global discovery recovered a foreign correction-required
-			// lineage: the named lineage must remain absent, and the caller must
-			// run review recover with --lineage=<requested> to bind it explicitly.
-			// Scoped to StateCorrectionRequired because approved-scope-changed and
-			// escalated-target-changed recovery is the documented existing
-			// contract (see TestStartCompactAuthorityRequiresRecoveryForApprovedSameScopeChangedCandidate).
-			// Regression class for issue #1987.
+			// The foreign-lineage refusal (issue #1987) is hoisted to the
+			// top of StartCompactAuthority via findForeignCorrectionRequiredPredecessor,
+			// so by the time we reach this branch the only remaining
+			// StateCorrectionRequired predecessors here are the requested
+			// lineage itself. Fall through to the recovery action.
 			recovered := records[recoveryCandidates[0].lineageID]
-			if request.ExplicitLineage && recovered.State.State == StateCorrectionRequired &&
-				recoveryCandidates[0].lineageID != request.State.LineageID {
-				return CompactStartResult{}, fmt.Errorf("%w: requested=%q recovered=%q",
-					errExplicitLineageForeignRecovery, request.State.LineageID, recoveryCandidates[0].lineageID)
-			}
 			return CompactStartResult{Record: recovered, Action: CompactStartRecover}, nil
 		}
 		return CompactStartResult{Record: records[recoveryCandidates[0].lineageID], Action: CompactStartBlocked}, nil
@@ -1384,21 +1435,14 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 		default:
 			return CompactStartResult{Record: record, Action: CompactStartBlocked}, nil
 		}
-		// Fail-closed on the Resumed path when an explicit --lineage selector
-		// named an absent lineage and the global claimant is a foreign
-		// correction-required predecessor. The named lineage must remain
-		// absent; the caller must run `gentle-ai review recover
-		// --lineage=<requested>` to bind it. Scoped to StateCorrectionRequired
-		// to preserve documented reviewing/approved/validating resume behavior
-		// (the existing CLI tests at review_facade_test.go:526 and :602 exercise
-		// this code path with reviewing-state predecessors and expect a resume).
-		// Mirrors the guard on the CompactStartRecover path earlier in this
-		// function. Regression class for issue #1987.
-		if request.ExplicitLineage && record.State.State == StateCorrectionRequired &&
-			record.State.LineageID != request.State.LineageID {
-			return CompactStartResult{}, fmt.Errorf("%w: requested=%q recovered=%q",
-				errExplicitLineageForeignRecovery, request.State.LineageID, record.State.LineageID)
-		}
+		// The foreign-lineage refusal (issue #1987) is hoisted to the
+		// top of StartCompactAuthority via findForeignCorrectionRequiredPredecessor,
+		// so by the time the loop reaches here no claimant in
+		// StateCorrectionRequired can be foreign to the requested lineage.
+		// Reviewing/Approved/Validating predecessors keep their documented
+		// resume semantics exactly as before; the resume branch is the
+		// only path that ever returned `review.recover --lineage=<requested>`
+		// failures from this loop.
 		return CompactStartResult{Record: record, Action: CompactStartResumed,
 			LensesRequired: len(record.State.LensResults) < len(record.State.SelectedLenses)}, nil
 	}
