@@ -77,6 +77,7 @@ var (
 	pathDirsFn          = func() []string {
 		return filepath.SplitList(os.Getenv("PATH"))
 	}
+	pathValueFn        = func() string { return os.Getenv("PATH") }
 	osExecutableDoctor = os.Executable
 	engramProbeStdioFn = engram.ProbeStdio
 	httpGetFn          = func(url string, timeout time.Duration) (int, error) {
@@ -118,9 +119,9 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx, homeDir, installedAgents) }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
 	)
-	if installedState.BackgroundIntent == model.OpenCodeBackgroundOn && doctorGOOS != "windows" {
+	if installedState.BackgroundIntent == model.OpenCodeBackgroundOn || installedState.BackgroundIntent == model.OpenCodeBackgroundOff {
 		checks = append(checks, doctor.Check{ID: doctor.CheckOpenCodeActivation, Run: func(context.Context) doctor.Result {
-			return checkManagedOpenCodeActivation(homeDir)
+			return checkManagedOpenCodeStatus(homeDir, installedState.BackgroundIntent)
 		}})
 	}
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
@@ -130,13 +131,29 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 }
 
 func checkManagedOpenCodeActivation(homeDir string) CheckResult {
-	resolved, err := lookPathFn("opencode")
-	expected := opencode.POSIXLauncherPath(homeDir)
-	owned, ownershipErr := opencode.ManagedLauncherOwnership(expected)
-	if err == nil && ownershipErr == nil && filepath.Clean(resolved) == filepath.Clean(expected) && owned {
-		return CheckResult{Status: CheckStatusPass, Detail: "managed OpenCode launcher resolves at " + resolved}
+	return checkManagedOpenCodeStatus(homeDir, model.OpenCodeBackgroundOn)
+}
+
+func checkManagedOpenCodeStatus(homeDir string, intent model.OpenCodeBackgroundIntent) CheckResult {
+	if intent == model.OpenCodeBackgroundOff {
+		return CheckResult{Status: CheckStatusPass, Detail: "OpenCode background activation status: off; background policy is intentionally disabled"}
 	}
-	return CheckResult{Status: CheckStatusFail, Detail: "OpenCode background policy is on, but bare opencode does not resolve to managed launcher " + expected + "; start a new supported login shell, then rerun doctor"}
+	paths := opencode.ManagedLauncherPaths(homeDir, doctorGOOS)
+	if len(paths) == 0 {
+		return CheckResult{Status: CheckStatusFail, Detail: "OpenCode background activation status: unknown; managed launcher path is unavailable"}
+	}
+	expected := paths[0]
+	status := opencode.ResolveManagedLauncherStatus(pathValueFn(), expected, doctorGOOS)
+	if status == opencode.ActivationStatusReady {
+		resolved, err := opencode.ResolveManagedLauncher(pathValueFn(), expected, doctorGOOS)
+		if err == nil {
+			return CheckResult{Status: CheckStatusPass, Detail: "managed OpenCode launcher resolves at " + resolved}
+		}
+	}
+	return CheckResult{
+		Status: CheckStatusFail,
+		Detail: "OpenCode background activation status: " + string(status) + "; bare opencode does not resolve to managed launcher " + expected + "; start a new supported login shell, then rerun doctor",
+	}
 }
 
 // readDoctorInstalledAgents returns the agent IDs persisted in state.json.
