@@ -11,6 +11,7 @@ const (
 	CheckInstalledAssetVersion CheckID = "installed:asset_version"
 	CheckEngramReachable       CheckID = "engram:reachable"
 	CheckDiskSpace             CheckID = "disk:space"
+	CheckOpenCodeActivation    CheckID = "opencode:managed_activation"
 )
 
 // ToolCheckID returns the stable check identifier for a tool binary.

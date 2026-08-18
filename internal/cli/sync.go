@@ -1584,7 +1584,7 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	defer rt.state.cleanupCompatibilityTransaction()
 	rt.backgroundActivation = background.activationPlan
 	if rt.backgroundActivation != nil {
-		rt.runtimeReady = rt.backgroundActivation.Capability().Ready()
+		rt.runtimeReady = rt.backgroundActivation.Effective()
 		rt.backgroundPolicy = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
 	} else {
 		// Preserve the programmatic/TUI seam's historical behavior. CLI sync
@@ -1855,7 +1855,7 @@ func RunSync(args []string) (SyncResult, error) {
 		}
 		background.activationPlan = backgroundActivation
 		rt.backgroundActivation = backgroundActivation
-		rt.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
+		rt.runtimeReady = backgroundActivation != nil && backgroundActivation.Effective()
 		rt.backgroundPolicy = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
 		result.Background = background
 		result.BackgroundPolicyEnabled = rt.backgroundPolicy

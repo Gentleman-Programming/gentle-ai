@@ -187,7 +187,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	result.Background.activationPlan = backgroundActivation
 	if backgroundActivation != nil {
 		result.Background.Activation = backgroundActivation.Report()
-		result.BackgroundPolicyEnabled = backgroundActivation.Capability().Ready() && background.Effective == model.OpenCodeBackgroundOn
+		result.BackgroundPolicyEnabled = backgroundActivation.Effective() && background.Effective == model.OpenCodeBackgroundOn
 	}
 
 	if input.DryRun {
@@ -215,7 +215,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	}
 	runtime.background = background
 	runtime.backgroundActivation = backgroundActivation
-	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
+	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Effective()
 	runtime.piBackgroundProjection = piBackgroundProjection
 
 	stagePlan = runtime.stagePlan()
@@ -791,7 +791,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			channel:      r.channel,
 			state:        r.state,
 		}
-		step.backgroundPolicy = r.backgroundActivation != nil && r.backgroundActivation.Capability().Ready() && r.background.Effective == model.OpenCodeBackgroundOn
+		step.backgroundPolicy = r.backgroundActivation != nil && r.backgroundActivation.Effective() && r.background.Effective == model.OpenCodeBackgroundOn
 		apply = append(apply, step)
 	}
 	// Routing guidance is scheduled per agent and outside the component loop:
@@ -1169,7 +1169,7 @@ func (s openCodeBackgroundActivationStep) Run() error {
 		return fmt.Errorf("apply managed OpenCode background activation: %w", err)
 	}
 	if s.ready != nil {
-		*s.ready = s.plan.Capability().Ready()
+		*s.ready = s.plan.Effective()
 	}
 	return nil
 }
@@ -1799,7 +1799,7 @@ func executeTUIInstallWithBackground(homeDir string, selection model.Selection, 
 	}
 	runtime.background = backgroundResolution
 	runtime.backgroundActivation = backgroundActivation
-	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Capability().Ready()
+	runtime.runtimeReady = backgroundActivation != nil && backgroundActivation.Effective()
 	piBackgroundResolution := PiBackgroundResolution{
 		Intent:    piBackground,
 		Effective: piBackground,
