@@ -526,6 +526,7 @@ type BeginAttemptRequest struct {
 	MaxChangedLines  int      `json:"max_changed_lines"`
 	ItemID           string   `json:"item_id,omitempty"`
 	ItemEditRoots    []string `json:"item_edit_roots,omitempty"`
+	itemPlan         *itemPlanBinding
 }
 
 type FinishAttemptRequest struct {
@@ -631,8 +632,12 @@ type RuntimeStore struct {
 	// keeps today's behavior. The switch itself is read in the CLI layer, which
 	// owns the single source of truth for both of its sources; an unreadable
 	// switch is not a disabled switch and resolves to false.
-	ReviewDisabled bool
-	commonDir      string
+	ReviewDisabled     bool
+	commonDir          string
+	authorityDir       string
+	authorityRepo      string
+	authorityWorkspace string
+	authorityChange    string
 	// instance is the change-instance identity this store session serves
 	// (#2540 S5). The ledger directory is keyed by change name alone and
 	// archive never touches it, so a future change reusing an archived name
@@ -723,17 +728,20 @@ type runtimeAdvanceEvent struct {
 }
 
 type runtimeBeginEvent struct {
-	ObjectiveID            string   `json:"objective_id"`
-	ObjectiveGeneration    int      `json:"objective_generation,omitempty"`
-	WorkUnit               string   `json:"work_unit"`
-	EvidenceGoal           string   `json:"evidence_goal"`
-	MaxAttempts            int      `json:"max_attempts"`
-	MaxChangedLines        int      `json:"max_changed_lines"`
-	ItemID                 string   `json:"item_id,omitempty"`
-	ItemEditRoots          []string `json:"item_edit_roots,omitempty"`
-	Ordinal                int      `json:"ordinal"`
-	BeginCandidateIdentity string   `json:"begin_candidate_identity"`
-	BeginCandidateTree     string   `json:"begin_candidate_tree"`
+	ObjectiveID            string             `json:"objective_id"`
+	ObjectiveGeneration    int                `json:"objective_generation,omitempty"`
+	WorkUnit               string             `json:"work_unit"`
+	EvidenceGoal           string             `json:"evidence_goal"`
+	MaxAttempts            int                `json:"max_attempts"`
+	MaxChangedLines        int                `json:"max_changed_lines"`
+	ItemID                 string             `json:"item_id,omitempty"`
+	ItemEditRoots          []string           `json:"item_edit_roots,omitempty"`
+	ItemPlan               *itemPlanCandidate `json:"item_plan,omitempty"`
+	ItemPlanDigest         string             `json:"item_plan_digest,omitempty"`
+	ItemPlanEntryDigest    string             `json:"item_plan_entry_digest,omitempty"`
+	Ordinal                int                `json:"ordinal"`
+	BeginCandidateIdentity string             `json:"begin_candidate_identity"`
+	BeginCandidateTree     string             `json:"begin_candidate_tree"`
 	// BeginWorktree records store.Workspace at Begin time (#2296 part 1): the
 	// resolved, symlink-evaluated absolute path of the exact --cwd this begin
 	// ran under. omitempty is load-bearing — every record predating this field
@@ -825,6 +833,7 @@ type runtimeReplay struct {
 	// S5): applyRuntimeGrantEvent projects a grant into GrantedRoots only
 	// when the record's identity equals this one. Empty projects nothing.
 	Instance string
+	itemPlan *itemPlanCandidate
 }
 
 func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, error) {
@@ -849,7 +858,8 @@ func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, e
 	}
 	commonDir := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(probe.Dir))))
 	dir := runtimeChangeLedgerDir(filepath.Join(commonDir, "gentle-ai", "sdd-runtime"), change)
-	return RuntimeStore{Dir: dir, Repo: root, Workspace: workspace, Change: change, commonDir: commonDir}, nil
+	return RuntimeStore{Dir: dir, Repo: root, Workspace: workspace, Change: change, commonDir: commonDir,
+		authorityDir: dir, authorityRepo: root, authorityWorkspace: workspace, authorityChange: change}, nil
 }
 
 // encodedRuntimeChangeNamespace holds identities that cannot be a directory
@@ -922,23 +932,28 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 	digest := runtimeBeginRequestDigest(request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
+		bound, plan, planDigest, entryDigest, err := store.runtimeItemPlanBinding(replay, request)
+		if err != nil {
+			return runtimeRecord{}, err
+		}
 		// Every precondition, ledger-side and repository-side, is evaluated by
 		// the one predicate the read-only surfaces evaluate too, under this
 		// lock and against this exact replay, so a read that said "admitted"
 		// a moment ago cannot let a stale verdict through here.
-		admission, err := store.runtimeBeginAdmission(ctx, status, request)
+		admission, err := store.runtimeBeginAdmission(ctx, status, bound)
 		if err != nil {
 			return runtimeRecord{}, err
 		}
 		advancing, generation, snapshot := admission.Advancing, admission.Generation, admission.Snapshot
-		objectiveID := runtimeObjectiveIDForBinding(store.Change, request.WorkUnit, request.EvidenceGoal, snapshot.Identity, generation, request.ItemID, request.ItemEditRoots)
+		objectiveID := runtimeObjectiveIDForBinding(store.Change, bound.WorkUnit, bound.EvidenceGoal, snapshot.Identity, generation, bound.ItemID, bound.ItemEditRoots)
 		if objective := status.runtimeObjective(); objective != nil && !advancing {
 			objectiveID = objective.ID
 		}
 		event := &runtimeBeginEvent{
-			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
-			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
-			ItemID: request.ItemID, ItemEditRoots: request.ItemEditRoots,
+			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: bound.WorkUnit, EvidenceGoal: bound.EvidenceGoal,
+			MaxAttempts: bound.MaxAttempts, MaxChangedLines: bound.MaxChangedLines,
+			ItemID: bound.ItemID, ItemEditRoots: bound.ItemEditRoots,
+			ItemPlan: plan, ItemPlanDigest: planDigest, ItemPlanEntryDigest: entryDigest,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
 			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace,
 		}
@@ -2142,6 +2157,10 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 
 func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runtimeRecord) error {
 	event := record.Begin
+	plan, err := runtimeReplayItemPlan(record, replay.itemPlan)
+	if err != nil {
+		return err
+	}
 	generation := event.ObjectiveGeneration
 	if generation == 0 {
 		generation = replay.Status.ObjectiveGeneration + 1
@@ -2218,6 +2237,9 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 	replay.Status.setRuntimeActiveAttempt(&active)
 	if err := replay.Accounting.begin(replay.Status.runtimeObjective()); err != nil {
 		return err
+	}
+	if plan != nil {
+		replay.itemPlan = plan
 	}
 	replay.Status.NextAction = RuntimeActionFinish
 	return nil
@@ -2565,6 +2587,12 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 		(event.ObjectiveGeneration == 0 && event.ItemID != "") {
 		return errors.New("invalid SDD runtime begin event")
 	}
+	if event.ItemPlan != nil || event.ItemPlanDigest != "" || event.ItemPlanEntryDigest != "" {
+		if event.ItemPlanDigest == "" || event.ItemPlanEntryDigest == "" || event.ItemID == "" {
+			return errors.New("invalid SDD runtime item plan begin event") // refusal:by-design world-action: a malformed persisted item-plan event requires authority restoration
+		}
+		return nil
+	}
 	request := BeginAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
 		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
@@ -2874,6 +2902,14 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	if err := validateRuntimeItemBinding(request.ItemID, request.ItemEditRoots); err != nil {
 		return BeginAttemptRequest{}, err
 	}
+	if request.itemPlan != nil && request.ItemID == "" {
+		return BeginAttemptRequest{}, errors.New("item_plan requires an item binding") // refusal:by-design operator-knowledge: the caller must provide the selected item binding the candidate describes
+	}
+	if request.itemPlan != nil {
+		if err := validateItemPlan(request.itemPlan.Plan); err != nil {
+			return BeginAttemptRequest{}, fmt.Errorf("invalid item_plan: %w", err)
+		}
+	}
 	return request, nil
 }
 
@@ -2905,6 +2941,161 @@ func validateRuntimeItemBinding(itemID string, roots []string) error {
 	return nil
 }
 
+func validateItemPlan(plan itemPlanCandidate) error {
+	if plan.Version != itemPlanVersion || len(plan.Items) == 0 || len(plan.Items) > 256 {
+		return errors.New("invalid item plan") // refusal:by-design operator-knowledge: artifact metadata must declare a non-empty supported plan
+	}
+	for index, item := range plan.Items {
+		if !workItemID.MatchString(item.ID) || !workItemID.MatchString(item.WorkUnit) ||
+			validateRuntimeText(item.EvidenceGoal, 240) != nil || item.MaxAttempts < 1 || item.MaxAttempts > maximumRuntimeAttemptLimit ||
+			item.MaxChangedLines < 1 || item.MaxChangedLines > maximumRuntimeChangedLines || len(item.EditRoots) == 0 ||
+			(index > 0 && plan.Items[index-1].ID >= item.ID) {
+			return errors.New("noncanonical item plan") // refusal:by-design operator-knowledge: artifact metadata must use canonical item ordering and limits
+		}
+		for rootIndex, root := range item.EditRoots {
+			if root == "" || filepath.IsAbs(root) || filepath.ToSlash(filepath.Clean(root)) != root || root == "." ||
+				strings.HasPrefix(root, "../") || strings.Contains("/"+root+"/", "/../") ||
+				(rootIndex > 0 && item.EditRoots[rootIndex-1] >= root) {
+				return errors.New("noncanonical item plan roots") // refusal:by-design operator-knowledge: artifact metadata must use canonical relative roots
+			}
+		}
+		for dependencyIndex, dependency := range item.DependsOn {
+			if !workItemID.MatchString(dependency) || dependency == item.ID ||
+				(dependencyIndex > 0 && item.DependsOn[dependencyIndex-1] >= dependency) {
+				return errors.New("noncanonical item plan dependencies") // refusal:by-design operator-knowledge: artifact metadata must use canonical declared dependencies
+			}
+		}
+	}
+	for _, item := range plan.Items {
+		for _, dependency := range item.DependsOn {
+			if _, ok := itemPlanEntryForID(plan, dependency); !ok {
+				return errors.New("item plan dependency is absent") // refusal:by-design operator-knowledge: artifact metadata must name only declared plan items
+			}
+		}
+	}
+	if plan.Digest != "" && plan.Digest != itemPlanDigest(plan) {
+		return errors.New("item plan digest does not match content") // refusal:by-design operator-knowledge: the candidate digest must bind its canonical content
+	}
+	return nil
+}
+
+func itemPlanDigest(plan itemPlanCandidate) string {
+	plan.Digest = ""
+	return runtimeValueHash("gentle-ai.sdd-item-plan/v1", plan)
+}
+
+func itemPlanEntryForID(plan itemPlanCandidate, id string) (itemPlanEntry, bool) {
+	for _, item := range plan.Items {
+		if item.ID == id {
+			return item, true
+		}
+	}
+	return itemPlanEntry{}, false
+}
+
+func itemPlanEntryDigest(item itemPlanEntry) string {
+	return runtimeValueHash("gentle-ai.sdd-item-plan-entry/v1", item)
+}
+
+func cloneItemPlan(plan *itemPlanCandidate) *itemPlanCandidate {
+	if plan == nil {
+		return nil
+	}
+	clone := *plan
+	clone.Items = make([]itemPlanEntry, len(plan.Items))
+	for index, item := range plan.Items {
+		clone.Items[index] = item
+		clone.Items[index].DependsOn = append([]string(nil), item.DependsOn...)
+		clone.Items[index].EditRoots = append([]string(nil), item.EditRoots...)
+	}
+	return &clone
+}
+
+func (store RuntimeStore) runtimeItemPlanBinding(replay runtimeReplay, request BeginAttemptRequest) (BeginAttemptRequest, *itemPlanCandidate, string, string, error) {
+	if (request.itemPlan != nil || replay.itemPlan != nil) && !store.planAuthoritySealed() {
+		return BeginAttemptRequest{}, nil, "", "", errors.New("runtime store plan authority identity is not sealed") // refusal:by-design world-action: reopen the runtime store instead of mutating its exported routing identity
+	}
+	if request.itemPlan == nil {
+		if replay.itemPlan != nil && request.ItemID != "" {
+			return BeginAttemptRequest{}, nil, "", "", errors.New("item-bound begin requires the retained item plan") // refusal:by-design human-authority: a retained immutable plan cannot be bypassed by a planless item binding
+		}
+		return request, nil, "", "", nil
+	}
+	if request.itemPlan.Workspace != store.authorityWorkspace || request.itemPlan.Change != store.authorityChange {
+		return BeginAttemptRequest{}, nil, "", "", errors.New("item plan candidate belongs to another workspace or change") // refusal:by-design operator-knowledge: resolve the selected item from this store's workspace and change
+	}
+	plan := &request.itemPlan.Plan
+	if replay.itemPlan != nil {
+		if plan.Digest != replay.itemPlan.Digest {
+			return BeginAttemptRequest{}, nil, "", "", errors.New("item plan candidate differs from retained runtime plan") // refusal:by-design human-authority: a mutable artifact cannot replace the retained immutable plan
+		}
+		plan = replay.itemPlan
+	}
+	entry, ok := itemPlanEntryForID(*plan, request.itemPlan.ItemID)
+	if !ok {
+		return BeginAttemptRequest{}, nil, "", "", errors.New("selected item is absent from retained runtime plan") // refusal:by-design operator-knowledge: select an item declared by the retained plan
+	}
+	roots, ok := canonicalWorkItemRoots(entry.EditRoots, store.Workspace)
+	if !ok || request.itemPlan.EntryDigest != itemPlanEntryDigest(entry) || request.ItemID != request.itemPlan.ItemID || request.WorkUnit != entry.WorkUnit || request.EvidenceGoal != entry.EvidenceGoal ||
+		request.MaxAttempts != entry.MaxAttempts || request.MaxChangedLines != entry.MaxChangedLines ||
+		!runtimeItemBindingEqual(entry.ID, roots, request.ItemID, request.ItemEditRoots) {
+		return BeginAttemptRequest{}, nil, "", "", errors.New("selected item binding differs from runtime plan") // refusal:by-design operator-knowledge: resolve the selected item from current canonical metadata
+	}
+	bound := request
+	bound.WorkUnit, bound.EvidenceGoal = entry.WorkUnit, entry.EvidenceGoal
+	bound.MaxAttempts, bound.MaxChangedLines = entry.MaxAttempts, entry.MaxChangedLines
+	bound.ItemID, bound.ItemEditRoots = entry.ID, roots
+	if replay.itemPlan == nil {
+		return bound, cloneItemPlan(plan), plan.Digest, itemPlanEntryDigest(entry), nil
+	}
+	return bound, nil, plan.Digest, itemPlanEntryDigest(entry), nil
+}
+
+func (store RuntimeStore) planAuthoritySealed() bool {
+	return store.authorityDir != "" && store.authorityRepo != "" && store.authorityWorkspace != "" && store.authorityChange != "" &&
+		store.Dir == store.authorityDir && store.Repo == store.authorityRepo && store.Workspace == store.authorityWorkspace && store.Change == store.authorityChange
+}
+
+func runtimeReplayItemPlan(record runtimeRecord, retained *itemPlanCandidate) (*itemPlanCandidate, error) {
+	event := record.Begin
+	if event.ItemPlan == nil && event.ItemPlanDigest == "" && event.ItemPlanEntryDigest == "" {
+		if retained != nil && event.ItemID != "" {
+			return nil, errors.New("item-bound begin omits the retained item plan") // refusal:by-design world-action: a persisted item-bound begin cannot bypass retained immutable authority
+		}
+		return nil, nil
+	}
+	if event.ItemPlanDigest == "" || event.ItemPlanEntryDigest == "" || event.ItemID == "" || event.BeginWorktree == "" {
+		return nil, errors.New("item plan fields are incomplete") // refusal:by-design world-action: a persisted plan record with incomplete fields requires authority restoration
+	}
+	plan := retained
+	if event.ItemPlan != nil {
+		if retained != nil || validateItemPlan(*event.ItemPlan) != nil || event.ItemPlan.Digest != event.ItemPlanDigest {
+			return nil, errors.New("invalid retained item plan") // refusal:by-design world-action: a persisted retained plan must be restored from valid authority
+		}
+		plan = event.ItemPlan
+	} else if plan == nil || plan.Digest != event.ItemPlanDigest {
+		return nil, errors.New("item plan digest does not match replay state") // refusal:by-design world-action: a persisted plan digest mismatch requires authority restoration
+	}
+	entry, ok := itemPlanEntryForID(*plan, event.ItemID)
+	if !ok || itemPlanEntryDigest(entry) != event.ItemPlanEntryDigest {
+		return nil, errors.New("item plan selected entry does not match replay state") // refusal:by-design world-action: a persisted selected entry mismatch requires authority restoration
+	}
+	roots, ok := canonicalWorkItemRoots(entry.EditRoots, event.BeginWorktree)
+	if !ok || event.WorkUnit != entry.WorkUnit || event.EvidenceGoal != entry.EvidenceGoal ||
+		event.MaxAttempts != entry.MaxAttempts || event.MaxChangedLines != entry.MaxChangedLines ||
+		!runtimeItemBindingEqual(entry.ID, roots, event.ItemID, event.ItemEditRoots) {
+		return nil, errors.New("item plan selected binding does not match replay state") // refusal:by-design world-action: a persisted selected binding mismatch requires authority restoration
+	}
+	request := BeginAttemptRequest{ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
+		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines, ItemID: event.ItemID,
+		ItemEditRoots: event.ItemEditRoots, itemPlan: &itemPlanBinding{Plan: *cloneItemPlan(plan), ItemID: event.ItemID, EntryDigest: event.ItemPlanEntryDigest,
+			Workspace: event.BeginWorktree, Change: record.Change}}
+	if runtimeBeginRequestDigest(request) != record.RequestDigest {
+		return nil, errors.New("item plan begin request digest does not match record") // refusal:by-design world-action: a persisted begin request digest mismatch requires authority restoration
+	}
+	return cloneItemPlan(plan), nil
+}
+
 func runtimeItemBindingEqual(leftID string, leftRoots []string, rightID string, rightRoots []string) bool {
 	if leftID != rightID || len(leftRoots) != len(rightRoots) {
 		return false
@@ -2918,6 +3109,27 @@ func runtimeItemBindingEqual(leftID string, leftRoots []string, rightID string, 
 }
 
 func runtimeBeginRequestDigest(request BeginAttemptRequest) string {
+	if request.itemPlan != nil {
+		return runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v3", struct {
+			ExpectedRevision string
+			RequestID        string
+			WorkUnit         string
+			EvidenceGoal     string
+			MaxAttempts      int
+			MaxChangedLines  int
+			ItemID           string
+			ItemEditRoots    []string
+			Plan             itemPlanCandidate
+			SelectedItemID   string
+			EntryDigest      string
+			Workspace        string
+			Change           string
+		}{ExpectedRevision: request.ExpectedRevision, RequestID: request.RequestID, WorkUnit: request.WorkUnit,
+			EvidenceGoal: request.EvidenceGoal, MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
+			ItemID: request.ItemID, ItemEditRoots: request.ItemEditRoots, Plan: request.itemPlan.Plan,
+			SelectedItemID: request.itemPlan.ItemID, EntryDigest: request.itemPlan.EntryDigest,
+			Workspace: request.itemPlan.Workspace, Change: request.itemPlan.Change})
+	}
 	if request.ItemID == "" {
 		return runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request)
 	}

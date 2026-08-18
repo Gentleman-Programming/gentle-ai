@@ -54,6 +54,37 @@ type workItemMetadata struct {
 	EvidenceGoal    string    `json:"evidenceGoal"`
 }
 
+// itemPlanCandidate is the portable immutable item metadata proposed by an
+// artifact resolver. RuntimeStore, not this candidate, decides whether to
+// retain or authorize it.
+type itemPlanCandidate struct {
+	Version string          `json:"version"`
+	Digest  string          `json:"digest"`
+	Items   []itemPlanEntry `json:"items"`
+}
+
+type itemPlanEntry struct {
+	ID              string   `json:"id"`
+	DependsOn       []string `json:"depends_on"`
+	WorkUnit        string   `json:"work_unit"`
+	EvidenceGoal    string   `json:"evidence_goal"`
+	MaxAttempts     int      `json:"max_attempts"`
+	MaxChangedLines int      `json:"max_changed_lines"`
+	EditRoots       []string `json:"edit_roots"`
+}
+
+// itemPlanBinding is deliberately private: only ResolveItemAcquire can attach
+// plan provenance to an otherwise caller-editable BeginAttemptRequest.
+type itemPlanBinding struct {
+	Plan        itemPlanCandidate
+	ItemID      string
+	EntryDigest string
+	Workspace   string
+	Change      string
+}
+
+const itemPlanVersion = "gentle-ai.sdd-item-plan/v1"
+
 func applyWorkItemProjection(status *Status, tasks string) {
 	items, present, err := projectWorkItems(tasks, *status)
 	if !present {
@@ -266,11 +297,42 @@ func ResolveItemAcquire(options ResolveOptions, itemID, requestID string) (Begin
 			// refusal:by-design operator-knowledge: the coordinator must update prerequisites or the checkbox before this item can open.
 			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: item %q is not ready", itemID)
 		}
+		plan, err := newItemPlanCandidate(status.Items)
+		if err != nil {
+			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: invalid item plan candidate: %w", err)
+		}
+		entry, _ := itemPlanEntryForID(plan, item.ID)
+		workspace, ok := prospectiveWorkItemPath(status.ActionContext.WorkspaceRoot)
+		if !ok || status.ChangeName == nil {
+			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: unresolved item plan origin") // refusal:by-design operator-knowledge: resolve the selected item from a workspace with one resolved change
+		}
 		return BeginAttemptRequest{RequestID: requestID, WorkUnit: item.WorkUnit, EvidenceGoal: item.EvidenceGoal,
-			MaxAttempts: item.MaxAttempts, MaxChangedLines: item.MaxChangedLines, ItemID: item.ID, ItemEditRoots: roots}, nil
+			MaxAttempts: item.MaxAttempts, MaxChangedLines: item.MaxChangedLines, ItemID: item.ID, ItemEditRoots: roots,
+			itemPlan: &itemPlanBinding{Plan: plan, ItemID: item.ID, EntryDigest: itemPlanEntryDigest(entry), Workspace: workspace, Change: *status.ChangeName}}, nil
 	}
 	// refusal:by-design operator-knowledge: the caller selected an ID absent from authoritative metadata.
 	return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: projected item %q was not found", itemID)
+}
+
+func newItemPlanCandidate(items []WorkItem) (itemPlanCandidate, error) {
+	plan := itemPlanCandidate{Version: itemPlanVersion, Items: make([]itemPlanEntry, 0, len(items))}
+	for _, item := range items {
+		dependsOn := append([]string(nil), item.DependsOn...)
+		roots := append([]string(nil), item.EditRoots...)
+		sort.Strings(dependsOn)
+		for index := range roots {
+			roots[index] = filepath.ToSlash(filepath.Clean(roots[index]))
+		}
+		sort.Strings(roots)
+		plan.Items = append(plan.Items, itemPlanEntry{ID: item.ID, DependsOn: dependsOn, WorkUnit: item.WorkUnit,
+			EvidenceGoal: item.EvidenceGoal, MaxAttempts: item.MaxAttempts, MaxChangedLines: item.MaxChangedLines, EditRoots: roots})
+	}
+	sort.Slice(plan.Items, func(left, right int) bool { return plan.Items[left].ID < plan.Items[right].ID })
+	if err := validateItemPlan(plan); err != nil {
+		return itemPlanCandidate{}, err
+	}
+	plan.Digest = itemPlanDigest(plan)
+	return plan, nil
 }
 
 func itemSelectedActiveBindingMatches(item WorkItem, roots []string, runtime *RuntimeStatus) bool {

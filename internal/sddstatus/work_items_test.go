@@ -133,7 +133,9 @@ func TestResolveItemAcquireUsesEquivalentOpenSpecAndEngramMetadata(t *testing.T)
 		t.Fatal(err)
 	}
 	if openSpec.WorkUnit != engram.WorkUnit || openSpec.EvidenceGoal != engram.EvidenceGoal || openSpec.MaxAttempts != engram.MaxAttempts || openSpec.MaxChangedLines != engram.MaxChangedLines ||
-		openSpec.ItemID != engram.ItemID || !reflect.DeepEqual(openSpec.ItemEditRoots, engram.ItemEditRoots) {
+		openSpec.ItemID != engram.ItemID || !reflect.DeepEqual(openSpec.ItemEditRoots, engram.ItemEditRoots) ||
+		openSpec.itemPlan == nil || engram.itemPlan == nil || !reflect.DeepEqual(openSpec.itemPlan, engram.itemPlan) ||
+		openSpec.itemPlan.Plan.Items[0].EditRoots[0] != "src" {
 		t.Fatalf("OpenSpec=%#v Engram=%#v", openSpec, engram)
 	}
 }

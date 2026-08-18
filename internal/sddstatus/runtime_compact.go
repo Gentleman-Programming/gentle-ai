@@ -459,7 +459,9 @@ func compactAcquireMatches(record runtimeRecord, request BeginAttemptRequest) bo
 	return request.ExpectedRevision == expected.ExpectedRevision && request.RequestID == expected.RequestID &&
 		request.WorkUnit == expected.WorkUnit && request.EvidenceGoal == expected.EvidenceGoal &&
 		request.MaxAttempts == expected.MaxAttempts && request.MaxChangedLines == expected.MaxChangedLines &&
-		runtimeItemBindingEqual(request.ItemID, request.ItemEditRoots, expected.ItemID, expected.ItemEditRoots)
+		runtimeItemBindingEqual(request.ItemID, request.ItemEditRoots, expected.ItemID, expected.ItemEditRoots) &&
+		((request.itemPlan == nil && event.ItemPlanDigest == "") ||
+			(request.itemPlan != nil && request.itemPlan.Plan.Digest == event.ItemPlanDigest))
 }
 
 func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, request CompactSettleRequest) (FinishAttemptRequest, bool) {
