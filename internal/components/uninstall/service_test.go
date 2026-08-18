@@ -38,7 +38,7 @@ func TestBuildPlanRemovesOnlyOwnedOpenCodeLaunchers(t *testing.T) {
 		}
 		content := []byte("user launcher")
 		if index == 0 {
-			content = []byte("#!/bin/sh\n# " + opencodeactivation.OwnershipMarker + "\n")
+			content = ownedOpenCodeLauncher(path)
 		}
 		if err := os.WriteFile(path, content, 0o755); err != nil {
 			t.Fatal(err)
@@ -61,6 +61,69 @@ func TestBuildPlanRemovesOnlyOwnedOpenCodeLaunchers(t *testing.T) {
 	}
 	if !slices.Contains(result.RemovedFiles, ownedPath) {
 		t.Fatalf("removed files = %v, want %q", result.RemovedFiles, ownedPath)
+	}
+}
+
+func TestUninstallPreservesLauncherWithIncidentalMarker(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)[0]
+	content := []byte("user launcher mentions " + opencodeactivation.OwnershipMarker)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil || os.WriteFile(path, content, 0o755) != nil {
+		t.Fatal("write user launcher")
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.executePlan(plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(content) {
+		t.Fatalf("user launcher after uninstall = %q, %v", got, err)
+	}
+}
+
+func TestUninstallPreservesManagedLauncherSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges not guaranteed on Windows")
+	}
+	homeDir := t.TempDir()
+	path := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)[0]
+	target := filepath.Join(t.TempDir(), "launcher-target")
+	if err := os.WriteFile(target, ownedOpenCodeLauncher(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil || os.Symlink(target, path) != nil {
+		t.Fatal("create launcher symlink")
+	}
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentOpenCode}, allManagedComponents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.executePlan(plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.Readlink(path); err != nil || got != target {
+		t.Fatalf("launcher symlink after uninstall = %q, %v", got, err)
+	}
+}
+
+func ownedOpenCodeLauncher(path string) []byte {
+	switch filepath.Ext(path) {
+	case ".cmd":
+		return []byte("@echo off\r\nrem " + opencodeactivation.OwnershipMarker + "\r\nsetlocal\r\nif not defined OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS set \"OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\"\r\n\"C:\\old\\opencode.exe\" %*\r\nexit /b %ERRORLEVEL%\r\n")
+	case ".ps1":
+		return []byte("# " + opencodeactivation.OwnershipMarker + "\r\n$ErrorActionPreference = 'Stop'\r\nif (-not (Test-Path Env:OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS)) { $env:OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS = 'true' }\r\n& 'C:\\old\\opencode.exe' @args\r\nexit $LASTEXITCODE\r\n")
+	default:
+		return []byte("#!/bin/sh\n# " + opencodeactivation.OwnershipMarker + "\nset -eu\nif [ -z \"${OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS+x}\" ]; then\n  export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\nfi\nexec '/old/opencode' \"$@\"\n")
 	}
 }
 

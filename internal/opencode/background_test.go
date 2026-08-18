@@ -247,6 +247,76 @@ func TestWindowsLauncherContents(t *testing.T) {
 	}
 }
 
+func TestIsManagedLauncherRejectsIncidentalAndMalformedMarkers(t *testing.T) {
+	for _, tt := range []struct {
+		name, path, content string
+		want                bool
+	}{
+		{"posix old target", "opencode", posixLauncher("/old/opencode"), true},
+		{"cmd old target", "opencode.cmd", windowsCMDLauncher(`C:\old\opencode.exe`), true},
+		{"powershell old target", "opencode.ps1", windowsPS1Launcher(`C:\old\opencode.exe`), true},
+		{"incidental marker", "opencode", "#!/bin/sh\n# user mentions " + OwnershipMarker + "\necho user\n", false},
+		{"truncated generated header", "opencode", "#!/bin/sh\n# " + OwnershipMarker + "\nset -eu\n", false},
+		{"wrong launcher path", "custom-opencode", posixLauncher("/old/opencode"), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsManagedLauncher(tt.path, []byte(tt.content)); got != tt.want {
+				t.Fatalf("IsManagedLauncher() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsManagedLauncherRequiresCanonicalGeneratedBytes(t *testing.T) {
+	for _, tt := range []struct {
+		name, path, content string
+	}{
+		{"posix shell characters", "opencode", posixLauncher("/old path/a'b;$HOME")},
+		{"cmd spaces and quotes", "opencode.cmd", windowsCMDLauncher(`C:\old path\a"b.exe`)},
+		{"powershell apostrophe", "opencode.ps1", windowsPS1Launcher(`C:\old path\a'b.exe`)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if !IsManagedLauncher(tt.path, []byte(tt.content)) {
+				t.Fatal("generated historical launcher was rejected")
+			}
+			for _, forged := range []string{
+				"echo injected\n" + tt.content,
+				tt.content + "echo injected\n",
+				strings.Replace(tt.content, "\n", "\necho injected\n", 1),
+				tt.content[:len(tt.content)-1],
+			} {
+				if IsManagedLauncher(tt.path, []byte(forged)) {
+					t.Fatalf("forged launcher accepted: %q", forged)
+				}
+			}
+		})
+	}
+}
+
+func TestManagedLauncherOwnershipRejectsSymlinksAndNonRegularPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges not guaranteed on Windows")
+	}
+	home := t.TempDir()
+	launcher := POSIXLauncherPath(home)
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.WriteFile(target, []byte(posixLauncher("/old/opencode")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil || os.Symlink(target, launcher) != nil {
+		t.Fatal("create managed launcher symlink")
+	}
+	if owned, err := ManagedLauncherOwnership(launcher); err == nil || owned {
+		t.Fatalf("symlink ownership = %t, %v; want rejected", owned, err)
+	}
+	if err := os.Remove(launcher); err != nil || os.Mkdir(launcher, 0o755) != nil {
+		t.Fatal("create launcher directory")
+	}
+	if owned, err := ManagedLauncherOwnership(launcher); err == nil || owned {
+		t.Fatalf("directory ownership = %t, %v; want rejected", owned, err)
+	}
+}
+
 func TestActivationIsIdempotentAndOffRemovesOnlyOwnedFiles(t *testing.T) {
 	home := t.TempDir()
 	target := filepath.Join(t.TempDir(), "opencode")
@@ -260,11 +330,18 @@ func TestActivationIsIdempotentAndOffRemovesOnlyOwnedFiles(t *testing.T) {
 		AddToUserPath: func(string) error { return nil },
 		ResolveTarget: func(string, string, string) (string, error) { return target, nil },
 	}
+	stale, _ := PrepareActivation(home, options)
+	path := POSIXLauncherPath(home)
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	_ = os.WriteFile(path, []byte("user replacement"), 0o600)
+	if stale.Apply() == nil {
+		t.Fatal("stale activation did not preserve user launcher")
+	}
+	_ = os.Remove(path)
 	first, err := Activate(home, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := POSIXLauncherPath(home)
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -280,6 +357,14 @@ func TestActivationIsIdempotentAndOffRemovesOnlyOwnedFiles(t *testing.T) {
 	if string(before) != string(after) || len(first.ChangedPaths()) == 0 || len(second.ChangedPaths()) != 0 {
 		t.Fatalf("activation changed paths first=%v second=%v", first.ChangedPaths(), second.ChangedPaths())
 	}
+	stale, _ = PrepareDeactivation(home, options)
+	_ = os.WriteFile(path, []byte("user replacement"), 0o600)
+	if stale.Apply() == nil {
+		t.Fatal("stale deactivation did not preserve user launcher")
+	}
+	if err := os.WriteFile(path, before, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Deactivate(home, options); err != nil {
 		t.Fatal(err)
 	}
@@ -291,23 +376,32 @@ func TestActivationIsIdempotentAndOffRemovesOnlyOwnedFiles(t *testing.T) {
 	}
 }
 
-func TestActivationRefusesUserOwnedCollision(t *testing.T) {
+func TestActivationRefusesIncidentalLauncherMarkerAndRefreshesEffectiveResolution(t *testing.T) {
 	home := t.TempDir()
-	path := POSIXLauncherPath(home)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	launcher := POSIXLauncherPath(home)
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("user launcher"), 0o755); err != nil {
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\n# "+OwnershipMarker+" belongs to user\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	plan, err := PrepareActivation(home, ActivationOptions{
-		OS:            "linux",
-		RunVersion:    func(string) (string, error) { return "1.18.18", nil },
-		AddToUserPath: func(string) error { return nil },
-		ResolveTarget: func(string, string, string) (string, error) { return "/real/opencode", nil },
-	})
-	if err == nil || plan != nil || !strings.Contains(err.Error(), "user-owned") {
-		t.Fatalf("PrepareActivation() plan=%v error=%v, want collision refusal", plan, err)
+	options := ActivationOptions{OS: "linux", Path: BinDir(home), RunVersion: func(string) (string, error) { return "1.15.11", nil }, ResolveTarget: func(string, string, string) (string, error) { return "/real/opencode", nil }}
+	if plan, err := PrepareActivation(home, options); err == nil || plan != nil {
+		t.Fatalf("PrepareActivation() = %v, %v; want unowned collision refusal", plan, err)
+	}
+	if err := os.Remove(launcher); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", BinDir(home)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	plan, err := PrepareActivation(home, options)
+	if err != nil || plan.Effective() {
+		t.Fatalf("prepared activation = %v, effective=%t; want pending", err, plan.Effective())
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Effective() {
+		t.Fatal("Apply() did not refresh effective managed resolution")
 	}
 }
 
