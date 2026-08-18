@@ -665,8 +665,8 @@ type runtimeReplay struct {
 }
 
 func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, error) {
-	if !validReviewBindingChange(change) {
-		return RuntimeStore{}, fmt.Errorf("invalid SDD change name %q; want letters, digits, and single hyphens or underscores between them, at most 96 characters; run `gentle-ai sdd-status --cwd <repo> --json` to read the resolved changeName", change)
+	if reason := sddChangeIdentityRefusal(change); reason != "" {
+		return RuntimeStore{}, sddChangeIdentityError(change, reason)
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -718,7 +718,35 @@ func runtimeChangeLedgerDir(base, change string) string {
 		return filepath.Join(base, "v1", change)
 	}
 	digest := strings.TrimPrefix(runtimeValueHash("gentle-ai.sdd-runtime-change-identity/v1", change), "sha256:")
-	return filepath.Join(base, "v1", encodedRuntimeChangeNamespace, strings.ToLower(change)+"-"+digest[:encodedRuntimeChangeDigestWidth])
+	return filepath.Join(base, "v1", encodedRuntimeChangeNamespace, encodedRuntimeChangeLabel(change)+"-"+digest[:encodedRuntimeChangeDigestWidth])
+}
+
+// encodedRuntimeChangeLabel keeps the encoded leaf humanly recognizable
+// without ever letting an identity rune decide what the directory is called.
+//
+// The label used to be strings.ToLower(change) verbatim, which was safe only
+// while the accepted identity was alphanumerics joined by hyphens or
+// underscores. Now that a change may carry a dot, a space, or an @ (#2116),
+// a verbatim label would put those bytes in a path: a leading dot hides the
+// ledger, a trailing dot or space is silently stripped by Windows so two
+// identities would share one directory, and a space makes the path a quoting
+// hazard for anything that reads it back. Folding every other rune to '_'
+// costs nothing, because the identity itself is never recovered from the
+// label -- the 128-bit digest suffix is what keeps two identities apart, and
+// the store carries the verbatim Change alongside it.
+//
+// Every identity that the pre-#2116 contract already accepted lowercases into
+// [a-z0-9-_] alone, so this is the identity function for each one of them and
+// no ledger already on disk moves.
+func encodedRuntimeChangeLabel(change string) string {
+	label := []rune(strings.ToLower(change))
+	for index, r := range label {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		label[index] = '_'
+	}
+	return string(label)
 }
 
 func (store RuntimeStore) Status() (RuntimeStatus, error) {

@@ -30,7 +30,11 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	if !validSDDAttemptOperation(operation) {
 		return fmt.Errorf("unknown sdd-attempt operation %q; want one of %s", operation, joinSDDAttemptOperations())
 	}
-	if err := validateSDDAttemptOperationFlags(operation, args[1:]); err != nil {
+	operands, err := normalizeSDDAttemptChangeOperand(operation, args[1:])
+	if err != nil {
+		return err
+	}
+	if err := validateSDDAttemptOperationFlags(operation, operands); err != nil {
 		return err
 	}
 
@@ -60,11 +64,11 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	var roots sddAttemptRootList
 	registerSDDAttemptRootFlag(flags, operation, &roots)
 	changeInstance := registerSDDAttemptStringFlag(flags, operation, "change-instance")
-	if err := flags.Parse(args[1:]); err != nil {
+	if err := flags.Parse(operands); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected sdd-attempt argument %q", flags.Arg(0))
+		return fmt.Errorf("unexpected sdd-attempt argument %q; sdd-attempt takes the change identity as `gentle-ai sdd-attempt %s <change>` immediately after the operation, or as `--change <change>` anywhere", flags.Arg(0), operation)
 	}
 	// Identity/revision-shaped values are trimmed at this CLI boundary so
 	// incidental leading/trailing whitespace from a shell or PowerShell
@@ -78,7 +82,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	*evidenceRevision = strings.TrimSpace(*evidenceRevision)
 	*expectedBindingRevision = strings.TrimSpace(*expectedBindingRevision)
 	*remediatesEvidenceRevision = strings.TrimSpace(*remediatesEvidenceRevision)
-	if missing := missingSDDAttemptOperationFlags(args[1:], operation, *outcome); len(missing) != 0 {
+	if missing := missingSDDAttemptOperationFlags(operands, operation, *outcome); len(missing) != 0 {
 		return missingSDDAttemptOperationError(operation, missing)
 	}
 	if strings.TrimSpace(*cwd) == "" {
@@ -116,7 +120,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		// Given the work-unit scope, status answers with the verdict acquire
 		// would reach for that exact request instead of the ledger-only view
 		// that reported next_action: "begin" while acquire blocked (#2114).
-		if presentSDDAttemptFlags(args[1:], "work-unit", "evidence-goal", "max-attempts", "max-changed-lines") != 0 {
+		if presentSDDAttemptFlags(operands, "work-unit", "evidence-goal", "max-attempts", "max-changed-lines") != 0 {
 			result, err = store.AdmissionStatus(ctx, sddstatus.BeginAttemptRequest{
 				RequestID: "sdd-attempt-status-probe", WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
@@ -130,7 +134,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
 		})
 	case "finish":
-		remediationFlags := presentSDDAttemptFlags(args[1:], "expected-binding-revision", "successor-lineage", "remediates-evidence-revision")
+		remediationFlags := presentSDDAttemptFlags(operands, "expected-binding-revision", "successor-lineage", "remediates-evidence-revision")
 		unmanagedRemediation := *expectedBindingRevision == "" && *successorLineage == "" && *remediatesEvidenceRevision != ""
 		if remediationFlags != 0 && remediationFlags != 3 && !unmanagedRemediation {
 			return errors.New("remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together")
@@ -431,7 +435,7 @@ func renderSDDAttemptHelp(operation string, stdout io.Writer) error {
 		return nil
 	}
 	definition, _ := sddAttemptOperationDefinition(operation)
-	_, _ = fmt.Fprintf(stdout, "Usage: gentle-ai sdd-attempt %s [flags]\n\n%s.\n\nFlags:\n", operation, definition.purpose)
+	_, _ = fmt.Fprintf(stdout, "Usage: gentle-ai sdd-attempt %s [flags]\n\n%s.\n\nThe change identity may be given positionally as `gentle-ai sdd-attempt %s <change>` or with --change; sdd-status accepts both spellings too.\n\nFlags:\n", operation, definition.purpose, operation)
 	for _, flagDefinition := range definition.flags {
 		value := "<value>"
 		if flagDefinition.kind == sddAttemptIntFlag {
@@ -462,6 +466,29 @@ func joinSDDAttemptOperations() string {
 		last := len(operations) - 1
 		return strings.Join(operations[:last], ", ") + ", or " + operations[last]
 	}
+}
+
+// normalizeSDDAttemptChangeOperand accepts the change identity in the shape
+// sdd-status has always documented -- `gentle-ai sdd-attempt <operation>
+// <change>` -- by rewriting it into the --change flag every operation contract
+// already defines. #2116: each command rejected the spelling the other
+// required, and the original reporter found the working shape by trial and
+// error.
+//
+// Only the token immediately after the operation is read this way. stdlib flag
+// stops parsing at the first non-flag argument, so a positional anywhere else
+// would silently swallow every flag behind it; those keep reaching the
+// unexpected-argument refusal, which now names both accepted spellings.
+func normalizeSDDAttemptChangeOperand(operation string, operands []string) ([]string, error) {
+	if len(operands) == 0 || strings.HasPrefix(operands[0], "-") {
+		return operands, nil
+	}
+	change := operands[0]
+	rest := operands[1:]
+	if len(missingSDDAttemptFlags(rest, "change")) == 0 {
+		return nil, fmt.Errorf("sdd-attempt %s takes the change identity once: %q was given positionally and --change was given too; rerun `gentle-ai sdd-attempt %s %s --cwd <repo>` with the identity given once", operation, change, operation, change)
+	}
+	return append([]string{"--change=" + change}, rest...), nil
 }
 
 func validateSDDAttemptOperationFlags(operation string, args []string) error {

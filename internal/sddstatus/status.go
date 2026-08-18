@@ -351,6 +351,17 @@ func ParseCommandArgs(args []string) (CommandArgs, error) {
 			}
 			parsed.CWD = args[i+1]
 			i++
+		case "--change":
+			// sdd-attempt has always required --change while sdd-status took
+			// the change positionally, so every caller had to remember which
+			// command wanted which spelling (#2116). Both now accept both.
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return CommandArgs{}, fmt.Errorf("--change requires a value; run `gentle-ai sdd-status --change <change> --cwd <repo>`")
+			}
+			if err := setStatusChangeName(&parsed, args[i+1]); err != nil {
+				return CommandArgs{}, err
+			}
+			i++
 		case "--contract":
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
 				return CommandArgs{}, fmt.Errorf("--contract requires a value")
@@ -368,17 +379,31 @@ func ParseCommandArgs(args []string) (CommandArgs, error) {
 				}
 				continue
 			}
-			if strings.HasPrefix(arg, "-") {
-				return CommandArgs{}, fmt.Errorf("unknown sdd-status argument %q", arg)
+			if strings.HasPrefix(arg, "--change=") {
+				if err := setStatusChangeName(&parsed, strings.TrimPrefix(arg, "--change=")); err != nil {
+					return CommandArgs{}, err
+				}
+				continue
 			}
-			if parsed.ChangeName == "" {
-				parsed.ChangeName = arg
-			} else {
-				return CommandArgs{}, fmt.Errorf("unexpected sdd-status argument %q", arg)
+			if strings.HasPrefix(arg, "-") {
+				return CommandArgs{}, fmt.Errorf("unknown sdd-status argument %q; sdd-status accepts the change as `gentle-ai sdd-status <change>` or as `--change <change>`, plus --cwd, --json, --instructions, and --contract", arg)
+			}
+			if err := setStatusChangeName(&parsed, arg); err != nil {
+				return CommandArgs{}, err
 			}
 		}
 	}
 	return parsed, nil
+}
+
+// setStatusChangeName accepts the change identity from either spelling and
+// refuses only the ambiguity of receiving it twice.
+func setStatusChangeName(parsed *CommandArgs, change string) error {
+	if parsed.ChangeName != "" {
+		return fmt.Errorf("unexpected sdd-status argument %q; the change identity is already set to %q, so run `gentle-ai sdd-status %s --cwd <repo>` with it given once", change, parsed.ChangeName, parsed.ChangeName)
+	}
+	parsed.ChangeName = change
+	return nil
 }
 
 func validateStatusContract(contract string) error {
@@ -491,6 +516,18 @@ func Resolve(options ResolveOptions) (Status, error) {
 		default:
 			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", ambiguousChangeSelectionReasons("Change", workspaceRoot, candidates), options.IncludeInstructions), nil
 		}
+	}
+
+	// One identity contract (#2116). Every surface downstream of here -- the
+	// openspec/changes/<change>/ prefix, the native runtime ledger, the review
+	// binding -- treats the change as one addressable path segment. Refusing
+	// an unusable identity here, before any artifact is written, is what the
+	// reporters asked for: the old behavior resolved the change, let planning
+	// create durable artifacts under it, and only then blocked the mandatory
+	// attempt gate with no rename or migration operation to recover with.
+	if reason := sddChangeIdentityRefusal(changeName); reason != "" {
+		return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, &changeName, nil, "sdd-new",
+			[]string{sddChangeIdentityBlockedReason(changeName, reason)}, options.IncludeInstructions), nil
 	}
 
 	if !contains(activeChanges, changeName) {
@@ -994,6 +1031,15 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		default:
 			return blockedEngramStatus(workspaceRoot, nil, "select-change", ambiguousChangeSelectionReasons("Engram change", workspaceRoot, changes), includeInstructions), true, nil
 		}
+	}
+
+	// Engram change ids come from the sdd/<change>/<type> topic key, whose
+	// only constraint is "no slash". That is looser than any surface that
+	// consumes the identity afterwards, so the same contract applies here
+	// (#2116).
+	if reason := sddChangeIdentityRefusal(changeName); reason != "" {
+		return blockedEngramStatus(workspaceRoot, &changeName, "sdd-new",
+			[]string{sddChangeIdentityBlockedReason(changeName, reason)}, includeInstructions), true, nil
 	}
 
 	artifactsByType := engramArtifactsForChange(observations, project, changeName)

@@ -21,12 +21,6 @@ import (
 
 const reviewBindingSchema = "gentle-ai.sdd-review-binding/v1"
 
-// A change identity is whatever sdd-status already resolves: an OpenSpec
-// directory name or an Engram change ID such as DEC-EXAMPLE-CHANGE. It stays
-// path-safe by construction, since alphanumeric segments joined by single
-// hyphens or underscores can express neither a separator nor a dot segment.
-var reviewBindingChange = regexp.MustCompile(`^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$`)
-
 // legacyRuntimeChange is the shape the runtime ledger stored directly at
 // v1/<change> before identities widened. It must never change.
 var legacyRuntimeChange = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -52,8 +46,8 @@ type ReviewBinding struct {
 }
 
 func BindApprovedReview(ctx context.Context, repo, change, lineage, expected string) (ReviewBinding, error) {
-	if !validReviewBindingChange(change) {
-		return ReviewBinding{}, errors.New("invalid OpenSpec change name")
+	if reason := sddChangeIdentityRefusal(change); reason != "" {
+		return ReviewBinding{}, sddChangeIdentityError(change, reason)
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -556,8 +550,12 @@ func bindingDigest(b ReviewBinding) string {
 	return bindingHash(payload)
 }
 
+// validReviewBindingChange is the review-binding and runtime-record spelling
+// of the one SDD change identity contract. It must never diverge from what
+// sdd-status resolves: a binding or ledger record written for a change whose
+// identity the reader then refuses is an orphaned authority.
 func validReviewBindingChange(change string) bool {
-	return len(change) <= 96 && reviewBindingChange.MatchString(change)
+	return validSDDChangeIdentity(change)
 }
 
 // legacyRuntimeChangeDir reports whether a change identity is one the runtime
