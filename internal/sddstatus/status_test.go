@@ -1208,3 +1208,52 @@ func ptrValue(value *string) string {
 	}
 	return *value
 }
+
+func TestTargetRepositoriesInjection(t *testing.T) {
+	tempDir := t.TempDir()
+	
+	// mock repository-registry.md
+	registryDir := filepath.Join(tempDir, "docs")
+	if err := os.MkdirAll(registryDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	registryPath := filepath.Join(registryDir, "repository-registry.md")
+	registryContent := `
+| Repository (gitlab_path) | repo-slug | Owner | Type | Purpose | Profile |
+|---|---|---|---|---|---|
+| gp-apps-cross/Pagos | gp-apps-cross-pagos | gp-apps-cross | backend (.NET, Clean Architecture) | Payments backend | skills/repo-profiles/payments-api/SKILL.md |
+`
+	if err := os.WriteFile(registryPath, []byte(registryContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// mock tasks.md
+	changeDir := filepath.Join(tempDir, "openspec", "changes", "test-change")
+	if err := os.MkdirAll(changeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	tasksPath := filepath.Join(changeDir, "tasks.md")
+	if err := os.WriteFile(tasksPath, []byte("repository: gp-apps-cross-pagos"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	changeName := "test-change"
+	status, err := Resolve(ResolveOptions{
+		WorkspaceRoot: tempDir,
+		ChangeName:    changeName,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(status.TargetRepositories) != 1 {
+		t.Fatalf("expected 1 target repository, got %d", len(status.TargetRepositories))
+	}
+
+	if status.TargetRepositories[0].Slug != "gp-apps-cross-pagos" {
+		t.Errorf("expected slug gp-apps-cross-pagos, got %s", status.TargetRepositories[0].Slug)
+	}
+	if status.TargetRepositories[0].GitlabPath != "gp-apps-cross/Pagos" {
+		t.Errorf("expected gitlabPath gp-apps-cross/Pagos, got %s", status.TargetRepositories[0].GitlabPath)
+	}
+}

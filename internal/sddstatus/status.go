@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/repository"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -59,7 +60,10 @@ const (
 type Phase string
 
 const (
-	PhasePropose   Phase = "propose"
+	PhasePropose          Phase = "propose"
+	PhaseApproveGate1     Phase = "approve-gate-1"
+	PhaseApproveGate2     Phase = "approve-gate-2"
+	PhaseApproveGate3     Phase = "approve-gate-3"
 	PhaseSpec      Phase = "spec"
 	PhaseDesign    Phase = "design"
 	PhaseTasks     Phase = "tasks"
@@ -70,7 +74,10 @@ const (
 )
 
 type ArtifactPaths struct {
-	Proposal      []string `json:"proposal"`
+	Proposal            []string `json:"proposal"`
+	Gate1Scope          []string `json:"gate1Scope"`
+	Gate2Technical      []string `json:"gate2Technical"`
+	Gate3Implementation []string `json:"gate3Implementation"`
 	Specs         []string `json:"specs"`
 	Design        []string `json:"design"`
 	Tasks         []string `json:"tasks"`
@@ -115,7 +122,10 @@ func (reasons blockerReasons) finalize(nextRecommended string, accumulated []str
 }
 
 type Dependencies struct {
-	Proposal DependencyState `json:"proposal"`
+	Proposal            DependencyState `json:"proposal"`
+	Gate1Scope          DependencyState `json:"gate1Scope"`
+	Gate2Technical      DependencyState `json:"gate2Technical"`
+	Gate3Implementation DependencyState `json:"gate3Implementation"`
 	Specs    DependencyState `json:"specs"`
 	Design   DependencyState `json:"design"`
 	Tasks    DependencyState `json:"tasks"`
@@ -245,6 +255,7 @@ type Status struct {
 	// applyMultiRepoApplyGate.
 	RepoProgress      *RepoProgress      `json:"repoProgress,omitempty"`
 	PhaseInstructions *PhaseInstructions `json:"phaseInstructions,omitempty"`
+	TargetRepositories []repository.Repository `json:"targetRepositories,omitempty"`
 	NextRecommended   string             `json:"nextRecommended"`
 	BlockedReasons    []string           `json:"blockedReasons"`
 	// runtimeAttemptTokens carries the ledger's live attempt tokens alongside
@@ -462,7 +473,10 @@ func Resolve(options ResolveOptions) (Status, error) {
 		return Status{}, err
 	}
 	artifacts := artifactStates{
-		Proposal:      singleArtifactState(artifactPaths.Proposal),
+		Proposal:            singleArtifactState(artifactPaths.Proposal),
+		Gate1Scope:          singleArtifactState(artifactPaths.Gate1Scope),
+		Gate2Technical:      singleArtifactState(artifactPaths.Gate2Technical),
+		Gate3Implementation: singleArtifactState(artifactPaths.Gate3Implementation),
 		Specs:         multiArtifactState(artifactPaths.Specs, filepath.Join(changeRoot, "specs")),
 		Design:        singleArtifactState(artifactPaths.Design),
 		Tasks:         singleArtifactState(artifactPaths.Tasks),
@@ -596,7 +610,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 	)
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
-	repoProgress := buildRepoProgress(declaredRepoSlugs(readText(firstPath(artifactPaths.Tasks))), applyProgressStateBySlug(artifactPaths.ApplyProgress))
+	slugs := declaredRepoSlugs(readText(firstPath(artifactPaths.Tasks)))
+	repoProgress := buildRepoProgress(slugs, applyProgressStateBySlug(artifactPaths.ApplyProgress))
+	targetRepos := resolveTargetRepositories(slugs, workspaceRoot)
 	applyMultiRepoApplyGate(&dependencies, &nextRecommended, &blockedReasons, repoProgress)
 	if staleAllowAuthority != nil || staleEvidenceUnmanaged || (reviewDisabled && runtimeRemediationComplete) {
 		dependencies.Verify = DependencyReady
@@ -676,6 +692,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	status.runtimeAttemptTokens = runtimeAttemptTokens
 	status.ReviewTransaction = reviewState
 	status.RepoProgress = repoProgress
+	status.TargetRepositories = targetRepos
 	if governingRef == nil {
 		if staleReviewAuthority != nil {
 			applyReviewGateEvaluation(&status, *staleReviewAuthority)
@@ -942,7 +959,10 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 
 	artifactPaths := engramArtifactPaths(changeName, artifactsByType)
 	artifacts := artifactStates{
-		Proposal:      engramArtifactState(artifactsByType["proposal"]),
+		Proposal:            engramArtifactState(artifactsByType["proposal"]),
+		Gate1Scope:          engramArtifactState(artifactsByType["gate-1-scope"]),
+		Gate2Technical:      engramArtifactState(artifactsByType["gate-2-technical"]),
+		Gate3Implementation: engramArtifactState(artifactsByType["gate-3-implementation"]),
 		Specs:         engramArtifactState(artifactsByType["spec"]),
 		Design:        engramArtifactState(artifactsByType["design"]),
 		Tasks:         engramArtifactState(artifactsByType["tasks"]),
@@ -1028,7 +1048,9 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
-	repoProgress := buildRepoProgress(declaredRepoSlugs(artifactsByType["tasks"].Content), engramApplyProgressStateBySlug(artifactsByType))
+	slugs := declaredRepoSlugs(artifactsByType["tasks"].Content)
+	repoProgress := buildRepoProgress(slugs, engramApplyProgressStateBySlug(artifactsByType))
+	targetRepos := resolveTargetRepositories(slugs, workspaceRoot)
 	applyMultiRepoApplyGate(&dependencies, &nextRecommended, &blockedReasons, repoProgress)
 	if staleAllowAuthority != nil || staleEvidenceUnmanaged || (reviewDisabled && runtimeRemediationComplete) {
 		dependencies.Verify = DependencyReady
@@ -1083,6 +1105,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	status.runtimeAttemptTokens = runtimeAttemptTokens
 	status.ReviewTransaction = reviewState
 	status.RepoProgress = repoProgress
+	status.TargetRepositories = targetRepos
 	if governingRef == nil {
 		if staleReviewAuthority != nil {
 			applyReviewGateEvaluation(&status, *staleReviewAuthority)
@@ -1649,7 +1672,10 @@ func baseStatus(store ArtifactStore, workspaceRoot string, grantedRoots []string
 		Artifacts:     artifactStates{}.statesFor(store),
 		TaskProgress:  TaskProgress{},
 		Dependencies: Dependencies{
-			Proposal: DependencyBlocked,
+			Proposal:            DependencyBlocked,
+			Gate1Scope:          DependencyBlocked,
+			Gate2Technical:      DependencyBlocked,
+			Gate3Implementation: DependencyBlocked,
 			Specs:    DependencyBlocked,
 			Design:   DependencyBlocked,
 			Tasks:    DependencyBlocked,
@@ -1678,6 +1704,9 @@ func baseStatus(store ArtifactStore, workspaceRoot string, grantedRoots []string
 func resolveArtifactPaths(changeRoot string) (ArtifactPaths, error) {
 	paths := emptyArtifactPaths()
 	paths.Proposal = existingPath(filepath.Join(changeRoot, "proposal.md"))
+	paths.Gate1Scope = existingPath(filepath.Join(changeRoot, "gate-1-scope.md"))
+	paths.Gate2Technical = existingPath(filepath.Join(changeRoot, "gate-2-technical.md"))
+	paths.Gate3Implementation = existingPath(filepath.Join(changeRoot, "gate-3-implementation.md"))
 	paths.Design = existingPath(filepath.Join(changeRoot, "design.md"))
 	paths.Tasks = existingPath(filepath.Join(changeRoot, "tasks.md"))
 	paths.ApplyProgress = existingPath(filepath.Join(changeRoot, "apply-progress.md"))
@@ -1714,7 +1743,10 @@ func resolveArtifactPaths(changeRoot string) (ArtifactPaths, error) {
 
 func emptyArtifactPaths() ArtifactPaths {
 	return ArtifactPaths{
-		Proposal:      []string{},
+		Proposal:            []string{},
+		Gate1Scope:          []string{},
+		Gate2Technical:      []string{},
+		Gate3Implementation: []string{},
 		Specs:         []string{},
 		Design:        []string{},
 		Tasks:         []string{},
@@ -1995,15 +2027,46 @@ func resolveApplyState(coreReady bool, taskProgress TaskProgress) ApplyState {
 
 func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskProgress, applyState ApplyState, coreReady, verifyReportCurrent, verifyReportPassing, remediationComplete bool) Dependencies {
 	dependencies := Dependencies{
-		Proposal: artifactDependency(artifacts["proposal"]),
-		Specs:    artifactDependency(artifacts["specs"]),
-		Design:   artifactDependency(artifacts["design"]),
-		Tasks:    artifactDependency(artifacts["tasks"]),
-		Apply:    DependencyBlocked,
-		Verify:   DependencyBlocked,
-		Archive:  DependencyBlocked,
+		Proposal:            artifactDependency(artifacts["proposal"]),
+		Gate1Scope:          DependencyBlocked,
+		Specs:               DependencyBlocked,
+		Design:              DependencyBlocked,
+		Gate2Technical:      DependencyBlocked,
+		Tasks:               DependencyBlocked,
+		Gate3Implementation: DependencyBlocked,
+		Apply:               DependencyBlocked,
+		Verify:              DependencyBlocked,
+		Archive:             DependencyBlocked,
 	}
-	if applyState == ApplyReady {
+
+	if dependencies.Proposal == DependencyAllDone {
+		if artifacts["gate-1-scope"] == ArtifactDone {
+			dependencies.Gate1Scope = DependencyAllDone
+			dependencies.Specs = artifactDependency(artifacts["specs"])
+			dependencies.Design = artifactDependency(artifacts["design"])
+		} else {
+			dependencies.Gate1Scope = DependencyReady
+		}
+	}
+
+	if dependencies.Specs == DependencyAllDone && dependencies.Design == DependencyAllDone {
+		if artifacts["gate-2-technical"] == ArtifactDone {
+			dependencies.Gate2Technical = DependencyAllDone
+			dependencies.Tasks = artifactDependency(artifacts["tasks"])
+		} else {
+			dependencies.Gate2Technical = DependencyReady
+		}
+	}
+
+	if dependencies.Tasks == DependencyAllDone {
+		if artifacts["gate-3-implementation"] == ArtifactDone {
+			dependencies.Gate3Implementation = DependencyAllDone
+		} else {
+			dependencies.Gate3Implementation = DependencyReady
+		}
+	}
+
+	if applyState == ApplyReady && dependencies.Gate3Implementation == DependencyAllDone {
 		dependencies.Apply = DependencyReady
 	} else if applyState == ApplyAllDone {
 		dependencies.Apply = DependencyAllDone
@@ -2051,14 +2114,23 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, ve
 	if dependencies.Proposal != DependencyAllDone {
 		return string(PhasePropose)
 	}
+	if dependencies.Gate1Scope != DependencyAllDone {
+		return string(PhaseApproveGate1)
+	}
 	if dependencies.Specs != DependencyAllDone {
 		return string(PhaseSpec)
 	}
 	if dependencies.Design != DependencyAllDone {
 		return string(PhaseDesign)
 	}
+	if dependencies.Gate2Technical != DependencyAllDone {
+		return string(PhaseApproveGate2)
+	}
 	if dependencies.Tasks != DependencyAllDone {
 		return string(PhaseTasks)
+	}
+	if dependencies.Gate3Implementation != DependencyAllDone {
+		return string(PhaseApproveGate3)
 	}
 
 	// Genuine anomaly: all planning artifacts are done but apply is still blocked.
@@ -2312,4 +2384,22 @@ func contains(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func resolveTargetRepositories(slugs []string, workspaceRoot string) []repository.Repository {
+	if len(slugs) == 0 {
+		return nil
+	}
+	registryPath := filepath.Join(workspaceRoot, "docs", "repository-registry.md")
+	registry, err := repository.ParseRegistry(registryPath)
+	if err != nil || len(registry) == 0 {
+		return nil
+	}
+	var targets []repository.Repository
+	for _, slug := range slugs {
+		if repo, ok := registry[slug]; ok {
+			targets = append(targets, repo)
+		}
+	}
+	return targets
 }
