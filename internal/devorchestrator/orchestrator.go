@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/context"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/router"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/trace"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/repository"
 )
@@ -110,4 +111,26 @@ func isExecutionAgent(agent string) bool {
 		return true
 	}
 	return false
+}
+
+// GenerateAgentPrompt is a convenience wrapper that generates the context package
+// and directly formats it into a prompt string for the agent.
+func (o *Orchestrator) GenerateAgentPrompt(
+	executionID string,
+	agentName string,
+	primaryArtifact string,
+	repoNames []string,
+	requiredSkills []string,
+	expectedType string,
+	expectedID string,
+	baseInstruction string,
+) (string, error) {
+	pkg, err := o.GenerateContextForAgent(
+		executionID, agentName, primaryArtifact, repoNames, requiredSkills, expectedType, expectedID,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate context package: %w", err)
+	}
+
+	return router.FormatPromptSignature(baseInstruction, pkg)
 }
