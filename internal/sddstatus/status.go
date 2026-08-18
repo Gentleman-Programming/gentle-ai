@@ -60,6 +60,8 @@ const (
 type Phase string
 
 const (
+	PhaseExplore          Phase = "explore"
+	PhaseBlueprint        Phase = "blueprint"
 	PhasePropose          Phase = "propose"
 	PhaseApproveGate1     Phase = "approve-gate-1"
 	PhaseApproveGate2     Phase = "approve-gate-2"
@@ -74,6 +76,8 @@ const (
 )
 
 type ArtifactPaths struct {
+	Explore             []string `json:"explore"`
+	Blueprint           []string `json:"blueprint"`
 	Proposal            []string `json:"proposal"`
 	Gate1Scope          []string `json:"gate1Scope"`
 	Gate2Technical      []string `json:"gate2Technical"`
@@ -114,7 +118,7 @@ func (reasons blockerReasons) forRoute(nextRecommended string) []string {
 
 func (reasons blockerReasons) finalize(nextRecommended string, accumulated []string) []string {
 	switch Phase(nextRecommended) {
-	case PhasePropose, PhaseSpec, PhaseDesign, PhaseTasks:
+	case PhaseExplore, PhaseBlueprint, PhasePropose, PhaseSpec, PhaseDesign, PhaseTasks:
 		return append([]string{}, accumulated...)
 	default:
 		return append(append([]string{}, reasons.expectedPlanning...), accumulated...)
@@ -122,6 +126,8 @@ func (reasons blockerReasons) finalize(nextRecommended string, accumulated []str
 }
 
 type Dependencies struct {
+	Explore             DependencyState `json:"explore"`
+	Blueprint           DependencyState `json:"blueprint"`
 	Proposal            DependencyState `json:"proposal"`
 	Gate1Scope          DependencyState `json:"gate1Scope"`
 	Gate2Technical      DependencyState `json:"gate2Technical"`
@@ -473,6 +479,8 @@ func Resolve(options ResolveOptions) (Status, error) {
 		return Status{}, err
 	}
 	artifacts := artifactStates{
+		Explore:             singleArtifactState(artifactPaths.Explore),
+		Blueprint:           singleArtifactState(artifactPaths.Blueprint),
 		Proposal:            singleArtifactState(artifactPaths.Proposal),
 		Gate1Scope:          singleArtifactState(artifactPaths.Gate1Scope),
 		Gate2Technical:      singleArtifactState(artifactPaths.Gate2Technical),
@@ -608,7 +616,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 		reviewStateReason,
 		readText(firstPath(artifactPaths.ApplyProgress)),
 	)
-	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete, changeOptsIntoGates(readText(firstPath(artifactPaths.Proposal))))
+	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete, changeOptsIntoGates(readText(firstPath(artifactPaths.Proposal))), readText(firstPath(artifactPaths.Explore)), readText(firstPath(artifactPaths.Proposal)))
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
 	slugs := declaredRepoSlugs(readText(firstPath(artifactPaths.Tasks)))
 	repoProgress := buildRepoProgress(slugs, applyProgressStateBySlug(artifactPaths.ApplyProgress))
@@ -959,6 +967,8 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 
 	artifactPaths := engramArtifactPaths(changeName, artifactsByType)
 	artifacts := artifactStates{
+		Explore:             engramArtifactState(artifactsByType["explore"]),
+		Blueprint:           engramArtifactState(artifactsByType["blueprint"]),
 		Proposal:            engramArtifactState(artifactsByType["proposal"]),
 		Gate1Scope:          engramArtifactState(artifactsByType["gate-1-scope"]),
 		Gate2Technical:      engramArtifactState(artifactsByType["gate-2-technical"]),
@@ -1046,7 +1056,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	if remediationState.Reason != "" {
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
 	}
-	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete, changeOptsIntoGates(artifactsByType["proposal"].Content))
+	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete, changeOptsIntoGates(artifactsByType["proposal"].Content), artifactsByType["explore"].Content, artifactsByType["proposal"].Content)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
 	slugs := declaredRepoSlugs(artifactsByType["tasks"].Content)
 	repoProgress := buildRepoProgress(slugs, engramApplyProgressStateBySlug(artifactsByType))
@@ -1703,6 +1713,8 @@ func baseStatus(store ArtifactStore, workspaceRoot string, grantedRoots []string
 
 func resolveArtifactPaths(changeRoot string) (ArtifactPaths, error) {
 	paths := emptyArtifactPaths()
+	paths.Explore = existingPath(filepath.Join(changeRoot, "explore.md"))
+	paths.Blueprint = existingPath(filepath.Join(changeRoot, "blueprint.md"))
 	paths.Proposal = existingPath(filepath.Join(changeRoot, "proposal.md"))
 	paths.Gate1Scope = existingPath(filepath.Join(changeRoot, "gate-1-scope.md"))
 	paths.Gate2Technical = existingPath(filepath.Join(changeRoot, "gate-2-technical.md"))
@@ -2041,9 +2053,25 @@ func changeOptsIntoGates(proposalText string) bool {
 	return gatesEnabledPattern.MatchString(proposalText)
 }
 
-func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskProgress, applyState ApplyState, coreReady, verifyReportCurrent, verifyReportPassing, remediationComplete, gatesRequired bool) Dependencies {
+func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskProgress, applyState ApplyState, coreReady, verifyReportCurrent, verifyReportPassing, remediationComplete, gatesRequired bool, exploreText string, proposalText string) Dependencies {
+	// P1: Discovery Classification
+	isGreenfield := strings.Contains(exploreText, "type: greenfield") || strings.Contains(proposalText, "type: greenfield") || strings.Contains(exploreText, "architecture:") || strings.Contains(proposalText, "architecture:")
+	
+	exploreState := artifactDependency(artifacts["explore"])
+	if artifacts["explore"] == ArtifactDone {
+		exploreDone := strings.Contains(exploreText, "### Recommendation") || strings.Contains(exploreText, "### Approaches")
+		if !exploreDone {
+			exploreState = DependencyBlocked
+		}
+	} else if artifacts["explore"] == ArtifactMissing && !isGreenfield {
+		// For existing projects without an explore artifact, it is skipped.
+		exploreState = DependencyAllDone
+	}
+
 	dependencies := Dependencies{
-		Proposal:            artifactDependency(artifacts["proposal"]),
+		Blueprint:           DependencyBlocked,
+		Explore:             DependencyBlocked,
+		Proposal:            DependencyBlocked,
 		Gate1Scope:          DependencyBlocked,
 		Specs:               DependencyBlocked,
 		Design:              DependencyBlocked,
@@ -2053,6 +2081,23 @@ func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskPr
 		Apply:               DependencyBlocked,
 		Verify:              DependencyBlocked,
 		Archive:             DependencyBlocked,
+	}
+
+	if exploreState == DependencyAllDone {
+		dependencies.Explore = DependencyAllDone
+		if isGreenfield {
+			if artifacts["blueprint"] == ArtifactDone {
+				dependencies.Blueprint = DependencyAllDone
+				dependencies.Proposal = artifactDependency(artifacts["proposal"])
+			} else {
+				dependencies.Blueprint = DependencyReady
+			}
+		} else {
+			dependencies.Blueprint = DependencyAllDone
+			dependencies.Proposal = artifactDependency(artifacts["proposal"])
+		}
+	} else {
+		dependencies.Explore = DependencyReady
 	}
 
 	// Human Gates are opt-in (declared via a "Gates: required" line in the
@@ -2143,6 +2188,12 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, ve
 	// Route toward the next missing planning artifact in dependency order.
 	// Missing planning artifacts are the expected output of planning phases,
 	// not genuine blockers. Reserve resolve-blockers for genuine anomalies.
+	if dependencies.Explore != DependencyAllDone {
+		return "sdd-explore"
+	}
+	if dependencies.Blueprint != DependencyAllDone {
+		return "solution-architect"
+	}
 	if dependencies.Proposal != DependencyAllDone {
 		return string(PhasePropose)
 	}

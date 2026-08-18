@@ -62,10 +62,22 @@ func (r *Router) RouteIntent(intentText string, sourceID string) (IntentResult, 
 
 	artifactPath := filepath.Join(changesDir, artifactName)
 
+	// 2.5 Greenfield detection
+	intentLower := strings.ToLower(intentText)
+	isGreenfield := strings.Contains(intentLower, "greenfield") || strings.Contains(intentLower, "new project") || strings.Contains(intentLower, "nuevo proyecto")
+	
+	frontmatterType := ""
+	if isGreenfield {
+		frontmatterType = "type: greenfield\n"
+		// If it's greenfield, we MUST start at Explore (or Blueprint, but SDD starts at explore to trigger solution-architect)
+		artifactName = "explore.md"
+		phase = "DISCOVERY"
+	}
+
 	// Create YAML frontmatter
 	// "originates-from" matches trace.Node's yaml tag exactly (internal/devorchestrator/trace/resolver.go),
 	// so a freshly routed intent's provenance survives into GenerateContextForAgent's Trace Resolver step.
-	frontmatter := fmt.Sprintf("---\nid: %s\noriginates-from: [%s]\n---\n", changeID, sourceID)
+	frontmatter := fmt.Sprintf("---\nid: %s\n%soriginates-from: [%s]\n---\n", changeID, frontmatterType, sourceID)
 	content := frontmatter + "# Intake Request\n\n" + intentText + "\n"
 
 	err = os.WriteFile(artifactPath, []byte(content), 0644)
