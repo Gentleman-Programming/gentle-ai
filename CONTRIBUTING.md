@@ -17,6 +17,7 @@ Before you dive in, please read this guide fully. We have a structured workflow 
 - [Commit Convention](#commit-convention)
 - [Delivery Strategy for SDD Changes](#delivery-strategy-for-sdd-changes)
 - [Pull Request Rules](#pull-request-rules)
+- [Hermes — Knowledge-Layer Agent](#hermes--knowledge-layer-agent)
 - [Code of Conduct](#code-of-conduct)
 
 ---
@@ -400,7 +401,7 @@ Resolves #42
 
 ## Hermes — Knowledge-Layer Agent
 
-Hermes is a detect-only agent in the Gentle AI ecosystem. Unlike coding agents (Claude Code, OpenCode, Cursor), Hermes does not have skills directories, system prompt injection targets, or subagent support. It operates purely as a configuration layer.
+Hermes is a detect-only agent in the Gentle AI ecosystem. Unlike coding agents (Claude Code, OpenCode, Cursor), Hermes has no subagent support. It operates as a configuration layer with skills-directory loading and a markdown system prompt.
 
 **Capabilities:**
 
