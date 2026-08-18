@@ -136,7 +136,10 @@ func checkManagedOpenCodeActivation(homeDir string) CheckResult {
 	if err == nil && ownershipErr == nil && filepath.Clean(resolved) == filepath.Clean(expected) && owned {
 		return CheckResult{Status: CheckStatusPass, Detail: "managed OpenCode launcher resolves at " + resolved}
 	}
-	return CheckResult{Status: CheckStatusFail, Detail: "OpenCode background policy is on, but bare opencode does not resolve to managed launcher " + expected + "; start a new supported login shell, then rerun doctor"}
+	return CheckResult{
+		Status: CheckStatusFail,
+		Detail: "OpenCode background policy is on, but bare opencode does not resolve to managed launcher " + expected + "; start a new supported login shell, then rerun doctor",
+	}
 }
 
 // readDoctorInstalledAgents returns the agent IDs persisted in state.json.

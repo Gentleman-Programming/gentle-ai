@@ -18,9 +18,11 @@ Release archives are currently produced for macOS and Linux only. Windows source
 
 ## OpenCode Managed Launcher
 
-When OpenCode background subagents are enabled through `gentle-ai install` or `gentle-ai sync`, Gentle AI writes only its own launcher files under `~/.gentle-ai/bin/`. POSIX systems use `~/.gentle-ai/bin/opencode`; Windows uses `opencode.cmd` and `opencode.ps1`. The launcher sets `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` only when the variable is not already defined, so an explicit `false` always selects foreground execution.
+When OpenCode background subagents are enabled through `gentle-ai install` or `gentle-ai sync`, Gentle AI writes only its own launcher files under `~/.gentle-ai/bin/`. POSIX systems use `~/.gentle-ai/bin/opencode`; Windows uses `opencode.cmd` and `opencode.ps1`. On POSIX, Gentle AI also owns a marked PATH block in `.zprofile` for zsh login shells or an existing `.bash_profile` for bash login shells. The launcher sets `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` only when the variable is not already defined, so an explicit `false` always selects foreground execution.
 
-Deactivation removes managed launcher files but may leave `~/.gentle-ai/bin/` in `PATH`; Gentle AI does not clean up shell profiles.
+Deactivation removes managed launcher files and only Gentle AI's marked shell-profile block. Unsupported shells remain pending rather than being reported ready; use a supported login shell and rerun sync.
+
+On Windows, managed CMD activation refuses an OpenCode executable path containing `%`, because CMD expands it as an environment variable. Install or invoke OpenCode from a path without `%`, then rerun sync.
 
 Restart OpenCode after enabling managed activation. Restart the shell if the launcher directory has not entered PATH. OpenCode `serve`, `attach`, Desktop, or any session started outside the managed launcher uses foreground fallback rather than receiving an unsafe partial activation.
 

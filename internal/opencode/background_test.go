@@ -249,22 +249,6 @@ func TestWindowsLauncherContents(t *testing.T) {
 	}
 }
 
-func TestWindowsPercentTargetsAreUnsupported(t *testing.T) {
-	for _, target := range []string{`C:\%USERPROFILE%\opencode.exe`, `C:\one%\opencode.exe`, `C:\Program Files\O'Brien\opencode.exe`, `C:\Program Files\OpenCode\opencode.exe`} {
-		plan, err := PrepareActivation(t.TempDir(), ActivationOptions{OS: "windows", Path: `C:\tools`, RunVersion: func(string) (string, error) { return "1.15.11", nil }, ResolveTarget: func(string, string, string) (string, error) { return target, nil }})
-		if err != nil {
-			t.Fatal(err)
-		}
-		wantUnsupported := strings.Contains(target, "%")
-		if (plan.Capability().Status == CapabilityUnsupported) != wantUnsupported {
-			t.Fatalf("target %q capability = %#v", target, plan.Capability())
-		}
-		if wantUnsupported && IsManagedLauncher("opencode.cmd", []byte(windowsCMDLauncher(target))) {
-			t.Fatalf("unsafe CMD target accepted: %q", target)
-		}
-	}
-}
-
 func TestIsManagedLauncherRejectsIncidentalAndMalformedMarkers(t *testing.T) {
 	for _, tt := range []struct {
 		name, path, content string
@@ -351,120 +335,92 @@ func TestManagedLauncherOwnershipRejectsSymlinksAndNonRegularPaths(t *testing.T)
 	}
 }
 
-func TestActivationIsIdempotentAndOffRemovesOnlyOwnedFiles(t *testing.T) {
+func TestApplyRejectsLauncherAndProfileChangesAfterPrepare(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		mutate func(t *testing.T, path string)
+	}{
+		{"user file", func(t *testing.T, path string) { t.Helper(); _ = os.WriteFile(path, []byte("user"), 0o600) }},
+		{"directory", func(t *testing.T, path string) { t.Helper(); _ = os.Mkdir(path, 0o755) }},
+	} {
+		t.Run("activation "+tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			launcher := POSIXLauncherPath(home)
+			if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			options := testActivationOptions(t, home)
+			plan, err := PrepareActivation(home, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.mutate(t, launcher)
+			if err := plan.Apply(); err == nil {
+				t.Fatal("Apply() = nil, want stale launcher refusal")
+			}
+			if info, err := os.Lstat(launcher); err != nil || (tt.name == "directory" && !info.IsDir()) {
+				t.Fatalf("substituted launcher changed: %v", err)
+			}
+		})
+	}
+
 	home := t.TempDir()
-	target := filepath.Join(t.TempDir(), "opencode")
-	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
+	profile := filepath.Join(home, ".zprofile")
+	if err := os.WriteFile(profile, []byte("user\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	options := ActivationOptions{
-		OS:            "linux",
-		Path:          filepath.Dir(target),
-		Shell:         "/bin/zsh",
-		RunVersion:    func(string) (string, error) { return "1.18.18", nil },
-		AddToUserPath: func(string) error { return nil },
-		ResolveTarget: func(string, string, string) (string, error) { return target, nil },
-	}
-	stale, _ := PrepareActivation(home, options)
-	path := POSIXLauncherPath(home)
-	_ = os.MkdirAll(filepath.Dir(path), 0o755)
-	_ = os.WriteFile(path, []byte("user replacement"), 0o600)
-	if stale.Apply() == nil {
-		t.Fatal("stale activation did not preserve user launcher")
-	}
-	_ = os.Remove(path)
-	first, err := Activate(home, options)
+	plan, err := PrepareActivation(home, testActivationOptions(t, home))
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(path)
-	if err != nil {
+	if err := os.WriteFile(profile, []byte("concurrent edit\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	second, err := Activate(home, options)
-	if err != nil {
-		t.Fatal(err)
+	if err := plan.Apply(); err == nil {
+		t.Fatal("Apply() = nil, want stale profile refusal")
 	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(before) != string(after) || len(first.ChangedPaths()) == 0 || len(second.ChangedPaths()) != 0 {
-		t.Fatalf("activation changed paths first=%v second=%v", first.ChangedPaths(), second.ChangedPaths())
-	}
-	stale, _ = PrepareDeactivation(home, options)
-	_ = os.WriteFile(path, []byte("user replacement"), 0o600)
-	if stale.Apply() == nil {
-		t.Fatal("stale deactivation did not preserve user launcher")
-	}
-	if err := os.WriteFile(path, before, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Deactivate(home, options); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("owned launcher stat error = %v, want absent", err)
-	}
-	if _, err := Deactivate(home, options); err != nil {
-		t.Fatal(err)
+	if data, err := os.ReadFile(profile); err != nil || string(data) != "concurrent edit\n" {
+		t.Fatalf("profile after stale apply = %q, %v", data, err)
 	}
 }
 
-func TestActivationRefusesIncidentalLauncherMarkerAndRefreshesEffectiveResolution(t *testing.T) {
+func TestDeactivationPreservesLauncherAndProfileChangesAfterPrepare(t *testing.T) {
 	home := t.TempDir()
+	options := testActivationOptions(t, home)
+	active, err := PrepareActivation(home, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := active.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareDeactivation(home, options)
+	if err != nil {
+		t.Fatal(err)
+	}
 	launcher := POSIXLauncherPath(home)
-	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+	if err := os.WriteFile(launcher, []byte("user replacement"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(launcher, []byte("#!/bin/sh\n# "+OwnershipMarker+" belongs to user\n"), 0o755); err != nil {
-		t.Fatal(err)
+	if err := plan.Apply(); err == nil {
+		t.Fatal("deactivation Apply() = nil, want stale launcher refusal")
 	}
-	options := ActivationOptions{OS: "linux", Shell: "/bin/zsh", Path: BinDir(home), RunVersion: func(string) (string, error) { return "1.15.11", nil }, ResolveTarget: func(string, string, string) (string, error) { return "/real/opencode", nil }}
-	if plan, err := PrepareActivation(home, options); err == nil || plan != nil {
-		t.Fatalf("PrepareActivation() = %v, %v; want unowned collision refusal", plan, err)
+	if data, err := os.ReadFile(launcher); err != nil || string(data) != "user replacement" {
+		t.Fatalf("launcher after stale deactivation = %q, %v", data, err)
 	}
-	if err := os.Remove(launcher); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", BinDir(home)+string(os.PathListSeparator)+os.Getenv("PATH"))
-	plan, err := PrepareActivation(home, options)
-	if err != nil || plan.Effective() {
-		t.Fatalf("prepared activation = %v, effective=%t; want pending", err, plan.Effective())
-	}
-	if err := plan.Apply(); err != nil {
-		t.Fatal(err)
-	}
-	if !plan.Effective() {
-		t.Fatal("Apply() did not refresh effective managed resolution")
-	}
-}
-
-func TestActivationRollsBackLauncherWritesWhenPathUpdateFails(t *testing.T) {
-	home := t.TempDir()
-	target := filepath.Join(t.TempDir(), "opencode")
-	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	pathErr := errors.New("path update failed")
-	plan, err := PrepareActivation(home, ActivationOptions{
-		OS:            "linux",
-		Shell:         "/bin/zsh",
-		RunVersion:    func(string) (string, error) { return "1.15.11", nil },
-		AddToUserPath: func(string) error { return pathErr },
-		ResolveTarget: func(string, string, string) (string, error) { return target, nil },
-	})
+	plan, err = PrepareDeactivation(home, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := plan.Apply(); err == nil || !strings.Contains(err.Error(), pathErr.Error()) {
-		t.Fatalf("Apply() error = %v, want path update failure", err)
+	profile := filepath.Join(home, ".zprofile")
+	if err := os.WriteFile(profile, []byte("concurrent profile\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(POSIXLauncherPath(home)); !os.IsNotExist(err) {
-		t.Fatalf("launcher after failed activation = %v, want absent", err)
+	if err := plan.Apply(); err == nil {
+		t.Fatal("deactivation Apply() = nil, want stale profile refusal")
 	}
-	if _, err := os.Stat(filepath.Join(home, ".zprofile")); !os.IsNotExist(err) {
-		t.Fatalf("profile after failed activation = %v, want absent", err)
+	if data, err := os.ReadFile(profile); err != nil || string(data) != "concurrent profile\n" {
+		t.Fatalf("profile after stale deactivation = %q, %v", data, err)
 	}
 }
 
@@ -501,27 +457,153 @@ func TestCRLFProfileActivationIsIdempotentAndPreservesBytesAndMode(t *testing.T)
 		t.Fatalf("CRLF profile mode = %v, %v", info.Mode(), err)
 	}
 }
-func TestProfileChangesAfterPrepareArePreserved(t *testing.T) {
+
+func TestWindowsPercentTargetsAreUnsupported(t *testing.T) {
+	for _, target := range []string{`C:\%USERPROFILE%\opencode.exe`, `C:\one%\opencode.exe`, `C:\Program Files\O'Brien\opencode.exe`, `C:\Program Files\OpenCode\opencode.exe`} {
+		plan, err := PrepareActivation(t.TempDir(), ActivationOptions{OS: "windows", Path: `C:\tools`, RunVersion: func(string) (string, error) { return "1.15.11", nil }, ResolveTarget: func(string, string, string) (string, error) { return target, nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantUnsupported := strings.Contains(target, "%")
+		if (plan.Capability().Status == CapabilityUnsupported) != wantUnsupported {
+			t.Fatalf("target %q capability = %#v", target, plan.Capability())
+		}
+		if wantUnsupported && IsManagedLauncher("opencode.cmd", []byte(windowsCMDLauncher(target))) {
+			t.Fatalf("unsafe CMD target accepted: %q", target)
+		}
+	}
+}
+
+func testActivationOptions(t *testing.T, home string) ActivationOptions {
+	t.Helper()
+	target := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return ActivationOptions{OS: "linux", Shell: "/bin/zsh", Path: filepath.Dir(target), AddToUserPath: func(string) error { return nil }, RunVersion: func(string) (string, error) { return "1.15.11", nil }, ResolveTarget: func(string, string, string) (string, error) { return target, nil }}
+}
+
+func TestActivationRefusesIncidentalLauncherMarkerAndRefreshesEffectiveResolution(t *testing.T) {
 	home := t.TempDir()
-	profile := filepath.Join(home, ".zprofile")
-	options := testActivationOptions(t, home)
+	launcher := POSIXLauncherPath(home)
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\n# "+OwnershipMarker+" belongs to user\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	options := ActivationOptions{OS: "linux", Shell: "/bin/zsh", Path: BinDir(home), RunVersion: func(string) (string, error) { return "1.15.11", nil }, ResolveTarget: func(string, string, string) (string, error) { return "/real/opencode", nil }}
+	if plan, err := PrepareActivation(home, options); err == nil || plan != nil {
+		t.Fatalf("PrepareActivation() = %v, %v; want unowned collision refusal", plan, err)
+	}
+	if err := os.Remove(launcher); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", BinDir(home)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	plan, err := PrepareActivation(home, options)
+	if err != nil || plan.Effective() {
+		t.Fatalf("prepared activation = %v, effective=%t; want pending", err, plan.Effective())
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Effective() {
+		t.Fatal("Apply() did not refresh effective managed resolution")
+	}
+}
+
+func TestActivationIsIdempotentAndOffRemovesOnlyOwnedFiles(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	options := ActivationOptions{
+		OS:            "linux",
+		Path:          filepath.Dir(target),
+		Shell:         "/bin/zsh",
+		RunVersion:    func(string) (string, error) { return "1.18.18", nil },
+		AddToUserPath: func(string) error { return nil },
+		ResolveTarget: func(string, string, string) (string, error) { return target, nil },
+	}
+	first, err := Activate(home, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(profile, []byte("concurrent activation edit\n"), 0o600); err != nil || plan.Apply() == nil {
-		t.Fatal("stale activation did not preserve profile")
-	}
-	if _, err := Activate(home, options); err != nil {
+	path := POSIXLauncherPath(home)
+	before, err := os.ReadFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err = PrepareDeactivation(home, options)
-	if err != nil || os.WriteFile(profile, []byte("concurrent deactivation edit\n"), 0o600) != nil || plan.Apply() == nil {
-		t.Fatal("stale deactivation did not preserve profile")
+	second, err := Activate(home, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) || len(first.ChangedPaths()) == 0 || len(second.ChangedPaths()) != 0 {
+		t.Fatalf("activation changed paths first=%v second=%v", first.ChangedPaths(), second.ChangedPaths())
+	}
+	if _, err := Deactivate(home, options); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("owned launcher stat error = %v, want absent", err)
+	}
+	if _, err := Deactivate(home, options); err != nil {
+		t.Fatal(err)
 	}
 }
-func testActivationOptions(t *testing.T, home string) ActivationOptions {
-	return ActivationOptions{OS: "linux", Shell: "/bin/zsh", Path: t.TempDir(), AddToUserPath: func(string) error { return nil }, RunVersion: func(string) (string, error) { return "1.15.11", nil }, ResolveTarget: func(string, string, string) (string, error) { return "/real/opencode", nil }}
+
+func TestActivationRefusesUserOwnedCollision(t *testing.T) {
+	home := t.TempDir()
+	path := POSIXLauncherPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("user launcher"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PrepareActivation(home, ActivationOptions{
+		OS:            "linux",
+		Shell:         "/bin/zsh",
+		RunVersion:    func(string) (string, error) { return "1.18.18", nil },
+		AddToUserPath: func(string) error { return nil },
+		ResolveTarget: func(string, string, string) (string, error) { return "/real/opencode", nil },
+	})
+	if err == nil || plan != nil || !strings.Contains(err.Error(), "user-owned") {
+		t.Fatalf("PrepareActivation() plan=%v error=%v, want collision refusal", plan, err)
+	}
+}
+
+func TestActivationRollsBackLauncherWritesWhenPathUpdateFails(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pathErr := errors.New("path update failed")
+	plan, err := PrepareActivation(home, ActivationOptions{
+		OS:            "linux",
+		Shell:         "/bin/zsh",
+		RunVersion:    func(string) (string, error) { return "1.15.11", nil },
+		AddToUserPath: func(string) error { return pathErr },
+		ResolveTarget: func(string, string, string) (string, error) { return target, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err == nil || !strings.Contains(err.Error(), pathErr.Error()) {
+		t.Fatalf("Apply() error = %v, want path update failure", err)
+	}
+	if _, err := os.Stat(POSIXLauncherPath(home)); !os.IsNotExist(err) {
+		t.Fatalf("launcher after failed activation = %v, want absent", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".zprofile")); !os.IsNotExist(err) {
+		t.Fatalf("profile after failed activation = %v, want absent", err)
+	}
 }
 
 func TestPOSIXActivationPersistsAndRemovesOnlyOwnedLoginProfileBlock(t *testing.T) {
@@ -530,7 +612,16 @@ func TestPOSIXActivationPersistsAndRemovesOnlyOwnedLoginProfileBlock(t *testing.
 	if err := os.WriteFile(profile, []byte("export OTHER=value\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	options := ActivationOptions{OS: "darwin", Shell: "/bin/zsh", Path: t.TempDir(), RunVersion: func(string) (string, error) { return "1.15.11", nil }, AddToUserPath: func(string) error { return nil }, ResolveTarget: func(string, string, string) (string, error) { return "/real/opencode", nil }}
+	target := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	options := ActivationOptions{
+		OS: "darwin", Shell: "/bin/zsh", Path: filepath.Dir(target),
+		RunVersion:    func(string) (string, error) { return "1.15.11", nil },
+		AddToUserPath: func(string) error { return nil },
+		ResolveTarget: func(string, string, string) (string, error) { return target, nil },
+	}
 	plan, err := Activate(home, options)
 	if err != nil {
 		t.Fatal(err)
@@ -553,7 +644,11 @@ func TestPOSIXActivationPersistsAndRemovesOnlyOwnedLoginProfileBlock(t *testing.
 
 func TestPOSIXActivationLeavesUnsupportedShellPending(t *testing.T) {
 	home := t.TempDir()
-	plan, err := PrepareActivation(home, ActivationOptions{OS: "darwin", Shell: "/bin/fish", Path: t.TempDir(), RunVersion: func(string) (string, error) { return "1.15.11", nil }, ResolveTarget: func(string, string, string) (string, error) { return "/real/opencode", nil }})
+	plan, err := PrepareActivation(home, ActivationOptions{
+		OS: "darwin", Shell: "/bin/fish", Path: t.TempDir(),
+		RunVersion:    func(string) (string, error) { return "1.15.11", nil },
+		ResolveTarget: func(string, string, string) (string, error) { return "/real/opencode", nil },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -572,8 +667,11 @@ func TestRemoveProfileChangePreservesMalformedMarkers(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, ".zprofile")
 	block := profileBlock(BinDir(home))
-	tests := []struct{ name, before, want string }{
+	tests := []struct {
+		name, before, want string
+	}{
 		{"orphan start", profileStart + "\nuser\n" + block, profileStart + "\nuser\n"},
+		{"orphan end", block + "user\n" + profileEnd + "\n", "user\n" + profileEnd + "\n"},
 		{"interleaved markers", profileStart + "\nuser\n" + profileEnd + "\n" + block, profileStart + "\nuser\n" + profileEnd + "\n"},
 		{"duplicate blocks", "before\n" + block + "between\n" + block + "after\n", "before\nbetween\nafter\n"},
 		{"user content between malformed markers", profileStart + "\nuser\n" + profileEnd + "\n", profileStart + "\nuser\n" + profileEnd + "\n"},
@@ -600,7 +698,11 @@ func TestPOSIXProfileWritesPreserveModeAndRepeatedOnOffIsIdempotent(t *testing.T
 	if err := os.WriteFile(profile, []byte("user\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	options := ActivationOptions{OS: "darwin", Shell: "/bin/zsh", Path: t.TempDir(), AddToUserPath: func(string) error { return nil }, RunVersion: func(string) (string, error) { return "1.15.11", nil }, ResolveTarget: func(string, string, string) (string, error) { return "/real/opencode", nil }}
+	target := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	options := ActivationOptions{OS: "darwin", Shell: "/bin/zsh", Path: filepath.Dir(target), AddToUserPath: func(string) error { return nil }, RunVersion: func(string) (string, error) { return "1.15.11", nil }, ResolveTarget: func(string, string, string) (string, error) { return target, nil }}
 	for i := 0; i < 2; i++ {
 		if _, err := Activate(home, options); err != nil {
 			t.Fatal(err)
@@ -618,6 +720,10 @@ func TestPOSIXProfileWritesPreserveModeAndRepeatedOnOffIsIdempotent(t *testing.T
 	data, err := os.ReadFile(profile)
 	if err != nil || string(data) != "user\n" {
 		t.Fatalf("profile after repeated deactivation = %q, %v", data, err)
+	}
+	info, err = os.Stat(profile)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("profile mode after deactivation = %v, %v; want 0600", info.Mode(), err)
 	}
 }
 

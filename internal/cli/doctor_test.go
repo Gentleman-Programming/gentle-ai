@@ -812,6 +812,11 @@ func TestCheckManagedOpenCodeActivationRequiresOwnedLauncherResolution(t *testin
 	t.Cleanup(func() { lookPathFn = original })
 	home := t.TempDir()
 	managed := filepath.Join(home, ".gentle-ai", "bin", "opencode")
+
+	lookPathFn = func(string) (string, error) { return "/opt/homebrew/bin/opencode", nil }
+	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusFail || !strings.Contains(got.Detail, "start a new supported login shell") {
+		t.Fatalf("external OpenCode result = %#v, want actionable failure", got)
+	}
 	lookPathFn = func(string) (string, error) { return managed, nil }
 	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
 		t.Fatal(err)
@@ -820,18 +825,26 @@ func TestCheckManagedOpenCodeActivationRequiresOwnedLauncherResolution(t *testin
 		t.Fatal(err)
 	}
 	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusFail {
-		t.Fatalf("incidental marker result = %#v", got)
+		t.Fatalf("incidental marker result = %#v, want failure", got)
 	}
-	if err := os.WriteFile(managed, ownedDoctorOpenCodeLauncher(), 0o755); err != nil {
+	if err := os.WriteFile(managed, []byte("#!/bin/sh\n# "+opencode.OwnershipMarker+"\nset -eu\nif [ -z \"${OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS+x}\" ]; then\n  export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\nfi\nexec '/old/opencode' \"$@\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusPass {
-		t.Fatalf("managed launcher result = %#v", got)
+		t.Fatalf("managed OpenCode result = %#v, want pass", got)
 	}
-}
-
-func ownedDoctorOpenCodeLauncher() []byte {
-	return []byte("#!/bin/sh\n# " + opencode.OwnershipMarker + "\nset -eu\nif [ -z \"${OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS+x}\" ]; then\n  export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\nfi\nexec '/old/opencode' \"$@\"\n")
+	if runtime.GOOS != "windows" {
+		linkTarget := filepath.Join(t.TempDir(), "generated-opencode")
+		if err := os.WriteFile(linkTarget, []byte("#!/bin/sh\n# "+opencode.OwnershipMarker+"\nset -eu\nif [ -z \"${OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS+x}\" ]; then\n  export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\nfi\nexec '/old/opencode' \"$@\"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(managed); err != nil || os.Symlink(linkTarget, managed) != nil {
+			t.Fatal("replace managed launcher with symlink")
+		}
+		if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusFail {
+			t.Fatalf("symlink result = %#v, want failure", got)
+		}
+	}
 }
 
 // --- #709: derive required agents from state.json ---

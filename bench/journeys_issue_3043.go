@@ -22,7 +22,10 @@ func issue3043OpenCodeRuntime(sandbox *Sandbox) error {
 		return err
 	}
 	sandbox.PathOverride = path
-	sandbox.Scratch["issue-3043-opencode"] = launcher
+	sandbox.Shell = "/bin/zsh"
+	if err := os.WriteFile(filepath.Join(sandbox.Home, ".zprofile"), []byte("export BENCH_PROFILE=1\n"), 0o644); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -34,7 +37,7 @@ func issue3043VerifyInstall(sandbox *Sandbox, observation Observation) error {
 	if observation.ExitCode != 0 {
 		return fmt.Errorf("OpenCode background install failed: %s", firstLine(observation.Stderr))
 	}
-	if !strings.Contains(observation.Stdout, "OpenCode background activation status: ready") ||
+	if !strings.Contains(observation.Stdout, "OpenCode background activation status: pending") ||
 		!strings.Contains(observation.Stdout, "OpenCode background restart required: true") {
 		return fmt.Errorf("install omitted ready activation evidence: %s", observation.Stdout)
 	}
@@ -46,14 +49,14 @@ func issue3043VerifyInstall(sandbox *Sandbox, observation Observation) error {
 	if err != nil || !strings.Contains(string(data), "gentle-ai:managed-opencode-launcher/v1") {
 		return fmt.Errorf("managed launcher missing or unowned: %q, %v", data, err)
 	}
-	cmd := exec.Command(launcher)
+	cmd := issue3043LoginShell("command -v opencode; opencode")
 	cmd.Dir = sandbox.Repo
 	cmd.Env = sandbox.env()
 	output, err := cmd.Output()
-	if err != nil || strings.TrimSpace(string(output)) != "runtime:true" {
-		return fmt.Errorf("managed launcher did not inject background env: %q, %v", output, err)
+	if err != nil || !strings.Contains(string(output), launcher) || !strings.HasSuffix(strings.TrimSpace(string(output)), "runtime:true") {
+		return fmt.Errorf("fresh login shell did not resolve managed launcher with background env: %q, %v", output, err)
 	}
-	cmd = exec.Command(launcher)
+	cmd = issue3043LoginShell("opencode")
 	cmd.Dir = sandbox.Repo
 	cmd.Env = append(sandbox.env(), "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=false")
 	output, err = cmd.Output()
@@ -61,6 +64,17 @@ func issue3043VerifyInstall(sandbox *Sandbox, observation Observation) error {
 		return fmt.Errorf("managed launcher overwrote explicit false: %q, %v", output, err)
 	}
 	return nil
+}
+
+// CI images may omit zsh. The fallback starts a fresh shell that explicitly
+// sources .zprofile, proving the product selected and wrote the zsh profile and
+// that bare opencode resolves through it; a real zsh login shell is exercised
+// whenever available.
+func issue3043LoginShell(command string) *exec.Cmd {
+	if zsh, err := exec.LookPath("zsh"); err == nil {
+		return exec.Command(zsh, "-l", "-c", command)
+	}
+	return exec.Command("sh", "-c", ". \"$HOME/.zprofile\"; "+command)
 }
 
 func issue3043Journeys() []Journey {

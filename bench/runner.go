@@ -21,6 +21,7 @@ type Sandbox struct {
 	// PathOverride is prepended to PATH for journeys that need a deterministic
 	// local runtime probe without depending on the host installation.
 	PathOverride             string
+	Shell                    string
 	Root                     string
 	Home                     string
 	Repo                     string
@@ -111,6 +112,9 @@ func (s *Sandbox) env() []string {
 	}
 	if s.NewLineageActivation {
 		env = append(env, "GENTLE_AI_RDD_NEW_LINEAGE=1")
+	}
+	if s.Shell != "" {
+		env = append(env, "SHELL="+s.Shell)
 	}
 	// Set last so a journey that poisons the process temp directory overrides
 	// the sandbox's own writable TMP/TEMP/TMPDIR defaults above.
