@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestNoSubtaskOnSDDOpenCodeCommands ensures the five SDD phase commands in
+// TestNoSubtaskOnSDDOpenCodeCommands ensures the six SDD phase commands in
 // internal/assets/opencode/commands/ do not carry `subtask: true` in their
 // YAML frontmatter. OpenCode treats `subtask: true` as a forced sub-agent
 // invocation, which conflicts with the primary-session routing contract
@@ -26,6 +26,7 @@ func TestNoSubtaskOnSDDOpenCodeCommands(t *testing.T) {
 		"sdd-apply.md",
 		"sdd-verify.md",
 		"sdd-archive.md",
+		"sdd-onboard.md",
 	}
 	for _, name := range files {
 		data, err := os.ReadFile(filepath.Join(root, name))
