@@ -11,14 +11,19 @@ func TestGenerateContextForAgent(t *testing.T) {
 	tempDir := t.TempDir()
 	orch := New(tempDir)
 
-	// Setup mock repository-registry.md
+	// Setup mock docs/repository-registry.md. Profile is a full workspace-
+	// relative path, matching the real registry's convention (it does not
+	// always equal "skills/repo-profiles/<slug>/SKILL.md" -- see docs/
+	// repository-registry.md's own header comment).
 	regContent := `
 | Repository (gitlab_path) | Slug | Owner | Type | Purpose | Profile |
 |---|---|---|---|---|---|
-| group/repo-a | repo-a | team-1 | Service | x | profile-1 |
-| group/repo-b | repo-b | team-2 | Frontend | x | profile-2 |
+| group/repo-a | repo-a | team-1 | Service | x | skills/repo-profiles/repo-a/SKILL.md |
+| group/repo-b | repo-b | team-2 | Frontend | x | skills/repo-profiles/repo-b/SKILL.md |
 `
-	err := os.WriteFile(filepath.Join(tempDir, "repository-registry.md"), []byte(regContent), 0644)
+	docsDir := filepath.Join(tempDir, "docs")
+	os.MkdirAll(docsDir, 0755)
+	err := os.WriteFile(filepath.Join(docsDir, "repository-registry.md"), []byte(regContent), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create registry: %v", err)
 	}
@@ -101,5 +106,41 @@ implements:
 
 	if pkg.ExpectedOutput.Type != "APPLY" {
 		t.Errorf("Expected APPLY output, got %s", pkg.ExpectedOutput.Type)
+	}
+}
+
+// TestRouteIntentThenGenerateContextPreservesProvenance is a seam test: it
+// exercises RouteIntent and GenerateContextForAgent back-to-back, the way a
+// real caller would, to catch frontmatter-field mismatches between the
+// Intent Router and the Trace Resolver that per-package unit tests (each
+// using its own hand-written fixture) cannot see.
+func TestRouteIntentThenGenerateContextPreservesProvenance(t *testing.T) {
+	tempDir := t.TempDir()
+	orch := New(tempDir)
+
+	result, err := orch.RouteIntent("Add a new payments export job", "issue-42")
+	if err != nil {
+		t.Fatalf("RouteIntent() error = %v", err)
+	}
+
+	pkg, err := orch.GenerateContextForAgent(
+		"EXEC-002",
+		"dev-explorer",
+		result.ArtifactPath,
+		nil,
+		"",
+		nil,
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("GenerateContextForAgent() error = %v", err)
+	}
+
+	if pkg.Trace.ID != result.ChangeID {
+		t.Errorf("Trace.ID = %q, want %q", pkg.Trace.ID, result.ChangeID)
+	}
+	if len(pkg.Trace.OriginatesFrom) != 1 || pkg.Trace.OriginatesFrom[0] != "issue-42" {
+		t.Errorf("Trace.OriginatesFrom = %v, want [\"issue-42\"] -- RouteIntent's frontmatter field must match trace.Node's yaml tag", pkg.Trace.OriginatesFrom)
 	}
 }

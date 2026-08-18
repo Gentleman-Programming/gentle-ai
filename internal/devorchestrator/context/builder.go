@@ -6,11 +6,11 @@ import (
 
 // Package represents the "Context Package", the universal delegation contract sent by the Orchestrator.
 type Package struct {
-	ExecutionID    string      `json:"execution_id" yaml:"execution_id"`
-	Agent          string      `json:"agent" yaml:"agent"`
-	Trace          trace.Node  `json:"trace" yaml:"trace"`
-	Scope          Scope       `json:"scope" yaml:"scope"`
-	Inputs         Inputs      `json:"inputs" yaml:"inputs"`
+	ExecutionID         string      `json:"execution_id" yaml:"execution_id"`
+	Agent               string      `json:"agent" yaml:"agent"`
+	Trace               trace.Node  `json:"trace" yaml:"trace"`
+	Scope               Scope       `json:"scope" yaml:"scope"`
+	Inputs              Inputs      `json:"inputs" yaml:"inputs"`
 	Skills              []string    `json:"skills" yaml:"skills"`
 	RepoProfile         string      `json:"repo_profile" yaml:"repo_profile"`
 	ArchitectureProfile string      `json:"architecture_profile" yaml:"architecture_profile"`

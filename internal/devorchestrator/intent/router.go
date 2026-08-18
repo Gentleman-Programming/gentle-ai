@@ -61,9 +61,11 @@ func (r *Router) RouteIntent(intentText string, sourceID string) (IntentResult, 
 	}
 
 	artifactPath := filepath.Join(changesDir, artifactName)
-	
+
 	// Create YAML frontmatter
-	frontmatter := fmt.Sprintf("---\nid: %s\noriginates: [%s]\n---\n", changeID, sourceID)
+	// "originates-from" matches trace.Node's yaml tag exactly (internal/devorchestrator/trace/resolver.go),
+	// so a freshly routed intent's provenance survives into GenerateContextForAgent's Trace Resolver step.
+	frontmatter := fmt.Sprintf("---\nid: %s\noriginates-from: [%s]\n---\n", changeID, sourceID)
 	content := frontmatter + "# Intake Request\n\n" + intentText + "\n"
 
 	err = os.WriteFile(artifactPath, []byte(content), 0644)

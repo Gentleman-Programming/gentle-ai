@@ -40,8 +40,8 @@ No frontmatter here.
 			expectEmpty: true,
 		},
 		{
-			name: "Empty file",
-			content: ``,
+			name:        "Empty file",
+			content:     ``,
 			expectEmpty: true,
 		},
 		{

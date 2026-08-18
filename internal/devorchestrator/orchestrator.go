@@ -69,8 +69,9 @@ func (o *Orchestrator) GenerateContextForAgent(
 	}
 
 	// 2. Repository Resolver
-	// Ensure repositories are valid
-	regPath := filepath.Join(o.WorkspaceRoot, "repository-registry.md")
+	// Ensure repositories are valid. The registry lives at docs/repository-registry.md
+	// (see internal/repository/registry.go), keyed by repo-slug.
+	regPath := filepath.Join(o.WorkspaceRoot, "docs", "repository-registry.md")
 	registry, err := repository.ParseRegistry(regPath)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("failed to parse repository registry: %w", err)
@@ -89,10 +90,16 @@ func (o *Orchestrator) GenerateContextForAgent(
 	}
 
 	// 3. Load Repo Profiles (handled as internal skills)
+	// The registry's own Profile column is authoritative for where a repo's
+	// profile lives -- it does NOT always match "skills/repo-profiles/<repo-slug>/"
+	// (e.g. gp-apps-cross-pagos's profile folder is "payments-api", not its slug).
 	var combinedRepoProfile string
 	for _, repo := range validRepos {
-		// We expect internal repository profiles to be in `skills/repo-profiles/<repo-slug>/SKILL.md`
-		profilePath := filepath.Join(o.WorkspaceRoot, "skills", "repo-profiles", repo, "SKILL.md")
+		entry, ok := registry[repo]
+		if !ok || entry.Profile == "" || entry.Profile == "none" {
+			continue
+		}
+		profilePath := filepath.Join(o.WorkspaceRoot, filepath.FromSlash(entry.Profile))
 		data, err := os.ReadFile(profilePath)
 		if err == nil {
 			combinedRepoProfile += fmt.Sprintf("## Profile for %s\n%s\n\n", repo, string(data))
