@@ -86,6 +86,7 @@ type sddRuntimeStatus struct {
 		ObjectiveGeneration        int    `json:"objective_generation"`
 		BeginCandidateTree         string `json:"begin_candidate_tree"`
 		FinishCandidateTree        string `json:"finish_candidate_tree"`
+		AttestedVerifyReportDigest string `json:"attested_verify_report_digest"`
 		Outcome                    string `json:"outcome"`
 		EvidenceRevision           string `json:"evidence_revision"`
 		RemediatesEvidenceRevision string `json:"remediates_evidence_revision"`
@@ -133,6 +134,7 @@ type sddStatusV1 struct {
 	} `json:"reviewOffer"`
 	BlockedReasons    []string `json:"blockedReasons"`
 	PhaseInstructions struct {
+		Verify    []string `json:"verify"`
 		Remediate []string `json:"remediate"`
 	} `json:"phaseInstructions"`
 	TaskProgress struct {
@@ -1698,6 +1700,7 @@ func sddJourneys() []Journey {
 		// ------------------------------------------ remediation successor cycle
 		{
 			ID:     "j37-sdd-bound-passing-attempt-closes-over-a-corrected-candidate",
+			Review: reviewOptedIn,
 			Title:  "Bound passing attempt over a corrected candidate closes; review enforces at delivery",
 			Source: "community deadlock report (#1993)",
 			// This journey used to prove the opposite: that the plain passing
@@ -1725,6 +1728,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j40-sdd-attempt-reset-after-drift",
+			Review: reviewOptedIn,
 			Title:  "Terminal attempt, drifted candidate: begin refuses and reset is the only way on",
 			Source: "shape 2 (a recoverable objective read as terminal) + shape 4",
 			// Expected: begin refuses because the objective's candidate moved, and
@@ -1745,6 +1749,7 @@ func sddJourneys() []Journey {
 		// -------------------------------------------------- kill switch and SDD
 		{
 			ID:     "j41-kill-switch-versus-sdd-pre-verify",
+			Review: reviewOptedIn,
 			Title:  "Pre-verify: RDD supervises nothing, on or off, before verify runs",
 			Source: "shape 5 (the kill switch and the pre-verify router) + Wave 4's own removal of pre-verify review supervision",
 			// Corrective verify cycle 3 (CRITICAL-C): this journey pinned a
@@ -1817,6 +1822,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j42-kill-switch-versus-sdd-archive",
+			Review: reviewOptedIn,
 			Title:  "The offer is an invitation, never a gate: archive proceeds with reviews on or off",
 			Source: "shape 5 (a shipped agent contract and the product disagreeing about the same fact) + corrective verify cycle 4 BLOCKER-1",
 			// Corrective verify cycle 4, BLOCKER-1 (rdd-post-verify-review-offer's
@@ -1880,6 +1886,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j63-disabled-failed-verification-unmanaged-remediation",
+			Review: reviewOptedIn,
 			Title:  "Disabled failed verification admits one evidence-bound correction, then requires a fresh verification",
 			Source: "#2182 acceptance: disabled/unmanaged remediation successor",
 			Steps: []Step{
@@ -1946,6 +1953,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j52-sdd-stale-authority-does-not-shadow-approved-candidate",
+			Review: reviewOptedIn,
 			Title:  "Stale same-path review authority: SDD selects the newer approved candidate",
 			Source: "issue #1893: stale compact authority must not shadow an exact approved candidate",
 			Steps: []Step{
@@ -1972,6 +1980,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j53-sdd-ambiguous-authorities-fail-closed",
+			Review: reviewOptedIn,
 			Title:  "Two approved candidates for the same OpenSpec change: not consulted before verify",
 			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddAmbiguousAuthorityFixture),
@@ -1982,6 +1991,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j54-sdd-missing-authority-receipt-fails-closed",
+			Review: reviewOptedIn,
 			Title:  "Approved compact authority without its receipt: not consulted before verify",
 			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
@@ -1992,6 +2002,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j55-sdd-mismatched-authority-receipt-fails-closed",
+			Review: reviewOptedIn,
 			Title:  "Approved compact authority with a mismatched receipt: not consulted before verify",
 			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
@@ -2002,6 +2013,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j56-sdd-non-allow-post-apply-gate-fails-closed",
+			Review: reviewOptedIn,
 			Title:  "Valid approved authority over changed bytes: not consulted before verify",
 			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
@@ -2012,6 +2024,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j58-sdd-foreign-openspec-path-fails-closed",
+			Review: reviewOptedIn,
 			Title:  "Mixed OpenSpec authority path set: not consulted before verify",
 			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddForeignAuthorityFixture),
@@ -2023,6 +2036,7 @@ func sddJourneys() []Journey {
 		// ------------------------------------------------ recovery guard rails
 		{
 			ID:     "j43-recovery-guard-rails-as-an-operator-meets-them",
+			Review: reviewOptedIn,
 			Title:  "Three correct refusals around healthy approved authority, and the one exit that works",
 			Source: "shape 4 (a correct refusal that names nothing runnable) + community deadlock report",
 			// These three refusals are RIGHT. `review recover` must not mint a
@@ -2071,6 +2085,7 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j44-sdd-historical-requirement-stale-pass",
+			Review: reviewOptedIn,
 			Title:  "Historical change-local requirement heading: stale PASS restarts verification instead of failed remediation",
 			Source: "issue #2137 (historical OpenSpec requirement compatibility and stale verification routing)",
 			Steps: []Step{

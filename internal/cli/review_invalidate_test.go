@@ -15,6 +15,7 @@ import (
 )
 
 func TestLegacyOrdinaryMutationRoutesShareTypedReadOnlyErrorWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	tests := []struct {
 		name          string
 		wantOperation string
@@ -98,6 +99,7 @@ func TestLegacyOrdinaryMutationRoutesShareTypedReadOnlyErrorWithoutMutation(t *t
 }
 
 func TestReviewInvalidateDeniesLegacyWithTypedReadOnlyErrorWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	store := addPristineLegacyAuthority(t, repo, "legacy-invalidate-read-only")
 	chain, err := store.LoadChain()
@@ -166,6 +168,7 @@ func TestReviewInvalidateFailsClosedForCompetingAuthorities(t *testing.T) {
 // compact lineage, naming `review validate --gate <gate>` as the runnable
 // alternative, and never touches authority bytes either way.
 func TestReviewInvalidateRefusesApprovedLineageUnconditionally(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started, store := approveDiscoveryMarkdown(t, repo, "invalidate-approved-healthy-cli", "approved.md", "approved\n")
 	runReviewCLIGit(t, repo, "add", "approved.md")
@@ -198,6 +201,7 @@ func TestReviewInvalidateRefusesApprovedLineageUnconditionally(t *testing.T) {
 // byte-identical output -- the replay-stability claim survives even though
 // there is no longer a completed write to replay against.
 func TestReviewInvalidateRefusalIsIdempotentForApprovedLineage(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started, store := approveDiscoveryMarkdown(t, repo, "invalidate-approved-replay", "approved.md", "approved\n")
 	record, err := store.Load()

@@ -43,6 +43,7 @@ func partiallyCapturedReview(t *testing.T) (repo, lineage, snapshotIdentity stri
 // TestPartialCaptureCollectTransitionNeverTerminates pins the dead-end itself:
 // while a selected lens is missing, the negotiated route asks for it forever.
 func TestPartialCaptureCollectTransitionNeverTerminates(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, _, _, missing := partiallyCapturedReview(t)
 	var out bytes.Buffer
 	if err := RunReview([]string{
@@ -67,6 +68,7 @@ func TestPartialCaptureCollectTransitionNeverTerminates(t *testing.T) {
 // issue #1958: an authorized disposition may retire the dead-end, but its
 // binding and audit proof must name the exact admitted results it discards.
 func TestAbandonQuarantinesPartialReviewWithV2Binding(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, snapshotIdentity, _, _ := partiallyCapturedReview(t)
 	eligibility, err := reviewtransaction.InspectCompactPristineAbandonment(context.Background(), repo, lineage)
 	if err != nil || !eligibility.Eligible {
@@ -106,6 +108,7 @@ func TestAbandonQuarantinesPartialReviewWithV2Binding(t *testing.T) {
 }
 
 func TestAbandonRefusesBindingWithChangedDiscardedWork(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, lineage, snapshotIdentity, _, _ := partiallyCapturedReview(t)
 	eligibility, err := reviewtransaction.InspectCompactPristineAbandonment(context.Background(), repo, lineage)
 	if err != nil || !eligibility.Eligible || len(eligibility.DiscardedWork.CapturedLensResults) == 0 {

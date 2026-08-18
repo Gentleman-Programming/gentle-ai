@@ -481,6 +481,30 @@ with `commands_to_completion` unchanged at 16.
 Journeys are data — a slice of `Step` in `journeys.go`. Adding one is
 appending to that slice.
 
+### Every journey declares its review precondition
+
+Receipt-driven development is opt-in, and the sandbox `HOME` each journey runs
+under is a fresh install, so a journey gets no review by standing still.
+`Journey.Review` says what the runner does about that, and it is **mandatory** —
+`validateCorpus` fails the whole run on a journey that does not declare one.
+
+- `reviewOptedIn` — before the journey's first step, the runner opts in the way
+  a user does: `gentle-ai review mode enable --scope global`, run from a
+  throwaway checkout of its own, then read back. The journey fails if the
+  product does not report the switch on. It is sandbox setup, not operator work,
+  so it is never counted in `commands_to_completion`. Global is the only scope
+  that can assert "on"; a clone may only ever assert "off".
+- `reviewUntouched` — the runner runs no mode command at all. This is for a
+  journey whose subject IS the switch (`j03-kill-switch` drives it itself,
+  `j31-nonsense-mode-value` authors the record under test) and for one that has
+  nothing to do with reviews (`j2138`, `j3043`, `j97` install agents).
+
+The declaration is mandatory because the alternative already cost us once: the
+corpus measured the review lifecycle only because the product's default happened
+to say yes, and the day that default changed those journeys did not fail — they
+quietly measured a different flow, with the review refused and the gate passing
+under ordinary repository policy.
+
 | ID | Flow | Source |
 |---|---|---|
 | `j01-docs-happy-path` | docs change: review, approve, commit, push gate | guide flow 3 + 9 |

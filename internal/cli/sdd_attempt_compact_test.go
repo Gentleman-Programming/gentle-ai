@@ -28,6 +28,7 @@ type compactAttemptOutput struct {
 }
 
 func TestRunSDDAttemptCompactOutputStaysBoundedAcrossHistory(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const change = "compact-history"
 

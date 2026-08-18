@@ -76,6 +76,10 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 		return assessment, nil
 	}
 	snapshot, resolvedPrePR, err := buildCompactLifecycleSnapshot(ctx, repo, request)
+	if err != nil && request.Gate == GatePreCommit && errors.Is(err, errUnbornStagedCandidateEmpty) {
+		assessment.Applicability = CompactGateTargetScopeChanged
+		return assessment, nil
+	}
 	if err != nil {
 		return assessment, fmt.Errorf("build compact gate target: %w", err)
 	}
@@ -94,7 +98,7 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	if compatibility != nil {
 		proofExpected := state.CurrentSnapshot
 		proofExpected.Projection = snapshot.Projection
-		if classifyCompactTargetRelation(proofExpected, snapshot, state.GenesisPaths,
+		if classifyCompactTargetRelation(proofExpected, snapshot, state.CorrectionScopePaths(),
 			compactTargetRelationEvidence{CompatibleAdvance: compatibility}).Kind == compactTargetCompatibleAdvance {
 			assessment.Applicability = CompactGateTargetExact
 			return assessment, nil
@@ -111,7 +115,7 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	squashedFixDelivery := compactSquashedFixDelivery(request.Gate, state, snapshot, resolvedPrePR, state.CurrentSnapshot.CandidateTree)
 	strictBinding := request.Gate == GatePostApply || request.Gate == GatePreCommit ||
 		request.Gate == GatePrePush && state.InitialSnapshot.Kind != TargetCurrentChanges
-	pathsMatch := pathsAreSubset(snapshot.Paths, state.GenesisPaths) == nil
+	pathsMatch := pathsAreSubset(snapshot.Paths, state.CorrectionScopePaths()) == nil
 	baseMatches := snapshot.BaseTree == state.CurrentSnapshot.BaseTree || request.Target.Kind == TargetFixDiff || squashedFixDelivery
 	if strictBinding {
 		pathsMatch = snapshot.PathsDigest == state.CurrentSnapshot.PathsDigest || squashedFixDelivery
@@ -149,7 +153,7 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 	// relation algebra compares content/scope inside the selected gate
 	// projection rather than treating the gate's own staged view as unrelated.
 	relationExpected.Projection = snapshot.Projection
-	relation := classifyCompactTargetRelation(relationExpected, snapshot, state.GenesisPaths, compactTargetRelationEvidence{})
+	relation := classifyCompactTargetRelation(relationExpected, snapshot, state.CorrectionScopePaths(), compactTargetRelationEvidence{})
 	if relation.Kind != compactTargetUnsafe {
 		assessment.Applicability = CompactGateTargetScopeChanged
 		return assessment, nil
@@ -161,7 +165,7 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 func compactSquashedFixDelivery(gate GateKind, state CompactState, snapshot Snapshot, refs *resolvedPrePRRefs, finalCandidateTree string) bool {
 	return gate == GatePrePush && state.CurrentSnapshot.Kind == TargetFixDiff && refs != nil && refs.DeliveredCommitCount == 1 &&
 		snapshot.CandidateTree == finalCandidateTree && snapshot.BaseTree == state.InitialSnapshot.BaseTree &&
-		equalStrings(snapshot.Paths, state.GenesisPaths) && snapshot.PathsDigest == digestPaths(state.GenesisPaths)
+		equalStrings(snapshot.Paths, state.CorrectionScopePaths()) && snapshot.PathsDigest == digestPaths(state.CorrectionScopePaths())
 }
 
 func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceipt, input NativeGateRequestInput) NativeGateEvaluation {
@@ -347,7 +351,11 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	validatePublicationRange := request.Gate == GatePrePush && (record.State.InitialSnapshot.Kind == TargetBaseDiff || bootstrapPublication) ||
 		record.State.InitialSnapshot.Kind == TargetBaseWorkspaceOverlay && (request.Gate == GatePrePush || request.Gate == GatePrePR)
 	if validatePublicationRange && !subsetProof.Allowed {
-		publicationGenesis := record.State.GenesisPaths
+		// "Nothing unreviewed rides along" is stated against the delivered
+		// scope, the same set prepr.go measures the boundary-compatible range
+		// against, so an admitted companion test path is not treated as a
+		// stowaway in the intermediate commits that carry it.
+		publicationGenesis := record.State.CorrectionScopePaths()
 		if record.State.Recovery != nil {
 			if chain, ok, chainErr := deriveCompactRecoveryBinding(ctx, repo, record.State); chainErr == nil && ok {
 				publicationGenesis = chain.GenesisPaths
@@ -440,7 +448,12 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		boundary := resolvedPrePR.Selection
 		gateContext.PrePRBoundary = &boundary
 	}
-	pathsMismatch := pathsAreSubset(snapshot.Paths, record.State.GenesisPaths) != nil && !compatibleAdvance
+	// The delivered paths are proven against the scope the receipt authorizes,
+	// which is the reviewed manifest plus whatever one admitted correction
+	// added. Measuring the frozen manifest here would refuse the companion test
+	// file the correction was granted -- the exact delivery the widened scope
+	// exists to permit -- at the last step before it ships.
+	pathsMismatch := pathsAreSubset(snapshot.Paths, record.State.CorrectionScopePaths()) != nil && !compatibleAdvance
 	if strictBinding {
 		pathsMismatch = snapshot.PathsDigest != binding.PathsDigest && !squashedFixDelivery && !compatibleAdvance
 	}

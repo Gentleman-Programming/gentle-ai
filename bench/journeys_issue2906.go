@@ -18,6 +18,7 @@ var finalizeActionEligibilityPreflightCapability = &Capability{
 func issue2906Journeys() []Journey {
 	return []Journey{{
 		ID:     "j99-issue-2906-finalize-missing-contract",
+		Review: reviewOptedIn,
 		Title:  "FINALIZE action outputs without a contract are preflight refusals",
 		Source: "#2906: missing FINALIZE --contract is input validation, not an unknown outcome",
 		Steps: []Step{

@@ -127,6 +127,7 @@ func waveThreeJourneys() []Journey {
 	return []Journey{
 		{
 			ID:                   "j59-new-lineage-exact-candidate-allows-post-apply-and-pre-commit",
+			Review:               reviewOptedIn,
 			Title:                "New-lineage tier-0 candidate: an unchanged candidate allows at both post-apply and pre-commit",
 			Source:               "Wave 3 Slice 5, task 6.7 (governingAuthorityLiveEvidence per-gate-accurate selector)",
 			NewLineageActivation: true,
@@ -151,6 +152,7 @@ func waveThreeJourneys() []Journey {
 		},
 		{
 			ID:                   "j60-new-lineage-unstaged-drift-denies-post-apply-allows-pre-commit",
+			Review:               reviewOptedIn,
 			Title:                "New-lineage gate-accurate selector: unstaged-only drift denies scope-changed at post-apply but still allows at pre-commit",
 			Source:               "Wave 3 Slice 5, task 6.7 (S4's documented scope cut, governingAuthorityLiveEvidence)",
 			NewLineageActivation: true,

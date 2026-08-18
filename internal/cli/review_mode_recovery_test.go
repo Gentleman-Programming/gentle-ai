@@ -33,6 +33,7 @@ func TestUnreadableGlobalModeNamesItsFileAndACommandThatClearsIt(t *testing.T) {
 }
 
 func TestUnreadableCloneLocalModeNamesItsFileAndACommandThatClearsIt(t *testing.T) {
+	reviewEnabledHome(t)
 	assertUnreadableModeIsRecoverable(t, reviewModeCorruption{clone: true})
 }
 
@@ -94,9 +95,15 @@ func assertUnreadableModeIsRecoverable(t *testing.T, corruption reviewModeCorrup
 // reviewModeUnreadableFixture builds a repository whose named scopes hold a
 // readable but nonsense mode value, and returns the message `review mode
 // status` -- the read-only diagnostic an operator reaches for first -- emits.
+//
+// The operator this models wants to review, so the fixture starts from an
+// explicit global "on": receipt-driven development is opt-in, and without that
+// opinion clearing a corrupted clone-local override would land on the off
+// default and the recovery would look like it never worked. A global
+// corruption below overwrites that same field, so the global case is unchanged.
 func reviewModeUnreadableFixture(t *testing.T, corruption reviewModeCorruption) (string, string) {
 	t.Helper()
-	home := reviewModeHome(t)
+	home := reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 
 	if corruption.clone {

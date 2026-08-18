@@ -22,6 +22,7 @@ import (
 // record revision, or every compiled-runtime finalize dies with "provider
 // refuter request requires the current compact authority revision".
 func TestReviewFinalizeProviderRuntimeSurvivesContextLevelObservation(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	handle := args[slices.Index(args, "--repository-context")+1]
 	previous := reviewProviderAdapterFor

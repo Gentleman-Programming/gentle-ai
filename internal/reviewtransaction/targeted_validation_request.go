@@ -88,7 +88,7 @@ func buildTargetedValidationRequest(ctx context.Context, repo string, state Comp
 	if fix.CandidateTree == state.CurrentSnapshot.CandidateTree || fix.Identity == state.CurrentSnapshot.Identity {
 		return TargetedValidationRequest{}, errors.New("targeted validation request requires a changed correction candidate")
 	}
-	if err := pathsAreSubset(fix.Paths, state.GenesisPaths); err != nil {
+	if _, err := admitCorrectionScope(fix.Paths, state.GenesisPaths); err != nil {
 		return TargetedValidationRequest{}, err
 	}
 	return targetedValidationRequestForCorrection(state, revision, fix)
@@ -101,7 +101,7 @@ func buildTargetedValidationRequest(ctx context.Context, repo string, state Comp
 func targetedValidationRequestForCorrection(state CompactState, revision string, fix Snapshot) (TargetedValidationRequest, error) {
 	snapshotProjection, err := canonicalProjection(state.InitialSnapshot.Projection)
 	if err != nil || !validSHA256(revision) || fix.Kind != TargetFixDiff || fix.Projection != snapshotProjection ||
-		!equalStrings(fix.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(fix.Paths, state.GenesisPaths) != nil {
+		!equalStrings(fix.LedgerIDs, state.FixFindingIDs) || correctionScopeRefused(fix.Paths, state.GenesisPaths) {
 		return TargetedValidationRequest{}, errors.New("targeted validation request correction binding is invalid")
 	}
 	projection := snapshotProjection

@@ -122,6 +122,61 @@ func reviewTransportRefusalExitGuidance() string {
 		strings.Join(reviewTransportSupportedRuntimeIDs(), ", ")
 }
 
+// reviewPiRelayHandshakeIsSoleMissingCondition reports whether Pi's refusal is
+// caused by nothing but the absent relay handshake: every other compiled
+// conjunct already holds, so declaring the exact contract is the single
+// remaining step. It decides which cause the operator reads and nothing else;
+// reviewImmutableRuntimeCapability stays the only admission authority, and no
+// runtime becomes eligible because of what this reports.
+func reviewPiRelayHandshakeIsSoleMissingCondition(agent model.AgentID) bool {
+	if agent != model.AgentPi {
+		return false
+	}
+	if os.Getenv(reviewPiHostRelayContractEnvironment) == reviewPiHostRelayContract {
+		return false
+	}
+	manifest, err := capabilitymanifest.ForAgent(agent)
+	return err == nil && manifest.Advertises(capabilitymanifest.ContractImmutableReviewExecutorV1)
+}
+
+// reviewPiRelayHandshakeGuidance names the one missing condition instead of
+// the kill switch. reviewTransportSupportedRuntimeIDs can never name `pi`
+// here, because it is computed by calling reviewImmutableRuntimeCapability in
+// this same process, under the exact condition that is failing. Offering
+// `review mode disable` is worse than unhelpful: leaving receipt-driven
+// review is a legitimate choice, but it is not the remedy for a runtime one
+// declared contract away from eligible, and a reader who follows it concludes
+// the runtime was dropped.
+//
+// The guidance names the variable but NOT its value, and that is deliberate
+// rather than an oversight. This prose reaches the operator only as the
+// negotiated envelope's `cause`, which every refusal crosses
+// reviewScrubDefectReportField to reach: that gate rewrites any `KEY=VALUE`
+// token to `<redacted>` in full, and any `/`-rooted run to `<redacted>` from
+// the slash onward. The exact handshake collides with both rules, so
+// `GENTLE_PI_REVIEW_RELAY_CONTRACT=gentle-pi.review-relay/v1` renders as
+// `<redacted>` and `gentle-pi.review-relay/v1` renders as
+// `gentle-pi.review-relay<redacted>`. Naming the variable alone survives the
+// gate byte for byte (pinned by
+// TestPiRelayHandshakeGuidanceSurvivesTheFailureCausePrivacyGate), so it is
+// the most actionable cause that can actually reach the operator without
+// relaxing a privacy boundary from a diagnostics change.
+func reviewPiRelayHandshakeGuidance() string {
+	return "; pi is eligible only while " + reviewPiHostRelayContractEnvironment +
+		" declares the exact relay contract this binary admits, which the gentle-pi host exports on every invocation it relays; export it in this shell and re-run"
+}
+
+// reviewTransportRefusalGuidanceFor selects the guidance the refused runtime
+// can actually act on. Every runtime other than a handshake-less Pi keeps the
+// generic exit guidance unchanged, so the env-var remedy never leaks to a
+// runtime it cannot help.
+func reviewTransportRefusalGuidanceFor(agent model.AgentID) string {
+	if reviewPiRelayHandshakeIsSoleMissingCondition(agent) {
+		return reviewPiRelayHandshakeGuidance()
+	}
+	return reviewTransportRefusalExitGuidance()
+}
+
 // reviewRuntimeWithImmutableTransport accepts only the exact compiled runtime
 // identities. It never selects a substitute transport for an unsupported one.
 func reviewRuntimeWithImmutableTransport(agent string) (model.AgentID, error) {
@@ -133,11 +188,11 @@ func reviewRuntimeWithImmutableTransport(agent string) (model.AgentID, error) {
 	capability := reviewImmutableRuntimeCapability(identity)
 	if !capability.Eligible {
 		// refusal:by-design world-action: runtimes outside the fixed RDD policy cannot receive immutable review authority
-		return "", fmt.Errorf("the active runtime is not eligible for immutable receipt review%s", reviewTransportRefusalExitGuidance())
+		return "", fmt.Errorf("the active runtime is not eligible for immutable receipt review%s", reviewTransportRefusalGuidanceFor(identity))
 	}
 	if !capability.supportsImmutableReceiptReview() {
 		// refusal:by-design world-action: unsupported transport cannot bind immutable evidence or capture an admissible result
-		return "", fmt.Errorf("the active runtime lacks immutable receipt-review transport%s", reviewTransportRefusalExitGuidance())
+		return "", fmt.Errorf("the active runtime lacks immutable receipt-review transport%s", reviewTransportRefusalGuidanceFor(identity))
 	}
 	return identity, nil
 }

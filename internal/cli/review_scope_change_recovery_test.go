@@ -135,7 +135,7 @@ func TestPrePushScopeChangeNamedRecoveryReachesAllow(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 			configureCLIReviewPublicationRemote(t, repo, branch)
@@ -172,7 +172,7 @@ func TestPrePushScopeChangeNamedRecoveryReachesAllow(t *testing.T) {
 // successor's receipt never bound. The gate must refuse again -- an allow here
 // would mean the recovery receipt authorized bytes nobody reviewed.
 func TestPrePushRecoveredPublishedDeliveryDriftStaysRefused(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	configureCLIReviewPublicationRemote(t, repo, branch)
@@ -231,7 +231,7 @@ func TestPrePushRecoveredPublishedDeliveryDriftStaysRefused(t *testing.T) {
 // works at pre-commit with a dirty workspace, so pre-commit must keep naming
 // it and must never acquire the committed base-diff flags it does not need.
 func TestPreCommitScopeChangeKeepsBareCurrentChangesRecovery(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	configureCLIReviewPublicationRemote(t, repo, branch)
@@ -282,7 +282,7 @@ func TestPreCommitScopeChangeKeepsBareCurrentChangesRecovery(t *testing.T) {
 // "requires explicit maintainer action" wording rather than send the operator
 // at a command that exits non-zero.
 func TestPrePushIdenticalContentDeliveryKeepsHonestFallback(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	configureCLIReviewPublicationRemote(t, repo, branch)
@@ -342,7 +342,7 @@ func TestPrePushEmptyPublicationRangeAllowsOnlyWhenNothingIsDelivered(t *testing
 	}
 
 	t.Run("fully published delivery allows and approves nothing", func(t *testing.T) {
-		reviewModeHome(t)
+		reviewEnabledHome(t)
 		repo := initReviewCLIRepo(t)
 		branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 		configureCLIReviewPublicationRemote(t, repo, branch)
@@ -386,7 +386,7 @@ func TestPrePushEmptyPublicationRangeAllowsOnlyWhenNothingIsDelivered(t *testing
 	})
 
 	t.Run("unpublished commit past the publication boundary still denies", func(t *testing.T) {
-		reviewModeHome(t)
+		reviewEnabledHome(t)
 		repo := initReviewCLIRepo(t)
 		branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 		configureCLIReviewPublicationRemote(t, repo, branch)
@@ -422,7 +422,7 @@ func TestPrePushEmptyPublicationRangeAllowsOnlyWhenNothingIsDelivered(t *testing
 	})
 
 	t.Run("empty range against a different push destination still denies", func(t *testing.T) {
-		reviewModeHome(t)
+		reviewEnabledHome(t)
 		repo := initReviewCLIRepo(t)
 		branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 		configureCLIReviewPublicationRemote(t, repo, branch)

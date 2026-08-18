@@ -18,6 +18,7 @@ import (
 )
 
 func TestReviewRetryFinalVerificationOperationAndStatusCompleteNormally(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := failedFinalVerificationCLIFixture(t)
 	statusArgs := []string{"status", "--contract", ReviewIntegrationContractV1, "--action-eligibility", "--next-transition", "--cwd", fixture.repo, "--lineage", fixture.predecessor.State.LineageID}
 	var statusOutput bytes.Buffer
@@ -108,6 +109,7 @@ func TestReviewRetryFinalVerificationOperationAndStatusCompleteNormally(t *testi
 }
 
 func TestReviewRetryFinalVerificationCorrectedRestartUsesFrozenAuthorityTarget(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := failedCorrectedFinalVerificationCLIFixture(t)
 	if fixture.predecessor.State.InitialSnapshot.Identity == fixture.predecessor.State.CurrentSnapshot.Identity {
 		t.Fatal("corrected fixture did not advance CurrentSnapshot")
@@ -167,6 +169,7 @@ func TestReviewRetryFinalVerificationCorrectedRestartUsesFrozenAuthorityTarget(t
 }
 
 func TestReviewRetryFinalVerificationNegotiatedDenialIsNoMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := failedFinalVerificationCLIFixture(t)
 	request := reviewtransaction.FinalVerificationRetryRequest{
 		PredecessorLineageID: fixture.predecessor.State.LineageID, ExpectedPredecessorRevision: fixture.predecessor.Revision,
@@ -201,6 +204,7 @@ func TestReviewRetryFinalVerificationNegotiatedDenialIsNoMutation(t *testing.T) 
 }
 
 func TestReviewRetryFinalVerificationIncidentInputIsBoundedAndCancellable(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Run("oversize regular file", func(t *testing.T) {
 		fixture := failedFinalVerificationCLIFixture(t)
 		oversize := filepath.Join(t.TempDir(), "oversize-incident.json")

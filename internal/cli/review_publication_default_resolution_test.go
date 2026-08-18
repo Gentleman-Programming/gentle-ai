@@ -22,6 +22,7 @@ import (
 // this path must reach that same typed statement — including the continuation
 // that actually clears the block.
 func TestUnqualifiedPrePRDiscoveryReportsPublicationDefaultResolution(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -103,6 +104,7 @@ func TestUnqualifiedPrePRDiscoveryReportsPublicationDefaultResolution(t *testing
 // mistyping the branch. The named continuation must not itself dead-end in a
 // false corruption report.
 func TestUnqualifiedPrePRDiscoveryReportsUnresolvableExplicitSelector(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	runReviewCLIGit(t, repo, "clone", "--bare", repo, remote)

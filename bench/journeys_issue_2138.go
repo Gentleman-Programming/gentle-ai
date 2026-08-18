@@ -14,6 +14,7 @@ const issue2138OpenCodeSettings = ".config/opencode/opencode.json"
 func issue2138Journeys() []Journey {
 	return []Journey{{
 		ID:     "j2138-opencode-native-fallback-boundary",
+		Review: reviewUntouched,
 		Title:  "Zero-config OpenCode install emits bounded native fallback agents",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2138",
 		Steps: []Step{

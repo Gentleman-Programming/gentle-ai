@@ -27,6 +27,7 @@ import (
 // refusal in this product, because the operator then trusts it. This test runs
 // the printed transition verbatim and requires authority to exist afterwards.
 func TestReviewStatusNamesAStartLineageThatCanActuallyBeStarted(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := newSupersededDerivedLineageRepo(t)
 
 	var statusOut bytes.Buffer
@@ -78,7 +79,7 @@ func TestReviewStatusNamesAStartLineageThatCanActuallyBeStarted(t *testing.T) {
 // approved and that the successor's frozen target no longer matches.
 func newSupersededDerivedLineageRepo(t *testing.T) string {
 	t.Helper()
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeCLIAttemptFile(t, filepath.Join(repo, "docs", "attempt.md"), "# attempt\n\nplain prose.\n")
 	runReviewCLIGit(t, repo, "add", ".")

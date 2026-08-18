@@ -630,6 +630,21 @@ func (err *GateTargetResolutionError) Unwrap() error {
 	return err.Err
 }
 
+// GateRemoteFetchRequiredError reports that boundary selection resolved an
+// advertised remote tip whose commit is absent from the local object store
+// (issue #3342). The review authority store is untouched by this condition:
+// the local clone is merely behind the remote it publishes to, and
+// `git fetch <remote>` followed by re-running the identical gate resolves it.
+// It is typed so receipt discovery can classify the denial as retry-safe
+// instead of collapsing it into authority corruption.
+type GateRemoteFetchRequiredError struct {
+	Remote string
+}
+
+func (err *GateRemoteFetchRequiredError) Error() string {
+	return "advertised base commit is not available locally; fetch before validation"
+}
+
 // baseRefTargetResolutionError types a publication-boundary failure the caller
 // resolves by supplying --base-ref <remote>/<branch>. Every producer of that
 // sentence types itself here: an untyped one is classified downstream as an
@@ -739,7 +754,7 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 	}
 	local, err := resolveCommit(ctx, repo, matches[0].Commit)
 	if err != nil || local != matches[0].Commit {
-		return PrePRBoundarySelection{}, errors.New("advertised base commit is not available locally; fetch before validation")
+		return PrePRBoundarySelection{}, &GateRemoteFetchRequiredError{Remote: matches[0].Remote}
 	}
 	return matches[0], nil
 }
@@ -768,7 +783,7 @@ func advertisedRemoteRef(ctx context.Context, repo, remote, ref, selector string
 	}
 	local, err := resolveCommit(ctx, repo, fields[0])
 	if err != nil || local != fields[0] {
-		return PrePRBoundarySelection{}, errors.New("advertised base commit is not available locally; fetch before validation")
+		return PrePRBoundarySelection{}, &GateRemoteFetchRequiredError{Remote: remote}
 	}
 	return PrePRBoundarySelection{Source: source, Selector: selector, Commit: fields[0], Remote: remote, RemoteRef: ref, RemoteIdentity: identity}, nil
 }

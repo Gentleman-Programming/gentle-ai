@@ -17,6 +17,7 @@ import (
 )
 
 func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	lines := make([]string, 129)
 	for index := range lines {
@@ -143,6 +144,7 @@ func TestOrdinaryMarkdownLowRiskLifecycleNeedsNoExternalEvidence(t *testing.T) {
 // the candidate becomes one consolidated review that cannot finalize on
 // structural readback alone.
 func TestActiveMDXRequiresReviewerEvidence(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/guide.mdx", "import Widget from './widget'\n\n# Active guide\n", 0o644)
 	var output bytes.Buffer
@@ -166,6 +168,7 @@ func TestActiveMDXRequiresReviewerEvidence(t *testing.T) {
 }
 
 func TestLowRiskExternalEvidenceRemainsBackwardCompatible(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	path := filepath.Join(repo, "docs", "guide.md")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -201,6 +204,7 @@ func TestLowRiskExternalEvidenceRemainsBackwardCompatible(t *testing.T) {
 }
 
 func TestLowRiskNativeVerificationSupportsStagedProjection(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	path := filepath.Join(repo, "docs", "staged-guide.md")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -239,6 +243,7 @@ func TestLowRiskNativeVerificationSupportsStagedProjection(t *testing.T) {
 }
 
 func TestLowRiskNativeVerificationSupportsBaseWorkspaceOverlay(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
@@ -278,6 +283,7 @@ func TestLowRiskNativeVerificationSupportsBaseWorkspaceOverlay(t *testing.T) {
 }
 
 func TestMediumReviewCannotApproveWithoutExternalEvidence(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)

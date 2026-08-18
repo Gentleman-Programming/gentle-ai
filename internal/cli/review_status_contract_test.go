@@ -19,6 +19,7 @@ import (
 )
 
 func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate behavior\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -600,6 +601,7 @@ func TestNegotiatedStatusAcceptsHistoricalApprovedOrdinary4RWithoutCompactFrozen
 }
 
 func TestNegotiatedRuntimeReplaysPublishedV149AuthorityReadOnly(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, authorityRoot, receiptPath := newPublishedV149CLIRepo(t)
 	before := readLegacyAuthorityTree(t, authorityRoot)
 	args := []string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", "legacy-valid"}
@@ -1012,6 +1014,7 @@ func TestNegotiatedReviewStatusCompletesWithOneHundredHistoricalLeaves(t *testin
 }
 
 func TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart(t *testing.T) {
+	reviewEnabledHome(t)
 	if testing.Short() {
 		t.Skip("uses a repository with a large tracked dirty candidate")
 	}
@@ -1062,6 +1065,7 @@ func TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart(t *testing.T)
 // refuses that scope as empty_candidate_scope before authority evaluation, so
 // the only honest STATUS result is the #1641 empty-root bootstrap STOP.
 func TestNegotiatedReviewStatusStopsZeroPathBaseDiffWithoutAuthority(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := runReviewCLIGit(t, repo, "rev-parse", "HEAD")
 
@@ -1101,6 +1105,7 @@ func TestNegotiatedReviewStatusStopsZeroPathBaseDiffWithoutAuthority(t *testing.
 }
 
 func TestNegotiatedReviewStatusReturnsFailureForUnreadableAuthority(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1226,6 +1231,7 @@ func writeNegotiatedStatusHistory(t *testing.T, repo string, count int) {
 // the LIVE identity and failed the whole status operation with
 // "negotiated status correction request binding is invalid".
 func TestCorrectionPlanStatusAcceptsFrozenBindingAfterAppliedFix(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, tt := range []struct {
 		name, reason string
 		forecast     bool

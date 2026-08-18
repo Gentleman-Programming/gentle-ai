@@ -98,7 +98,7 @@ func captureNewLineageLensResults(t *testing.T, repo, lineage string, lenses []s
 }
 
 func TestReviewFacadeCaptureResultNewLineage_InputPreflightDoesNotCapture(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "new-lineage-input-preflight"
 	started := startMediumTierNewLineage(t, repo, lineage)
@@ -165,7 +165,7 @@ func TestReviewFacadeCaptureResultNewLineage_InputPreflightDoesNotCapture(t *tes
 // gates allow. Before this fix, finalize refused with
 // ErrFinalizeRequiresLensResults and there was no way to satisfy it.
 func TestReviewFacadeCaptureResultNewLineage_MediumTierFinalizeAllowsAllFiveGates(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "medium-tier-capture-lineage"
 	started := startMediumTierNewLineage(t, repo, lineage)
@@ -235,7 +235,7 @@ func TestReviewFacadeCaptureResultNewLineage_MediumTierFinalizeAllowsAllFiveGate
 // SAME outcome (blocks) the v2/compact path reaches as correction_required
 // and the v3 --admission-findings channel already reached as escalated.
 func TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "candidate-causal-blocker-lineage"
 	started := startMediumTierNewLineage(t, repo, lineage)
@@ -298,7 +298,7 @@ func TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates(t *
 // duplicated) is a follow-up, never a blocker -- captured findings must not
 // become MORE aggressive than the existing admission machinery already is.
 func TestReviewFacadeCaptureResultNewLineage_NonCausalFindingDoesNotBlock(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "non-causal-finding-lineage"
 	started := startMediumTierNewLineage(t, repo, lineage)
@@ -366,7 +366,7 @@ func TestReviewFacadeCaptureResultNewLineage_NonCausalFindingDoesNotBlock(t *tes
 // capture-result continuation -- never a bare "capture more" or a fault
 // report.
 func TestReviewFacadeFinalizeNewLineage_PartialCaptureIsOrdinaryNotAFault(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "partial-capture-lineage"
 	started := startMediumTierNewLineage(t, repo, lineage)
@@ -406,7 +406,7 @@ func TestReviewFacadeFinalizeNewLineage_PartialCaptureIsOrdinaryNotAFault(t *tes
 // finalizes with zero captured results -- the C-A fix must not require a
 // capture that a tier-low lineage never asked for.
 func TestReviewFacadeCaptureResultNewLineage_TierLowZeroResultsStillWorks(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "tier-low-zero-results-lineage"
 	startNewLineageForFinalizeTest(t, repo, lineage)

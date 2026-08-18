@@ -128,12 +128,13 @@ func leaksRepositoryPath(output, repo string) bool {
 func repositoryContextJourneys() []Journey {
 	return []Journey{{
 		ID:     "j104-repository-context-survives-fresh-process",
+		Review: reviewOptedIn,
 		Title:  "Repository context reconciliation survives fresh START and STATUS processes",
 		Source: "issue #1875: one committed repository_context event must reconcile path-free and replay idempotently across native CLI processes",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
 			{Name: "fixture: staged ordinary-code candidate", Fixture: stageOrdinaryCode},
-			{Name: "enable review mode only in the disposable journey clone", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
+			{Name: "clear any clone-local review override (a clone may only ever assert off)", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
 			{Name: "drive START, fresh STATUS retries, and foreign-handle refusal", Requires: frozenLineageStatusCapability, Composite: driveRepositoryContextFreshProcesses},
 		},
 	}}

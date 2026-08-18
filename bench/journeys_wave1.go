@@ -45,6 +45,12 @@ type waveOperationResult struct {
 	TargetIdentity       string `json:"target_identity"`
 }
 
+type waveTransitionArgument struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Token string `json:"token"`
+}
+
 type waveCorrectionStatus struct {
 	Schema         string `json:"schema"`
 	TargetIdentity string `json:"target_identity"`
@@ -81,10 +87,15 @@ type waveCorrectionStatus struct {
 				CaptureOperation string                         `json:"capture_operation"`
 				Arguments        []struct{ Name, Value string } `json:"arguments"`
 				Submission       *waveSubmissionDescriptor      `json:"submission"`
+				ProviderTask     *struct {
+					Prompt string `json:"prompt"`
+					Role   string `json:"role"`
+				} `json:"provider_task"`
 			} `json:"inputs"`
 		} `json:"collect"`
 		Execute *struct {
-			Operation string `json:"operation"`
+			Operation string                   `json:"operation"`
+			Arguments []waveTransitionArgument `json:"arguments"`
 		} `json:"execute"`
 	} `json:"next_transition"`
 }
@@ -1243,6 +1254,7 @@ func waveOneJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j44-corrected-current-changes-delivery",
+			Review: reviewOptedIn,
 			Title:  "Corrected current-changes receipt: one exact linked-worktree delivery is discovered selector-free",
 			Source: "issue #1819 + shape 3 (the squashed-delivery proof was hidden behind the wrong binding condition)",
 			Steps: []Step{
@@ -1273,6 +1285,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j45-completed-final-verification-retry",
+			Review: reviewOptedIn,
 			Title:  "Completed final-verification retry: provider successor remains authoritative in inventory and post-apply",
 			Source: "issue #1915 + shape 3 (retry edge validation was gated on a validating-only successor)",
 			Steps: []Step{
@@ -1304,6 +1317,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j46-correction-required-staged-recovery",
+			Review: reviewOptedIn,
 			Title:  "Correction-required base diff: negotiated staged recovery receives a fresh review and delivers",
 			Source: "issue #1921",
 			Steps: []Step{
@@ -1352,6 +1366,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j47-disabled-mode-archives-discovered-scope-changed-authority",
+			Review: reviewOptedIn,
 			Title:  "Discovered scope-changed archive authority: disabled mode steps aside without weakening explicit authority",
 			Source: "issue #2128",
 			Steps: []Step{
@@ -1379,6 +1394,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j48-recovered-workspace-preserves-full-candidate-scope",
+			Review: reviewOptedIn,
 			Title:  "Recovered workspace correction: terminal authorities preserve the complete candidate scope",
 			Source: "issue #2090",
 			Steps: []Step{
@@ -1412,6 +1428,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j49-status-without-cwd-honors-kill-switch",
+			Review: reviewOptedIn,
 			Title:  "SDD status without CWD: repository resolution and the kill switch share one workspace",
 			Source: "issue #2129",
 			Steps: []Step{
@@ -1445,6 +1462,7 @@ func waveOneJourneys() []Journey {
 			// tree matches the frozen target) were never gate-side and
 			// stay exactly as true as before.
 			ID:     "j50-candidate-decline-denies-generically-then-disabled",
+			Review: reviewOptedIn,
 			Title:  "Candidate decline creates no review authority; a later gate denies generically, or reaches ordinary unmanaged delivery once reviews are disabled",
 			Source: "issue #2045 (Wave 5 Slice 6 downgrade)",
 			Steps: []Step{
@@ -1462,6 +1480,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j51-negotiated-status-correction-continuation",
+			Review: reviewOptedIn,
 			Title:  "Negotiated status: fresh candidate starts, corrected candidate continues",
 			Source: "issue #2044: selector-free fresh status and post-correction continuation",
 			Steps: []Step{
@@ -1485,6 +1504,7 @@ func waveOneJourneys() []Journey {
 		},
 		{
 			ID:     "j65-selectorless-committed-correction-continuation",
+			Review: reviewOptedIn,
 			Title:  "Committed-only correction: selector-less status and finalize rebuild the frozen base boundary",
 			Source: "issue #1925",
 			Steps: []Step{

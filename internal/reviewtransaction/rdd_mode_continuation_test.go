@@ -16,7 +16,7 @@ func TestRDDDisabledErrorNamesTheCommandThatTurnsItBackOn(t *testing.T) {
 		want   string
 	}{
 		{name: "global", source: RDDModeSourceGlobal, want: "gentle-ai review mode enable --scope=global"},
-		{name: "clone local", source: RDDModeSourceCloneLocal, want: "gentle-ai review mode enable --scope=clone"},
+		{name: "clone local", source: RDDModeSourceCloneLocal, want: "gentle-ai review mode enable --scope=global then gentle-ai review mode enable --scope=clone"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			err := &RDDDisabledError{Operation: RDDOperationStart, Source: testCase.source}
@@ -27,17 +27,24 @@ func TestRDDDisabledErrorNamesTheCommandThatTurnsItBackOn(t *testing.T) {
 	}
 }
 
-// The default source expresses no opinion, so it can never be what keeps
-// reviews off. Naming a scope there would invent a continuation for a state
-// that cannot occur, which is the failure mode these guards exist to prevent.
-// Both refusable operations are covered: a mutation says more than a start
-// does, and none of that extra prose may smuggle in a command.
-func TestRDDDisabledErrorInventsNoContinuationForTheDefaultSource(t *testing.T) {
+// Receipt-driven development is opt-in, which makes the default source the
+// single most common reason a refusal happens at all: every install nobody
+// configured lands here. It used to be unreachable, and naming no command was
+// right then; now it is the first thing a new user hits, so it must name the
+// one command that turns reviews on. That command is global-scoped because a
+// clone can only ever disable -- it may never assert "on" for the user -- so
+// the clone scope would be a continuation that cannot work. Both refusable
+// operations are covered: a mutation says more than a start does, and the
+// continuation has to survive that extra prose.
+func TestRDDDisabledErrorSendsTheDefaultSourceToTheGlobalEnable(t *testing.T) {
 	for _, operation := range []RDDOperation{RDDOperationStart, RDDOperationMutate} {
 		t.Run(string(operation), func(t *testing.T) {
-			err := &RDDDisabledError{Operation: operation, Source: RDDModeSourceDefault}
-			if got := err.Error(); strings.Contains(got, "review mode enable") {
-				t.Fatalf("default source named a continuation it cannot know: %s", got)
+			got := (&RDDDisabledError{Operation: operation, Source: RDDModeSourceDefault}).Error()
+			if !strings.Contains(got, "gentle-ai review mode enable --scope=global") {
+				t.Fatalf("an opt-in default left the operator with no runnable way in: %s", got)
+			}
+			if strings.Contains(got, "--scope=clone") {
+				t.Fatalf("a clone scope can never turn reviews on, so it must not be offered: %s", got)
 			}
 		})
 	}
@@ -55,7 +62,7 @@ func TestRDDDisabledMutationSaysTheReviewIsFrozenAndWhatReEnablingResumes(t *tes
 		want   string
 	}{
 		{name: "global", source: RDDModeSourceGlobal, want: "gentle-ai review mode enable --scope=global"},
-		{name: "clone local", source: RDDModeSourceCloneLocal, want: "gentle-ai review mode enable --scope=clone"},
+		{name: "clone local", source: RDDModeSourceCloneLocal, want: "gentle-ai review mode enable --scope=global then gentle-ai review mode enable --scope=clone"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			got := (&RDDDisabledError{Operation: RDDOperationMutate, Source: testCase.source}).Error()

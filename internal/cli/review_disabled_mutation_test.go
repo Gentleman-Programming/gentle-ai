@@ -28,9 +28,15 @@ import (
 // receipt-driven development off for this clone, which is the exact shape the
 // hand reproduction hit: authority that already exists, and a switch that is
 // now off.
+//
+// Reaching that shape needs both halves of the switch in order. Receipt-driven
+// development is opt-in, so the START that creates the authority to freeze only
+// runs for a user who explicitly turned reviews on -- hence the enabled home.
+// The clone-local disable that follows is what the tests here are actually
+// about, and it still wins over that explicit global "on".
 func disabledReviewRepo(t *testing.T, lineage string) (repo string, started ReviewFacadeStartResult) {
 	t.Helper()
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo = initReviewCLIRepo(t)
 	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
 		t.Fatal(err)
@@ -251,7 +257,7 @@ func TestDisabledReviewKeepsReadOnlyInspectionAndDeliveryReachable(t *testing.T)
 // unreachable, and would break replay-based recovery for anyone who switched
 // reviews off afterwards.
 func TestDisabledReviewReplaysTerminalAuthorityWhileDisabled(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
 		t.Fatal(err)

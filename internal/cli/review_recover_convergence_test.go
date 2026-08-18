@@ -17,7 +17,7 @@ import (
 // property for RECOVER: STATUS never renders a recovery its own preflight
 // refuses.
 func TestNegotiatedRecoverTransitionRunsVerbatimForStagedPredecessorAfterRebase(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 
 	// Approved staged review of one tracked change.
@@ -132,7 +132,7 @@ func TestNegotiatedRecoverTransitionRunsVerbatimForStagedPredecessorAfterRebase(
 // when START's own discovery resolves the approved predecessor and answers
 // blocked-scope-action. Whatever START decides, STATUS must describe.
 func TestNegotiatedStatusNeverAdvertisesFreshStartForByteIdenticalApprovedCandidate(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "feature.md", "# feature\n\nworkspace reviewed prose.\n", 0o644)
 	var started bytes.Buffer

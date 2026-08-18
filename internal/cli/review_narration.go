@@ -2,13 +2,8 @@ package cli
 
 import (
 	"fmt"
-	"io"
-	"os"
 	"regexp"
-	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
@@ -224,86 +219,12 @@ func reviewNarrationContainsWord(lowered, word string) bool {
 	return pattern.MatchString(lowered)
 }
 
-// reviewNarrationOutput is the human-surface stream Tier C statements print
-// to. It is a var, like reviewConsole, so tests can capture it without a
-// real terminal; production always writes to stderr, never stdout, because
-// stdout carries the machine-readable JSON envelope and a narration line
-// mixed into it would corrupt every caller that parses it.
-var reviewNarrationOutput io.Writer = os.Stderr
-
-// reviewStopReasonStatement looks up the registered Tier C statement for a
-// review_next_transition.go stop reason code. The second result is false for
-// a code with no registry entry — TestReviewNarrationRegistryCoversEveryStopReasonCode
-// is what keeps that from happening for any code the source actually emits.
-func reviewStopReasonStatement(reason string) (string, bool) {
-	emission, ok := reviewNarrationRegistry["stop:"+strings.TrimSpace(reason)]
-	if !ok {
-		return "", false
-	}
-	return emission.Statement, true
-}
-
-// reviewNarrateStopReason writes exactly one Tier C statement to the human
-// surface for a stop-kind next transition. It never touches stdout, so the
-// negotiated JSON envelope (the machine surface) is byte-for-byte unchanged;
-// it is the additive half of spec "Three-Tier Narration Contract"'s "Tier C
-// terminal state emits exactly one statement" scenario. A reason with no
-// registry entry prints nothing: TestReviewNarrationRegistryCoversEveryStopReasonCode
-// is the fail-closed proof that should never happen for a code the source emits.
-func reviewNarrateStopReason(reason string, runtimeAgent model.AgentID, continuation string) {
-	statement, ok := reviewStopReasonStatement(reason)
-	if !ok {
-		return
-	}
-	if strings.TrimSpace(continuation) != "" {
-		statement = continuation
-	}
-	_, _ = fmt.Fprintln(reviewNarrationOutput, bindNarrationRuntimeIdentity(statement, runtimeAgent))
-}
-
-func reviewRDDDisabledNarration(mode reviewtransaction.RDDModeStatus, root string, statusArgs []string) string {
-	enable := "gentle-ai review mode enable --scope=global"
-	if mode.Source == reviewtransaction.RDDModeSourceCloneLocal {
-		enable = "gentle-ai review mode enable --scope=clone --cwd=" + reviewTransitionShellWord(root)
-	}
-	parts := []string{reviewTransitionCommandTool, "review", "status", reviewTransitionShellWord("--cwd=" + root)}
-	for index := 0; index < len(statusArgs); index++ {
-		argument := statusArgs[index]
-		if argument == "--cwd" {
-			index++
-			continue
-		}
-		if strings.HasPrefix(argument, "--cwd=") {
-			continue
-		}
-		parts = append(parts, reviewTransitionShellWord(argument))
-	}
-	return "Review mode is disabled. Run `" + enable + "`, then re-run `" + strings.Join(parts, " ") + "`."
-}
-
-// reviewNarrateForecast keeps the v2 machine envelope on stdout while showing
-// its descriptive, non-routing head to a human on stderr.
-func reviewNarrateForecast(forecast ReviewForecast) {
-	_, _ = fmt.Fprintf(reviewNarrationOutput, "Forecast horizon: %s\n", forecast.Horizon)
-	for _, step := range forecast.Steps {
-		_, _ = fmt.Fprintf(reviewNarrationOutput, "step %d: %s; reason_code=%s; description=%s\n", step.Step, step.Kind, step.ReasonCode, step.Description)
-	}
-	if forecast.Horizon == ForecastHorizonPartial {
-		_, _ = fmt.Fprintln(reviewNarrationOutput, "Re-query STATUS after completing this partial head.")
-	}
-}
-
-// bindNarrationRuntimeIdentity fills the runtime-identity slot in a registered
-// statement with the identity the caller declared on this very invocation. The
-// registry is a package-level map with no caller context, so the statements
-// carry a slot rather than a constant: a narration that told every runtime to
-// rerun as `claude-code` would invite a Codex or OpenCode reader to declare a
-// false identity and pass the transport admission check under another runtime's
-// capability profile. An undeclared caller omits the entire optional segment.
-func bindNarrationRuntimeIdentity(statement string, runtimeAgent model.AgentID) string {
-	identity := strings.TrimSpace(string(runtimeAgent))
-	if identity == "" {
-		return strings.ReplaceAll(statement, " --agent "+reviewUndeclaredRuntimeIdentitySlot, "")
-	}
-	return strings.ReplaceAll(statement, reviewUndeclaredRuntimeIdentitySlot, identity)
-}
+// There is deliberately no stderr emission machinery here anymore: a
+// successful negotiated operation is machine-readable end to end (gentle-pi
+// fails closed on any stderr a successful native process writes). The
+// registered statements above stay live two ways. The Tier C stop statements
+// are contract data cross-validated against the live stop-code emitter in
+// review_next_transition.go by review_narration_test.go (the bijection test).
+// The Tier A consent prompt remains production-emitted through the
+// interactive console ceremony in review_mode.go, proven reachable by
+// TestNegotiatedStartUndeclaredInteractiveKeepsConsentCeremony.

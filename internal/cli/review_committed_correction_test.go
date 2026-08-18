@@ -74,6 +74,7 @@ func TestSelectorlessCommittedCorrectionContinuesToReceipt(t *testing.T) {
 }
 
 func TestStagedCorrectionContinuesToReceipt(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "base\none\ntwo\nthree\nwrong\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
@@ -324,8 +325,14 @@ func committedCorrectionWithOverBudgetReconstructionAuthority(t *testing.T) stri
 	return repo
 }
 
+// forecastCommittedCorrection drives a real lineage from START through a
+// blocking finding to an open correction budget. Every caller continues that
+// lifecycle through the native CLI, so the fixture opts in the way a real user
+// does: receipt-driven development is off until someone enables it, and none of
+// these transitions exist for a clone that never did.
 func forecastCommittedCorrection(t *testing.T) (string, string, string) {
 	t.Helper()
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := "frozen-base"
 	runReviewCLIGit(t, repo, "branch", base, "HEAD")

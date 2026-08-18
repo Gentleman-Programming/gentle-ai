@@ -24,8 +24,7 @@ import (
 // rather than a list copied into this test, so a renamed or dropped flag fails
 // here instead of shipping a token that cannot run.
 func TestNativeCaptureCollectArgumentsCarryRunnableTokens(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc collect() {}\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, "collect-token-binding")

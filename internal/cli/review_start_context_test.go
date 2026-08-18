@@ -18,6 +18,7 @@ import (
 )
 
 func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "private tracked candidate\n", 0o644)
 	writeReviewStartCandidate(t, repo, "private.txt", "private intended candidate\n", 0o644)
@@ -90,6 +91,7 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 }
 
 func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Run("created and receipt replay", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
@@ -125,7 +127,9 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 }
 
 func TestNegotiatedReviewStartLargeRepositoryUsesBoundedReferenceAdmission(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	if testing.Short() {
 		t.Skip("uses real git commands and a repository tree larger than 4 MiB")
@@ -175,6 +179,7 @@ func TestNegotiatedReviewStartLargeRepositoryUsesBoundedReferenceAdmission(t *te
 }
 
 func TestNegotiatedReviewStartContextValidationDistinguishesMissingAndEmpty(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 	writeReviewStartCandidate(t, repo, "z.txt", "second candidate\n", 0o644)
@@ -243,6 +248,7 @@ func TestNegotiatedReviewStartContextValidationDistinguishesMissingAndEmpty(t *t
 }
 
 func TestNegotiatedReviewStartContextFailureReportsTruthfulAuthorityProvenance(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Run("new authority remains uncreated", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)

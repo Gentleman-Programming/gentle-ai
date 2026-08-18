@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
@@ -48,25 +49,61 @@ func TestOfferReviewAfterVerifyContextCanceledRefusesFirst(t *testing.T) {
 	}
 }
 
-// TestOfferReviewAfterVerifyDefaultModeWithNoReceiptIsAvailable is Wave 4
+// TestOfferReviewAfterVerifyEnabledModeWithNoReceiptIsAvailable is Wave 4
 // S5b's closed loop (design decision 8, superseding the earlier unwired
-// placeholder): with a DIFFERENT global mode (unset — effective on, not
-// off) and no receipt supplied at all, no prior receipt governs this
-// candidate, so OfferReviewAfterVerify genuinely invites a review —
-// Available:true, not a hollow always-false stub.
-func TestOfferReviewAfterVerifyDefaultModeWithNoReceiptIsAvailable(t *testing.T) {
+// placeholder): with reviews enabled and no receipt supplied at all, no prior
+// receipt governs this candidate, so OfferReviewAfterVerify genuinely invites
+// a review — Available:true, not a hollow always-false stub.
+//
+// It used to prove this against an unset global mode, because unset resolved
+// to on. Receipt-driven development is opt-in now, so unset resolves to off and
+// there is correctly nothing to offer; the invitation is a property of reviews
+// being enabled, so the fixture enables them the way a user does.
+func TestOfferReviewAfterVerifyEnabledModeWithNoReceiptIsAvailable(t *testing.T) {
+	enableGlobalRDDModeForOfferTest(t)
+	offer, err := OfferReviewAfterVerify(context.Background(), "/does/not/exist/at/all", OfferRequest{LineageID: "unwired-offer-lineage"})
+	if err != nil {
+		t.Fatalf("OfferReviewAfterVerify(enabled mode) = err %v, want nil", err)
+	}
+	if !offer.Available {
+		t.Fatalf("OfferReviewAfterVerify(enabled mode, no receipt) = %#v, want Available=true (nothing governs this candidate yet)", offer)
+	}
+}
+
+// TestOfferReviewAfterVerifyUnsetModeOffersNothing is the other side of that
+// flip, and it is worth its own test: with nobody opted in, reviews are off,
+// so an invitation would be an offer the product cannot honor.
+func TestOfferReviewAfterVerifyUnsetModeOffersNothing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	// No state file written at all: readGlobalRDDModeForOffer must treat a
-	// missing state file as an unset (not off, not corrupt) global mode.
+	// missing state file as an unset (not off, not corrupt) global mode, which
+	// the resolver then answers with the shipped opt-in default of off.
 	offer, err := OfferReviewAfterVerify(context.Background(), "/does/not/exist/at/all", OfferRequest{LineageID: "unwired-offer-lineage"})
 	if err != nil {
-		t.Fatalf("OfferReviewAfterVerify(default mode) = err %v, want nil", err)
+		t.Fatalf("OfferReviewAfterVerify(unset mode) = err %v, want nil", err)
 	}
-	if !offer.Available {
-		t.Fatalf("OfferReviewAfterVerify(default mode, no receipt) = %#v, want Available=true (nothing governs this candidate yet)", offer)
+	if offer.Available {
+		t.Fatalf("OfferReviewAfterVerify(unset mode) = %#v, want Available=false — nobody opted in", offer)
 	}
+}
+
+// enableGlobalRDDModeForOfferTest gives the test an isolated home carrying the
+// same explicit global "on" that `gentle-ai review mode enable` persists.
+func enableGlobalRDDModeForOfferTest(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	recordedAt := time.Now().UTC()
+	if err := state.Write(home, state.InstallState{
+		RDDMode:           string(RDDModeOn),
+		RDDModeRecordedAt: &recordedAt,
+	}); err != nil {
+		t.Fatalf("enable global review mode for this test: %v", err)
+	}
+	return home
 }
 
 // TestOfferReviewAfterVerifyReceiptStillGoverningReportsUnavailable proves
@@ -94,9 +131,9 @@ func TestOfferReviewAfterVerifyReceiptStillGoverningReportsUnavailable(t *testin
 // authority for its lineage) still results in a genuine invitation — the
 // same as no receipt at all.
 func TestOfferReviewAfterVerifyReceiptNotAllowReportsAvailable(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	// Reviews must be enabled for an invitation to mean anything, so this opts
+	// in explicitly rather than leaning on a default that no longer exists.
+	enableGlobalRDDModeForOfferTest(t)
 	root := initSnapshotRepo(t)
 	ref := SDDReceiptRef{Lineage: "offer-no-authority-lineage", ReceiptHash: "sha256:" + shaIDForTest("9")}
 

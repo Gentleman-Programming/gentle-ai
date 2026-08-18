@@ -145,7 +145,9 @@ func TestLockContentionAfterACommittedTransitionStillReportsUnknown(t *testing.T
 // with explicit-maintainer-action. The reporter saw 19 of 20 concurrent
 // pre-commit gates report exactly that against a healthy authority.
 func TestConcurrentDeliveryGateContentionIsNotReportedAsInvalidated(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo := initReviewCLIRepo(t)
 	lineage := approvedLowRiskFacadeReview(t, repo)
@@ -208,6 +210,7 @@ func TestConcurrentDeliveryGateContentionIsNotReportedAsInvalidated(t *testing.T
 // that commits more transitions than one sequential FINALIZE would be a
 // double-apply.
 func TestConcurrentFinalizeElectsExactlyOneWriter(t *testing.T) {
+	reviewEnabledHome(t)
 	sequentialRepo := initReviewCLIRepo(t)
 	sequentialTrace := filepath.Join(t.TempDir(), "sequential-trace.jsonl")
 	sequentialLineage := startLowRiskFacadeReview(t, sequentialRepo)
@@ -308,6 +311,7 @@ func TestConcurrentFinalizeElectsExactlyOneWriter(t *testing.T) {
 // progress.record. This proves the post-commit envelope without scheduler
 // timing and keeps the pre-write loser contract narrow.
 func TestFinalizePostCommitFailureReportsUnknownWithCause(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	lineage := startLowRiskFacadeReview(t, repo)
 

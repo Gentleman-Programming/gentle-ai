@@ -15,7 +15,7 @@
     "contract": {"const": "gentle-ai.review-integration/v2"},
     "operation": {"const": "review.start"},
     "action": {"const": "consent_required"},
-    "agent": {"const": "claude-code"},
+    "agent": {"enum": ["claude-code", "opencode", "codex", "pi"]},
     "blocking": {"const": true},
     "target_identity": {"$ref": "#/$defs/sha256"},
     "projection": {"enum": ["workspace", "staged"]},
@@ -56,7 +56,7 @@
         "answer": {"enum": ["granted", "declined"]},
         "label": {"type": "string", "minLength": 1},
         "effect": {"type": "string", "minLength": 1},
-        "invocation": {"type": "string", "pattern": "^gentle-ai review start --contract gentle-ai\\.review-integration/v2 .* --agent claude-code .* --consent (granted|declined)$"}
+        "invocation": {"type": "string", "pattern": "^gentle-ai review start --contract gentle-ai\\.review-integration/v2 .+ --consent (granted|declined)$"}
       }
     },
     "choice_granted": {

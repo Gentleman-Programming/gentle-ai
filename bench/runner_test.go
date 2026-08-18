@@ -100,6 +100,96 @@ func TestReadBackBlanksGitTrace(t *testing.T) {
 	}
 }
 
+// reviewModeStubBinary writes an executable that logs every argv it is given
+// and answers `review mode enable` with the effective mode the test wants,
+// so the review precondition can be tested without a real gentle-ai.
+func reviewModeStubBinary(t *testing.T, effective string) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "gentle-ai-stub")
+	log := filepath.Join(dir, "argv.log")
+	script := "#!/bin/sh\n" +
+		"echo \"$*\" >> " + log + "\n" +
+		"case \"$1 $2 $3\" in\n" +
+		"'review mode enable') printf '{\"status\":{\"effective\":\"" + effective + "\"}}\\n'; exit 0;;\n" +
+		"esac\n" +
+		"exit 0\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatalf("write review mode stub: %v", err)
+	}
+	return binary, log
+}
+
+func stubJourney(precondition ReviewPrecondition) Journey {
+	return Journey{
+		ID:     "jStub",
+		Review: precondition,
+		Steps: []Step{{
+			Name:    "journey command",
+			Fixture: func(sandbox *Sandbox) error { return os.MkdirAll(sandbox.Repo, 0o755) },
+			Args:    func(*Sandbox) ([]string, error) { return []string{"review", "status"}, nil },
+		}},
+	}
+}
+
+func argvLines(t *testing.T, log string) []string {
+	t.Helper()
+	content, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("read argv log: %v", err)
+	}
+	return strings.Split(strings.TrimSpace(string(content)), "\n")
+}
+
+// An opted-in journey has to opt in the way a user does — through the product's
+// own command — and it has to do it BEFORE the first command it measures.
+func TestOptedInJourneyEnablesReviewModeFirst(t *testing.T) {
+	binary, log := reviewModeStubBinary(t, "on")
+	result := runJourney(binary, stubJourney(reviewOptedIn))
+	if result.Status != StatusCompleted {
+		t.Fatalf("status = %s (%s), want completed", result.Status, result.FailureReason)
+	}
+	lines := argvLines(t, log)
+	if lines[0] != "review mode enable --scope global --json" {
+		t.Fatalf("first invocation = %q, want the global opt-in before anything the journey measures", lines[0])
+	}
+	if len(lines) != 2 || lines[1] != "review status" {
+		t.Fatalf("invocations = %#v, want the opt-in followed by the journey's own command", lines)
+	}
+}
+
+// The opt-in is read back, not assumed. A product that answers the enable with
+// the switch still off must fail the journey loudly: measuring a review-off
+// flow under a journey that says it reviews is the silent degradation this
+// declaration exists to stop.
+func TestOptedInJourneyFailsWhenTheSwitchDoesNotComeOn(t *testing.T) {
+	binary, log := reviewModeStubBinary(t, "off")
+	result := runJourney(binary, stubJourney(reviewOptedIn))
+	if result.Status != StatusFailed {
+		t.Fatalf("status = %s, want failed when the switch never came on", result.Status)
+	}
+	if !strings.Contains(result.FailureReason, "reviews off") {
+		t.Fatalf("failure reason = %q, want it to say the journey would have measured a flow with reviews off", result.FailureReason)
+	}
+	if lines := argvLines(t, log); len(lines) != 1 {
+		t.Fatalf("invocations = %#v, want the journey's own commands never to have run", lines)
+	}
+}
+
+// A journey whose subject IS the switch declares reviewUntouched, and the
+// runner must then keep its hands off: reaching in first would overwrite the
+// very state under test.
+func TestUntouchedJourneyNeverTouchesTheSwitch(t *testing.T) {
+	binary, log := reviewModeStubBinary(t, "on")
+	result := runJourney(binary, stubJourney(reviewUntouched))
+	if result.Status != StatusCompleted {
+		t.Fatalf("status = %s (%s), want completed", result.Status, result.FailureReason)
+	}
+	if lines := argvLines(t, log); len(lines) != 1 || lines[0] != "review status" {
+		t.Fatalf("invocations = %#v, want only the journey's own command", lines)
+	}
+}
+
 func TestSandboxEnvIncludesBenchReceiptMutationPath(t *testing.T) {
 	sandbox, err := newSandbox("gentle-ai", t.TempDir())
 	if err != nil {

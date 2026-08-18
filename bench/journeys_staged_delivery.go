@@ -109,11 +109,12 @@ func validateExactStagedDeliveryCandidate(r *journeyRun) error {
 func stagedDeliveryJourneys() []Journey {
 	return []Journey{{
 		ID:     "j89-approved-workspace-receipt-requires-exact-staged-delivery",
+		Review: reviewOptedIn,
 		Title:  "Approved workspace receipt: only its exact staged delivery candidate can validate at pre-commit",
 		Source: "issue #2758: STATUS must not offer workspace approval for an empty, partial, or different staged index",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
-			{Name: "enable review mode only in the disposable journey clone", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
+			{Name: "clear any clone-local review override (a clone may only ever assert off)", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
 			{Name: "fixture: add a second tracked delivery path", Fixture: prepareWorkspaceDeliveryBaseline},
 			{Name: "fixture: two-path workspace candidate staged", Fixture: stageWorkspaceDeliveryCandidate},
 			{Name: "review the workspace candidate", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", stagedDeliveryLineage)},

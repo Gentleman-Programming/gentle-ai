@@ -52,6 +52,7 @@ func invalidatedRecoverySelfDerivationPredecessor(t *testing.T, lineage string) 
 // succeeds, and the persisted CAS audit entry carries a Git-derived actor and
 // a closed machine-generated reason, never an empty or operator-invented one.
 func TestReviewRecoverSelfDerivesBindingForInvalidatedPredecessor(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := invalidatedRecoverySelfDerivationPredecessor(t, "self-derive-invalidated")
 	runReviewCLIGit(t, repo, "config", "user.name", "Ada Lovelace")
 	runReviewCLIGit(t, repo, "config", "user.email", "ada@example.com")
@@ -89,6 +90,7 @@ func TestReviewRecoverSelfDerivesBindingForInvalidatedPredecessor(t *testing.T) 
 // same self-derivation seam falls through to GIT_AUTHOR_EMAIL when no local
 // Git identity is configured, matching reviewAuditActor's own fallback chain.
 func TestReviewRecoverSelfDerivedBindingFallsBackToEnvActor(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := invalidatedRecoverySelfDerivationPredecessor(t, "self-derive-env-actor")
 	// initReviewCLIRepo (via the fixture above) sets a local Git identity;
 	// remove it and isolate global/system config so the env fallback below
@@ -128,6 +130,7 @@ func TestReviewRecoverSelfDerivedBindingFallsBackToEnvActor(t *testing.T) {
 // escalated, target-changed predecessor: unlike invalidated recovery, this
 // shape actually validates the authorization binding downstream.
 func TestReviewRecoverSelfDerivationExplicitWrongBindingStillRefuses(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, baseRef, predecessor := escalatedCurrentChangesRecoveryFixture(t, "self-derive-wrong-binding")
 	err := RunReviewRecover([]string{
 		"--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,
@@ -150,6 +153,7 @@ func TestReviewRecoverSelfDerivationExplicitWrongBindingStillRefuses(t *testing.
 // fail-closed negative #2: a corrupted predecessor store still refuses
 // before self-derivation ever runs (Load() fails first).
 func TestReviewRecoverSelfDerivationCorruptedAuthorityStillRefuses(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := invalidatedRecoverySelfDerivationPredecessor(t, "self-derive-corrupted")
 	predecessorStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, predecessor.State.LineageID)
 	if err != nil {
@@ -179,6 +183,7 @@ func TestReviewRecoverSelfDerivationCorruptedAuthorityStillRefuses(t *testing.T)
 // --maintainer-authorization) — which itself refuses for this predecessor
 // state — still governs.
 func TestReviewRecoverSelfDerivationActiveAttemptNeverAutoResets(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	lineage := "self-derive-active-attempt"
 	writeReviewStartCandidate(t, repo, "docs/active-attempt.md", "# active attempt\n\nplain prose, no executable content.\n", 0o644)
@@ -219,6 +224,7 @@ func TestReviewRecoverSelfDerivationActiveAttemptNeverAutoResets(t *testing.T) {
 // reviewtransaction.RecoverCompactAuthority still refuses exactly as it did
 // before self-derivation existed. Self-derivation adds no authority.
 func TestReviewRecoverSelfDerivationFailedCriteriaEscalationNeverAutoRecovers(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, _, predecessor := escalatedCurrentChangesRecoveryFixture(t, "self-derive-failed-criteria")
 	err := RunReviewRecover([]string{
 		"--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,
@@ -240,6 +246,7 @@ func TestReviewRecoverSelfDerivationFailedCriteriaEscalationNeverAutoRecovers(t 
 // refuses under the existing drift gate ("recovery scope has not changed"),
 // which runs entirely before self-derivation.
 func TestReviewRecoverSelfDerivationNoDriftElectiveResetStillRefuses(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := approvedWorkspaceOverlayRecoveryPredecessor(t, "self-derive-no-drift")
 	err := RunReviewRecover([]string{
 		"--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,

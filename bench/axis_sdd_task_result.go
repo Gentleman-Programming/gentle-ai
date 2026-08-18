@@ -29,6 +29,7 @@ func init() {
 func sddTaskResultJourneys() []Journey {
 	return []Journey{{
 		ID:     "tr01-sdd-empty-task-result",
+		Review: reviewOptedIn,
 		Title:  "Empty SDD task result: typed terminal failure without artifact mutation or downstream launch",
 		Source: "issue #2117 provider transport report",
 		Steps: []Step{{

@@ -165,7 +165,9 @@ func TestAmbiguousChangeSelectionNamesARunnableCommandPerChange(t *testing.T) {
 
 	reasons := strings.Join(status.BlockedReasons, "\n")
 	for _, change := range []string{"first", "second"} {
-		want := "gentle-ai sdd-status --cwd " + root + " --change " + change
+		// The selector is positional: ParseCommandArgs has no --change flag
+		// (#3278, #2790), so this is the only runnable spelling.
+		want := "gentle-ai sdd-status " + change + " --cwd " + root
 		if !strings.Contains(reasons, want) {
 			t.Fatalf("blocked reasons named no runnable command for %q; a refusal that lists options and no command is the shape this project does not ship.\ngot:\n%s", change, reasons)
 		}

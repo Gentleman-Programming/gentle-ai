@@ -56,6 +56,7 @@ func pristineInvalidatedCLIFixture(t *testing.T, repo string) (revision, snapsho
 // invalidated authority remains auditable without blocking an unrelated exact
 // approved receipt. Explicit selection of the invalidated lineage still fails.
 func TestPristineInvalidatedLineageDoesNotPoisonLineagelessGateDiscovery(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-abandon-valid", "docs/valid.md", "valid\n")
 	pristineInvalidatedCLIFixture(t, repo)
@@ -100,6 +101,7 @@ func abandonCLIBinding(t *testing.T, repo, revision, snapshotIdentity string) st
 }
 
 func TestReviewAbandonRefusesTerminalInvalidatedLineage(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-abandon-valid", "docs/valid.md", "valid\n")
 	revision, snapshotIdentity := pristineInvalidatedCLIFixture(t, repo)

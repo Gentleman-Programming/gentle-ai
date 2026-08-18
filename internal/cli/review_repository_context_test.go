@@ -16,8 +16,7 @@ import (
 )
 
 func TestRepositoryContextCaptureFromUnrelatedCWDProducesFinalizeArtifact(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc capture() {}\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, "repository-context-capture")
@@ -128,8 +127,7 @@ func TestPreserveResultRequiresExactLiveSelectedLensBinding(t *testing.T) {
 			name = "opaque-context"
 		}
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			t.Setenv("USERPROFILE", os.Getenv("HOME"))
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc preserveBinding() {}\n", 0o644)
 			started := runNegotiatedReviewStart(t, repo, "preserve-selected-binding-"+name)
@@ -170,9 +168,7 @@ func TestPreserveResultRequiresExactLiveSelectedLensBinding(t *testing.T) {
 func TestOpaqueContextErrorsDoNotExposeProviderPaths(t *testing.T) {
 	for _, damage := range []string{"locator", "authority"} {
 		t.Run(damage, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("USERPROFILE", home)
+			home := reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc opaqueFailure() {}\n", 0o644)
 			started := runNegotiatedReviewStart(t, repo, "opaque-error-"+damage)
@@ -204,8 +200,7 @@ func TestOpaqueContextErrorsDoNotExposeProviderPaths(t *testing.T) {
 }
 
 func TestNativeNextTransitionCarriesRepositoryContextCaptureBinding(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc transition() {}\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, "repository-context-transition")
@@ -259,8 +254,7 @@ func TestNativeNextTransitionCarriesRepositoryContextCaptureBinding(t *testing.T
 }
 
 func TestNegotiatedFinalizeReturnsProviderOwnedTargetedValidationRequest(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc corrected() int { return 1 }\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, "typed-validation-request")
@@ -380,8 +374,7 @@ func TestNegotiatedFinalizeReturnsProviderOwnedTargetedValidationRequest(t *test
 }
 
 func TestNegotiatedStatusAcceptsCorrectionSubsetDigest(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "corrected.go", "package candidate\n\nfunc correctedSubset() int { return 0 }\n", 0o644)
 	writeReviewStartCandidate(t, repo, "untouched.go", "package candidate\n\nfunc untouchedSubset() int { return 0 }\n", 0o644)
@@ -443,8 +436,7 @@ func TestNegotiatedStatusAcceptsCorrectionSubsetDigest(t *testing.T) {
 }
 
 func TestNegotiatedStartPublishesStableOpaqueRepositoryContext(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
 
@@ -574,8 +566,7 @@ func TestNegotiatedStartRepositoryContextCoversWorkspaceStagedAndOverlay(t *test
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			t.Setenv("USERPROFILE", os.Getenv("HOME"))
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			args := boundNegotiatedStartArgs(t, append([]string{"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--lineage", "repository-context-" + strings.ReplaceAll(tt.name, " ", "-")}, tt.args(t, repo)...))
 			var output bytes.Buffer
@@ -601,6 +592,7 @@ func TestNegotiatedStartRepositoryContextCoversWorkspaceStagedAndOverlay(t *test
 }
 
 func TestLegacyStartBytesDoNotContainRepositoryContext(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc legacy() {}\n", 0o644)
 	var output bytes.Buffer

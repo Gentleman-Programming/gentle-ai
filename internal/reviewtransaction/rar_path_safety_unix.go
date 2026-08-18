@@ -17,17 +17,96 @@ func rarPathUnsafe(_ string, info fs.FileInfo) bool {
 	return info == nil || info.Mode()&os.ModeSymlink != 0
 }
 
+// rarPrivateDirectoryMkdir and rarPrivateDirectoryChmod are the only two
+// filesystem primitives that establish an owner-only RAR directory. They are
+// variables so tests can reproduce filesystems that silently ignore the mode
+// they are handed -- WSL DrvFS, exFAT, and SMB mounts without POSIX extensions
+// -- which no mode argument reachable from a test on ext4 or tmpfs can
+// produce. Production always uses the no-follow repair below.
+var (
+	rarPrivateDirectoryMkdir = os.Mkdir
+	rarPrivateDirectoryChmod = repairPrivateRARDirectoryNoFollow
+)
+
+// repairPrivateRARDirectoryNoFollow reapplies the owner-only mode through a
+// descriptor, never the path: os.Chmod resolves symlinks and Linux rejects
+// AT_SYMLINK_NOFOLLOW on fchmodat(2). The validator's own no-follow walk opens
+// the directory, and fchmod(2), the mode check and the uid check all run
+// against that one descriptor -- substituting a symlink for the just-created
+// directory is the attack this walk exists to defeat, and on POSIX it is
+// essentially the only other reason this repair ever runs.
+func repairPrivateRARDirectoryNoFollow(path string, mode fs.FileMode) error {
+	file, err := openRARPathNoFollow(path, true)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	// What the entry IS decides, never who created it. O_NOFOLLOW|O_DIRECTORY
+	// already failed the open for a symlink, and an entry owned by anyone else
+	// is refused before the write: euid 0 could otherwise chmod it.
+	before, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if stat, ok := before.Sys().(*syscall.Stat_t); !ok || !before.IsDir() ||
+		stat.Uid != uint32(os.Geteuid()) {
+		return unsafeRARPathError(path, true)
+	}
+	// Only an empty directory is repaired, and emptiness is read from this same
+	// descriptor. An interrupted creation leaves nothing behind, so recovery
+	// works; a populated authority directory whose mode somebody weakened stays
+	// refused, because silently re-tightening it would hide from the operator
+	// that anything inside it was writable by anyone.
+	if names, readErr := file.Readdirnames(-1); readErr != nil || len(names) > 0 {
+		return unsafeRARPathError(path, true)
+	}
+	if err := file.Chmod(mode); err != nil {
+		return err
+	}
+	repaired, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !repaired.IsDir() || !privateOpenRARPathSafe(file, repaired) {
+		return unsafeRARPathError(path, true)
+	}
+	return nil
+}
+
 func createPrivateRARDirectory(path string) (bool, error) {
-	err := os.Mkdir(path, 0o700)
+	err := rarPrivateDirectoryMkdir(path, 0o700)
 	created := err == nil
 	if err != nil && !errors.Is(err, fs.ErrExist) {
 		return false, err
 	}
-	if err := validatePrivateRARDirectory(path); err != nil {
-		if created {
-			_ = os.Remove(path)
+	validateErr := validatePrivateRARDirectory(path)
+	if validateErr != nil {
+		// A directory at this path can still fail its own owner-only
+		// validation, because some filesystems ignore the mode passed to
+		// mkdir(2). Ask for the mode explicitly and revalidate before giving
+		// up: that is the whole failure on WSL DrvFS, and it is the difference
+		// between the kill switch working and the documented self-service
+		// delivery exit being unreachable.
+		//
+		// Do NOT gate this on `created`: a run killed between mkdir(2) and its
+		// repair leaves an unsafe directory that every later mkdir answers with
+		// EEXIST, so that gate makes recovery once-only. The no-follow
+		// descriptor decides instead: tightening an EMPTY directory this euid
+		// already owns is not the world-action errUnsafeRARAuthorityPath
+		// declines. A symlink, somebody else's entry, and a directory already
+		// holding state all still refuse.
+		if repairErr := rarPrivateDirectoryChmod(path, 0o700); repairErr == nil {
+			validateErr = validatePrivateRARDirectory(path)
 		}
-		return false, err
+	}
+	if validateErr != nil {
+		// The just-created directory deliberately stays on disk. Removing it
+		// made the refusal name a path that no longer existed, so the repair
+		// this product prints (`chmod 700 <path>`) failed with "cannot access
+		// ...: No such file or directory" and the operator had no runnable way
+		// out. Nothing is trusted by leaving it: every reader revalidates, and
+		// the next attempt takes the already-exists branch and refuses again.
+		return false, validateErr
 	}
 	return created, nil
 }

@@ -640,6 +640,7 @@ func crashRecoveryPositionJourney(phase string, role crashPositionRole, extraSte
 	)
 	return Journey{
 		ID:     "ds11-crash-recovery-" + phase + "-" + role.label,
+		Review: reviewOptedIn,
 		Title:  "A closure genuinely interrupted right after its " + role.label + "'s " + phase + " phase resumes byte-identically through the real binary",
 		Source: "rdd-root-simplification-wave6 fix cycle 2 (journey-level crash-position coverage, sdd-verify cycle-2 WARNING) — the real-binary twin of TestAuthorityDispositionResumeCrashPositionMatrix's " + phase + "/" + role.label + " case",
 		Steps:  steps,
@@ -688,6 +689,7 @@ func closureDispositionJourneys() []Journey {
 	journeys := []Journey{
 		{
 			ID:     "ds09-multi-chain-closure",
+			Review: reviewOptedIn,
 			Title:  "A multi-hop closure — one damaged seed with a two-hop descendant chain — derives and disposes end-to-end",
 			Source: "rdd-root-simplification-wave6 Slices S1/S2 (topological ordering, ordered N-node transaction)",
 			// ds06 above proves the N=1 base case. This is Wave 6's own
@@ -720,6 +722,7 @@ func closureDispositionJourneys() []Journey {
 		},
 		{
 			ID:     "ds10-cross-lineage-closure",
+			Review: reviewOptedIn,
 			Title:  "The over-collection guard: everything NOT in the closure — the predecessor and an unrelated lineage — stays byte-identical",
 			Source: "rdd-root-simplification-wave6 design decision D6 (over-collection guard)",
 			// ds09 proves the closure disposes. This journey isolates the
@@ -743,6 +746,7 @@ func closureDispositionJourneys() []Journey {
 		},
 		{
 			ID:     "ds12-negotiated-transition-route",
+			Review: reviewOptedIn,
 			Title:  "The negotiated route: `review status --next-transition` surfaces the closure disposition collect/execute, not a raw flag triad",
 			Source: "rdd-root-simplification-wave6 Slice S4/D7 (negotiated transition route)",
 			// ds06/ds08/ds09/ds10/ds11 above all drive --plan-digest and

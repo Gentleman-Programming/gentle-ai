@@ -26,6 +26,7 @@ func incompleteCompactResidueDir(t *testing.T, repo, lineage string) string {
 // incomplete and is reported as such, but the approved lineage beside it is
 // untouched and still governs its own delivery.
 func TestUnqualifiedGateDiscoveryReportsIncompleteStoreEntryWithoutDenyingOthers(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-reclaim-valid", "docs/valid.md", "valid\n")
 	incompleteCompactResidueDir(t, repo, "reclaim-audit")
@@ -59,6 +60,7 @@ func TestUnqualifiedGateDiscoveryReportsIncompleteStoreEntryWithoutDenyingOthers
 }
 
 func TestReviewReclaimQuarantinesResidueAndRestoresLineagelessDiscovery(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-reclaim-valid", "docs/valid.md", "valid\n")
 	residue := incompleteCompactResidueDir(t, repo, "reclaim-audit")
@@ -105,6 +107,7 @@ func TestReviewReclaimQuarantinesResidueAndRestoresLineagelessDiscovery(t *testi
 }
 
 func TestReviewStartSucceedsDespiteIncompleteStoreResidue(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	incompleteCompactResidueDir(t, repo, "reclaim-audit")
 	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
@@ -127,6 +130,7 @@ func TestReviewStartSucceedsDespiteIncompleteStoreResidue(t *testing.T) {
 // its own job: the residue is quarantined with an audit record, and start
 // works on both sides of that, not only after it.
 func TestReviewReclaimClearsEnumeratedResidueThatNeverBlockedStart(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	residue := incompleteCompactResidueDir(t, repo, "reclaim-audit")
 	if err := os.WriteFile(filepath.Join(residue, "stray.tmp"), []byte("stray\n"), 0o644); err != nil {

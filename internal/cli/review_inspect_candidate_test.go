@@ -23,6 +23,7 @@ type inspectionCase struct {
 }
 
 func TestReviewInspectCandidateReadsOnlyBoundFrozenTrees(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, args, _, index := newCandidateInspectionReview(t, "candidate\n", true)
 	attributes := filepath.Join(repo, "hostile attributes")
 	writeReviewStartCandidate(t, repo, "hostile attributes", "tracked.txt binary\n", 0o644)
@@ -63,6 +64,7 @@ func TestReviewInspectCandidateReadsOnlyBoundFrozenTrees(t *testing.T) {
 }
 
 func TestReviewInspectCandidateCarriesAggregateDeadlineAndCancels(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	args = append(args, "--operation", "name-status")
 	contexts := map[error]func(*reviewInspectCandidateDeps){
@@ -129,6 +131,7 @@ func canceledInspectionContext(context.Context, time.Duration) (context.Context,
 }
 
 func TestReviewInspectCandidateRejectsUnboundInput(t *testing.T) {
+	reviewEnabledHome(t)
 	var help bytes.Buffer
 	if err := RunReview([]string{"inspect-candidate", "--help"}, &help); err != nil {
 		t.Fatal(err)
@@ -167,6 +170,7 @@ func TestReviewInspectCandidateRejectsUnboundInput(t *testing.T) {
 }
 
 func TestReviewInspectCandidateRejectsOversizedObject(t *testing.T) {
+	reviewEnabledHome(t)
 	_, args, _, index := newCandidateInspectionReview(t, string(bytes.Repeat([]byte("x"), reviewtransaction.MaxFrozenCandidateDiffBytes+1)), false)
 	args = append(args, "--operation", "object", "--path-index", fmt.Sprint(index), "--side", "candidate")
 	if err := RunReviewInspectCandidate(args, io.Discard); err == nil || !strings.Contains(err.Error(), "byte limit") {
@@ -175,6 +179,7 @@ func TestReviewInspectCandidateRejectsOversizedObject(t *testing.T) {
 }
 
 func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, args, ready, store, index := newTargetedCandidateInspectionReview(t)
 	before := readReviewOperationFile(t, store.StatePath())
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 3 }\n", 0o644)
@@ -220,6 +225,7 @@ func TestReviewInspectCandidateInspectsProviderBoundCorrectedTree(t *testing.T) 
 }
 
 func TestReviewInspectCandidatePreservesCorrectedEvidenceError(t *testing.T) {
+	reviewEnabledHome(t)
 	_, args, ready, store, _ := newTargetedCandidateInspectionReview(t)
 	evidenceDir := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir,
 		strings.TrimPrefix(ready.ValidationRequest.CorrectionTargetIdentity, "sha256:"))
@@ -233,6 +239,7 @@ func TestReviewInspectCandidatePreservesCorrectedEvidenceError(t *testing.T) {
 }
 
 func TestReviewInspectCandidateRejectsTargetedBindingDecoys(t *testing.T) {
+	reviewEnabledHome(t)
 	_, lens, _, _ := newCandidateInspectionReview(t, "candidate\n", false)
 	_, targeted, ready, _, _ := newTargetedCandidateInspectionReview(t)
 	targeted = append(targeted, "--operation", "name-status")
@@ -259,8 +266,7 @@ func TestReviewInspectCandidateRejectsTargetedBindingDecoys(t *testing.T) {
 
 func newCandidateInspectionReview(t *testing.T, tracked string, hostile bool) (string, []string, reviewtransaction.CompactRecord, int) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", tracked, 0o644)
 	if hostile {
@@ -290,8 +296,7 @@ func newCandidateInspectionReview(t *testing.T, tracked string, hostile bool) (s
 
 func newTargetedCandidateInspectionReview(t *testing.T) (string, []string, ReviewTargetStatusResult, reviewtransaction.CompactStore, int) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo, started, store := submissionDescriptorCorrectionFixture(t)
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2"}, io.Discard); err != nil {
 		t.Fatal(err)

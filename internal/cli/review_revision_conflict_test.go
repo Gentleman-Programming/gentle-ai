@@ -29,6 +29,7 @@ import (
 // commit, which is exactly the instant a competing writer has to advance the
 // authority for this operation to lose its CAS.
 func TestFinalizeRevisionConflictIsRetryableNotUnknown(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	lineage := startLowRiskFacadeReview(t, repo)
 

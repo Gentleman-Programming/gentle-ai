@@ -33,12 +33,17 @@
         "eligibility": {"$ref": "status.schema.json#/properties/eligibility"},
         "next_transition": {"$ref": "status.schema.json#/$defs/next_transition"},
         "validation_request": {"$ref": "../../v1/schemas/targeted-validation-request.schema.json"},
-        "escalation": {"type": "string", "minLength": 1}
+        "escalation": {"type": "string", "minLength": 1},
+        "advisory_findings": {"$ref": "../../v1/schemas/operation.schema.json#/$defs/advisory_findings"}
       },
       "allOf": [
         {
           "if": {"required": ["validation_request"]},
           "then": {"properties": {"state": {"const": "correction_required"}}}
+        },
+        {
+          "if": {"required": ["advisory_findings"]},
+          "then": {"properties": {"state": {"const": "approved"}}}
         }
       ]
     }

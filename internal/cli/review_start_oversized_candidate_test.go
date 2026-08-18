@@ -26,6 +26,7 @@ func writeReviewStartLargeCandidate(t *testing.T, repo string, lines int) []byte
 }
 
 func TestLargeCandidateSTARTAndStatusCarryOnlyNativeGitReferences(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	fullDiff := writeReviewStartLargeCandidate(t, repo, 110000)
 	if len(fullDiff) <= 4<<20 {

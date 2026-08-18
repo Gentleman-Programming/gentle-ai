@@ -46,7 +46,7 @@ func TestDisabledDeliveryIsNeverBlockedByADamagedAuthorityEntry(t *testing.T) {
 	}
 	for _, damage := range damages {
 		t.Run(damage.name, func(t *testing.T) {
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 			configureCLIReviewPublicationRemote(t, repo, branch)
@@ -146,7 +146,7 @@ func TestEnabledDeliveryOverADamagedEntryStillServesTheHealthyCandidate(t *testi
 	}
 	for _, damage := range damages {
 		t.Run(damage.name, func(t *testing.T) {
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 
 			_, successor := mintDamagedStoreRecoveryPair(t, repo)
@@ -192,7 +192,7 @@ func TestEnabledDeliveryOverADamagedEntryStillServesTheHealthyCandidate(t *testi
 // entry could not be read, which left the harness with no transition to take
 // and the operator with a blocked push and no exit.
 func TestNegotiatedStatusOverADamagedEntryStillRoutesTheHealthyTarget(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 
 	_, successor := mintDamagedStoreRecoveryPair(t, repo)

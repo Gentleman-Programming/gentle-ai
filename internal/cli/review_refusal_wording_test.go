@@ -97,6 +97,7 @@ func TestReviewFinalizeNoDiscoverableLineageNamesStartCommand(t *testing.T) {
 // names the exact continuation command and the concrete lineage ID, not only
 // the concept of finalizing.
 func TestReviewValidateReceiptNotAvailableNamesFinalizeCommandWithLineage(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	lineage := "receipt-not-available-needs-finalize"
 	writeReviewStartCandidate(t, repo, "docs/pending.md", "# pending\n\nplain prose, no executable content.\n", 0o644)
@@ -117,6 +118,7 @@ func TestReviewValidateReceiptNotAvailableNamesFinalizeCommandWithLineage(t *tes
 // says who must run it (the parent orchestrator holds --cwd; this opaque
 // caller does not).
 func TestReviewCaptureResultOpaqueBindingMismatchNamesRefreshCommand(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc capture() {}\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, "opaque-capture-binding-mismatch")

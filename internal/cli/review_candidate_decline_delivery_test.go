@@ -17,7 +17,7 @@ import (
 // never authorizes an unrelated subsequent candidate) stays: it was never
 // specific to decline resolving anything, it proves nothing does.
 func TestCandidateDeclineNeverAuthorizesPrePushOrPrePRDelivery(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))

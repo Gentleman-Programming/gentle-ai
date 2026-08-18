@@ -11,6 +11,7 @@ import (
 )
 
 func TestReviewFacadeKeepsInvalidatedAuthorityNonPoisoningAndNonUsable(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started := startFacadeReview(t, repo)
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)

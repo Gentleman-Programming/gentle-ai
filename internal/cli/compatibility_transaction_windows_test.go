@@ -157,7 +157,7 @@ func TestExecuteTUIInstallClosesWindowsCompatibilityTransactionAfterSuccess(t *t
 		closeCount++
 	})
 	selection, resolved, profile := windowsTUICompatibilityPlan()
-	result, _ := ExecuteTUIInstallWithBackgroundAndOrchestrator(home, selection, resolved, profile, model.OpenCodeBackgroundAuto, nil)
+	result, _ := ExecuteTUIInstallWithBackgroundAndOrchestrator(home, selection, resolved, profile, model.OpenCodeBackgroundAuto, model.PiBackgroundIntent(""), nil)
 	if result.Err != nil {
 		t.Fatalf("ExecuteTUIInstallWithBackgroundAndOrchestrator() error = %v", result.Err)
 	}
@@ -190,7 +190,7 @@ func TestExecuteTUIInstallClosesWindowsCompatibilityTransactionAfterRollback(t *
 	})
 
 	selection, resolved, profile := windowsTUICompatibilityPlan()
-	result, _ := ExecuteTUIInstallWithBackgroundAndOrchestrator(home, selection, resolved, profile, model.OpenCodeBackgroundAuto, nil)
+	result, _ := ExecuteTUIInstallWithBackgroundAndOrchestrator(home, selection, resolved, profile, model.OpenCodeBackgroundAuto, model.PiBackgroundIntent(""), nil)
 	if result.Err == nil {
 		t.Fatal("ExecuteTUIInstallWithBackgroundAndOrchestrator() error = nil, want post-publication failure")
 	}

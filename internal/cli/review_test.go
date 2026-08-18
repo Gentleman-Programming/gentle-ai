@@ -54,6 +54,7 @@ func TestFlatReviewStartRejectsBeforeCreatingLegacyAuthority(t *testing.T) {
 // legacy, switch-OFF branch already had this exact guard unchanged; this
 // test specifically exercises the NEW switch-ON copy WU18a added.)
 func TestReviewFacadeStartRefusesOverExistingV1Authority(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := newLegacyCLIFixture(t, "v1-blocks-v3-start")
 	runReviewCLIGit(t, fixture.repo, "add", "-A")
 	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "1")
@@ -93,7 +94,7 @@ func TestReviewFacadeStartRefusesOverExistingV1Authority(t *testing.T) {
 // accepts a v1 chain), this refusal must name review recover as an
 // ADDITIONAL, genuinely resolving option.
 func TestReviewFacadeStartRefusesOverExistingV2AuthorityAndNamesRecover(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "v2-blocks-v3-start"
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("v2 collision fixture\n"), 0o644); err != nil {

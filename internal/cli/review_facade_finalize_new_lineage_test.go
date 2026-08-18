@@ -55,7 +55,7 @@ func startNewLineageForFinalizeTest(t *testing.T, repo, lineage string) {
 // for the tier-0 minimum-viable path: no admitted blocker, no --failed ⇒
 // approved.
 func TestReviewFacadeFinalizeNewLineageReachesReceiptNoBlocker(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "finalize-no-blocker-lineage"
 	startNewLineageForFinalizeTest(t, repo, lineage)
@@ -93,7 +93,7 @@ func TestReviewFacadeFinalizeNewLineageReachesReceiptNoBlocker(t *testing.T) {
 // half of the tier-0 minimum-viable path: --failed routes to an escalated
 // receipt rather than approved.
 func TestReviewFacadeFinalizeNewLineageFailedEvidenceEscalates(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "finalize-failed-evidence-lineage"
 	startNewLineageForFinalizeTest(t, repo, lineage)
@@ -119,7 +119,7 @@ func TestReviewFacadeFinalizeNewLineageFailedEvidenceEscalates(t *testing.T) {
 // pre-existing finding never appears there (spec rdd-review-core-transitions,
 // "Candidate-Causal Admission Only", both scenarios).
 func TestReviewFacadeFinalizeNewLineageAdmitsOnlyCandidateCausalFindings(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "finalize-admission-blocks-lineage"
 	startNewLineageForFinalizeTest(t, repo, lineage)
@@ -171,7 +171,7 @@ func TestReviewFacadeFinalizeNewLineageAdmitsOnlyCandidateCausalFindings(t *test
 // base-only still reaches approved — a follow-up can never authorize a
 // correction (block finalize).
 func TestReviewFacadeFinalizeNewLineageFollowUpFindingsDoNotBlock(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "finalize-followups-dont-block-lineage"
 	startNewLineageForFinalizeTest(t, repo, lineage)
@@ -211,7 +211,7 @@ func TestReviewFacadeFinalizeNewLineageFollowUpFindingsDoNotBlock(t *testing.T) 
 // new lineage still finalizes after rollback", whose GIVEN is literally a
 // `correcting` lineage.
 func TestReviewFacadeFinalizeNewLineageCorrectingStateReachesReceipt(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "finalize-correcting-lineage"
 	startNewLineageForFinalizeTest(t, repo, lineage)

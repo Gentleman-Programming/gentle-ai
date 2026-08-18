@@ -35,6 +35,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 var gateBoundaryMatrixGates = []string{
@@ -228,7 +231,19 @@ func decodeGateBoundaryMatrixResult(t *testing.T, payload string) gateBoundaryMa
 // see each SKIP's own comment above for why it is not wired yet.
 func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 	binary := gateBoundaryMatrixBinary(t)
+	// Every wired cell drives a real review through the compiled binary, and
+	// receipt-driven development is opt-in, so this shared home carries the same
+	// explicit global "on" that `gentle-ai review mode enable` persists. Without
+	// it every cell would be refused at start for a reason the matrix is not
+	// about. The gate algebra under test is unaffected by how the mode got set.
 	gateBoundaryMatrixHome = t.TempDir()
+	recordedAt := time.Now().UTC()
+	if err := state.Write(gateBoundaryMatrixHome, state.InstallState{
+		RDDMode:           string(RDDModeOn),
+		RDDModeRecordedAt: &recordedAt,
+	}); err != nil {
+		t.Fatalf("enable review mode for the gate boundary matrix: %v", err)
+	}
 	t.Cleanup(func() { gateBoundaryMatrixHome = "" })
 	wired := map[[2]string]gateBoundaryMatrixRow{}
 

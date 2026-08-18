@@ -36,7 +36,7 @@ import (
 // governs real content through it. No production code changes were needed
 // for this half of #2586; this test is the proof.
 func TestZeroDeltaReceiptNeverGovernsANonEmptyDeliveryGate(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	configureCLIReviewPublicationRemote(t, repo, branch)

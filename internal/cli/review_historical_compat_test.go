@@ -122,6 +122,7 @@ func injectCLIRetiredRecoveryReviewStart(t *testing.T, statePath string) {
 }
 
 func TestReviewStatusReportsHistoricalRecoveredStartLineage(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("recovered candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -223,6 +224,7 @@ func TestReviewBundleExportRefusesHistoricalZeroEditEscalationClearly(t *testing
 }
 
 func TestReviewFacadeExplicitFinalizeCompletesWithHistoricalZeroEditEscalationRecord(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("historical candidate\n"), 0o644); err != nil {
 		t.Fatal(err)

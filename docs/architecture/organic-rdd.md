@@ -10,7 +10,7 @@ Receipt-Driven Development used to be a control plane. A change was routed into 
 
 **Tier is decided by evidence, never by size.** A thousand-line documentation change is tier 0 and gets no reviewer. Two lines touching authentication are tier 2 and get four. The classifier names its own reason, so the cost is never unexplained.
 
-**The switch is a switch.** `gentle-ai review mode disable` means RDD does not exist: nothing blocks, nothing gates, delivery falls to ordinary repository policy. Turning it back on re-validates from the current state rather than resuming stale obligations.
+**The switch is a switch, and it starts off.** RDD is opt-in: until someone runs `gentle-ai review mode enable --scope global`, RDD does not exist — nothing blocks, nothing gates, delivery falls to ordinary repository policy. `gentle-ai review mode disable` returns to that same state. Turning it on re-validates from the current state rather than resuming stale obligations.
 
 ## 2. The lifecycle
 

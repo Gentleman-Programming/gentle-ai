@@ -28,6 +28,7 @@ func captureEvidenceDescriptorJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j66-v5-capture-evidence-descriptors-execute",
+			Review: reviewOptedIn,
 			Title:  "STATUS v5 capture-evidence descriptor executes normal verification without caller-built bindings",
 			Source: "issue #2248: provider-owned capture-evidence descriptors must advance ordinary verification",
 			Steps: []Step{
@@ -47,6 +48,7 @@ func captureEvidenceDescriptorJourneys() []Journey {
 		},
 		{
 			ID:     "j67-v5-capture-evidence-correction-descriptor-executes",
+			Review: reviewOptedIn,
 			Title:  "STATUS v5 capture-evidence descriptor executes corrected verification without caller-built bindings",
 			Source: "issue #2248: provider-owned capture-evidence descriptors must advance correction verification",
 			Steps: []Step{
@@ -67,6 +69,7 @@ func captureEvidenceDescriptorJourneys() []Journey {
 		},
 		{
 			ID:     "j95-targeted-validator-inspects-provider-bound-corrected-tree",
+			Review: reviewOptedIn,
 			Title:  "Targeted validator inspects STATUS-bound corrected trees through live worktree drift",
 			Source: "issue #2945: corrected targeted validation must inspect only the provider-bound immutable candidate",
 			Steps: []Step{

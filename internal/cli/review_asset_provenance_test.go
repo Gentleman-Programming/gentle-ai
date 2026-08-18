@@ -44,7 +44,7 @@ func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			home, repo := reviewModeHome(t), initReviewCLIRepo(t)
+			home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 			refuse, err := run(t, home, repo)
 			if refuse && (err == nil || !bytes.Contains([]byte(err.Error()), []byte(managedAssetProvenanceRefusal))) {
 				t.Fatalf("authority bypass error = %v, want %q", err, managedAssetProvenanceRefusal)
@@ -71,14 +71,14 @@ func TestManagedReviewerAssetProvenanceAuthorityBoundary(t *testing.T) {
 }
 func TestManagedReviewerAssetProvenanceReceiptOrdering(t *testing.T) {
 	t.Run("corrupt compact receipt", func(t *testing.T) {
-		home, repo := reviewModeHome(t), initReviewCLIRepo(t)
+		home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 		_, store := approveDiscoveryMarkdown(t, repo, "provenance-corrupt", "docs/review.md", "reviewed\n")
 		requireManagedAssetProvenanceNoError(t, os.WriteFile(store.ReceiptPath(), []byte("{"), 0o644))
 		staleManagedReviewerAssets(t, home)
 		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-commit"}, &bytes.Buffer{}), "complete review authority inventory is unavailable or corrupted")
 	})
 	t.Run("escalated compact receipt", func(t *testing.T) {
-		home := reviewModeHome(t)
+		home := reviewEnabledHome(t)
 		repo, _, record := escalatedCurrentChangesRecoveryFixture(t, "provenance-escalated")
 		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, record.State.LineageID)
 		requireManagedAssetProvenanceNoError(t, err)
@@ -90,14 +90,14 @@ func TestManagedReviewerAssetProvenanceReceiptOrdering(t *testing.T) {
 		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-commit"}, &bytes.Buffer{}), "compact review authority is escalated (budget_exceeded)")
 	})
 	t.Run("valid legacy receipt", func(t *testing.T) {
-		home := reviewModeHome(t)
+		home := reviewEnabledHome(t)
 		fixture := newLegacyCLIFixture(t, "provenance-legacy")
 		runReviewCLIGit(t, fixture.repo, "add", "tracked.txt")
 		staleManagedReviewerAssets(t, home)
 		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", fixture.repo, "--lineage", fixture.lineage, "--gate", "pre-commit"}, &bytes.Buffer{}), managedAssetProvenanceRefusal)
 	})
 	t.Run("in-flight compact receipt", func(t *testing.T) {
-		home, repo := reviewModeHome(t), initReviewCLIRepo(t)
+		home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 		startNewLineageForFinalizeTest(t, repo, "provenance-inflight")
 		staleManagedReviewerAssets(t, home)
 		requireManagedAssetProvenanceError(t, RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", "provenance-inflight", "--gate", "pre-commit"}, &bytes.Buffer{}), reviewFacadeReceiptNotAvailableReason("provenance-inflight"))
@@ -143,7 +143,7 @@ func TestManagedReviewerAssetProvenanceRefusesOnlyRecordedSkew(t *testing.T) {
 }
 
 func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *testing.T) {
-	home, repo := reviewModeHome(t), initReviewCLIRepo(t)
+	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/stale-assets.md", "# Candidate\n", 0o644)
 	staleManagedReviewerAssets(t, home)
 
@@ -169,11 +169,11 @@ func TestNegotiatedReviewStartClassifiesStaleManagedAssetsBeforeAuthority(t *tes
 }
 
 func TestNegotiatedReviewStartWithCurrentManagedAssetsStillStarts(t *testing.T) {
-	home, repo := reviewModeHome(t), initReviewCLIRepo(t)
+	home, repo := reviewEnabledHome(t), initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/current-assets.md", "# Candidate\n", 0o644)
 	digest, err := managedAssetDigest()
 	requireManagedAssetProvenanceNoError(t, err)
-	requireManagedAssetProvenanceNoError(t, state.Write(home, state.InstallState{ManagedAssetDigest: digest}))
+	recordManagedAssetDigest(t, home, digest)
 
 	var output bytes.Buffer
 	err = RunReview(boundNegotiatedStartArgs(t, []string{
@@ -217,8 +217,31 @@ func TestManagedAssetDigestIsStableAndAssetBound(t *testing.T) {
 	}
 }
 
+// staleManagedReviewerAssets records an asset digest that disagrees with this
+// binary's, which is the only skew the provenance guard refuses on.
+//
+// It reads the existing user state and rewrites only that one field. A blind
+// state.Write would also erase the explicit global "on" these fixtures depend
+// on -- receipt-driven development is opt-in, so wiping it would turn every
+// following gate into a disabled/unmanaged report and the provenance refusal
+// under test would never be reached.
 func staleManagedReviewerAssets(t *testing.T, home string) {
-	requireManagedAssetProvenanceNoError(t, state.Write(home, state.InstallState{ManagedAssetDigest: "sha256:stale"}))
+	t.Helper()
+	recordManagedAssetDigest(t, home, "sha256:stale")
+}
+
+// recordManagedAssetDigest rewrites only the recorded managed-asset digest,
+// preserving every other opinion already persisted in the user's state.
+func recordManagedAssetDigest(t *testing.T, home, digest string) {
+	t.Helper()
+	// A home with nothing persisted yet is an ordinary starting point here, so
+	// an absent state file seeds an empty one rather than failing the fixture.
+	persisted, err := state.Read(home)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	persisted.ManagedAssetDigest = digest
+	requireManagedAssetProvenanceNoError(t, state.Write(home, persisted))
 }
 func requireManagedAssetProvenanceNoError(t *testing.T, err error) {
 	t.Helper()

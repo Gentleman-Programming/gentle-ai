@@ -107,7 +107,7 @@ func assertDisabledUnmanagedGate(t *testing.T, runErr error, payload []byte) Rev
 // them. Nothing is chosen here: the gate declines to manage, emits no lineage
 // and no receipt, and ordinary repository policy decides.
 func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMultipleExactReceipts(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	_ = approveTwoExactlyGoverningReceipts(t, repo)
 
@@ -151,7 +151,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMultipleExactReceipts
 // runs discovery at all, so it has nothing to name). The property survives
 // here because discovery genuinely still runs while reviews are ON.
 func TestReviewValidateKeepsFailingClosedOnMultipleExactReceiptsWhileEnabled(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	lineages := approveTwoExactlyGoverningReceipts(t, repo)
 
@@ -195,7 +195,7 @@ func TestReviewValidateKeepsFailingClosedOnMultipleExactReceiptsWhileEnabled(t *
 // the same damage and blocks, so nothing is forgiven, only deferred; while
 // disabled, the damage simply never gets read in the first place.
 func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthority(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -224,7 +224,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthority(t 
 // (Wave 5 Slice 2: this is now the sole home of that visibility property; the
 // disabled half above no longer discovers the corruption at all).
 func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -276,7 +276,7 @@ func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled(t *tes
 // behind `if !negotiated`, so the identical repository that exits 0 for a human
 // exited 1 for any caller driving the negotiated contract.
 func TestReviewValidateNegotiatedContractReportsDisabledUnmanagedDelivery(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	logicalPath := "docs/negotiated-stale.md"
 	_, storeA := approveDiscoveryMarkdownProjection(t, repo, "review-disabled-reach-negotiated-a", logicalPath, "reviewed\n", reviewtransaction.ProjectionWorkspace)
@@ -316,7 +316,7 @@ func TestReviewValidateNegotiatedContractReportsDisabledUnmanagedDelivery(t *tes
 // negotiated regression: with reviews on, the same repository still produces
 // the typed failure envelope and a non-zero exit.
 func TestReviewValidateNegotiatedContractKeepsFailingClosedWhileEnabled(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	logicalPath := "docs/negotiated-stale.md"
 	_, storeA := approveDiscoveryMarkdownProjection(t, repo, "review-enabled-reach-negotiated-a", logicalPath, "reviewed\n", reviewtransaction.ProjectionWorkspace)
@@ -354,6 +354,7 @@ func TestReviewValidateNegotiatedContractKeepsFailingClosedWhileEnabled(t *testi
 // whose enabled half asserts the same message (errReviewMixedCompactLegacyAuthority
 // is returned directly while enabled, since discovery genuinely still runs).
 func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMixedCompactAndLegacyAuthority(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := newLegacyCLIFixture(t, "review-disabled-reach-mixed-legacy")
 	finalizeFacadeReviewForRepo(t, fixture.repo)
 
@@ -372,7 +373,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMixedCompactAndLegacy
 // once reviews are back on the gate blocks, and a fresh START re-freezes the
 // CURRENT candidate instead of resuming the pre-disable obligation.
 func TestReviewValidateReValidatesFromScratchAfterReEnabling(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -658,7 +659,7 @@ func TestDisabledGateNeverEmitsAllowOrCreatesReceipt(t *testing.T) {
 	outputs := make(map[string][]byte, len(cases))
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			testCase.stage(t, repo)
 			disableReviewForClone(t, repo)

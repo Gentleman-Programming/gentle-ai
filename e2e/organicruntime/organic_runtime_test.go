@@ -101,6 +101,7 @@ const (
 
 	organicGateAllow = "allow"
 	organicModeOff   = "off"
+	organicModeOn    = "on"
 )
 
 var organicBinary string
@@ -1911,7 +1912,7 @@ func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
 		t.Fatalf("disabled window produced a review gate instead of structural absence: %#v", disabled.ReviewGate)
 	}
 
-	if mode := harness.enableReview(); mode.Status.Effective != "on" {
+	if mode := harness.enableReview(); mode.Status.Effective != organicModeOn {
 		t.Fatalf("re-enable produced no typed outcome: %#v", mode)
 	}
 
@@ -2074,7 +2075,7 @@ func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *te
 	// Re-enabling rediscovers the SAME unmutated receipt, and it governs
 	// again exactly as before withdrawal -- proving the switch never touched
 	// the authority itself, only whether it is consulted.
-	if mode := harness.enableReview(); mode.Status.Effective != "on" {
+	if mode := harness.enableReview(); mode.Status.Effective != organicModeOn {
 		t.Fatalf("re-enabling did not take effect: %#v", mode)
 	}
 	reEnabledGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
@@ -2103,9 +2104,32 @@ type organicHarness struct {
 	home string
 }
 
+// newOrganicHarness builds the shared fixture every review-lifecycle journey
+// runs against: a seeded repository, an isolated HOME, and an explicit global
+// opt-in into receipt-driven development.
+//
+// The opt-in is part of the fixture rather than of each journey because review
+// is off unless somebody turns it on. A fresh HOME therefore reproduces a fresh
+// install, where every `review start` is refused before it can reach the
+// behaviour under test. Performing the opt-in the way an operator would --
+// through the real command, against this run's own HOME -- keeps the journeys
+// about the lifecycle instead of about the default, and leaves the kill-switch
+// journeys with a real `on` to switch off.
 func newOrganicHarness(t *testing.T) *organicHarness {
 	t.Helper()
 	harness := &organicHarness{t: t, repo: initOrganicRepository(t), home: t.TempDir()}
+	harness.enableReviewGlobally()
+	return harness
+}
+
+// newOrganicHarnessForWorktree wraps an already-initialized worktree in the
+// same fixture. Journeys that need a repository shape initOrganicRepository
+// cannot produce (an unborn HEAD, for instance) build the worktree themselves,
+// but they still need the isolated HOME and the same global opt-in.
+func newOrganicHarnessForWorktree(t *testing.T, worktree string) *organicHarness {
+	t.Helper()
+	harness := &organicHarness{t: t, repo: organicRepository{worktree: worktree}, home: t.TempDir()}
+	harness.enableReviewGlobally()
 	return harness
 }
 
@@ -2318,9 +2342,30 @@ func (harness *organicHarness) disableReview() organicModeResult {
 	return mode
 }
 
-// enableReview flips the clone-local kill switch back on: the other half of
-// the disable journeys, and the point where issue #1877's re-enable sequence
-// begins.
+// enableReviewGlobally records the user-scoped `on` this fixture's isolated
+// HOME needs before any review may start.
+//
+// Only the global scope can assert `on`. A clone-local enable merely clears
+// this clone's own `off` opinion, so it can never stand in for this call: with
+// no global opinion recorded, clearing the clone override just falls back to
+// the default, which keeps review off.
+func (harness *organicHarness) enableReviewGlobally() organicModeResult {
+	harness.t.Helper()
+	payload := harness.gentle("review", "mode", "enable", "--cwd", harness.repo.worktree, "--scope", "global", "--json")
+	var mode organicModeResult
+	if err := json.Unmarshal(payload, &mode); err != nil {
+		harness.t.Fatalf("decode review mode: %v\n%s", err, payload)
+	}
+	if mode.Status.Effective != organicModeOn {
+		harness.t.Fatalf("global opt-in left review off: %#v", mode)
+	}
+	return mode
+}
+
+// enableReview clears this clone's `off` opinion: the other half of the disable
+// journeys, and the point where issue #1877's re-enable sequence begins. It
+// restores the fixture's global `on` rather than asserting one of its own,
+// because a repository-scoped source may only ever disable.
 func (harness *organicHarness) enableReview() organicModeResult {
 	harness.t.Helper()
 	payload := harness.gentle("review", "mode", "enable", "--cwd", harness.repo.worktree, "--scope", "clone", "--json")

@@ -27,6 +27,7 @@ import (
 // handle re-publication on revision advance ever regresses, this test goes
 // red naming the exact hop.
 func TestCorrectionPhaseRepositoryContextStaysExecutable(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	// Reporter's shape: two newly added source files, staged projection.
 	for name, content := range map[string]string{

@@ -65,19 +65,21 @@ The binaries are on the prerelease page: **https://github.com/Gentleman-Programm
 
 ### Flow 2: Kill switch
 
-1. [ ] `gentle-ai review mode status --cwd $HOME/demo --json` → **Expected**: effective `on`, with the source that decides it.
-2. [ ] `gentle-ai review mode disable --cwd $HOME/demo` → **Expected**: it confirms reviews are off.
-3. [ ] `status` again → **Expected**: effective `off`, source `global`.
-4. [ ] `gentle-ai review start --cwd $HOME/demo` → **Expected**: refused, naming that reviews are turned off **and naming the command that turns them back on**, scoped to the source that actually decided:
+1. [ ] `gentle-ai review mode status --cwd $HOME/demo --json` → **Expected**: effective `off`, source `default` — receipt-driven development is opt-in, so a fresh install reviews nothing until you ask it to.
+2. [ ] `gentle-ai review start --cwd $HOME/demo` → **Expected**: refused, naming that reviews are off **and naming the command that turns them on**:
 
 ```
-receipt-driven development is disabled: start is rejected because the global mode source
-keeps it off; turn it back on with gentle-ai review mode enable --scope=global
+receipt-driven development is disabled: start is rejected because the default mode source
+keeps it off; turn reviews on with gentle-ai review mode enable --scope=global
 ```
 
-It does NOT hang, it does NOT review. A refusal that exits non-zero and names no command is the defect. If you turned it off at clone scope, the scope in the message must say `clone`, not `global`.
-5. [ ] `enable` and `status` → **Expected**: `on` again.
-6. [ ] `disable --scope clone`, clone (`git clone $HOME/demo $HOME/demo2`) and `status` in `demo2` → **Expected**: `demo2` gives **on** — turning a clone off is NOT inherited.
+It does NOT hang, it does NOT review. A refusal that exits non-zero and names no command is the defect.
+3. [ ] `gentle-ai review mode enable --scope global --cwd $HOME/demo` then `status` → **Expected**: effective `on`, source `global`.
+4. [ ] `gentle-ai review mode disable --cwd $HOME/demo` → **Expected**: it confirms reviews are off.
+5. [ ] `status` again → **Expected**: effective `off`, source `global` (an explicit off, not the default).
+6. [ ] `gentle-ai review start --cwd $HOME/demo` → **Expected**: the same shape of refusal, naming commands that actually reach `on` from where you are. If you turned it off at clone scope, the message must name `--scope=global` **then** `--scope=clone`: clearing the clone override alone drops you on the opt-in default, still off.
+7. [ ] `enable --scope global` and `status` → **Expected**: `on` again.
+8. [ ] `disable --scope clone`, clone (`git clone $HOME/demo $HOME/demo2`) and `status` in `demo2` → **Expected**: `demo2` gives **on** (the global enable still applies) — turning a clone off is NOT inherited.
 7. [ ] **Before moving on**: `enable --scope clone` in `demo` → **Expected**: `on`.
 
 ### Flow 3: Documentation-only change (zero ceremony)

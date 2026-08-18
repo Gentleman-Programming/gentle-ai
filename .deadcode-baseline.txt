@@ -127,6 +127,8 @@ internal/reviewtransaction/rar_plan_authority.go	rarPlanAuthorityDigest
 internal/reviewtransaction/rar_plan_authority.go	validatePlanEffectBinding
 internal/reviewtransaction/rar_plan_authority.go	verificationEffectAuthorizationDigest
 internal/reviewtransaction/rar_plan_authority.go	verificationFrozenPlanConsentDigest
+internal/reviewtransaction/rar_windows_owner_trust.go	rarWindowsOwnerOnlyMismatch
+internal/reviewtransaction/rar_windows_owner_trust.go	rarWindowsRepairOwnerControlled
 internal/reviewtransaction/rdd_mode.go	AuthorizeRDDCandidate
 internal/reviewtransaction/receipt_ref.go	strictDecodeSDDReceiptRef
 internal/reviewtransaction/repository_locator.go	RepositoryIdentityLease.StorageKey
@@ -141,7 +143,6 @@ internal/reviewtransaction/snapshot.go	sanitizedGitEnvironment
 internal/reviewtransaction/snapshot.go	snapshotIdentity
 internal/reviewtransaction/store.go	SnapshotsEqualExact
 internal/reviewtransaction/store.go	WriteReceiptAtomic
-internal/reviewtransaction/store_lock.go	AcquireReviewMaintenanceExclusive
 internal/reviewtransaction/target_status.go	AssessTargetStatus
 internal/reviewtransaction/target_status.go	compactLiveTargetMatchesSnapshot
 internal/reviewtransaction/target_status.go	legacyLiveTargetMatchesSnapshot
@@ -149,6 +150,7 @@ internal/reviewtransaction/transaction.go	CanonicalLensResult
 internal/reviewtransaction/transaction.go	NewLineage
 internal/reviewtransaction/transaction.go	NewTransaction
 internal/reviewtransaction/transaction.go	Transaction.addFixFinding
+internal/reviewtransaction/tree_blob.go	RestoreTreeBlob
 internal/reviewtransaction/verification_contract.go	AggregateVerificationCost
 internal/reviewtransaction/verification_contract.go	BuildCorrectionImpactClosure
 internal/reviewtransaction/verification_contract.go	BuildVerificationPlan

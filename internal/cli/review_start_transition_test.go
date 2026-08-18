@@ -13,6 +13,7 @@ import (
 )
 
 func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Run("workspace and explicit lineage", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repo, "tracked.txt", "workspace\n", 0o644)
@@ -74,6 +75,7 @@ func TestStatusStartTransitionPreservesFrozenTarget(t *testing.T) {
 }
 
 func TestNegotiatedStatusStartReplayCanonicalBaseDiffStaged(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "committed\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
@@ -93,6 +95,7 @@ func TestNegotiatedStatusStartReplayCanonicalBaseDiffStaged(t *testing.T) {
 }
 
 func TestNegotiatedStatusInterpretsCommittedOnlyValue(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	tests := []struct {
 		name string
@@ -142,7 +145,7 @@ func TestNegotiatedStatusInterpretsCommittedOnlyValue(t *testing.T) {
 }
 
 func TestNegotiatedV2FreshStatusIncludesExactConsentRelay(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
 
@@ -183,6 +186,7 @@ func TestNegotiatedV2FreshStatusIncludesExactConsentRelay(t *testing.T) {
 }
 
 func TestNegotiatedStartRejectsIncompleteBindingsWithoutAuthority(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 	status := negotiatedStartStatus(t, repo)
@@ -243,6 +247,7 @@ func TestNegotiatedStartRejectsIncompleteBindingsWithoutAuthority(t *testing.T) 
 }
 
 func TestLegacyStartPreservesDuplicateNonBindingFlags(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 	if err := RunReviewFacadeStart([]string{
@@ -257,6 +262,7 @@ func TestLegacyStartPreservesDuplicateNonBindingFlags(t *testing.T) {
 }
 
 func TestNegotiatedStartRevalidatesFrozenTargetBeforeCreate(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 	status := negotiatedStartStatus(t, repo, "--lineage", "start-live-revalidation")
@@ -283,6 +289,7 @@ func TestNegotiatedStartRevalidatesFrozenTargetBeforeCreate(t *testing.T) {
 }
 
 func TestStatusRejectsNonCanonicalStartTransition(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 	valid := negotiatedStartStatus(t, repo)

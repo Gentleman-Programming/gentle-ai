@@ -14,8 +14,7 @@ import (
 )
 
 func TestSubmissionDescriptorsAreBoundAndExecuteOneValueOnly(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo, started, store := submissionDescriptorCorrectionFixture(t)
 	status := submissionDescriptorStatus(t, repo, started.LineageID)
 	correction := submissionDescriptorInput(t, status)
@@ -259,8 +258,7 @@ func assertSubmissionTransitionSchema(t *testing.T, status ReviewTargetStatusRes
 }
 
 func TestCaptureEvidenceDescriptorExecutesExactV5Transition(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	reviewEnabledHome(t)
 	repo, started, _, _, _ := capturedArtifact(t)
 	if err := RunReviewFacadeFinalize([]string{
 		"--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", repo,

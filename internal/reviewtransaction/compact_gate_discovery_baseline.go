@@ -69,5 +69,5 @@ func CompactLeafProvablyUnrelatedToPreCommitBaseline(state CompactState, baselin
 	if current.CandidateTree == baseline.HeadTree || current.CandidateTree == baseline.CandidateTree {
 		return false
 	}
-	return classifyCompactPathSetRelation(state.GenesisPaths, baseline.Paths) == compactPathsDisjoint
+	return classifyCompactPathSetRelation(state.CorrectionScopePaths(), baseline.Paths) == compactPathsDisjoint
 }

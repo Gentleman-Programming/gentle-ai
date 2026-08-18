@@ -76,6 +76,7 @@ func escalatedIntendedUntrackedRecoveryFixture(t *testing.T, lineage string) (st
 // under review. The rc.7 reporter's client refused to treat that partial
 // review as approval, which is the only reason this was caught.
 func TestReviewRecoverInheritsDeclaredIntendedUntracked(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := escalatedIntendedUntrackedRecoveryFixture(t, "recover-3159")
 
 	// Apply the fix that verification asked for: the successor candidate must
@@ -134,6 +135,7 @@ func TestReviewRecoverInheritsDeclaredIntendedUntracked(t *testing.T) {
 // An untracked file that appeared after the predecessor froze must stay out
 // of the successor, no matter that it would be eligible for a fresh START.
 func TestReviewRecoverStillNeverSweepsUndeclaredUntracked(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := escalatedIntendedUntrackedRecoveryFixture(t, "recover-3159-nosweep")
 
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\ncorrected\n"), 0o644); err != nil {

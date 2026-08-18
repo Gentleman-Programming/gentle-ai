@@ -15,6 +15,7 @@ import (
 )
 
 func TestNegotiatedReviewFinalizeRejectsStaleLiveTargetWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	tests := []struct {
 		name     string
 		explicit bool
@@ -53,6 +54,7 @@ func TestNegotiatedReviewFinalizeRejectsStaleLiveTargetWithoutMutation(t *testin
 }
 
 func TestNegotiatedReviewFinalizeRejectsStaleZeroTransitionWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, explicit := range []bool{true, false} {
 		name := "implicit sole lineage"
 		if explicit {
@@ -82,7 +84,9 @@ func TestNegotiatedReviewFinalizeRejectsStaleZeroTransitionWithoutMutation(t *te
 }
 
 func TestReviewFinalizeAcceptsExactLiveTargetSemantics(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	tests := []struct {
 		name    string
@@ -140,6 +144,7 @@ func TestReviewFinalizeAcceptsExactLiveTargetSemantics(t *testing.T) {
 }
 
 func TestReviewFinalizeCrowdedStoreSelectsOnlyFullLiveSnapshotMatch(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "target\n", 0o644)
 	writeReviewStartCandidate(t, repo, "scope.txt", "scope\n", 0o644)
@@ -206,6 +211,7 @@ func TestReviewFinalizeCrowdedStoreSelectsOnlyFullLiveSnapshotMatch(t *testing.T
 }
 
 func TestReviewFinalizeConvergesCommittedPendingJournalAfterWorktreeDrift(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "tracked.txt", "candidate\n", 0o644)
 	started, store, resultArgs := startFinalizeLiveTarget(t, repo, "finalize-pending-drift")
@@ -241,7 +247,9 @@ func TestReviewFinalizeConvergesCommittedPendingJournalAfterWorktreeDrift(t *tes
 }
 
 func TestReviewFinalizeBindsCorrectedRetrySuccessorToLiveFixDiff(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	for _, drift := range []bool{false, true} {
 		name := "exact"
@@ -383,6 +391,7 @@ func assertFinalizeLiveTargetDenied(t *testing.T, repo, lineage string, resultAr
 }
 
 func TestNegotiatedReviewFinalizeRejectsReviewerPreflightWithoutAuthorityMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	tests := []struct {
 		name    string
 		payload string
@@ -453,6 +462,7 @@ func TestNegotiatedReviewFinalizeRejectsReviewerPreflightWithoutAuthorityMutatio
 }
 
 func TestNegotiatedReviewFinalizeRetriesSameLineageAfterReviewerSchemaRejection(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -531,6 +541,7 @@ func TestNegotiatedReviewFinalizeRetriesSameLineageAfterReviewerSchemaRejection(
 }
 
 func TestNegotiatedReviewFinalizeRequiresExplicitLineageWhenAuthorityIsAmbiguous(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)

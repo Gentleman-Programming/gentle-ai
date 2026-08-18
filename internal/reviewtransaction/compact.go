@@ -55,6 +55,12 @@ type CompactSemanticStateError struct {
 	// damaged: diagnostics classify it historical instead of malformed, and
 	// no scoped walk lets it block another lineage's operation.
 	OutdatedIdentity bool
+	// PriorSchemaPredecessorLineageID names the recovery predecessor an
+	// OutdatedIdentity record froze, recovered through the same read-only
+	// forensic parse that proved the prior-schema classification. It lets a
+	// scoped ancestry audit keep walking past inert prior-schema history; it
+	// is forensic classification only and never live authority.
+	PriorSchemaPredecessorLineageID string
 }
 
 func (err *CompactSemanticStateError) Error() string {
@@ -91,6 +97,7 @@ type CompactState struct {
 	InitialSnapshot              Snapshot                     `json:"initial_snapshot"`
 	CurrentSnapshot              Snapshot                     `json:"current_snapshot"`
 	GenesisPaths                 []string                     `json:"genesis_paths"`
+	CorrectionAddedPaths         []string                     `json:"correction_added_paths,omitempty"`
 	PolicyHash                   string                       `json:"policy_hash"`
 	RiskLevel                    RiskLevel                    `json:"risk_level"`
 	SelectedLenses               []string                     `json:"selected_lenses"`
@@ -294,14 +301,23 @@ type CompactRecoveredEvidence struct {
 }
 
 type CompactReceipt struct {
-	Schema                    string              `json:"schema"`
-	LineageID                 string              `json:"lineage_id"`
-	Projection                Projection          `json:"projection,omitempty"`
-	Generation                int                 `json:"generation"`
-	BaseTree                  string              `json:"base_tree"`
-	InitialReviewTree         string              `json:"initial_review_tree"`
-	FinalCandidateTree        string              `json:"final_candidate_tree"`
-	PathsDigest               string              `json:"paths_digest"`
+	Schema             string     `json:"schema"`
+	LineageID          string     `json:"lineage_id"`
+	Projection         Projection `json:"projection,omitempty"`
+	Generation         int        `json:"generation"`
+	BaseTree           string     `json:"base_tree"`
+	InitialReviewTree  string     `json:"initial_review_tree"`
+	FinalCandidateTree string     `json:"final_candidate_tree"`
+	PathsDigest        string     `json:"paths_digest"`
+	// CorrectionAddedPaths discloses the companion test paths one admitted
+	// bounded correction added beyond the reviewed genesis manifest (issue
+	// #3375). PathsDigest already covers them, so delivery works; this field
+	// exists so an auditor can see WHICH delivered paths no lens inspected
+	// rather than having to infer it. It is omitempty, and absence means the
+	// correction stayed inside the reviewed manifest — which is every receipt
+	// issued before this field existed, so each of those stays byte-identical
+	// under re-derivation.
+	CorrectionAddedPaths      []string            `json:"correction_added_paths,omitempty"`
 	FixDeltaHash              string              `json:"fix_delta_hash"`
 	PolicyHash                string              `json:"policy_hash"`
 	EvidenceHash              string              `json:"evidence_hash"`
@@ -483,7 +499,14 @@ func (state CompactState) Validate() error {
 	if err != nil || !equalStrings(paths, state.GenesisPaths) || !equalStrings(state.GenesisPaths, state.InitialSnapshot.Paths) {
 		return errors.New("compact genesis paths must exactly match the canonical initial scope")
 	}
-	if err := pathsAreSubset(state.CurrentSnapshot.Paths, state.GenesisPaths); err != nil {
+	if err := validateCompactCorrectionAddedPaths(state); err != nil {
+		return err
+	}
+	candidateScope, err := compactCorrectionCandidateScope(state)
+	if err != nil {
+		return err
+	}
+	if err := pathsAreSubset(state.CurrentSnapshot.Paths, candidateScope); err != nil {
 		return err
 	}
 	if !validSHA256(state.PolicyHash) || !validSHA256(state.FixDeltaHash) {
@@ -789,10 +812,14 @@ func validateCompactCorrection(state CompactState) error {
 		return errors.New("compact cumulative correction lines require persisted attempts")
 	}
 	if len(state.CorrectionAttempts) > 0 {
+		candidateScope, scopeErr := compactCorrectionCandidateScope(state)
+		if scopeErr != nil {
+			return errors.New("compact correction attempt is outside frozen scope")
+		}
 		base, cumulative := state.InitialSnapshot.CandidateTree, 0
 		for _, attempt := range state.CorrectionAttempts {
 			if attempt.ProposedLines <= 0 || attempt.ActualLines < 0 || attempt.Snapshot.Kind != TargetFixDiff || attempt.Snapshot.Projection != state.InitialSnapshot.Projection || attempt.Snapshot.BaseTree != base ||
-				!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(attempt.Snapshot.Paths, state.GenesisPaths) != nil ||
+				!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(attempt.Snapshot.Paths, candidateScope) != nil ||
 				validateCompactSnapshot(attempt.Snapshot) != nil || validateCompactSnapshotMetadata(attempt.Snapshot) != nil ||
 				attempt.FixDeltaHash != FixDeltaHashForSnapshot(attempt.Snapshot) {
 				return errors.New("compact correction attempt is outside frozen scope")
@@ -840,7 +867,7 @@ func validateCompactCorrection(state CompactState) error {
 			state.OriginalCriteria != nil || state.CorrectionRegression != nil || state.FixDeltaHash != EmptyFixDeltaHash ||
 			target.Kind != TargetFixDiff || target.Projection != state.InitialSnapshot.Projection ||
 			target.BaseTree != state.CurrentSnapshot.CandidateTree || !equalStrings(target.LedgerIDs, state.FixFindingIDs) ||
-			pathsAreSubset(target.Paths, state.GenesisPaths) != nil {
+			correctionScopeRefused(target.Paths, state.GenesisPaths) {
 			return errors.New("procedural correction verification target is invalid") // refusal:by-design world-action: persisted terminal evidence targets an invalid correction snapshot and cannot authorize continuation
 		}
 		if err := validateCompactSnapshot(*target); err != nil {
@@ -909,11 +936,15 @@ func validateCompactCorrection(state CompactState) error {
 
 func validateCompactCorrectedCandidate(state CompactState, correction Snapshot) error {
 	current, initial := state.CurrentSnapshot, state.InitialSnapshot
+	candidateScope, scopeErr := compactCorrectionCandidateScope(state)
+	if scopeErr != nil {
+		return errors.New("terminal correction authority does not preserve the complete reviewed candidate") // refusal:by-design world-action: contradictory persisted authority requires code or storage repair
+	}
 	if current.Kind != initial.Kind || current.Projection != initial.Projection || current.UnbornHead != correction.UnbornHead ||
 		current.BaseTree != initial.BaseTree || current.CandidateTree != correction.CandidateTree ||
 		current.IntendedUntrackedProof != correction.IntendedUntrackedProof ||
 		!equalStrings(current.IntendedUntracked, initial.IntendedUntracked) || !equalStrings(current.LedgerIDs, initial.LedgerIDs) ||
-		pathsAreSubset(current.Paths, state.GenesisPaths) != nil {
+		pathsAreSubset(current.Paths, candidateScope) != nil {
 		return errors.New("terminal correction authority does not preserve the complete reviewed candidate") // refusal:by-design world-action: contradictory persisted authority requires code or storage repair
 	}
 	return nil
@@ -939,7 +970,17 @@ func validateCompactRecoveredCorrection(state CompactState, evidence CompactReco
 		attempt.Snapshot.CandidateTree != state.InitialSnapshot.CandidateTree ||
 		attempt.Snapshot.Projection != state.InitialSnapshot.Projection ||
 		!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) ||
-		pathsAreSubset(attempt.Snapshot.Paths, state.GenesisPaths) != nil ||
+		// The imported attempt is measured the way every other attempt-facing
+		// check measures one (validateCompactCorrection, correctionTargetFrozen,
+		// targetedValidationRequestForCorrection): against the frozen genesis
+		// manifest THROUGH the correction admission, not against the delivery
+		// scope. The delivery scope is rolled back when a correction escalates,
+		// and an accounting-only escalation is exactly what this recovery
+		// imports, so measuring against it would refuse a companion test path
+		// the correction was entitled to add and leave the attempt with no way
+		// to be revalidated. Admission still refuses everything a correction
+		// could not have added, so nothing unreviewed enters here.
+		correctionScopeRefused(attempt.Snapshot.Paths, state.GenesisPaths) ||
 		attempt.FixDeltaHash != FixDeltaHashForSnapshot(attempt.Snapshot) || state.FixDeltaHash != attempt.FixDeltaHash ||
 		state.OriginalCriteria == nil || state.CorrectionRegression == nil ||
 		*state.OriginalCriteria != attempt.OriginalCriteria || *state.CorrectionRegression != attempt.CorrectionRegression ||
@@ -1416,7 +1457,8 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	if snapshot.CandidateTree == snapshot.BaseTree {
 		return errors.New("compact correction has an unchanged candidate tree")
 	}
-	if err := pathsAreSubset(snapshot.Paths, state.GenesisPaths); err != nil {
+	added, err := admitCorrectionScope(snapshot.Paths, state.GenesisPaths)
+	if err != nil {
 		return err
 	}
 	if actual < 0 {
@@ -1443,9 +1485,18 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	original, regression := validation.OriginalCriteria, validation.CorrectionRegression
 	state.OriginalCriteria, state.CorrectionRegression = &original, &regression
 	if state.CumulativeCorrectionLines > state.CorrectionBudget || !original.Passed || !regression.Passed {
+		// The correction did not complete, so it never earned the widened
+		// delivery scope. The attempt stays on record -- it consumed the one
+		// correction, and its snapshot still names every path it touched --
+		// but CorrectionScopePaths keeps the frozen reviewed manifest, so a
+		// companion path an escalated correction merely attempted can never
+		// ride out through a delivery gate.
 		state.State = StateEscalated
 	} else {
 		state.State = StateValidating
+		if len(added) > 0 {
+			state.CorrectionAddedPaths = added
+		}
 	}
 	return state.Validate()
 }
@@ -1495,7 +1546,7 @@ func (state *CompactState) EscalateCorrectionVerification(snapshot Snapshot, rec
 	}
 	if snapshot.Kind != TargetFixDiff || snapshot.Projection != state.InitialSnapshot.Projection ||
 		snapshot.BaseTree != state.CurrentSnapshot.CandidateTree || !equalStrings(snapshot.LedgerIDs, state.FixFindingIDs) ||
-		pathsAreSubset(snapshot.Paths, state.GenesisPaths) != nil {
+		correctionScopeRefused(snapshot.Paths, state.GenesisPaths) {
 		return errors.New("procedural correction verification target is outside the open correction transaction") // refusal:by-design world-action: candidate mutation invalidated the captured correction target and requires a fresh stable evidence capture
 	}
 	if err := record.ValidatePayload(payload); err != nil {
@@ -1645,14 +1696,23 @@ func (state CompactState) Receipt() (CompactReceipt, error) {
 	}
 	pathsDigest := state.CurrentSnapshot.PathsDigest
 	if state.CurrentSnapshot.Kind == TargetFixDiff {
+		// A fix diff names only the correction's own paths, so the reviewed
+		// manifest is the authority for what was delivered. When an admitted
+		// correction widened that manifest, the digest must cover the widened
+		// scope or delivery would refuse the very file the correction was
+		// granted. With no added paths the two expressions are identical.
 		pathsDigest = state.InitialSnapshot.PathsDigest
+		if len(state.CorrectionAddedPaths) > 0 {
+			pathsDigest = digestPaths(state.CorrectionScopePaths())
+		}
 	}
 	receipt := CompactReceipt{
 		Schema: CompactReceiptSchema, LineageID: state.LineageID, Generation: state.Generation,
 		Projection: state.InitialSnapshot.Projection,
 		BaseTree:   state.InitialSnapshot.BaseTree, InitialReviewTree: state.InitialSnapshot.CandidateTree,
 		FinalCandidateTree: state.CurrentSnapshot.CandidateTree, PathsDigest: pathsDigest,
-		FixDeltaHash: state.FixDeltaHash, PolicyHash: state.PolicyHash, EvidenceHash: evidence,
+		CorrectionAddedPaths: append([]string(nil), state.CorrectionAddedPaths...),
+		FixDeltaHash:         state.FixDeltaHash, PolicyHash: state.PolicyHash, EvidenceHash: evidence,
 		EvidenceRecordDigest: state.EvidenceRecordDigest, EvidenceOutcome: state.EvidenceOutcome,
 		EvidenceTargetIdentity: state.EvidenceTargetIdentity, EvidenceAuthorityRevision: state.EvidenceAuthorityRevision,
 		RiskLevel: state.RiskLevel, SelectedLenses: append([]string{}, state.SelectedLenses...),
@@ -1735,6 +1795,13 @@ func (receipt CompactReceipt) Validate() error {
 	ids, err := canonicalStrings(receipt.ResolvedFindingIDs, "resolved finding id")
 	if err != nil || !equalStrings(ids, receipt.ResolvedFindingIDs) {
 		return errors.New("compact receipt resolved finding IDs must be canonical")
+	}
+	if len(receipt.CorrectionAddedPaths) > 0 {
+		added, addedErr := canonicalPaths(receipt.CorrectionAddedPaths)
+		if addedErr != nil || !equalStrings(added, receipt.CorrectionAddedPaths) {
+			// refusal:by-design world-action: an immutably published receipt carrying non-canonical bytes requires storage repair, not an operator command
+			return errors.New("compact receipt correction added paths must be canonical")
+		}
 	}
 	if receipt.TerminalState != TerminalApproved && receipt.TerminalState != TerminalEscalated {
 		return errors.New("compact receipt terminal state is invalid")

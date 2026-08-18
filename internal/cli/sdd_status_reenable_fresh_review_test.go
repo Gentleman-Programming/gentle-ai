@@ -81,7 +81,7 @@ func finalizeFacadeLineage(t *testing.T, repo, lineage string) {
 // product's messages name until the archive stop clears through the fresh
 // full review of the current state.
 func TestSDDStatusReEnableSequenceLandsOnTheFreshFullReview(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	seedArchiveGatedSDDChange(t, root)
 
@@ -183,7 +183,7 @@ func TestSDDStatusReEnableSequenceLandsOnTheFreshFullReview(t *testing.T) {
 // fix; runLegacyFacadeStartForTest reproduces exactly that pre-guard START
 // pipeline, on purpose, for fixtures like this one.
 func TestSDDStatusArchiveNeverTreatsAnEmptyCandidateReviewAsCoverage(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	seedArchiveGatedSDDChange(t, root)
 
@@ -221,7 +221,7 @@ func TestSDDStatusArchiveNeverTreatsAnEmptyCandidateReviewAsCoverage(t *testing.
 // start` as a runnable exit from a blocked state; there is no blocked state
 // to exit from anymore for this exact fixture.
 func TestSDDStatusEnabledMissingReceiptIsDeclineNotAStop(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	seedArchiveGatedSDDChange(t, root)
 

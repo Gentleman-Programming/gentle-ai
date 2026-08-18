@@ -32,7 +32,11 @@ func TestRDDConsentLatchIsAbsentUntilRecordedAndThenIdempotent(t *testing.T) {
 	if asked, err := RDDConsentAsked(ctx, repo); err != nil || !asked {
 		t.Fatalf("latched consent = %v, %v", asked, err)
 	}
-	status, err := ResolveRDDMode(ctx, repo, RDDGlobalMode{})
+	// Resolved against an explicit opt-in, because this asserts the latch left
+	// the override head alone -- not what an unconfigured clone resolves to.
+	// Receipt-driven development is off by default, so passing no opinion here
+	// would make the check pass for the wrong reason.
+	status, err := ResolveRDDMode(ctx, repo, RDDGlobalMode{Value: string(RDDModeOn)})
 	if err != nil {
 		t.Fatalf("ResolveRDDMode after latching: %v", err)
 	}
@@ -49,7 +53,7 @@ func TestResolveRDDModeLetsAnyOffWin(t *testing.T) {
 		effective  RDDMode
 		source     RDDModeSource
 	}{
-		{name: "unconfigured stays enabled", global: "", cloneLocal: RDDModeUnset, effective: RDDModeOn, source: RDDModeSourceDefault},
+		{name: "unconfigured stays off", global: "", cloneLocal: RDDModeUnset, effective: RDDModeOff, source: RDDModeSourceDefault},
 		{name: "global off with no override", global: "off", cloneLocal: RDDModeUnset, effective: RDDModeOff, source: RDDModeSourceGlobal},
 		{name: "global on with clone off", global: "on", cloneLocal: RDDModeOff, effective: RDDModeOff, source: RDDModeSourceCloneLocal},
 		{name: "global off with cleared override", global: "off", cloneLocal: RDDModeUnset, effective: RDDModeOff, source: RDDModeSourceGlobal},
@@ -74,6 +78,60 @@ func TestResolveRDDModeLetsAnyOffWin(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestResolveRDDModeStaysOffUntilExplicitlyEnabled pins the product default:
+// receipt-driven development is opt-in. A fresh install where no source
+// expressed an opinion must resolve to off, and it must say the default is why,
+// so nothing about the resolution looks like a choice somebody made. The other
+// two cases are the reason that flip is safe to ship: an explicit global "on"
+// survives an upgrade untouched, and a clone-local "off" still beats it.
+func TestResolveRDDModeStaysOffUntilExplicitlyEnabled(t *testing.T) {
+	t.Run("nobody chose anything so reviews stay off", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		status, err := ResolveRDDMode(context.Background(), repo, RDDGlobalMode{})
+		if err != nil {
+			t.Fatalf("ResolveRDDMode error = %v", err)
+		}
+		if status.Effective != RDDModeOff || status.Source != RDDModeSourceDefault {
+			t.Fatalf("unconfigured effective/source = %q/%q, want %q/%q", status.Effective, status.Source, RDDModeOff, RDDModeSourceDefault)
+		}
+		if status.Enabled() {
+			t.Fatalf("an unconfigured clone reported reviews enabled: %#v", status)
+		}
+		if status.Global != RDDModeUnset || status.CloneLocal != RDDModeUnset {
+			t.Fatalf("the default must not invent an opinion for either source: %#v", status)
+		}
+	})
+
+	t.Run("an explicit global enable survives the new default", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		status, err := ResolveRDDMode(context.Background(), repo, RDDGlobalMode{Value: string(RDDModeOn)})
+		if err != nil {
+			t.Fatalf("ResolveRDDMode error = %v", err)
+		}
+		if status.Effective != RDDModeOn || status.Source != RDDModeSourceGlobal {
+			t.Fatalf("explicit global on = %q/%q, want %q/%q", status.Effective, status.Source, RDDModeOn, RDDModeSourceGlobal)
+		}
+		if !status.Enabled() {
+			t.Fatalf("a user who deliberately enabled reviews lost them: %#v", status)
+		}
+	})
+
+	t.Run("a clone-local off still beats an explicit global on", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		global := RDDGlobalMode{Value: string(RDDModeOn)}
+		if _, err := SetCloneLocalRDDMode(context.Background(), repo, RDDModeOff, "", global); err != nil {
+			t.Fatalf("SetCloneLocalRDDMode(off) error = %v", err)
+		}
+		status, err := ResolveRDDMode(context.Background(), repo, global)
+		if err != nil {
+			t.Fatalf("ResolveRDDMode error = %v", err)
+		}
+		if status.Effective != RDDModeOff || status.Source != RDDModeSourceCloneLocal {
+			t.Fatalf("clone-local off = %q/%q, want %q/%q", status.Effective, status.Source, RDDModeOff, RDDModeSourceCloneLocal)
+		}
+	})
 }
 
 func TestCloneLocalRDDOverrideCannotForceOn(t *testing.T) {
@@ -121,7 +179,7 @@ func TestResolveRDDModeNeverCreatesState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveRDDMode error = %v", err)
 	}
-	if status.Effective != RDDModeOn || status.Source != RDDModeSourceDefault {
+	if status.Effective != RDDModeOff || status.Source != RDDModeSourceDefault {
 		t.Fatalf("unconfigured status = %#v", status)
 	}
 	if _, err := os.Lstat(filepath.Join(repo, ".git", "gentle-ai")); !errors.Is(err, os.ErrNotExist) {

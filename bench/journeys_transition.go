@@ -43,6 +43,7 @@ func transitionJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "tr01-consecutive-rescope-keeps-the-ledger-readable",
+			Review: reviewOptedIn,
 			Title:  "Two rescopes in a row: whatever the second one answers, the ledger must still answer",
 			Source: "community report #2830 on published 2.4.0-rc.1",
 			// The reported shape, reproduced through the CLI only. The first
@@ -70,6 +71,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr02-reset-after-rescope-keeps-the-ledger-readable",
+			Review: reviewOptedIn,
 			Title:  "Narrow, spend the budget, then reset: the widening route, driven end to end",
 			Source: "#2769's documented exhaust-to-widen route + #2830's write-versus-replay surface",
 			// What this proves, stated narrowly because two decoys narrowed it:
@@ -105,6 +107,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr04-reset-then-rescope-keeps-the-ledger-readable",
+			Review: reviewOptedIn,
 			Title:  "The mirror of tr02: reset first, then narrow",
 			Source: "systematic pairing of the mutating ledger verbs",
 			// tr01 and tr02 cover rescope-then-X. This is X-then-rescope, and
@@ -128,6 +131,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr05-review-re-enabled-mid-change-keeps-sdd-moving",
+			Review: reviewOptedIn,
 			Title:  "Turn review back ON in the middle of a change that started without it",
 			Source: "the mirror of tr03; the switch is documented as reversible",
 			// tr03 proves work survives the switch going off. Nothing proved
@@ -150,6 +154,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr06-mode-flip-during-an-active-attempt",
+			Review: reviewOptedIn,
 			Title:  "Flip the switch while an attempt is OPEN, not between attempts",
 			Source: "the sequence tr03 and tr05 both avoid: no terminal boundary to land on",
 			// tr03 and tr05 both flip the switch between attempts, which is the
@@ -171,6 +176,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr07-reset-then-reset-keeps-the-ledger-readable",
+			Review: reviewOptedIn,
 			Title:  "Reset twice: the same-verb pair tr01 proves is dangerous for rescope",
 			Source: "systematic pairing; tr01 shows a same-verb repeat can wedge",
 			// tr01 established that repeating a generation-advancing verb is a
@@ -193,6 +199,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr08-scope-change-after-a-delegated-handoff",
+			Review: reviewOptedIn,
 			Title:  "Hand the attempt to a linked worktree, then change the scope",
 			Source: "systematic pairing across surfaces; handoff rebinds the worktree an attempt belongs to",
 			// Handoff moves an attempt's effective worktree, and a scope change
@@ -214,6 +221,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr09-mode-flip-while-a-review-lineage-is-open",
+			Review: reviewOptedIn,
 			Title:  "Turn review off while a REVIEW is open, not merely while an attempt is",
 			Source: "tr03 and tr06 flip the switch against SDD state; this flips it against review state",
 			// The switch's own contract says delivery falls back to ordinary
@@ -237,6 +245,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr10-scope-change-after-the-review-is-bound",
+			Review: reviewOptedIn,
 			Title:  "Bind an approved review to the change, then move the objective under it",
 			Source: "cross-surface pairing: the binding names an objective a scope change replaces",
 			// The highest-value pair left after tr08, and the most plausible in
@@ -269,6 +278,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr11-abandon-the-review-while-an-attempt-is-open",
+			Review: reviewOptedIn,
 			Title:  "Quarantine the review out from under a running SDD attempt",
 			Source: "cross-surface pairing: the two surfaces own separate state and nothing sequences them",
 			// SDD attempts and review lineages are separate authorities that a
@@ -292,6 +302,7 @@ func transitionJourneys() []Journey {
 		},
 		{
 			ID:     "tr03-review-disabled-mid-change-keeps-sdd-moving",
+			Review: reviewOptedIn,
 			Title:  "Turn review off in the middle of a change: SDD must keep working under ordinary policy",
 			Source: "maintainer-named coverage gap: no journey changes mode mid-lifecycle",
 			// The kill switch is user-owned and documented as always available.

@@ -17,6 +17,7 @@ import (
 )
 
 func TestNegotiatedReviewFinalizePreservesLegacyResultAndCanonicalIdentities(t *testing.T) {
+	reviewEnabledHome(t)
 	legacyRepo := initReviewCLIRepo(t)
 	negotiatedRepo := initReviewCLIRepo(t)
 	for _, repo := range []string{legacyRepo, negotiatedRepo} {
@@ -55,6 +56,7 @@ func TestNegotiatedReviewFinalizePreservesLegacyResultAndCanonicalIdentities(t *
 }
 
 func TestNegotiatedReviewValidateCoversAllGatesAndPreservesLegacyResult(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeNegotiatedOperationChange(t, repo, "thin")
 	lineage := "review-operation-validate"
@@ -124,6 +126,7 @@ func TestNegotiatedReviewValidateCoversAllGatesAndPreservesLegacyResult(t *testi
 }
 
 func TestNegotiatedReviewBindSDDPreservesLegacyResultAndBindingHashes(t *testing.T) {
+	reviewEnabledHome(t)
 	legacyRepo := initReviewCLIRepo(t)
 	negotiatedRepo := initReviewCLIRepo(t)
 	for _, repo := range []string{legacyRepo, negotiatedRepo} {
@@ -170,6 +173,7 @@ func TestNegotiatedReviewBindSDDPreservesLegacyResultAndBindingHashes(t *testing
 }
 
 func TestNegotiatedReviewBindSDDAcceptsSemanticallyEquivalentCompactReceiptArrays(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeNegotiatedOperationChange(t, repo, "thin")
 	runReviewCLIGit(t, repo, "add", "-A")
@@ -212,6 +216,7 @@ func TestNegotiatedReviewBindSDDAcceptsSemanticallyEquivalentCompactReceiptArray
 }
 
 func TestNegotiatedReviewBindSDDRejectsHistoricalLegacyThroughTypedFailureEnvelope(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := newLegacyCLIFixture(t, "historical-bind-sdd")
 	writeNegotiatedOperationChange(t, fixture.repo, "thin")
 	commonDir := strings.TrimSpace(runReviewCLIGit(t, fixture.repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
@@ -249,6 +254,7 @@ func TestNegotiatedReviewBindSDDRejectsHistoricalLegacyThroughTypedFailureEnvelo
 }
 
 func TestNegotiatedReviewOperationsRejectInvalidContractsBeforeMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, contract := range []string{"", "gentle-ai.review-integration/v3"} {
 		t.Run("finalize_"+contract, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)

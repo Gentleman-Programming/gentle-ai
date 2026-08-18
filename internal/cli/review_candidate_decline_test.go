@@ -22,7 +22,7 @@ import (
 // later gate call to find. A drifted candidate still denies too, exactly
 // as before, for the identical structural reason (no receipt governs it).
 func TestRelayedCandidateDeclineNeverAuthorizesLaterGateDelivery(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -72,7 +72,7 @@ func TestRelayedCandidateDeclineNeverAuthorizesLaterGateDelivery(t *testing.T) {
 }
 
 func TestCandidateDeclineNeverAuthorizesRelease(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)

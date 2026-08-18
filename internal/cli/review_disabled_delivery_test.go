@@ -102,7 +102,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryWithoutReceipt(t *testing
 // itself is never mutated or invalidated, it is simply not consulted while
 // the switch is off.
 func TestReviewValidateReportsDisabledUnmanagedDeliveryEvenOverAGoverningReceipt(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryEvenOverAGoverningReceipt
 // regression guard: with the switch on, a receiptless candidate keeps today's
 // denial, today's exit status, and today's exact field set.
 func TestReviewValidateWithoutReceiptStillDeniesWhileReviewIsEnabled(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("unreviewed candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -241,7 +241,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryWithPriorReceipt(t *testi
 	}
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 			shape.review(t, repo)
@@ -311,7 +311,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryWithPriorReceipt(t *testi
 // sibling TestReviewValidateDeniesDeliveredWorkspaceReceiptPrePushAsScopeMismatchWhileEnabled
 // below, where discovery genuinely still runs.
 func TestReviewValidateReportsDisabledUnmanagedDeliveryOverDeliveredWorkspaceReceiptAtPrePush(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	// The publication boundary stays at the base commit: the reviewed delivery
@@ -362,7 +362,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverDeliveredWorkspaceRec
 // candidate's delivered shape no longer matches the reviewed receipt — and
 // never claim `authority_corrupted`.
 func TestReviewValidateDeniesDeliveredWorkspaceReceiptPrePushAsScopeMismatchWhileEnabled(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	configureCLIReviewPublicationRemote(t, repo, branch)
@@ -428,7 +428,7 @@ func TestReviewValidateDeniesDeliveredWorkspaceReceiptPrePushAsScopeMismatchWhil
 // responsibility of TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled
 // (pre-commit gate, identical inventory-corruption mechanism).
 func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthorityAtPrePush(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	configureCLIReviewPublicationRemote(t, repo, branch)
@@ -473,7 +473,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthorityAtP
 // remote target BEFORE honoring the kill switch and failed closed with a
 // typed target-resolution denial instead of reporting disabled/unmanaged.
 func TestReviewValidateReportsDisabledUnmanagedDeliveryWhenNoUpstreamConfigured(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	// Deliberately NO remote and NO branch upstream: initReviewCLIRepo never
 	// configures one, and this test must not call
@@ -518,7 +518,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryWhenNoUpstreamConfigured(
 // "target_resolution_failed"), naming --base-ref <remote>/<branch> as the
 // escape. Only the disabled path changes.
 func TestReviewValidateDeniesNoUpstreamTargetResolutionWhileEnabled(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
@@ -564,7 +564,7 @@ func TestReviewValidateDeniesNoUpstreamTargetResolutionWhileEnabled(t *testing.T
 // and already the sole responsibility of
 // TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled.
 func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthorityNoUpstream(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
@@ -616,7 +616,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthorityNoU
 // below, which builds the identical alone-then-plural fixture progression
 // with reviews ON throughout.
 func TestReviewValidatePluralStaleReceiptsReportDisabledUnmanagedDelivery(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	logicalPath := "docs/plural-stale.md"
 	lineageA := "review-disabled-plural-stale-a"
@@ -675,7 +675,7 @@ func TestReviewValidatePluralStaleReceiptsReportDisabledUnmanagedDelivery(t *tes
 // throughout, pinning the discovery-kind visibility the disabled half no
 // longer carries (Wave 5 Slice 2, design decision 4).
 func TestReviewValidateStaleAndPluralStaleReceiptsFailClosedWhileEnabled(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	logicalPath := "docs/plural-stale-enabled.md"
 	lineageA := "review-enabled-plural-stale-a"
@@ -776,7 +776,7 @@ func disableReviewForClone(t *testing.T, repo string) {
 // finalized commits over a real bare remote, the first two actually pushed --
 // and proves the DeterministicallyStaleOnly fix is not count-specific.
 func TestReviewValidateReportsDisabledUnmanagedDeliveryOverThreeStaleReceiptsAtPrePush(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	configureCLIReviewPublicationRemote(t, repo, branch)

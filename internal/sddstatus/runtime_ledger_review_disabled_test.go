@@ -91,6 +91,11 @@ func TestRuntimeFinishStillValidatesAnExplicitSuccessorWhileReviewIsDisabled(t *
 }
 
 func TestRuntimeDisabledUnmanagedRemediationConsumesTheOnlyRemainingAttempt(t *testing.T) {
+	// The subject is what re-enabling does to a disabled/unmanaged
+	// correction, so this fixture needs a user who has receipt-driven
+	// development switched on -- otherwise the "re-enabled" half of the test
+	// never re-enables anything.
+	reviewEnabledHome(t)
 	repo := initRuntimeLedgerRepo(t)
 	changeRoot := seedReadyChange(t, repo, "unmanaged-remediation", "- [x] 1.1 Work\n")
 	store := mustRuntimeStore(t, repo, "unmanaged-remediation")

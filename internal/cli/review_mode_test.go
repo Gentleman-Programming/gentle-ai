@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
@@ -37,7 +38,11 @@ func TestReviewModeStatusReportsBothSourcesWithoutMutating(t *testing.T) {
 	if result.Schema != ReviewModeSchema || result.Operation != "status" {
 		t.Fatalf("status result = %#v", result)
 	}
-	if result.Status.Effective != reviewtransaction.RDDModeOn ||
+	// Nobody opted in here, so both sources stay unset and the default
+	// decides -- and the default is off, because receipt-driven development
+	// is opt-in. Status still has to name both sources rather than collapsing
+	// them into the one effective answer.
+	if result.Status.Effective != reviewtransaction.RDDModeOff ||
 		result.Status.Source != reviewtransaction.RDDModeSourceDefault ||
 		result.Status.Global != reviewtransaction.RDDModeUnset ||
 		result.Status.CloneLocal != reviewtransaction.RDDModeUnset {
@@ -81,8 +86,63 @@ func TestReviewModeDisableGlobalWinsOverEveryRepository(t *testing.T) {
 	}
 }
 
+// TestReviewModeGlobalEnableSurvivesTheOptInDefault is the upgrade-safety
+// property behind making receipt-driven development opt-in. A user who
+// deliberately ran `review mode enable --scope global` before the flip must
+// still be reviewed after it: the enable writes an explicit "on" into user
+// state, and resolution reads that explicit opinion rather than falling through
+// to the now-off default. A clone that never opted in stays off.
+func TestReviewModeGlobalEnableSurvivesTheOptInDefault(t *testing.T) {
+	home := reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+
+	var output bytes.Buffer
+	if err := RunReviewMode([]string{"status", "--cwd", repo, "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(status) error = %v", err)
+	}
+	if before := decodeReviewModeResult(t, output.Bytes()); before.Status.Effective != reviewtransaction.RDDModeOff ||
+		before.Status.Source != reviewtransaction.RDDModeSourceDefault {
+		t.Fatalf("a clone nobody opted in was not off by default: %#v", before.Status)
+	}
+
+	output.Reset()
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--scope", "global", "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(enable global) error = %v", err)
+	}
+	if result := decodeReviewModeResult(t, output.Bytes()); result.Status.Effective != reviewtransaction.RDDModeOn ||
+		result.Status.Source != reviewtransaction.RDDModeSourceGlobal ||
+		result.Status.Global != reviewtransaction.RDDModeOn {
+		t.Fatalf("global enable result = %#v", result.Status)
+	}
+
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read error = %v", err)
+	}
+	if persisted.RDDMode != string(reviewtransaction.RDDModeOn) || persisted.RDDModeRecordedAt == nil {
+		t.Fatalf("global enable did not persist an explicit on: %#v", persisted)
+	}
+
+	// The persisted opinion, not the process that wrote it, is what survives an
+	// upgrade: a later status in a different clone reads the same explicit on.
+	other := initReviewCLIRepo(t)
+	output.Reset()
+	if err := RunReviewMode([]string{"status", "--cwd", other, "--json"}, &output); err != nil {
+		t.Fatalf("RunReviewMode(status other clone) error = %v", err)
+	}
+	if after := decodeReviewModeResult(t, output.Bytes()); after.Status.Effective != reviewtransaction.RDDModeOn ||
+		after.Status.Source != reviewtransaction.RDDModeSourceGlobal {
+		t.Fatalf("an explicitly enabled user lost reviews: %#v", after.Status)
+	}
+}
+
+// TestReviewModeCloneScopeDisablesOnlyThisClone needs a user who opted in
+// globally: the property under test is that a clone-local off does not travel
+// to a second clone, and that is only observable when something other than the
+// override would have said on. Against the opt-in default both clones would
+// read off for the same reason and the test would prove nothing.
 func TestReviewModeCloneScopeDisablesOnlyThisClone(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 
 	var output bytes.Buffer
@@ -128,8 +188,12 @@ func TestReviewModeCloneScopeEnableIsIdempotentWhenGlobalOn(t *testing.T) {
 	}
 }
 
+// TestReviewModeCloneScopeEnableMigratesLegacyRevision seeds the clone-local
+// override against an explicit global "on", so the fixture opts in the same
+// way: clearing the override has to land back on that global opinion, and
+// against the opt-in default it would land on off and hide the migration.
 func TestReviewModeCloneScopeEnableMigratesLegacyRevision(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	ctx := context.Background()
 	disabled, err := reviewtransaction.SetCloneLocalRDDMode(ctx, repo, reviewtransaction.RDDModeOff, "", reviewtransaction.RDDGlobalMode{Value: "on"})
@@ -145,6 +209,13 @@ func TestReviewModeCloneScopeEnableMigratesLegacyRevision(t *testing.T) {
 		t.Fatalf("read current record: %v", err)
 	}
 	legacyRoot := filepath.Join(repo, ".git", "gentle-ai", "review-transactions")
+	// The seeding write publishes into both locations, because the switch is
+	// machine state rather than build state (#3284). This fixture is the clone
+	// that only ever had the pre-relocation one, so its mirror is dropped
+	// before the relocated root takes that name.
+	if err := os.RemoveAll(legacyRoot); err != nil {
+		t.Fatalf("drop the mirrored fixture copy: %v", err)
+	}
 	if err := os.Rename(filepath.Join(repo, ".git", "gentle-ai", "review-mode"), legacyRoot); err != nil {
 		t.Fatalf("relocate secure legacy fixture: %v", err)
 	}
@@ -372,8 +443,12 @@ func TestReviewModeRejectsUnknownSubcommandAndScope(t *testing.T) {
 // TestReviewStartIsRejectedWhileTheKillSwitchIsOff proves that disabling freezes
 // authority read-only instead of destroying it: only a new start stops, while
 // status, exact replay, and receipt validation keep serving pre-existing work.
+//
+// The authority it freezes has to exist first, so the fixture opts in the way a
+// real user does before running the START and finalize below; the clone-local
+// disable partway through is the state this test is actually about.
 func TestReviewStartIsRejectedWhileTheKillSwitchIsOff(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "docs/guide.md", "ordinary documentation\n", 0o644)
@@ -428,7 +503,7 @@ func TestReviewStartIsRejectedWhileTheKillSwitchIsOff(t *testing.T) {
 }
 
 func TestTierZeroReviewStartNeverAsksForConsent(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, true, "1\n")
 	writeReviewStartCandidate(t, repo, "docs/guide.md", "ordinary documentation\n", 0o644)
@@ -451,7 +526,7 @@ func TestTierZeroReviewStartNeverAsksForConsent(t *testing.T) {
 }
 
 func TestTierOneReviewStartAsksOnceForOneConsolidatedReview(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, true, "1\n")
 	writeReviewStartCandidate(t, repo, "internal/app.go", "package internal\n", 0o644)
@@ -484,7 +559,7 @@ func TestTierOneReviewStartAsksOnceForOneConsolidatedReview(t *testing.T) {
 }
 
 func TestTierTwoReviewStartAsksOnceNamingTheTriggeringEvidence(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, true, "1\n")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -519,7 +594,7 @@ func TestTierTwoReviewStartAsksOnceNamingTheTriggeringEvidence(t *testing.T) {
 // review mode — by proving the keystroke no longer reaches it. Turning the
 // safety net off for good now costs a deliberate command.
 func TestReviewConsentNeverAskAgainIsNoLongerAnOfferedAnswer(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, true, "3\n")
 	writeReviewStartCandidate(t, repo, "internal/app.go", "package internal\n", 0o644)
@@ -551,7 +626,7 @@ func TestReviewConsentNeverAskAgainIsNoLongerAnOfferedAnswer(t *testing.T) {
 // direction: an answer nobody offered reviews the candidate and leaves the
 // question unanswered, so the next candidate can still ask.
 func TestReviewConsentUnrecognizedAnswerReviewsAndAsksAgain(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, true, "maybe later\n")
 	writeReviewStartCandidate(t, repo, "internal/app.go", "package internal\n", 0o644)
@@ -583,7 +658,7 @@ func TestReviewConsentUnrecognizedAnswerReviewsAndAsksAgain(t *testing.T) {
 // Declining applies to this candidate only, because today's README says
 // nothing about tomorrow's migration.
 func TestReviewConsentNotNowIsNotPersisted(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, true, "2\n")
 	writeReviewStartCandidate(t, repo, "internal/app.go", "package internal\n", 0o644)
@@ -635,7 +710,7 @@ func TestReviewConsentNotNowIsNotPersisted(t *testing.T) {
 }
 
 func TestNonInteractiveReviewStartNeverBlocksOnConsent(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -669,7 +744,7 @@ func TestNonInteractiveReviewStartNeverBlocksOnConsent(t *testing.T) {
 // one-time consent question, so a later interactive session in the same
 // clone can still be asked.
 func TestNonInteractiveReviewStartNoticeShownOnlyOnce(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	console := stubReviewConsole(t, false, "")
 
@@ -754,6 +829,31 @@ func reviewModeHome(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	return home
+}
+
+// reviewEnabledHome is reviewModeHome for a user who opted in. Receipt-driven
+// development is off until someone explicitly enables it, so a test whose
+// subject is the review lifecycle -- rather than the switch itself -- has to
+// opt in the way a real user does before a review will start at all. It writes
+// the same explicit global "on" that `gentle-ai review mode enable` persists,
+// rather than reaching past the switch, so these fixtures keep exercising the
+// resolution path they are meant to run through.
+//
+// The opinion lives in the user's home directory, which is process-wide state
+// reached through t.Setenv. Go forbids t.Setenv in a test that also calls
+// t.Parallel, so a test that opts in cannot be parallel: there is no
+// repository-scoped way to assert "on" (a clone may only ever assert "off").
+func reviewEnabledHome(t *testing.T) string {
+	t.Helper()
+	home := reviewModeHome(t)
+	recordedAt := time.Now().UTC()
+	if err := state.Write(home, state.InstallState{
+		RDDMode:           string(reviewtransaction.RDDModeOn),
+		RDDModeRecordedAt: &recordedAt,
+	}); err != nil {
+		t.Fatalf("enable review mode for this test: %v", err)
+	}
 	return home
 }
 

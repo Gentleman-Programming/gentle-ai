@@ -199,7 +199,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		bindingTarget = reviewAuthorityTargetIdentity(status)
 	}
 	binding := reviewTransitionBinding(status.Authority, bindingTarget, input.RepositoryContext)
-	if status.Authority.State == reviewtransaction.StateReviewing && artifactErr != nil {
+	if artifactErr != nil && (status.Authority.State == reviewtransaction.StateReviewing || input.ValidationRequest != nil) {
 		return reviewStopTransition("captured_artifacts_unverifiable")
 	}
 	if status.Authority.State == reviewtransaction.StateReviewing && input.LensContextBudgetExceeded {
@@ -226,7 +226,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			return reviewMissingCaptureTransition(binding, selectedLenses, artifacts, input.CaptureContext, input.RuntimeAgent)
 		}
 		if input.ProviderRole == reviewerprovider.RoleRefuter {
-			return reviewProviderRoleTransition("provider_refuter_required", binding, input.ProviderRole)
+			return reviewProviderRoleTransition("provider_refuter_required", binding, input.ProviderRole, input.RuntimeAgent, nil)
 		}
 		arguments := []ReviewTransitionArgument{
 			{Name: "lineage", Value: binding.LineageID}, {Name: "captured_results", Value: "true"},
@@ -255,7 +255,31 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 				return reviewCollectTransition("correction_repository_verification_required", reviewCaptureEvidenceInput(input.Contract, validationBinding))
 			}
 			if input.ProviderRole == reviewerprovider.RoleTargetedValidator {
-				return reviewProviderRoleTransition("targeted_validation_required", validationBinding, input.ProviderRole)
+				// Same Go-issued role task either way; only the reason differs,
+				// so a consumer can tell a first validation apart from one being
+				// run again because the captured attempt produced no verdict.
+				reason := "targeted_validation_required"
+				if input.CapturedProviderTargetedValidatorInconclusive {
+					reason = reviewInconclusiveTargetedValidationReason
+				}
+				return reviewProviderRoleTransition(reason, validationBinding, input.ProviderRole, input.RuntimeAgent, input.ValidationRequest)
+			}
+			if input.CapturedProviderTargetedValidatorInconclusive {
+				// The occupied slot holds a non-verdict, and an occupied slot
+				// is no-replace by construction (publishCompactRoleResultSlot
+				// leaves conflicting bytes untouched, so the immutability of a
+				// real verdict is never weakened). The recapture therefore
+				// routes around the slot through the ordinary submission
+				// descriptor, which hands the fresh validation straight to
+				// finalize; the inconclusive bytes stay preserved on disk.
+				// Neither inconclusive branch is unbounded: each branch records a
+				// rejected recapture, and the caller stops raising the retryable
+				// sentinel once that ledger reaches
+				// maxInconclusiveTargetedValidations, so an exhausted lineage stops.
+				return reviewTargetedValidationCollection(reviewInconclusiveTargetedValidationReason, input.Contract, validationBinding, *input.ValidationRequest)
+			}
+			if input.CapturedProviderTargetedValidator {
+				return reviewCapturedProviderTargetedValidatorFinalizeTransition(input.Contract, validationBinding, *input.ValidationRequest)
 			}
 			if capturedEvidence == nil {
 				return reviewCollectTransition("correction_repository_verification_required", reviewCaptureEvidenceInput(input.Contract, validationBinding))
@@ -271,12 +295,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			default:
 				return reviewStopTransition("captured_verification_evidence_invalid")
 			}
-			return reviewCollectTransition("targeted_validation_required", ReviewTransitionInput{
-				Name: "targeted_validation", Schema: reviewtransaction.TargetedValidationRequestSchema,
-				CaptureOperation: "external.run_targeted_validation", Arguments: reviewTargetedValidationArguments(input.Contract, validationBinding, *input.ValidationRequest),
-				ValidationRequest: input.ValidationRequest,
-				Submission:        reviewTargetedValidationSubmission(input.Contract, validationBinding, *input.ValidationRequest),
-			})
+			return reviewTargetedValidationCollection("targeted_validation_required", input.Contract, validationBinding, *input.ValidationRequest)
 		}
 		if input.CorrectionForecasted {
 			if input.CorrectionRequest == nil {
@@ -394,19 +413,80 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	}
 }
 
-func reviewProviderRoleTransition(reason string, binding ReviewTransitionBinding, role reviewProviderRole) ReviewNextTransition {
+// reviewProviderRoleInputName renders the published collection-input name for
+// one provider role. Input names are contract identifiers, not role tokens:
+// the published transition_input schema (status-v5.schema.json) and gentle-pi's
+// runtime decoder both pin them to ^[a-z0-9_]+$, so the hyphen the
+// targeted-validator role token carries must project to an underscore here
+// (cross-lane battery finding; the completed-input echo already published
+// "provider_targeted_validator").
+func reviewProviderRoleInputName(role reviewProviderRole) string {
+	return "provider_" + strings.ReplaceAll(string(role), "-", "_")
+}
+
+func reviewProviderRoleTransition(reason string, binding ReviewTransitionBinding, role reviewProviderRole, runtime model.AgentID, validation *reviewtransaction.TargetedValidationRequest) ReviewNextTransition {
+	if reviewProviderHostRelayMaterializeRuntime(runtime) {
+		input, err := reviewProviderHostRelayRoleInput(binding, role, runtime, validation)
+		if err != nil {
+			return reviewStopTransition("captured_artifacts_unverifiable")
+		}
+		return reviewCollectTransition(reason, input)
+	}
 	task, err := newReviewProviderTask(role, binding)
 	if err != nil {
 		return reviewStopTransition("captured_artifacts_unverifiable")
 	}
 	return reviewCollectTransition(reason, ReviewTransitionInput{
-		Name: "provider_" + string(role), Schema: reviewProviderRoleTaskSchema(role), CaptureOperation: "external.run_provider_role",
+		Name: reviewProviderRoleInputName(role), Schema: reviewProviderRoleTaskSchema(role), CaptureOperation: "external.run_provider_role",
 		Arguments: append(reviewBindingArguments(binding),
 			ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext},
 			ReviewTransitionArgument{Name: "agent", Value: string(model.AgentOpenCode)},
 			ReviewTransitionArgument{Name: "role", Value: string(role)}),
 		ProviderTask: &task,
 	})
+}
+
+// reviewCaptureRefuterCaptureOperation and its validation twin name the two
+// native non-lens role capture operations the pi host relay collects through.
+// Like reviewCaptureResultCaptureOperation they are the single wording source:
+// the collect transition, its submission operation token, and the runnable
+// CLI verb all derive from the same constants.
+const (
+	reviewCaptureRefuterCaptureOperation    = "review.capture-refuter"
+	reviewCaptureValidationCaptureOperation = "review.capture-validation"
+)
+
+// reviewProviderHostRelayRoleInput renders the one pi host-relay collection
+// input for a Go-issued non-lens provider role. The vector is self-contained:
+// its --execute form materializes the role request in Go, runs the Go-owned
+// locked-down pi process on it, and admits the raw bytes -- so the rendered
+// arguments themselves advance authority and no submission descriptor exists
+// for a caller to author a verdict through.
+func reviewProviderHostRelayRoleInput(binding ReviewTransitionBinding, role reviewProviderRole, runtime model.AgentID, validation *reviewtransaction.TargetedValidationRequest) (ReviewTransitionInput, error) {
+	if binding.LineageID == "" || !providerSHA256(binding.Revision) || !providerSHA256(binding.TargetIdentity) ||
+		reviewtransaction.ValidateReviewRepositoryContextHandle(binding.RepositoryContext) != nil {
+		return ReviewTransitionInput{}, errors.New("provider role host-relay binding is incomplete") // refusal:by-design world-action: only a Go-issued STATUS transition may bind a host-relay provider role input
+	}
+	arguments := append(reviewBindingArguments(binding),
+		ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext})
+	input := ReviewTransitionInput{Name: reviewProviderRoleInputName(role)}
+	switch role {
+	case reviewerprovider.RoleRefuter:
+		input.Schema, input.CaptureOperation = reviewRefuterSchemaID, reviewCaptureRefuterCaptureOperation
+	case reviewerprovider.RoleTargetedValidator:
+		if validation == nil {
+			return ReviewTransitionInput{}, errors.New("provider targeted validator host-relay input requires the frozen validation request") // refusal:by-design world-action: only STATUS can bind the frozen correction request
+		}
+		arguments = append(arguments, ReviewTransitionArgument{Name: "request-hash", Value: validation.RequestHash})
+		input.Schema, input.CaptureOperation = reviewValidatorSchemaID, reviewCaptureValidationCaptureOperation
+		input.ValidationRequest = validation
+	default:
+		return ReviewTransitionInput{}, fmt.Errorf("unsupported host-relay provider role %q", role) // refusal:by-design world-action: the pi host relay may collect only compiled provider roles
+	}
+	input.Arguments = append(arguments,
+		ReviewTransitionArgument{Name: "agent", Value: string(runtime)},
+		ReviewTransitionArgument{Name: "execute", Value: "true"})
+	return input, nil
 }
 
 type reviewFinalizeTransitionContext struct {
@@ -587,6 +667,8 @@ type reviewNextTransitionInput struct {
 	StartLineage                                   string
 	RuntimeAgent                                   model.AgentID
 	ProviderRole                                   reviewProviderRole
+	CapturedProviderTargetedValidator              bool
+	CapturedProviderTargetedValidatorInconclusive  bool
 	Contract                                       string
 	RepositoryContext                              string
 	ValidationRequest                              *reviewtransaction.TargetedValidationRequest
@@ -600,6 +682,26 @@ type reviewNextTransitionInput struct {
 	RDDModeResolved                                bool
 	LensContextBudgetExceeded                      bool
 	PreCommitDeliveryAssessment                    *reviewtransaction.CompactGateTargetApplicability
+}
+
+func reviewCapturedProviderTargetedValidatorFinalizeTransition(contract string, binding ReviewTransitionBinding, request reviewtransaction.TargetedValidationRequest) ReviewNextTransition {
+	if contract != ReviewIntegrationContractV2 || binding.RepositoryContext == "" {
+		return reviewStopTransition("captured_artifacts_unverifiable")
+	}
+	arguments := []ReviewTransitionArgument{
+		{Name: "contract", Value: contract},
+		{Name: "lineage", Value: binding.LineageID},
+		{Name: "expected-revision", Value: binding.Revision},
+		{Name: "target", Value: binding.TargetIdentity},
+		{Name: "request-hash", Value: request.RequestHash},
+		{Name: "repository-context", Value: binding.RepositoryContext},
+		{Name: "captured-evidence", Value: "true"},
+	}
+	return reviewExecuteTransition("captured_provider_targeted_validation_ready", "review.finalize", arguments, []ReviewTransitionArgument{
+		{Name: "state", Value: "correction_required"},
+		{Name: "verification_outcome", Value: string(reviewtransaction.VerificationOutcomePassed)},
+		{Name: "provider_targeted_validator", Value: "captured"},
+	}, binding, nil)
 }
 
 const reviewSubmissionValuePlaceholder = "{{value}}"
@@ -855,7 +957,7 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 			return reviewStopTransition("recovery_scope_unchanged")
 		}
 		var representable bool
-		selectorArguments, representable = input.Selector.recoveryArguments()
+		selectorArguments, representable = input.Selector.recoveryArguments(input.IntendedUntracked)
 		if !representable {
 			// Root 7 (#2471): the selector the caller supplied cannot be
 			// represented as a recovery target, so the missing thing is a
@@ -880,7 +982,7 @@ func reviewRecoveryCollection(status ReviewTargetStatusResult, binding ReviewTra
 	})
 }
 
-func (selector reviewTransitionSelector) recoveryArguments() ([]ReviewTransitionArgument, bool) {
+func (selector reviewTransitionSelector) recoveryArguments(scope reviewIntendedUntrackedScope) ([]ReviewTransitionArgument, bool) {
 	if selector.Recovery == nil {
 		return nil, false
 	}
@@ -893,6 +995,26 @@ func (selector reviewTransitionSelector) recoveryArguments() ([]ReviewTransition
 	case reviewtransaction.TargetCurrentChanges:
 		if target.Projection == reviewtransaction.ProjectionStaged {
 			arguments = append(arguments, ReviewTransitionArgument{Name: "projection", Value: string(target.Projection)})
+			break
+		}
+		// Issue #1972: STATUS authorized a target derived from the caller's
+		// declared untracked selection, so the rendered RECOVER must replay
+		// that exact selection. Without it, `review recover` re-derives the
+		// successor target from predecessor inheritance alone and refuses
+		// its own authorization whenever the recovery-time selection
+		// diverges from the predecessor's frozen declaration. A declared
+		// selection without its validated inventory digest cannot be
+		// replayed and fails closed instead of rendering a partial selector.
+		if scope.Declared {
+			if scope.Digest == "" {
+				return nil, false
+			}
+			arguments = append(arguments,
+				ReviewTransitionArgument{Name: "untracked-scope", Value: map[bool]string{true: "select", false: "exclude"}[len(target.IntendedUntracked) != 0]},
+				ReviewTransitionArgument{Name: "expected-untracked-inventory", Value: scope.Digest})
+			for _, path := range target.IntendedUntracked {
+				arguments = append(arguments, ReviewTransitionArgument{Name: "intended-untracked", Value: path})
+			}
 		}
 	case reviewtransaction.TargetBaseDiff:
 		if target.BaseRef == "" || target.Projection != reviewtransaction.ProjectionWorkspace {
@@ -972,6 +1094,28 @@ func reviewTargetArguments(status ReviewTargetStatusResult) []ReviewTransitionAr
 
 func reviewBindingArguments(binding ReviewTransitionBinding) []ReviewTransitionArgument {
 	return []ReviewTransitionArgument{{Name: "lineage", Value: binding.LineageID}, {Name: "expected-revision", Value: binding.Revision}, {Name: "target", Value: binding.TargetIdentity}}
+}
+
+// reviewInconclusiveTargetedValidationReason names the one retryable
+// captured-validation outcome (issue #3378). It is deliberately distinct from
+// targeted_validation_required so a consumer can tell "no validation exists
+// yet" apart from "the captured one produced no verdict, nothing was
+// consumed, and the validator's access to the frozen trees must be restored
+// before running it again". Both collect the same input through the same
+// capture operation and submission descriptor.
+const reviewInconclusiveTargetedValidationReason = "targeted_validation_inconclusive_recapture_required"
+
+// reviewTargetedValidationCollection renders the generic targeted-validation
+// collection. Its capture operation is external, and its submission hands the
+// result straight to finalize, so it never touches the immutable
+// correction-bound validator slot.
+func reviewTargetedValidationCollection(reason, contract string, binding ReviewTransitionBinding, request reviewtransaction.TargetedValidationRequest) ReviewNextTransition {
+	return reviewCollectTransition(reason, ReviewTransitionInput{
+		Name: "targeted_validation", Schema: reviewtransaction.TargetedValidationRequestSchema,
+		CaptureOperation: "external.run_targeted_validation", Arguments: reviewTargetedValidationArguments(contract, binding, request),
+		ValidationRequest: &request,
+		Submission:        reviewTargetedValidationSubmission(contract, binding, request),
+	})
 }
 
 func reviewTargetedValidationArguments(contract string, binding ReviewTransitionBinding, request reviewtransaction.TargetedValidationRequest) []ReviewTransitionArgument {
@@ -1120,6 +1264,8 @@ func reviewReasonDescription(reason string) string {
 		return "Reviewer lens artifacts required for current revision"
 	case "targeted_validation_required":
 		return "Targeted validation run required for correction plan"
+	case reviewInconclusiveTargetedValidationReason:
+		return "Captured targeted validation produced no verdict and consumed no correction attempt; restore validator access to the frozen candidate and run it again"
 	case "correction_plan_required":
 		return "Correction plan required to resolve review findings"
 	case "verification_evidence_required":

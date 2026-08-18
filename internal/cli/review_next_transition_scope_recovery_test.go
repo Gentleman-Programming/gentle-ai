@@ -24,7 +24,7 @@ import (
 // bind the approved predecessor for recovery and expose the authorization
 // collection with no caller-invented flags.
 func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	attempt := filepath.Join(repo, "docs", "attempt.md")
 	writeCLIAttemptFile(t, attempt, "# attempt\n\nplain prose.\n")
@@ -146,7 +146,7 @@ func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) 
 }
 
 func TestNegotiatedStatusRecoversApprovedFeatureOntoCurrentBase(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	featureBranch := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "--abbrev-ref", "HEAD"))
 	originalBase := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
@@ -252,7 +252,7 @@ func TestNegotiatedStatusRecoversApprovedFeatureOntoCurrentBase(t *testing.T) {
 }
 
 func TestNegotiatedStatusCollectsEscalatedChangedScopeRecovery(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	attempt := filepath.Join(repo, "internal", "auth", "session.go")
 	writeCLIAttemptFile(t, attempt, "package auth\n\nfunc CheckToken(token string) bool { return token != \"\" }\n")

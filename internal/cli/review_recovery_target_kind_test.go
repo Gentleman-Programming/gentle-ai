@@ -29,6 +29,7 @@ import (
 // predecessors — none of which is kind matching. This test and its four
 // negative siblings below prove the CLI relaxation does not widen authority.
 func TestReviewRecoverEscalatedBaseDiffSuccessorOverCurrentChangesPredecessor(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, baseRef, predecessor := escalatedCurrentChangesRecoveryFixture(t, "recover-1744-escalated")
 
 	successorIdentity := reviewRecoverBaseDiffSuccessorIdentity(t, repo, baseRef)
@@ -64,6 +65,7 @@ func TestReviewRecoverEscalatedBaseDiffSuccessorOverCurrentChangesPredecessor(t 
 // did not weaken the identity-bound authorization check, regardless of the
 // requested target kind.
 func TestReviewRecoverEscalatedRequiresExactSuccessorBoundAuthorization(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, baseRef, predecessor := escalatedCurrentChangesRecoveryFixture(t, "recover-1744-wrong-auth")
 	err := RunReviewRecover([]string{
 		"--cwd", repo, "--predecessor-lineage", predecessor.State.LineageID,
@@ -86,6 +88,7 @@ func TestReviewRecoverEscalatedRequiresExactSuccessorBoundAuthorization(t *testi
 // predecessor cannot be recovered with --disposition invalidated, regardless
 // of the requested target kind.
 func TestReviewRecoverInvalidatedRequiresInvalidatedPredecessor(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, baseRef, predecessor := escalatedCurrentChangesRecoveryFixture(t, "recover-1744-wrong-disposition")
 	successorIdentity := reviewRecoverBaseDiffSuccessorIdentity(t, repo, baseRef)
 	authorization := reviewRecoveryAuthorization(predecessor.State.LineageID, predecessor.Revision, successorIdentity, "maintainer", "recover into base-diff scope")
@@ -111,6 +114,7 @@ func TestReviewRecoverInvalidatedRequiresInvalidatedPredecessor(t *testing.T) {
 // "recovery base-ref does not match predecessor base" check) for a
 // predecessor that was already base-diff.
 func TestReviewRecoverBaseDiffPredecessorStillBindsFrozenBaseTree(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	firstBase := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
@@ -181,6 +185,7 @@ func TestReviewRecoverBaseDiffPredecessorStillBindsFrozenBaseTree(t *testing.T) 
 // (*committedOnly != (base != "")) still rejects --base-ref without
 // --committed-only and --committed-only without --base-ref.
 func TestReviewRecoverArgvCoherenceStillRejectsMismatchedBaseRefFlags(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, baseRef, predecessor := escalatedCurrentChangesRecoveryFixture(t, "recover-1744-argv-coherence")
 	for _, tt := range []struct {
 		name string

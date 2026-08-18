@@ -60,7 +60,7 @@ import (
 // internal/reviewtransaction/gate_write_guard_test.go, proves it by
 // call-absence).
 func TestInvalidationVerbDowngrade_RefusesInsteadOfDeriving(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	lineage := "review-invalidation-verb-characterization"
@@ -141,7 +141,7 @@ func TestInvalidationVerbDowngrade_RefusesInsteadOfDeriving(t *testing.T) {
 // call itself reporting `Action: "declined"` — it creates no lasting
 // delivery-gate authorization for any later gate call.
 func TestCandidateDeclineDowngrade_DeniesLikeAnyNeverReviewedCandidate(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
@@ -207,6 +207,7 @@ func TestCandidateDeclineDowngrade_DeniesLikeAnyNeverReviewedCandidate(t *testin
 // discoverFacadeReview/runFacadeLegacyValidateNegotiated identically for
 // both negotiated and non-negotiated calls.
 func TestLegacyFunnelCharacterization_RunFacadeLegacyValidateNegotiated(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := newLegacyCLIFixture(t, "legacy-funnel-characterization")
 	runReviewCLIGit(t, fixture.repo, "add", "tracked.txt")
 

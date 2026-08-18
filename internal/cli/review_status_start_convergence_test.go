@@ -135,7 +135,7 @@ func TestNegotiatedStatusNeverOffersAStartItsOwnPreflightRefuses(t *testing.T) {
 
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo, extra := shape.arrange(t)
 			kind, reason, operation, tokens := reviewNegotiatedTransition(t, repo, extra...)
 

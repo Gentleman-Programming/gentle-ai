@@ -25,7 +25,7 @@ import (
 // (CLI-wired) — still reports the exact tier, lens set, and correction
 // budget frozen at start.
 func TestNewLineageFrozenTierIsNeverRecomputedAfterFreeze(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "frozen-tier-lineage"
 	// Freeze at RiskLow: a single passive documentation file, the exact

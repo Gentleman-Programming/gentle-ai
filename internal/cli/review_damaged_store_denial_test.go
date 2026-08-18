@@ -279,7 +279,7 @@ func TestDamagedEntryNamesItsOwnDamageKindAndDiagnosis(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			test.stage(t, repo)
 
@@ -381,7 +381,7 @@ func anyDamagedStoreProblemContains(problems []string, fragment string) bool {
 // the refusal, supplies only the operator-owned actor and reason, dispatches
 // through the real router, and requires the entry to be gone afterwards.
 func TestOrphanedSuccessorHasARunnableAbandonThatDoesNotBlockNewWork(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	predecessor, successor := mintDamagedStoreRecoveryPair(t, repo)
 	if err := os.RemoveAll(damagedStoreLineageDir(t, repo, predecessor)); err != nil {
@@ -458,7 +458,7 @@ func TestOrphanedSuccessorHasARunnableAbandonThatDoesNotBlockNewWork(t *testing.
 // EOF`. The refusal now carries the precise diagnosis and the runnable
 // inspection, which is dispatched and required to answer.
 func TestReclaimRefusalOverTruncatedRecordNamesDiagnosisNotReconcile(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	_, successor := mintDamagedStoreRecoveryPair(t, repo)
 	truncateDamagedStoreRecord(t, repo, successor)
@@ -484,7 +484,7 @@ func TestReclaimRefusalOverTruncatedRecordNamesDiagnosisNotReconcile(t *testing.
 }
 
 func TestNegotiatedFinalizeClassifiesNamedDamagedAuthorization(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	_, successor := mintDamagedStoreRecoveryPair(t, repo)
 	forgeDamagedStoreRecoveryReason(t, repo, successor)

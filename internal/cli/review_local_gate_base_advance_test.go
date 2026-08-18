@@ -13,6 +13,7 @@ import (
 )
 
 func TestValidateLocalParentMergeAllowsExplicitBase(t *testing.T) {
+	reviewEnabledHome(t)
 	tests := []struct {
 		name      string
 		gate      reviewtransaction.GateKind

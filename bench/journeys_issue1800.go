@@ -17,11 +17,12 @@ const issue1800Lineage = "issue-1800-pre-plan-abandon"
 func issue1800Journeys() []Journey {
 	return []Journey{{
 		ID:     "j91-audited-abandon-preplan-over-budget-correction",
+		Review: reviewOptedIn,
 		Title:  "Already-edited pre-plan correction abandons audibly and requires a fresh review",
 		Source: "issue #1800 D1800: exact audited abandon is the supported pre-forecast exit",
 		Steps: []Step{
 			{Name: "fixture: repository", Fixture: baseRepo},
-			{Name: "enable review mode in the disposable clone", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
+			{Name: "clear any clone-local review override (a clone may only ever assert off)", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--scope", "clone", "--json")},
 			{Name: "fixture: stage candidate", Fixture: stageWaveCandidate},
 			{Name: "start product-created compact review", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", issue1800Lineage)},
 			{Name: "capture candidate finding", Requires: captureResultCapability, Composite: captureCorrectableFinding},

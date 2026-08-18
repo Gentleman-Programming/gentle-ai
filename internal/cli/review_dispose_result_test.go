@@ -42,6 +42,7 @@ func disposeResultAuthorization(repository, lineage, revision, target, lens stri
 // another preserves an unreplayable payload, and the disposition terminally
 // escalates the lineage without touching either artifact.
 func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, true)
 	lenses := record.State.SelectedLenses
 	if len(lenses) != 4 {
@@ -185,6 +186,7 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 // — so the lookup path it drives must still locate the artifact without
 // knowing the class in advance.
 func TestReviewDisposeResultFindsClassSuffixedIncidentArtifact(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, true)
 	lenses := record.State.SelectedLenses
 	target := record.State.InitialSnapshot.Identity
@@ -242,6 +244,7 @@ func TestReviewDisposeResultFindsClassSuffixedIncidentArtifact(t *testing.T) {
 // boundary through the facade: wrong_target is admitted only over a payload
 // that genuinely decoded, and the committed audit record says so.
 func TestReviewDisposeResultWrongTargetRequiresADecodablePayload(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, true)
 	lenses := record.State.SelectedLenses
 	target := record.State.InitialSnapshot.Identity
@@ -297,6 +300,7 @@ func TestReviewDisposeResultWrongTargetRequiresADecodablePayload(t *testing.T) {
 // every missing flag and every unproven evidence claim is refused before any
 // authority is touched.
 func TestReviewDisposeResultRequiresCompleteBinding(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, store, record := newArtifactReview(t, true)
 	lenses := record.State.SelectedLenses
 	target := record.State.InitialSnapshot.Identity

@@ -85,7 +85,7 @@ func byteEquivalenceCommitAFixturePath(t *testing.T) string {
 // later surface must echo exactly that digest for its golden to match.
 func byteEquivalenceCommitAFixture(t *testing.T) (string, string) {
 	t.Helper()
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := byteEquivalenceCommitAFixturePath(t)
 	runReviewCLIGit(t, repo, "init", "-q")
 	runReviewCLIGit(t, repo, "config", "user.email", "test@example.com")
@@ -155,12 +155,14 @@ func byteEquivalenceCommitAReceiptRevision(t *testing.T, finalizeResponse []byte
 // TestReviewByteEquivalenceCommitAUnnegotiatedStartAndFinalize proves the
 // start/finalize response bytes are byte-stable now, at Commit A time.
 func TestReviewByteEquivalenceCommitAUnnegotiatedStartAndFinalize(t *testing.T) {
+	reviewEnabledHome(t)
 	_, _ = byteEquivalenceCommitAFixture(t)
 }
 
 // TestReviewByteEquivalenceCommitAStatus proves `review status`'s response
 // bytes for the terminal (approved, receipted) lineage are byte-stable.
 func TestReviewByteEquivalenceCommitAStatus(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, revision := byteEquivalenceCommitAFixture(t)
 
 	var statusOut bytes.Buffer
@@ -171,22 +173,27 @@ func TestReviewByteEquivalenceCommitAStatus(t *testing.T) {
 }
 
 func TestReviewByteEquivalenceCommitAGatePostApply(t *testing.T) {
+	reviewEnabledHome(t)
 	assertReviewByteEquivalenceCommitAGate(t, reviewtransaction.GatePostApply)
 }
 
 func TestReviewByteEquivalenceCommitAGatePreCommit(t *testing.T) {
+	reviewEnabledHome(t)
 	assertReviewByteEquivalenceCommitAGate(t, reviewtransaction.GatePreCommit)
 }
 
 func TestReviewByteEquivalenceCommitAGatePrePush(t *testing.T) {
+	reviewEnabledHome(t)
 	assertReviewByteEquivalenceCommitAGate(t, reviewtransaction.GatePrePush)
 }
 
 func TestReviewByteEquivalenceCommitAGatePrePR(t *testing.T) {
+	reviewEnabledHome(t)
 	assertReviewByteEquivalenceCommitAGate(t, reviewtransaction.GatePrePR)
 }
 
 func TestReviewByteEquivalenceCommitAGateRelease(t *testing.T) {
+	reviewEnabledHome(t)
 	assertReviewByteEquivalenceCommitAGate(t, reviewtransaction.GateRelease)
 }
 

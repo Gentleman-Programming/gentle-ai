@@ -12,6 +12,7 @@ func findingIDPrefixJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j78-lens-finding-id-prefix-discovery",
+			Review: reviewOptedIn,
 			Title:  "Reviewer discovers lens finding-ID prefixes before native admission",
 			Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/1844",
 			Steps: []Step{

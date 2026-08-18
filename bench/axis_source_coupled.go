@@ -30,6 +30,7 @@ func sourceCoupledJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j57-sdd-authority-drift-during-discovery-fails-closed",
+			Review: reviewOptedIn,
 			Title:  "Authority receipt changes during discovery: not consulted before verify",
 			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),

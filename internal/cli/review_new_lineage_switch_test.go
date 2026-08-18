@@ -16,6 +16,7 @@ import (
 // `review start` takes the legacy path and the v3/ authority root is never
 // created — not even an empty directory.
 func TestReviewStartNewLineageSwitchOffCreatesNoV3Entries(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "")
 	repo := initReviewCLIRepo(t)
 	path := filepath.Join(repo, "docs", "kill-switch-off.md")
@@ -54,6 +55,7 @@ func TestReviewStartNewLineageSwitchOffCreatesNoV3Entries(t *testing.T) {
 // correction budget the shared preamble already computed — and creates no
 // legacy v1/v2 artifact for that lineage.
 func TestReviewStartNewLineageSwitchOnFreezesV3Authority(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "1")
 	repo := initReviewCLIRepo(t)
 	lines := make([]string, 129)

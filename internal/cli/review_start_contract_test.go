@@ -19,6 +19,7 @@ import (
 )
 
 func TestNegotiatedReviewStartMatchesVersionedFixture(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
 
@@ -68,6 +69,7 @@ func TestNegotiatedReviewStartMatchesVersionedFixture(t *testing.T) {
 }
 
 func TestNegotiatedReviewStartRiskReasonsUseOnlyImmutableSnapshotEvidence(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Run("mode-only executable transition", func(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Skip("Git worktree executable-bit transitions are POSIX-only")
@@ -146,7 +148,9 @@ func TestNegotiatedReviewStartRiskReasonsUseOnlyImmutableSnapshotEvidence(t *tes
 // named evidence is one consolidated review, and only genuine risk evidence
 // reaches focused 4R. The former 401-line escalation is deliberately gone.
 func TestNegotiatedReviewStartRoutesLargeCandidatesByEvidence(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	full4R := []string{
 		reviewtransaction.LensRisk, reviewtransaction.LensResilience,
@@ -229,6 +233,7 @@ func TestNegotiatedReviewStartPreservesPrePolicyLargeDocumentationAuthority(t *t
 }
 
 func TestNegotiatedReviewStartAndStatusExposeWorkspaceOverlay(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	if err := os.WriteFile(filepath.Join(repo, "committed.txt"), []byte("committed\n"), 0o644); err != nil {
@@ -282,6 +287,7 @@ func TestNegotiatedReviewStartAndStatusExposeWorkspaceOverlay(t *testing.T) {
 }
 
 func TestNegotiatedOverlayStatusUsesResolvedStartBaseAfterSymbolicRefAdvances(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	baseCommit := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	runReviewCLIGit(t, repo, "branch", "review-base", baseCommit)
@@ -331,6 +337,7 @@ func TestNegotiatedOverlayStatusUsesResolvedStartBaseAfterSymbolicRefAdvances(t 
 }
 
 func TestReviewRecoverRetainsWorkspaceOverlayBaseAndScope(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := approvedWorkspaceOverlayRecoveryPredecessor(t, "overlay-recovery-predecessor")
 	lineage := predecessor.State.LineageID
 	args := []string{"--cwd", repo, "--predecessor-lineage", lineage, "--expected-predecessor-revision", predecessor.Revision,
@@ -358,6 +365,7 @@ func TestReviewRecoverRetainsWorkspaceOverlayBaseAndScope(t *testing.T) {
 }
 
 func TestReviewRecoverAdoptsExplicitWorkspaceOverlayBase(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor := approvedWorkspaceOverlayRecoveryPredecessor(t, "overlay-explicit-base-predecessor")
 	declaredBase := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	declaredBaseTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", declaredBase+"^{tree}"))
@@ -442,6 +450,7 @@ func approvedWorkspaceOverlayRecoveryPredecessor(t *testing.T, lineage string) (
 }
 
 func TestReviewRecoverSelectsAuthorizedStagedProjection(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor, status := escalatedRecoveryProjectionFixture(t, "staged-projection-success")
 	reason, actor := "select exact staged target", "maintainer"
 	authorization := reviewRecoveryAuthorization(predecessor.State.LineageID, predecessor.Revision, status.TargetIdentity, actor, reason)
@@ -465,6 +474,7 @@ func TestReviewRecoverSelectsAuthorizedStagedProjection(t *testing.T) {
 }
 
 func TestReviewRecoverProjectionFailuresDoNotMutateAuthority(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, tt := range []struct {
 		name       string
 		projection string
@@ -500,6 +510,7 @@ func TestReviewRecoverProjectionFailuresDoNotMutateAuthority(t *testing.T) {
 }
 
 func TestReviewRecoverRejectsStagedIndexMutationBeforePersistence(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, predecessor, status := escalatedRecoveryProjectionFixture(t, "staged-projection-race")
 	reason, actor := "select exact staged target", "maintainer"
 	successor := "staged-projection-race-successor"
@@ -589,6 +600,7 @@ func reviewRecoveryAuthorization(lineage, revision, identity, actor, reason stri
 }
 
 func TestReviewRecoverReleaseScopeExpandsMergedSliceToFirstParentDiff(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	mainBranch := strings.TrimSpace(runReviewCLIGit(t, repo, "branch", "--show-current"))
 	runReviewCLIGit(t, repo, "checkout", "-qb", "release-candidate")
@@ -675,6 +687,7 @@ func TestReviewRecoverReleaseScopeExpandsMergedSliceToFirstParentDiff(t *testing
 }
 
 func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *testing.T) {
+	reviewEnabledHome(t)
 	legacyRepo := initReviewCLIRepo(t)
 	negotiatedRepo := initReviewCLIRepo(t)
 	for _, repo := range []string{legacyRepo, negotiatedRepo} {
@@ -787,6 +800,7 @@ func TestNegotiatedReviewStartRejectsInvalidContractsBeforeAuthorityMutation(t *
 }
 
 func TestExplicitReviewStartRetriesAcrossSharedCommonDirWithoutReconstruction(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	linked := filepath.Join(t.TempDir(), "linked")
 	runReviewCLIGit(t, repo, "worktree", "add", "--detach", linked, "HEAD")

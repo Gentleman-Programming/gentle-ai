@@ -12,6 +12,7 @@ import (
 func captureResultDryRunJourneys() []Journey {
 	return []Journey{{
 		ID:     "j77-capture-result-input-preflight-is-read-only",
+		Review: reviewOptedIn,
 		Title:  "Capture-result input preflight validates admission without persistence",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2630",
 		Steps: []Step{

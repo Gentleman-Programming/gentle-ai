@@ -18,6 +18,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/skillregistry"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
@@ -248,6 +249,13 @@ func RunArgs(args []string, stdout io.Writer) error {
 		// nil; assigning it explicitly here keeps the production wiring
 		// visible at the same seam as the other injected functions.
 		m.OpenCodePluginUninstallFn = opencodeplugin.Uninstall
+		// The review store is clone-scoped, so the TUI acts on the repository
+		// the user launched it from. Both closures resolve the working
+		// directory at call time rather than at wiring time, so a survey and
+		// the reset it authorized can never disagree about which clone they
+		// mean.
+		m.ReviewStoreResetSurveyFn = tuiReviewStoreSurvey
+		m.ReviewStoreResetFn = tuiReviewStoreReset
 		finalModel, err := runTUI(m, tea.WithAltScreen())
 		if err != nil {
 			return err
@@ -383,6 +391,16 @@ func runSkillRegistryRefresh(args []string, stdout io.Writer) error {
 	cwd, home, err := resolveSkillRegistryDirs(cwd)
 	if err != nil {
 		return err
+	}
+	// Startup hooks run refresh from whatever directory the host resolved; a
+	// brand-new non-project directory can resolve to "/", $HOME, or a
+	// markerless folder. Never initialize there: skip silently under --quiet
+	// (a startup hook must not scream) and with a one-line notice otherwise.
+	if reason := skillregistry.RefreshSkip(cwd, home); reason != skillregistry.SkipNone {
+		if !quiet {
+			_, _ = fmt.Fprintf(stdout, "Skill registry refresh skipped (%s): %s is not a project root; run it from a project directory (one containing .git or .atl), or create the project first.\n", reason, cwd)
+		}
+		return nil
 	}
 	if ensureGitignore {
 		if err := skillregistry.EnsureATLIgnored(cwd); err != nil {
@@ -555,6 +573,8 @@ func tuiExecuteWithBackground(
 	detection system.DetectionResult,
 	background model.OpenCodeBackgroundIntent,
 	backgroundPersist model.OpenCodeBackgroundIntent,
+	piBackground model.PiBackgroundIntent,
+	piBackgroundPersist model.PiBackgroundIntent,
 	onProgress pipeline.ProgressFunc,
 ) pipeline.ExecutionResult {
 	restoreCommandOutput := cli.SetCommandOutputStreaming(false)
@@ -568,7 +588,7 @@ func tuiExecuteWithBackground(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, onProgress)
+	execResult, orchestrator := cli.ExecuteTUIInstallWithBackgroundAndOrchestrator(homeDir, selection, resolved, profile, background, piBackground, onProgress)
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.
@@ -605,6 +625,9 @@ func tuiExecuteWithBackground(
 		installState.SetSelection(selection)
 		if backgroundPersist != "" {
 			installState.BackgroundIntent = backgroundPersist
+		}
+		if piBackgroundPersist != "" {
+			installState.PiBackgroundIntent = piBackgroundPersist
 		}
 		if writeErr := state.WriteReconciled(homeDir, installState); writeErr != nil {
 			execResult.Err = fmt.Errorf("persist install state: %w", writeErr)
@@ -1099,4 +1122,29 @@ func codexOrchestratorFromState(a *state.CodexOrchestratorAssignmentState) *mode
 		return nil
 	}
 	return &model.CodexOrchestratorAssignment{Model: a.Model, Effort: model.CodexEffort(a.Effort)}
+}
+
+// tuiReviewStoreSurvey reports what a review store reset would remove for the
+// clone the TUI was launched from. It is read-only.
+func tuiReviewStoreSurvey() (reviewtransaction.StoreResetReport, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return reviewtransaction.StoreResetReport{}, err
+	}
+	return reviewtransaction.SurveyReviewStore(context.Background(), cwd, reviewtransaction.StoreResetRequest{})
+}
+
+// tuiReviewStoreReset applies the reset for that same clone.
+//
+// It never sets IncludeInFlight, and never sets IncludeAdapterReviews either.
+// The TUI has no keystroke that destroys a review somebody is in the middle of,
+// nor one that destroys a store this command cannot classify: the confirmation
+// screen refuses outright and prints the CLI invocation that overrides it, so
+// every override stays an act the user has to type out.
+func tuiReviewStoreReset() (reviewtransaction.StoreResetReport, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return reviewtransaction.StoreResetReport{}, err
+	}
+	return reviewtransaction.ResetReviewStore(context.Background(), cwd, reviewtransaction.StoreResetRequest{})
 }

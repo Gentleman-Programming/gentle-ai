@@ -69,6 +69,12 @@ var (
 	// ErrRDDConsentCorrupt reports an unreadable one-shot consent latch.
 	ErrRDDConsentCorrupt = errors.New("clone-local review consent latch is corrupt")
 
+	// ErrRDDModePartiallyApplied reports a clone-scope decision this build
+	// recorded but could not publish at the readable location a coexisting
+	// gentle-ai reads. It is the opposite of a fallback: it exists so a
+	// half-applied kill switch can never be reported as a working one.
+	ErrRDDModePartiallyApplied = errors.New("clone-local review mode was not applied for every gentle-ai on this machine")
+
 	// rddConsentPayload is the exact latch content. It deliberately carries no
 	// timestamp: identical bytes keep the immutable no-replace publish idempotent,
 	// so recording the same answer twice can never raise a slot conflict.
@@ -147,6 +153,33 @@ type RDDGlobalMode struct {
 	RecordedAt time.Time
 }
 
+// RDDModeReach reports how far a clone-scope write actually reached.
+//
+// The kill switch is a decision about this machine, not about one build, and
+// #3284 is what happens when a write reports plain success for less than that:
+// a modern binary published the decision only under the relocated switch root,
+// every gentle-ai installed before that relocation kept reading its own
+// location, and those builds went on enforcing review while the operator had
+// been told the switch was off.
+type RDDModeReach string
+
+const (
+	// RDDModeReachUnreported is the read-only projection's answer. Resolving a
+	// mode never writes and never probes the other location, so it asserts
+	// nothing about reach instead of guessing.
+	RDDModeReachUnreported RDDModeReach = ""
+	// RDDModeReachMachine means every gentle-ai installed on this machine
+	// observes the decision.
+	RDDModeReachMachine RDDModeReach = "machine"
+	// RDDModeReachThisBuild means only builds that read the relocated switch
+	// root observe it, because the pre-relocation location could not be
+	// reached. A gentle-ai installed before the relocation keeps reading the
+	// value it already has there -- which is also the value it fails closed to
+	// when that location is unreadable, so nothing is relaxed and nothing is
+	// silently claimed.
+	RDDModeReachThisBuild RDDModeReach = "this_build"
+)
+
 // RDDModeStatus is the read-only projection of both sources. Revision is the
 // clone-local compare-and-set token. The projection carries no time cutoff: it
 // answers "may review start now", never "which bytes are approved".
@@ -157,6 +190,7 @@ type RDDModeStatus struct {
 	Effective  RDDMode       `json:"effective"`
 	Source     RDDModeSource `json:"source"`
 	Revision   string        `json:"revision,omitempty"`
+	Reach      RDDModeReach  `json:"reach,omitempty"`
 }
 
 // Enabled reports whether new receipt-driven development may start.
@@ -169,30 +203,29 @@ type RDDDisabledError struct {
 	Source    RDDModeSource
 }
 
-// Error names the exact command that turns reviews back on, scoped to the
-// source that actually decided. Refusing here is correct -- the operator asked
-// for reviews to be off -- but a refusal that exits non-zero and names no
-// runnable continuation is the one shape this project does not ship. The scope
-// is derived rather than generic so the operator does not have to work out
-// which of the two independent sources they need to change.
+// Error names the exact command that turns reviews on, scoped to the source
+// that actually decided. Refusing here is correct -- either the operator asked
+// for reviews to be off, or nobody ever opted in -- but a refusal that exits
+// non-zero and names no runnable continuation is the one shape this project
+// does not ship. The scope is derived rather than generic so the operator does
+// not have to work out which source they need to change. The wording says "on"
+// rather than "back on" because receipt-driven development is opt-in: the most
+// common refusal is a fresh install where reviews were never on to begin with.
 func (err *RDDDisabledError) Error() string {
 	message := fmt.Sprintf("%v: %s is rejected because the %s mode source keeps it off",
 		ErrRDDDisabled, rddOperationSubject(err.Operation), err.Source)
 	// A mutation refuses against authority that already exists, so the operator
 	// needs one fact a start never has to carry: their in-flight review survived
-	// the refusal. It is stated before the continuation because it is true even
-	// when no source can be named and no command may be offered.
+	// the refusal. It is stated before the continuation because it answers a
+	// different question than "how do I proceed".
 	if err.Operation == RDDOperationMutate {
 		message += "; the review is frozen, not discarded"
 	}
-	scope := reviewModeScopeForSource(err.Source)
-	if scope == "" {
-		return message
-	}
+	enable := reviewModeEnableForSource(err.Source)
 	if err.Operation == RDDOperationMutate {
-		return fmt.Sprintf("%s; turn reviews back on with gentle-ai review mode enable --scope=%s to continue it from where it stopped", message, scope)
+		return fmt.Sprintf("%s; turn reviews on with %s to continue it from where it stopped", message, enable)
 	}
-	return fmt.Sprintf("%s; turn it back on with gentle-ai review mode enable --scope=%s", message, scope)
+	return fmt.Sprintf("%s; turn reviews on with %s", message, enable)
 }
 
 // rddOperationSubject names the refused operation the way an operator would say
@@ -205,22 +238,62 @@ func rddOperationSubject(operation RDDOperation) string {
 	return string(operation)
 }
 
-// reviewModeScopeForSource maps the deciding source onto the --scope value of
-// `gentle-ai review mode enable`. The default source expresses no opinion, so
-// it can never be what keeps reviews off and gets no continuation rather than
-// a guessed one.
-func reviewModeScopeForSource(source RDDModeSource) string {
-	switch source {
-	case RDDModeSourceGlobal:
-		return "global"
-	case RDDModeSourceCloneLocal:
-		return "clone"
-	default:
-		return ""
+// reviewModeEnableForSource names the exact `gentle-ai review mode enable`
+// commands that turn reviews on. Receipt-driven development is opt-in, so the
+// default source is not an absence of a decision the operator can act on: it is
+// the ordinary state of an install nobody configured, and it resolves the same
+// way a global opinion does. It answers "global" for that reason, and because
+// global is the only scope that can turn reviews on at all -- a clone may
+// disable for itself but may never require review for the user, so pointing a
+// never-configured operator at --scope=clone would name a command that cannot
+// do what the refusal just asked them to do. A clone-local off is the one
+// source needing two commands: --scope=clone clears the override, but clearing
+// it only lands on the global source, which an opt-in install has no reason to
+// have turned on -- so naming that scope alone was a dead end.
+func reviewModeEnableForSource(source RDDModeSource) string {
+	const enable = "gentle-ai review mode enable --scope="
+	if source == RDDModeSourceCloneLocal {
+		return enable + "global then " + enable + "clone"
 	}
+	return enable + "global"
 }
 
 func (err *RDDDisabledError) Unwrap() error { return ErrRDDDisabled }
+
+// RDDModePartialApplyError reports a clone-scope write that applied for this
+// build and did not apply at the readable pre-relocation location, so two
+// gentle-ai installations on this machine now disagree about whether reviews
+// run. It is raised only when that location was reachable and its publish
+// failed: an unreachable one is reported as reach instead, because refusing
+// there would re-close the exit #2882 opened.
+//
+// It deliberately does not unwrap to its cause. A caller that classified this
+// by the cause would report the other location's local problem and lose the
+// one fact the operator has to act on. The sentinel is enough to recognise it.
+type RDDModePartialApplyError struct {
+	Mode  RDDMode
+	Cause error
+}
+
+func (err *RDDModePartialApplyError) Error() string {
+	decision, verb := "no longer disables", "enable"
+	if err.Mode == RDDModeOff {
+		decision, verb = "disables", "disable"
+	}
+	return fmt.Sprintf(
+		"%v: this clone %s receipt-driven development for this gentle-ai, but publishing the same decision under gentle-ai/%s/%s/%s/%s failed, so a gentle-ai installed before the switch moved still reads the value it already has there and keeps enforcing it: %v; rerun `gentle-ai review mode %s --scope clone` to publish it in both places",
+		ErrRDDModePartiallyApplied,
+		decision,
+		rddModeLegacySwitchDirectory,
+		rarAuthorityDirectory,
+		rarAuthorityVersion,
+		rddModeDirectory,
+		err.Cause,
+		verb,
+	)
+}
+
+func (err *RDDModePartialApplyError) Unwrap() error { return ErrRDDModePartiallyApplied }
 
 // ResolveRDDMode combines the global user mode with this clone's off-only
 // override. Any off wins, a repository can never force on, and every failure
@@ -272,8 +345,16 @@ func SetCloneLocalRDDMode(
 		// global source remains off, so refuse without publishing a generation.
 		return currentStatus, &RDDDisabledError{Operation: RDDOperationStart, Source: RDDModeSourceGlobal}
 	}
-	if currentErr == nil && ((mode == RDDModeOff && currentStatus.CloneLocal == RDDModeOff) ||
-		(mode == RDDModeUnset && currentStatus.CloneLocal == RDDModeUnset)) {
+	// A request that matches the mode this clone already carries publishes no
+	// new generation of its own -- but it is not finished until every gentle-ai
+	// on this machine carries it too, so it goes on to the mirror below rather
+	// than returning here.
+	alreadyDecided := currentErr == nil && ((mode == RDDModeOff && currentStatus.CloneLocal == RDDModeOff) ||
+		(mode == RDDModeUnset && currentStatus.CloneLocal == RDDModeUnset))
+	if alreadyDecided && currentStatus.Revision == "" {
+		// This clone holds no override in either location and is not being asked
+		// for one. There is no decision to record and none to mirror, so this
+		// stays the one path that creates nothing at all.
 		return currentStatus, nil
 	}
 	if currentErr != nil && !errors.Is(currentErr, ErrRDDModeCorrupt) {
@@ -288,6 +369,14 @@ func SetCloneLocalRDDMode(
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
 	}
 	defer func() { _ = lock.release() }()
+
+	// Every clone-scope write also publishes into the pre-relocation location,
+	// because that is where the other gentle-ai installations on this machine
+	// read the switch. Writers from before the relocation lock that path;
+	// taking this build's root first and that one second serialises either
+	// version of gentle-ai without a lock-order cycle.
+	mirror := openCloneLocalRDDModeMirror(ctx, repo)
+	defer mirror.release()
 
 	head, present, err := readCloneLocalRDDOverrideHead(dir)
 	repairingCurrentHead := false
@@ -312,26 +401,15 @@ func SetCloneLocalRDDMode(
 		head, present = rddModeOverrideRecord{Generation: generation}, false
 		repairingCurrentHead = true
 	}
-	if !present && !repairingCurrentHead {
+	if !present && !repairingCurrentHead && mirror.available {
 		// Legacy records are immutable forensic evidence. A valid one may advance
 		// only by publishing its successor in the switch-owned authority root;
 		// a damaged legacy record must never be shadowed by a fresh root.
-		legacy, legacyErr := cloneLocalRDDModeLegacyRoot(ctx, repo)
-		if legacyErr == nil {
-			// Writers before the relocation lock this path. Taking current then
-			// legacy serializes either version without a lock-order cycle.
-			legacyLock, lockErr := acquireRARAuthorityLock(ctx, filepath.Join(legacy, rddModeLockName))
-			if lockErr != nil {
-				return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), lockErr
-			}
-			defer func() { _ = legacyLock.release() }()
-			legacyHead, legacyPresent, legacyHeadErr := readCloneLocalRDDOverrideHead(legacy)
-			if legacyHeadErr != nil {
-				return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), legacyHeadErr
-			}
-			if legacyPresent {
-				head, present = legacyHead, true
-			}
+		if mirror.readErr != nil {
+			return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), mirror.readErr
+		}
+		if mirror.present {
+			head, present = mirror.record, true
 		}
 	}
 	current := ""
@@ -342,13 +420,28 @@ func SetCloneLocalRDDMode(
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), fmt.Errorf(
 			"%w: expected %q but the clone-local head is %q", ErrRDDModeRevisionMismatch, expectedRevision, current)
 	}
-	if head.Generation >= rddModeMaxGeneration {
+	if alreadyDecided && (!mirror.available || mirror.decides(persisted)) {
+		// Both readable locations already carry this decision, or the other one
+		// cannot be reached at all and no write would change what it reports.
+		// Publishing another generation would move the compare-and-set token
+		// for nothing.
+		return rddModeWriteStatus(globalMode, head, present, mirror.reach()), nil
+	}
+	// The generation is a slot number in both locations, so it clears whichever
+	// of them has published further. A pre-relocation gentle-ai that wrote its
+	// own generations must not have one of them overwritten, and this build's
+	// own head must still advance.
+	generation := head.Generation + 1
+	if mirror.available && mirror.head >= generation {
+		generation = mirror.head + 1
+	}
+	if generation > rddModeMaxGeneration {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), errors.New("clone-local review mode generation space is exhausted")
 	}
 
 	record := rddModeOverrideRecord{
 		Schema:           rddModeOverrideSchema,
-		Generation:       head.Generation + 1,
+		Generation:       generation,
 		PreviousRevision: current,
 		Mode:             persisted,
 		RecordedAt:       time.Now().UTC().Format(time.RFC3339Nano),
@@ -363,10 +456,126 @@ func SetCloneLocalRDDMode(
 	// The immutable no-replace publish is the fail-closed backstop: a writer
 	// that somehow bypassed the lock still cannot overwrite a published
 	// generation, so a lost race can never corrupt the head record.
+	//
+	// This build's own root is published first and never waits on the other
+	// location's health. #2882 is exactly what happens when the switch can be
+	// held hostage by the review authority tree, and ordering the mirror ahead
+	// of it would reintroduce that through the back door.
 	if err := publishPrivateRARImmutable(filepath.Join(dir, rddModeGenerationName(record.Generation)), payload); err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
 	}
-	return rddModeStatus(globalMode, record, true), nil
+	if !mirror.available {
+		return rddModeWriteStatus(globalMode, record, true, RDDModeReachThisBuild), nil
+	}
+	// The same exact bytes at the same slot: a pre-relocation gentle-ai parses,
+	// digests, and canonicalises this record identically, so the two locations
+	// hold one decision rather than two that have to be reconciled.
+	if err := publishPrivateRARImmutable(filepath.Join(mirror.dir, rddModeGenerationName(record.Generation)), payload); err != nil {
+		return rddModeWriteStatus(globalMode, record, true, RDDModeReachThisBuild),
+			&RDDModePartialApplyError{Mode: mode, Cause: err}
+	}
+	return rddModeWriteStatus(globalMode, record, true, RDDModeReachMachine), nil
+}
+
+// cloneLocalRDDModeMirror is the pre-relocation copy of this clone's override,
+// held open under its own lock for the duration of one write.
+//
+// It is deliberately best-effort about reachability and strict about writing.
+// A location this build cannot open is also a location a pre-relocation
+// gentle-ai fails closed on, so refusing there would only re-close the exit
+// #2882 opened; a location that opens and then refuses the publish is a real
+// half-applied switch and is reported as one.
+type cloneLocalRDDModeMirror struct {
+	dir       string
+	lock      *storeLock
+	available bool
+	head      int
+	record    rddModeOverrideRecord
+	present   bool
+	readErr   error
+}
+
+// cloneLocalRDDModeMirrorSlotScan reads the mirror's published slot numbers.
+//
+// It is a variable for the same reason rarPrivateDirectoryMkdir is: the
+// failure it has to survive cannot be produced by a test on ext4 or tmpfs. A
+// directory that fails the owner-only no-follow walk never becomes a mirror at
+// all, so the only way to reach an unreadable head is a directory that
+// validates and then refuses readdir(2) -- a permission change racing the
+// walk, EIO, or ESTALE on a network mount. Production always uses the real
+// scan.
+var cloneLocalRDDModeMirrorSlotScan = cloneLocalRDDOverrideHeadGeneration
+
+func openCloneLocalRDDModeMirror(ctx context.Context, repo string) *cloneLocalRDDModeMirror {
+	mirror := &cloneLocalRDDModeMirror{}
+	// An unreachable location is not an error here. It is reported as reach,
+	// because a location this build cannot open is one a pre-relocation
+	// gentle-ai cannot read either, and refusing over it would re-close the
+	// clone-scoped exit #2882 opened.
+	dir, err := cloneLocalRDDModeLegacyRoot(ctx, repo, true)
+	if err != nil {
+		return mirror
+	}
+	lock, err := acquireRARAuthorityLock(ctx, filepath.Join(dir, rddModeLockName))
+	if err != nil {
+		return mirror
+	}
+	mirror.dir, mirror.lock, mirror.available = dir, lock, true
+	// The slot scan is kept separate from the record read: an unparseable head
+	// still occupies its slot, and the successor that supersedes it has to
+	// clear that slot rather than collide with it.
+	head, headErr := cloneLocalRDDModeMirrorSlotScan(dir)
+	if headErr != nil {
+		// A location whose slots cannot be enumerated has an UNKNOWN head, not
+		// an empty one, and the difference is the whole switch. Leaving it
+		// available with head zero published this build's next slot number
+		// into it: below the record a pre-relocation gentle-ai actually reads,
+		// invisible to the only reader it was written for, and reported as
+		// machine-wide reach -- #3284 with a success message on it.
+		//
+		// So it joins the location that cannot be opened at all. Not reached
+		// is the honest answer, the write still applies here, the operator is
+		// told reach=this_build, and nothing is published into a layout this
+		// build could not read. The lock stays held and released for the rest
+		// of this write, because the location itself is real.
+		//
+		// The scan error is dropped rather than carried, exactly like the two
+		// opens above: readErr is the record's own problem, consulted only
+		// while this location is still writable, and an unavailable mirror is
+		// never written to or asked what it decides.
+		mirror.available = false
+		return mirror
+	}
+	mirror.head = head
+	mirror.record, mirror.present, mirror.readErr = readCloneLocalRDDOverrideHead(dir)
+	return mirror
+}
+
+// decides reports whether a pre-relocation gentle-ai reading this location
+// already reaches the same conclusion as the requested mode. An absent record
+// is that conclusion for inherit: those builds spell "this clone holds no
+// override" by finding nothing here.
+func (mirror *cloneLocalRDDModeMirror) decides(mode string) bool {
+	if !mirror.available || mirror.readErr != nil {
+		return false
+	}
+	if !mirror.present {
+		return mode == rddModeOverrideInherit
+	}
+	return mirror.record.Mode == mode
+}
+
+func (mirror *cloneLocalRDDModeMirror) reach() RDDModeReach {
+	if mirror.available {
+		return RDDModeReachMachine
+	}
+	return RDDModeReachThisBuild
+}
+
+func (mirror *cloneLocalRDDModeMirror) release() {
+	if mirror.lock != nil {
+		_ = mirror.lock.release()
+	}
 }
 
 // AuthorizeRDDOperation is the single kill-switch gate. Reads and the
@@ -510,8 +719,25 @@ func rddModeStatus(
 	case globalMode == RDDModeOn:
 		status.Effective, status.Source = RDDModeOn, RDDModeSourceGlobal
 	default:
-		status.Effective, status.Source = RDDModeOn, RDDModeSourceDefault
+		// Receipt-driven development is opt-in. Nobody expressed an opinion
+		// here, and an install nobody configured must not start reviewing on
+		// its own: the only way to "on" is an explicit global enable, which the
+		// case above reads back untouched across an upgrade.
+		status.Effective, status.Source = RDDModeOff, RDDModeSourceDefault
 	}
+	return status
+}
+
+// rddModeWriteStatus is the projection a clone-scope write returns. It differs
+// from the read-only one by exactly one fact: how far the decision reached.
+func rddModeWriteStatus(
+	globalMode RDDMode,
+	override rddModeOverrideRecord,
+	present bool,
+	reach RDDModeReach,
+) RDDModeStatus {
+	status := rddModeStatus(globalMode, override, present)
+	status.Reach = reach
 	return status
 }
 
@@ -577,6 +803,13 @@ func cloneLocalRDDOverrideValue(mode RDDMode) (string, error) {
 // rule, and drops only the dependency that had no reason to exist.
 const rddModeSwitchDirectory = "review-mode"
 
+// rddModeLegacySwitchDirectory is where the switch lived before #2882 moved it,
+// and therefore where every gentle-ai released before that move still reads it.
+// It is not history: those builds coexist with this one on the same machine and
+// share the same Git common directory, so a decision absent from this location
+// is a decision they never see (#3284).
+const rddModeLegacySwitchDirectory = "review-transactions"
+
 // cloneLocalRDDModeRoot derives the override directory from the exact Git
 // common directory, under the switch's own root.
 func cloneLocalRDDModeRoot(ctx context.Context, repo string, create bool) (string, error) {
@@ -596,10 +829,14 @@ func cloneLocalRDDModeRoot(ctx context.Context, repo string, create bool) (strin
 }
 
 // cloneLocalRDDModeLegacyRoot is the pre-#2882 location inside the review
-// authority tree. It is read-only and best-effort: overrides written before
-// this change must keep deciding, and a clone that never disabled has nothing
-// here.
-func cloneLocalRDDModeLegacyRoot(ctx context.Context, repo string) (string, error) {
+// authority tree. Reads pass create=false and are best-effort: overrides
+// written before that change must keep deciding, and a clone that never
+// disabled has nothing here.
+//
+// Writes pass create=true. The location is not merely history: it is where
+// every gentle-ai installed before the relocation still looks, so a clone-scope
+// decision that is never published here is invisible to those builds (#3284).
+func cloneLocalRDDModeLegacyRoot(ctx context.Context, repo string, create bool) (string, error) {
 	identity, err := cloneLocalRDDModeIdentity(ctx, repo)
 	if err != nil {
 		return "", err
@@ -607,15 +844,15 @@ func cloneLocalRDDModeLegacyRoot(ctx context.Context, repo string) (string, erro
 	base := filepath.Join(
 		identity.GitCommonDir,
 		"gentle-ai",
-		"review-transactions",
+		rddModeLegacySwitchDirectory,
 		rarAuthorityDirectory,
 		rarAuthorityVersion,
 	)
-	if err := ensureRARRepositoryRoot(identity.GitCommonDir, base, false); err != nil {
+	if err := ensureRARRepositoryRoot(identity.GitCommonDir, base, create); err != nil {
 		return "", err
 	}
 	dir := filepath.Join(base, rddModeDirectory)
-	if err := ensurePrivateRARDirectoryTree(base, dir, false); err != nil {
+	if err := ensurePrivateRARDirectoryTree(base, dir, create); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -661,7 +898,7 @@ func cloneLocalRDDModeReadRoot(ctx context.Context, repo string) (string, error)
 			return dir, nil
 		}
 	}
-	legacy, legacyErr := cloneLocalRDDModeLegacyRoot(ctx, repo)
+	legacy, legacyErr := cloneLocalRDDModeLegacyRoot(ctx, repo, false)
 	if legacyErr != nil {
 		return "", nil
 	}

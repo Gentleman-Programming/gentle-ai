@@ -153,7 +153,7 @@ func seedScopeChangedApprovedSDDChange(t *testing.T, root string) {
 // internal/sddstatus for that case) and so could no longer distinguish
 // enabled enforcement from disabled leniency.
 func TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	seedScopeChangedApprovedSDDChange(t, root)
 
@@ -234,7 +234,7 @@ func TestSDDStatusWithoutCWDUsesLinkedWorktreeCommonDirMode(t *testing.T) {
 // switch now, so it could no longer distinguish "correctly fails closed to
 // enabled" from "incorrectly resolved to disabled".
 func TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	seedScopeChangedApprovedSDDChange(t, root)
 	disableReviewForClone(t, root)

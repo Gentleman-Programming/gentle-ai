@@ -30,6 +30,7 @@ func init() {
 func modelPickerJourneys() []Journey {
 	return []Journey{{
 		ID:     "j97-opencode-custom-agent-model-picker-runtime",
+		Review: reviewUntouched,
 		Title:  "Runtime model picker discovers and persists a custom native agent assignment",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/2098",
 		Steps: []Step{

@@ -32,6 +32,7 @@ func piHostRelayCaptureBinding(t *testing.T, repo string, args []string, record 
 }
 
 func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	binding := piHostRelayCaptureBinding(t, repo, args, record)
@@ -76,6 +77,7 @@ func TestReviewCaptureResultMaterializePrintsPiProviderTaskWithoutCapturing(t *t
 }
 
 func TestReviewCaptureResultMaterializedPiTaskSubmitsThroughExistingInputPath(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, args, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	binding := piHostRelayCaptureBinding(t, repo, args, record)
@@ -129,9 +131,14 @@ func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
 			want: "materializes internally",
 		},
 		{
+			// #3441: this refusal used to be byte-identical to the opposite
+			// one (--materialize omitted for a non-capture runtime), so the
+			// assertion could not tell them apart either. The exact texts of
+			// both live in
+			// TestCaptureResultHostMediatedRefusalsAreDistinguishable.
 			name: "opencode keeps its host-mediated refusal", env: reviewPiHostRelayContract,
 			argv: append(slices.Clone(fakeBinding), "--agent", string(model.AgentOpenCode), "--materialize=true"),
-			want: "is host-mediated; use its live transport collection",
+			want: "--materialize is unavailable for \"opencode\": printing the Go-materialized provider task is the host-relay form",
 		},
 		{
 			name: "combined with input", env: reviewPiHostRelayContract,
@@ -166,6 +173,7 @@ func TestReviewCaptureResultMaterializeRefusals(t *testing.T) {
 }
 
 func TestNegotiatedStatusRendersPiHostRelayMaterializeCaptureInput(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Setenv(reviewPiHostRelayContractEnvironment, reviewPiHostRelayContract)
 	repo, _, record, _ := newCandidateInspectionReview(t, "candidate\n", true)
 	var output bytes.Buffer

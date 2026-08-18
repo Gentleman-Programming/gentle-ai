@@ -104,6 +104,7 @@ func writeUnadmittedCLIReviewerResults(t *testing.T, started ReviewFacadeStartRe
 // message-only assertion would still pass if the route kept minting authority
 // under a different sentence, which is the defect class, not the fix.
 func TestReviewFinalizeRefusesUnadmittedReviewerResults(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started := startHighRiskCLIReview(t, repo)
 
@@ -148,6 +149,7 @@ func TestReviewFinalizeRefusesUnadmittedReviewerResults(t *testing.T) {
 // finalize --captured-results, so that exact sequence must reach an approved
 // receipt the delivery gate honours.
 func TestReviewFinalizeNamedContinuationReachesApproval(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	started := startHighRiskCLIReview(t, repo)
 	for order := range started.SelectedLenses {

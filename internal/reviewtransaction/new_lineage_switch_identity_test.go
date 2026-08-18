@@ -30,12 +30,17 @@ func TestNewLineageActivationSwitchIndependentOfKillSwitch(t *testing.T) {
 	for _, activation := range []string{"", "1"} {
 		t.Run("kill-switch-resolution-with-activation="+activation, func(t *testing.T) {
 			t.Setenv(newLineageActivationEnvVar, activation)
-			status, err := ResolveRDDMode(ctx, repo, RDDGlobalMode{})
+			// An explicit global opt-in, not an absent opinion. Receipt-driven
+			// development is off by default, so resolving with no opinion would
+			// report disabled for a reason that has nothing to do with the
+			// activation variable, and this assertion would stop testing the
+			// independence it exists for.
+			status, err := ResolveRDDMode(ctx, repo, RDDGlobalMode{Value: string(RDDModeOn)})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !status.Enabled() {
-				t.Fatalf("kill switch resolved disabled with no override present (activation=%q) — the activation env var must never influence it", activation)
+				t.Fatalf("kill switch resolved disabled against an explicit global on (activation=%q) — the activation env var must never influence it", activation)
 			}
 		})
 	}

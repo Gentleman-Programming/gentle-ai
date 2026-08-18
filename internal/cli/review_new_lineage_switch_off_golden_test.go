@@ -28,22 +28,27 @@ var updateReviewNewLineageSwitchOffGolden = flag.Bool("update", false, "update r
 // rdd-new-lineage-activation, "Additive Gate Branch, Switch-Off
 // Byte-Equivalence, Not a Cutover").
 func TestReviewNewLineageSwitchOffByteEquivalencePostApply(t *testing.T) {
+	reviewEnabledHome(t)
 	assertReviewNewLineageSwitchOffByteEquivalence(t, reviewtransaction.GatePostApply)
 }
 
 func TestReviewNewLineageSwitchOffByteEquivalencePreCommit(t *testing.T) {
+	reviewEnabledHome(t)
 	assertReviewNewLineageSwitchOffByteEquivalence(t, reviewtransaction.GatePreCommit)
 }
 
 func TestReviewNewLineageSwitchOffByteEquivalencePrePush(t *testing.T) {
+	reviewEnabledHome(t)
 	assertReviewNewLineageSwitchOffByteEquivalence(t, reviewtransaction.GatePrePush)
 }
 
 func TestReviewNewLineageSwitchOffByteEquivalencePrePR(t *testing.T) {
+	reviewEnabledHome(t)
 	assertReviewNewLineageSwitchOffByteEquivalence(t, reviewtransaction.GatePrePR)
 }
 
 func TestReviewNewLineageSwitchOffByteEquivalenceRelease(t *testing.T) {
+	reviewEnabledHome(t)
 	assertReviewNewLineageSwitchOffByteEquivalence(t, reviewtransaction.GateRelease)
 }
 
@@ -55,7 +60,7 @@ func assertReviewNewLineageSwitchOffByteEquivalence(t *testing.T, gate reviewtra
 	// proves is decision 4's own zero-cost construction: no explicit
 	// --lineage marker means resolveGoverningAuthority returns before any
 	// v3 lookup, switch state notwithstanding.
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate with the new-lineage switch off\n"), 0o644); err != nil {
 		t.Fatal(err)

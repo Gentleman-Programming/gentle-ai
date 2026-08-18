@@ -72,7 +72,7 @@ func TestReceiptDiscoveryDenialNamesRunnableReviewStart(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			reviewModeHome(t)
+			reviewEnabledHome(t)
 			repo := initReviewCLIRepo(t)
 			test.stage(t, repo)
 

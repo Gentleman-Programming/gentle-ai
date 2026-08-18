@@ -321,6 +321,7 @@ func TestReviewFacadeStartLensesRequiredHintsNegotiatedContract(t *testing.T) {
 // already exists -- the complementary starting condition to the sibling test,
 // which starts with none.
 func TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "dependency.go", "package dependency\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "--", "dependency.go")
@@ -403,6 +404,7 @@ func TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector(t *testing.T) {
 // (after the candidate moved) is refused with nothing persisted, exactly
 // like any other negotiated START would be.
 func TestReviewFacadeStartBaseDiffRefusalReplaysFrozenSelector(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "dependency.go", "package dependency\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "--", "dependency.go")

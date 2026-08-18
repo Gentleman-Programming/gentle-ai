@@ -23,7 +23,7 @@ import (
 // so this proves that invariant end-to-end rather than by code inspection
 // alone.
 func TestNewLineageRollbackSafetyStaysReadableAndFinalizableWhileSwitchIsOff(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineageID = "rollback-safety-lineage"
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("rollback-safety candidate\n"), 0o644); err != nil {

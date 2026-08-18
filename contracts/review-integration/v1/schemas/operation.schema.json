@@ -89,6 +89,9 @@
           "$comment": "Present only when the authority is escalated. Carries the accounting sentence with spent, remaining and total correction lines, so a caller learns the numbers without a second call.",
           "type": "string",
           "minLength": 1
+        },
+        "advisory_findings": {
+          "$ref": "#/$defs/advisory_findings"
         }
       },
       "allOf": [
@@ -105,8 +108,81 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "required": [
+              "advisory_findings"
+            ]
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "const": "approved"
+              }
+            }
+          }
         }
       ]
+    },
+    "advisory_findings": {
+      "$comment": "Additive and optional. Present only on an approved lineage that froze at least one non-blocking finding, it names the disposition that lineage's routing already decided (outcome plus absence from the correction ledger) instead of leaving a consumer to infer it from a bare severity string. It changes nothing about which findings block: a corrected blocker is excluded rather than relabelled, and the statement says the approval stands and that no correction transition is offered.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statement",
+        "findings"
+      ],
+      "properties": {
+        "statement": {
+          "type": "string",
+          "minLength": 1
+        },
+        "findings": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "severity",
+              "disposition"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "lens": {
+                "type": "string",
+                "minLength": 1
+              },
+              "location": {
+                "type": "string",
+                "minLength": 1
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "BLOCKER",
+                  "CRITICAL",
+                  "WARNING",
+                  "SUGGESTION"
+                ]
+              },
+              "disposition": {
+                "$comment": "informational: a non-severe finding that never entered classification and requires no action. follow_up: a severe finding proved to originate outside the frozen candidate, recorded for separate later work. refuted: a severe inferential finding the refuter knocked down.",
+                "enum": [
+                  "informational",
+                  "follow_up",
+                  "refuted"
+                ]
+              }
+            }
+          }
+        }
+      }
     },
     "validate": {
       "type": "object",

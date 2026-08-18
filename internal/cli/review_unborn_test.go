@@ -98,6 +98,7 @@ func TestReviewFacadeUnbornHeadDefaultProjectionStart(t *testing.T) {
 }
 
 func TestReviewFacadeUnbornHeadStagedLifecycle(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initUnbornReviewCLIRepo(t)
 	writeUnbornReviewCandidate(t, repo)
 	runReviewCLIGit(t, repo, "add", "--", "candidate.go", "candidate.md")
@@ -160,6 +161,7 @@ func TestReviewFacadeUnbornHeadStagedWithNothingStagedRefusesActionably(t *testi
 }
 
 func TestReviewFacadeUnbornReceiptDeniesFirstPublicationGates(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initUnbornReviewCLIRepo(t)
 	writeUnbornReviewCandidate(t, repo)
 	runReviewCLIGit(t, repo, "add", "--", "candidate.go", "candidate.md")
@@ -210,6 +212,7 @@ func TestReviewFacadeUnbornReceiptDeniesFirstPublicationGates(t *testing.T) {
 // --committed-only with --base-ref set to that commit's SHA — instead of the
 // generic "not supported" denial.
 func TestFirstPublicationEmptyBaseReceiptRefusal(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initUnbornReviewCLIRepo(t)
 	writeUnbornReviewCandidate(t, repo)
 	runReviewCLIGit(t, repo, "add", "--", "candidate.go", "candidate.md")
@@ -269,6 +272,7 @@ func TestFirstPublicationEmptyBaseReceiptRefusal(t *testing.T) {
 }
 
 func TestReviewFacadeExistingRemoteEmptyCommitAllowsPublicationGates(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initUnbornReviewCLIRepo(t)
 	runReviewCLIGit(t, repo, "commit", "--allow-empty", "-qm", "empty base")
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))

@@ -12,6 +12,7 @@ import (
 )
 
 func TestFailedCapturedEvidenceDrivesNegotiatedEscalationWithoutCallerBoolean(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, _, _ := capturedArtifact(t)
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-results"}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -89,6 +90,7 @@ func TestFailedCapturedEvidenceDrivesNegotiatedEscalationWithoutCallerBoolean(t 
 }
 
 func TestLegacyRawEvidenceWithoutMetadataFailsClosed(t *testing.T) {
+	reviewEnabledHome(t)
 	repo, started, _, _, _ := capturedArtifact(t)
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-results"}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -120,7 +122,9 @@ func TestLegacyRawEvidenceWithoutMetadataFailsClosed(t *testing.T) {
 }
 
 func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
@@ -239,6 +243,7 @@ func TestCorrectionAcceptanceWaitsForMatchingPassedRepositoryEvidence(t *testing
 }
 
 func TestProceduralCorrectionEvidenceEscalatesBeforeRetryEligibility(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
 		t.Fatal(err)

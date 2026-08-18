@@ -231,7 +231,9 @@ func TestReviewFacadeStartStagedProjectionBaseRefContinuationRefused(t *testing.
 }
 
 func TestReviewFacadeStagedReceiptAllowsDeliveredTreePrePushAndPrePR(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
@@ -271,7 +273,9 @@ func TestReviewFacadeStagedReceiptAllowsDeliveredTreePrePushAndPrePR(t *testing.
 }
 
 func TestReviewFacadeCleanFlowReplacesOneCompactStateAndUsesOnlyReceipt(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate behavior\n"), 0o644); err != nil {
@@ -394,7 +398,9 @@ func TestReviewFacadeCleanFlowReplacesOneCompactStateAndUsesOnlyReceipt(t *testi
 }
 
 func TestReviewFacadeStartSupportsCommittedBaseDiff(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
@@ -470,7 +476,9 @@ func TestReviewFacadeStartSupportsCommittedBaseDiff(t *testing.T) {
 }
 
 func TestReviewFacadeStartRequiresCommittedOnlyAndReusesEquivalentAuthority(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
@@ -709,6 +717,7 @@ func TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible(t *testing.T
 }
 
 func TestReviewFacadeFinalizeReceiptPublicationFailureIsExactlyReplayable(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := prepareFacadeReceiptPending(t)
 	if fixture.diagnostic.MutationOutcome != "committed" || fixture.diagnostic.Replayability != "exact_replay_safe" || fixture.diagnostic.LineageID != fixture.started.LineageID || !strings.HasPrefix(fixture.diagnostic.RequestDigest, "sha256:") {
 		t.Fatalf("receipt publication diagnostic = %#v", fixture.diagnostic)
@@ -762,6 +771,7 @@ func TestReviewFacadeFinalizeReceiptPublicationFailureIsExactlyReplayable(t *tes
 }
 
 func TestReviewFacadeFinalizeCompletesPendingJournalAfterReceiptPublication(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := prepareFacadeReceiptPending(t)
 	receipt, err := fixture.pending.State.Receipt()
 	if err != nil {
@@ -784,6 +794,7 @@ func TestReviewFacadeFinalizeCompletesPendingJournalAfterReceiptPublication(t *t
 }
 
 func TestReviewFacadeFinalizeResyncsCompletedJournalBeforeTerminalReplay(t *testing.T) {
+	reviewEnabledHome(t)
 	fixture := prepareFacadeReceiptPending(t)
 	receipt, err := fixture.pending.State.Receipt()
 	if err != nil {
@@ -818,6 +829,7 @@ func TestReviewFacadeFinalizeResyncsCompletedJournalBeforeTerminalReplay(t *test
 }
 
 func TestReviewFacadeFinalizePlannedTransitionInterruptionResumesWithoutDuplicateCommit(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -874,6 +886,7 @@ func TestReviewFacadeFinalizePlannedTransitionInterruptionResumesWithoutDuplicat
 }
 
 func TestReviewFacadeFinalizeReceiptReplayRejectsNonExactAndUnsafeRequests(t *testing.T) {
+	reviewEnabledHome(t)
 	t.Run("explicit lineage is required", func(t *testing.T) {
 		fixture := prepareFacadeReceiptPending(t)
 		assertFacadeReceiptReplayRejected(t, fixture, []string{"--cwd", fixture.repo})
@@ -900,6 +913,7 @@ func TestReviewFacadeFinalizeReceiptReplayRejectsNonExactAndUnsafeRequests(t *te
 }
 
 func TestReviewFacadeFinalizeTerminalReplaysRejectCapturedEvidence(t *testing.T) {
+	reviewEnabledHome(t)
 	for _, tt := range []struct {
 		name             string
 		publishReceipt   bool
@@ -1012,7 +1026,9 @@ func TestReadFacadeReviewerResultsRejectsNonNativeFields(t *testing.T) {
 }
 
 func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
@@ -1225,6 +1241,7 @@ func TestReviewFacadeRefusesFalseIntroducedFindingOutsideGenesis(t *testing.T) {
 }
 
 func TestReviewFacadeStartCannotResetActiveCorrectionBudget(t *testing.T) {
+	reviewEnabledHome(t)
 	tests := []struct {
 		name       string
 		negotiated bool
@@ -1311,7 +1328,9 @@ func TestReviewFacadeStartCannotResetActiveCorrectionBudget(t *testing.T) {
 // corrected candidate -- and therefore must not block the correction either,
 // which is the false blocker that guard would have become.
 func TestReviewFacadeFinalizeIgnoresCorrectionCreatedUntrackedPath(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
@@ -1369,7 +1388,9 @@ func TestReviewFacadeFinalizeIgnoresCorrectionCreatedUntrackedPath(t *testing.T)
 	}
 }
 func TestReviewFacadePersistsOverBudgetForecastAndActual(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	newCandidate := func(t *testing.T) (string, ReviewFacadeStartResult, string) {
 		t.Helper()
@@ -1822,7 +1843,9 @@ func TestReviewSchemasRequireConcreteEvidenceStrings(t *testing.T) {
 }
 
 func TestReviewFacadeRejectsMalformedInputsWithoutConsumingTerminalValidator(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"), 0o644); err != nil {
@@ -1898,6 +1921,7 @@ func TestReviewFacadeRejectsMalformedInputsWithoutConsumingTerminalValidator(t *
 }
 
 func TestReviewRecoverCreatesSuccessorAndDiscoveryRejectsHistoricalAuthority(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1964,6 +1988,7 @@ func TestReviewRecoverCreatesSuccessorAndDiscoveryRejectsHistoricalAuthority(t *
 }
 
 func TestReviewRecoverRetainsCommittedOnlyBaseDiffAndIgnoresWorkspace(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	baseRef := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
@@ -2036,6 +2061,7 @@ func TestReviewBindSDDRequiresExplicitInputs(t *testing.T) {
 }
 
 func TestReviewBindSDDAcceptsEqualsFormForEmptyExpectedRevision(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	for path, content := range map[string]string{"tasks.md": "- [x] 1.1 Done\n", "proposal.md": "# Proposal\n", "design.md": "# Design\n", "specs/binding/spec.md": "# Spec\n"} {
 		writeReviewStartCandidate(t, repo, "openspec/changes/thin/"+path, content, 0o644)
@@ -2056,6 +2082,7 @@ func TestReviewBindSDDAcceptsEqualsFormForEmptyExpectedRevision(t *testing.T) {
 }
 
 func TestReviewBindSDDFeedsSelectedSDDStatusRuntime(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	for path, content := range map[string]string{
 		"tasks.md":              "- [x] 1.1 Done\n",
@@ -2117,7 +2144,9 @@ func TestLegacyV1LineageRemainsReadableButRejectsAppend(t *testing.T) {
 }
 
 func TestCompactTransportCommandsRoundTripWithoutEventReconstruction(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
@@ -2159,7 +2188,9 @@ func TestCompactTransportCommandsRoundTripWithoutEventReconstruction(t *testing.
 }
 
 func TestCompactTransportAllowsCorrectedPrePushWithoutTransientBaseObject(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	source := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(source, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
@@ -2390,7 +2421,9 @@ func facadeReviewerResultArgs(t *testing.T, repo string, started ReviewFacadeSta
 // reviewtransaction.EscalationAccountingReasonTemplate, the same template the
 // organic gate and the SDD-bound remediation surface use.
 func TestReviewFacadeFinalizeSurfacesEscalationAccounting(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
@@ -2435,6 +2468,7 @@ func TestReviewFacadeFinalizeSurfacesEscalationAccounting(t *testing.T) {
 // stays absent for every non-escalated finalize, so the approved and
 // correction-required shapes keep their exact existing output.
 func TestReviewFacadeFinalizeOmitsEscalationWhenNotEscalated(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "notes.md"), []byte("a documentation note\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -2572,7 +2606,9 @@ func TestReviewFacadeOperationDeadlineSelector(t *testing.T) {
 // review state" without ever consuming canonical captured evidence or telling
 // the caller why nothing happened.
 func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
-	t.Parallel()
+	// Not parallel: opting in writes the user's global mode through t.Setenv,
+	// which Go forbids in a test that also calls t.Parallel.
+	reviewEnabledHome(t)
 
 	setup := func(t *testing.T) (string, ReviewFacadeStartResult) {
 		t.Helper()

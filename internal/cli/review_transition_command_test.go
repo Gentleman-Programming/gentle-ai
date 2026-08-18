@@ -474,6 +474,7 @@ func TestPublishedStatusSchemasRequireTokenOnExecutableArguments(t *testing.T) {
 // actually land, because a command that parses but does not work is the dead
 // end this defect class is about.
 func TestReviewRecoverTransitionEmitsACommandThatRuns(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
 	var output bytes.Buffer

@@ -35,7 +35,7 @@ func TestResolveGoverningAuthorityAbsentWithoutMarkerCostsNoGitCall(t *testing.T
 // through to the legacy receipt, even though that legacy receipt alone would
 // have allowed this exact candidate.
 func TestReviewValidateDiscoveryIntegrityMarkerCorruptedDeniesNeverLegacy(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineageID = "shared-legacy-and-new-lineage"
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate reviewed under legacy and named by a corrupted v3 marker\n"), 0o644); err != nil {
@@ -116,7 +116,7 @@ func TestReviewValidateDiscoveryIntegrityMarkerCorruptedDeniesNeverLegacy(t *tes
 // but never finalized is `reviewing`, never `approved`, and has no receipt —
 // default-deny requires every one of the five gates to deny it.
 func TestResolveGoverningAuthorityInFlightDeniesEveryGate(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "inflight-default-deny-lineage"
 	startNewLineageForFinalizeTest(t, repo, lineage)
@@ -407,7 +407,7 @@ func TestResolveGoverningAuthorityCorruptReceiptNamesFreshLineageNotFinalize(t *
 // (task 5.2) already pins the sibling corrupted-marker shape of the same
 // "never fall back to legacy" invariant.
 func TestRunReviewFacadeValidateNewLineageGovernsOverAnAllowingLegacyReceipt(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "shared-lineage-legacy-precedence"
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("legacy would govern this exact candidate alone\n"), 0o644); err != nil {

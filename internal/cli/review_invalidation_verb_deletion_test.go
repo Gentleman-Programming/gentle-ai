@@ -22,7 +22,7 @@ import (
 // (evaluateCompactGate's own scope/binding checks, unrelated to and
 // unaffected by this slice's deletion), never a persisted write.
 func TestReceiptFilePersistsAfterDerivedInvalidation_AllFiveGates(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	configureCLIReviewPublicationRemote(t, repo, branch)

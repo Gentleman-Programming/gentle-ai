@@ -38,6 +38,10 @@ func seedVerifiedReadyChangeForOffer(t *testing.T, root string) {
 // Archive stays whatever resolveDependencies already computed for a passing
 // verify report (Ready), never gated on the offer.
 func TestReviewOfferBlockPresentWhenVerifiedAndEnabled(t *testing.T) {
+	// "Enabled" is this fixture's premise, so it has to be stated. Without
+	// the opt-in the offer still arrives, but unavailable, and the nil check
+	// below accepts it -- the test would keep passing while proving nothing.
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("a"), "pass"))
@@ -149,6 +153,9 @@ func TestReviewOfferJourneyFiresZeroTimesAcrossFullFlowWhenDisabled(t *testing.T
 // repository policy regardless — there is no new state and no new
 // persistence to represent "declined".
 func TestReviewOfferDeclineLeavesNoStateAndDoesNotSuppressLaterOffer(t *testing.T) {
+	// Declining an offer is only meaningful when there is a real one to
+	// decline, which takes a user who switched receipt-driven development on.
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	seedVerifiedReadyChangeForOffer(t, root)
 
@@ -200,6 +207,10 @@ func TestReviewOfferDeclineLeavesNoStateAndDoesNotSuppressLaterOffer(t *testing.
 // two different, both-correct dispositions that happen to agree on the one
 // property that matters for delivery: neither blocks archive.
 func TestReviewOfferDeclineNeverBlocksArchiveAtTheProjectionLevel(t *testing.T) {
+	// The comparison is switch-on versus switch-off, so the "on" half has to
+	// be a user who opted in; the "off" half stays an explicit
+	// ResolveOptions.ReviewDisabled toggle over the same fixture.
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("a"), "pass"))
@@ -258,6 +269,9 @@ func TestReviewOfferDeclineNeverBlocksArchiveAtTheProjectionLevel(t *testing.T) 
 // (there is no `--consent declined` verb and no decline state to record;
 // the user declines simply by proceeding to archive without acting).
 func TestReviewOfferPresentAndArchiveReadyForAGenuinelyMissingReceipt(t *testing.T) {
+	// "Switch on, verify passed, no receipt anywhere" is the repro shape, so
+	// the switch has to actually be on for the offer to be available.
+	reviewEnabledHome(t)
 	root := t.TempDir()
 	seedVerifiedReadyChangeForOffer(t, root)
 

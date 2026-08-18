@@ -18,7 +18,7 @@
 ---
 
 > [!IMPORTANT]
-> **Receipt-Driven Development (RDD) is the supported stable path.** `v2.2.0` was the historical release where that path became supported after RDD began in `v1.47.0`: small work stays direct, broader implementation is delegated, SDD stays optional, and every route converges on structural proof, bounded review, an exact receipt, and delivery authorization.
+> **Receipt-Driven Development (RDD) is the supported stable path, and it is opt-in.** `v2.2.0` was the historical release where that path became supported after RDD began in `v1.47.0`: small work stays direct, broader implementation is delegated, SDD stays optional, and once RDD is enabled every route converges on structural proof, bounded review, an exact receipt, and delivery authorization. RDD is off until you enable it with `gentle-ai review mode enable --scope global`.
 >
 > The current stable release is [`v2.3.0`](https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v2.3.0). `@latest` is the stable channel:
 >
@@ -215,7 +215,7 @@ The managed installer tracks the channel's latest version and does not accept an
 
 ### The flow at a glance
 
-Both implementation routes converge on RDD: a bounded native review freezes the candidate and issues the one receipt that every delivery gate validates — review is never reopened for unchanged content.
+Once you enable it, both implementation routes converge on RDD: a bounded native review freezes the candidate and issues the one receipt that every delivery gate validates — review is never reopened for unchanged content. RDD is opt-in, so with it off both routes deliver under ordinary repository policy instead.
 
 **Organic route (no SDD)** — the agent picks the smallest useful route and RDD enters at the end, over the frozen candidate:
 
@@ -226,9 +226,9 @@ flowchart TD
     B -->|"4+ file exploration<br/>or 2+ non-trivial writes"| D["Delegated direct<br/>(one bounded worker)"]
     C --> E["Implementation + tests"]
     D --> E
-    E --> F{"RDD enabled?<br/>(user-owned kill switch)"}
-    F -->|"off"| Z["Ordinary delivery<br/>reports disabled/unmanaged"]
-    F -->|"on"| G["review status --next-transition<br/>(provider-owned negotiated route)"]
+    E --> F{"RDD enabled?<br/>(user-owned, opt-in)"}
+    F -->|"off (default)"| Z["Ordinary delivery<br/>reports disabled/unmanaged"]
+    F -->|"on (explicitly enabled)"| G["review status --next-transition<br/>(provider-owned negotiated route)"]
     G --> H{"Risk frozen<br/>at START"}
     H -->|"low"| I["Structural readback<br/>0 lenses · silent"]
     H -->|"standard"| J["1 focus lens<br/>+ consent"]
@@ -295,15 +295,15 @@ Size, file count, or perceived risk never select SDD on their own — only an ex
 
 ### Control receipt-driven development
 
-Review mode is user-owned and available independently of the review lifecycle:
+Review mode is user-owned and available independently of the review lifecycle. **Receipt-driven development is opt-in: it is off until you turn it on.**
 
 ```bash
 gentle-ai review mode status --cwd .
+gentle-ai review mode enable --scope global --cwd .
 gentle-ai review mode disable --cwd .
-gentle-ai review mode enable --cwd .
 ```
 
-`status` is read-only. Any global or clone-local disabled source wins; a clone can opt out with `--scope clone` but cannot force review on. Re-enabling applies only to future candidates, while declining a one-candidate review prompt does not change the mode. When review is disabled, existing exact governing receipts remain authoritative; otherwise native review gates report `disabled/unmanaged` and defer delivery to ordinary repository policy without fabricating approval.
+`status` is read-only. With no source expressing an opinion the effective mode is `off`, reported as decided by `default`; only an explicit global enable turns review on. Any global or clone-local disabled source wins; a clone can opt out with `--scope clone` but cannot force review on, so `--scope global` is the only way in. Enabling applies only to future candidates, while declining a one-candidate review prompt does not change the mode. When review is off, existing exact governing receipts remain authoritative; otherwise native review gates report `disabled/unmanaged` and defer delivery to ordinary repository policy without fabricating approval.
 
 Historical note: `v2.2.2` introduced the native delivery-gate `disabled/unmanaged` disposition. Current SDD status does not use that disposition: with review disabled, it skips review authority, emits no `reviewGate`, and pre-verify continues without routing to a review that cannot start. Archive proceeds under ordinary repository policy when `reviewGate` is absent; a present `reviewGate.result: allow` is required only for discovered review activity. This differs from native delivery gates, which report `disabled/unmanaged` when review is disabled.
 

@@ -52,6 +52,7 @@ func contendedReceiptWriter(t *testing.T, lockPath string, release time.Duration
 // failure with `mutation_outcome: committed` sending the caller to replay a
 // publication that is not pending in any durable sense.
 func TestFinalizeConvergesWhenReceiptPublicationMeetsBrieflyHeldLock(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	lineage := startLowRiskFacadeReview(t, repo)
 	contendedReceiptWriter(t, compactAuthorityLockPath(t, repo, lineage), 150*time.Millisecond)
@@ -80,6 +81,7 @@ func TestFinalizeConvergesWhenReceiptPublicationMeetsBrieflyHeldLock(t *testing.
 // once the obstruction clears. Do not relax this test to make publication
 // failures disappear.
 func TestFinalizeReceiptPublicationExhaustionKeepsPendingReplay(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	lineage := startLowRiskFacadeReview(t, repo)
 	lockPath := compactAuthorityLockPath(t, repo, lineage)

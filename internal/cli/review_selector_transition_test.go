@@ -16,6 +16,7 @@ import (
 )
 
 func TestStatusValidateTransitionPreservesCustomPublicationBase(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	remote := filepath.Join(t.TempDir(), "origin.git")
 	if err := os.MkdirAll(remote, 0o755); err != nil {
@@ -105,6 +106,7 @@ func TestStatusValidateTransitionPreservesCustomPublicationBase(t *testing.T) {
 }
 
 func TestStatusAndValidateShareMergeBaseBoundPrePRTarget(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	remote := filepath.Join(t.TempDir(), "origin.git")
 	if err := os.MkdirAll(remote, 0o755); err != nil {
@@ -155,6 +157,7 @@ func TestStatusAndValidateShareMergeBaseBoundPrePRTarget(t *testing.T) {
 }
 
 func TestStatusRecoverTransitionExecutesExactBaseDiffSelectors(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
@@ -267,6 +270,7 @@ func TestStatusRecoverTransitionExecutesExactBaseDiffSelectors(t *testing.T) {
 // accounting-only edge deliberately carries no target selector, unlike an
 // absent selector from an unrepresentable recovery.
 func TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, "selector-accounting-only")
@@ -371,6 +375,7 @@ func TestStatusRecoverTransitionExecutesAccountingOnlyRecoveryWithoutSelectors(t
 }
 
 func TestStatusStopsFreshStagedWorkspaceOverlay(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	writeReviewStartCandidate(t, repo, "docs/fresh.md", "# Fresh\n", 0o644)
@@ -386,6 +391,7 @@ func TestStatusStopsFreshStagedWorkspaceOverlay(t *testing.T) {
 }
 
 func TestStatusRecoverTransitionExecutesApprovedStagedScopeExpansion(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	writeReviewStartCandidate(t, repo, "docs/candidate.md", "# Candidate\n", 0o644)
@@ -519,6 +525,7 @@ func TestStatusRecoverTransitionExecutesApprovedStagedScopeExpansion(t *testing.
 }
 
 func TestStatusRecoverTransitionExecutesCorrectionRequiredStagedScopeExpansion(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int {\n\treturn 1\n}\n", 0o644)
@@ -628,6 +635,7 @@ func TestStatusRecoverTransitionExecutesCorrectionRequiredStagedScopeExpansion(t
 }
 
 func TestCurrentChangesRecoverSelectorPresenceSurvivesJSONRoundTrip(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
 	var output bytes.Buffer
@@ -709,6 +717,7 @@ func TestCurrentChangesRecoverSelectorPresenceSurvivesJSONRoundTrip(t *testing.T
 }
 
 func TestStatusStopsUnrepresentableRecoveryWithoutMutation(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
@@ -778,6 +787,7 @@ func TestTransitionSelectorFlagsRejectMixedAliases(t *testing.T) {
 }
 
 func TestStatusStopsUnchangedBaseDiffRecoveryWithoutSuccessor(t *testing.T) {
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n", 0o644)
@@ -860,6 +870,20 @@ func runSelectorTransition(repo string, status ReviewTargetStatusResult) ([]byte
 }
 
 func selectorTransitionCommandArguments(repo string, status ReviewTargetStatusResult) []string {
+	// Only an `execute` transition carries a command. A `stop` -- most commonly
+	// `rdd_disabled`, now that receipt-driven development is opt-in and a
+	// fixture that forgets to enable it lands here -- carries none, and
+	// dereferencing it panics the whole test binary. That is worse than one
+	// failing test: the SIGSEGV aborts the run, so every later test in the
+	// package silently disappears from the report rather than failing. Naming
+	// the reason code turns that into an obvious, local diagnosis.
+	if status.NextTransition == nil || status.NextTransition.Execute == nil {
+		reason := "<no transition>"
+		if status.NextTransition != nil {
+			reason = status.NextTransition.Kind + "/" + status.NextTransition.ReasonCode
+		}
+		panic("selector transition carries no executable command: " + reason)
+	}
 	operation := strings.TrimPrefix(status.NextTransition.Execute.Operation, "review.")
 	args := []string{operation, "--cwd=" + repo}
 	for _, argument := range status.NextTransition.Execute.Arguments {

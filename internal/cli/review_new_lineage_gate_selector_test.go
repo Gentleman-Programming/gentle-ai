@@ -32,7 +32,7 @@ import (
 // scope-changed/collect denial for a candidate pre-commit would never
 // actually commit).
 func TestGoverningAuthorityLiveEvidenceUsesStagedProjectionAtPreCommit(t *testing.T) {
-	reviewModeHome(t)
+	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "1")
 
@@ -72,7 +72,7 @@ func TestGoverningAuthorityLiveEvidenceUsesStagedProjectionAtPreCommit(t *testin
 // not been staged yet. The same unstaged-drift fixture that pre-commit
 // (correctly) allows must still be reported as changed at post-apply.
 func TestGoverningAuthorityLiveEvidenceUsesWorkspaceProjectionAtPostApply(t *testing.T) {
-	home := reviewModeHome(t)
+	home := reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "1")
 

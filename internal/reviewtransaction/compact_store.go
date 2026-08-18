@@ -170,7 +170,13 @@ type CompactRecord struct {
 }
 
 // historicalCompactForensicRecord is raw-byte identity, never authority.
-type historicalCompactForensicRecord struct{ RawDigest string }
+// PredecessorLineageID carries the recovery predecessor the prior-schema
+// record names, recovered through the same read-only forensic parse, so
+// scoped ancestry audits can keep walking past inert prior-schema history.
+type historicalCompactForensicRecord struct {
+	RawDigest            string
+	PredecessorLineageID string
+}
 
 type CompactStore struct {
 	Dir                 string
@@ -2393,9 +2399,9 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 		return CompactRecord{}, errors.New("invalid compact review state record")
 	}
 	if err := record.State.Validate(); err != nil {
-		_, historical := forensicHistoricalCompactRecord(payload, lineageID)
+		forensic, historical := forensicHistoricalCompactRecord(payload, lineageID)
 		return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error(),
-			OutdatedIdentity: historical}
+			OutdatedIdentity: historical, PriorSchemaPredecessorLineageID: forensic.PredecessorLineageID}
 	}
 	if err := validateCompactEffectIntents(record); err != nil {
 		return CompactRecord{}, err
@@ -2475,17 +2481,58 @@ func forensicHistoricalCompactRecord(payload []byte, lineageID string) (historic
 		return historicalCompactForensicRecord{}, false
 	}
 	state := record.State
+	// The proof is a coherent re-mint of the retired identity domain: every
+	// snapshot identity the record froze must equal the retired formula's own
+	// recomputation (Initial/Current unconditionally; correction snapshots may
+	// already carry a current-formula identity and then stay untouched), and
+	// every binding that pins one of those identities — the verification
+	// evidence target and each correction attempt's frozen correction target —
+	// is remapped through the exact same bijection, never invented. A record
+	// that still fails validation after that is not prior-schema.
+	reminted := map[string]string{}
+	remint := func(snapshot *Snapshot) {
+		minted := snapshotIdentityForProjection(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
+		reminted[snapshot.Identity] = minted
+		snapshot.Identity = minted
+	}
 	for _, snapshot := range []*Snapshot{&state.InitialSnapshot, &state.CurrentSnapshot} {
 		if snapshot.Identity != retiredCompactSnapshotIdentity(*snapshot) {
 			return historicalCompactForensicRecord{}, false
 		}
-		snapshot.Identity = snapshotIdentityForProjection(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
+		remint(snapshot)
+	}
+	for index := range state.CorrectionAttempts {
+		snapshot := &state.CorrectionAttempts[index].Snapshot
+		if minted, seen := reminted[snapshot.Identity]; seen {
+			snapshot.Identity = minted
+		} else if snapshot.Identity == retiredCompactSnapshotIdentity(*snapshot) {
+			remint(snapshot)
+		}
+	}
+	if target := state.CorrectionVerificationTarget; target != nil {
+		if minted, seen := reminted[target.Identity]; seen {
+			target.Identity = minted
+		} else if target.Identity == retiredCompactSnapshotIdentity(*target) {
+			remint(target)
+		}
+	}
+	if minted, seen := reminted[state.EvidenceTargetIdentity]; seen {
+		state.EvidenceTargetIdentity = minted
+	}
+	for index := range state.CorrectionAttempts {
+		if minted, seen := reminted[state.CorrectionAttempts[index].CorrectionTargetIdentity]; seen {
+			state.CorrectionAttempts[index].CorrectionTargetIdentity = minted
+		}
 	}
 	if state.Validate() != nil {
 		return historicalCompactForensicRecord{}, false
 	}
+	predecessor := ""
+	if state.Recovery != nil {
+		predecessor = state.Recovery.PredecessorLineageID
+	}
 	sum := sha256.Sum256(payload)
-	return historicalCompactForensicRecord{RawDigest: "sha256:" + hex.EncodeToString(sum[:])}, true
+	return historicalCompactForensicRecord{RawDigest: "sha256:" + hex.EncodeToString(sum[:]), PredecessorLineageID: predecessor}, true
 }
 
 func retiredCompactSnapshotIdentity(snapshot Snapshot) string {
