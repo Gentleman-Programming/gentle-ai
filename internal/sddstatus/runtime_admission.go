@@ -3,6 +3,8 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
@@ -14,6 +16,7 @@ type runtimeBeginAdmissionResult struct {
 	Advancing  bool
 	Generation int
 	Snapshot   reviewtransaction.Snapshot
+	Concurrent bool
 }
 
 // runtimeBeginAdmission is the ONE evaluator of every precondition Begin must
@@ -35,8 +38,27 @@ type runtimeBeginAdmissionResult struct {
 // repository-side precondition without every read-only surface inheriting it,
 // because there is only one place to put it.
 func (store RuntimeStore) runtimeBeginAdmission(
-	ctx context.Context, status RuntimeStatus, request BeginAttemptRequest,
+	ctx context.Context, replay runtimeReplay, request BeginAttemptRequest,
 ) (runtimeBeginAdmissionResult, error) {
+	status := replay.Status
+	if replay.itemPlan != nil && request.itemPlan != nil && runtimePlanItemPassedProof(replay, *replay.itemPlan, request.ItemID) {
+		return runtimeBeginAdmissionResult{}, ErrRuntimeAttemptActive
+	}
+	if status.runtimeActiveCount() > 0 {
+		if !runtimeConcurrentItemAdmissible(replay, request) {
+			return runtimeBeginAdmissionResult{}, ErrRuntimeAttemptActive
+		}
+		snapshot, err := captureRuntimeCandidate(ctx, store.Repo)
+		if err != nil {
+			return runtimeBeginAdmissionResult{}, wrapRuntimeCandidateUnavailable("before launch", err)
+		}
+		return runtimeBeginAdmissionResult{Generation: status.ObjectiveGeneration + 1, Snapshot: snapshot, Concurrent: true}, nil
+	}
+	if replay.itemPlan != nil && request.itemPlan != nil {
+		if !runtimePlanDependenciesSatisfied(replay, *replay.itemPlan, request.ItemID) {
+			return runtimeBeginAdmissionResult{}, ErrRuntimeAttemptActive
+		}
+	}
 	if status.runtimeActiveAttempt() != nil {
 		return runtimeBeginAdmissionResult{}, ErrRuntimeAttemptActive
 	}
@@ -151,9 +173,16 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 		status.BlockedExit = err.Error()
 		return status, nil
 	}
+	bound, _, _, _, err := store.runtimeItemPlanBinding(replay, normalized)
+	if err != nil {
+		status.BlockedReason = CompactBlockInvalidContinuation
+		status.BlockedExit = err.Error()
+		return status, nil
+	}
+	normalized = bound
 	if result, terminal := runtimeReadiness(runtimeReadinessInput{
 		Status: status, AttemptTokens: replay.AttemptTokens, Request: normalized,
-	}); terminal && result.State == CompactStateBlocked {
+	}); terminal && result.State == CompactStateBlocked && !(result.Reason == CompactBlockActiveAttempt && runtimeConcurrentItemAdmissible(replay, normalized)) {
 		status.BlockedReason, status.BlockedExit = result.Reason, result.Exit
 		// An exhausted budget is a decision, so it asks instead of ending the
 		// conversation. The grant is the reset the ledger already admits at
@@ -166,12 +195,82 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 		}
 		return status, nil
 	}
-	if _, admissionErr := store.runtimeBeginAdmission(ctx, status, normalized); admissionErr != nil {
+	if _, admissionErr := store.runtimeBeginAdmission(ctx, replay, normalized); admissionErr != nil {
 		if blocked := store.compactMutationFailure(admissionErr, false, normalized); blocked.State == CompactStateBlocked {
 			status.BlockedReason, status.BlockedExit = blocked.Reason, blocked.Exit
 		}
 	}
 	return status, nil
+}
+
+func runtimeConcurrentItemAdmissible(replay runtimeReplay, request BeginAttemptRequest) bool {
+	if replay.itemPlan == nil || request.itemPlan == nil || request.itemPlan.Plan.Digest != replay.itemPlan.Digest || !runtimePlanDependenciesSatisfied(replay, *replay.itemPlan, request.ItemID) {
+		return false
+	}
+	for _, ordinal := range replay.Status.runtimeActiveOrdinals() {
+		active := replay.Status.runtimeActiveAttemptForOrdinal(ordinal)
+		owner := replay.Status.ownership.objectives[replay.Status.ownership.active[ordinal]]
+		if active == nil || owner == nil || owner.planDigest != replay.itemPlan.Digest || owner.entryDigest == "" || !runtimeDisjointRoots(active.ItemEditRoots, request.ItemEditRoots) {
+			return false
+		}
+	}
+	return true
+}
+func runtimePlanDependenciesSatisfied(replay runtimeReplay, plan itemPlanCandidate, itemID string) bool {
+	entry, ok := itemPlanEntryForID(plan, itemID)
+	if !ok {
+		return false
+	}
+	for _, dependency := range entry.DependsOn {
+		_, ok := itemPlanEntryForID(plan, dependency)
+		if !ok {
+			return false
+		}
+		if !runtimePlanItemPassedProof(replay, plan, dependency) {
+			return false
+		}
+	}
+	return true
+}
+
+// runtimePlanItemPassedProof is the immutable authority shared by dependency
+// admission and selected-item completion. A checkbox only projects work; it
+// cannot reopen an already-passed item or satisfy a dependency on its own.
+func runtimePlanItemPassedProof(replay runtimeReplay, plan itemPlanCandidate, itemID string) bool {
+	want, ok := itemPlanEntryForID(plan, itemID)
+	if !ok {
+		return false
+	}
+	for index := range replay.Status.Attempts {
+		attempt := &replay.Status.Attempts[index]
+		owner := replay.Status.ownership.objectives[attempt.ObjectiveID]
+		if attempt.Outcome == AttemptPassed && attempt.ItemID == want.ID && attempt.WorkUnit == want.WorkUnit &&
+			owner != nil && owner.objective != nil && owner.objective.ID == attempt.ObjectiveID && owner.objective.Generation == attempt.ObjectiveGeneration &&
+			owner.objective.ID == runtimeObjectiveIDForBinding(replay.Status.Change, owner.objective.WorkUnit, owner.objective.EvidenceGoal, owner.objective.InitialCandidateIdentity, owner.objective.Generation, owner.objective.ItemID, owner.objective.ItemEditRoots) &&
+			owner.planDigest == plan.Digest && owner.entryDigest == itemPlanEntryDigest(want) &&
+			owner.objective.EvidenceGoal == want.EvidenceGoal && owner.objective.MaxAttempts == want.MaxAttempts && owner.objective.MaxChangedLines == want.MaxChangedLines &&
+			runtimeItemBindingEqual(attempt.ItemID, attempt.ItemEditRoots, owner.objective.ItemID, owner.objective.ItemEditRoots) {
+			return true
+		}
+	}
+	return false
+}
+func runtimeDisjointRoots(left, right []string) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	outside := func(a, b string) bool {
+		rel, err := filepath.Rel(a, b)
+		return err == nil && rel != "." && (rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+	}
+	for _, a := range left {
+		for _, b := range right {
+			if !outside(a, b) || !outside(b, a) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // budgetConsentInput reads the question's facts off the ledger. HarnessFailures

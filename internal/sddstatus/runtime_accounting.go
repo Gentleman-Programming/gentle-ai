@@ -76,10 +76,14 @@ func (accounting *runtimeAccounting) finish(objective *RuntimeObjective, lines i
 }
 
 func (accounting runtimeAccounting) materialize(status *RuntimeStatus) error {
-	if status.runtimeObjective() == nil {
+	objective := status.runtimeObjective()
+	if compatible, active := status.runtimeCompatibilityActive(); active != nil {
+		objective = compatible
+	}
+	if objective == nil {
 		status.CumulativeAttempts, status.CumulativeChangedLines = 0, 0
 	} else {
-		consumed, err := accounting.current(status.runtimeObjective())
+		consumed, err := accounting.current(objective)
 		if err != nil {
 			return err
 		}

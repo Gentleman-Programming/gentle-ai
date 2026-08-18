@@ -437,6 +437,57 @@ func TestRunSDDAttemptAcquireProjectedItemDerivesAndSettlesBoundScope(t *testing
 	}
 }
 
+func TestRunSDDAttemptConcurrentDisjointItemsSettleByToken(t *testing.T) {
+	repo, change := concurrentItemCLIChange(t)
+	a, _ := runCompactSDDAttempt(t, []string{"acquire", "--cwd", repo, "--change", change, "--item", "a", "--request-id", "concurrent-a"})
+	b, _ := runCompactSDDAttempt(t, []string{"acquire", "--cwd", repo, "--change", change, "--item", "b", "--request-id", "concurrent-b"})
+	if a.State != "proceed" || b.State != "proceed" || a.Token == "" || b.Token == "" || a.Token == b.Token {
+		t.Fatalf("disjoint acquires a=%#v b=%#v", a, b)
+	}
+
+	var status sddstatus.RuntimeStatus
+	var output bytes.Buffer
+	if err := RunSDDAttempt([]string{"status", "--cwd", repo, "--change", change}, &output); err != nil || json.Unmarshal(output.Bytes(), &status) != nil ||
+		status.ActiveAttempt == nil || status.ActiveAttempt.Ordinal != 1 || status.Objective == nil || status.Objective.Generation != 1 || len(status.Attempts) != 2 {
+		t.Fatalf("concurrent status=%#v err=%v output=%s", status, err, output.String())
+	}
+	if status.Attempts[0].Ordinal != 1 || status.Attempts[1].Ordinal != 2 || status.Attempts[0].ObjectiveGeneration != 1 || status.Attempts[1].ObjectiveGeneration != 2 {
+		t.Fatalf("concurrent attempts=%#v", status.Attempts)
+	}
+
+	settleA := compactSettleArgs(repo, change, a.Token, "concurrent-a-settle", "passed")
+	first, firstPayload := runCompactSDDAttempt(t, settleA)
+	if first.State != "proceed" || first.ItemSettlement == nil || first.ItemSettlement.ItemID != "a" || first.ItemSettlement.AttemptOrdinal != 1 || first.ItemSettlement.ObjectiveGeneration != 1 {
+		t.Fatalf("non-projected settlement=%#v", first)
+	}
+	output.Reset()
+	if err := RunSDDAttempt([]string{"status", "--cwd", repo, "--change", change}, &output); err != nil || json.Unmarshal(output.Bytes(), &status) != nil || status.ActiveAttempt == nil || status.ActiveAttempt.Ordinal != 2 || status.Attempts[0].Outcome != sddstatus.AttemptPassed || status.Attempts[1].Outcome != sddstatus.AttemptRunning || status.Complete {
+		t.Fatalf("remaining owner=%#v err=%v", status, err)
+	}
+
+	second, _ := runCompactSDDAttempt(t, compactSettleArgs(repo, change, b.Token, "concurrent-b-settle", "passed"))
+	if second.State != "complete" || second.ItemSettlement == nil || second.ItemSettlement.ItemID != "b" || second.ItemSettlement.AttemptOrdinal != 2 {
+		t.Fatalf("remaining settlement=%#v", second)
+	}
+	recordsDir := filepath.Join(repo, ".git", "gentle-ai", "sdd-runtime", "v1", change, "records")
+	beforeReplay := snapshotRuntimeAuthorityFiles(t, recordsDir)
+	replayed, replayPayload := runCompactSDDAttempt(t, settleA)
+	afterReplay := snapshotRuntimeAuthorityFiles(t, recordsDir)
+	if !reflect.DeepEqual(replayed.ItemSettlement, first.ItemSettlement) || !reflect.DeepEqual(beforeReplay, afterReplay) {
+		t.Fatalf("first settlement replay=%#v payload=%s first=%s", replayed, replayPayload, firstPayload)
+	}
+	for _, token := range []string{"", cliAttemptHash('f')} {
+		before := snapshotRuntimeAuthorityFiles(t, recordsDir)
+		var foreignOutput bytes.Buffer
+		err := RunSDDAttempt(compactSettleArgs(repo, change, token, "foreign-"+fmt.Sprint(len(token)), "passed"), &foreignOutput)
+		var blocked compactAttemptOutput
+		_ = json.Unmarshal(foreignOutput.Bytes(), &blocked)
+		if (err == nil && blocked.State != "blocked") || !reflect.DeepEqual(before, snapshotRuntimeAuthorityFiles(t, recordsDir)) {
+			t.Fatalf("foreign token=%q err=%v output=%s", token, err, foreignOutput.String())
+		}
+	}
+}
+
 func TestRunSDDAttemptAcquireProjectedItemRefusesCallerScopeAndUnavailableItems(t *testing.T) {
 	repo, change := projectedItemCLIChange(t)
 	store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, change)
@@ -500,6 +551,22 @@ func projectedItemCLIChange(t *testing.T) (string, string) {
 		writeReviewStartCandidate(t, repo, filepath.Join("openspec", "changes", change, path), content, 0o644)
 	}
 	writeProjectedItemTasks(t, repo, change, false)
+	return repo, change
+}
+
+func concurrentItemCLIChange(t *testing.T) (string, string) {
+	t.Helper()
+	repo, change := initReviewCLIRepo(t), "concurrent-items"
+	for _, root := range []string{"a", "b"} {
+		if err := os.MkdirAll(filepath.Join(repo, root), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, content := range map[string]string{"proposal.md": "# Proposal\n", "design.md": "# Design\n", "specs/item/spec.md": "### Requirement: Item\n#### Scenario: Acquire\n"} {
+		writeReviewStartCandidate(t, repo, filepath.Join("openspec", "changes", change, path), content, 0o644)
+	}
+	tasks := "- [ ] a: A\n- [ ] b: B\n<!-- gentle-ai.sdd-items/v1\n{\"items\":[{\"id\":\"a\",\"dependsOn\":[],\"workUnit\":\"a\",\"editRoots\":[\"a\"],\"maxAttempts\":1,\"maxChangedLines\":100,\"evidenceGoal\":\"prove a\"},{\"id\":\"b\",\"dependsOn\":[],\"workUnit\":\"b\",\"editRoots\":[\"b\"],\"maxAttempts\":1,\"maxChangedLines\":100,\"evidenceGoal\":\"prove b\"}]}\n-->"
+	writeReviewStartCandidate(t, repo, filepath.Join("openspec", "changes", change, "tasks.md"), tasks, 0o644)
 	return repo, change
 }
 

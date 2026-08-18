@@ -169,21 +169,56 @@ func projectWorkItems(tasks string, status Status) ([]WorkItem, bool, error) {
 	result := make([]WorkItem, 0, len(document.Items))
 	for _, declared := range document.Items {
 		item := WorkItem{ID: declared.ID, DependsOn: append([]string{}, (*declared.DependsOn)...), WorkUnit: declared.WorkUnit, EditRoots: declared.EditRoots, MaxAttempts: declared.MaxAttempts, MaxChangedLines: declared.MaxChangedLines, EvidenceGoal: declared.EvidenceGoal, Done: checkboxes[declared.ID]}
+		roots, rootsValid := canonicalWorkItemRoots(declared.EditRoots, status.ActionContext.WorkspaceRoot)
 		scopeAllowed := workItemRootsAllowed(declared.EditRoots, status.ActionContext)
 		dependenciesDone := true
-		for _, dependency := range *declared.DependsOn {
-			dependenciesDone = dependenciesDone && checkboxes[dependency]
-		}
-		runtimeMatch := !item.Done && workItemRuntimeMatches(declared, status.ActionContext.WorkspaceRoot, status.RuntimeStatus)
-		if runtimeMatch {
-			item.EvidenceRevision = status.RuntimeStatus.EvidenceRevision
-			if active := status.RuntimeStatus.runtimeActiveAttempt(); active != nil {
-				item.Active, item.RuntimeAttempt = true, active
+		if runtime := status.RuntimeStatus; runtime != nil && runtime.itemPlan != nil {
+			dependenciesDone = runtimePlanDependenciesSatisfied(runtimeReplay{Status: *runtime, itemPlan: runtime.itemPlan}, *runtime.itemPlan, declared.ID)
+		} else {
+			for _, dependency := range *declared.DependsOn {
+				dependenciesDone = dependenciesDone && checkboxes[dependency]
 			}
 		}
-		otherActive := status.RuntimeStatus != nil && status.RuntimeStatus.runtimeActiveAttempt() != nil && !runtimeMatch
+		runtimeMatch := !item.Done && workItemRuntimeMatches(declared, status.ActionContext.WorkspaceRoot, status.RuntimeStatus)
+		itemPassed := status.RuntimeStatus != nil && status.RuntimeStatus.itemPlan != nil &&
+			runtimePlanItemPassedProof(runtimeReplay{Status: *status.RuntimeStatus, itemPlan: status.RuntimeStatus.itemPlan}, *status.RuntimeStatus.itemPlan, declared.ID)
+		if runtimeMatch {
+			item.EvidenceRevision = status.RuntimeStatus.EvidenceRevision
+			if len(status.RuntimeStatus.ownership.active) == 0 && status.RuntimeStatus.ActiveAttempt != nil {
+				item.Active, item.RuntimeAttempt = true, status.RuntimeStatus.ActiveAttempt
+			}
+			for _, ordinal := range status.RuntimeStatus.runtimeActiveOrdinals() {
+				if active := status.RuntimeStatus.runtimeActiveAttemptForOrdinal(ordinal); active != nil && (active.ItemID == item.ID || (active.ItemID == "" && item.WorkUnit == active.WorkUnit)) {
+					item.Active, item.RuntimeAttempt = true, active
+				}
+			}
+		}
+		otherActive := false
+		if runtime := status.RuntimeStatus; runtime != nil && !runtimeMatch {
+			if runtime.itemPlan == nil && runtime.runtimeActiveCount() > 0 {
+				// A planless active ledger is legacy serial authority. Preserve its
+				// matching Active projection, but never infer disjoint concurrency.
+				otherActive = true
+			} else {
+				for _, ordinal := range runtime.runtimeActiveOrdinals() {
+					active := runtime.runtimeActiveAttemptForOrdinal(ordinal)
+					// A retained plan makes every concurrent owner prove its exact item
+					// contract. Legacy owners remain serial rather than becoming a
+					// disjoint-ready loophole after plan retention begins.
+					if !rootsValid || active == nil || active.ItemID == "" ||
+						!runtimeActiveMatchesRetainedPlan(*runtime, active, status.ActionContext.WorkspaceRoot) ||
+						!runtimeDisjointRoots(roots, active.ItemEditRoots) {
+						otherActive = true
+						break
+					}
+				}
+			}
+			if len(runtime.ownership.active) == 0 && runtime.ActiveAttempt != nil {
+				otherActive = true
+			}
+		}
 		terminalRuntime := runtimeMatch && status.RuntimeStatus.runtimeActiveAttempt() == nil && (status.RuntimeStatus.Complete || status.RuntimeStatus.DecisionRequired || lastWorkItemAttemptFailed(status.RuntimeStatus))
-		item.Blocked = !item.Done && (!scopeAllowed || !dependenciesDone || otherActive || terminalRuntime || status.Dependencies.Apply != DependencyReady)
+		item.Blocked = !item.Done && (!scopeAllowed || !dependenciesDone || itemPassed || otherActive || terminalRuntime || status.Dependencies.Apply != DependencyReady)
 		item.Ready = !item.Done && !item.Active && !item.Blocked
 		result = append(result, item)
 	}
@@ -191,17 +226,47 @@ func projectWorkItems(tasks string, status Status) ([]WorkItem, bool, error) {
 }
 
 func workItemRuntimeMatches(item workItemMetadata, workspace string, runtime *RuntimeStatus) bool {
-	if runtime == nil || runtime.runtimeObjective() == nil {
+	if runtime == nil {
 		return false
 	}
-	objective := runtime.runtimeObjective()
-	if objective.ItemID == "" {
+	roots, ok := canonicalWorkItemRoots(item.EditRoots, workspace)
+	if !ok {
+		return false
+	}
+	if objective := runtime.runtimeObjective(); objective != nil && objective.ItemID == "" {
 		return objective.WorkUnit == item.WorkUnit
 	}
-	roots, ok := canonicalWorkItemRoots(item.EditRoots, workspace)
-	return ok && objective.ItemID == item.ID && objective.WorkUnit == item.WorkUnit &&
-		objective.EvidenceGoal == item.EvidenceGoal && objective.MaxAttempts == item.MaxAttempts &&
-		objective.MaxChangedLines == item.MaxChangedLines && runtimeItemBindingEqual(item.ID, roots, objective.ItemID, objective.ItemEditRoots)
+	if len(runtime.ownership.objectives) == 0 {
+		objective := runtime.Objective
+		return objective != nil && objective.ItemID == item.ID && objective.WorkUnit == item.WorkUnit && objective.EvidenceGoal == item.EvidenceGoal && objective.MaxAttempts == item.MaxAttempts && objective.MaxChangedLines == item.MaxChangedLines && runtimeItemBindingEqual(item.ID, roots, objective.ItemID, objective.ItemEditRoots)
+	}
+	for _, owner := range runtime.ownership.objectives {
+		objective := owner.objective
+		if objective != nil && objective.ItemID == item.ID && objective.WorkUnit == item.WorkUnit && objective.EvidenceGoal == item.EvidenceGoal && objective.MaxAttempts == item.MaxAttempts && objective.MaxChangedLines == item.MaxChangedLines && runtimeItemBindingEqual(item.ID, roots, objective.ItemID, objective.ItemEditRoots) &&
+			(runtime.itemPlan == nil || runtimeOwnerMatchesPlanEntry(owner, objective, runtime.itemPlan, workspace)) {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeActiveMatchesRetainedPlan(runtime RuntimeStatus, active *RuntimeAttempt, workspace string) bool {
+	owner := runtime.ownership.objectives[active.ObjectiveID]
+	return owner != nil && runtimeOwnerMatchesPlanEntry(owner, owner.objective, runtime.itemPlan, workspace) &&
+		runtimeItemBindingEqual(active.ItemID, active.ItemEditRoots, owner.objective.ItemID, owner.objective.ItemEditRoots)
+}
+
+func runtimeOwnerMatchesPlanEntry(owner *runtimeObjectiveOwnership, objective *RuntimeObjective, plan *itemPlanCandidate, workspace string) bool {
+	if owner == nil || objective == nil || plan == nil || owner.planDigest != plan.Digest {
+		return false
+	}
+	entry, ok := itemPlanEntryForID(*plan, objective.ItemID)
+	if !ok || owner.entryDigest != itemPlanEntryDigest(entry) || objective.WorkUnit != entry.WorkUnit || objective.EvidenceGoal != entry.EvidenceGoal ||
+		objective.MaxAttempts != entry.MaxAttempts || objective.MaxChangedLines != entry.MaxChangedLines {
+		return false
+	}
+	roots, ok := canonicalWorkItemRoots(entry.EditRoots, workspace)
+	return ok && runtimeItemBindingEqual(entry.ID, roots, objective.ItemID, objective.ItemEditRoots)
 }
 
 func lastWorkItemAttemptFailed(runtime *RuntimeStatus) bool {
