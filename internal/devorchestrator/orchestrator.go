@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/agent"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/batch"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/context"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/devorchestrator/db"
@@ -153,6 +154,15 @@ func (o *Orchestrator) GenerateContextForAgent(
 		// In a real implementation we might fail hard
 	}
 
+	// 3.9 Validate Agent Contract
+	contract, exists := agent.Registry[agentName]
+	if !exists {
+		return nil, fmt.Errorf("strict enforcement: agent '%s' is not registered in the agent contract registry", agentName)
+	}
+
+	// In a real implementation, we would filter `Artifacts` based on `contract.Inputs.AllowedArtifactTypes`
+	// For now, we ensure the orchestrator assigns the precise permissions mandated by the contract.
+
 	// 4. Context Builder
 	req := context.BuildRequest{
 		ExecutionID:         executionID,
@@ -170,21 +180,11 @@ func (o *Orchestrator) GenerateContextForAgent(
 
 	pkg := context.Build(req)
 
-	// Adjust permissions based on agent type
-	if isExecutionAgent(agentName) {
-		pkg.Permissions.Code = "write"
-		pkg.Permissions.Git = "write"
-	}
+	// Apply permissions from the strict contract
+	pkg.Permissions.Code = contract.Permissions.Code
+	pkg.Permissions.Git = contract.Permissions.Git
 
 	return &pkg, nil
-}
-
-func isExecutionAgent(agent string) bool {
-	switch agent {
-	case "backend-implementer", "frontend-implementer", "database-specialist":
-		return true
-	}
-	return false
 }
 
 // GenerateAgentPrompt is a convenience wrapper that generates the context package

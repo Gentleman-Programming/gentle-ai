@@ -70,7 +70,7 @@ db_impact: simple
 		[]string{"repo-a", "repo-c"}, // repo-c is invalid, should be filtered
 		"spring-rest",
 		[]string{"backend-implementer"},
-		"APPLY",
+		"COMMIT",
 		"APPLY-123",
 	)
 
@@ -125,8 +125,8 @@ db_impact: simple
 		t.Errorf("Expected code write permission for implementer, got %s", pkg.Permissions.Code)
 	}
 
-	if pkg.ExpectedOutput.Type != "APPLY" {
-		t.Errorf("Expected APPLY output, got %s", pkg.ExpectedOutput.Type)
+	if pkg.ExpectedOutput.Type != "COMMIT" {
+		t.Errorf("Expected COMMIT output, got %s", pkg.ExpectedOutput.Type)
 	}
 }
 
@@ -163,5 +163,46 @@ func TestRouteIntentThenGenerateContextPreservesProvenance(t *testing.T) {
 	}
 	if len(pkg.Trace.OriginatesFrom) != 1 || pkg.Trace.OriginatesFrom[0] != "issue-42" {
 		t.Errorf("Trace.OriginatesFrom = %v, want [\"issue-42\"] -- RouteIntent's frontmatter field must match trace.Node's yaml tag", pkg.Trace.OriginatesFrom)
+	}
+}
+
+func TestGenerateContextForAgent_StrictRegistryEnforcement(t *testing.T) {
+	tempDir := t.TempDir()
+	orch := New(tempDir)
+
+	// Valid agent (dev-specifier) should get read-only permissions
+	pkg, err := orch.GenerateContextForAgent(
+		"EXEC-VALID",
+		"dev-specifier",
+		"",
+		nil,
+		"",
+		nil,
+		"SPEC",
+		"SPEC-1",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error for valid agent: %v", err)
+	}
+	if pkg.Permissions.Code != "none" || pkg.Permissions.Git != "none" {
+		t.Errorf("expected dev-specifier to have none permissions, got code:%s git:%s", pkg.Permissions.Code, pkg.Permissions.Git)
+	}
+
+	// Invalid agent should fail
+	_, err = orch.GenerateContextForAgent(
+		"EXEC-INVALID",
+		"custom-unknown-agent",
+		"",
+		nil,
+		"",
+		nil,
+		"OUTPUT",
+		"ID-1",
+	)
+	if err == nil {
+		t.Fatalf("expected error for unregistered agent 'custom-unknown-agent', got nil")
+	}
+	if !strings.Contains(err.Error(), "strict enforcement") {
+		t.Errorf("expected error to mention strict enforcement, got: %v", err)
 	}
 }
