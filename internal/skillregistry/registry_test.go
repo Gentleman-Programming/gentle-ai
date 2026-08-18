@@ -704,6 +704,135 @@ description: should not be indexed
 	}
 }
 
+func TestFindAllSkillFilesIndexesDepthTwoSkillsWithNamespace(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	writeSkill(t, filepath.Join(cwd, "skills", "agents", "dev-orchestrator", "SKILL.md"), `---
+name: dev-orchestrator
+description: Orchestrates dev agents
+---
+
+## Hard Rules
+
+- ok
+`)
+
+	result, err := Regenerate(cwd, home, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SkillCount != 1 {
+		t.Fatalf("SkillCount = %d, want 1 (depth-2 skill must be indexed)", result.SkillCount)
+	}
+	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
+	if !strings.Contains(registry, "`agents/dev-orchestrator`") {
+		t.Fatalf("registry missing namespaced depth-2 skill:\n%s", registry)
+	}
+	if !strings.Contains(registry, filepath.Join(cwd, "skills", "agents", "dev-orchestrator", "SKILL.md")) {
+		t.Fatalf("registry missing depth-2 skill path:\n%s", registry)
+	}
+}
+
+func TestRegenerateExcludesNestedFixtureDirsWhenDescending(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	// agents/ has no SKILL.md of its own, so the scanner descends into it.
+	// agents/testdata/ is deny-listed and must not be descended into even
+	// though the depth budget would otherwise allow it.
+	writeSkill(t, filepath.Join(cwd, "skills", "agents", "testdata", "fixture", "SKILL.md"), `---
+name: fixture
+description: should not be indexed
+---
+
+## Hard Rules
+- no
+`)
+	writeSkill(t, filepath.Join(cwd, "skills", "agents", "dev-orchestrator", "SKILL.md"), `---
+name: dev-orchestrator
+description: real skill
+---
+
+## Hard Rules
+- ok
+`)
+
+	result, err := Regenerate(cwd, home, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SkillCount != 1 {
+		t.Fatalf("SkillCount = %d, want 1 (deny-listed testdata dir must not be descended into)", result.SkillCount)
+	}
+	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
+	if strings.Contains(registry, "fixture") || strings.Contains(registry, "should not be indexed") {
+		t.Fatalf("nested fixture SKILL.md leaked into registry:\n%s", registry)
+	}
+	if !strings.Contains(registry, "`agents/dev-orchestrator`") {
+		t.Fatalf("registry missing real depth-2 skill:\n%s", registry)
+	}
+}
+
+func TestRegenerateNamespacesNestedSkillsWithoutCollidingOnLeafName(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	writeSkill(t, filepath.Join(cwd, "skills", "branch-pr", "SKILL.md"), `---
+name: branch-pr
+description: top-level branch-pr
+---
+
+## Hard Rules
+- ok
+`)
+	writeSkill(t, filepath.Join(cwd, "skills", "legacy", "branch-pr", "SKILL.md"), `---
+name: branch-pr
+description: legacy branch-pr
+---
+
+## Hard Rules
+- ok
+`)
+
+	result, err := Regenerate(cwd, home, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SkillCount != 2 {
+		t.Fatalf("SkillCount = %d, want 2 (namespaced and bare branch-pr must both survive)", result.SkillCount)
+	}
+	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
+	for _, want := range []string{"`branch-pr`", "`legacy/branch-pr`", "top-level branch-pr", "legacy branch-pr"} {
+		if !strings.Contains(registry, want) {
+			t.Fatalf("registry missing %q:\n%s", want, registry)
+		}
+	}
+}
+
+func TestListAndRegenerateAgreeOnDepthTwoNamespacedSkills(t *testing.T) {
+	cwd := t.TempDir()
+	home := t.TempDir()
+	writeSkill(t, filepath.Join(cwd, "skills", "agents", "dev-orchestrator", "SKILL.md"), "---\nname: dev-orchestrator\ndescription: d\n---\n")
+	writeSkill(t, filepath.Join(cwd, "skills", "solo", "SKILL.md"), "---\nname: solo\ndescription: s\n---\n")
+
+	listed := List(cwd, home)
+	if _, err := Regenerate(cwd, home, false); err != nil {
+		t.Fatal(err)
+	}
+	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
+	if len(listed) != 2 {
+		t.Fatalf("len(listed) = %d, want 2", len(listed))
+	}
+	names := map[string]bool{}
+	for _, entry := range listed {
+		names[entry.Name] = true
+		if !strings.Contains(registry, "`"+entry.Name+"`") {
+			t.Fatalf("List/Regenerate disagree: List has %q not present in registry:\n%s", entry.Name, registry)
+		}
+	}
+	if !names["agents/dev-orchestrator"] || !names["solo"] {
+		t.Fatalf("List() names = %#v, want agents/dev-orchestrator and solo", names)
+	}
+}
+
 func TestListReturnsDedupedEntriesWithoutWriting(t *testing.T) {
 	cwd := t.TempDir()
 	home := t.TempDir()

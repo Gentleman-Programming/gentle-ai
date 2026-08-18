@@ -18,7 +18,7 @@ import (
 const (
 	RegistryRelPath = ".atl/skill-registry.md"
 	CacheRelPath    = ".atl/.skill-registry.cache.json"
-	RegistrySchema  = 5
+	RegistrySchema  = 6
 	sectionMarker   = "## Skills"
 	atlIgnoreEntry  = ".atl/"
 )
@@ -111,25 +111,26 @@ func Regenerate(cwd, home string, force bool) (Result, error) {
 	home = filepath.Clean(home)
 
 	existingDirs := uniqueExistingDirs(append(ProjectSkillDirs(cwd), UserSkillDirs(home)...))
-	files, err := findAllSkillFiles(existingDirs)
+	discovered, err := findAllSkillFiles(existingDirs)
 	if err != nil {
 		return Result{}, err
 	}
 
 	registryPath := filepath.Join(cwd, RegistryRelPath)
 	cachePath := filepath.Join(cwd, CacheRelPath)
-	fp := Fingerprint(files)
+	fp := Fingerprint(pathsOf(discovered))
 	cached := readCachedFingerprint(cachePath)
 	if !force && cached == fp && fileExists(registryPath) {
 		return Result{Regenerated: false, Reason: "cache-hit", Registry: registryPath, Cache: cachePath}, nil
 	}
 
-	entries := make([]SkillEntry, 0, len(files))
-	for _, file := range files {
-		entry, ok := LoadSkill(file)
-		if ok {
-			entries = append(entries, entry)
+	entries := make([]SkillEntry, 0, len(discovered))
+	for _, ds := range discovered {
+		entry, ok := LoadSkill(ds.Path)
+		if !ok {
+			continue
 		}
+		entries = append(entries, namespacedEntry(entry, ds.Namespace))
 	}
 	entries = dedupeBySkillName(entries, cwd)
 
@@ -175,14 +176,14 @@ func List(cwd, home string) []SkillEntry {
 	cwd = filepath.Clean(cwd)
 	home = filepath.Clean(home)
 	existingDirs := uniqueExistingDirs(append(ProjectSkillDirs(cwd), UserSkillDirs(home)...))
-	files, err := findAllSkillFiles(existingDirs)
+	discovered, err := findAllSkillFiles(existingDirs)
 	if err != nil {
 		return nil
 	}
-	entries := make([]SkillEntry, 0, len(files))
-	for _, file := range files {
-		if entry, ok := LoadSkill(file); ok {
-			entries = append(entries, entry)
+	entries := make([]SkillEntry, 0, len(discovered))
+	for _, ds := range discovered {
+		if entry, ok := LoadSkill(ds.Path); ok {
+			entries = append(entries, namespacedEntry(entry, ds.Namespace))
 		}
 	}
 	return dedupeBySkillName(entries, cwd)
@@ -282,33 +283,100 @@ func RenderRegistry(cwd string, sources []string, entries []SkillEntry) string {
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
 }
 
-// findAllSkillFiles scans each root exactly one level deep for
-// <root>/<skill>/SKILL.md, the Agent Skills layout. A single-level scan is
-// deliberate: it follows symlinked skill directories (dotfiles/nix setups,
-// which filepath.WalkDir silently skips) and never indexes nested fixture or
-// example SKILL.md files that would otherwise pollute the registry with
-// phantom entries named after their parent directory.
-func findAllSkillFiles(dirs []string) ([]string, error) {
-	var out []string
+// maxSkillDirDepth bounds recursive descent under each root:
+// <root>/<skill>/SKILL.md (depth 1) or <root>/<group>/<skill>/SKILL.md
+// (depth 2). The bound also caps symlink-loop recursion.
+const maxSkillDirDepth = 2
+
+// noDescendDirs lists directory names that are never descended into while
+// looking for a nested skill group. It is consulted only when deciding
+// whether to descend past a non-leaf directory — it never suppresses a
+// directory that is itself a leaf (contains its own SKILL.md).
+var noDescendDirs = map[string]bool{
+	"testdata":     true,
+	"fixtures":     true,
+	"examples":     true,
+	"references":   true,
+	"node_modules": true,
+	"vendor":       true,
+	"dist":         true,
+	"build":        true,
+	".git":         true,
+}
+
+// discoveredSkill is a SKILL.md file found under a scanned root, together
+// with the namespace (slash-joined relative directory path) it was found
+// under. Namespace is "" for depth-1 skills (<root>/<skill>/SKILL.md).
+type discoveredSkill struct {
+	Path      string
+	Namespace string
+}
+
+// findAllSkillFiles scans each root for SKILL.md files up to
+// maxSkillDirDepth levels deep, the Agent Skills layout plus one level of
+// grouping (e.g. skills/agents/<name>/SKILL.md). The core rule is: a
+// directory that contains SKILL.md is a leaf and is never descended into.
+// This preserves symlinked skill directories (dotfiles/nix setups, which
+// filepath.WalkDir silently skips — os.Stat is used at every level instead)
+// and, by construction, keeps nested fixture/example SKILL.md files
+// (skills/parent/examples/SKILL.md) from ever being reached, since
+// skills/parent/SKILL.md already makes "parent" a leaf. noDescendDirs is an
+// additional guard applied only when deciding to descend into a non-leaf
+// directory (e.g. skills/agents/testdata/), so it never hides a real leaf.
+func findAllSkillFiles(dirs []string) ([]discoveredSkill, error) {
+	var out []discoveredSkill
 	for _, root := range dirs {
-		entries, err := os.ReadDir(root)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			// dirExists/fileExists use os.Stat, so symlinked skill dirs and
-			// symlinked SKILL.md files are resolved instead of skipped.
-			skillDir := filepath.Join(root, entry.Name())
-			if !dirExists(skillDir) {
-				continue
-			}
-			candidate := filepath.Join(skillDir, "SKILL.md")
-			if fileExists(candidate) {
-				out = append(out, candidate)
-			}
-		}
+		collectSkillFiles(root, root, 0, &out)
 	}
 	return out, nil
+}
+
+func collectSkillFiles(root, dir string, depth int, out *[]discoveredSkill) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		// dirExists/fileExists use os.Stat, so symlinked skill dirs and
+		// symlinked SKILL.md files are resolved instead of skipped.
+		child := filepath.Join(dir, entry.Name())
+		if !dirExists(child) {
+			continue
+		}
+		candidate := filepath.Join(child, "SKILL.md")
+		if fileExists(candidate) {
+			namespace := ""
+			if rel, relErr := filepath.Rel(root, dir); relErr == nil && rel != "." {
+				namespace = filepath.ToSlash(rel)
+			}
+			*out = append(*out, discoveredSkill{Path: candidate, Namespace: namespace})
+			continue // leaf — never descend into a directory with its own SKILL.md
+		}
+		if depth+1 >= maxSkillDirDepth || noDescendDirs[entry.Name()] {
+			continue
+		}
+		collectSkillFiles(root, child, depth+1, out)
+	}
+}
+
+func pathsOf(discovered []discoveredSkill) []string {
+	out := make([]string, len(discovered))
+	for i, ds := range discovered {
+		out[i] = ds.Path
+	}
+	return out
+}
+
+// namespacedEntry prefixes entry.Name with the skill's namespace
+// (group/skill) when it was discovered at depth 2. Exclusion via
+// isExcluded is already applied inside LoadSkill on the bare leaf name,
+// before this prefix is added.
+func namespacedEntry(entry SkillEntry, namespace string) SkillEntry {
+	if namespace == "" {
+		return entry
+	}
+	entry.Name = namespace + "/" + entry.Name
+	return entry
 }
 
 func uniqueExistingDirs(dirs []string) []string {
