@@ -64,7 +64,8 @@ func extractFrontmatter(data []byte) ([]byte, error) {
 		}
 
 		if inFrontmatter {
-			frontmatter.WriteString(line + "\n")
+			frontmatter.WriteString(line)
+			frontmatter.WriteString("\n")
 		} else if trimmed != "" {
 			// If we hit non-empty text before "---", there is no frontmatter
 			break
