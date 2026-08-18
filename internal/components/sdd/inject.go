@@ -2010,63 +2010,67 @@ func claudeHookExists(root map[string]any, command string) bool {
 }
 
 // pruneLegacyClaudeHook removes any inner-hook entry whose `command` matches
-// `legacy` from the UserPromptSubmit and SessionStart hooks in root, mutating
-// the structure in place. Called from ensureClaudeSkillRegistryHook before
-// the canonical-existence early return so a settings file that already has
-// the canonical entry but still carries the legacy gets cleaned up.
+// `legacy` from the UserPromptSubmit hook in root, mutating the structure
+// in place. Called from ensureClaudeSkillRegistryHook before the canonical-
+// existence early return so a settings file that already has the canonical
+// entry but still carries the legacy gets cleaned up.
+//
+// Scope is UserPromptSubmit only, matching the original inline pruning
+// block before the helper extraction. The helper must not silently widen
+// to other hook kinds; the issue that motivates a SessionStart extension
+// (if any) lands in its own PR.
 func pruneLegacyClaudeHook(root map[string]any, legacy string) {
 	hooksRaw, ok := root["hooks"].(map[string]any)
 	if !ok {
 		return
 	}
-	for _, key := range []string{"UserPromptSubmit", "SessionStart"} {
-		upsRaw, ok := hooksRaw[key]
+	const userPromptSubmit = "UserPromptSubmit"
+	upsRaw, ok := hooksRaw[userPromptSubmit]
+	if !ok {
+		return
+	}
+	ups, ok := upsRaw.([]any)
+	if !ok {
+		return
+	}
+	var pruned []any
+	for _, item := range ups {
+		itemMap, ok := item.(map[string]any)
 		if !ok {
+			pruned = append(pruned, item)
 			continue
 		}
-		ups, ok := upsRaw.([]any)
+		innerHooks, ok := itemMap["hooks"].([]any)
 		if !ok {
+			pruned = append(pruned, item)
 			continue
 		}
-		var pruned []any
-		for _, item := range ups {
-			itemMap, ok := item.(map[string]any)
-			if !ok {
-				pruned = append(pruned, item)
+		var kept []any
+		for _, h := range innerHooks {
+			hMap, ok := h.(map[string]any)
+			if ok && hMap["command"] == legacy {
 				continue
 			}
-			innerHooks, ok := itemMap["hooks"].([]any)
-			if !ok {
-				pruned = append(pruned, item)
-				continue
-			}
-			var kept []any
-			for _, h := range innerHooks {
-				hMap, ok := h.(map[string]any)
-				if ok && hMap["command"] == legacy {
-					continue
-				}
-				kept = append(kept, h)
-			}
-			if len(kept) == len(innerHooks) {
-				pruned = append(pruned, item)
-				continue
-			}
-			if len(kept) == 0 {
-				continue
-			}
-			copyMap := make(map[string]any, len(itemMap))
-			for k, v := range itemMap {
-				copyMap[k] = v
-			}
-			copyMap["hooks"] = kept
-			pruned = append(pruned, copyMap)
+			kept = append(kept, h)
 		}
-		if len(pruned) == 0 {
-			delete(hooksRaw, key)
-		} else {
-			hooksRaw[key] = pruned
+		if len(kept) == len(innerHooks) {
+			pruned = append(pruned, item)
+			continue
 		}
+		if len(kept) == 0 {
+			return
+		}
+		copyMap := make(map[string]any, len(itemMap))
+		for k, v := range itemMap {
+			copyMap[k] = v
+		}
+		copyMap["hooks"] = kept
+		pruned = append(pruned, copyMap)
+	}
+	if len(pruned) == 0 {
+		delete(hooksRaw, userPromptSubmit)
+	} else {
+		hooksRaw[userPromptSubmit] = pruned
 	}
 }
 
