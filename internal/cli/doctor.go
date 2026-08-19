@@ -142,18 +142,6 @@ func checkManagedOpenCodeActivation(homeDir string) CheckResult {
 	}
 }
 
-// readDoctorInstalledAgents returns the agent IDs persisted in state.json.
-// An unreadable or absent state file yields a nil slice — callers must treat
-// nil/empty as "no agents selected" rather than a hard error so first-time
-// installs do not surface phantom agent-missing failures.
-func readDoctorInstalledAgents(homeDir string) ([]string, error) {
-	s, err := state.Read(homeDir)
-	if err != nil {
-		return nil, err
-	}
-	return s.InstalledAgents, nil
-}
-
 // checkToolBinaries checks each required tool for PATH resolution and
 // shadowing. The required set is coreTools plus one binary per installed
 // agent ID (resolved via agentToolBinaries), so the doctor only flags agents
