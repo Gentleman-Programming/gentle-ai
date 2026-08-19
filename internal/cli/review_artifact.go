@@ -1019,14 +1019,13 @@ type ReviewFacadeCaptureResultNewLineageResult struct {
 // Wave 5 fix cycle 3: capture-result validates and persists findings, and
 // finalize feeds them into the EXISTING AdmitCandidateCausalFindings, reused
 // rather than duplicated. ProofRefs (a list) joins into Proof (a single
-// string) with "; ", matching the single free-text Proof field
-// FindingEvidence has always carried for the --admission-findings channel.
 func newLineageCapturedFindings(findings []facadeFinding) []reviewtransaction.FindingEvidence {
 	converted := make([]reviewtransaction.FindingEvidence, len(findings))
 	for index, finding := range findings {
+		causalRefs := append([]string{finding.Location}, finding.ProofRefs...)
 		converted[index] = reviewtransaction.FindingEvidence{
 			FindingID: finding.ID, Severity: finding.Severity, Class: finding.EvidenceClass, Causality: finding.CausalDisposition,
-			Proof: strings.Join(finding.ProofRefs, "; "),
+			Proof: strings.Join(causalRefs, "; "),
 		}
 	}
 	return converted
@@ -1083,7 +1082,7 @@ func runReviewFacadeCaptureResultNewLineage(
 	if result.Findings == nil || result.Evidence == nil {
 		return reviewPreflightError(errors.New("reviewer result requires explicit findings and evidence arrays"))
 	}
-	if err := reviewtransaction.ValidateNewLineageLensResult(authority, lens, order, result.SubjectHash, newLineageCapturedFindings(result.Findings)); err != nil {
+	if err := reviewtransaction.ValidateNewLineageLensResult(authority, lens, order, result.SubjectHash, nil); err != nil {
 		return reviewPreflightError(err)
 	}
 	if preflight {

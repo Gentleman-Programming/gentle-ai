@@ -220,21 +220,7 @@ func TestReviewFacadeCaptureResultNewLineage_MediumTierFinalizeAllowsAllFiveGate
 	}
 }
 
-// TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates is
-// CRITICAL-E's exact A/B repro, inverted (Wave 5 fix cycle 3, verify-report
-// #10186 cycle 2): `review capture-result` on a v3 lineage validated a
-// reviewer result's findings/evidence and then discarded the findings --
-// CaptureLensResult persisted only {Lens, Order, SubjectHash}, so a
-// reviewer-reported, deterministic, candidate-introduced BLOCKER never
-// reached AdmitCandidateCausalFindings, and finalize --captured-results
-// issued `approved` where the identical input escalates on the
-// --admission-findings channel. This test submits the identical BLOCKER
-// shape the verify report used (severity BLOCKER, evidence_class
-// deterministic, causal_disposition introduced) through the real capture
-// CLI and asserts finalize now escalates with the finding admitted -- the
-// SAME outcome (blocks) the v2/compact path reaches as correction_required
-// and the v3 --admission-findings channel already reached as escalated.
-func TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates(t *testing.T) {
+func TestReviewFacadeCaptureResultNewLineage_SevereUnknownEscalates(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "candidate-causal-blocker-lineage"
@@ -257,7 +243,7 @@ func TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates(t *
 		"findings": [{
 			"id": "R3-boom-div-zero",
 			"lens": "` + lens + `",
-			"location": "lib/boom.go:1",
+			"location": "missing.go:1",
 			"severity": "BLOCKER",
 			"claim": "candidate introduces a division by zero",
 			"proof_refs": ["lib/boom.go:1"],
@@ -286,17 +272,11 @@ func TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates(t *
 	if finalized.State != reviewtransaction.NewLineageStateEscalated {
 		t.Fatalf("finalize after a captured candidate-causal BLOCKER = %q, want escalated (CRITICAL-E: a captured BLOCKER must not silently approve)", finalized.State)
 	}
-	if len(finalized.AdmittedFindingIDs) != 1 || finalized.AdmittedFindingIDs[0] != "R3-boom-div-zero" {
-		t.Fatalf("admitted_finding_ids = %v, want exactly [R3-boom-div-zero]", finalized.AdmittedFindingIDs)
+	if len(finalized.AdmittedFindingIDs) != 0 {
+		t.Fatalf("admitted_finding_ids = %v, want empty for severe unknown causality", finalized.AdmittedFindingIDs)
 	}
 }
 
-// TestReviewFacadeCaptureResultNewLineage_NonCausalFindingDoesNotBlock is the
-// companion scenario: a captured finding whose causal_disposition is NOT
-// introduced/behavior-activated/worsened (matching --admission-findings'
-// own AdmitCandidateCausalFindings rules exactly, reused rather than
-// duplicated) is a follow-up, never a blocker -- captured findings must not
-// become MORE aggressive than the existing admission machinery already is.
 func TestReviewFacadeCaptureResultNewLineage_NonCausalFindingDoesNotBlock(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)

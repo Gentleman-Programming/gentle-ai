@@ -27,6 +27,48 @@ func fixtureNewLineageAuthority(lineageID string, state NewLineageState) NewLine
 	}
 }
 
+func TestNewLineageAuthorityValidateRejectsUntrustedCapturedSemantics(t *testing.T) {
+	authority := fixtureNewLineageAuthority("captured-semantics", NewLineageStateReviewing)
+	authority.SelectedLenses = []string{"review-reliability"}
+	valid := NewLineageCapturedResult{Lens: "review-reliability", Order: 0, SubjectHash: NewLineageArtifactSubjectHash(authority, "review-reliability", 0)}
+	wrongLens, wrongOrder, wrongSubject := valid, valid, valid
+	wrongLens.Lens, wrongOrder.Order, wrongSubject.SubjectHash = "review-risk", 1, "sha256:"+strings.Repeat("0", 64)
+	results := []NewLineageCapturedResult{wrongLens, wrongOrder, wrongSubject}
+	for _, result := range results {
+		candidate := authority
+		candidate.CapturedResults = []NewLineageCapturedResult{result}
+		if err := candidate.Validate(); err == nil {
+			t.Fatal("Validate accepted untrusted persisted capture semantics")
+		}
+	}
+}
+func historicalNewLineageAuthority(lineage string, state NewLineageState, causality CausalDisposition, severity string) NewLineageAuthority {
+	authority := fixtureNewLineageAuthority(lineage, state)
+	authority.SelectedLenses = []string{"review-reliability"}
+	authority.CapturedResults = []NewLineageCapturedResult{{Lens: "review-reliability", Order: 0, SubjectHash: NewLineageArtifactSubjectHash(authority, "review-reliability", 0), Findings: []FindingEvidence{{FindingID: "historical", Severity: severity, Causality: causality}}}}
+	return authority
+}
+func TestAuthorityStoreLoadsHistoricalCapturedCausality(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	store, err := NewLineageAuthorityStore(context.Background(), repo, "historical-causality")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err := makeNewLineageRecord(historicalNewLineageAuthority("historical-causality", NewLineageStateApproved, CausalUnknown, "BLOCKER"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatalf("historical authority no longer decodes: %v", err)
+	}
+	if err := store.WriteReceipt(context.Background(), NewLineageReceipt{Schema: NewLineageReceiptSchema, LineageID: record.Authority.LineageID, TerminalState: NewLineageStateApproved, AuthorityRevision: record.Revision, CandidateIdentity: record.Authority.CandidateIdentity}); err == nil {
+		t.Fatal("historical causality published an authorizing receipt")
+	}
+}
 func readDirNames(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -122,6 +164,19 @@ func TestAuthorityStoreMutateRefusesStaleExpectedRevision(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatal("stale-revision Mutate mutated the state artifact")
+	}
+}
+
+func TestAuthorityStoreMutate_DoesNotWriteAfterApplyCancelsContext(t *testing.T) {
+	store, _ := NewLineageAuthorityStore(context.Background(), initSnapshotRepo(t), "cancelled-mutation-lineage")
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := store.Mutate(ctx, "", func(next *NewLineageAuthority) error {
+		*next = fixtureNewLineageAuthority("cancelled-mutation-lineage", NewLineageStateReviewing)
+		cancel()
+		return nil
+	})
+	if _, statErr := os.Stat(store.StatePath()); !errors.Is(err, context.Canceled) || !os.IsNotExist(statErr) {
+		t.Fatalf("cancelled mutation error=%v state error=%v", err, statErr)
 	}
 }
 

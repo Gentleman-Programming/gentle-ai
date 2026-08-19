@@ -150,6 +150,9 @@ func (core ReviewCore) start(request CoreRequest) (CoreTransition, error) {
 // pinned TestReviewCoreFinalizeRequiresTerminalState invariant is preserved
 // exactly, since a zero-value CoreRequest leaves AdvanceRequest nil.
 func (core ReviewCore) finalize(authority NewLineageAuthority, request CoreRequest) (CoreTransition, error) {
+	if authority.State == NewLineageStateApproved && !authority.CapturedCausalityAllowsApproval() {
+		return CoreTransition{}, errors.New("new-lineage captured causality cannot authorize approval") // refusal:by-design world-action: an already-approved authority with severe or prohibited persisted causality must fail closed and has no caller-side recovery
+	}
 	switch authority.State {
 	case NewLineageStateApproved, NewLineageStateEscalated:
 		revision, err := NewLineageRevisionForState(authority)
@@ -168,7 +171,7 @@ func (core ReviewCore) finalize(authority NewLineageAuthority, request CoreReque
 		if request.AdvanceRequest == nil {
 			return CoreTransition{}, fmt.Errorf("%w: got %q", ErrFinalizeRequiresTerminalState, authority.State)
 		}
-		escalating := request.AdvanceRequest.Failed || len(request.AdvanceRequest.AdmittedFindingIDs) > 0
+		escalating := request.AdvanceRequest.Failed || len(request.AdvanceRequest.AdmittedFindingIDs) > 0 || !authority.CapturedCausalityAllowsApproval()
 		if !escalating && !hasCapturedAllSelectedLenses(authority.SelectedLenses, request.AdvanceRequest.CapturedLensResults) {
 			return CoreTransition{}, fmt.Errorf("%w: lineage %q", ErrFinalizeRequiresLensResults, authority.LineageID)
 		}

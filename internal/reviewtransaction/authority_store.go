@@ -171,6 +171,15 @@ func (authority NewLineageAuthority) CapturedFindingEvidence() []FindingEvidence
 	return findings
 }
 
+func (authority NewLineageAuthority) CapturedCausalityAllowsApproval() bool {
+	for _, finding := range authority.CapturedFindingEvidence() {
+		if isSevereSeverity(finding.Severity) || (finding.Causality != CausalIntroduced && finding.Causality != CausalUnknown) {
+			return false
+		}
+	}
+	return true
+}
+
 // Validate enforces the structural half of the two-artifact contract this
 // slice owns. It does not — and cannot — validate review semantics (whether
 // this tier/lens/budget combination is the one ClassifyRisk/SelectReviewLenses/
@@ -214,6 +223,10 @@ func (authority NewLineageAuthority) Validate() error {
 	for _, captured := range authority.CapturedResults {
 		if strings.TrimSpace(captured.Lens) == "" || captured.Order < 0 || !validSHA256(captured.SubjectHash) {
 			return errors.New("new-lineage authority captured results must carry a non-empty lens, a non-negative order, and a canonical subject hash") // refusal:by-design world-action: captured results are only ever written by AuthorityStore.CaptureLensResult after validating them; malformed entries here mean in-process corruption, not something an operator command repairs
+		}
+		if captured.Order >= len(authority.SelectedLenses) || authority.SelectedLenses[captured.Order] != captured.Lens ||
+			captured.SubjectHash != NewLineageArtifactSubjectHash(authority, captured.Lens, captured.Order) {
+			return errors.New("new-lineage authority captured result does not match its frozen lens, order, and subject") // refusal:by-design world-action: persisted capture binding is provider-owned and cannot be repaired by an operator command
 		}
 		if seenCapturedLenses[captured.Lens] {
 			return errors.New("new-lineage authority captured results must name each lens at most once") // refusal:by-design world-action: CaptureLensResult enforces one-shot-per-lens before ever appending; a duplicate here means in-process corruption, not something an operator command repairs
@@ -401,6 +414,9 @@ func (store AuthorityStore) Mutate(ctx context.Context, expectedRevision string,
 	if err := apply(&next); err != nil {
 		return "", err
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if next.LineageID == "" {
 		next.LineageID = store.lineageID
 	}
@@ -571,6 +587,9 @@ func (store AuthorityStore) WriteReceipt(ctx context.Context, receipt NewLineage
 	}
 	if record.Authority.CandidateIdentity != receipt.CandidateIdentity {
 		return errors.New("new-lineage receipt candidate identity does not match authority") // refusal:by-design world-action: the receipt must carry the exact frozen identity the authority already recorded; a mismatch is a caller construction bug, not an operator-fixable state
+	}
+	if receipt.TerminalState == NewLineageStateApproved && !record.Authority.CapturedCausalityAllowsApproval() {
+		return errors.New("new-lineage captured causality cannot authorize an approved receipt") // refusal:by-design world-action: an approved receipt cannot safely authorize severe or prohibited persisted causality and the immutable captured result has no caller-side repair
 	}
 	receiptPayload, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {

@@ -15,11 +15,13 @@ import (
 func newLineageCaptureFixtureStore(t *testing.T, lenses []string) (AuthorityStore, NewLineageRecord) {
 	t.Helper()
 	repo := initSnapshotRepo(t)
-	treeOutput, err := runGit(context.Background(), repo, nil, nil, "rev-parse", "HEAD^{tree}")
-	if err != nil {
-		t.Fatal(err)
+	writeTree := func(body string) string {
+		writeSnapshotFile(t, repo, "proof.go", body)
+		gitSnapshot(t, repo, "add", "--", literalPathspec("proof.go"))
+		return strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
 	}
-	tree := strings.TrimSpace(string(treeOutput))
+	baseTree := writeTree("one\ntwo\nthree\nfour\nfive\n")
+	candidateTree := writeTree("one\nTWO\nTHREE\nfour\nfive\n")
 	store, err := NewLineageAuthorityStore(context.Background(), repo, "capture-fixture")
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +29,7 @@ func newLineageCaptureFixtureStore(t *testing.T, lenses []string) (AuthorityStor
 	if _, err := store.Mutate(context.Background(), "", func(next *NewLineageAuthority) error {
 		next.State = NewLineageStateReviewing
 		next.CandidateIdentity = CandidateIdentity{
-			RepositoryID: "repo-id", BaseTree: tree, CandidateTree: tree, PolicyHash: "sha256:" + hash("policy"),
+			RepositoryID: "repo-id", BaseTree: baseTree, CandidateTree: candidateTree, PolicyHash: "sha256:" + hash("policy"),
 		}
 		next.Tier = RiskMedium
 		next.SelectedLenses = lenses
@@ -39,7 +41,23 @@ func newLineageCaptureFixtureStore(t *testing.T, lenses []string) (AuthorityStor
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.repo = repo
 	return store, record
+}
+
+func TestCaptureLensResult_DerivesIntroducedOnlyFromFullyContainedFrozenHunks(t *testing.T) {
+	assert := func(class EvidenceClass, proof string, want CausalDisposition) {
+		store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
+		subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
+		updated, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, []FindingEvidence{{FindingID: "finding", Class: class, Causality: CausalIntroduced, Proof: proof}})
+		if got := updated.Authority.CapturedResults[0].Findings[0].Causality; err != nil || got != want {
+			t.Fatalf("proof %q persisted causality = %q, want %q; error=%v", proof, got, want, err)
+		}
+	}
+	assert(EvidenceClass("unsupported"), "proof.go:2-3; proof.go:2", CausalUnknown)
+	assert(EvidenceInsufficient, "proof.go:2-3; proof.go:2", CausalUnknown)
+	assert(EvidenceDeterministic, "proof.go:2-4; proof.go:2", CausalUnknown)
+	assert(EvidenceDeterministic, "proof.go:not-a-line", CausalUnknown)
 }
 
 // TestCaptureLensResult_HappyPathThenFinalizeSatisfiesLensResults is C-A's
@@ -105,14 +123,16 @@ func TestCaptureLensResult_RejectsSubjectHashMismatch(t *testing.T) {
 func TestCaptureLensResult_OneShotNoReopen(t *testing.T) {
 	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
 	subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
+	firstFindings := []FindingEvidence{{FindingID: " finding ", Severity: "blocker", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: " proof.go:2 ; proof.go:3 ; proof.go:2-3 "}}
+	equivalentFindings := []FindingEvidence{{FindingID: "finding", Severity: "BLOCKER", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "proof.go:2; proof.go:2-3; proof.go:3"}}
 
-	first, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, nil)
+	first, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, firstFindings)
 	if err != nil {
 		t.Fatalf("first capture: %v", err)
 	}
 
 	t.Run("identical resubmission is an idempotent no-op", func(t *testing.T) {
-		again, err := store.CaptureLensResult(context.Background(), first.Revision, "review-reliability", 0, subject, nil)
+		again, err := store.CaptureLensResult(context.Background(), first.Revision, "review-reliability", 0, subject, equivalentFindings)
 		if err != nil {
 			t.Fatalf("identical resubmission: %v", err)
 		}
@@ -164,7 +184,7 @@ func TestCaptureLensResult_PersistsFindingsForAdmission(t *testing.T) {
 	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
 	subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
 	findings := []FindingEvidence{
-		{FindingID: "R3-boom-div-zero", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "lib/boom.go:1"},
+		{FindingID: "R3-boom-div-zero", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "proof.go:2; proof.go:2"},
 	}
 
 	updated, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, findings)
@@ -235,37 +255,26 @@ func TestFindingEvidenceSeverityFieldRoundTrips(t *testing.T) {
 	}
 }
 
-// TestCaptureLensResult_RefusesSevereFindingMissingEvidenceOrCausality is
-// W-10's behavioral proof (design decision 3a): a BLOCKER/CRITICAL finding
-// captured without a supported evidence_class or causal_disposition must be
-// refused at capture time -- mirroring artifact_admission.go's identical
-// --admission-findings-channel refusal ("severe reviewer finding requires
-// supported evidence_class and causal_disposition") verbatim, so v3 fails
-// the same way v2 already does for the same operator mistake. A WARNING
-// finding with the identical gaps is NOT refused -- only BLOCKER/CRITICAL
-// (isSevereSeverity) triggers the requirement.
-func TestCaptureLensResult_RefusesSevereFindingMissingEvidenceOrCausality(t *testing.T) {
-	t.Run("severe finding missing evidence_class and causal_disposition is refused", func(t *testing.T) {
+func TestCaptureLensResult_IncompleteCausalityPersistsUnknown(t *testing.T) {
+	t.Run("severe finding missing evidence_class and causal_disposition persists unknown", func(t *testing.T) {
 		store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
 		subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
 		findings := []FindingEvidence{{FindingID: "R3-incomplete", Severity: "BLOCKER", Proof: "lib/boom.go:1"}}
 
-		_, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, findings)
-		if err == nil {
-			t.Fatal("captured a BLOCKER finding with no evidence_class/causal_disposition, want refused")
-		}
-		if !strings.Contains(err.Error(), "severe reviewer finding requires supported evidence_class and causal_disposition") {
-			t.Fatalf("error = %q, want the v2-verbatim severe-finding refusal message", err.Error())
+		updated, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, findings)
+		if err != nil || updated.Authority.CapturedResults[0].Findings[0].Causality != CausalUnknown {
+			t.Fatalf("incomplete BLOCKER capture = %#v, err=%v; want unknown", updated, err)
 		}
 	})
 
-	t.Run("severe finding with only evidence_class missing causal_disposition is refused", func(t *testing.T) {
+	t.Run("severe finding with unsupported causal_disposition persists unknown", func(t *testing.T) {
 		store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
 		subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
-		findings := []FindingEvidence{{FindingID: "R3-half", Severity: "CRITICAL", Class: EvidenceDeterministic, Proof: "lib/boom.go:1"}}
+		findings := []FindingEvidence{{FindingID: "R3-half", Severity: "CRITICAL", Class: EvidenceDeterministic, Causality: CausalDisposition("unsupported"), Proof: "lib/boom.go:1"}}
 
-		if _, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, findings); err == nil {
-			t.Fatal("captured a CRITICAL finding with no causal_disposition, want refused")
+		updated, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, findings)
+		if err != nil || updated.Authority.CapturedResults[0].Findings[0].Causality != CausalUnknown {
+			t.Fatalf("unsupported CRITICAL capture = %#v, err=%v; want unknown", updated, err)
 		}
 	})
 
@@ -275,7 +284,7 @@ func TestCaptureLensResult_RefusesSevereFindingMissingEvidenceOrCausality(t *tes
 		findings := []FindingEvidence{{FindingID: "R3-warning", Severity: "WARNING", Proof: "lib/boom.go:1"}}
 
 		if _, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, findings); err != nil {
-			t.Fatalf("WARNING finding with no evidence_class/causal_disposition was refused: %v, want accepted (only severe findings require these)", err)
+			t.Fatalf("WARNING finding with no evidence_class/causal_disposition was refused: %v", err)
 		}
 	})
 
@@ -285,7 +294,7 @@ func TestCaptureLensResult_RefusesSevereFindingMissingEvidenceOrCausality(t *tes
 		findings := []FindingEvidence{{FindingID: "R3-complete", Severity: "BLOCKER", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "lib/boom.go:1"}}
 
 		if _, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, findings); err != nil {
-			t.Fatalf("complete severe finding was refused: %v, want accepted", err)
+			t.Fatalf("complete severe finding was refused: %v", err)
 		}
 	})
 }
