@@ -22,6 +22,10 @@ func issue3043OpenCodeRuntime(sandbox *Sandbox) error {
 		return err
 	}
 	sandbox.PathOverride = path
+	sandbox.Shell = "/bin/zsh"
+	if err := os.WriteFile(filepath.Join(sandbox.Home, ".zprofile"), []byte("export BENCH_PROFILE=1\n"), 0o644); err != nil {
+		return err
+	}
 	sandbox.Scratch["issue-3043-opencode"] = launcher
 	return nil
 }
