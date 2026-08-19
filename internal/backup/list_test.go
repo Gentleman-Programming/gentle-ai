@@ -98,6 +98,43 @@ func TestDirSizeBytes(t *testing.T) {
 	}
 }
 
+func TestListBackupsPropagatesDirectorySizeError(t *testing.T) {
+	backupDir := t.TempDir()
+	manifestDir := filepath.Join(backupDir, "broken")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := Manifest{ID: "broken", CreatedAt: time.Now(), RootDir: filepath.Join(backupDir, "snapshot\x00")}
+	if err := WriteManifest(filepath.Join(manifestDir, ManifestFilename), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := ListBackups(backupDir)
+	if err == nil || report.TotalCount != 1 || len(report.Backups) != 1 {
+		t.Fatalf("ListBackups report=%+v, err=%v; want one partial backup and an error", report, err)
+	}
+}
+
+func TestListBackupsFallsBackToManifestEntriesFileCount(t *testing.T) {
+	backupDir := t.TempDir()
+	manifestDir := filepath.Join(backupDir, "legacy")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := Manifest{
+		ID: "legacy", CreatedAt: time.Now(), RootDir: manifestDir,
+		Entries: []ManifestEntry{{Existed: true}, {Existed: false}, {Existed: true}},
+	}
+	if err := WriteManifest(filepath.Join(manifestDir, ManifestFilename), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := ListBackups(backupDir)
+	if err != nil || len(report.Backups) != 1 || report.Backups[0].FileCount != 2 {
+		t.Fatalf("ListBackups report=%+v, err=%v; want fallback file count 2", report, err)
+	}
+}
+
 func TestListBackupsAndCleanBackups(t *testing.T) {
 	backupDir := t.TempDir()
 

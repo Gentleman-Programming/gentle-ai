@@ -76,33 +76,44 @@ func TestRunBackupListAndClean(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 
-	backupDir := filepath.Join(tempHome, ".gentle-ai", "backups")
+	backupDir := t.TempDir()
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		t.Fatalf("mkdir backupDir error = %v", err)
 	}
 
-	// Override BackupRootFn for safety
+	// Override BackupRootFn for safety and ensure the CLI uses the authoritative resolver.
 	defer func(orig func() (string, error)) { backup.BackupRootFn = orig }(backup.BackupRootFn)
 	backup.BackupRootFn = func() (string, error) { return backupDir, nil }
 
 	now := time.Now()
-	// Create test manifest
 	mDir := filepath.Join(backupDir, "upgrade-test")
-	if err := os.MkdirAll(mDir, 0o755); err != nil {
-		t.Fatalf("mkdir mDir error = %v", err)
+	staleDir := filepath.Join(backupDir, "upgrade-stale")
+	manifests := []backup.Manifest{
+		{
+			ID:        "upgrade-test",
+			CreatedAt: now.Add(-1 * time.Hour),
+			RootDir:   mDir,
+			Source:    backup.BackupSourceUpgrade,
+			FileCount: 1,
+		},
+		{
+			ID:        "upgrade-stale",
+			CreatedAt: now.Add(-2 * time.Hour),
+			RootDir:   staleDir,
+			Source:    backup.BackupSourceSync,
+			FileCount: 1,
+		},
 	}
-	m := backup.Manifest{
-		ID:        "upgrade-test",
-		CreatedAt: now.Add(-1 * time.Hour),
-		RootDir:   mDir,
-		Source:    backup.BackupSourceUpgrade,
-		FileCount: 1,
-	}
-	if err := backup.WriteManifest(filepath.Join(mDir, backup.ManifestFilename), m); err != nil {
-		t.Fatalf("WriteManifest error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(mDir, "data.txt"), []byte("data"), 0o644); err != nil {
-		t.Fatalf("Write data error = %v", err)
+	for _, manifest := range manifests {
+		if err := os.MkdirAll(manifest.RootDir, 0o755); err != nil {
+			t.Fatalf("mkdir %s error = %v", manifest.RootDir, err)
+		}
+		if err := backup.WriteManifest(filepath.Join(manifest.RootDir, backup.ManifestFilename), manifest); err != nil {
+			t.Fatalf("WriteManifest error = %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(manifest.RootDir, "data.txt"), []byte("data"), 0o644); err != nil {
+			t.Fatalf("Write data error = %v", err)
+		}
 	}
 
 	// Test list human table
@@ -111,7 +122,7 @@ func TestRunBackupListAndClean(t *testing.T) {
 		t.Fatalf("RunBackup(list) error = %v", err)
 	}
 	outHuman := bufHuman.String()
-	if !strings.Contains(outHuman, "upgrade") || !strings.Contains(outHuman, "Total: 1 backup") {
+	if !strings.Contains(outHuman, "upgrade") || !strings.Contains(outHuman, "Total: 2 backup") || !strings.Contains(outHuman, backupDir) {
 		t.Errorf("RunBackup(list) human output unexpected: %s", outHuman)
 	}
 
@@ -124,8 +135,8 @@ func TestRunBackupListAndClean(t *testing.T) {
 	if err := json.Unmarshal(bufJSON.Bytes(), &report); err != nil {
 		t.Fatalf("json.Unmarshal report error = %v; raw = %s", err, bufJSON.String())
 	}
-	if report.TotalCount != 1 || len(report.Backups) != 1 {
-		t.Errorf("JSON report total_count = %d; want 1", report.TotalCount)
+	if report.TotalCount != 2 || len(report.Backups) != 2 {
+		t.Errorf("JSON report total_count = %d; want 2", report.TotalCount)
 	}
 
 	// Test clean cancellation
@@ -137,13 +148,36 @@ func TestRunBackupListAndClean(t *testing.T) {
 		t.Errorf("RunBackup(clean cancel) output unexpected: %s", bufCancel.String())
 	}
 
-	// Test clean confirmed
+	// Test clean with no stale backups to remove.
+	var bufNoStale bytes.Buffer
+	if err := RunBackup([]string{"clean", "--keep", "5"}, strings.NewReader("y\n"), &bufNoStale); err != nil {
+		t.Fatalf("RunBackup(clean no-op) error = %v", err)
+	}
+	if !strings.Contains(bufNoStale.String(), "No stale backups to clean") {
+		t.Errorf("RunBackup(clean no-op) output unexpected: %s", bufNoStale.String())
+	}
+
+	// Test clean confirmed retains the most recent backup and removes the stale backup.
 	var bufClean bytes.Buffer
-	if err := RunBackup([]string{"clean", "--keep", "5"}, strings.NewReader("y\n"), &bufClean); err != nil {
+	if err := RunBackup([]string{"clean", "--keep", "1"}, strings.NewReader("y\n"), &bufClean); err != nil {
 		t.Fatalf("RunBackup(clean) error = %v", err)
 	}
-	if !strings.Contains(bufClean.String(), "No stale backups to clean") {
-		t.Errorf("RunBackup(clean) output unexpected: %s", bufClean.String())
+	if output, want := bufClean.String(), "This will purge stale backups (retaining up to 1). Continue? [y/N]: Cleaned 1 stale backup(s) (retained 1 most recent):\n  - upgrade-stale\n"; output != want {
+		t.Errorf("RunBackup(clean) output = %q, want %q", output, want)
+	}
+	if _, err := os.Stat(mDir); err != nil {
+		t.Errorf("retained backup directory %s is unavailable: %v", mDir, err)
+	}
+	if _, err := os.Stat(staleDir); !os.IsNotExist(err) {
+		t.Errorf("stale backup directory %s still exists: %v", staleDir, err)
+	}
+
+	var bufAfterClean bytes.Buffer
+	if err := RunBackup([]string{"list"}, nil, &bufAfterClean); err != nil {
+		t.Fatalf("RunBackup(list after clean) error = %v", err)
+	}
+	if output := bufAfterClean.String(); !strings.Contains(output, "upgrade") || !strings.Contains(output, "Total: 1 backup(s)") {
+		t.Errorf("RunBackup(list after clean) output unexpected: %s", output)
 	}
 }
 

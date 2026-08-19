@@ -548,6 +548,25 @@ Status:  healthy
 	}
 }
 
+func TestCheckBackupFootprint_InspectionErrorWarns(t *testing.T) {
+	homeDir := t.TempDir()
+	backupDir := filepath.Join(homeDir, ".gentle-ai", "backups")
+	if err := os.MkdirAll(filepath.Dir(backupDir), 0o755); err != nil {
+		t.Fatalf("mkdir backup parent error = %v", err)
+	}
+	if err := os.WriteFile(backupDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("write backup path error = %v", err)
+	}
+
+	got := checkBackupFootprint(homeDir)
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("expected warn for backup inspection error, got %s: %s", got.Status, got.Detail)
+	}
+	if strings.Contains(got.Detail, "no backups found") {
+		t.Fatalf("inspection error was reported as an empty backup directory: %s", got.Detail)
+	}
+}
+
 func TestRunDoctor_HomeDirError(t *testing.T) {
 	orig := osUserHomeDirDoctor
 	defer func() { osUserHomeDirDoctor = orig }()

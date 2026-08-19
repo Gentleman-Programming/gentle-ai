@@ -1205,6 +1205,47 @@ func requireCandidateDeclineRejected(name string) func(*Sandbox, Observation) er
 }
 
 func waveOneJourneys() []Journey {
+	const (
+		j52OldestBackupID = "20260802120000.000000000"
+		j52NewestBackupID = "20260803120000.000000000"
+	)
+	backupArgs := func(parts ...string) func(*Sandbox) ([]string, error) {
+		return func(_ *Sandbox) ([]string, error) {
+			return append([]string(nil), parts...), nil
+		}
+	}
+	seedBackup := func(sb *Sandbox, id, createdAt string) error {
+		backupDir := filepath.Join(sb.Home, ".gentle-ai", "backups", id)
+		if err := os.MkdirAll(backupDir, 0o755); err != nil {
+			return err
+		}
+		manifest := struct {
+			Version    int    `json:"version"`
+			ID         string `json:"id"`
+			CreatedAt  string `json:"created_at"`
+			RootDir    string `json:"root_dir"`
+			Entries    []any  `json:"entries"`
+			Source     string `json:"source"`
+			AppVersion string `json:"app_version"`
+			Targets    []any  `json:"targets"`
+		}{
+			Version:    1,
+			ID:         id,
+			CreatedAt:  createdAt,
+			RootDir:    backupDir,
+			Entries:    []any{},
+			Source:     "sync",
+			AppVersion: "dev",
+			Targets:    []any{},
+		}
+		content, err := json.Marshal(manifest)
+		if err != nil {
+			return fmt.Errorf("marshal backup manifest %q: %w", id, err)
+		}
+		content = append(content, '\n')
+		return os.WriteFile(filepath.Join(backupDir, "manifest.json"), content, 0o644)
+	}
+
 	return []Journey{
 		{
 			ID:     "j44-corrected-current-changes-delivery",
@@ -1433,30 +1474,29 @@ func waveOneJourneys() []Journey {
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{
-					Name: "fixture: seed backup snapshot",
+					Name: "fixture: seed oldest and newest backup snapshots",
 					Fixture: func(sb *Sandbox) error {
-						backupDir := filepath.Join(sb.Home, ".gentle-ai", "backups", "20260803120000.000000000")
-						if err := os.MkdirAll(backupDir, 0o755); err != nil {
+						if err := seedBackup(sb, j52OldestBackupID, "2026-08-02T12:00:00Z"); err != nil {
 							return err
 						}
-						return os.WriteFile(filepath.Join(backupDir, "manifest.json"), []byte(`{"version":1,"created_at":"2026-08-03T12:00:00Z","source":"sync","app_version":"dev","targets":[]}`), 0o644)
+						return seedBackup(sb, j52NewestBackupID, "2026-08-03T12:00:00Z")
 					},
 				},
 				{
-					Name:     "backup list returns created backup",
+					Name:     "backup list returns both seeded backups",
 					Requires: &Capability{Verb: []string{"backup", "list"}},
-					Args:     productArgs("backup", "list"),
+					Args:     backupArgs("backup", "list"),
 					After: func(_ *Sandbox, observation Observation) error {
-						if !strings.Contains(observation.Stdout, "20260803120000.000000000") {
-							return fmt.Errorf("expected backup in output, got %q", observation.Stdout)
+						if !strings.Contains(observation.Stdout, "2026-08-02 12:00:00") || !strings.Contains(observation.Stdout, "2026-08-03 12:00:00") {
+							return fmt.Errorf("expected both backups in output, got %q", observation.Stdout)
 						}
 						return nil
 					},
 				},
 				{
-					Name:     "backup list --json returns valid json structure",
-					Requires: &Capability{Verb: []string{"backup", "list"}, Flags: []string{"--json"}},
-					Args:     productArgs("backup", "list", "--json"),
+					Name:     "backup list --json reports both snapshots",
+					Requires: &Capability{Verb: []string{"backup", "list"}, Flags: []string{"--json"}, Probe: []string{"backup", "list", "--json"}},
+					Args:     backupArgs("backup", "list", "--json"),
 					After: func(_ *Sandbox, observation Observation) error {
 						var report struct {
 							TotalCount int `json:"total_count"`
@@ -1464,19 +1504,63 @@ func waveOneJourneys() []Journey {
 						if err := json.Unmarshal([]byte(observation.Stdout), &report); err != nil {
 							return fmt.Errorf("invalid json output: %w", err)
 						}
-						if report.TotalCount != 1 {
-							return fmt.Errorf("expected 1 backup in JSON, got %d", report.TotalCount)
+						if report.TotalCount != 2 {
+							return fmt.Errorf("expected 2 backups in JSON, got %d", report.TotalCount)
 						}
 						return nil
 					},
 				},
 				{
-					Name:     "backup clean prunes excess backups",
-					Requires: &Capability{Verb: []string{"backup", "clean"}, Flags: []string{"--force"}},
-					Args:     productArgs("backup", "clean", "--keep", "0", "--force"),
+					Name:     "backup clean prunes the oldest snapshot",
+					Requires: &Capability{Verb: []string{"backup", "clean"}, Flags: []string{"--force"}, Probe: []string{"backup", "clean", "--keep", "2", "--force"}},
+					Args:     backupArgs("backup", "clean", "--keep", "1", "--force"),
 					After: func(_ *Sandbox, observation Observation) error {
-						if !strings.Contains(observation.Stdout, "Pruned") && !strings.Contains(observation.Stdout, "Cleaned") && !strings.Contains(observation.Stdout, "clean") {
-							return fmt.Errorf("expected clean message, got %q", observation.Stdout)
+						if !strings.Contains(observation.Stdout, "Cleaned 1 stale backup(s)") || !strings.Contains(observation.Stdout, j52OldestBackupID) {
+							return fmt.Errorf("expected deletion of oldest backup, got %q", observation.Stdout)
+						}
+						return nil
+					},
+				},
+				{
+					Name: "fixture: clean removes oldest and retains newest snapshot",
+					Fixture: func(sb *Sandbox) error {
+						backupRoot := filepath.Join(sb.Home, ".gentle-ai", "backups")
+						oldestDir := filepath.Join(backupRoot, j52OldestBackupID)
+						if _, err := os.Stat(oldestDir); err == nil {
+							return fmt.Errorf("oldest backup directory still exists: %s", oldestDir)
+						} else if !errors.Is(err, os.ErrNotExist) {
+							return fmt.Errorf("check oldest backup directory: %w", err)
+						}
+						newestDir := filepath.Join(backupRoot, j52NewestBackupID)
+						info, err := os.Stat(newestDir)
+						if err != nil {
+							return fmt.Errorf("newest backup directory is missing: %w", err)
+						}
+						if !info.IsDir() {
+							return fmt.Errorf("newest backup path is not a directory: %s", newestDir)
+						}
+						if _, err := os.Stat(filepath.Join(newestDir, "manifest.json")); err != nil {
+							return fmt.Errorf("newest backup manifest is missing: %w", err)
+						}
+						return nil
+					},
+				},
+				{
+					Name:     "backup list --json retains newest snapshot after clean",
+					Requires: &Capability{Verb: []string{"backup", "list"}, Flags: []string{"--json"}, Probe: []string{"backup", "list", "--json"}},
+					Args:     backupArgs("backup", "list", "--json"),
+					After: func(_ *Sandbox, observation Observation) error {
+						var report struct {
+							TotalCount int `json:"total_count"`
+							Backups    []struct {
+								Name string `json:"name"`
+							} `json:"backups"`
+						}
+						if err := json.Unmarshal([]byte(observation.Stdout), &report); err != nil {
+							return fmt.Errorf("invalid json output after clean: %w", err)
+						}
+						if report.TotalCount != 1 || len(report.Backups) != 1 || report.Backups[0].Name != j52NewestBackupID {
+							return fmt.Errorf("expected newest backup to remain, got %+v", report)
 						}
 						return nil
 					},

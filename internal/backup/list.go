@@ -33,7 +33,9 @@ type BackupListReport struct {
 }
 
 // ListBackups scans backupDir, parses all valid manifests, calculates directory sizes,
-// and returns a BackupListReport sorted newest-first.
+// and returns a BackupListReport sorted newest-first. If a directory-size calculation
+// fails, the report retains the entries and partial totals collected before returning
+// the error.
 func ListBackups(backupDir string) (BackupListReport, error) {
 	manifests, err := listManifests(backupDir)
 	if err != nil {
@@ -46,14 +48,18 @@ func ListBackups(backupDir string) (BackupListReport, error) {
 	})
 
 	now := time.Now()
-	var (
-		totalBytes int64
-		backups    = make([]BackupInfo, 0, len(manifests))
-	)
+	report := BackupListReport{
+		BackupRoot: backupDir,
+		Backups:    make([]BackupInfo, 0, len(manifests)),
+	}
+	var sizeErr error
 
 	for _, m := range manifests {
-		sizeBytes, _ := DirSizeBytes(m.RootDir)
-		totalBytes += sizeBytes
+		sizeBytes, err := DirSizeBytes(m.RootDir)
+		report.TotalBytes += sizeBytes
+		if err != nil && sizeErr == nil {
+			sizeErr = fmt.Errorf("calculate size for backup %q: %w", m.ID, err)
+		}
 
 		fileCount := m.FileCount
 		if fileCount == 0 && len(m.Entries) > 0 {
@@ -76,16 +82,12 @@ func ListBackups(backupDir string) (BackupListReport, error) {
 			Pinned:      m.Pinned,
 			Age:         FormatAge(m.CreatedAt, now),
 		}
-		backups = append(backups, info)
+		report.Backups = append(report.Backups, info)
 	}
 
-	return BackupListReport{
-		BackupRoot: backupDir,
-		TotalCount: len(backups),
-		TotalBytes: totalBytes,
-		TotalHuman: FormatBytes(totalBytes),
-		Backups:    backups,
-	}, nil
+	report.TotalCount = len(report.Backups)
+	report.TotalHuman = FormatBytes(report.TotalBytes)
+	return report, sizeErr
 }
 
 // DirSizeBytes computes the cumulative size of all regular files under dirPath.
@@ -123,7 +125,7 @@ func DirSizeBytes(dirPath string) (int64, error) {
 		return nil
 	})
 	if err != nil {
-		return 0, fmt.Errorf("walk dir %q: %w", dirPath, err)
+		return total, fmt.Errorf("walk dir %q: %w", dirPath, err)
 	}
 	if walkErrOccurred != nil {
 		return total, walkErrOccurred

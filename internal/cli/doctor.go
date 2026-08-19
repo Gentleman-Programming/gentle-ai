@@ -577,7 +577,14 @@ func checkBackupFootprint(homeDir string) CheckResult {
 	backupDir := filepath.Join(homeDir, ".gentle-ai", "backups")
 
 	report, err := backup.ListBackups(backupDir)
-	if err != nil || report.TotalCount == 0 {
+	if err != nil {
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: "could not inspect backups in " + backupDir + ": " + err.Error(),
+		}
+	}
+	if report.TotalCount == 0 {
 		return CheckResult{
 			Name:   id,
 			Status: CheckStatusPass,

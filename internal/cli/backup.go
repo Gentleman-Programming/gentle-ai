@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
@@ -91,12 +90,10 @@ func RunBackup(args []string, stdin io.Reader, stdout io.Writer) error {
 		return nil
 	}
 
-	homeDir, err := os.UserHomeDir()
+	backupDir, err := backup.BackupRootFn()
 	if err != nil {
-		return fmt.Errorf("resolve user home directory: %w", err)
+		return fmt.Errorf("resolve backup root: %w", err)
 	}
-
-	backupDir := filepath.Join(homeDir, ".gentle-ai", "backups")
 
 	switch flags.Subcommand {
 	case "list":
