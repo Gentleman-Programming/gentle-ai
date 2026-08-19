@@ -52,6 +52,10 @@ func TestEvaluateNewLineageGate_ContinueConsultsGateVerdictPreconditions(t *test
 			t.Fatalf("gate %q allowed an approved v3 receipt with a diverged base and no release evidence; want deny (CRITICAL-C, absorbed N2 must actually be enforced)", gate)
 		}
 	}
+	record.Authority = historicalNewLineageAuthority(record.Authority.LineageID, NewLineageStateApproved, CausalBaseOnly, "")
+	if evaluation := EvaluateNewLineageGate(context.Background(), "", record, transition, record.Authority.CandidateIdentity, NativeGateRequestInput{Gate: GatePreCommit}); evaluation.Result == GateAllow {
+		t.Fatalf("historical causality authorized gate: %#v", evaluation)
+	}
 }
 
 // TestEvaluateNewLineageGate_ReleaseRequiresDerivedEvidence proves the other

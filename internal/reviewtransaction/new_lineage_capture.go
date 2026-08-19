@@ -17,10 +17,8 @@ package reviewtransaction
 // primitive DOES persist the reviewer's validated findings (not just
 // SubjectHash) -- cycle 2's own capture-result already required and
 // validated `findings`/`evidence` were present before this fix, so silently
-// discarding them was a fail-open. Capture now normalizes findings and writes
-// `introduced` only when the location and every proof reference are wholly
-// contained by added hunks in the frozen candidate; every other causal claim
-// persists as `unknown` for fail-closed finalize handling.
+// discarding them was a fail-open. Store normalization writes only
+// frozen-hunk-supported `introduced`; every other claim persists `unknown`.
 
 import (
 	"context"
@@ -34,8 +32,6 @@ import (
 	"strconv"
 	"strings"
 )
-
-var newLineageDiffHunk = regexp.MustCompile(`(?m)^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 
 // NewLineageArtifactSubjectHash is C-A's minimal provider-owned binding: it
 // proves a reviewer result was computed against THIS exact frozen authority
@@ -85,8 +81,7 @@ var (
 	// ErrNewLineageCaptureConflict is refused when a lens already has a
 	// captured result under a DIFFERENT subject hash -- one-shot per lens, no
 	// reopen machinery (C-A's explicit scope boundary).
-	ErrNewLineageCaptureConflict = errors.New("lens already captured with a different binding; capture is one-shot per lens") // refusal:by-design world-action: v3 has no reviewer-artifact reopen concept (that is v2-only, Wave 7 deletion scope); the fix is a fresh review start for a corrected candidate, not an operator command that reopens this capture
-	// ErrNewLineageCaptureIncompleteSeverity remains for source compatibility.
+	ErrNewLineageCaptureConflict           = errors.New("lens already captured with a different binding; capture is one-shot per lens")     // refusal:by-design world-action: v3 has no reviewer-artifact reopen concept (that is v2-only, Wave 7 deletion scope); the fix is a fresh review start for a corrected candidate, not an operator command that reopens this capture
 	ErrNewLineageCaptureIncompleteSeverity = errors.New("severe reviewer finding requires supported evidence_class and causal_disposition") // refusal:by-design operator-knowledge: providers must supply supported values; callers cannot infer them
 )
 
@@ -141,18 +136,34 @@ func (store AuthorityStore) normalizeCapturedFindings(ctx context.Context, candi
 		finding.Severity = strings.ToUpper(strings.TrimSpace(finding.Severity))
 		finding.Class = EvidenceClass(strings.TrimSpace(string(finding.Class)))
 		refs := strings.Split(finding.Proof, ";")
-		for refIndex := range refs {
-			refs[refIndex] = strings.TrimSpace(refs[refIndex])
+		for refIndex, ref := range refs {
+			refs[refIndex] = strings.TrimSpace(ref)
 		}
 		if len(refs) > 1 {
 			sort.Strings(refs[1:])
 		}
 		finding.Proof = strings.Join(refs, "; ")
 		finding.Causality = CausalUnknown
-		if claim == CausalIntroduced && len(refs) > 1 {
-			introduced, err := allNewLineageRefsAdded(ctx, store.repo, isolation, candidate, refs)
-			if err != nil {
-				return nil, err
+		if claim == CausalIntroduced && isSupportedEvidenceClass(finding.Class) && finding.Class != EvidenceInsufficient && len(refs) > 1 {
+			introduced := true
+			for _, ref := range refs {
+				location, parseErr := parseFindingLocation(ref)
+				if parseErr != nil {
+					introduced = false
+					break
+				}
+				diff, gitErr := runGit(ctx, store.repo, isolation, nil, "diff", "--text", "--unified=0", "--no-renames", "--no-ext-diff", "--no-textconv", "--diff-algorithm=myers", "--no-indent-heuristic", candidate.BaseTree, candidate.CandidateTree, "--", literalPathspec(location.Path))
+				if gitErr != nil {
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						return nil, ctxErr
+					}
+					introduced = false
+					break
+				}
+				if !newLineageRangeInsideAddedHunk(diff, location) {
+					introduced = false
+					break
+				}
 			}
 			if introduced {
 				finding.Causality = CausalIntroduced
@@ -163,37 +174,14 @@ func (store AuthorityStore) normalizeCapturedFindings(ctx context.Context, candi
 	return normalized, nil
 }
 
-func allNewLineageRefsAdded(ctx context.Context, repo string, isolation []string, candidate CandidateIdentity, refs []string) (bool, error) {
-	for _, ref := range refs {
-		location, err := parseFindingLocation(ref)
-		if err != nil {
-			return false, nil
-		}
-		diff, err := runGit(ctx, repo, isolation, nil, "diff", "--text", "--unified=0", "--no-renames", "--no-ext-diff", "--no-textconv", "--diff-algorithm=myers", "--no-indent-heuristic", candidate.BaseTree, candidate.CandidateTree, "--", literalPathspec(location.Path))
-		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return false, ctxErr
-			}
-			return false, nil
-		}
-		if !newLineageRangeInsideAddedHunk(diff, location) {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
 func newLineageRangeInsideAddedHunk(diff []byte, location findingLocation) bool {
-	for _, match := range newLineageDiffHunk.FindAllSubmatch(diff, -1) {
-		start, err := strconv.Atoi(string(match[1]))
-		if err != nil {
-			continue
-		}
+	for _, match := range regexp.MustCompile(`(?m)^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`).FindAllSubmatch(diff, -1) {
+		start, _ := strconv.Atoi(string(match[1]))
 		count := 1
 		if len(match[2]) != 0 {
-			count, err = strconv.Atoi(string(match[2]))
+			count, _ = strconv.Atoi(string(match[2]))
 		}
-		if err == nil && count > 0 && start <= location.StartLine && location.EndLine < start+count {
+		if count > 0 && start <= location.StartLine && location.EndLine < start+count {
 			return true
 		}
 	}
