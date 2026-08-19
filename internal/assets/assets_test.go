@@ -848,7 +848,7 @@ func TestOpenCodeSDDOrchestratorPreflightDoesNotUseVisibleCodesOrCanonicalUIValu
 	if end >= 0 {
 		t.Fatal("raw opencode/sdd-orchestrator.md still owns the preflight mapping block")
 	}
-	uiBlock := strings.NewReplacer("`interactive`", "", "`openspec`", "", "`ask-on-risk`", "").Replace(content)
+	uiBlock := strings.NewReplacer("Interactive -> `interactive`", "`interactive`", "OpenSpec -> `openspec`", "`openspec`", "Ask me -> `ask-on-risk`", "`ask-on-risk`", "`interactive`", "", "`openspec`", "", "`ask-on-risk`", "").Replace(content)
 
 	// `ask-always` used to sit here as a canonical value. It was never in the
 	// consumer's domain, so keeping it would have let this guard vouch for a
