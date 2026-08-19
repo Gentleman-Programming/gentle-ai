@@ -11,6 +11,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// Tests replacing this shared close seam must not call t.Parallel().
+var closeManagedLauncherFile = func(file *os.File) error { return file.Close() }
+
 // RemoveManagedLauncher validates and removes a regular, canonical managed
 // launcher through its opened Windows handle. Deletion is requested on that
 // handle, never on a subsequently resolved path.
@@ -50,7 +53,12 @@ func RemoveManagedLauncher(path string) (ManagedLauncherRemovalResult, error) {
 		_ = windows.CloseHandle(handle)
 		return ManagedLauncherRemovalResult{}, fmt.Errorf("open managed launcher %q: create file handle", path)
 	}
-	defer file.Close()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = file.Close()
+		}
+	}()
 
 	var information windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(handle, &information); err != nil {
@@ -108,6 +116,10 @@ func RemoveManagedLauncher(path string) (ManagedLauncherRemovalResult, error) {
 	var status windows.IO_STATUS_BLOCK
 	if err := windows.NtSetInformationFile(handle, &status, &deleteFile, 1, windows.FileDispositionInformation); err != nil {
 		return ManagedLauncherRemovalResult{}, fmt.Errorf("remove managed launcher %q: %w", path, err)
+	}
+	closed = true
+	if err := closeManagedLauncherFile(file); err != nil {
+		return ManagedLauncherRemovalResult{}, fmt.Errorf("close managed launcher %q: %w", path, err)
 	}
 	return ManagedLauncherRemovalResult{Status: ManagedLauncherRemovalRemoved}, nil
 }

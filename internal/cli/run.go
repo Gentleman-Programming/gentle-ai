@@ -794,7 +794,8 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			channel:      r.channel,
 			state:        r.state,
 		}
-		step.backgroundPolicy = r.backgroundActivation != nil && r.backgroundActivation.Effective() && r.background.Effective == model.OpenCodeBackgroundOn
+		step.backgroundPolicy = r.backgroundActivation != nil && r.background.Effective == model.OpenCodeBackgroundOn
+		step.backgroundReady = &r.runtimeReady
 		apply = append(apply, step)
 	}
 	// Routing guidance is scheduled per agent and outside the component loop:
@@ -1302,6 +1303,7 @@ type componentApplyStep struct {
 	state        *runtimeState
 
 	backgroundPolicy bool
+	backgroundReady  *bool
 }
 
 type communityToolInstallStep struct {
@@ -1327,6 +1329,10 @@ func (s communityToolInstallStep) Run() error {
 
 func (s componentApplyStep) ID() string {
 	return s.id
+}
+
+func (s componentApplyStep) backgroundPolicyEnabled() bool {
+	return s.backgroundPolicy && (s.backgroundReady == nil || *s.backgroundReady)
 }
 
 // computeSlugSlimVerdicts implements the Per-slug forwarding semantics
@@ -1645,7 +1651,7 @@ func (s componentApplyStep) Run() error {
 				Profiles:                    s.selection.Profiles,
 				CodeGraphGuidanceMarkdown:   codeGraphGuidanceMarkdownForSDD(s.homeDir, s.selection.CommunityTools),
 			}
-			opts.IncludeOpenCodeBackgroundPolicy = s.backgroundPolicy && adapter.Agent() == model.AgentOpenCode
+			opts.IncludeOpenCodeBackgroundPolicy = s.backgroundPolicyEnabled() && adapter.Agent() == model.AgentOpenCode
 			if _, err := injectSDD(targetDir, adapter, s.selection.SDDMode, opts); err != nil {
 				return fmt.Errorf("inject sdd for %q: %w", adapter.Agent(), err)
 			}
