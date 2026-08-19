@@ -49,6 +49,7 @@ func journeySources() []journeySource {
 		{"journeys_staged_delivery.go", stagedDeliveryJourneys()},
 		{"journeys_frozen_lineage_resume.go", frozenLineageResumeJourneys()},
 		{"journeys_issue1800.go", issue1800Journeys()},
+		{"journeys_issue3194.go", issue3194Journeys()},
 		{"journeys_issue2879.go", issue2879Journeys()},
 		{"journeys_managed_assets.go", managedAssetJourneys()},
 		{"journeys_issue2906.go", issue2906Journeys()},
