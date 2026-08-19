@@ -34,9 +34,9 @@ func issue3043VerifyInstall(sandbox *Sandbox, observation Observation) error {
 	if observation.ExitCode != 0 {
 		return fmt.Errorf("OpenCode background install failed: %s", firstLine(observation.Stderr))
 	}
-	if !strings.Contains(observation.Stdout, "OpenCode background activation status: ready") ||
+	if !strings.Contains(observation.Stdout, "OpenCode background activation status: pending") ||
 		!strings.Contains(observation.Stdout, "OpenCode background restart required: true") {
-		return fmt.Errorf("install omitted ready activation evidence: %s", observation.Stdout)
+		return fmt.Errorf("install omitted pending activation evidence: %s", observation.Stdout)
 	}
 	if strings.Contains(observation.Stdout, "OPENCODE_EXPERIMENTAL=true") {
 		return fmt.Errorf("install emitted legacy shell mutation guidance: %s", observation.Stdout)

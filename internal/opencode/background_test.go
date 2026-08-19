@@ -399,7 +399,7 @@ func TestIsManagedLauncherRequiresCanonicalGeneratedBytes(t *testing.T) {
 	}
 }
 
-func TestManagedLauncherOwnershipRejectsSymlinksAndNonRegularPaths(t *testing.T) {
+func TestInspectLauncherRejectsSymlinksAndNonRegularPaths(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privileges not guaranteed on Windows")
 	}
@@ -412,13 +412,13 @@ func TestManagedLauncherOwnershipRejectsSymlinksAndNonRegularPaths(t *testing.T)
 	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil || os.Symlink(target, launcher) != nil {
 		t.Fatal("create managed launcher symlink")
 	}
-	if owned, err := ManagedLauncherOwnership(launcher); err == nil || owned {
+	if _, _, owned, err := inspectLauncher(launcher); err == nil || owned {
 		t.Fatalf("symlink ownership = %t, %v; want rejected", owned, err)
 	}
 	if err := os.Remove(launcher); err != nil || os.Mkdir(launcher, 0o755) != nil {
 		t.Fatal("create launcher directory")
 	}
-	if owned, err := ManagedLauncherOwnership(launcher); err == nil || owned {
+	if _, _, owned, err := inspectLauncher(launcher); err == nil || owned {
 		t.Fatalf("directory ownership = %t, %v; want rejected", owned, err)
 	}
 }

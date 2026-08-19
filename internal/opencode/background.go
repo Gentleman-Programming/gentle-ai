@@ -1170,11 +1170,6 @@ func inspectLauncher(path string) (os.FileInfo, []byte, bool, error) {
 	return info, data, IsManagedLauncher(path, data), nil
 }
 
-func ManagedLauncherOwnership(path string) (bool, error) {
-	_, _, owned, err := inspectLauncher(path)
-	return owned, err
-}
-
 func IsManagedLauncher(path string, data []byte) bool {
 	base := strings.ToLower(filepath.Base(path))
 	text := string(data)

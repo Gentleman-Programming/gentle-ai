@@ -130,10 +130,6 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
-func checkManagedOpenCodeActivation(homeDir string) CheckResult {
-	return checkManagedOpenCodeStatus(homeDir, model.OpenCodeBackgroundOn)
-}
-
 func checkManagedOpenCodeStatus(homeDir string, intent model.OpenCodeBackgroundIntent) CheckResult {
 	if intent == model.OpenCodeBackgroundOff {
 		return CheckResult{Status: CheckStatusPass, Detail: "OpenCode background activation status: off; background policy is intentionally disabled"}
@@ -154,18 +150,6 @@ func checkManagedOpenCodeStatus(homeDir string, intent model.OpenCodeBackgroundI
 		Status: CheckStatusFail,
 		Detail: "OpenCode background activation status: " + string(status) + "; bare opencode does not resolve to managed launcher " + expected + "; start a new supported login shell, then rerun doctor",
 	}
-}
-
-// readDoctorInstalledAgents returns the agent IDs persisted in state.json.
-// An unreadable or absent state file yields a nil slice — callers must treat
-// nil/empty as "no agents selected" rather than a hard error so first-time
-// installs do not surface phantom agent-missing failures.
-func readDoctorInstalledAgents(homeDir string) ([]string, error) {
-	s, err := state.Read(homeDir)
-	if err != nil {
-		return nil, err
-	}
-	return s.InstalledAgents, nil
 }
 
 // checkToolBinaries checks each required tool for PATH resolution and
