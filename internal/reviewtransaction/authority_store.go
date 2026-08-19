@@ -401,6 +401,9 @@ func (store AuthorityStore) Mutate(ctx context.Context, expectedRevision string,
 	if err := apply(&next); err != nil {
 		return "", err
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if next.LineageID == "" {
 		next.LineageID = store.lineageID
 	}

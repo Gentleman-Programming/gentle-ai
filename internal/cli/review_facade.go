@@ -2632,7 +2632,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	correctionLines := flags.Int("correction-lines", 0, "positive predicted correction changed lines before editing")
 	failed := flags.Bool("failed", false, "bind supplied final evidence as a failed verification")
 	tracePath := flags.String("trace", "", "optional diagnostic operation metadata trace path")
-	admissionFindingsPath := flags.String("admission-findings", "", "new-lineage authorities only: candidate-causal admission findings JSON array file or - for stdin")
+	admissionFindingsPath := flags.String("admission-findings", "", "retired for new-lineage authorities: alternate causal input is always refused")
 	var resultPaths repeatedString
 	flags.Var(&resultPaths, "result", "retired and always refused: unadmitted reviewer results cannot bind an approval; capture each lens with `"+reviewCaptureResultCommandName()+"` and finalize with --captured-results")
 	var resultArtifacts repeatedString
@@ -2733,6 +2733,10 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			return newDiscErr
 		}
 		if newFound {
+			if strings.TrimSpace(*admissionFindingsPath) != "" {
+				// refusal:by-design operator-knowledge: remove --admission-findings; new-lineage causality comes only from prior store-owned capture
+				return reviewPreflightError(errors.New("new-lineage finalize refuses --admission-findings alternate causal input; causality is written only by store-owned capture from frozen candidate evidence"))
+			}
 			// The legacy reviewer-result ARTIFACT ingestion pipeline
 			// (readFacadeReviewerArtifacts, readCapturedReviewerResults) is bound to
 			// CompactState/CompactStore and has no v3 equivalent — refuse explicitly
@@ -2743,40 +2747,18 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			// pipeline these other flags name.
 			for _, unsupported := range []string{"result", "result-artifact", "result-artifact-file", "captured-evidence", "validation", "refuter", "evidence"} {
 				if reviewFinalizeFlagProvided(args, unsupported) {
-					return reviewPreflightError(fmt.Errorf("new-lineage finalize does not yet support --%s; retry with `gentle-ai review finalize --lineage %s` and, if needed, --failed or --admission-findings", unsupported, *lineage))
+					return reviewPreflightError(fmt.Errorf("new-lineage finalize does not yet support --%s; retry with `gentle-ai review finalize --lineage %s` and, if needed, --failed", unsupported, *lineage))
 				}
 			}
-			// C-E (Wave 5 fix cycle 3, verify-report #10186 cycle 2): the reviewer
-			// channel's own captured findings feed the identical
-			// AdmitCandidateCausalFindings admission decision --admission-findings
-			// already drives, reused rather than duplicated. --admission-findings
-			// stays an explicit override/compat surface (coordinator decision):
-			// when the caller supplies it, it is used verbatim exactly as before,
-			// UNCONDITIONALLY -- captured findings are consulted only when the
-			// caller did not override.
-			var findings []reviewtransaction.FindingEvidence
-			if trimmed := strings.TrimSpace(*admissionFindingsPath); trimmed != "" {
-				if err := readFacadeJSON(trimmed, &findings); err != nil {
-					return reviewPreflightError(fmt.Errorf("read new-lineage admission findings: %w", err))
-				}
-			} else if *capturedResults {
-				// W-11 (Wave 7 S1, design decision 3b): only SEVERE
-				// (BLOCKER/CRITICAL) captured findings are ever candidates for
-				// candidate-causal admission -- a WARNING finding must stay
-				// non-blocking even if its causal_disposition would otherwise
-				// admit it. Filtering here, before AdmitCandidateCausalFindings,
-				// keeps that function itself byte-identical and never touches
-				// the --admission-findings branch above, whose FindingEvidence
-				// carries no Severity at all.
-				findings = reviewtransaction.SevereFindingEvidence(newRecord.Authority.CapturedFindingEvidence())
-			}
+			// New-lineage finalize accepts no alternate causal input. Its helper
+			// reads only the causality already persisted by store-owned capture.
 			newTerminalAtEntry := newRecord.Authority.State == reviewtransaction.NewLineageStateApproved || newRecord.Authority.State == reviewtransaction.NewLineageStateEscalated
 			if !newTerminalAtEntry {
 				if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
 					return err
 				}
 			}
-			return runReviewFacadeFinalizeNewLineage(ctx, stdout, root, *lineage, newRecord, findings, *failed, *capturedResults)
+			return runReviewFacadeFinalizeNewLineage(ctx, stdout, root, *lineage, newRecord, *failed, *capturedResults)
 		}
 	}
 	store, record, err := discoverCompactFacadeFinalize(ctx, root, *lineage)

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -112,13 +111,9 @@ func TestReviewFacadeFinalizeNewLineageFailedEvidenceEscalates(t *testing.T) {
 	}
 }
 
-// TestReviewFacadeFinalizeNewLineageAdmitsOnlyCandidateCausalFindings is
-// task C2's CLI-level RED/GREEN evidence: a candidate-caused finding blocks
-// finalize (escalates rather than approves) and is the ONLY finding ID ever
-// persisted into review-state.json's admitted_finding_ids; the sibling
-// pre-existing finding never appears there (spec rdd-review-core-transitions,
-// "Candidate-Causal Admission Only", both scenarios).
-func TestReviewFacadeFinalizeNewLineageAdmitsOnlyCandidateCausalFindings(t *testing.T) {
+// TestReviewFacadeFinalizeNewLineageRefusesAlternateCausalityBeforeMutation
+// proves finalize cannot bypass store-owned capture with caller-authored input.
+func TestReviewFacadeFinalizeNewLineageRefusesAlternateCausalityBeforeMutation(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "finalize-admission-blocks-lineage"
@@ -138,39 +133,24 @@ func TestReviewFacadeFinalizeNewLineageAdmitsOnlyCandidateCausalFindings(t *test
 	}
 
 	var out bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--admission-findings", findingsPath}, &out); err != nil {
-		t.Fatalf("new-lineage finalize(admission findings) must still reach a receipt, got error: %v\n%s", err, out.String())
-	}
-	var result ReviewFacadeFinalizeNewLineageResult
-	decodeStrictReviewJSON(t, out.Bytes(), &result)
-	if result.State != reviewtransaction.NewLineageStateEscalated {
-		t.Fatalf("finalize with an admitted candidate-causal finding = %q, want escalated (blocked)", result.State)
-	}
-	if !reflect.DeepEqual(result.AdmittedFindingIDs, []string{"candidate-caused-finding"}) {
-		t.Fatalf("admitted_finding_ids = %v, want exactly [candidate-caused-finding]", result.AdmittedFindingIDs)
-	}
-
 	store, err := reviewtransaction.NewLineageAuthorityStore(context.Background(), repo, lineage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(store.StatePath())
+	before, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "pre-existing-finding") {
-		t.Fatalf("pre-existing (follow-up) finding must never be persisted into review-state.json's admitted set: %s", raw)
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--admission-findings", findingsPath}, &out); err == nil || !strings.Contains(err.Error(), "alternate causal input") {
+		t.Fatalf("new-lineage alternate causality error = %v, want refusal", err)
 	}
-	if !strings.Contains(string(raw), "candidate-caused-finding") {
-		t.Fatalf("candidate-causal finding must be persisted: %s", raw)
+	after, err := store.Load()
+	if err != nil || after.Revision != before.Revision {
+		t.Fatalf("alternate causality mutated authority: before=%q after=%q err=%v", before.Revision, after.Revision, err)
 	}
 }
 
-// TestReviewFacadeFinalizeNewLineageFollowUpFindingsDoNotBlock is the
-// companion scenario: a lineage whose only findings are pre-existing/
-// base-only still reaches approved — a follow-up can never authorize a
-// correction (block finalize).
-func TestReviewFacadeFinalizeNewLineageFollowUpFindingsDoNotBlock(t *testing.T) {
+func TestReviewFacadeFinalizeNewLineageRefusesAlternateNegativeCausality(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
 	const lineage = "finalize-followups-dont-block-lineage"
@@ -190,16 +170,8 @@ func TestReviewFacadeFinalizeNewLineageFollowUpFindingsDoNotBlock(t *testing.T) 
 	}
 
 	var out bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--admission-findings", findingsPath}, &out); err != nil {
-		t.Fatalf("new-lineage finalize(follow-ups only) must reach a receipt, got error: %v\n%s", err, out.String())
-	}
-	var result ReviewFacadeFinalizeNewLineageResult
-	decodeStrictReviewJSON(t, out.Bytes(), &result)
-	if result.State != reviewtransaction.NewLineageStateApproved {
-		t.Fatalf("finalize with only follow-up findings = %q, want approved (never blocked)", result.State)
-	}
-	if len(result.AdmittedFindingIDs) != 0 {
-		t.Fatalf("admitted_finding_ids = %v, want empty", result.AdmittedFindingIDs)
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--admission-findings", findingsPath}, &out); err == nil || !strings.Contains(err.Error(), "alternate causal input") {
+		t.Fatalf("new-lineage alternate causality error = %v, want refusal", err)
 	}
 }
 

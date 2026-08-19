@@ -66,7 +66,7 @@ type ReviewFacadeFinalizeNewLineageResult struct {
 // own precedent (review_facade_new_lineage.go:73-78) exactly.
 func runReviewFacadeFinalizeNewLineage(
 	ctx context.Context, stdout io.Writer, root, lineage string, record reviewtransaction.NewLineageRecord,
-	findings []reviewtransaction.FindingEvidence, failed, capturedResults bool,
+	failed, capturedResults bool,
 ) error {
 	store, err := reviewtransaction.NewLineageAuthorityStore(ctx, root, lineage)
 	if err != nil {
@@ -93,6 +93,7 @@ func runReviewFacadeFinalizeNewLineage(
 	// unresolvedIDs is never merged into AdmittedFindingIDs itself: that
 	// field's contract is "candidate-caused blocker admitted for
 	// correction", and an unresolved cause is not confirmed candidate-caused.
+	findings := reviewtransaction.SevereFindingEvidence(authority.CapturedFindingEvidence())
 	admitted, _, unresolved := reviewtransaction.AdmitCandidateCausalFindings(findings)
 	transition, err := (reviewtransaction.ReviewCore{}).Next(ctx, authority, reviewtransaction.CoreRequest{
 		Kind: reviewtransaction.CoreRequestFinalize,
