@@ -255,6 +255,122 @@ func intendedUntrackedSubmissionArguments(t *testing.T, descriptor ReviewTransit
 	return arguments
 }
 
+func TestIntendedUntrackedPublishedSchemaMatchesAllEmittedLayouts(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+	base := intendedUntrackedStatus(t, repo)
+	schema := compileWholeNativeStatusSchema(t, "status-v5.schema.json")
+	digest := "sha256:" + strings.Repeat("a", 64)
+	selectors := []struct {
+		name     string
+		selector reviewTransitionSelector
+	}{
+		{name: "current", selector: reviewTransitionSelector{Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace}},
+		{name: "base diff", selector: reviewTransitionSelector{Kind: reviewtransaction.TargetBaseDiff, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "origin/main"}},
+		{name: "base overlay by ref", selector: reviewTransitionSelector{Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace, BaseRef: "origin/main", WorkspaceOverlay: true}},
+		{name: "base overlay by tree", selector: reviewTransitionSelector{Kind: reviewtransaction.TargetBaseWorkspaceOverlay, Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("b", 40), WorkspaceOverlay: true}},
+	}
+	for _, selector := range selectors {
+		for _, runtime := range []string{"", "claude-code", "codex", "opencode"} {
+			for _, lineage := range []string{"", "layout-lineage"} {
+				t.Run(selector.name+"/runtime="+runtime+"/lineage="+lineage, func(t *testing.T) {
+					descriptor := reviewIntendedUntrackedSubmission(ReviewIntegrationContractV2, digest, reviewIntendedUntrackedSubmissionContext{
+						Selector: selector.selector,
+						Runtime:  runtime,
+						Lineage:  lineage,
+					})
+					if descriptor == nil {
+						t.Fatal("runtime refused a legitimately emitted intended-untracked layout")
+					}
+					if err := schema.Validate(intendedUntrackedStatusDocument(t, base, *descriptor)); err != nil {
+						t.Fatalf("published schema rejected emitted layout: %v", err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestIntendedUntrackedPublishedSchemaRejectsMalformedDescriptorGrammar(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+	base := intendedUntrackedStatus(t, repo)
+	schema := compileWholeNativeStatusSchema(t, "status-v5.schema.json")
+	digest := "sha256:" + strings.Repeat("a", 64)
+	valid := reviewIntendedUntrackedSubmission(ReviewIntegrationContractV2, digest, reviewIntendedUntrackedSubmissionContext{
+		Selector: reviewTransitionSelector{Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace},
+	})
+	if valid == nil {
+		t.Fatal("failed to construct valid intended-untracked descriptor")
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*ReviewTransitionSubmission)
+	}{
+		{name: "unrelated selector token", mutate: func(descriptor *ReviewTransitionSubmission) {
+			descriptor.ArgumentTokens[3] = "--unexpected-selector=true"
+		}},
+		{name: "unsupported runtime token", mutate: func(descriptor *ReviewTransitionSubmission) {
+			descriptor.ArgumentTokens = append([]string{}, reviewIntendedUntrackedSubmission(ReviewIntegrationContractV2, digest, reviewIntendedUntrackedSubmissionContext{
+				Selector: reviewTransitionSelector{Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace},
+				Runtime:  "opencode",
+			}).ArgumentTokens...)
+			descriptor.ArgumentTokens[3] = "--agent=unknown-runtime"
+		}},
+		{name: "uppercase inventory digest", mutate: func(descriptor *ReviewTransitionSubmission) {
+			descriptor.ArgumentTokens[5] = "--expected-untracked-inventory=sha256:" + strings.Repeat("A", 64)
+		}},
+		{name: "non-final placeholder tail", mutate: func(descriptor *ReviewTransitionSubmission) {
+			descriptor.ArgumentTokens = append(descriptor.ArgumentTokens, "--unexpected=true")
+		}},
+		{name: "mismatched scope location", mutate: func(descriptor *ReviewTransitionSubmission) {
+			descriptor.Values[1].SubstitutionLocation = 5
+		}},
+		{name: "mismatched repeated path location", mutate: func(descriptor *ReviewTransitionSubmission) {
+			descriptor.Values[2].SubstitutionLocation = 5
+		}},
+		{name: "non-final repeated slot", mutate: func(descriptor *ReviewTransitionSubmission) {
+			descriptor.Values = []ReviewTransitionSubmissionValue{descriptor.Values[2], descriptor.Values[0], descriptor.Values[1]}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := *valid
+			candidate.ArgumentTokens = append([]string{}, valid.ArgumentTokens...)
+			candidate.Values = append([]ReviewTransitionSubmissionValue{}, valid.Values...)
+			test.mutate(&candidate)
+			if err := schema.Validate(intendedUntrackedStatusDocument(t, base, candidate)); err == nil {
+				t.Fatal("published schema accepted malformed intended-untracked descriptor")
+			}
+		})
+	}
+}
+
+func intendedUntrackedStatusDocument(t *testing.T, base ReviewTargetStatusResult, descriptor ReviewTransitionSubmission) map[string]any {
+	t.Helper()
+	status := base
+	if status.NextTransition == nil || status.NextTransition.Collect == nil || len(status.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("base intended-untracked status transition = %#v", status.NextTransition)
+	}
+	transition := *status.NextTransition
+	collection := *transition.Collect
+	inputs := append([]ReviewTransitionInput{}, collection.Inputs...)
+	input := inputs[0]
+	input.Submission = &descriptor
+	inputs[0] = input
+	collection.Inputs = inputs
+	transition.Collect = &collection
+	status.NextTransition = &transition
+	payload, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(payload, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document
+}
+
 func intendedUntrackedSelectArgs(digest string, paths ...string) []string {
 	args := []string{"--untracked-scope=select", "--expected-untracked-inventory=" + digest}
 	for _, path := range paths {

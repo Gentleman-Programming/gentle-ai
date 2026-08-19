@@ -98,7 +98,7 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
 		"fixtures/status-v5.fixture.json": "1a6d002c9691c87e50687f8d5f3e59013e9229d93004028f746bfcda7947d5fc",
-		"schemas/status-v5.schema.json":   "c00d851e717d394efd8a0ed996a3dfde44da3636fa599827580ceeefd2f35c4d",
+		"schemas/status-v5.schema.json":   "ee75904efa9148013d7bacaca49b84a82c92aad39f192ed32cbf32b02b94742b",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))

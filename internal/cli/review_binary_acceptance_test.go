@@ -314,6 +314,10 @@ func TestMainBinaryExecutesIntendedUntrackedSubmissionFromArbitraryCWD(t *testin
 	var initial ReviewTargetStatusResult
 	decodeBinaryJSON(t, runReviewBinaryAt(t, binary, outside, true,
 		"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", repo), &initial)
+	if initial.NextTransition == nil || initial.NextTransition.Kind != reviewNextTransitionCollect ||
+		initial.NextTransition.Collect == nil || len(initial.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("initial binary intended-untracked transition = %#v", initial.NextTransition)
+	}
 	descriptor := initial.NextTransition.Collect.Inputs[0].Submission
 	if descriptor == nil {
 		t.Fatal("initial STATUS omitted intended-untracked submission")

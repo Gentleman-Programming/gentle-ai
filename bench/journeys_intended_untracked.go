@@ -30,18 +30,53 @@ func mixedIntendedUntrackedCandidate(sandbox *Sandbox) error {
 	return nil
 }
 
+func intendedUntrackedCollectSubmission(status waveCorrectionStatus, phase string) (waveSubmissionDescriptor, error) {
+	if status.NextTransition == nil {
+		return waveSubmissionDescriptor{}, fmt.Errorf("%s: next_transition is missing", phase)
+	}
+	if status.NextTransition.Kind != "collect" {
+		return waveSubmissionDescriptor{}, fmt.Errorf("%s: next_transition kind = %q, want collect", phase, status.NextTransition.Kind)
+	}
+	if status.NextTransition.Collect == nil {
+		return waveSubmissionDescriptor{}, fmt.Errorf("%s: collect transition is missing", phase)
+	}
+	if len(status.NextTransition.Collect.Inputs) != 1 {
+		return waveSubmissionDescriptor{}, fmt.Errorf("%s: collect inputs = %d, want exactly one", phase, len(status.NextTransition.Collect.Inputs))
+	}
+	if status.NextTransition.Collect.Inputs[0].Submission == nil {
+		return waveSubmissionDescriptor{}, fmt.Errorf("%s: collect input is missing its submission", phase)
+	}
+	return *status.NextTransition.Collect.Inputs[0].Submission, nil
+}
+
+func intendedUntrackedExecuteTransition(status waveCorrectionStatus, phase string) error {
+	if status.NextTransition == nil {
+		return fmt.Errorf("%s: next_transition is missing", phase)
+	}
+	if status.NextTransition.Kind != "execute" {
+		return fmt.Errorf("%s: next_transition kind = %q, want execute", phase, status.NextTransition.Kind)
+	}
+	if status.NextTransition.Execute == nil {
+		return fmt.Errorf("%s: execute transition is missing", phase)
+	}
+	return nil
+}
+
 func selectIntendedUntrackedAndRunPrintedStart(r *journeyRun) error {
 	initialObservation := r.run(productArgsFor(r, "review", "status", "--contract", reviewContractV2, "--next-transition"), false)
 	var initial waveCorrectionStatus
 	if err := decodeWaveObservation(initialObservation, &initial, "initial intended-untracked STATUS"); err != nil {
 		return err
 	}
-	if initial.NextTransition.Kind != "collect" || initial.NextTransition.ReasonCode != "intended_untracked_selection_required" ||
-		len(initial.NextTransition.Collect.Inputs) != 1 || initial.NextTransition.Collect.Inputs[0].Submission == nil {
-		return fmt.Errorf("initial STATUS did not own intended untracked submission: %+v", initial.NextTransition)
+	initialSubmission, err := intendedUntrackedCollectSubmission(initial, "initial intended-untracked STATUS")
+	if err != nil {
+		return err
+	}
+	if initial.NextTransition.ReasonCode != "intended_untracked_selection_required" {
+		return fmt.Errorf("initial intended-untracked STATUS: reason_code = %q, want intended_untracked_selection_required", initial.NextTransition.ReasonCode)
 	}
 	selectedPaths := []string{"docs/chosen, file.md", "docs/second file,with comma.md"}
-	arguments, err := intendedUntrackedSubmissionArguments(r, *initial.NextTransition.Collect.Inputs[0].Submission, "select", selectedPaths)
+	arguments, err := intendedUntrackedSubmissionArguments(r, initialSubmission, "select", selectedPaths)
 	if err != nil {
 		return err
 	}
@@ -50,7 +85,10 @@ func selectIntendedUntrackedAndRunPrintedStart(r *journeyRun) error {
 	if err := decodeWaveObservation(selectedObservation, &selected, "provider-owned selected STATUS"); err != nil {
 		return err
 	}
-	if selected.NextTransition.Kind != "execute" || selected.NextTransition.Execute.Operation != "review.start" ||
+	if err := intendedUntrackedExecuteTransition(selected, "selected intended-untracked STATUS"); err != nil {
+		return err
+	}
+	if selected.NextTransition.Execute.Operation != "review.start" ||
 		selected.TargetIdentity == initial.TargetIdentity ||
 		slices.Contains(selected.Projection.Paths, "unrelated-credentials.env") ||
 		!slices.Contains(selected.Projection.Paths, selectedPaths[0]) || !slices.Contains(selected.Projection.Paths, selectedPaths[1]) {
@@ -88,16 +126,21 @@ func selectOverlayIntendedUntrackedAndRunPrintedStart(r *journeyRun) error {
 	if err := decodeWaveObservation(initialObservation, &initial, "initial overlay intended-untracked STATUS"); err != nil {
 		return err
 	}
-	if initial.Projection.Kind != "base-workspace-overlay" || initial.NextTransition.Kind != "collect" ||
-		initial.NextTransition.ReasonCode != "intended_untracked_selection_required" || len(initial.NextTransition.Collect.Inputs) != 1 ||
-		initial.NextTransition.Collect.Inputs[0].Submission == nil {
-		return fmt.Errorf("initial overlay STATUS = %+v", initial)
+	if initial.Projection.Kind != "base-workspace-overlay" {
+		return fmt.Errorf("initial overlay STATUS projection kind = %q, want base-workspace-overlay", initial.Projection.Kind)
 	}
-	if !slices.Contains(initial.NextTransition.Collect.Inputs[0].Submission.ArgumentTokens, "--agent="+runtimeAgent) {
-		return fmt.Errorf("initial overlay STATUS submission = %+v, want --agent=%s", initial.NextTransition.Collect.Inputs[0].Submission.ArgumentTokens, runtimeAgent)
+	initialSubmission, err := intendedUntrackedCollectSubmission(initial, "initial overlay intended-untracked STATUS")
+	if err != nil {
+		return err
+	}
+	if initial.NextTransition.ReasonCode != "intended_untracked_selection_required" {
+		return fmt.Errorf("initial overlay intended-untracked STATUS: reason_code = %q, want intended_untracked_selection_required", initial.NextTransition.ReasonCode)
+	}
+	if !slices.Contains(initialSubmission.ArgumentTokens, "--agent="+runtimeAgent) {
+		return fmt.Errorf("initial overlay STATUS submission = %+v, want --agent=%s", initialSubmission.ArgumentTokens, runtimeAgent)
 	}
 	selectedPaths := []string{"docs/chosen, file.md", "docs/second file,with comma.md"}
-	arguments, err := intendedUntrackedSubmissionArguments(r, *initial.NextTransition.Collect.Inputs[0].Submission, "select", selectedPaths)
+	arguments, err := intendedUntrackedSubmissionArguments(r, initialSubmission, "select", selectedPaths)
 	if err != nil {
 		return err
 	}
@@ -106,10 +149,12 @@ func selectOverlayIntendedUntrackedAndRunPrintedStart(r *journeyRun) error {
 	if err := decodeWaveObservation(selectedObservation, &selected, "provider-owned overlay selected STATUS"); err != nil {
 		return err
 	}
+	if err := intendedUntrackedExecuteTransition(selected, "selected overlay intended-untracked STATUS"); err != nil {
+		return err
+	}
 	if selected.Projection.Kind != "base-workspace-overlay" || selected.TargetIdentity == initial.TargetIdentity ||
 		!slices.Contains(selected.Projection.Paths, selectedPaths[0]) || !slices.Contains(selected.Projection.Paths, selectedPaths[1]) ||
-		slices.Contains(selected.Projection.Paths, "unrelated-credentials.env") || selected.NextTransition.Kind != "execute" ||
-		selected.NextTransition.Execute.Operation != "review.start" {
+		slices.Contains(selected.Projection.Paths, "unrelated-credentials.env") || selected.NextTransition.Execute.Operation != "review.start" {
 		return fmt.Errorf("selected overlay STATUS = %+v", selected)
 	}
 	command := selected.NextTransition.Execute.Command
@@ -160,11 +205,11 @@ func intendedUntrackedSubmissionArguments(r *journeyRun, descriptor waveSubmissi
 		index := slot.SubstitutionLocation + 2
 		placeholder := "{{" + slot.Slot + "}}"
 		if slot.Repeated {
-			replacements := make([]string, len(values[slot.Slot]))
-			for valueIndex, value := range values[slot.Slot] {
-				replacements[valueIndex] = strings.Replace(arguments[index], placeholder, value, 1)
+			replacements := make([]string, 0, len(values[slot.Slot]))
+			for _, value := range values[slot.Slot] {
+				replacements = append(replacements, strings.Replace(arguments[index], placeholder, value, 1))
 			}
-			arguments = append(arguments[:index], append(replacements, arguments[index+1:]...)...)
+			arguments = slices.Replace(arguments, index, index+1, replacements...)
 			continue
 		}
 		if len(values[slot.Slot]) != 1 {
