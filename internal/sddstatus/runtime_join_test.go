@@ -3,6 +3,7 @@ package sddstatus
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -115,6 +116,46 @@ func TestV2DependenciesAndJoinRequireImmutableCompletionAndProjection(t *testing
 	applyRetainedItemPlanJoinRouting(&status)
 	if status.NextRecommended != "verify" || status.Dependencies.Verify != DependencyReady {
 		t.Fatalf("joined routing = %#v", status)
+	}
+}
+
+func TestResolveRetainedV2JoinBlocksDownstreamPhasesForInvalidMetadata(t *testing.T) {
+	ctx, root := context.Background(), initRuntimeLedgerRepo(t)
+	for _, dir := range []string{"build", "verify"} {
+		mkdir(t, filepath.Join(root, dir))
+	}
+	const change = "invalid-retained-item-metadata"
+	store := mustRuntimeStore(t, root, change)
+	plan, err := newItemPlanCandidate([]WorkItem{
+		{ID: "build", WorkUnit: "build", EvidenceGoal: "compile", MaxAttempts: 1, MaxChangedLines: 20, EditRoots: []string{"build"}},
+		{ID: "verify", WorkUnit: "verify", EvidenceGoal: "test", MaxAttempts: 1, MaxChangedLines: 20, EditRoots: []string{"verify"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(ctx, runtimePlanRequest(t, store, plan, "build", "invalid-metadata-build"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Finish(ctx, FinishAttemptRequest{ExpectedRevision: started.Revision, RequestID: "invalid-metadata-finish", Outcome: AttemptPassed, EvidenceRevision: runtimeTestHash('a'), Diagnosis: "passed", HarnessDisposition: HarnessReused, CleanupEvidence: "clean", ProcessEvidence: "none"}); err != nil {
+		t.Fatal(err)
+	}
+	changeRoot := filepath.Join(root, "openspec", "changes", change)
+	for path, content := range map[string]string{
+		"proposal.md":        "# Proposal\n",
+		"design.md":          "# Design\n",
+		"specs/item/spec.md": "### Requirement: Item\n#### Scenario: Join\n",
+		"verify-report.md":   boundedVerifyEnvelope(shaID("a"), "pass"),
+		"tasks.md":           "- [x] build: Build\n- [x] verify: Verify\n<!-- gentle-ai.sdd-items/v1\n{}\n-->",
+	} {
+		write(t, filepath.Join(changeRoot, path), content)
+	}
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: change, ReviewDisabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Dependencies.Apply != DependencyBlocked || status.Dependencies.Verify != DependencyBlocked || status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-blockers" {
+		t.Fatalf("invalid retained-plan metadata routing = %#v", status)
 	}
 }
 

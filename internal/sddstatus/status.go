@@ -791,6 +791,10 @@ func applyRetainedItemPlanJoinRouting(status *Status) {
 		status.Dependencies.Apply = DependencyReady
 	}
 	if status.Dependencies.Apply == DependencyBlocked {
+		// Invalid projected metadata must not let an unjoined immutable plan
+		// advance through otherwise-complete Verify or Archive artifacts.
+		status.Dependencies.Verify = DependencyBlocked
+		status.Dependencies.Archive = DependencyBlocked
 		return
 	}
 	status.Dependencies.Verify = DependencyBlocked

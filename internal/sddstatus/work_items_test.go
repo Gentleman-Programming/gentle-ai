@@ -161,6 +161,54 @@ func TestResolveItemAcquireUsesEquivalentOpenSpecAndEngramMetadata(t *testing.T)
 	}
 }
 
+func TestResolveItemAcquireReplaysEachDisjointActiveItem(t *testing.T) {
+	ctx, root := context.Background(), initRuntimeLedgerRepo(t)
+	for _, dir := range []string{"a", "b"} {
+		mkdir(t, filepath.Join(root, dir))
+	}
+	const change = "replay-disjoint-active-items"
+	tasks := `- [ ] a: A
+- [ ] b: B
+<!-- gentle-ai.sdd-items/v1
+{"items":[{"id":"a","dependsOn":[],"workUnit":"a","editRoots":["a"],"maxAttempts":2,"maxChangedLines":20,"evidenceGoal":"a"},{"id":"b","dependsOn":[],"workUnit":"b","editRoots":["b"],"maxAttempts":2,"maxChangedLines":20,"evidenceGoal":"b"}]}
+-->`
+	changeRoot := filepath.Join(root, "openspec", "changes", change)
+	for path, content := range map[string]string{
+		"proposal.md":        "# Proposal\n",
+		"design.md":          "# Design\n",
+		"specs/item/spec.md": "### Requirement: Item\n#### Scenario: Acquire\n",
+		"tasks.md":           tasks,
+	} {
+		write(t, filepath.Join(changeRoot, path), content)
+	}
+	options := ResolveOptions{CWD: root, ChangeName: change, ReviewDisabled: true}
+	requests := map[string]BeginAttemptRequest{}
+	results := map[string]CompactAttemptResult{}
+	store := mustRuntimeStore(t, root, change)
+	for _, itemID := range []string{"a", "b"} {
+		request, err := ResolveItemAcquire(options, itemID, "replay-"+itemID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := store.Acquire(ctx, CompactAcquireRequest{BeginAttemptRequest: request})
+		if err != nil || result.State != CompactStateProceed {
+			t.Fatalf("initial %s acquire = %#v, %v", itemID, result, err)
+		}
+		requests[itemID], results[itemID] = request, result
+	}
+	before := countRuntimeRecords(t, store.Dir)
+	for _, itemID := range []string{"a", "b"} {
+		replayed, err := ResolveItemAcquire(options, itemID, "replay-"+itemID)
+		if err != nil || !reflect.DeepEqual(replayed, requests[itemID]) {
+			t.Fatalf("%s resolved replay = %#v, %v; want %#v", itemID, replayed, err, requests[itemID])
+		}
+		result, err := store.Acquire(ctx, CompactAcquireRequest{BeginAttemptRequest: replayed})
+		if err != nil || result.State != CompactStateProceed || result.Token != results[itemID].Token || countRuntimeRecords(t, store.Dir) != before {
+			t.Fatalf("%s submitted replay = %#v, %v; records=%d want=%d", itemID, result, err, countRuntimeRecords(t, store.Dir), before)
+		}
+	}
+}
+
 func TestResolveEngramStatusRetainedItemPlanBlocksVerifyAndArchiveUntilJoined(t *testing.T) {
 	root := initRuntimeLedgerRepo(t)
 	for _, dir := range []string{"build", "verify"} {

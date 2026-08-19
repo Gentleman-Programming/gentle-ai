@@ -441,10 +441,31 @@ func newItemPlanCandidate(items []WorkItem, retained *itemPlanCandidate) (itemPl
 func boolPointer(value bool) *bool { return &value }
 
 func itemSelectedActiveBindingMatches(item WorkItem, roots []string, runtime *RuntimeStatus) bool {
-	if runtime == nil || runtime.runtimeObjective() == nil || runtime.runtimeActiveAttempt() == nil {
+	if runtime == nil {
 		return false
 	}
-	objective, attempt := runtime.runtimeObjective(), runtime.runtimeActiveAttempt()
+	if len(runtime.ownership.active) == 0 {
+		return itemSelectedActiveObjectiveBindingMatches(item, roots, runtime.runtimeObjective(), runtime.runtimeActiveAttempt())
+	}
+	for _, ordinal := range runtime.runtimeActiveOrdinals() {
+		attempt := runtime.runtimeActiveAttemptForOrdinal(ordinal)
+		objective := runtime.runtimeObjectiveForAttempt(attempt)
+		// A dangling active owner makes the active set untrustworthy; never
+		// adopt a selected item from an incomplete ownership projection.
+		if attempt == nil || objective == nil {
+			return false
+		}
+		if itemSelectedActiveObjectiveBindingMatches(item, roots, objective, attempt) {
+			return true
+		}
+	}
+	return false
+}
+
+func itemSelectedActiveObjectiveBindingMatches(item WorkItem, roots []string, objective *RuntimeObjective, attempt *RuntimeAttempt) bool {
+	if objective == nil || attempt == nil {
+		return false
+	}
 	return objective.WorkUnit == item.WorkUnit && objective.EvidenceGoal == item.EvidenceGoal &&
 		objective.MaxAttempts == item.MaxAttempts && objective.MaxChangedLines == item.MaxChangedLines &&
 		runtimeItemBindingEqual(item.ID, roots, objective.ItemID, objective.ItemEditRoots) &&
