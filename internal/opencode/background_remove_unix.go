@@ -15,6 +15,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func managedLauncherOpenRefusal(err error) bool {
+	return errors.Is(err, unix.ENOENT) ||
+		errors.Is(err, unix.ELOOP) ||
+		errors.Is(err, unix.EMLINK) ||
+		isManagedLauncherEFTYPE(err)
+}
+
 // RemoveManagedLauncher validates a launcher before atomically capturing the
 // current directory entry into an implementation-owned quarantine name. The
 // captured entry is then validated by identity and bytes before only that
@@ -47,7 +54,7 @@ func RemoveManagedLauncher(path string) (ManagedLauncherRemovalResult, error) {
 		0,
 	)
 	if err != nil {
-		if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ELOOP) {
+		if managedLauncherOpenRefusal(err) {
 			return ManagedLauncherRemovalResult{Status: ManagedLauncherRemovalRefused}, nil
 		}
 		return ManagedLauncherRemovalResult{}, fmt.Errorf("open managed launcher %q: %w", path, err)

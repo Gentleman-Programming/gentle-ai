@@ -25,7 +25,8 @@ func (r ManagedLauncherRemovalResult) Removed() bool {
 
 // These hooks are intentionally package-private: tests use them to place
 // deterministic replacements around the mutation boundary. Production leaves
-// them as no-ops.
+// them as no-ops. They are shared mutable state, so tests replacing a hook must
+// not call t.Parallel().
 var (
 	managedLauncherRemovalBeforeDelete = func(string) {}
 	managedLauncherRemovalBeforeUnlink = func(string) {}
