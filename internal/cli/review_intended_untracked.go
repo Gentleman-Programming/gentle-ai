@@ -40,6 +40,12 @@ type reviewIntendedUntrackedScope struct {
 	NeedsSelection, Declared bool
 }
 
+type reviewIntendedUntrackedSubmissionContext struct {
+	Selector reviewTransitionSelector
+	Runtime  string
+	Lineage  string
+}
+
 func reviewIntendedUntrackedDeclared(mode reviewSingleValueFlag, selected reviewRepeatedPathFlag, digest reviewSingleValueFlag) bool {
 	return mode.set || len(selected) != 0 || digest.set
 }
@@ -92,28 +98,65 @@ func reviewIntendedUntrackedCollection(status ReviewTargetStatusResult, scope re
 		Arguments: append(reviewTargetArguments(status),
 			ReviewTransitionArgument{Name: "eligible_paths_json", Value: string(paths)},
 			ReviewTransitionArgument{Name: "expected_untracked_inventory", Value: scope.Digest}),
-		Submission: reviewIntendedUntrackedSubmission(status.Contract, scope.Digest),
+		Submission: reviewIntendedUntrackedSubmission(status.Contract, scope.Digest, status.intendedUntrackedSubmission),
 	})
 }
 
-func reviewIntendedUntrackedSubmission(contract, digest string) *ReviewTransitionSubmission {
-	if contract != ReviewIntegrationContractV2 {
+func reviewIntendedUntrackedSubmission(contract, digest string, context reviewIntendedUntrackedSubmissionContext) *ReviewTransitionSubmission {
+	if contract != ReviewIntegrationContractV2 || context.Selector.Projection != reviewtransaction.ProjectionWorkspace {
 		return nil
 	}
+
+	argumentTokens := []string{
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "contract", Value: contract}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "next_transition", Value: "true"}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "cwd", Value: "{{cwd}}"}),
+	}
+	if strings.TrimSpace(context.Runtime) != "" {
+		argumentTokens = append(argumentTokens, reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "agent", Value: context.Runtime}))
+	}
+	if strings.TrimSpace(context.Lineage) != "" {
+		argumentTokens = append(argumentTokens, reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "lineage", Value: context.Lineage}))
+	}
+	argumentTokens = append(argumentTokens, reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "projection", Value: string(context.Selector.Projection)}))
+	switch context.Selector.Kind {
+	case reviewtransaction.TargetCurrentChanges:
+	case reviewtransaction.TargetBaseDiff:
+		if strings.TrimSpace(context.Selector.BaseRef) == "" || context.Selector.BaseTree != "" || context.Selector.WorkspaceOverlay {
+			return nil
+		}
+		argumentTokens = append(argumentTokens,
+			reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "base_ref", Value: context.Selector.BaseRef}),
+			reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "committed_only", Value: "true"}),
+		)
+	case reviewtransaction.TargetBaseWorkspaceOverlay:
+		if !context.Selector.WorkspaceOverlay || context.Selector.BaseRef == "" && context.Selector.BaseTree == "" ||
+			context.Selector.BaseRef != "" && context.Selector.BaseTree != "" {
+			return nil
+		}
+		if context.Selector.BaseRef != "" {
+			argumentTokens = append(argumentTokens, reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "base_ref", Value: context.Selector.BaseRef}))
+		} else {
+			argumentTokens = append(argumentTokens, reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "base_tree", Value: context.Selector.BaseTree}))
+		}
+		argumentTokens = append(argumentTokens, reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "workspace_overlay", Value: "true"}))
+	default:
+		return nil
+	}
+
+	scopeLocation := len(argumentTokens)
+	argumentTokens = append(argumentTokens,
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "untracked_scope", Value: "{{untracked_scope}}"}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "expected_untracked_inventory", Value: digest}),
+		reviewTransitionArgumentToken(ReviewTransitionArgument{Name: "intended_untracked", Value: "{{intended_untracked}}"}),
+	)
 	return &ReviewTransitionSubmission{
 		OperationToken: "status",
-		ArgumentTokens: []string{
-			"--contract=" + contract,
-			"--next-transition=true",
-			"--cwd={{cwd}}",
-			"--untracked-scope={{untracked_scope}}",
-			"--expected-untracked-inventory=" + digest,
-			"--intended-untracked={{intended_untracked}}",
-		},
+		ArgumentTokens: argumentTokens,
 		Values: []ReviewTransitionSubmissionValue{
 			{Slot: "cwd", Domain: "repository_path", SubstitutionLocation: 2},
-			{Slot: "untracked_scope", Domain: "enum", AllowedValues: []string{"select", "exclude"}, SubstitutionLocation: 3},
-			{Slot: "intended_untracked", Domain: "repo_relative_path", Schema: reviewIntendedUntrackedSelectionSchema, SubstitutionLocation: 5, Repeated: true},
+			{Slot: "untracked_scope", Domain: "enum", AllowedValues: []string{"select", "exclude"}, SubstitutionLocation: scopeLocation},
+			{Slot: "intended_untracked", Domain: "repo_relative_path", Schema: reviewIntendedUntrackedSelectionSchema, SubstitutionLocation: scopeLocation + 2, Repeated: true},
 		},
 	}
 }

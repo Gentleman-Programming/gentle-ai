@@ -44,11 +44,12 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 	// j81's RC-created repair fixture (#2839) follows the independently-owned
 	// #2621 journey.
 	// j82 proves #2127's reviewed full candidate can publish an unpublished
-	// monotonic subset without reopening review.
+	// monotonic subset without reopening review. j115 proves the provider-owned
+	// intended-untracked handoff preserves a workspace-overlay target.
 	// Bump this deliberately when a journey is added, and name it here: the
 	// count exists so a journey cannot appear or vanish unnoticed.
-	if got := len(seen); got != 83 {
-		t.Errorf("core journey count = %d, want 83", got)
+	if got := len(seen); got != 84 {
+		t.Errorf("core journey count = %d, want 84", got)
 	}
 	for id, found := range want {
 		if !found {

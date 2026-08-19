@@ -153,7 +153,7 @@
       "required": ["operation_token", "argument_tokens", "values"],
       "properties": {
         "operation_token": {"const": "status"},
-        "argument_tokens": {"type": "array", "minItems": 6, "maxItems": 6, "prefixItems": [{"const": "--contract=gentle-ai.review-integration/v2"}, {"const": "--next-transition=true"}, {"const": "--cwd={{cwd}}"}, {"const": "--untracked-scope={{untracked_scope}}"}, {"pattern": "^--expected-untracked-inventory=sha256:[0-9a-f]{64}$"}, {"const": "--intended-untracked={{intended_untracked}}"}], "items": false},
+        "argument_tokens": {"type": "array", "minItems": 7, "maxItems": 11, "prefixItems": [{"const": "--contract=gentle-ai.review-integration/v2"}, {"const": "--next-transition=true"}, {"const": "--cwd={{cwd}}"}], "items": {"type": "string", "minLength": 1, "pattern": "^--\\S+$"}},
         "values": {"type": "array", "minItems": 3, "maxItems": 3, "prefixItems": [{"$ref": "#/$defs/intended_untracked_cwd_value"}, {"$ref": "#/$defs/intended_untracked_scope_value"}, {"$ref": "#/$defs/intended_untracked_paths_value"}], "items": false}
       }
     },
@@ -163,11 +163,11 @@
     },
     "intended_untracked_scope_value": {
       "type": "object", "additionalProperties": false, "required": ["slot", "domain", "allowed_values", "substitution_location"],
-      "properties": {"slot": {"const": "untracked_scope"}, "domain": {"const": "enum"}, "allowed_values": {"const": ["select", "exclude"]}, "substitution_location": {"const": 3}}
+      "properties": {"slot": {"const": "untracked_scope"}, "domain": {"const": "enum"}, "allowed_values": {"const": ["select", "exclude"]}, "substitution_location": {"type": "integer", "minimum": 3, "maximum": 9}}
     },
     "intended_untracked_paths_value": {
       "type": "object", "additionalProperties": false, "required": ["slot", "domain", "schema", "substitution_location", "repeated"],
-      "properties": {"slot": {"const": "intended_untracked"}, "domain": {"const": "repo_relative_path"}, "schema": {"const": "gentle-ai.review-intended-untracked-selection/v1"}, "substitution_location": {"const": 5}, "repeated": {"const": true}}
+      "properties": {"slot": {"const": "intended_untracked"}, "domain": {"const": "repo_relative_path"}, "schema": {"const": "gentle-ai.review-intended-untracked-selection/v1"}, "substitution_location": {"type": "integer", "minimum": 5, "maximum": 10}, "repeated": {"const": true}}
     },
     "git_tree": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}
   },

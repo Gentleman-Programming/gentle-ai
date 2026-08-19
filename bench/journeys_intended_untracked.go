@@ -77,8 +77,81 @@ func selectIntendedUntrackedAndRunPrintedStart(r *journeyRun) error {
 	return nil
 }
 
+func selectOverlayIntendedUntrackedAndRunPrintedStart(r *journeyRun) error {
+	baseRef, err := gitOut(r.sandbox, r.sandbox.Repo, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	const runtimeAgent = "opencode"
+	initialObservation := r.run(productArgsFor(r, "review", "status", "--contract", reviewContractV2, "--next-transition", "--agent="+runtimeAgent, "--base-ref", baseRef, "--workspace-overlay"), false)
+	var initial waveCorrectionStatus
+	if err := decodeWaveObservation(initialObservation, &initial, "initial overlay intended-untracked STATUS"); err != nil {
+		return err
+	}
+	if initial.Projection.Kind != "base-workspace-overlay" || initial.NextTransition.Kind != "collect" ||
+		initial.NextTransition.ReasonCode != "intended_untracked_selection_required" || len(initial.NextTransition.Collect.Inputs) != 1 ||
+		initial.NextTransition.Collect.Inputs[0].Submission == nil {
+		return fmt.Errorf("initial overlay STATUS = %+v", initial)
+	}
+	if !slices.Contains(initial.NextTransition.Collect.Inputs[0].Submission.ArgumentTokens, "--agent="+runtimeAgent) {
+		return fmt.Errorf("initial overlay STATUS submission = %+v, want --agent=%s", initial.NextTransition.Collect.Inputs[0].Submission.ArgumentTokens, runtimeAgent)
+	}
+	selectedPaths := []string{"docs/chosen, file.md", "docs/second file,with comma.md"}
+	arguments, err := intendedUntrackedSubmissionArguments(r, *initial.NextTransition.Collect.Inputs[0].Submission, "select", selectedPaths)
+	if err != nil {
+		return err
+	}
+	selectedObservation := r.run(arguments, false)
+	var selected waveCorrectionStatus
+	if err := decodeWaveObservation(selectedObservation, &selected, "provider-owned overlay selected STATUS"); err != nil {
+		return err
+	}
+	if selected.Projection.Kind != "base-workspace-overlay" || selected.TargetIdentity == initial.TargetIdentity ||
+		!slices.Contains(selected.Projection.Paths, selectedPaths[0]) || !slices.Contains(selected.Projection.Paths, selectedPaths[1]) ||
+		slices.Contains(selected.Projection.Paths, "unrelated-credentials.env") || selected.NextTransition.Kind != "execute" ||
+		selected.NextTransition.Execute.Operation != "review.start" {
+		return fmt.Errorf("selected overlay STATUS = %+v", selected)
+	}
+	command := selected.NextTransition.Execute.Command
+	for _, token := range []string{
+		"gentle-ai review start ",
+		"--contract=" + reviewContractV2,
+		"--target=" + selected.TargetIdentity,
+		"--projection=workspace",
+		"--agent=" + runtimeAgent,
+		"--workspace-overlay=true",
+		"--untracked-scope=select",
+	} {
+		if !strings.Contains(command, token) {
+			return fmt.Errorf("selected overlay printed START = %q, want %q", command, token)
+		}
+	}
+	startArguments, err := printedCommandArguments(command)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(startArguments, "--agent="+runtimeAgent) {
+		return fmt.Errorf("selected overlay START arguments = %v, want --agent=%s", startArguments, runtimeAgent)
+	}
+	started := r.run(startArguments, false)
+	if started.ExitCode != 0 {
+		return fmt.Errorf("printed overlay START exited %d: %s", started.ExitCode, firstLine(started.Stderr))
+	}
+	if strings.Contains(started.Stdout+started.Stderr, "stale_target_identity") {
+		return fmt.Errorf("selected overlay START reported stale_target_identity: %s", started.Stdout+started.Stderr)
+	}
+	var authority waveOperationResult
+	if err := decodeWaveObservation(started, &authority, "selected overlay START"); err != nil {
+		return err
+	}
+	if authority.Operation != "review.start" || authority.TargetIdentity != selected.TargetIdentity || authority.TargetIdentity == initial.TargetIdentity {
+		return fmt.Errorf("selected overlay authority = %+v, selected target = %s, initial target = %s", authority, selected.TargetIdentity, initial.TargetIdentity)
+	}
+	return nil
+}
+
 func intendedUntrackedSubmissionArguments(r *journeyRun, descriptor waveSubmissionDescriptor, scope string, paths []string) ([]string, error) {
-	if descriptor.OperationToken != "status" || len(descriptor.ArgumentTokens) != 6 || len(descriptor.Values) != 3 {
+	if descriptor.OperationToken != "status" || len(descriptor.ArgumentTokens) == 0 || len(descriptor.Values) < 3 {
 		return nil, fmt.Errorf("intended-untracked submission = %+v", descriptor)
 	}
 	arguments := append([]string{"review", descriptor.OperationToken}, descriptor.ArgumentTokens...)
@@ -112,6 +185,16 @@ func intendedUntrackedJourneys() []Journey {
 				{Name: "fixture: repository", Fixture: baseRepo},
 				{Name: "fixture: mixed tracked and intended/unrelated untracked files", Fixture: mixedIntendedUntrackedCandidate},
 				{Name: "STATUS collects selection and printed START freezes only chosen paths", Requires: intendedUntrackedStatusCapability, Composite: selectIntendedUntrackedAndRunPrintedStart},
+			},
+		},
+		{
+			ID:     "j115-intended-untracked-overlay-selection-preserves-target",
+			Title:  "Workspace overlay STATUS preserves target kind and identity through provider-owned untracked selection and the printed START",
+			Source: "https://github.com/Gentleman-Programming/gentle-ai/pull/2880",
+			Steps: []Step{
+				{Name: "fixture: repository", Fixture: baseRepo},
+				{Name: "fixture: mixed tracked and intended/unrelated untracked files", Fixture: mixedIntendedUntrackedCandidate},
+				{Name: "overlay STATUS owns selection and its exact printed START", Requires: intendedUntrackedStatusCapability, Composite: selectOverlayIntendedUntrackedAndRunPrintedStart},
 			},
 		},
 	}

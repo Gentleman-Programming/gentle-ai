@@ -67,6 +67,161 @@ func TestIntendedUntrackedCollectionCarriesExecutableStatusSubmission(t *testing
 	assertSubmissionTransitionSchema(t, status)
 }
 
+func TestIntendedUntrackedSubmissionPreservesPlainWorkspaceSelectorsAndRuntime(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "tracked.txt", "tracked\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+
+	initial := intendedUntrackedStatus(t, repo, "--agent", "opencode")
+	if initial.Projection.Kind != reviewtransaction.TargetCurrentChanges || initial.Projection.Projection != reviewtransaction.ProjectionWorkspace {
+		t.Fatalf("plain initial projection = %#v", initial.Projection)
+	}
+	input := initial.NextTransition.Collect.Inputs[0]
+	if input.Submission == nil {
+		t.Fatal("plain initial STATUS omitted its submission descriptor")
+	}
+	for _, token := range []string{
+		"--contract=" + ReviewIntegrationContractV2,
+		"--next-transition=true",
+		"--agent=opencode",
+		"--projection=workspace",
+	} {
+		if !containsString(input.Submission.ArgumentTokens, token) {
+			t.Fatalf("plain submission tokens = %v, want %q", input.Submission.ArgumentTokens, token)
+		}
+	}
+
+	selected, err := executeIntendedUntrackedSubmission(t, *input.Submission, repo, "select", "candidate.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Projection.Kind != reviewtransaction.TargetCurrentChanges || selected.Projection.Projection != reviewtransaction.ProjectionWorkspace ||
+		selected.TargetIdentity == initial.TargetIdentity || !containsString(selected.Projection.Paths, "candidate.txt") {
+		t.Fatalf("selected plain projection = %#v, target=%s initial=%s", selected.Projection, selected.TargetIdentity, initial.TargetIdentity)
+	}
+	if selected.NextTransition == nil || selected.NextTransition.Execute == nil {
+		t.Fatalf("selected plain transition = %#v", selected.NextTransition)
+	}
+	arguments, err := reviewTransitionArgumentMap(selected.NextTransition.Execute.Arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if arguments["agent"] != "opencode" || arguments["projection"] != string(reviewtransaction.ProjectionWorkspace) {
+		t.Fatalf("selected plain START arguments = %#v", arguments)
+	}
+}
+
+func TestIntendedUntrackedSubmissionPreservesWorkspaceOverlaySelectorsAndIdentity(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	baseRef := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+	const runtimeAgent = "opencode"
+
+	initial := intendedUntrackedStatus(t, repo, "--agent", runtimeAgent, "--base-ref", baseRef, "--workspace-overlay")
+	if initial.Projection.Kind != reviewtransaction.TargetBaseWorkspaceOverlay || initial.Projection.Projection != reviewtransaction.ProjectionWorkspace {
+		t.Fatalf("overlay initial projection = %#v", initial.Projection)
+	}
+	input := initial.NextTransition.Collect.Inputs[0]
+	if input.Submission == nil {
+		t.Fatal("overlay initial STATUS omitted its submission descriptor")
+	}
+	for _, token := range []string{
+		"--agent=" + runtimeAgent,
+		"--projection=workspace",
+		"--base-ref=" + baseRef,
+		"--workspace-overlay=true",
+	} {
+		if !containsString(input.Submission.ArgumentTokens, token) {
+			t.Fatalf("overlay submission tokens = %v, want %q", input.Submission.ArgumentTokens, token)
+		}
+	}
+
+	selected, err := executeIntendedUntrackedSubmission(t, *input.Submission, repo, "select", "candidate.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Projection.Kind != reviewtransaction.TargetBaseWorkspaceOverlay || selected.Projection.Projection != reviewtransaction.ProjectionWorkspace ||
+		selected.Projection.BaseTree != initial.Projection.BaseTree || selected.TargetIdentity == initial.TargetIdentity ||
+		!containsString(selected.Projection.Paths, "candidate.txt") {
+		t.Fatalf("selected overlay projection = %#v, target=%s initial=%s", selected.Projection, selected.TargetIdentity, initial.TargetIdentity)
+	}
+	if selected.NextTransition == nil || selected.NextTransition.Execute == nil || selected.NextTransition.Execute.Operation != "review.start" {
+		t.Fatalf("selected overlay transition = %#v", selected.NextTransition)
+	}
+	arguments, err := reviewTransitionArgumentMap(selected.NextTransition.Execute.Arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if arguments["agent"] != runtimeAgent {
+		t.Fatalf("selected overlay START arguments = %#v, want agent=%q", arguments, runtimeAgent)
+	}
+	for _, token := range []string{"--agent=" + runtimeAgent, "--projection=workspace", "--workspace-overlay=true"} {
+		if !strings.Contains(selected.NextTransition.Execute.Command, token) {
+			t.Fatalf("selected overlay command = %q, want %q", selected.NextTransition.Execute.Command, token)
+		}
+	}
+	var question ReviewIntegrationConsentResult
+	decodeStrictReviewJSON(t, executePrintedReview(t, repo, selected.NextTransition.Execute.Command), &question)
+	invocation := ""
+	for _, choice := range question.Choices {
+		if strings.Contains(choice.Invocation, "--consent granted") {
+			invocation = choice.Invocation
+			break
+		}
+	}
+	if invocation == "" {
+		t.Fatalf("overlay consent question omitted granted invocation: %#v", question.Choices)
+	}
+	if !strings.Contains(invocation, "--agent "+runtimeAgent) {
+		t.Fatalf("overlay granted START = %q, want agent=%q", invocation, runtimeAgent)
+	}
+	started := decodeNegotiatedReviewStart(t, executePrintedReview(t, repo, invocation))
+	if started.TargetMode != reviewtransaction.TargetBaseWorkspaceOverlay || negotiatedStartTarget(started) != selected.TargetIdentity {
+		t.Fatalf("printed overlay START = %#v, selected target=%s", started, selected.TargetIdentity)
+	}
+	staleCommand := strings.Replace(selected.NextTransition.Execute.Command, selected.TargetIdentity, initial.TargetIdentity, 1)
+	words, err := SplitPrintedCommandWords(staleCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReview(words[2:], &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "stale_target_identity") {
+		t.Fatalf("stale overlay START = %v, want stale_target_identity", err)
+	}
+}
+
+func TestIntendedUntrackedSelectionKeepsV1AndUnnegotiatedFlows(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "tracked.txt", "tracked\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, "candidate.txt", "candidate\n", 0o644)
+
+	var statusOutput bytes.Buffer
+	if err := RunReviewStatus([]string{"--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo}, &statusOutput); err != nil {
+		t.Fatalf("v1 intended-untracked STATUS: %v\n%s", err, statusOutput.String())
+	}
+	var legacy ReviewTargetStatusResult
+	if err := json.Unmarshal(statusOutput.Bytes(), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Contract != ReviewIntegrationContractV1 || legacy.NextTransition == nil || legacy.NextTransition.Collect == nil || len(legacy.NextTransition.Collect.Inputs) != 1 {
+		t.Fatalf("v1 intended-untracked STATUS = %#v", legacy)
+	}
+	if legacy.NextTransition.Collect.Inputs[0].Submission != nil {
+		t.Fatalf("v1 intended-untracked STATUS carried a v2 submission: %#v", legacy.NextTransition.Collect.Inputs[0].Submission)
+	}
+	arguments, err := reviewTransitionArgumentMap(legacy.NextTransition.Collect.Inputs[0].Arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var startOutput bytes.Buffer
+	if err := RunReviewFacadeStart([]string{
+		"--cwd", repo, "--lineage", "unnegotiated-intended", "--untracked-scope=select",
+		"--expected-untracked-inventory=" + arguments["expected_untracked_inventory"], "--intended-untracked=candidate.txt",
+	}, &startOutput); err != nil {
+		t.Fatalf("unnegotiated intended-untracked START: %v\n%s", err, startOutput.String())
+	}
+}
+
 func executeIntendedUntrackedSubmission(t *testing.T, descriptor ReviewTransitionSubmission, repo, scope string, paths ...string) (ReviewTargetStatusResult, error) {
 	t.Helper()
 	arguments := intendedUntrackedSubmissionArguments(t, descriptor, repo, scope, paths...)

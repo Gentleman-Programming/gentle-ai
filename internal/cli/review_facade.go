@@ -885,6 +885,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		result := newReviewTargetStatusResultForContract(native, *contract)
 		result.intendedUntracked = intendedScope
+		result.intendedUntrackedSubmission = reviewIntendedUntrackedSubmissionContext{
+			Selector: *selector, Runtime: string(runtime), Lineage: strings.TrimSpace(*lineage),
+		}
 		if native.Applicability == reviewtransaction.TargetApplicabilityCorrupted &&
 			native.Action == reviewtransaction.TargetStatusActionRepairAuthority {
 			repair, repairErr := reviewtransaction.AssessAuthorityRepairAtRepositoryRoot(ctx, root)
