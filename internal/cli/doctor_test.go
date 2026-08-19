@@ -825,19 +825,19 @@ func TestCheckManagedOpenCodeActivationRequiresOwnedLauncherResolution(t *testin
 	if err := os.WriteFile(managed, []byte("#!/bin/sh\n# "+opencode.OwnershipMarker+" belongs to user\necho user\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusFail {
+	if got := checkManagedOpenCodeStatus(home, model.OpenCodeBackgroundOn); got.Status != CheckStatusFail {
 		t.Fatalf("incidental marker result = %#v", got)
 	}
 	if err := os.WriteFile(managed, []byte("#!/bin/sh\n# "+opencode.OwnershipMarker+"\nset -eu\nif [ -z \"${OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS+x}\" ]; then\n  export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\nfi\nexec '/old/opencode' \"$@\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusPass {
+	if got := checkManagedOpenCodeStatus(home, model.OpenCodeBackgroundOn); got.Status != CheckStatusPass {
 		t.Fatalf("managed launcher result = %#v", got)
 	}
 	if err := os.Chmod(managed, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusFail {
+	if got := checkManagedOpenCodeStatus(home, model.OpenCodeBackgroundOn); got.Status != CheckStatusFail {
 		t.Fatalf("non-executable managed launcher result = %#v", got)
 	}
 }
@@ -857,7 +857,7 @@ func TestCheckManagedOpenCodeActivationRejectsExternalAndSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	pathValueFn = func() string { return externalDir }
-	got := checkManagedOpenCodeActivation(home)
+	got := checkManagedOpenCodeStatus(home, model.OpenCodeBackgroundOn)
 	if got.Status != CheckStatusFail || !strings.Contains(got.Detail, "start a new supported login shell") {
 		t.Fatalf("external OpenCode result = %#v, want actionable failure", got)
 	}
@@ -869,7 +869,7 @@ func TestCheckManagedOpenCodeActivationRejectsExternalAndSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	pathValueFn = func() string { return filepath.Dir(managed) }
-	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusPass {
+	if got := checkManagedOpenCodeStatus(home, model.OpenCodeBackgroundOn); got.Status != CheckStatusPass {
 		t.Fatalf("managed OpenCode result = %#v, want pass", got)
 	}
 	if runtime.GOOS != "windows" {
@@ -880,7 +880,7 @@ func TestCheckManagedOpenCodeActivationRejectsExternalAndSymlink(t *testing.T) {
 		if err := os.Remove(managed); err != nil || os.Symlink(linkTarget, managed) != nil {
 			t.Fatal("replace managed launcher with symlink")
 		}
-		if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusFail {
+		if got := checkManagedOpenCodeStatus(home, model.OpenCodeBackgroundOn); got.Status != CheckStatusFail {
 			t.Fatalf("symlink result = %#v, want failure", got)
 		}
 	}
@@ -927,7 +927,7 @@ exec '/old/opencode' "$@"
 				t.Chdir(workingDir)
 			}
 			activationEffective := opencode.ManagedLauncherEffective(tt.path, managed, "linux")
-			doctorEffective := checkManagedOpenCodeActivation(home).Status == CheckStatusPass
+			doctorEffective := checkManagedOpenCodeStatus(home, model.OpenCodeBackgroundOn).Status == CheckStatusPass
 			if activationEffective != doctorEffective {
 				t.Fatalf("activation effective = %t, doctor effective = %t for PATH %q", activationEffective, doctorEffective, tt.path)
 			}
@@ -949,7 +949,7 @@ func TestCheckManagedOpenCodeActivationWindowsFailsClosedAsUnknown(t *testing.T)
 	home := t.TempDir()
 	pathValueFn = func() string { return t.TempDir() }
 
-	got := checkManagedOpenCodeActivation(home)
+	got := checkManagedOpenCodeStatus(home, model.OpenCodeBackgroundOn)
 	if got.Status != CheckStatusFail {
 		t.Fatalf("Windows unverifiable activation = %#v, want fail-closed check", got)
 	}
