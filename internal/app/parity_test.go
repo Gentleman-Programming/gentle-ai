@@ -162,6 +162,7 @@ func TestGuardFlowLinuxDryRunPropagatesDecision(t *testing.T) {
 }
 
 func TestRunArgsNoCommandLaunchesTUI(t *testing.T) {
+	withTerminalStreams(t)
 	origRunTUI := runTUI
 	t.Cleanup(func() { runTUI = origRunTUI })
 	runTUI = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
