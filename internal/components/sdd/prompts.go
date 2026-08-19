@@ -1,6 +1,7 @@
 package sdd
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	opencodemodel "github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 const (
@@ -101,6 +103,55 @@ func WriteSharedPromptFiles(homeDir string, phaseCapabilities map[string]string,
 		// OpenCode phases reference these shared files via {file:...}
 		// indirection, which the in-settings injection deliberately skips —
 		// the contract must land here or those executors would miss it.
+		content = injectLanguageContractIntoPrompt(content)
+
+		path := filepath.Join(promptDir, phase+".md")
+		result, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
+		if err != nil {
+			return false, err
+		}
+
+		if result.Changed {
+			anyChanged = true
+		}
+	}
+
+	return anyChanged, nil
+}
+
+// WriteDevAgentPromptFiles generates the prompt files for the dev-orchestrator
+// role family by reading the canonical Claude agent definitions, stripping
+// their frontmatter, and rewriting paths for the OpenCode environment.
+func WriteDevAgentPromptFiles(homeDir string, codeGraphGuidance ...string) (bool, error) {
+	promptDir := SharedPromptDir(homeDir)
+	anyChanged := false
+	guidance := ""
+	if len(codeGraphGuidance) > 0 {
+		guidance = codeGraphGuidance[0]
+	}
+
+	for _, phase := range opencodemodel.DevRolePhases() {
+		// Read the canonical Claude agent file
+		assetPath := "claude/agents/" + phase + ".md"
+		content, err := assets.Read(assetPath)
+		if err != nil {
+			return false, fmt.Errorf("read canonical agent %q: %w", assetPath, err)
+		}
+
+		// Strip the YAML frontmatter
+		if strings.HasPrefix(content, "---\n") {
+			if endIdx := strings.Index(content[4:], "\n---"); endIdx >= 0 {
+				// 4 for "---\n", plus 4 for "\n---" = 8
+				content = content[4+endIdx+4:]
+				// trim any leading newlines that might be left after the frontmatter
+				content = strings.TrimPrefix(content, "\n")
+			}
+		}
+
+		// Adapt for OpenCode: rewrite .claude paths to .config/opencode
+		content = strings.ReplaceAll(content, "~/.claude/skills/", "~/.config/opencode/skills/")
+
+		content = injectCodeGraphGuidanceIntoPrompt(content, guidance)
 		content = injectLanguageContractIntoPrompt(content)
 
 		path := filepath.Join(promptDir, phase+".md")

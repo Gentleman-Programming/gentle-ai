@@ -517,6 +517,12 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					return InjectionResult{}, fmt.Errorf("write shared SDD prompt files: %w", promptsErr)
 				}
 				changed = changed || promptsChanged
+			} else {
+				devPromptsChanged, devPromptsErr := WriteDevAgentPromptFiles(homeDir, opts.CodeGraphGuidanceMarkdown)
+				if devPromptsErr != nil {
+					return InjectionResult{}, fmt.Errorf("write dev-agent prompt files: %w", devPromptsErr)
+				}
+				changed = changed || devPromptsChanged
 			}
 
 			overlayBytes, err = inlineOpenCodeSDDPrompts(overlayBytes, homeDir, settingsPath, adapter.Agent(), opts.PreserveOpenCodeOrchestratorPrompt, opts.orchestratorPolicyRenderOptions(), opts.CodeGraphGuidanceMarkdown)
@@ -924,7 +930,11 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 	// Replace sub-agent prompt placeholders with settings-relative file references.
 	// The placeholder format is __PROMPT_FILE_{phase}__ where {phase} is the agent name.
 	if homeDir != "" {
-		for _, phase := range subAgentPhaseOrder {
+		var allPlaceholders []string
+		allPlaceholders = append(allPlaceholders, subAgentPhaseOrder...)
+		allPlaceholders = append(allPlaceholders, opencode.DevRolePhases()...)
+
+		for _, phase := range allPlaceholders {
 			agentRaw, exists := agentsMap[phase]
 			if !exists {
 				continue
