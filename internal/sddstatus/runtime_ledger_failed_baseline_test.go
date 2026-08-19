@@ -173,16 +173,17 @@ func TestRuntimeRemediationReplayDecidesWriteGuardPredicate(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			replay := &runtimeReplay{Status: RuntimeStatus{
+			replay := &runtimeReplay{Accounting: runtimeAccounting{buckets: map[runtimeObjectiveAccountingKey]runtimeObjectiveAccounting{{"objective", 1}: {attempts: 2}}, nextOrdinal: 3}, Status: RuntimeStatus{
 				Objective: &RuntimeObjective{ID: "objective", Generation: 1, MaxAttempts: 3, MaxChangedLines: 10},
 				Attempts: []RuntimeAttempt{
 					{ObjectiveID: "objective", ObjectiveGeneration: 1, Outcome: AttemptFailed, EvidenceRevision: failedEvidence,
 						FinishCandidateIdentity: runtimeTestHash('f'), FinishCandidateTree: failedTree},
-					{Outcome: AttemptRunning},
+					{Ordinal: 2, ObjectiveID: "objective", ObjectiveGeneration: 1, Outcome: AttemptRunning},
 				},
-				ActiveAttempt: &RuntimeAttempt{Ordinal: 2, BeginCandidateIdentity: runtimeTestHash('0'), BeginCandidateTree: beginTree},
+				ActiveAttempt: &RuntimeAttempt{Ordinal: 2, ObjectiveID: "objective", ObjectiveGeneration: 1, BeginCandidateIdentity: runtimeTestHash('0'), BeginCandidateTree: beginTree},
 				LastReset:     testCase.reset,
 			}}
+			replay.Status.initializeRuntimeOwnership()
 			err := applyRuntimeFinishEvent(replay, &runtimeFinishEvent{
 				Ordinal: 2, FinishCandidateIdentity: runtimeTestHash('1'), FinishCandidateTree: testCase.finishTree,
 				Outcome: AttemptPassed, EvidenceRevision: runtimeTestHash('b'), RemediatesEvidenceRevision: failedEvidence,
