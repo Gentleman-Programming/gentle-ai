@@ -100,6 +100,84 @@ func TestIntendedUntrackedSubmissionArgumentsExpandRepeatedPathsInOrder(t *testi
 	}
 }
 
+func TestIntendedUntrackedSubmissionArgumentsRejectMalformedMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		edit func(*waveSubmissionDescriptor)
+		want string
+	}{
+		{
+			name: "unknown slot",
+			edit: func(descriptor *waveSubmissionDescriptor) { descriptor.Values[0].Slot = "unknown" },
+			want: "unknown slot",
+		},
+		{
+			name: "negative substitution location",
+			edit: func(descriptor *waveSubmissionDescriptor) { descriptor.Values[0].SubstitutionLocation = -1 },
+			want: "substitution location",
+		},
+		{
+			name: "out-of-range substitution location",
+			edit: func(descriptor *waveSubmissionDescriptor) {
+				descriptor.Values[0].SubstitutionLocation = len(descriptor.ArgumentTokens)
+			},
+			want: "substitution location",
+		},
+		{
+			name: "missing placeholder",
+			edit: func(descriptor *waveSubmissionDescriptor) { descriptor.ArgumentTokens[2] = "--cwd=/already-set" },
+			want: "placeholder",
+		},
+		{
+			name: "non-final repeated slot",
+			edit: func(descriptor *waveSubmissionDescriptor) { descriptor.Values[0].Repeated = true },
+			want: "final",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			descriptor := intendedUntrackedSubmissionDescriptor()
+			test.edit(&descriptor)
+			var (
+				err      error
+				panicked any
+			)
+			func() {
+				defer func() { panicked = recover() }()
+				_, err = intendedUntrackedSubmissionArguments(
+					&journeyRun{sandbox: &Sandbox{Repo: filepath.Join(t.TempDir(), "repo")}},
+					descriptor, "select", []string{"first path", "second path"},
+				)
+			}()
+			if panicked != nil {
+				t.Fatalf("submission panicked: %v", panicked)
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("submission error = %v, want an error containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func intendedUntrackedSubmissionDescriptor() waveSubmissionDescriptor {
+	return waveSubmissionDescriptor{
+		OperationToken: "status",
+		ArgumentTokens: []string{
+			"--contract=" + reviewContractV2,
+			"--next-transition=true",
+			"--cwd={{cwd}}",
+			"--projection=workspace",
+			"--untracked-scope={{untracked_scope}}",
+			"--expected-untracked-inventory=sha256:" + strings.Repeat("a", 64),
+			"--intended-untracked={{intended_untracked}}",
+		},
+		Values: []waveSubmissionValue{
+			{Slot: "cwd", SubstitutionLocation: 2},
+			{Slot: "untracked_scope", SubstitutionLocation: 4},
+			{Slot: "intended_untracked", SubstitutionLocation: 6, Repeated: true},
+		},
+	}
+}
+
 func malformedIntendedUntrackedJourneyRun(t *testing.T, output string, overlay bool) *journeyRun {
 	t.Helper()
 	root := t.TempDir()

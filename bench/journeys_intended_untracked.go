@@ -201,21 +201,34 @@ func intendedUntrackedSubmissionArguments(r *journeyRun, descriptor waveSubmissi
 	}
 	arguments := append([]string{"review", descriptor.OperationToken}, descriptor.ArgumentTokens...)
 	values := map[string][]string{"cwd": {r.sandbox.Repo}, "untracked_scope": {scope}, "intended_untracked": paths}
-	for _, slot := range descriptor.Values {
+	for position, slot := range descriptor.Values {
+		slotValues, ok := values[slot.Slot]
+		if !ok {
+			return nil, fmt.Errorf("intended-untracked submission has unknown slot %q", slot.Slot)
+		}
+		if slot.Repeated && position != len(descriptor.Values)-1 {
+			return nil, fmt.Errorf("intended-untracked submission repeated slot %q must be final", slot.Slot)
+		}
+		if slot.SubstitutionLocation < 0 || slot.SubstitutionLocation >= len(descriptor.ArgumentTokens) {
+			return nil, fmt.Errorf("intended-untracked submission slot %q has substitution location %d outside argument tokens", slot.Slot, slot.SubstitutionLocation)
+		}
 		index := slot.SubstitutionLocation + 2
 		placeholder := "{{" + slot.Slot + "}}"
+		if !strings.Contains(arguments[index], placeholder) {
+			return nil, fmt.Errorf("intended-untracked submission slot %q placeholder %q missing from argument token %q", slot.Slot, placeholder, arguments[index])
+		}
 		if slot.Repeated {
-			replacements := make([]string, 0, len(values[slot.Slot]))
-			for _, value := range values[slot.Slot] {
+			replacements := make([]string, 0, len(slotValues))
+			for _, value := range slotValues {
 				replacements = append(replacements, strings.Replace(arguments[index], placeholder, value, 1))
 			}
 			arguments = slices.Replace(arguments, index, index+1, replacements...)
 			continue
 		}
-		if len(values[slot.Slot]) != 1 {
+		if len(slotValues) != 1 {
 			return nil, fmt.Errorf("submission slot %q requires one value", slot.Slot)
 		}
-		arguments[index] = strings.Replace(arguments[index], placeholder, values[slot.Slot][0], 1)
+		arguments[index] = strings.Replace(arguments[index], placeholder, slotValues[0], 1)
 	}
 	return arguments, nil
 }
