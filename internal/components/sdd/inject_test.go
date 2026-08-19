@@ -7454,7 +7454,10 @@ exit 0
 	if !strings.Contains(log, "argv[4]=--no-gitignore") {
 		t.Fatalf("missing argv[4]=--no-gitignore:\n%s", log)
 	}
-	wantCwdArg := fmt.Sprintf("argv[5]=%s", projectDir)
+	if !strings.Contains(log, "argv[5]=--cwd") {
+		t.Fatalf("missing argv[5]=--cwd:\n%s", log)
+	}
+	wantCwdArg := fmt.Sprintf("argv[6]=%s", projectDir)
 	if !strings.Contains(log, wantCwdArg) {
 		t.Fatalf("missing %q in argv (special-character CLAUDE_PROJECT_DIR did not survive argument reconstruction):\nlog:\n%s\npwsh output:\n%s", wantCwdArg, log, pwshOutput)
 	}
