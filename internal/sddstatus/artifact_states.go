@@ -20,17 +20,17 @@ type artifactStates struct {
 	Gate1Scope          ArtifactState
 	Gate2Technical      ArtifactState
 	Gate3Implementation ArtifactState
-	Specs         ArtifactState
-	Design        ArtifactState
-	Tasks         ArtifactState
-	ApplyProgress ArtifactState
-	VerifyReport  ArtifactState
-	ReviewPolicy  ArtifactState
-	ReviewLedger  ArtifactState
-	ReviewReceipt ArtifactState
-	ReviewBundle  ArtifactState
-	ReviewContext ArtifactState
-	ReviewState   ArtifactState
+	Specs               ArtifactState
+	Design              ArtifactState
+	Tasks               ArtifactState
+	ApplyProgress       ArtifactState
+	VerifyReport        ArtifactState
+	ReviewPolicy        ArtifactState
+	ReviewLedger        ArtifactState
+	ReviewReceipt       ArtifactState
+	ReviewBundle        ArtifactState
+	ReviewContext       ArtifactState
+	ReviewState         ArtifactState
 }
 
 // artifactStateField binds one wire key to its artifactStates field and to the

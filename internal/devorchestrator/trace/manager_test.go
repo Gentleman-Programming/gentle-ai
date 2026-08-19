@@ -45,7 +45,7 @@ func TestTraceabilityManager_InvalidTransition_MissingImplements(t *testing.T) {
 
 	manager := NewManager()
 	err = manager.ValidatePhaseTransition(sourcePath, destPath)
-	
+
 	if err == nil {
 		t.Fatal("Expected error for invalid transition, got nil")
 	}
@@ -72,7 +72,7 @@ func TestTraceabilityManager_InvalidTransition_MismatchedID(t *testing.T) {
 
 	manager := NewManager()
 	err = manager.ValidatePhaseTransition(sourcePath, destPath)
-	
+
 	if err == nil {
 		t.Fatal("Expected error for mismatched ID, got nil")
 	}

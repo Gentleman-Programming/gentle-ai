@@ -1299,7 +1299,7 @@ func ptrValue(value *string) string {
 
 func TestTargetRepositoriesInjection(t *testing.T) {
 	tempDir := t.TempDir()
-	
+
 	// mock repository-registry.md
 	registryDir := filepath.Join(tempDir, "docs")
 	if err := os.MkdirAll(registryDir, 0755); err != nil {

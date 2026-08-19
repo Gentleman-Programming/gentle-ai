@@ -62,19 +62,19 @@ const (
 type Phase string
 
 const (
-	PhaseExplore          Phase = "explore"
-	PhaseBlueprint        Phase = "blueprint"
-	PhasePropose          Phase = "propose"
-	PhaseApproveGate1     Phase = "approve-gate-1"
-	PhaseApproveGate2     Phase = "approve-gate-2"
-	PhaseApproveGate3     Phase = "approve-gate-3"
-	PhaseSpec      Phase = "spec"
-	PhaseDesign    Phase = "design"
-	PhaseTasks     Phase = "tasks"
-	PhaseApply     Phase = "apply"
-	PhaseVerify    Phase = "verify"
-	PhaseRemediate Phase = "remediate"
-	PhaseArchive   Phase = "archive"
+	PhaseExplore      Phase = "explore"
+	PhaseBlueprint    Phase = "blueprint"
+	PhasePropose      Phase = "propose"
+	PhaseApproveGate1 Phase = "approve-gate-1"
+	PhaseApproveGate2 Phase = "approve-gate-2"
+	PhaseApproveGate3 Phase = "approve-gate-3"
+	PhaseSpec         Phase = "spec"
+	PhaseDesign       Phase = "design"
+	PhaseTasks        Phase = "tasks"
+	PhaseApply        Phase = "apply"
+	PhaseVerify       Phase = "verify"
+	PhaseRemediate    Phase = "remediate"
+	PhaseArchive      Phase = "archive"
 )
 
 type ArtifactPaths struct {
@@ -84,17 +84,17 @@ type ArtifactPaths struct {
 	Gate1Scope          []string `json:"gate1Scope"`
 	Gate2Technical      []string `json:"gate2Technical"`
 	Gate3Implementation []string `json:"gate3Implementation"`
-	Specs         []string `json:"specs"`
-	Design        []string `json:"design"`
-	Tasks         []string `json:"tasks"`
-	ApplyProgress []string `json:"applyProgress"`
-	VerifyReport  []string `json:"verifyReport"`
-	ReviewPolicy  []string `json:"reviewPolicy"`
-	ReviewLedger  []string `json:"reviewLedger"`
-	ReviewReceipt []string `json:"reviewReceipt"`
-	ReviewBundle  []string `json:"reviewBundle"`
-	ReviewContext []string `json:"reviewContext"`
-	ReviewState   []string `json:"reviewState"`
+	Specs               []string `json:"specs"`
+	Design              []string `json:"design"`
+	Tasks               []string `json:"tasks"`
+	ApplyProgress       []string `json:"applyProgress"`
+	VerifyReport        []string `json:"verifyReport"`
+	ReviewPolicy        []string `json:"reviewPolicy"`
+	ReviewLedger        []string `json:"reviewLedger"`
+	ReviewReceipt       []string `json:"reviewReceipt"`
+	ReviewBundle        []string `json:"reviewBundle"`
+	ReviewContext       []string `json:"reviewContext"`
+	ReviewState         []string `json:"reviewState"`
 }
 
 type PlanningHome struct {
@@ -134,12 +134,12 @@ type Dependencies struct {
 	Gate1Scope          DependencyState `json:"gate1Scope"`
 	Gate2Technical      DependencyState `json:"gate2Technical"`
 	Gate3Implementation DependencyState `json:"gate3Implementation"`
-	Specs    DependencyState `json:"specs"`
-	Design   DependencyState `json:"design"`
-	Tasks    DependencyState `json:"tasks"`
-	Apply    DependencyState `json:"apply"`
-	Verify   DependencyState `json:"verify"`
-	Archive  DependencyState `json:"archive"`
+	Specs               DependencyState `json:"specs"`
+	Design              DependencyState `json:"design"`
+	Tasks               DependencyState `json:"tasks"`
+	Apply               DependencyState `json:"apply"`
+	Verify              DependencyState `json:"verify"`
+	Archive             DependencyState `json:"archive"`
 }
 
 type ActionContext struct {
@@ -261,8 +261,8 @@ type Status struct {
 	// one repo -- which is every legacy fixture -- so the wire is
 	// byte-identical to before this field existed. See
 	// applyMultiRepoApplyGate.
-	RepoProgress      *RepoProgress      `json:"repoProgress,omitempty"`
-	PhaseInstructions *PhaseInstructions `json:"phaseInstructions,omitempty"`
+	RepoProgress       *RepoProgress           `json:"repoProgress,omitempty"`
+	PhaseInstructions  *PhaseInstructions      `json:"phaseInstructions,omitempty"`
 	TargetRepositories []repository.Repository `json:"targetRepositories,omitempty"`
 	// Engine is dev-orchestrator-installable-owner's change-engine-ownership
 	// field (SPEC-002): additive and `omitempty`, set only when
@@ -272,9 +272,9 @@ type Status struct {
 	// leaves Engine as the empty string, so the wire is byte-identical to
 	// before this field existed. See applyForeignEngineGate for the
 	// dependency-blocking gate this field feeds.
-	Engine            string             `json:"engine,omitempty"`
-	NextRecommended   string             `json:"nextRecommended"`
-	BlockedReasons    []string           `json:"blockedReasons"`
+	Engine          string   `json:"engine,omitempty"`
+	NextRecommended string   `json:"nextRecommended"`
+	BlockedReasons  []string `json:"blockedReasons"`
 	// runtimeAttemptTokens carries the ledger's live attempt tokens alongside
 	// RuntimeStatus so status can ask the one readiness predicate the same
 	// question compact acquire asks, and name the same continuation acquire
@@ -548,17 +548,17 @@ func Resolve(options ResolveOptions) (Status, error) {
 		Gate1Scope:          singleArtifactState(artifactPaths.Gate1Scope),
 		Gate2Technical:      singleArtifactState(artifactPaths.Gate2Technical),
 		Gate3Implementation: singleArtifactState(artifactPaths.Gate3Implementation),
-		Specs:         multiArtifactState(artifactPaths.Specs, filepath.Join(changeRoot, "specs")),
-		Design:        singleArtifactState(artifactPaths.Design),
-		Tasks:         singleArtifactState(artifactPaths.Tasks),
-		ApplyProgress: multiArtifactState(artifactPaths.ApplyProgress, filepath.Join(changeRoot, "apply-progress")),
-		VerifyReport:  singleArtifactState(artifactPaths.VerifyReport),
-		ReviewPolicy:  singleArtifactState(artifactPaths.ReviewPolicy),
-		ReviewLedger:  singleArtifactState(artifactPaths.ReviewLedger),
-		ReviewReceipt: singleArtifactState(artifactPaths.ReviewReceipt),
-		ReviewBundle:  singleArtifactState(artifactPaths.ReviewBundle),
-		ReviewContext: singleArtifactState(artifactPaths.ReviewContext),
-		ReviewState:   singleArtifactState(artifactPaths.ReviewState),
+		Specs:               multiArtifactState(artifactPaths.Specs, filepath.Join(changeRoot, "specs")),
+		Design:              singleArtifactState(artifactPaths.Design),
+		Tasks:               singleArtifactState(artifactPaths.Tasks),
+		ApplyProgress:       multiArtifactState(artifactPaths.ApplyProgress, filepath.Join(changeRoot, "apply-progress")),
+		VerifyReport:        singleArtifactState(artifactPaths.VerifyReport),
+		ReviewPolicy:        singleArtifactState(artifactPaths.ReviewPolicy),
+		ReviewLedger:        singleArtifactState(artifactPaths.ReviewLedger),
+		ReviewReceipt:       singleArtifactState(artifactPaths.ReviewReceipt),
+		ReviewBundle:        singleArtifactState(artifactPaths.ReviewBundle),
+		ReviewContext:       singleArtifactState(artifactPaths.ReviewContext),
+		ReviewState:         singleArtifactState(artifactPaths.ReviewState),
 	}.statesFor(ArtifactStoreOpenSpec)
 	taskProgress, err := countTaskProgress(firstPath(artifactPaths.Tasks))
 	if err != nil {
@@ -1097,17 +1097,17 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		Gate1Scope:          engramArtifactState(artifactsByType["gate-1-scope"]),
 		Gate2Technical:      engramArtifactState(artifactsByType["gate-2-technical"]),
 		Gate3Implementation: engramArtifactState(artifactsByType["gate-3-implementation"]),
-		Specs:         engramArtifactState(artifactsByType["spec"]),
-		Design:        engramArtifactState(artifactsByType["design"]),
-		Tasks:         engramArtifactState(artifactsByType["tasks"]),
-		ApplyProgress: engramArtifactState(artifactsByType["apply-progress"]),
-		VerifyReport:  engramArtifactState(artifactsByType["verify-report"]),
-		ReviewPolicy:  engramArtifactState(artifactsByType["review/policy"]),
-		ReviewLedger:  engramArtifactState(artifactsByType["review/ledger"]),
-		ReviewReceipt: engramArtifactState(artifactsByType["review/receipt"]),
-		ReviewBundle:  engramArtifactState(artifactsByType["review/chain-bundle"]),
-		ReviewContext: engramArtifactState(artifactsByType["review/gate-context"]),
-		ReviewState:   engramArtifactState(artifactsByType["review/transaction"]),
+		Specs:               engramArtifactState(artifactsByType["spec"]),
+		Design:              engramArtifactState(artifactsByType["design"]),
+		Tasks:               engramArtifactState(artifactsByType["tasks"]),
+		ApplyProgress:       engramArtifactState(artifactsByType["apply-progress"]),
+		VerifyReport:        engramArtifactState(artifactsByType["verify-report"]),
+		ReviewPolicy:        engramArtifactState(artifactsByType["review/policy"]),
+		ReviewLedger:        engramArtifactState(artifactsByType["review/ledger"]),
+		ReviewReceipt:       engramArtifactState(artifactsByType["review/receipt"]),
+		ReviewBundle:        engramArtifactState(artifactsByType["review/chain-bundle"]),
+		ReviewContext:       engramArtifactState(artifactsByType["review/gate-context"]),
+		ReviewState:         engramArtifactState(artifactsByType["review/transaction"]),
 	}.statesFor(ArtifactStoreEngram)
 	taskProgress := countTaskProgressText(artifactsByType["tasks"].Content)
 	specCounts := countSpecRequirementsAndScenarios([]string{artifactsByType["spec"].Content})
@@ -1827,12 +1827,12 @@ func baseStatus(store ArtifactStore, workspaceRoot string, grantedRoots []string
 			Gate1Scope:          DependencyBlocked,
 			Gate2Technical:      DependencyBlocked,
 			Gate3Implementation: DependencyBlocked,
-			Specs:    DependencyBlocked,
-			Design:   DependencyBlocked,
-			Tasks:    DependencyBlocked,
-			Apply:    DependencyBlocked,
-			Verify:   DependencyBlocked,
-			Archive:  DependencyBlocked,
+			Specs:               DependencyBlocked,
+			Design:              DependencyBlocked,
+			Tasks:               DependencyBlocked,
+			Apply:               DependencyBlocked,
+			Verify:              DependencyBlocked,
+			Archive:             DependencyBlocked,
 		},
 		ApplyState: ApplyBlocked,
 		ActionContext: ActionContext{
@@ -1900,17 +1900,17 @@ func emptyArtifactPaths() ArtifactPaths {
 		Gate1Scope:          []string{},
 		Gate2Technical:      []string{},
 		Gate3Implementation: []string{},
-		Specs:         []string{},
-		Design:        []string{},
-		Tasks:         []string{},
-		ApplyProgress: []string{},
-		VerifyReport:  []string{},
-		ReviewLedger:  []string{},
-		ReviewPolicy:  []string{},
-		ReviewReceipt: []string{},
-		ReviewBundle:  []string{},
-		ReviewContext: []string{},
-		ReviewState:   []string{},
+		Specs:               []string{},
+		Design:              []string{},
+		Tasks:               []string{},
+		ApplyProgress:       []string{},
+		VerifyReport:        []string{},
+		ReviewLedger:        []string{},
+		ReviewPolicy:        []string{},
+		ReviewReceipt:       []string{},
+		ReviewBundle:        []string{},
+		ReviewContext:       []string{},
+		ReviewState:         []string{},
 	}
 }
 
@@ -2197,7 +2197,7 @@ func changeOptsIntoGates(proposalText string) bool {
 func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskProgress, applyState ApplyState, coreReady, verifyReportCurrent, verifyReportPassing, remediationComplete, gatesRequired bool, exploreText string, proposalText string) Dependencies {
 	// P1: Discovery Classification
 	isGreenfield := strings.Contains(exploreText, "type: greenfield") || strings.Contains(proposalText, "type: greenfield") || strings.Contains(exploreText, "architecture:") || strings.Contains(proposalText, "architecture:")
-	
+
 	exploreState := artifactDependency(artifacts["explore"])
 	if artifacts["explore"] == ArtifactDone {
 		exploreDone := strings.Contains(exploreText, "### Recommendation") || strings.Contains(exploreText, "### Approaches")

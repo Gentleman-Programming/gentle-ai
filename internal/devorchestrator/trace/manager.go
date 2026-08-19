@@ -54,7 +54,7 @@ func (m *defaultManager) ValidatePhaseTransition(sourceArtifactPath, destArtifac
 			break
 		}
 	}
-	
+
 	if !found {
 		for _, id := range destNode.OriginatesFrom {
 			if id == sourceNode.ID {
