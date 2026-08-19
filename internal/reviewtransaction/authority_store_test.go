@@ -125,6 +125,26 @@ func TestAuthorityStoreMutateRefusesStaleExpectedRevision(t *testing.T) {
 	}
 }
 
+func TestAuthorityStoreMutate_DoesNotWriteAfterApplyCancelsContext(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	store, err := NewLineageAuthorityStore(context.Background(), repo, "cancelled-mutation-lineage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err = store.Mutate(ctx, "", func(next *NewLineageAuthority) error {
+		*next = fixtureNewLineageAuthority("cancelled-mutation-lineage", NewLineageStateReviewing)
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Mutate() error = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(store.StatePath()); !os.IsNotExist(err) {
+		t.Fatalf("state path exists after cancelled mutation: %v", err)
+	}
+}
+
 // TestAuthorityStoreResolveReplayReturnsStoredTransitionWithoutMutation is
 // task 3.2's second RED assertion: an exact-replay request (identical
 // digest) resolves from review-state.json alone, without a store write.

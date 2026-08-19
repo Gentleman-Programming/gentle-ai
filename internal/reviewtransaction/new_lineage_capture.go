@@ -17,11 +17,10 @@ package reviewtransaction
 // primitive DOES persist the reviewer's validated findings (not just
 // SubjectHash) -- cycle 2's own capture-result already required and
 // validated `findings`/`evidence` were present before this fix, so silently
-// discarding them was a channel that looked like it carried findings and
-// did not, a fail-open in an authorization system. Persisted findings feed
-// the EXISTING AdmitCandidateCausalFindings at finalize (review_facade.go)
-// -- the same admission decision function the --admission-findings channel
-// already uses, reused rather than duplicated.
+// discarding them was a fail-open. Capture now normalizes findings and writes
+// `introduced` only when the location and every proof reference are wholly
+// contained by added hunks in the frozen candidate; every other causal claim
+// persists as `unknown` for fail-closed finalize handling.
 
 import (
 	"context"
@@ -30,8 +29,13 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
+	"sort"
 	"strconv"
+	"strings"
 )
+
+var newLineageDiffHunk = regexp.MustCompile(`(?m)^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 
 // NewLineageArtifactSubjectHash is C-A's minimal provider-owned binding: it
 // proves a reviewer result was computed against THIS exact frozen authority
@@ -82,14 +86,8 @@ var (
 	// captured result under a DIFFERENT subject hash -- one-shot per lens, no
 	// reopen machinery (C-A's explicit scope boundary).
 	ErrNewLineageCaptureConflict = errors.New("lens already captured with a different binding; capture is one-shot per lens") // refusal:by-design world-action: v3 has no reviewer-artifact reopen concept (that is v2-only, Wave 7 deletion scope); the fix is a fresh review start for a corrected candidate, not an operator command that reopens this capture
-	// ErrNewLineageCaptureIncompleteSeverity is refused when a severe
-	// (BLOCKER/CRITICAL) finding is captured without a supported
-	// evidence_class and causal_disposition -- W-10 (Wave 7 S1, design
-	// decision 3a). The message is verbatim identical to
-	// artifact_admission.go's own --admission-findings-channel refusal for
-	// the same shape, so v3 fails the same way v2 already does for the same
-	// operator mistake.
-	ErrNewLineageCaptureIncompleteSeverity = errors.New("severe reviewer finding requires supported evidence_class and causal_disposition") // refusal:by-design operator-knowledge: the reviewer must submit a supported evidence_class and causal_disposition for every BLOCKER/CRITICAL finding; there is no operator command that fabricates that classification on the reviewer's behalf
+	// ErrNewLineageCaptureIncompleteSeverity remains for source compatibility.
+	ErrNewLineageCaptureIncompleteSeverity = errors.New("severe reviewer finding requires supported evidence_class and causal_disposition") // refusal:by-design operator-knowledge: providers must supply supported values; callers cannot infer them
 )
 
 // CaptureLensResult persists one captured reviewer result onto a v3
@@ -98,15 +96,16 @@ var (
 //   - only a reviewing or validating authority may capture;
 //   - lens/order must match the frozen SelectedLenses set exactly;
 //   - subjectHash must match NewLineageArtifactSubjectHash's own derivation;
-//   - findings ARE persisted verbatim (C-E) -- fed into
-//     AdmitCandidateCausalFindings at finalize, never discarded;
 //   - one-shot per lens: capturing the SAME lens again with the IDENTICAL
 //     subject hash AND identical findings is an idempotent replace (Mutate's
 //     own byte-identical no-op path); anything else for an already-captured
 //     lens is refused (ErrNewLineageCaptureConflict) -- there is no reopen.
 func (store AuthorityStore) CaptureLensResult(ctx context.Context, expectedRevision, lens string, order int, subjectHash string, findings []FindingEvidence) (NewLineageRecord, error) {
 	if _, err := store.Mutate(ctx, expectedRevision, func(next *NewLineageAuthority) error {
-		normalizedFindings := append([]FindingEvidence(nil), findings...)
+		normalizedFindings, err := store.normalizeCapturedFindings(ctx, next.CandidateIdentity, findings)
+		if err != nil {
+			return err
+		}
 		if err := ValidateNewLineageLensResult(*next, lens, order, subjectHash, normalizedFindings); err != nil {
 			return err
 		}
@@ -114,7 +113,7 @@ func (store AuthorityStore) CaptureLensResult(ctx context.Context, expectedRevis
 			if existing.Lens != lens {
 				continue
 			}
-			return nil // validation permits only the idempotent existing result
+			return nil // normalized equality permits only the idempotent existing result
 		}
 		next.CapturedResults = append(append([]NewLineageCapturedResult(nil), next.CapturedResults...), NewLineageCapturedResult{
 			Lens: lens, Order: order, SubjectHash: subjectHash, Findings: normalizedFindings,
@@ -124,6 +123,81 @@ func (store AuthorityStore) CaptureLensResult(ctx context.Context, expectedRevis
 		return NewLineageRecord{}, err
 	}
 	return store.Load()
+}
+
+func (store AuthorityStore) normalizeCapturedFindings(ctx context.Context, candidate CandidateIdentity, findings []FindingEvidence) ([]FindingEvidence, error) {
+	if findings == nil {
+		return nil, nil
+	}
+	normalized := make([]FindingEvidence, len(findings))
+	isolation, cleanup, err := isolatedImmutableTreeGit(ctx, store.repo)
+	if err != nil {
+		return nil, fmt.Errorf("prepare frozen candidate evidence: %w", err)
+	}
+	defer cleanup()
+	for index, finding := range findings {
+		claim := finding.Causality
+		finding.FindingID = strings.TrimSpace(finding.FindingID)
+		finding.Severity = strings.ToUpper(strings.TrimSpace(finding.Severity))
+		finding.Class = EvidenceClass(strings.TrimSpace(string(finding.Class)))
+		refs := strings.Split(finding.Proof, ";")
+		for refIndex := range refs {
+			refs[refIndex] = strings.TrimSpace(refs[refIndex])
+		}
+		if len(refs) > 1 {
+			sort.Strings(refs[1:])
+		}
+		finding.Proof = strings.Join(refs, "; ")
+		finding.Causality = CausalUnknown
+		if claim == CausalIntroduced && len(refs) > 1 {
+			introduced, err := allNewLineageRefsAdded(ctx, store.repo, isolation, candidate, refs)
+			if err != nil {
+				return nil, err
+			}
+			if introduced {
+				finding.Causality = CausalIntroduced
+			}
+		}
+		normalized[index] = finding
+	}
+	return normalized, nil
+}
+
+func allNewLineageRefsAdded(ctx context.Context, repo string, isolation []string, candidate CandidateIdentity, refs []string) (bool, error) {
+	for _, ref := range refs {
+		location, err := parseFindingLocation(ref)
+		if err != nil {
+			return false, nil
+		}
+		diff, err := runGit(ctx, repo, isolation, nil, "diff", "--text", "--unified=0", "--no-renames", "--no-ext-diff", "--no-textconv", "--diff-algorithm=myers", "--no-indent-heuristic", candidate.BaseTree, candidate.CandidateTree, "--", literalPathspec(location.Path))
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return false, ctxErr
+			}
+			return false, nil
+		}
+		if !newLineageRangeInsideAddedHunk(diff, location) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func newLineageRangeInsideAddedHunk(diff []byte, location findingLocation) bool {
+	for _, match := range newLineageDiffHunk.FindAllSubmatch(diff, -1) {
+		start, err := strconv.Atoi(string(match[1]))
+		if err != nil {
+			continue
+		}
+		count := 1
+		if len(match[2]) != 0 {
+			count, err = strconv.Atoi(string(match[2]))
+		}
+		if err == nil && count > 0 && start <= location.StartLine && location.EndLine < start+count {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateNewLineageLensResult applies the native admission checks without
@@ -138,14 +212,11 @@ func ValidateNewLineageLensResult(authority NewLineageAuthority, lens string, or
 	if subjectHash != NewLineageArtifactSubjectHash(authority, lens, order) {
 		return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureSubjectMismatch, authority.LineageID, lens)
 	}
-	for _, finding := range findings {
-		if isSevereSeverity(finding.Severity) && (!isSupportedEvidenceClass(finding.Class) || !isSupportedCausalDisposition(finding.Causality)) {
-			return fmt.Errorf("%w: lineage %q lens %q finding %q", ErrNewLineageCaptureIncompleteSeverity, authority.LineageID, lens, finding.FindingID)
-		}
-	}
-	for _, existing := range authority.CapturedResults {
-		if existing.Lens == lens && (existing.SubjectHash != subjectHash || !reflect.DeepEqual(existing.Findings, findings)) {
-			return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureConflict, authority.LineageID, lens)
+	if findings != nil {
+		for _, existing := range authority.CapturedResults {
+			if existing.Lens == lens && (existing.SubjectHash != subjectHash || !reflect.DeepEqual(existing.Findings, findings)) {
+				return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureConflict, authority.LineageID, lens)
+			}
 		}
 	}
 	return nil
