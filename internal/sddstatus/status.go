@@ -221,6 +221,7 @@ type Status struct {
 	// placeholder or a status call that happened anyway. See
 	// applyReviewOfferRouting and review_door.go's reviewOfferForVerify.
 	ReviewOffer *ReviewOfferBlock `json:"reviewOffer,omitempty"`
+	Items       []WorkItem        `json:"items,omitempty"`
 	// ReVerify is Wave 4 S6's targeted re-verify routing decision
 	// (design.md's "Amendment (coordinator-resolved): targeted re-verify
 	// call site"), present exactly when the change's governing receipt
@@ -317,6 +318,9 @@ type ResolveOptions struct {
 	// against the exact workspace normalized by Resolve. When set, it is called
 	// once and its result replaces ReviewDisabled for the whole status decision.
 	ReviewDisabledForWorkspace func(workspaceRoot string) (bool, error)
+	// ReadOnly suppresses status's consent-marker write. Admission callers need
+	// the same artifact selection without creating a change-instance marker.
+	ReadOnly bool
 }
 
 type CommandArgs struct {
@@ -551,7 +555,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
 	applyState, unauthorizedRoots := applyEditAuthorityBlock(applyState, &blockedReasons, readText(firstPath(artifactPaths.Tasks)), workspaceRoot, append([]string{workspaceRoot}, grantedRoots...))
 	var consent *SDDIntegrationConsentResult
-	if len(unauthorizedRoots) != 0 {
+	if len(unauthorizedRoots) != 0 && !options.ReadOnly {
 		// The envelope must name an invocation the agent executes verbatim,
 		// so the instance token is minted (once) and persisted here; a
 		// covering grant later projects through the same token and detection
@@ -758,6 +762,8 @@ func Resolve(options ResolveOptions) (Status, error) {
 	} else {
 		applyNativeRuntimeRouting(&status)
 	}
+	applyWorkItemProjection(&status, readText(firstPath(artifactPaths.Tasks)))
+	applyRetainedItemPlanJoinRouting(&status)
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
@@ -770,6 +776,50 @@ func Resolve(options ResolveOptions) (Status, error) {
 		status.PhaseInstructions = &instructions
 	}
 	return status, nil
+}
+
+// applyRetainedItemPlanJoinRouting prevents mutable task checkboxes from
+// advancing a v2 item plan before immutable execution and coordinator
+// projection agree. Older plans predate the snapshot authority and retain
+// their established routing semantics.
+func applyRetainedItemPlanJoinRouting(status *Status) {
+	if status == nil || status.RuntimeStatus == nil || status.RuntimeStatus.itemPlan == nil ||
+		status.RuntimeStatus.itemPlan.Version != itemPlanVersionV2 || retainedItemPlanJoined(status) {
+		return
+	}
+	if status.Dependencies.Apply == DependencyAllDone {
+		status.Dependencies.Apply = DependencyReady
+	}
+	if status.Dependencies.Apply == DependencyBlocked {
+		// Invalid projected metadata must not let an unjoined immutable plan
+		// advance through otherwise-complete Verify or Archive artifacts.
+		status.Dependencies.Verify = DependencyBlocked
+		status.Dependencies.Archive = DependencyBlocked
+		return
+	}
+	status.Dependencies.Verify = DependencyBlocked
+	status.Dependencies.Archive = DependencyBlocked
+	status.NextRecommended = string(PhaseApply)
+	status.BlockedReasons = append(status.BlockedReasons, "retained item plan join is incomplete: wait for every required item to pass, settle, and be projected into tasks.")
+}
+
+func retainedItemPlanJoined(status *Status) bool {
+	runtime, plan := status.RuntimeStatus, status.RuntimeStatus.itemPlan
+	if runtime.runtimeActiveCount() != 0 || len(status.Items) != len(plan.Items) {
+		return false
+	}
+	items := make(map[string]WorkItem, len(status.Items))
+	for _, item := range status.Items {
+		items[item.ID] = item
+	}
+	replay := runtimeReplay{Status: *runtime, itemPlan: plan}
+	for _, entry := range plan.Items {
+		item, ok := items[entry.ID]
+		if !ok || !item.Done || !runtimePlanItemCompleteProof(replay, *plan, entry.ID) {
+			return false
+		}
+	}
+	return true
 }
 
 // loadNativeRuntimeStatus returns the runtime status together with the ledger's
@@ -843,14 +893,12 @@ func nativeRuntimeCompletesRemediation(runtimeStatus *RuntimeStatus, attemptToke
 // record Finish admits only while review authority is disabled: a direct failed
 // attempt followed by a changed, distinct-evidence correction with no binding.
 func nativeRuntimeCompletedUnmanagedCorrection(runtimeStatus *RuntimeStatus) bool {
-	if runtimeStatus == nil || runtimeStatus.Binding != nil || runtimeStatus.Receipt != nil || len(runtimeStatus.Attempts) < 2 {
+	if runtimeStatus == nil || runtimeStatus.Binding != nil || runtimeStatus.Receipt != nil {
 		return false
 	}
-	correction := runtimeStatus.Attempts[len(runtimeStatus.Attempts)-1]
-	failed := runtimeStatus.Attempts[len(runtimeStatus.Attempts)-2]
-	return failed.Outcome == AttemptFailed && correction.Outcome == AttemptPassed &&
-		correction.RemediatesEvidenceRevision != "" && correction.RemediatesEvidenceRevision == failed.EvidenceRevision &&
-		correction.EvidenceRevision != "" && correction.EvidenceRevision == runtimeStatus.EvidenceRevision &&
+	failed, correction, ok := runtimeLineageCorrection(*runtimeStatus)
+	return ok && correction.EvidenceRevision != "" && correction.RemediatesEvidenceRevision == failed.EvidenceRevision &&
+		correction.EvidenceRevision == runtimeStatus.EvidenceRevision &&
 		correction.FinishCandidateIdentity != correction.BeginCandidateIdentity && correction.FinishCandidateTree != correction.BeginCandidateTree
 }
 
@@ -1167,6 +1215,8 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	} else {
 		applyNativeRuntimeRouting(&status)
 	}
+	applyWorkItemProjection(&status, artifactsByType["tasks"].Content)
+	applyRetainedItemPlanJoinRouting(&status)
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
@@ -2151,10 +2201,10 @@ func nativeRuntimeInstructions(status Status, change string) []string {
 			Status: *runtime, AttemptTokens: status.runtimeAttemptTokens,
 		})
 		launchable := !terminal || readiness.Reason == CompactBlockActiveAttempt
-		chainEvidence, chainHasFailedEvidence := runtimeChainFailedEvidence(runtime.Attempts)
+		chainEvidence, chainHasFailedEvidence := runtimeLineageFailedEvidence(*runtime)
 		switch {
-		case chainHasFailedEvidence && runtime.Objective != nil && launchable:
-			objective := runtime.Objective
+		case chainHasFailedEvidence && runtime.runtimeObjective() != nil && launchable:
+			objective := runtime.runtimeObjective()
 			instructions = append(instructions,
 				fmt.Sprintf("Disabled/unmanaged remediation has one bounded correction attempt: run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d --remediates-evidence-revision %s`.", pathquote.Quote(workspace), change, objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines, chainEvidence),
 				fmt.Sprintf("After the candidate changes, settle that token with `--remediates-evidence-revision %s`; a fresh independent verification is required before archive.", chainEvidence),

@@ -43,10 +43,14 @@ From the orchestrator:
 
 > Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/sdd-phase-common.md`.
 
-- **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks` (all required — keep tasks ID for updates). Mark tasks complete via `mem_update(id: {tasks-observation-id}, content: "...")`. Save progress as `sdd/{change-name}/apply-progress`.
-- **openspec**: Read and follow `skills/_shared/openspec-convention.md`. Update `tasks.md` with `[x]` marks.
-- **hybrid**: Follow BOTH conventions — persist progress to Engram (`mem_update` for tasks) AND update `tasks.md` with `[x]` marks on filesystem.
+- **engram**: For non-item execution, read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks` (all required — keep tasks ID for updates). Mark tasks complete via `mem_update(id: {tasks-observation-id}, content: "...")`. Save progress as `sdd/{change-name}/apply-progress`.
+- **openspec**: For non-item execution, read and follow `skills/_shared/openspec-convention.md`. Update `tasks.md` with `[x]` marks.
+- **hybrid**: For non-item execution, follow BOTH conventions — persist progress to Engram (`mem_update` for tasks) AND update `tasks.md` with `[x]` marks on filesystem.
 - **none**: Return progress only. Do not update project artifacts.
+
+### Item-Selected Settlement
+
+For an item-selected runtime attempt, settle before artifact projection. The worker MUST NOT write OpenSpec or Engram, mark task checkboxes, or run an RDD lifecycle per item. Return the settle result unchanged. Only the coordinator may use a successful `item_settlement` to re-resolve status and idempotently merge apply-progress and the OpenSpec/Engram/hybrid task update. If settlement, projection, or re-resolution fails, stop; do not continue with another item.
 
 ## Status and Workspace Guard
 
@@ -162,7 +166,7 @@ Focused remediation is the sole `applyState: all_done` exception. It requires th
 This step is used when Strict TDD Mode is NOT active:
 
 ```
-FOR EACH TASK:
+FOR EACH NON-ITEM TASK:
 ├── Read the task description
 ├── Read relevant spec scenarios (these are your acceptance criteria)
 ├── Read the design decisions (these constrain your approach)
@@ -174,7 +178,7 @@ FOR EACH TASK:
 
 ### Step 5: Mark Tasks Complete
 
-Update `tasks.md` — change `- [ ]` to `- [x]` for completed tasks:
+For non-item execution, update `tasks.md` — change `- [ ]` to `- [x]` for completed tasks:
 
 ```markdown
 ## Phase 1: Foundation
@@ -186,7 +190,7 @@ Update `tasks.md` — change `- [ ]` to `- [x]` for completed tasks:
 
 ### Step 6: Persist Progress
 
-**This step is MANDATORY — do NOT skip it.**
+**This step is mandatory for non-item execution — do NOT skip it.** Item-selected workers return after settlement and do not persist artifacts.
 
 Follow **Section C** from `skills/_shared/sdd-phase-common.md`.
 - artifact: `apply-progress`
@@ -305,6 +309,7 @@ You are an IMPLEMENTER sub-agent. You receive specific tasks and implement them 
 - If workload forecast says >400 lines or `Chained PRs recommended`, STOP and return `blocked: workload-decision-required`
 - If previous apply-progress exists, read it via mem_search + mem_get_observation and MERGE before saving
 - Focused remediation is the sole `all_done` exception and must bind both evidence blocks to the exact lineage_id, generation, fix_batch, and failed_evidence_revision from native status
+- In item-selected mode, settle before projection and never write OpenSpec/Engram or task marks; the coordinator alone re-resolves status and merges idempotent artifact updates
 
 ## Steps
 
@@ -314,7 +319,7 @@ You are an IMPLEMENTER sub-agent. You receive specific tasks and implement them 
 4. Read the design decisions
 5. Read only files explicitly referenced by the task (max 3 files)
 6. Implement code changes — minimal, localized edits
-7. Persist progress immediately after each completed task:
+7. For non-item execution, persist progress immediately after each completed task:
     - `engram`: `mem_update` the `sdd/{change-name}/tasks` observation so completed tasks are marked `[x]`, then `mem_save` or `mem_update` for `sdd/{change-name}/apply-progress`
     - `openspec`: mark tasks.md checkboxes
     - `hybrid`: both

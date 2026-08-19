@@ -3,6 +3,15 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
+)
+
+const (
+	runtimeAcquireRetryTimeout = 2 * time.Second
+	runtimeAcquireRetryPoll    = 25 * time.Millisecond
 )
 
 type CompactAttemptState string
@@ -60,6 +69,22 @@ type CompactAttemptResult struct {
 	// the token is real. Empty whenever the chain holds nothing, because a
 	// field that is always populated is noise.
 	SettleObligation string `json:"settle_obligation,omitempty"`
+	// ItemSettlement is present only after a passed, item-bound settle reaches
+	// this request's immutable terminal record.
+	ItemSettlement *ItemSettlement `json:"item_settlement,omitempty"`
+}
+
+// ItemSettlement is the immutable authority for a coordinator to project one
+// completed item into shared artifacts. It is not an artifact write or a Done
+// claim: only the coordinator may perform and verify that projection.
+type ItemSettlement struct {
+	ItemID              string `json:"item_id"`
+	WorkUnit            string `json:"work_unit"`
+	ObjectiveID         string `json:"objective_id"`
+	ObjectiveGeneration int    `json:"objective_generation"`
+	AttemptOrdinal      int    `json:"attempt_ordinal"`
+	EvidenceRevision    string `json:"evidence_revision"`
+	SettlementRequestID string `json:"settlement_request_id"`
 }
 
 // CompactAcquireRequest is the bounded orchestration projection of
@@ -95,6 +120,8 @@ type CompactAcquireRequest struct {
 	RemediatesEvidenceRevision string
 }
 
+// CompactSettleRequest closes the live attempt identified by Token through the
+// compact orchestration boundary.
 type CompactSettleRequest struct {
 	Token              string
 	RequestID          string
@@ -111,6 +138,45 @@ type CompactSettleRequest struct {
 
 type CompactHandoffRequest struct {
 	HandoffAttemptRequest
+}
+
+func runtimeAttemptTargetForToken(replay runtimeReplay, token string) (runtimeAttemptTarget, RuntimeAttempt, bool) {
+	ordinal, found := 0, false
+	for candidate, candidateToken := range replay.AttemptTokens {
+		if candidateToken == token {
+			if found {
+				return runtimeAttemptTarget{}, RuntimeAttempt{}, false
+			}
+			ordinal, found = candidate, true
+		}
+	}
+	if !found {
+		return runtimeAttemptTarget{}, RuntimeAttempt{}, false
+	}
+	var resolved *RuntimeAttempt
+	for index := range replay.Status.Attempts {
+		attempt := &replay.Status.Attempts[index]
+		if attempt.Ordinal == ordinal {
+			if resolved != nil {
+				return runtimeAttemptTarget{}, RuntimeAttempt{}, false
+			}
+			owner := replay.Status.ownership.objectives[attempt.ObjectiveID]
+			if replay.Status.ownership.objectives != nil && (owner == nil || owner.objective.Generation != attempt.ObjectiveGeneration) {
+				return runtimeAttemptTarget{}, RuntimeAttempt{}, false
+			}
+			resolved = attempt
+		}
+	}
+	if resolved == nil {
+		return runtimeAttemptTarget{}, RuntimeAttempt{}, false
+	}
+	return runtimeAttemptTarget{ObjectiveID: resolved.ObjectiveID, ObjectiveGeneration: resolved.ObjectiveGeneration, Ordinal: ordinal, Token: token}, *resolved, true
+}
+
+func runtimeActiveSettleTarget(replay runtimeReplay, token string) (runtimeAttemptTarget, RuntimeAttempt, bool) {
+	target, attempt, ok := runtimeAttemptTargetForToken(replay, token)
+	active := replay.Status.runtimeActiveAttemptForOrdinal(target.Ordinal)
+	return target, attempt, ok && active != nil && active.Ordinal == target.Ordinal && active.ObjectiveID == target.ObjectiveID && active.ObjectiveGeneration == target.ObjectiveGeneration
 }
 
 // runtimeReadinessInput is everything the one readiness predicate reads. It
@@ -148,9 +214,18 @@ type runtimeReadinessInput struct {
 // Complete or DecisionRequired and clears ActiveAttempt in both branches, so
 // checking Complete first is not a precedence choice among reachable states.
 func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
+	if in.Status.validateRuntimeLineage() != nil {
+		return compactBlocked(CompactBlockCorruptAuthority, ""), true
+	}
+	active := in.Status.runtimeActiveAttempt()
 	activeToken := ""
-	if in.Status.ActiveAttempt != nil {
-		activeToken = in.AttemptTokens[in.Status.ActiveAttempt.Ordinal]
+	if active == nil && in.Status.runtimeActiveCount() > 0 {
+		// Multiple item owners have no singular active attempt. Use the
+		// deterministic compatibility owner when reporting a foreign token.
+		_, active = in.Status.runtimeCompatibilityActive()
+	}
+	if active != nil {
+		activeToken = in.AttemptTokens[active.Ordinal]
 	}
 
 	// Zero-mutation ownership check (#2291): a distinct call or process launched
@@ -158,9 +233,11 @@ func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
 	// token to prove it continues the SAME attempt rather than colliding with
 	// it. A non-matching token falls to the ordinary block naming the REAL
 	// active token. An empty token leaves every other path unchanged.
-	if in.PresentedToken != "" && in.Status.ActiveAttempt != nil {
-		if in.PresentedToken == activeToken {
-			return CompactAttemptResult{State: CompactStateProceed, Token: activeToken}, true
+	if in.PresentedToken != "" {
+		for ordinal, token := range in.AttemptTokens {
+			if token == in.PresentedToken && in.Status.runtimeActiveAttemptForOrdinal(ordinal) != nil {
+				return CompactAttemptResult{State: CompactStateProceed, Token: token}, true
+			}
 		}
 		return compactForeignAcquireToken(activeToken), true
 	}
@@ -178,7 +255,13 @@ func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
 		return CompactAttemptResult{State: CompactStateComplete}, true
 	case in.Status.DecisionRequired:
 		return compactBlocked(CompactBlockMaintainerDecision, ""), true
-	case in.Status.ActiveAttempt != nil:
+	case in.Status.runtimeActiveCount() > 0:
+		if active == nil {
+			_, active = in.Status.runtimeCompatibilityActive()
+			if active != nil {
+				activeToken = in.AttemptTokens[active.Ordinal]
+			}
+		}
 		return compactBlocked(CompactBlockActiveAttempt, activeToken), true
 	default:
 		return CompactAttemptResult{}, false
@@ -195,7 +278,35 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	if request.RemediatesEvidenceRevision != "" && !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
 		return CompactAttemptResult{}, errors.New("remediates_evidence_revision must be sha256; rerun `gentle-ai sdd-attempt acquire` with --remediates-evidence-revision sha256:<64-lowercase-hex>")
 	}
+	timeout, poll := store.runtimeAcquireRetryTimeout(), store.runtimeAcquireRetryPoll()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(poll)
+	defer ticker.Stop()
+	for {
+		result, err := store.acquireOnce(ctx, request, begin)
+		if store.acquireAttemptObserved != nil {
+			store.acquireAttemptObserved(err)
+		}
+		if err == nil {
+			return result, nil
+		}
+		if !errors.Is(err, reviewtransaction.ErrStoreLockContended) {
+			return store.compactMutationFailure(err, nil, begin), nil
+		}
+		select {
+		case <-ctx.Done():
+			return CompactAttemptResult{}, ctx.Err()
+		case <-deadline.C:
+			return store.compactMutationFailure(fmt.Errorf("%w: acquire retry timed out after %s: %w", ErrRuntimeConcurrentUpdate, timeout, reviewtransaction.ErrStoreLockContended), nil, begin), nil
+		case <-ticker.C:
+		}
+	}
+}
 
+// acquireOnce starts from a new replay on every call. A retry can therefore
+// never reuse a stale revision, candidate snapshot, or concurrent admission.
+func (store RuntimeStore) acquireOnce(ctx context.Context, request CompactAcquireRequest, begin BeginAttemptRequest) (CompactAttemptResult, error) {
 	replay, err := store.load()
 	if err != nil {
 		return compactBlockedByUnreadableAuthority(err), nil
@@ -210,7 +321,7 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 		}
 		if _, err := store.Begin(ctx, begin); err != nil {
-			return store.compactMutationFailure(err, false, begin), nil
+			return CompactAttemptResult{}, err
 		}
 		current, loadErr := store.load()
 		if loadErr != nil {
@@ -223,10 +334,14 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		Status: replay.Status, AttemptTokens: replay.AttemptTokens,
 		Request: begin, PresentedToken: request.Token,
 	}); terminal {
-		if result.State == CompactStateProceed {
-			result.SettleObligation = runtimeSettleObligation(replay.Status, store.ReviewDisabled)
+		if result.Reason == CompactBlockActiveAttempt && runtimeConcurrentItemAdmissible(replay, begin) {
+			terminal = false
+		} else {
+			if result.State == CompactStateProceed {
+				result.SettleObligation = runtimeSettleObligation(replay.Status, store.ReviewDisabled)
+			}
+			return result, nil
 		}
-		return result, nil
 	}
 	// #2564 fail-fast: a declared unmanaged correction whose settlement is
 	// already structurally unsatisfiable earns its typed refusal HERE, before
@@ -245,7 +360,7 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 	begin.ExpectedRevision = replay.Status.Revision
 	started, err := store.Begin(ctx, begin)
 	if err != nil {
-		return store.compactMutationFailure(err, false, begin), nil
+		return CompactAttemptResult{}, err
 	}
 	return CompactAttemptResult{
 		State: CompactStateProceed, Token: started.Revision,
@@ -253,6 +368,20 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		// inherits is the one that existed when it was opened.
 		SettleObligation: runtimeSettleObligation(replay.Status, store.ReviewDisabled),
 	}, nil
+}
+
+func (store RuntimeStore) runtimeAcquireRetryTimeout() time.Duration {
+	if store.acquireRetryTimeout > 0 {
+		return store.acquireRetryTimeout
+	}
+	return runtimeAcquireRetryTimeout
+}
+
+func (store RuntimeStore) runtimeAcquireRetryPoll() time.Duration {
+	if store.acquireRetryPoll > 0 {
+		return store.acquireRetryPoll
+	}
+	return runtimeAcquireRetryPoll
 }
 
 // Settle closes the attempt selected by Token through the ordinary Finish
@@ -273,10 +402,14 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		if !ok {
 			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 		}
-		if _, err := store.Finish(ctx, finish); err != nil {
-			return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
+		target, _, targetOK := runtimeAttemptTargetForToken(replay, request.Token)
+		if !targetOK {
+			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 		}
-		return store.compactSettleResult()
+		if _, err := store.finishTarget(ctx, finish, target); err != nil {
+			return store.compactMutationFailure(err, &request, BeginAttemptRequest{}), nil
+		}
+		return store.compactSettleResult(&request)
 	}
 	if err := normalizeCompactSettleRequest(request); err != nil {
 		return CompactAttemptResult{}, err
@@ -295,6 +428,10 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 	if readiness.State != CompactStateProceed {
 		return readiness, nil
 	}
+	target, _, ok := runtimeActiveSettleTarget(replay, request.Token)
+	if !ok {
+		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
+	}
 
 	status := replay.Status
 	finish := FinishAttemptRequest{
@@ -304,7 +441,7 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		ProcessEvidence: request.ProcessEvidence,
 	}
 	explicitSuccessor := request.SuccessorLineageID != ""
-	failedEvidence, _ := runtimeChainFailedEvidence(status.Attempts)
+	failedEvidence, _ := runtimeLineageFailedEvidence(status)
 	if request.RemediatesEvidenceRevision != "" && failedEvidence != request.RemediatesEvidenceRevision {
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}
@@ -320,10 +457,14 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 	} else if explicitSuccessor || request.RemediatesEvidenceRevision != "" {
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}
-	if _, err := store.Finish(ctx, finish); err != nil {
-		return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
+	if _, err := store.finishTarget(ctx, finish, target); err != nil {
+		result := store.compactMutationFailure(err, &request, BeginAttemptRequest{})
+		if result.State == CompactStateComplete {
+			return store.compactSettleResult(&request)
+		}
+		return result, nil
 	}
-	return store.compactSettleResult()
+	return store.compactSettleResult(&request)
 }
 
 func (store RuntimeStore) HandoffCompact(ctx context.Context, request CompactHandoffRequest) (CompactAttemptResult, error) {
@@ -335,20 +476,20 @@ func (store RuntimeStore) HandoffCompact(ctx context.Context, request CompactHan
 	if errors.As(err, &publication) && publication.Committed {
 		return CompactAttemptResult{State: CompactStateProceed}, nil
 	}
-	return store.compactMutationFailure(err, false, BeginAttemptRequest{}), nil
+	return store.compactMutationFailure(err, nil, BeginAttemptRequest{}), nil
 }
 
 // unmanagedRemediationSettleable reports whether a settle carrying
 // --remediates-evidence-revision failedEvidence can structurally succeed
 // against this ledger state: the immutable attempt chain must still hold that
-// exact failed evidence unremediated, per runtimeChainFailedEvidence, the
+// exact failed evidence unremediated, per runtimeLineageFailedEvidence, the
 // same chain-derived binding Finish's unmanaged guard enforces (#1974 slice
 // 2). A changed candidate and fresh distinct evidence remain settle-time
 // facts and are not judged here; nor is "may this work proceed?", which
 // stays runtimeReadiness's question alone -- this reads only the immutable
 // attempt chain.
 func unmanagedRemediationSettleable(status RuntimeStatus, failedEvidence string) bool {
-	chainEvidence, chainHasFailedEvidence := runtimeChainFailedEvidence(status.Attempts)
+	chainEvidence, chainHasFailedEvidence := runtimeLineageFailedEvidence(status)
 	return chainHasFailedEvidence && failedEvidence != "" && chainEvidence == failedEvidence
 }
 
@@ -379,10 +520,15 @@ func compactAcquireMatches(record runtimeRecord, request BeginAttemptRequest) bo
 		return false
 	}
 	event := record.Begin
-	return request == (BeginAttemptRequest{
-		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
+	expected := BeginAttemptRequest{ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
 		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
-	})
+		ItemID: event.ItemID, ItemEditRoots: event.ItemEditRoots}
+	return request.ExpectedRevision == expected.ExpectedRevision && request.RequestID == expected.RequestID &&
+		request.WorkUnit == expected.WorkUnit && request.EvidenceGoal == expected.EvidenceGoal &&
+		request.MaxAttempts == expected.MaxAttempts && request.MaxChangedLines == expected.MaxChangedLines &&
+		runtimeItemBindingEqual(request.ItemID, request.ItemEditRoots, expected.ItemID, expected.ItemEditRoots) &&
+		((request.itemPlan == nil && event.ItemPlanDigest == "") ||
+			(request.itemPlan != nil && request.itemPlan.Plan.Digest == event.ItemPlanDigest))
 }
 
 func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, request CompactSettleRequest) (FinishAttemptRequest, bool) {
@@ -390,6 +536,10 @@ func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, requ
 		return FinishAttemptRequest{}, false
 	}
 	event := record.Finish
+	target, attempt, targetOK := runtimeAttemptTargetForToken(replay, request.Token)
+	if !targetOK || target.Ordinal != event.Ordinal || attempt.ObjectiveID != target.ObjectiveID || attempt.ObjectiveGeneration != target.ObjectiveGeneration {
+		return FinishAttemptRequest{}, false
+	}
 	finish := FinishAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Outcome: event.Outcome,
 		EvidenceRevision: event.EvidenceRevision, Diagnosis: event.Diagnosis,
@@ -405,7 +555,7 @@ func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, requ
 	if effectiveSuccessor == "" && record.Operation == runtimeOperationFinishRemediation {
 		effectiveSuccessor = replay.Requests[record.RequestID].RemediationPredecessorLineage
 	}
-	matches := request.Token == replay.AttemptTokens[event.Ordinal] && request.RequestID == finish.RequestID &&
+	matches := request.Token == target.Token && request.RequestID == finish.RequestID &&
 		request.Outcome == finish.Outcome && request.EvidenceRevision == finish.EvidenceRevision &&
 		request.Diagnosis == finish.Diagnosis && request.HarnessDisposition == finish.HarnessDisposition &&
 		request.CleanupEvidence == finish.CleanupEvidence && request.ProcessEvidence == finish.ProcessEvidence &&
@@ -427,7 +577,7 @@ func compactAcquireResult(replay runtimeReplay, request BeginAttemptRequest, own
 	return compactBlocked(CompactBlockInvalidContinuation, "")
 }
 
-func (store RuntimeStore) compactSettleResult(expected ...string) (CompactAttemptResult, error) {
+func (store RuntimeStore) compactSettleResult(request *CompactSettleRequest, expected ...string) (CompactAttemptResult, error) {
 	replay, err := store.load()
 	if err != nil {
 		return compactBlockedByUnreadableAuthority(err), nil
@@ -435,19 +585,59 @@ func (store RuntimeStore) compactSettleResult(expected ...string) (CompactAttemp
 	if len(expected) == 1 && replay.Status.Revision != expected[0] {
 		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
 	}
+	var settlement *ItemSettlement
+	if request != nil {
+		settlement = compactItemSettlement(replay, *request)
+	}
 	if result, terminal := runtimeReadiness(runtimeReadinessInput{
 		Status: replay.Status, AttemptTokens: replay.AttemptTokens,
 	}); terminal {
+		if settlement != nil {
+			// A v2 retained plan is globally joined only after the coordinator
+			// projects every settlement into tasks. Compact Settle cannot observe
+			// that write, so it must never claim terminal completion here.
+			if replay.itemPlan != nil && replay.itemPlan.Version == itemPlanVersionV2 {
+				return CompactAttemptResult{State: CompactStateProceed, ItemSettlement: settlement}, nil
+			}
+			if result.State == CompactStateComplete {
+				result.ItemSettlement = settlement
+				return result, nil
+			}
+			return CompactAttemptResult{State: CompactStateProceed, ItemSettlement: settlement}, nil
+		}
 		return result, nil
+	}
+	if settlement != nil {
+		return CompactAttemptResult{State: CompactStateProceed, ItemSettlement: settlement}, nil
 	}
 	return CompactAttemptResult{State: CompactStateProceed}, nil
 }
 
-func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin BeginAttemptRequest) CompactAttemptResult {
+func compactItemSettlement(replay runtimeReplay, request CompactSettleRequest) *ItemSettlement {
+	status := replay.Status
+	if request.Outcome != AttemptPassed || len(status.Attempts) == 0 {
+		return nil
+	}
+	target, attempt, ok := runtimeAttemptTargetForToken(replay, request.Token)
+	if !ok {
+		return nil
+	}
+	objective := status.runtimeObjectiveForAttempt(&attempt)
+	if objective == nil || attempt.Outcome != AttemptPassed || attempt.ItemID == "" || attempt.EvidenceRevision != request.EvidenceRevision ||
+		attempt.ObjectiveID != objective.ID || attempt.ObjectiveGeneration != objective.Generation || attempt.WorkUnit != objective.WorkUnit ||
+		attempt.ItemID != objective.ItemID || target.ObjectiveID != objective.ID || target.ObjectiveGeneration != objective.Generation {
+		return nil
+	}
+	return &ItemSettlement{ItemID: attempt.ItemID, WorkUnit: attempt.WorkUnit, ObjectiveID: attempt.ObjectiveID,
+		ObjectiveGeneration: attempt.ObjectiveGeneration, AttemptOrdinal: attempt.Ordinal, EvidenceRevision: attempt.EvidenceRevision,
+		SettlementRequestID: request.RequestID}
+}
+
+func (store RuntimeStore) compactMutationFailure(err error, settle *CompactSettleRequest, begin BeginAttemptRequest) CompactAttemptResult {
 	var publication *RuntimePublicationError
 	if errors.As(err, &publication) && publication.Committed {
-		if settle {
-			result, _ := store.compactSettleResult(publication.Revision)
+		if settle != nil {
+			result, _ := store.compactSettleResult(settle, publication.Revision)
 			return result
 		}
 		replay, loadErr := store.load()
@@ -600,14 +790,14 @@ func compactBlockedByUnreadableAuthority(cause error) CompactAttemptResult {
 // surface that speaks earliest is the one that ends up lying.
 //
 // It reads the same chain-derived binding the settle itself enforces
-// (runtimeChainFailedAttempt, #1974 slice 2 / #2565), so the notice cannot
+// (runtimeLineageFailedAttempt, #1974 slice 2 / #2565), so the notice cannot
 // promise something the settle will not demand, or stay silent about
 // something it will.
 func runtimeSettleObligation(status RuntimeStatus, reviewDisabled bool) string {
 	if !reviewDisabled || status.Binding != nil {
 		return ""
 	}
-	failed, ok := runtimeChainFailedAttempt(status.Attempts)
+	failed, ok := runtimeLineageFailedAttempt(status)
 	if !ok || failed.EvidenceRevision == "" {
 		return ""
 	}

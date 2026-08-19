@@ -37,6 +37,12 @@ func TestRuntimeLedgerConsumesOrdinalBeforeLaunchAndChargesNativeLines(t *testin
 	if first.Objective == nil || first.Objective.WorkUnit != "browser-harness" || first.Objective.EvidenceGoal != "prove process containment" {
 		t.Fatalf("first objective = %#v", first.Objective)
 	}
+	if _, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: first.Revision, RequestID: "begin-active", WorkUnit: "browser-harness",
+		EvidenceGoal: "prove process containment", MaxAttempts: 2, MaxChangedLines: 4,
+	}); !errors.Is(err, ErrRuntimeAttemptActive) {
+		t.Fatalf("second active begin error = %v, want ErrRuntimeAttemptActive", err)
+	}
 
 	// An exact retry after the ordinal is durable is a read-only replay.
 	replayed, err := store.Begin(context.Background(), beginOne)

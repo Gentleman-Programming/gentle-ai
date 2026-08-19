@@ -57,6 +57,7 @@ type StatusV1Projection struct {
 	// which is every legacy shape the freeze tests exercise — produces
 	// byte-identical output to before this field existed.
 	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
+	Items             []WorkItem                   `json:"items,omitempty"`
 	PhaseInstructions *phaseInstructionsV1         `json:"phaseInstructions,omitempty"`
 	NextRecommended   string                       `json:"nextRecommended"`
 	BlockedReasons    []string                     `json:"blockedReasons"`
@@ -200,6 +201,7 @@ func ProjectStatusV1(status Status) (StatusV1Projection, error) {
 	projected.ReviewOffer = status.ReviewOffer
 	projected.ReVerify = status.ReVerify
 	projected.Consent = status.Consent
+	projected.Items = status.Items
 	if status.PhaseInstructions != nil {
 		projected.PhaseInstructions = &phaseInstructionsV1{
 			Apply:     status.PhaseInstructions.Apply,

@@ -674,6 +674,7 @@ func Journeys() []Journey {
 	journeys = append(journeys, capturedProviderValidatorJourneys()...)
 	journeys = append(journeys, sddSharedScaffoldingJourneys()...)
 	journeys = append(journeys, sddPostReviewVerifyReportJourneys()...)
+	journeys = append(journeys, issue1302Journeys()...)
 	return append(journeys, handoffJourneys()...)
 }
 

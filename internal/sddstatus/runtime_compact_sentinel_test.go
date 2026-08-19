@@ -100,7 +100,7 @@ func TestCompactMutationFailureClassifiesEveryReachableLedgerSentinel(t *testing
 	store := RuntimeStore{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := store.compactMutationFailure(tt.err, false, BeginAttemptRequest{})
+			result := store.compactMutationFailure(tt.err, nil, BeginAttemptRequest{})
 			if !tt.reachable {
 				return
 			}
@@ -194,7 +194,7 @@ func TestCompactBlockedNamesExitForEveryReachableReason(t *testing.T) {
 func TestCompactMutationFailureLeavesUnexpectedErrorsAtAuthorityFailure(t *testing.T) {
 	store := RuntimeStore{}
 	err := errors.New("simulated unexpected I/O failure")
-	result := store.compactMutationFailure(err, false, BeginAttemptRequest{})
+	result := store.compactMutationFailure(err, nil, BeginAttemptRequest{})
 	if result.State != CompactStateBlocked || result.Reason != CompactBlockAuthorityFailure {
 		t.Fatalf("compactMutationFailure(%v) = %#v, want state=blocked reason=authority_failure", err, result)
 	}

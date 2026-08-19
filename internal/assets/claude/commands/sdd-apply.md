@@ -18,7 +18,7 @@ Implement the remaining incomplete tasks for the active SDD change.
 STATUS GATE:
 Read `~/.claude/skills/_shared/sdd-status-contract.md` and produce structured status before acting. If `$ARGUMENTS` is missing or ambiguous, ask the user to choose and STOP. Do not guess. Continue only when status says apply is `ready`, spec/design/tasks exist, and `actionContext` allows implementation edits. If status reports `workspace-planning` with no allowed edit roots, STOP before launching apply or editing inline. Carry `contextFiles`, task progress, dependency states, and `actionContext` into the native sub-agent prompt when delegating.
 
-ENGRAM PERSISTENCE (artifact store mode: engram):
+ENGRAM PERSISTENCE (artifact store mode: engram, non-item execution only):
 CRITICAL: mem_search returns 300-char PREVIEWS, not full content. You MUST call mem_get_observation(id) for EVERY artifact.
 STEP A — SEARCH (get IDs only):
   mem_search(query: "sdd/{change-name}/spec", project: "{project}") → save spec_id
@@ -44,6 +44,8 @@ For each task:
 3. Read existing code patterns in the project
 4. Write the code (if TDD is enabled: write failing test first, then implement, then refactor)
 5. Mark the task as complete [x]
+
+ITEM-SELECTED SETTLEMENT: the worker settles before projection and never writes OpenSpec/Engram, task marks, or an RDD lifecycle. A successful `item_settlement` is projected only by the coordinator, which re-resolves status and merges apply-progress plus OpenSpec/Engram/hybrid updates idempotently. Stop on any failure before another item.
 
 Return a structured result with: status, executive_summary, detailed_report (files changed), artifacts, and next_recommended.
 

@@ -42,6 +42,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	expected := registerSDDAttemptStringFlag(flags, operation, "expected-revision")
 	token := registerSDDAttemptStringFlag(flags, operation, "token")
 	requestID := registerSDDAttemptStringFlag(flags, operation, "request-id")
+	itemID := registerSDDAttemptStringFlag(flags, operation, "item")
 	workUnit := registerSDDAttemptStringFlag(flags, operation, "work-unit")
 	evidenceGoal := registerSDDAttemptStringFlag(flags, operation, "evidence-goal")
 	maxAttempts := registerSDDAttemptIntFlag(flags, operation, "max-attempts")
@@ -78,7 +79,11 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	*evidenceRevision = strings.TrimSpace(*evidenceRevision)
 	*expectedBindingRevision = strings.TrimSpace(*expectedBindingRevision)
 	*remediatesEvidenceRevision = strings.TrimSpace(*remediatesEvidenceRevision)
-	if missing := missingSDDAttemptOperationFlags(args[1:], operation, *outcome); len(missing) != 0 {
+	missing := missingSDDAttemptOperationFlags(args[1:], operation, *outcome)
+	if operation == "acquire" && *itemID == "" {
+		missing = append(missing, missingSDDAttemptFlags(args[1:], "work-unit", "evidence-goal")...)
+	}
+	if len(missing) != 0 {
 		return missingSDDAttemptOperationError(operation, missing)
 	}
 	if strings.TrimSpace(*cwd) == "" {
@@ -92,9 +97,12 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read review mode: %w", err)
 	}
-	store, err := sddstatus.OpenRuntimeStore(ctx, *cwd, *change)
-	if err != nil {
-		return fmt.Errorf("open native SDD runtime authority: %w", err)
+	var store sddstatus.RuntimeStore
+	if operation != "acquire" || *itemID == "" {
+		store, err = sddstatus.OpenRuntimeStore(ctx, *cwd, *change)
+		if err != nil {
+			return fmt.Errorf("open native SDD runtime authority: %w", err)
+		}
 	}
 	// The kill switch reaches the runtime ledger here, at the one place that
 	// knows how to read both of its sources. With reviews off, closing an
@@ -163,11 +171,23 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			ExpectedRevision: *expected, RequestID: *requestID, Reason: *reason, Actor: *actor,
 		})
 	case "acquire":
+		request := sddstatus.BeginAttemptRequest{RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal, MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines}
+		if *itemID != "" {
+			if presentSDDAttemptFlags(args[1:], "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "remediates-evidence-revision") != 0 {
+				// refusal:by-design operator-knowledge: metadata owns item policy, so only the caller can remove the conflicting flags.
+				return errors.New("item-selected acquire derives work-unit policy from metadata; omit caller-authored scope and remediation flags")
+			}
+			request, err = sddstatus.ResolveItemAcquire(sddstatus.ResolveOptions{CWD: *cwd, ChangeName: *change, ReviewDisabled: reviewDisabled}, *itemID, *requestID)
+			if err != nil {
+				return err
+			}
+		}
+		if store, err = sddstatus.OpenRuntimeStore(ctx, *cwd, *change); err != nil {
+			return fmt.Errorf("open native SDD runtime authority: %w", err)
+		}
+		store.ReviewDisabled = reviewDisabled
 		result, err = store.Acquire(ctx, sddstatus.CompactAcquireRequest{
-			BeginAttemptRequest: sddstatus.BeginAttemptRequest{
-				RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
-				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
-			},
+			BeginAttemptRequest:        request,
 			Token:                      *token,
 			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
 		})
@@ -305,10 +325,11 @@ var sddAttemptOperationDefinitions = []sddAttemptOperationContract{
 	}},
 	{name: "acquire", purpose: "Claim a bounded attempt and return its token", flags: []sddAttemptFlagDefinition{
 		sddAttemptCWDFlag, sddAttemptChangeFlag,
+		{name: "item", usage: "optional; projected work item id; derives attempt scope from task metadata"},
 		{name: "token", usage: "optional; token from an earlier acquire to continue that active attempt"},
 		{name: "request-id", required: true, usage: "required; lowercase idempotency key, at most 128 bytes"},
-		{name: "work-unit", required: true, usage: "required; single-line label, at most 160 bytes"},
-		{name: "evidence-goal", required: true, usage: "required; single-line objective, at most 240 bytes"},
+		{name: "work-unit", usage: "required unless --item; single-line label, at most 160 bytes"},
+		{name: "evidence-goal", usage: "required unless --item; single-line objective, at most 240 bytes"},
 		{name: "max-attempts", kind: sddAttemptIntFlag, usage: "optional; default 2, limit 1..100"},
 		{name: "max-changed-lines", kind: sddAttemptIntFlag, usage: "optional; default 200, limit 1..1000000"},
 		{name: "remediates-evidence-revision", usage: "optional; sha256:<64 lowercase hex> failed evidence for unmanaged remediation"},

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ const (
 	runtimeRecordSchema                      = "gentle-ai.sdd-runtime-record/v1"
 	runtimeObjectiveSchema                   = "gentle-ai.sdd-runtime-objective/v1"
 	runtimeObjectiveSchemaV2                 = "gentle-ai.sdd-runtime-objective/v2"
+	runtimeObjectiveSchemaV3                 = "gentle-ai.sdd-runtime-objective/v3"
 	DefaultRuntimeAttemptLimit               = 2
 	DefaultRuntimeChangedLines               = 200
 	maximumRuntimeAttemptLimit               = 100
@@ -201,23 +203,27 @@ const (
 )
 
 type RuntimeObjective struct {
-	ID                       string `json:"id"`
-	Generation               int    `json:"generation"`
-	WorkUnit                 string `json:"work_unit"`
-	EvidenceGoal             string `json:"evidence_goal"`
-	InitialCandidateIdentity string `json:"initial_candidate_identity"`
-	InitialCandidateTree     string `json:"initial_candidate_tree"`
-	MaxAttempts              int    `json:"max_attempts"`
-	MaxChangedLines          int    `json:"max_changed_lines"`
+	ID                       string   `json:"id"`
+	Generation               int      `json:"generation"`
+	WorkUnit                 string   `json:"work_unit"`
+	EvidenceGoal             string   `json:"evidence_goal"`
+	InitialCandidateIdentity string   `json:"initial_candidate_identity"`
+	InitialCandidateTree     string   `json:"initial_candidate_tree"`
+	MaxAttempts              int      `json:"max_attempts"`
+	MaxChangedLines          int      `json:"max_changed_lines"`
+	ItemID                   string   `json:"item_id,omitempty"`
+	ItemEditRoots            []string `json:"item_edit_roots,omitempty"`
 }
 
 type RuntimeAttempt struct {
-	Ordinal                int    `json:"ordinal"`
-	ObjectiveID            string `json:"objective_id"`
-	ObjectiveGeneration    int    `json:"objective_generation"`
-	WorkUnit               string `json:"work_unit"`
-	BeginCandidateIdentity string `json:"begin_candidate_identity"`
-	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	Ordinal                int      `json:"ordinal"`
+	ObjectiveID            string   `json:"objective_id"`
+	ObjectiveGeneration    int      `json:"objective_generation"`
+	WorkUnit               string   `json:"work_unit"`
+	ItemID                 string   `json:"item_id,omitempty"`
+	ItemEditRoots          []string `json:"item_edit_roots,omitempty"`
+	BeginCandidateIdentity string   `json:"begin_candidate_identity"`
+	BeginCandidateTree     string   `json:"begin_candidate_tree"`
 	// BeginWorktree is the canonical (absolute, symlink-evaluated) --cwd Begin
 	// ran under (#2296 part 1). It is empty for every chain recorded before
 	// this field existed — that emptiness IS the legacy signal, so replay and
@@ -356,16 +362,264 @@ type RuntimeStatus struct {
 	// instead of dead-ending in prose (#2588, and the same dead end #2902 and
 	// #2913 died in). Populated only by AdmissionStatus, and only while the
 	// ledger actually requires that decision.
-	Consent *BudgetConsentResult `json:"consent,omitempty"`
+	Consent   *BudgetConsentResult `json:"consent,omitempty"`
+	ownership runtimeOwnership
+	itemPlan  *itemPlanCandidate
+}
+
+// runtimeOwnership is replay's sole mutable representation of objective and
+// attempt ownership. RuntimeStatus retains the legacy fields as projections so
+// existing callers and persisted JSON remain unchanged while later admission
+// work can target ownership by objective or attempt ordinal.
+type runtimeOwnership struct {
+	objectives map[string]*runtimeObjectiveOwnership
+	active     map[int]string
+	parents    map[string]string
+	roots      map[string]bool
+	current    string
+}
+
+type runtimeObjectiveOwnership struct {
+	objective               *RuntimeObjective
+	active                  *RuntimeAttempt
+	planDigest, entryDigest string
+}
+
+// runtimeAttemptTarget is compact settlement's immutable owner selection. It
+// is private so only authority code can construct and revalidate it.
+type runtimeAttemptTarget struct {
+	ObjectiveID         string
+	ObjectiveGeneration int
+	Ordinal             int
+	Token               string
+}
+
+func runtimeActiveAttemptForTarget(replay runtimeReplay, target runtimeAttemptTarget) (*RuntimeAttempt, bool) {
+	if target.Token == "" || replay.AttemptTokens[target.Ordinal] != target.Token {
+		return nil, false
+	}
+	active := replay.Status.runtimeActiveAttemptForOrdinal(target.Ordinal)
+	if active == nil || active.ObjectiveID != target.ObjectiveID || active.ObjectiveGeneration != target.ObjectiveGeneration {
+		return nil, false
+	}
+	owner := replay.Status.ownership.objectives[target.ObjectiveID]
+	if owner == nil || owner.objective.Generation != target.ObjectiveGeneration {
+		return nil, false
+	}
+	found := false
+	for index := range replay.Status.Attempts {
+		attempt := &replay.Status.Attempts[index]
+		if attempt.Ordinal == target.Ordinal && attempt.ObjectiveID == target.ObjectiveID && attempt.ObjectiveGeneration == target.ObjectiveGeneration {
+			if found {
+				return nil, false
+			}
+			found = true
+		}
+	}
+	return active, found
+}
+
+func newRuntimeOwnership() runtimeOwnership {
+	return runtimeOwnership{objectives: map[string]*runtimeObjectiveOwnership{}, active: map[int]string{}, parents: map[string]string{}, roots: map[string]bool{}}
+}
+
+func (status *RuntimeStatus) initializeRuntimeOwnership() {
+	if status.ownership.objectives != nil {
+		return
+	}
+	status.ownership = newRuntimeOwnership()
+	if status.Objective != nil {
+		status.ownership.current = status.Objective.ID
+		status.ownership.objectives[status.Objective.ID] = &runtimeObjectiveOwnership{objective: status.Objective}
+		status.ownership.roots[status.Objective.ID] = true
+	}
+	if status.ActiveAttempt != nil && status.Objective != nil {
+		status.ownership.active[status.ActiveAttempt.Ordinal] = status.Objective.ID
+		status.ownership.objectives[status.Objective.ID].active = status.ActiveAttempt
+	}
+}
+
+func (status RuntimeStatus) runtimeObjective() *RuntimeObjective {
+	if status.ownership.objectives == nil {
+		return status.Objective
+	}
+	owner := status.ownership.objectives[status.ownership.current]
+	if owner == nil {
+		return nil
+	}
+	return owner.objective
+}
+
+func (status RuntimeStatus) runtimeActiveAttempt() *RuntimeAttempt {
+	if status.ownership.active == nil {
+		return status.ActiveAttempt
+	}
+	if len(status.ownership.active) != 1 {
+		return nil
+	}
+	for _, objectiveID := range status.ownership.active {
+		owner := status.ownership.objectives[objectiveID]
+		if owner == nil || owner.objective == nil || owner.active == nil {
+			return nil
+		}
+		return owner.active
+	}
+	return nil
+}
+
+func (status RuntimeStatus) runtimeActiveAttemptForOrdinal(ordinal int) *RuntimeAttempt {
+	if status.ownership.active == nil {
+		if status.ActiveAttempt != nil && status.ActiveAttempt.Ordinal == ordinal {
+			return status.ActiveAttempt
+		}
+		return nil
+	}
+	objectiveID := status.ownership.active[ordinal]
+	if objectiveID == "" || status.ownership.objectives[objectiveID] == nil {
+		return nil
+	}
+	owner := status.ownership.objectives[objectiveID]
+	if owner == nil || owner.objective == nil || owner.active == nil {
+		return nil
+	}
+	return owner.active
+}
+
+func (status RuntimeStatus) runtimeActiveCount() int { return len(status.ownership.active) }
+
+func (status RuntimeStatus) runtimeActiveOrdinals() []int {
+	ordinals := make([]int, 0, len(status.ownership.active))
+	for ordinal := range status.ownership.active {
+		ordinals = append(ordinals, ordinal)
+	}
+	sort.Ints(ordinals)
+	return ordinals
+}
+
+// runtimeCompatibilityActive deterministically projects the lowest live owner.
+func (status RuntimeStatus) runtimeCompatibilityActive() (*RuntimeObjective, *RuntimeAttempt) {
+	ordinals := status.runtimeActiveOrdinals()
+	if len(ordinals) == 0 {
+		return nil, nil
+	}
+	owner := status.ownership.objectives[status.ownership.active[ordinals[0]]]
+	if owner == nil {
+		return nil, nil
+	}
+	if owner.objective == nil || owner.active == nil {
+		return nil, nil
+	}
+	return owner.objective, owner.active
+}
+
+func (status RuntimeStatus) runtimeObjectiveForAttempt(attempt *RuntimeAttempt) *RuntimeObjective {
+	if attempt == nil {
+		return nil
+	}
+	owner := status.ownership.objectives[attempt.ObjectiveID]
+	if owner == nil || owner.objective == nil || owner.objective.Generation != attempt.ObjectiveGeneration {
+		return nil
+	}
+	return owner.objective
+}
+
+func cloneRuntimeObjective(objective *RuntimeObjective) *RuntimeObjective {
+	if objective == nil {
+		return nil
+	}
+	clone := *objective
+	clone.ItemEditRoots = append([]string(nil), objective.ItemEditRoots...)
+	return &clone
+}
+
+func cloneRuntimeAttempt(attempt *RuntimeAttempt) *RuntimeAttempt {
+	if attempt == nil {
+		return nil
+	}
+	clone := *attempt
+	clone.ItemEditRoots = append([]string(nil), attempt.ItemEditRoots...)
+	if attempt.Handoff != nil {
+		handoff := *attempt.Handoff
+		clone.Handoff = &handoff
+	}
+	return &clone
+}
+
+func (status *RuntimeStatus) materializeRuntimeOwnership() {
+	status.Objective = nil
+	status.ActiveAttempt = nil
+	if objective, active := status.runtimeCompatibilityActive(); active != nil {
+		status.Objective, status.ActiveAttempt = cloneRuntimeObjective(objective), cloneRuntimeAttempt(active)
+		return
+	}
+	if owner := status.ownership.objectives[status.ownership.current]; owner != nil {
+		status.Objective = cloneRuntimeObjective(owner.objective)
+	}
+	if active := status.runtimeActiveAttempt(); active != nil {
+		status.ActiveAttempt = cloneRuntimeAttempt(active)
+	}
+}
+
+func (status *RuntimeStatus) setRuntimeObjective(objective *RuntimeObjective) {
+	status.setRuntimeObjectiveWithParent(objective, "")
+}
+
+func (status *RuntimeStatus) setRuntimeObjectiveWithParent(objective *RuntimeObjective, parent string) {
+	status.initializeRuntimeOwnership()
+	if objective == nil {
+		status.ownership.current = ""
+		status.materializeRuntimeOwnership()
+		return
+	}
+	status.ownership.current = objective.ID
+	status.ownership.objectives[objective.ID] = &runtimeObjectiveOwnership{objective: objective}
+	if parent != "" {
+		status.ownership.parents[objective.ID] = parent
+		delete(status.ownership.roots, objective.ID)
+	} else {
+		delete(status.ownership.parents, objective.ID)
+		status.ownership.roots[objective.ID] = true
+	}
+	status.materializeRuntimeOwnership()
+}
+
+func (status *RuntimeStatus) setRuntimeActiveAttempt(attempt *RuntimeAttempt) {
+	status.initializeRuntimeOwnership()
+	objective := status.runtimeObjective()
+	if objective == nil || objective.ID != attempt.ObjectiveID {
+		panic("runtime active attempt has no current objective")
+	}
+	status.ownership.objectives[objective.ID].active = attempt
+	status.ownership.active[attempt.Ordinal] = objective.ID
+	status.materializeRuntimeOwnership()
+}
+
+func (status *RuntimeStatus) addRuntimeObjective(objective *RuntimeObjective, planDigest, entryDigest string) {
+	status.initializeRuntimeOwnership()
+	status.ownership.objectives[objective.ID] = &runtimeObjectiveOwnership{objective: objective, planDigest: planDigest, entryDigest: entryDigest}
+	status.ownership.roots[objective.ID] = true
+}
+
+func (status *RuntimeStatus) clearRuntimeActiveAttempt(ordinal int) {
+	status.initializeRuntimeOwnership()
+	objectiveID := status.ownership.active[ordinal]
+	if objectiveID != "" && status.ownership.objectives[objectiveID] != nil {
+		status.ownership.objectives[objectiveID].active = nil
+	}
+	delete(status.ownership.active, ordinal)
+	status.materializeRuntimeOwnership()
 }
 
 type BeginAttemptRequest struct {
-	ExpectedRevision string `json:"expected_revision"`
-	RequestID        string `json:"request_id"`
-	WorkUnit         string `json:"work_unit"`
-	EvidenceGoal     string `json:"evidence_goal"`
-	MaxAttempts      int    `json:"max_attempts"`
-	MaxChangedLines  int    `json:"max_changed_lines"`
+	ExpectedRevision string   `json:"expected_revision"`
+	RequestID        string   `json:"request_id"`
+	WorkUnit         string   `json:"work_unit"`
+	EvidenceGoal     string   `json:"evidence_goal"`
+	MaxAttempts      int      `json:"max_attempts"`
+	MaxChangedLines  int      `json:"max_changed_lines"`
+	ItemID           string   `json:"item_id,omitempty"`
+	ItemEditRoots    []string `json:"item_edit_roots,omitempty"`
+	itemPlan         *itemPlanBinding
 }
 
 type FinishAttemptRequest struct {
@@ -471,8 +725,12 @@ type RuntimeStore struct {
 	// keeps today's behavior. The switch itself is read in the CLI layer, which
 	// owns the single source of truth for both of its sources; an unreadable
 	// switch is not a disabled switch and resolves to false.
-	ReviewDisabled bool
-	commonDir      string
+	ReviewDisabled     bool
+	commonDir          string
+	authorityDir       string
+	authorityRepo      string
+	authorityWorkspace string
+	authorityChange    string
 	// instance is the change-instance identity this store session serves
 	// (#2540 S5). The ledger directory is keyed by change name alone and
 	// archive never touches it, so a future change reusing an archived name
@@ -487,6 +745,16 @@ type RuntimeStore struct {
 	// zero value is the conservative containment: a store opened without an
 	// instance identity projects no granted roots at all.
 	instance string
+	// finishTargetPreMutation is a value-scoped test seam. It is nil in
+	// production and copied only when the store value itself is copied.
+	finishTargetPreMutation func(*runtimeAttemptTarget)
+	// acquireRetryTimeout/Poll are value-scoped test configuration. Production
+	// uses the bounded defaults in runtime_compact.go.
+	acquireRetryTimeout time.Duration
+	acquireRetryPoll    time.Duration
+	// acquireAttemptObserved is value-scoped test instrumentation for the
+	// compact retry classifier; production stores leave it nil.
+	acquireAttemptObserved func(error)
 }
 
 // ForInstance derives a store bound to one change-instance identity. The
@@ -563,15 +831,20 @@ type runtimeAdvanceEvent struct {
 }
 
 type runtimeBeginEvent struct {
-	ObjectiveID            string `json:"objective_id"`
-	ObjectiveGeneration    int    `json:"objective_generation,omitempty"`
-	WorkUnit               string `json:"work_unit"`
-	EvidenceGoal           string `json:"evidence_goal"`
-	MaxAttempts            int    `json:"max_attempts"`
-	MaxChangedLines        int    `json:"max_changed_lines"`
-	Ordinal                int    `json:"ordinal"`
-	BeginCandidateIdentity string `json:"begin_candidate_identity"`
-	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	ObjectiveID            string             `json:"objective_id"`
+	ObjectiveGeneration    int                `json:"objective_generation,omitempty"`
+	WorkUnit               string             `json:"work_unit"`
+	EvidenceGoal           string             `json:"evidence_goal"`
+	MaxAttempts            int                `json:"max_attempts"`
+	MaxChangedLines        int                `json:"max_changed_lines"`
+	ItemID                 string             `json:"item_id,omitempty"`
+	ItemEditRoots          []string           `json:"item_edit_roots,omitempty"`
+	ItemPlan               *itemPlanCandidate `json:"item_plan,omitempty"`
+	ItemPlanDigest         string             `json:"item_plan_digest,omitempty"`
+	ItemPlanEntryDigest    string             `json:"item_plan_entry_digest,omitempty"`
+	Ordinal                int                `json:"ordinal"`
+	BeginCandidateIdentity string             `json:"begin_candidate_identity"`
+	BeginCandidateTree     string             `json:"begin_candidate_tree"`
 	// BeginWorktree records store.Workspace at Begin time (#2296 part 1): the
 	// resolved, symlink-evaluated absolute path of the exact --cwd this begin
 	// ran under. omitempty is load-bearing — every record predating this field
@@ -658,10 +931,12 @@ type runtimeReplay struct {
 	Status        RuntimeStatus
 	Requests      map[string]runtimeRequestReceipt
 	AttemptTokens map[int]string
+	Accounting    runtimeAccounting
 	// Instance carries the store's ForInstance identity into replay (#2540
 	// S5): applyRuntimeGrantEvent projects a grant into GrantedRoots only
 	// when the record's identity equals this one. Empty projects nothing.
 	Instance string
+	itemPlan *itemPlanCandidate
 }
 
 func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, error) {
@@ -686,7 +961,8 @@ func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, e
 	}
 	commonDir := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(probe.Dir))))
 	dir := runtimeChangeLedgerDir(filepath.Join(commonDir, "gentle-ai", "sdd-runtime"), change)
-	return RuntimeStore{Dir: dir, Repo: root, Workspace: workspace, Change: change, commonDir: commonDir}, nil
+	return RuntimeStore{Dir: dir, Repo: root, Workspace: workspace, Change: change, commonDir: commonDir,
+		authorityDir: dir, authorityRepo: root, authorityWorkspace: workspace, authorityChange: change}, nil
 }
 
 // encodedRuntimeChangeNamespace holds identities that cannot be a directory
@@ -739,11 +1015,12 @@ func (store RuntimeStore) Status() (RuntimeStatus, error) {
 // inspecting the last recorded attempt, which would still belong to the
 // objective THIS one just superseded.
 func runtimeObjectiveHasRecordedAttempt(status RuntimeStatus) bool {
-	if status.Objective == nil {
+	objective := status.runtimeObjective()
+	if objective == nil {
 		return false
 	}
 	for index := len(status.Attempts) - 1; index >= 0; index-- {
-		if status.Attempts[index].ObjectiveID == status.Objective.ID {
+		if status.Attempts[index].ObjectiveID == objective.ID {
 			return true
 		}
 	}
@@ -755,39 +1032,58 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	digest := runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request)
+	digest := runtimeBeginRequestDigest(request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
+		bound, plan, planDigest, entryDigest, err := store.runtimeItemPlanBinding(replay, request)
+		if err != nil {
+			return runtimeRecord{}, err
+		}
 		// Every precondition, ledger-side and repository-side, is evaluated by
 		// the one predicate the read-only surfaces evaluate too, under this
 		// lock and against this exact replay, so a read that said "admitted"
 		// a moment ago cannot let a stale verdict through here.
-		admission, err := store.runtimeBeginAdmission(ctx, status, request)
+		admission, err := store.runtimeBeginAdmission(ctx, replay, bound)
 		if err != nil {
 			return runtimeRecord{}, err
 		}
 		advancing, generation, snapshot := admission.Advancing, admission.Generation, admission.Snapshot
-		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, snapshot.Identity, generation)
-		if status.Objective != nil && !advancing {
-			objectiveID = status.Objective.ID
+		objectiveID := runtimeObjectiveIDForBinding(store.Change, bound.WorkUnit, bound.EvidenceGoal, snapshot.Identity, generation, bound.ItemID, bound.ItemEditRoots)
+		if objective := status.runtimeObjective(); objective != nil && !advancing && !admission.Concurrent {
+			objectiveID = objective.ID
 		}
 		event := &runtimeBeginEvent{
-			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
-			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
+			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: bound.WorkUnit, EvidenceGoal: bound.EvidenceGoal,
+			MaxAttempts: bound.MaxAttempts, MaxChangedLines: bound.MaxChangedLines,
+			ItemID: bound.ItemID, ItemEditRoots: bound.ItemEditRoots,
+			ItemPlan: plan, ItemPlanDigest: planDigest, ItemPlanEntryDigest: entryDigest,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
 			BeginWorktree: store.Workspace, EffectiveWorktree: store.Workspace,
 		}
 		if advancing {
 			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
-				PreviousObjectiveID: status.Objective.ID, PreviousGeneration: status.Objective.Generation,
-				PreviousWorkUnit: status.Objective.WorkUnit,
+				PreviousObjectiveID: status.runtimeObjective().ID, PreviousGeneration: status.runtimeObjective().Generation,
+				PreviousWorkUnit: status.runtimeObjective().WorkUnit,
 			}}, nil
 		}
 		return runtimeRecord{Operation: runtimeOperationBegin, Begin: event}, nil
 	})
 }
 
+// Finish selects the one serial active owner. Token-selected callers use
+// finishTarget so they never rely on this compatibility selection.
 func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptRequest) (RuntimeStatus, error) {
+	return store.finish(ctx, request, nil)
+}
+
+func (store RuntimeStore) finishTarget(ctx context.Context, request FinishAttemptRequest, target runtimeAttemptTarget) (RuntimeStatus, error) {
+	if store.finishTargetPreMutation != nil {
+		store.finishTargetPreMutation(&target)
+	}
+	return store.finish(ctx, request, &target)
+}
+
+func (store RuntimeStore) finish(ctx context.Context, request FinishAttemptRequest, target *runtimeAttemptTarget) (RuntimeStatus, error) {
 	request, err := normalizeFinishAttemptRequest(request)
 	if err != nil {
 		return RuntimeStatus{}, err
@@ -795,9 +1091,30 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
-		active := status.ActiveAttempt
+		if status.runtimeActiveCount() > 1 && target == nil {
+			return runtimeRecord{}, ErrRuntimeAttemptActive
+		}
+		active := status.runtimeActiveAttempt()
+		if active != nil && target == nil {
+			target = &runtimeAttemptTarget{Ordinal: active.Ordinal, ObjectiveID: active.ObjectiveID, ObjectiveGeneration: active.ObjectiveGeneration, Token: replay.AttemptTokens[active.Ordinal]}
+		}
+		if target != nil {
+			var ok bool
+			active, ok = runtimeActiveAttemptForTarget(replay, *target)
+			if !ok {
+				return runtimeRecord{}, ErrRuntimeNoActiveAttempt
+			}
+		}
 		if active == nil {
 			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
+		}
+		objective := status.ownership.objectives[active.ObjectiveID]
+		if objective == nil || objective.objective.Generation != active.ObjectiveGeneration {
+			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
+		}
+		consumed, err := replay.Accounting.current(objective.objective)
+		if err != nil {
+			return runtimeRecord{}, err
 		}
 		// A canonical evidence revision is accepted through normalization so an
 		// exact retry can reach mutate's request receipt and replay a legacy
@@ -842,7 +1159,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		// honest interrupted settlement between the failure and its correction
 		// is an audit record, not a semantic successor, so neither severs the
 		// binding; the first passed settlement after the failure does.
-		chainFailedAttempt, chainHasFailedEvidence := runtimeChainFailedAttempt(status.Attempts)
+		chainFailedAttempt, chainHasFailedEvidence := runtimeLineageFailedAttempt(status)
 		chainFailedEvidence := chainFailedAttempt.EvidenceRevision
 		if unmanagedRemediation {
 			if !store.ReviewDisabled {
@@ -861,7 +1178,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				// slice already repaired it. Blaming their input sent the
 				// reporter looking for authority to guess at; the state is what
 				// changed, and the exit is to stop claiming a remediation.
-				if discharged, ordinal, ok := runtimeDischargedFailure(status.Attempts, request.RemediatesEvidenceRevision); ok {
+				if discharged, ordinal, ok := runtimeLineageDischargedFailure(status, request.RemediatesEvidenceRevision); ok {
 					return runtimeRecord{}, runtimeDischargedFailureRefusal(discharged, ordinal)
 				}
 				// No by-design marker: this names a runnable continuation inline.
@@ -936,7 +1253,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			Diagnosis: request.Diagnosis, HarnessDisposition: request.HarnessDisposition,
 			CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
 			RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
-			ChangedLineBudgetExceeded:  status.CumulativeChangedLines+changedLines > status.Objective.MaxChangedLines,
+			ChangedLineBudgetExceeded:  consumed.lines+changedLines > objective.objective.MaxChangedLines,
 		}
 		if remediation {
 			prepared, prepareErr := prepareApprovedRuntimeSuccessorBinding(ctx, store.Repo, store.Workspace, store.Change, request.SuccessorLineageID)
@@ -1064,7 +1381,10 @@ func (store RuntimeStore) Handoff(ctx context.Context, request HandoffAttemptReq
 	}
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-handoff-request/v1", request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
-		active := replay.Status.ActiveAttempt
+		if replay.Status.runtimeActiveCount() > 1 {
+			return runtimeRecord{}, ErrRuntimeAttemptActive
+		}
+		active := replay.Status.runtimeActiveAttempt()
 		if active == nil {
 			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
 		}
@@ -1130,7 +1450,7 @@ func (store RuntimeStore) Handoff(ctx context.Context, request HandoffAttemptReq
 // remaining attempts honestly, which is what reaches decision-required, where
 // this same reset is admitted and opens a fresh budget.
 func (store RuntimeStore) runtimeZeroDriftResetRefusal(status RuntimeStatus) error {
-	objective := status.Objective
+	objective := status.runtimeObjective()
 	return fmt.Errorf(
 		"%w: this objective's candidate has not drifted and it still has attempts left, so resetting it now would launder the per-objective budget. If the failed evidence proves this OBJECTIVE is wrong rather than under-attempted, a maintainer may open a narrower successor scope instead — `gentle-ai sdd-attempt rescope --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --work-unit \"<narrower-work-unit>\" --evidence-goal \"<narrower-evidence-goal>\" --max-attempts \"<n, at most %d>\" --max-changed-lines \"<n, at most %d>\" --reason \"<why-the-objective-is-narrowing>\" --actor \"<actor>\"`; rescope carries cumulative_attempts and cumulative_changed_lines forward unchanged and never widens a budget, so if the successor needs MORE than %d changed lines, spend this objective's remaining attempts first: the run that exhausts them reaches decision-required, where this reset is admitted",
 		ErrRuntimeResetNotAllowed, store.Workspace, store.Change, status.Revision,
@@ -1150,7 +1470,7 @@ func (store RuntimeStore) runtimeZeroDriftResetRefusal(status RuntimeStatus) err
 // not weaken the narrowing rule, which exists so a successor scope cannot
 // launder a consumed budget.
 func (store RuntimeStore) runtimeRescopeWidenedRefusal(status RuntimeStatus, flag string, requested, allowed int) error {
-	remaining := status.Objective.MaxAttempts - status.CumulativeAttempts
+	remaining := status.runtimeObjective().MaxAttempts - status.CumulativeAttempts
 	return fmt.Errorf(
 		"%w: received %s %d, the current objective allows %d. A wider successor scope is reached by finishing this objective rather than by rescoping it: spend its %d remaining attempt(s), and the run that exhausts them reaches decision-required, where `gentle-ai sdd-attempt reset --cwd %q --change %q --expected-revision \"<revision-from-status>\" --request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"` opens a fresh budget of any size",
 		ErrRuntimeRescopeWidened, flag, requested, allowed, remaining, store.Workspace, store.Change)
@@ -1249,7 +1569,7 @@ func (store RuntimeStore) runtimeObjectiveChangeRefusal(ctx context.Context, sta
 // candidate capture that fails all answer false, and the caller then names the
 // begin the ledger already accepts instead of a command refused one layer in.
 func (store RuntimeStore) runtimeObjectiveResetAdmissible(ctx context.Context, status RuntimeStatus) bool {
-	if status.ActiveAttempt != nil || status.Objective == nil || !runtimeResetStructurallyPermitted(status) {
+	if status.runtimeActiveAttempt() != nil || status.runtimeObjective() == nil || !runtimeResetStructurallyPermitted(status) {
 		return false
 	}
 	if status.DecisionRequired || status.Complete {
@@ -1272,7 +1592,7 @@ func (store RuntimeStore) runtimeObjectiveResetAdmissible(ctx context.Context, s
 // last attempt, or a candidate capture that fails all answer false; a
 // candidate that captured successfully and did NOT drift answers true.
 func (store RuntimeStore) runtimeObjectiveRescopeAdmissible(ctx context.Context, status RuntimeStatus) bool {
-	if status.ActiveAttempt != nil || status.Objective == nil || !runtimeObjectiveRescopeStructurallyPermitted(status) {
+	if status.runtimeActiveAttempt() != nil || status.runtimeObjective() == nil || !runtimeObjectiveRescopeStructurallyPermitted(status) {
 		return false
 	}
 	last := status.Attempts[len(status.Attempts)-1]
@@ -1295,15 +1615,24 @@ func (store RuntimeStore) runtimeObjectiveRescopeAdmissible(ctx context.Context,
 // validator re-checks, so an admitted advance can only be one the ledger
 // accepts.
 func runtimeObjectiveAdvanceAdmissible(status RuntimeStatus, request BeginAttemptRequest) bool {
-	if !status.Complete || status.DecisionRequired || status.ActiveAttempt != nil ||
-		status.Objective == nil || len(status.Attempts) == 0 {
+	objective := status.runtimeObjective()
+	if !status.Complete || status.DecisionRequired || status.runtimeActiveAttempt() != nil ||
+		objective == nil || len(status.Attempts) == 0 {
 		return false
 	}
-	if request.WorkUnit == status.Objective.WorkUnit {
+	if status.itemPlan != nil && request.itemPlan != nil && request.ItemID != "" &&
+		runtimePlanDependenciesSatisfied(runtimeReplay{Status: status, itemPlan: status.itemPlan}, *status.itemPlan, request.ItemID) &&
+		!runtimePlanItemPassedProof(runtimeReplay{Status: status, itemPlan: status.itemPlan}, *status.itemPlan, request.ItemID) {
+		return true
+	}
+	if request.WorkUnit == objective.WorkUnit {
+		return false
+	}
+	if objective.ItemID != "" && (request.ItemID == "" || request.ItemID == objective.ItemID) {
 		return false
 	}
 	last := status.Attempts[len(status.Attempts)-1]
-	return last.ObjectiveID == status.Objective.ID && last.Outcome == AttemptPassed &&
+	return last.ObjectiveID == objective.ID && last.Outcome == AttemptPassed &&
 		!last.ChangedLineBudgetExceeded && last.FinishCandidateIdentity != "" && last.FinishCandidateTree != ""
 }
 
@@ -1348,10 +1677,13 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-reset-request/v1", request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
-		if status.ActiveAttempt != nil {
+		if status.runtimeActiveCount() > 1 {
 			return runtimeRecord{}, ErrRuntimeAttemptActive
 		}
-		if status.Objective == nil {
+		if status.runtimeActiveAttempt() != nil {
+			return runtimeRecord{}, ErrRuntimeAttemptActive
+		}
+		if status.runtimeObjective() == nil {
 			return runtimeRecord{}, ErrRuntimeNoObjective
 		}
 		if !runtimeResetStructurallyPermitted(status) {
@@ -1378,7 +1710,7 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective reset: %w", err)
 		}
 		return runtimeRecord{Operation: runtimeOperationReset, Reset: &runtimeResetEvent{
-			PreviousObjectiveID: status.Objective.ID, PreviousGeneration: status.Objective.Generation,
+			PreviousObjectiveID: status.runtimeObjective().ID, PreviousGeneration: status.runtimeObjective().Generation,
 			ResetCandidateIdentity: snapshot.Identity, ResetCandidateTree: snapshot.CandidateTree,
 			Reason: request.Reason, Actor: request.Actor,
 		}}, nil
@@ -1399,14 +1731,15 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 // replaying one from the immutable chain (applyRuntimeRecord), so a
 // committed rescope always replays deterministically.
 func runtimeObjectiveRescopeStructurallyPermitted(status RuntimeStatus) bool {
-	if status.Objective == nil || status.DecisionRequired || status.Complete {
+	objective := status.runtimeObjective()
+	if objective == nil || status.DecisionRequired || status.Complete {
 		return false
 	}
 	if len(status.Attempts) == 0 {
 		return false
 	}
 	last := status.Attempts[len(status.Attempts)-1]
-	return last.ObjectiveID == status.Objective.ID &&
+	return last.ObjectiveID == objective.ID &&
 		(last.Outcome == AttemptFailed || last.Outcome == AttemptInterrupted)
 }
 
@@ -1428,10 +1761,13 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-rescope-request/v1", request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
 		status := replay.Status
-		if status.ActiveAttempt != nil {
+		if status.runtimeActiveCount() > 1 {
 			return runtimeRecord{}, ErrRuntimeAttemptActive
 		}
-		objective := status.Objective
+		if status.runtimeActiveAttempt() != nil {
+			return runtimeRecord{}, ErrRuntimeAttemptActive
+		}
+		objective := status.runtimeObjective()
 		if objective == nil {
 			return runtimeRecord{}, ErrRuntimeNoObjective
 		}
@@ -1457,6 +1793,9 @@ func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveR
 			return runtimeRecord{}, store.runtimeRescopeWidenedRefusal(
 				status, "--max-attempts", request.MaxAttempts, objective.MaxAttempts,
 			)
+		}
+		if objective.ItemID != "" {
+			return runtimeRecord{}, ErrRuntimeObjectiveChange
 		}
 		// The zero-drift `drift` snapshot above was captured with
 		// TargetBaseWorkspaceOverlay (same Kind/BaseRef Finish itself used),
@@ -1808,12 +2147,13 @@ func (store RuntimeStore) loadRevision(head string) (runtimeReplay, error) {
 	replay := runtimeReplay{
 		Status: RuntimeStatus{
 			Schema: RuntimeStatusSchema, Change: store.Change, Attempts: []RuntimeAttempt{},
-			NextOrdinal: 1, NextAction: RuntimeActionBegin,
+			NextOrdinal: 1, NextAction: RuntimeActionBegin, ownership: newRuntimeOwnership(),
 		},
 		Requests:      map[string]runtimeRequestReceipt{},
 		AttemptTokens: map[int]string{},
 		Instance:      store.instance,
 	}
+	replay.Accounting.nextOrdinal = 1
 	type revisionRecord struct {
 		revision string
 		record   runtimeRecord
@@ -1844,6 +2184,10 @@ func (store RuntimeStore) loadRevision(head string) (runtimeReplay, error) {
 			return runtimeReplay{}, fmt.Errorf("replay SDD runtime revision %s: %w", entry.revision, err)
 		}
 	}
+	if err := replay.Status.validateRuntimeLineage(); err != nil {
+		return runtimeReplay{}, fmt.Errorf("replay SDD runtime lineage: %w", err)
+	}
+	replay.Status.itemPlan = cloneItemPlan(replay.itemPlan)
 	if head != "" && replay.Status.Revision != head {
 		return runtimeReplay{}, errors.New("SDD runtime HEAD does not equal replayed revision")
 	}
@@ -1911,17 +2255,15 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 
 	case runtimeOperationReset:
 		event := record.Reset
-		objective := replay.Status.Objective
-		if replay.Status.ActiveAttempt != nil || objective == nil || !runtimeResetStructurallyPermitted(replay.Status) {
+		objective := replay.Status.runtimeObjective()
+		if replay.Status.runtimeActiveCount() > 1 || replay.Status.runtimeActiveAttempt() != nil || objective == nil || !runtimeResetStructurallyPermitted(replay.Status) {
 			return errors.New("objective reset is not a valid successor")
 		}
 		if event.PreviousObjectiveID != objective.ID || event.PreviousGeneration != objective.Generation ||
 			event.PreviousGeneration != replay.Status.ObjectiveGeneration {
 			return errors.New("objective reset does not match the terminal objective")
 		}
-		replay.Status.Objective = nil
-		replay.Status.CumulativeAttempts = 0
-		replay.Status.CumulativeChangedLines = 0
+		replay.Status.setRuntimeObjective(nil)
 		replay.Status.EvidenceRevision = ""
 		replay.Status.DecisionRequired = false
 		replay.Status.Complete = false
@@ -1955,6 +2297,9 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 		return errors.New("unsupported SDD runtime record operation")
 	}
 	replay.Status.Revision = revision
+	if err := replay.Accounting.materialize(&replay.Status); err != nil {
+		return err
+	}
 	replay.Requests[record.RequestID] = runtimeRequestReceipt{
 		Digest: record.RequestDigest, Revision: revision,
 		RemediationPredecessorLineage: remediationPredecessorLineage,
@@ -1964,39 +2309,75 @@ func applyRuntimeRecord(store RuntimeStore, replay *runtimeReplay, revision stri
 
 func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runtimeRecord) error {
 	event := record.Begin
+	plan, err := runtimeReplayItemPlan(record, replay.itemPlan)
+	if err != nil {
+		return err
+	}
 	generation := event.ObjectiveGeneration
 	if generation == 0 {
 		generation = replay.Status.ObjectiveGeneration + 1
-		if replay.Status.Objective != nil {
-			generation = replay.Status.Objective.Generation
+		if objective := replay.Status.runtimeObjective(); objective != nil {
+			generation = objective.Generation
 		}
 	}
-	if replay.Status.ActiveAttempt != nil || replay.Status.Complete || replay.Status.DecisionRequired {
+	concurrent := replay.Status.runtimeActiveCount() > 0
+	if !concurrent && (replay.Status.runtimeActiveAttempt() != nil || replay.Status.Complete || replay.Status.DecisionRequired) {
 		return errors.New("begin record is not a valid successor")
 	}
-	if replay.Status.Objective == nil {
-		expectedObjectiveID := runtimeObjectiveID(record.Change, event.WorkUnit, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
+	if concurrent {
+		if replay.itemPlan == nil {
+			// refusal:by-design world-action: a forged concurrent ledger record cannot be repaired by a runtime command; restore authoritative history.
+			return errors.New("concurrent begin record lacks retained item plan")
+		}
+		request := BeginAttemptRequest{WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines, ItemID: event.ItemID, ItemEditRoots: event.ItemEditRoots, itemPlan: &itemPlanBinding{Plan: *replay.itemPlan, ItemID: event.ItemID, EntryDigest: event.ItemPlanEntryDigest}}
+		if plan == nil || !runtimeConcurrentItemAdmissible(*replay, request) || event.ObjectiveGeneration != replay.Status.ObjectiveGeneration+1 || event.Ordinal != replay.Accounting.nextOrdinal {
+			// refusal:by-design world-action: immutable replay evidence is semantically forged; restore authoritative history.
+			return errors.New("concurrent begin record is not semantically admissible")
+		}
+		expected := runtimeObjectiveIDForBinding(record.Change, event.WorkUnit, event.EvidenceGoal, event.BeginCandidateIdentity, event.ObjectiveGeneration, event.ItemID, event.ItemEditRoots)
+		if event.ObjectiveID != expected {
+			// refusal:by-design world-action: immutable replay identity is forged; restore authoritative history.
+			return errors.New("concurrent begin objective identity is invalid")
+		}
+		objective := &RuntimeObjective{ID: event.ObjectiveID, Generation: event.ObjectiveGeneration, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal, InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines, ItemID: event.ItemID, ItemEditRoots: event.ItemEditRoots}
+		replay.Status.addRuntimeObjective(objective, event.ItemPlanDigest, event.ItemPlanEntryDigest)
+		replay.Status.ObjectiveGeneration = event.ObjectiveGeneration
+		if err := replay.Accounting.fresh(objective); err != nil {
+			return err
+		}
+	} else if replay.Status.runtimeObjective() == nil {
+		expectedObjectiveID := runtimeObjectiveIDForBinding(record.Change, event.WorkUnit, event.EvidenceGoal, event.BeginCandidateIdentity, generation, event.ItemID, event.ItemEditRoots)
 		if event.ObjectiveGeneration == 0 {
 			expectedObjectiveID = legacyRuntimeObjectiveID(record.Change, event.EvidenceGoal)
 		}
 		legacyGeneratedID := runtimeObjectiveIDV1(record.Change, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
 		validObjectiveID := event.ObjectiveID == expectedObjectiveID ||
-			event.ObjectiveGeneration != 0 && event.ObjectiveID == legacyGeneratedID
-		if event.Ordinal != replay.Status.NextOrdinal || generation != replay.Status.ObjectiveGeneration+1 || !validObjectiveID {
+			event.ItemID == "" && event.ObjectiveGeneration != 0 && event.ObjectiveID == legacyGeneratedID
+		if event.Ordinal != replay.Accounting.nextOrdinal || generation != replay.Status.ObjectiveGeneration+1 || !validObjectiveID {
 			return errors.New("initial objective identity or ordinal is invalid")
 		}
-		replay.Status.Objective = &RuntimeObjective{
+		parent := ""
+		if reset := replay.Status.LastReset; reset != nil && reset.Revision == record.PreviousRevision {
+			parent = reset.PreviousObjectiveID
+		}
+		replay.Status.setRuntimeObjectiveWithParent(&RuntimeObjective{
 			ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 			InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree,
 			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
-		}
+			ItemID: event.ItemID, ItemEditRoots: event.ItemEditRoots,
+		}, parent)
+		replay.Status.ownership.objectives[event.ObjectiveID].planDigest, replay.Status.ownership.objectives[event.ObjectiveID].entryDigest = event.ItemPlanDigest, event.ItemPlanEntryDigest
 		replay.Status.ObjectiveGeneration = generation
-	} else {
-		objective := replay.Status.Objective
+		if err := replay.Accounting.fresh(replay.Status.runtimeObjective()); err != nil {
+			return err
+		}
+	} else if !concurrent {
+		objective := replay.Status.runtimeObjective()
 		if event.ObjectiveID != objective.ID || generation != objective.Generation || event.EvidenceGoal != objective.EvidenceGoal ||
 			event.WorkUnit != objective.WorkUnit ||
 			event.MaxAttempts != objective.MaxAttempts || event.MaxChangedLines != objective.MaxChangedLines ||
-			event.Ordinal != replay.Status.NextOrdinal {
+			!runtimeItemBindingEqual(event.ItemID, event.ItemEditRoots, objective.ItemID, objective.ItemEditRoots) ||
+			event.Ordinal != replay.Accounting.nextOrdinal {
 			return errors.New("begin record changes the active objective or ordinal")
 		}
 		if runtimeObjectiveHasRecordedAttempt(replay.Status) {
@@ -2012,28 +2393,42 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 			return errors.New("begin record does not continue the rescoped objective's recorded candidate") // refusal:by-design world-action: this shape is constructed by the authority itself from Rescope's own recorded InitialCandidate*, so a mismatch is a mutated record and the exit is restoring the store
 		}
 	}
-	if replay.Status.CumulativeAttempts >= event.MaxAttempts || replay.Status.CumulativeChangedLines >= event.MaxChangedLines {
+	objective := replay.Status.runtimeObjectiveForAttempt(&RuntimeAttempt{ObjectiveID: event.ObjectiveID, ObjectiveGeneration: generation})
+	consumed, err := replay.Accounting.current(objective)
+	if err != nil {
+		return err
+	}
+	if consumed.attempts >= event.MaxAttempts || consumed.lines >= event.MaxChangedLines {
 		return errors.New("begin record exceeds the persisted objective budget")
 	}
 	attempt := RuntimeAttempt{
 		Ordinal: event.Ordinal, ObjectiveID: event.ObjectiveID, ObjectiveGeneration: generation,
-		WorkUnit: event.WorkUnit, BeginCandidateIdentity: event.BeginCandidateIdentity,
+		WorkUnit: event.WorkUnit, ItemID: event.ItemID, ItemEditRoots: event.ItemEditRoots, BeginCandidateIdentity: event.BeginCandidateIdentity,
 		BeginCandidateTree: event.BeginCandidateTree, BeginWorktree: event.BeginWorktree,
 		EffectiveWorktree: event.EffectiveWorktree, Outcome: AttemptRunning,
 	}
 	replay.Status.Attempts = append(replay.Status.Attempts, attempt)
 	replay.AttemptTokens[event.Ordinal] = revision
 	active := attempt
-	replay.Status.ActiveAttempt = &active
-	replay.Status.CumulativeAttempts++
-	replay.Status.LifetimeAttempts++
-	replay.Status.NextOrdinal = event.Ordinal + 1
+	if concurrent {
+		replay.Status.ownership.objectives[event.ObjectiveID].active = &active
+		replay.Status.ownership.active[event.Ordinal] = event.ObjectiveID
+		replay.Status.materializeRuntimeOwnership()
+	} else {
+		replay.Status.setRuntimeActiveAttempt(&active)
+	}
+	if err := replay.Accounting.begin(objective); err != nil {
+		return err
+	}
+	if plan != nil {
+		replay.itemPlan = plan
+	}
 	replay.Status.NextAction = RuntimeActionFinish
 	return nil
 }
 
 func applyRuntimeHandoffEvent(replay *runtimeReplay, event *RuntimeHandoff) error {
-	active := replay.Status.ActiveAttempt
+	active := replay.Status.runtimeActiveAttempt()
 	if active == nil || active.Ordinal != event.Ordinal || active.EffectiveWorktree == "" ||
 		active.EffectiveWorktree != event.SourceWorktree || active.Handoff != nil ||
 		len(replay.Status.Attempts) == 0 || replay.Status.Attempts[len(replay.Status.Attempts)-1].Outcome != AttemptRunning {
@@ -2044,7 +2439,7 @@ func applyRuntimeHandoffEvent(replay *runtimeReplay, event *RuntimeHandoff) erro
 	attempt.EffectiveWorktree = event.DestinationWorktree
 	attempt.Handoff = &handoff
 	activeCopy := *attempt
-	replay.Status.ActiveAttempt = &activeCopy
+	replay.Status.setRuntimeActiveAttempt(&activeCopy)
 	return nil
 }
 
@@ -2059,8 +2454,8 @@ func applyRuntimeHandoffEvent(replay *runtimeReplay, event *RuntimeHandoff) erro
 // fooled by a forged event.PreviousMaxAttempts.
 func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record runtimeRecord) error {
 	event := record.Rescope
-	objective := replay.Status.Objective
-	if replay.Status.ActiveAttempt != nil || objective == nil || !runtimeObjectiveRescopeStructurallyPermitted(replay.Status) {
+	objective := replay.Status.runtimeObjective()
+	if replay.Status.runtimeActiveCount() > 1 || replay.Status.runtimeActiveAttempt() != nil || objective == nil || !runtimeObjectiveRescopeStructurallyPermitted(replay.Status) {
 		return errors.New("objective rescope is not a valid successor") // refusal:by-design world-action: a replayed chain that contradicts its own write-time state is damaged authority; the exit is restoring the Git-common-dir store, not a command
 	}
 	// The real narrowing guard runs FIRST and is recomputed against the
@@ -2097,10 +2492,13 @@ func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record run
 	if generation != replay.Status.ObjectiveGeneration+1 || event.ObjectiveID != expectedObjectiveID {
 		return errors.New("objective rescope identity is invalid") // refusal:by-design world-action: the successor identity is derived deterministically at publication, so a mismatch is a mutated record and the exit is restoring the store
 	}
-	replay.Status.Objective = &RuntimeObjective{
+	replay.Status.setRuntimeObjectiveWithParent(&RuntimeObjective{
 		ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 		InitialCandidateIdentity: event.RescopeCandidateIdentity, InitialCandidateTree: event.RescopeCandidateTree,
 		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+	}, event.PreviousObjectiveID)
+	if err := replay.Accounting.carry(replay.Status.runtimeObjective(), objective); err != nil {
+		return err
 	}
 	replay.Status.ObjectiveGeneration = generation
 	replay.Status.EvidenceRevision = ""
@@ -2128,8 +2526,8 @@ func validateConsecutiveRescopeRepairCandidate(replay runtimeReplay, poisoned ru
 	if poisoned.Operation != runtimeOperationRescope || poisoned.Rescope == nil || poisoned.PreviousRevision != replay.Status.Revision {
 		return errors.New("record is not a rescope directly following the valid prefix") // refusal:by-design world-action: a repair cannot safely bypass a different immutable chain edge
 	}
-	objective := replay.Status.Objective
-	if replay.Status.ActiveAttempt != nil || objective == nil || replay.Status.DecisionRequired || replay.Status.Complete || len(replay.Status.Attempts) == 0 {
+	objective := replay.Status.runtimeObjective()
+	if replay.Status.runtimeActiveAttempt() != nil || objective == nil || replay.Status.DecisionRequired || replay.Status.Complete || len(replay.Status.Attempts) == 0 {
 		return errors.New("record does not meet the historical writer preconditions") // refusal:by-design world-action: a non-exact damaged record has no safe self-service repair
 	}
 	last := replay.Status.Attempts[len(replay.Status.Attempts)-1]
@@ -2167,10 +2565,15 @@ func applyRuntimeConsecutiveRescopeRepairEvent(store RuntimeStore, replay *runti
 		Revision: revision, ReplacedRevision: event.ReplacedRevision, RestoredRevision: event.RestoredRevision,
 		Reason: event.Reason, Actor: event.Actor,
 	}
-	if replay.Status.CumulativeAttempts >= replay.Status.Objective.MaxAttempts ||
-		replay.Status.CumulativeChangedLines >= replay.Status.Objective.MaxChangedLines {
-		replay.Status.DecisionRequired = true
-		replay.Status.NextAction = RuntimeActionReset
+	if objective := replay.Status.runtimeObjective(); objective != nil {
+		consumed, err := replay.Accounting.current(objective)
+		if err != nil {
+			return err
+		}
+		if consumed.attempts >= objective.MaxAttempts || consumed.lines >= objective.MaxChangedLines {
+			replay.Status.DecisionRequired = true
+			replay.Status.NextAction = RuntimeActionReset
+		}
 	}
 	return nil
 }
@@ -2181,47 +2584,69 @@ func applyRuntimeConsecutiveRescopeRepairEvent(store RuntimeStore, replay *runti
 // can never admit an advance the authority would have refused.
 func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record runtimeRecord) error {
 	event := record.Advance
-	objective := replay.Status.Objective
+	objective := replay.Status.runtimeObjective()
 	// Every refusal below re-checks an invariant the authority already enforced
 	// before publishing this record, so reaching one means the persisted chain
 	// was damaged or forged after the fact.
-	if replay.Status.ActiveAttempt != nil || objective == nil || !replay.Status.Complete || replay.Status.DecisionRequired {
+	if replay.Status.runtimeActiveCount() > 1 || replay.Status.runtimeActiveAttempt() != nil || objective == nil || !replay.Status.Complete || replay.Status.DecisionRequired {
 		return errors.New("objective advance is not a valid successor") // refusal:by-design world-action: a replayed chain that contradicts its own write-time state is damaged authority; the exit is restoring the Git-common-dir store, not a command
 	}
+	concurrentPlanAdvance := replay.itemPlan != nil && record.Begin.ItemID != "" &&
+		runtimePlanDependenciesSatisfied(*replay, *replay.itemPlan, record.Begin.ItemID)
 	if event.PreviousObjectiveID != objective.ID || event.PreviousGeneration != objective.Generation ||
-		event.PreviousGeneration != replay.Status.ObjectiveGeneration || event.PreviousWorkUnit != objective.WorkUnit {
+		(!concurrentPlanAdvance && event.PreviousGeneration != replay.Status.ObjectiveGeneration) || event.PreviousWorkUnit != objective.WorkUnit {
 		return errors.New("objective advance does not match the terminal objective") // refusal:by-design world-action: the predecessor identity was frozen at publication, so a mismatch is a mutated record and the exit is restoring the store
 	}
 	if len(replay.Status.Attempts) == 0 {
 		return errors.New("objective advance has no terminal candidate provenance") // refusal:by-design world-action: an advance can only follow a settled attempt, so an empty history is a truncated chain and the exit is restoring the store
 	}
 	last := replay.Status.Attempts[len(replay.Status.Attempts)-1]
-	if last.ObjectiveID != objective.ID || last.Outcome != AttemptPassed || last.ChangedLineBudgetExceeded ||
-		last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
+	predecessor := last
+	for _, attempt := range replay.Status.Attempts {
+		if attempt.ObjectiveID == objective.ID {
+			predecessor = attempt
+		}
+	}
+	if (predecessor.ObjectiveID != objective.ID || predecessor.Outcome != AttemptPassed || predecessor.ChangedLineBudgetExceeded ||
+		predecessor.FinishCandidateIdentity == "" || predecessor.FinishCandidateTree == "") ||
+		(!concurrentPlanAdvance && last.ObjectiveID != objective.ID) {
 		return errors.New("objective advance does not follow a passed terminal objective") // refusal:by-design world-action: the passed predecessor was verified before publication, so this is a mutated record and the exit is restoring the store
 	}
 	if record.Begin.WorkUnit == objective.WorkUnit {
 		return errors.New("objective advance does not select a distinct work unit") // refusal:by-design world-action: same-scope advance is refused at write time, so observing one on replay is a forged record and the exit is restoring the store
 	}
+	if objective.ItemID != "" && (record.Begin.ItemID == "" || record.Begin.ItemID == objective.ItemID) {
+		return errors.New("objective advance drops or rebinds its item") // refusal:by-design world-action: a bound predecessor may advance only to a distinct immutable item binding
+	}
 	replay.Status.LastAdvance = &RuntimeAdvance{
 		Revision: revision, PreviousObjectiveID: objective.ID, PreviousGeneration: objective.Generation,
 		PreviousWorkUnit: objective.WorkUnit, PreviousEvidenceRevision: replay.Status.EvidenceRevision,
 	}
-	replay.Status.Objective = nil
-	replay.Status.CumulativeAttempts = 0
-	replay.Status.CumulativeChangedLines = 0
+	replay.Status.setRuntimeObjective(nil)
 	replay.Status.EvidenceRevision = ""
 	replay.Status.Complete = false
-	return applyRuntimeBeginEvent(replay, revision, record)
+	if err := applyRuntimeBeginEvent(replay, revision, record); err != nil {
+		return err
+	}
+	replay.Status.ownership.parents[record.Begin.ObjectiveID] = objective.ID
+	delete(replay.Status.ownership.roots, record.Begin.ObjectiveID)
+	return nil
 }
 
 func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, unmanagedRemediation bool) error {
-	active := replay.Status.ActiveAttempt
-	if active == nil || active.Ordinal != event.Ordinal || len(replay.Status.Attempts) == 0 ||
-		replay.Status.Attempts[len(replay.Status.Attempts)-1].Outcome != AttemptRunning {
+	active := replay.Status.runtimeActiveAttemptForOrdinal(event.Ordinal)
+	if active == nil || active.Ordinal != event.Ordinal || len(replay.Status.Attempts) == 0 {
 		return errors.New("finish record does not match the active attempt")
 	}
-	budgetExceeded := replay.Status.CumulativeChangedLines+event.ChangedLines > replay.Status.Objective.MaxChangedLines
+	objective := replay.Status.runtimeObjectiveForAttempt(active)
+	if objective == nil {
+		return errors.New("finish record does not match the active objective") // refusal:by-design world-action: a finish for another immutable objective is corrupt authority
+	}
+	consumed, err := replay.Accounting.current(objective)
+	if err != nil {
+		return err
+	}
+	budgetExceeded := consumed.lines+event.ChangedLines > objective.MaxChangedLines
 	if event.ChangedLineBudgetExceeded != budgetExceeded {
 		return errors.New("finish record changed-line budget decision does not match replay state")
 	}
@@ -2234,7 +2659,7 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		// from the immutable chain, so replayed corrections recorded across an
 		// audited reset stay valid. The chain walk requires a settled failed
 		// predecessor, which subsumes the former len(Attempts) < 2 conjunct.
-		chainFailedAttempt, chainHasFailedEvidence := runtimeChainFailedAttempt(replay.Status.Attempts)
+		chainFailedAttempt, chainHasFailedEvidence := runtimeLineageFailedAttempt(replay.Status)
 		// #2621 lockstep twin: an audited reset or rescope that terminated the
 		// failing objective against these exact bytes authorizes one evidence-only
 		// retry, so a replayed correction may leave the candidate unchanged.
@@ -2256,7 +2681,16 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 			return errors.New("unmanaged remediation finish does not bind the final failed-evidence correction")
 		}
 	}
-	attempt := &replay.Status.Attempts[len(replay.Status.Attempts)-1]
+	var attempt *RuntimeAttempt
+	for index := range replay.Status.Attempts {
+		if replay.Status.Attempts[index].Ordinal == event.Ordinal {
+			attempt = &replay.Status.Attempts[index]
+			break
+		}
+	}
+	if attempt == nil || attempt.Outcome != AttemptRunning {
+		return errors.New("finish record does not match the active attempt")
+	}
 	attempt.FinishCandidateIdentity = event.FinishCandidateIdentity
 	attempt.FinishCandidateTree = event.FinishCandidateTree
 	attempt.AttestedVerifyReportDigest = event.AttestedVerifyReportDigest
@@ -2269,15 +2703,18 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	attempt.ProcessEvidence = event.ProcessEvidence
 	attempt.RemediatesEvidenceRevision = event.RemediatesEvidenceRevision
 	attempt.ChangedLineBudgetExceeded = event.ChangedLineBudgetExceeded
-	replay.Status.ActiveAttempt = nil
-	replay.Status.CumulativeChangedLines += event.ChangedLines
-	replay.Status.LifetimeChangedLines += event.ChangedLines
+	replay.Status.clearRuntimeActiveAttempt(event.Ordinal)
+	if err := replay.Accounting.finish(objective, event.ChangedLines); err != nil {
+		return err
+	}
 	replay.Status.EvidenceRevision = event.EvidenceRevision
-	if event.Outcome == AttemptPassed && !event.ChangedLineBudgetExceeded {
+	if replay.Status.runtimeActiveCount() > 0 {
+		replay.Status.NextAction = RuntimeActionFinish
+	} else if event.Outcome == AttemptPassed && !event.ChangedLineBudgetExceeded {
 		replay.Status.Complete = true
 		replay.Status.NextAction = RuntimeActionComplete
-	} else if event.ChangedLineBudgetExceeded || replay.Status.CumulativeAttempts >= replay.Status.Objective.MaxAttempts ||
-		replay.Status.CumulativeChangedLines >= replay.Status.Objective.MaxChangedLines {
+	} else if event.ChangedLineBudgetExceeded || consumed.attempts >= objective.MaxAttempts ||
+		consumed.lines+event.ChangedLines >= objective.MaxChangedLines {
 		replay.Status.DecisionRequired = true
 		replay.Status.NextAction = RuntimeActionReset
 	} else {
@@ -2346,14 +2783,23 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 		// must be a bounded, trimmed, single-line value like every other
 		// recorded text field, not raw garbage.
 		(event.BeginWorktree != "" && validateRuntimeText(event.BeginWorktree, 4096) != nil) ||
-		(event.EffectiveWorktree != "" && (validateRuntimeText(event.EffectiveWorktree, 4096) != nil || event.EffectiveWorktree != event.BeginWorktree)) {
+		(event.EffectiveWorktree != "" && (validateRuntimeText(event.EffectiveWorktree, 4096) != nil || event.EffectiveWorktree != event.BeginWorktree)) ||
+		validateRuntimeItemBinding(event.ItemID, event.ItemEditRoots) != nil ||
+		(event.ObjectiveGeneration == 0 && event.ItemID != "") {
 		return errors.New("invalid SDD runtime begin event")
+	}
+	if event.ItemPlan != nil || event.ItemPlanDigest != "" || event.ItemPlanEntryDigest != "" {
+		if event.ItemPlanDigest == "" || event.ItemPlanEntryDigest == "" || event.ItemID == "" {
+			return errors.New("invalid SDD runtime item plan begin event") // refusal:by-design world-action: a malformed persisted item-plan event requires authority restoration
+		}
+		return nil
 	}
 	request := BeginAttemptRequest{
 		ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit,
 		EvidenceGoal: event.EvidenceGoal, MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+		ItemID: event.ItemID, ItemEditRoots: event.ItemEditRoots,
 	}
-	if runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request) != record.RequestDigest {
+	if runtimeBeginRequestDigest(request) != record.RequestDigest {
 		return errors.New("SDD runtime begin request digest does not match record")
 	}
 	return nil
@@ -2654,7 +3100,275 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	if request.MaxChangedLines < 1 || request.MaxChangedLines > maximumRuntimeChangedLines {
 		return BeginAttemptRequest{}, fmt.Errorf("max_changed_lines must be within 1..%d", maximumRuntimeChangedLines)
 	}
+	if err := validateRuntimeItemBinding(request.ItemID, request.ItemEditRoots); err != nil {
+		return BeginAttemptRequest{}, err
+	}
+	if request.itemPlan != nil && request.ItemID == "" {
+		return BeginAttemptRequest{}, errors.New("item_plan requires an item binding") // refusal:by-design operator-knowledge: the caller must provide the selected item binding the candidate describes
+	}
+	if request.itemPlan != nil {
+		if err := validateItemPlan(request.itemPlan.Plan); err != nil {
+			return BeginAttemptRequest{}, fmt.Errorf("invalid item_plan: %w", err)
+		}
+	}
 	return request, nil
+}
+
+func validateRuntimeItemBinding(itemID string, roots []string) error {
+	if itemID == "" {
+		if len(roots) != 0 {
+			return errors.New("item_id and item_edit_roots must be present together") // refusal:by-design operator-knowledge: only the caller can supply one coherent immutable item binding
+		}
+		return nil
+	}
+	if !workItemID.MatchString(itemID) {
+		return errors.New("item_id must be a canonical work item identifier") // refusal:by-design operator-knowledge: the caller owns the selected work-item identity
+	}
+	if len(roots) == 0 || len(roots) > maximumRuntimeGrantRoots {
+		return fmt.Errorf("item_edit_roots must contain between 1 and %d canonical roots", maximumRuntimeGrantRoots) // refusal:by-design operator-knowledge: the caller must supply the complete immutable root set
+	}
+	for index, root := range roots {
+		if validateRuntimeText(root, 4096) != nil || !filepath.IsAbs(root) || filepath.Clean(root) != root {
+			return errors.New("item_edit_roots must be canonical absolute cleaned paths") // refusal:by-design operator-knowledge: the caller must name the immutable canonical roots
+		}
+		resolved, ok := prospectiveWorkItemPath(root)
+		if !ok || resolved != root {
+			return errors.New("item_edit_roots must be canonical absolute cleaned paths") // refusal:by-design operator-knowledge: the caller must name the immutable canonical roots
+		}
+		if index > 0 && (roots[index-1] == root || roots[index-1] > root) {
+			return errors.New("item_edit_roots must be sorted and deduplicated") // refusal:by-design operator-knowledge: the caller must provide one deterministic root ordering
+		}
+	}
+	return nil
+}
+
+func validateItemPlan(plan itemPlanCandidate) error {
+	if (plan.Version != itemPlanVersionV1 && plan.Version != itemPlanVersionV2) || len(plan.Items) == 0 || len(plan.Items) > 256 {
+		return errors.New("invalid item plan") // refusal:by-design operator-knowledge: artifact metadata must declare a non-empty supported plan
+	}
+	for index, item := range plan.Items {
+		if !workItemID.MatchString(item.ID) || !workItemID.MatchString(item.WorkUnit) ||
+			validateRuntimeText(item.EvidenceGoal, 240) != nil || item.MaxAttempts < 1 || item.MaxAttempts > maximumRuntimeAttemptLimit ||
+			item.MaxChangedLines < 1 || item.MaxChangedLines > maximumRuntimeChangedLines || len(item.EditRoots) == 0 ||
+			(index > 0 && plan.Items[index-1].ID >= item.ID) {
+			return errors.New("noncanonical item plan") // refusal:by-design operator-knowledge: artifact metadata must use canonical item ordering and limits
+		}
+		if (plan.Version == itemPlanVersionV1 && item.InitiallyDone != nil) ||
+			(plan.Version == itemPlanVersionV2 && item.InitiallyDone == nil) {
+			// refusal:by-design world-action: immutable plan history has an invalid versioned snapshot shape.
+			return errors.New("invalid item plan initial completion snapshot")
+		}
+		for rootIndex, root := range item.EditRoots {
+			if root == "" || filepath.IsAbs(root) || filepath.ToSlash(filepath.Clean(root)) != root || root == "." ||
+				strings.HasPrefix(root, "../") || strings.Contains("/"+root+"/", "/../") ||
+				(rootIndex > 0 && item.EditRoots[rootIndex-1] >= root) {
+				return errors.New("noncanonical item plan roots") // refusal:by-design operator-knowledge: artifact metadata must use canonical relative roots
+			}
+		}
+		for dependencyIndex, dependency := range item.DependsOn {
+			if !workItemID.MatchString(dependency) || dependency == item.ID ||
+				(dependencyIndex > 0 && item.DependsOn[dependencyIndex-1] >= dependency) {
+				return errors.New("noncanonical item plan dependencies") // refusal:by-design operator-knowledge: artifact metadata must use canonical declared dependencies
+			}
+		}
+	}
+	for _, item := range plan.Items {
+		for _, dependency := range item.DependsOn {
+			if _, ok := itemPlanEntryForID(plan, dependency); !ok {
+				return errors.New("item plan dependency is absent") // refusal:by-design operator-knowledge: artifact metadata must name only declared plan items
+			}
+		}
+	}
+	visiting, visited := map[string]bool{}, map[string]bool{}
+	var visit func(string) bool
+	visit = func(id string) bool {
+		if visiting[id] {
+			return true
+		}
+		if visited[id] {
+			return false
+		}
+		visiting[id] = true
+		entry, _ := itemPlanEntryForID(plan, id)
+		for _, dependency := range entry.DependsOn {
+			if visit(dependency) {
+				return true
+			}
+		}
+		delete(visiting, id)
+		visited[id] = true
+		return false
+	}
+	for _, item := range plan.Items {
+		if visit(item.ID) {
+			// guard:population item-plan-dependency-cycle fail-closed: legitimate retained plans have an acyclic dependency order; cyclic plans remain excluded
+			return errors.New("item plan dependencies are cyclic") // refusal:by-design operator-knowledge: a retained plan must have a satisfiable dependency order
+		}
+	}
+	if plan.Digest != "" && plan.Digest != itemPlanDigest(plan) {
+		return errors.New("item plan digest does not match content") // refusal:by-design operator-knowledge: the candidate digest must bind its canonical content
+	}
+	return nil
+}
+
+func itemPlanDigest(plan itemPlanCandidate) string {
+	plan.Digest = ""
+	return runtimeValueHash("gentle-ai.sdd-item-plan/v1", plan)
+}
+
+func itemPlanEntryForID(plan itemPlanCandidate, id string) (itemPlanEntry, bool) {
+	for _, item := range plan.Items {
+		if item.ID == id {
+			return item, true
+		}
+	}
+	return itemPlanEntry{}, false
+}
+
+func itemPlanEntryDigest(item itemPlanEntry) string {
+	return runtimeValueHash("gentle-ai.sdd-item-plan-entry/v1", item)
+}
+
+func cloneItemPlan(plan *itemPlanCandidate) *itemPlanCandidate {
+	if plan == nil {
+		return nil
+	}
+	clone := *plan
+	clone.Items = make([]itemPlanEntry, len(plan.Items))
+	for index, item := range plan.Items {
+		clone.Items[index] = item
+		clone.Items[index].DependsOn = append([]string(nil), item.DependsOn...)
+		clone.Items[index].EditRoots = append([]string(nil), item.EditRoots...)
+		if item.InitiallyDone != nil {
+			clone.Items[index].InitiallyDone = boolPointer(*item.InitiallyDone)
+		}
+	}
+	return &clone
+}
+
+func (store RuntimeStore) runtimeItemPlanBinding(replay runtimeReplay, request BeginAttemptRequest) (BeginAttemptRequest, *itemPlanCandidate, string, string, error) {
+	if (request.itemPlan != nil || replay.itemPlan != nil) && !store.planAuthoritySealed() {
+		return BeginAttemptRequest{}, nil, "", "", errors.New("runtime store plan authority identity is not sealed") // refusal:by-design world-action: reopen the runtime store instead of mutating its exported routing identity
+	}
+	if request.itemPlan == nil {
+		if replay.itemPlan != nil && request.ItemID != "" {
+			return BeginAttemptRequest{}, nil, "", "", errors.New("item-bound begin requires the retained item plan") // refusal:by-design human-authority: a retained immutable plan cannot be bypassed by a planless item binding
+		}
+		return request, nil, "", "", nil
+	}
+	if request.itemPlan.Workspace != store.authorityWorkspace || request.itemPlan.Change != store.authorityChange {
+		return BeginAttemptRequest{}, nil, "", "", errors.New("item plan candidate belongs to another workspace or change") // refusal:by-design operator-knowledge: resolve the selected item from this store's workspace and change
+	}
+	plan := &request.itemPlan.Plan
+	if replay.itemPlan != nil {
+		if plan.Digest != replay.itemPlan.Digest {
+			return BeginAttemptRequest{}, nil, "", "", errors.New("item plan candidate differs from retained runtime plan") // refusal:by-design human-authority: a mutable artifact cannot replace the retained immutable plan
+		}
+		plan = replay.itemPlan
+	}
+	entry, ok := itemPlanEntryForID(*plan, request.itemPlan.ItemID)
+	if !ok {
+		return BeginAttemptRequest{}, nil, "", "", errors.New("selected item is absent from retained runtime plan") // refusal:by-design operator-knowledge: select an item declared by the retained plan
+	}
+	roots, ok := canonicalWorkItemRoots(entry.EditRoots, store.Workspace)
+	if !ok || request.itemPlan.EntryDigest != itemPlanEntryDigest(entry) || request.ItemID != request.itemPlan.ItemID || request.WorkUnit != entry.WorkUnit || request.EvidenceGoal != entry.EvidenceGoal ||
+		request.MaxAttempts != entry.MaxAttempts || request.MaxChangedLines != entry.MaxChangedLines ||
+		!runtimeItemBindingEqual(entry.ID, roots, request.ItemID, request.ItemEditRoots) {
+		return BeginAttemptRequest{}, nil, "", "", errors.New("selected item binding differs from runtime plan") // refusal:by-design operator-knowledge: resolve the selected item from current canonical metadata
+	}
+	bound := request
+	bound.WorkUnit, bound.EvidenceGoal = entry.WorkUnit, entry.EvidenceGoal
+	bound.MaxAttempts, bound.MaxChangedLines = entry.MaxAttempts, entry.MaxChangedLines
+	bound.ItemID, bound.ItemEditRoots = entry.ID, roots
+	if replay.itemPlan == nil {
+		return bound, cloneItemPlan(plan), plan.Digest, itemPlanEntryDigest(entry), nil
+	}
+	return bound, nil, plan.Digest, itemPlanEntryDigest(entry), nil
+}
+
+func (store RuntimeStore) planAuthoritySealed() bool {
+	return store.authorityDir != "" && store.authorityRepo != "" && store.authorityWorkspace != "" && store.authorityChange != "" &&
+		store.Dir == store.authorityDir && store.Repo == store.authorityRepo && store.Workspace == store.authorityWorkspace && store.Change == store.authorityChange
+}
+
+func runtimeReplayItemPlan(record runtimeRecord, retained *itemPlanCandidate) (*itemPlanCandidate, error) {
+	event := record.Begin
+	if event.ItemPlan == nil && event.ItemPlanDigest == "" && event.ItemPlanEntryDigest == "" {
+		if retained != nil && event.ItemID != "" {
+			return nil, errors.New("item-bound begin omits the retained item plan") // refusal:by-design world-action: a persisted item-bound begin cannot bypass retained immutable authority
+		}
+		return nil, nil
+	}
+	if event.ItemPlanDigest == "" || event.ItemPlanEntryDigest == "" || event.ItemID == "" || event.BeginWorktree == "" {
+		return nil, errors.New("item plan fields are incomplete") // refusal:by-design world-action: a persisted plan record with incomplete fields requires authority restoration
+	}
+	plan := retained
+	if event.ItemPlan != nil {
+		if retained != nil || validateItemPlan(*event.ItemPlan) != nil || event.ItemPlan.Digest != event.ItemPlanDigest {
+			return nil, errors.New("invalid retained item plan") // refusal:by-design world-action: a persisted retained plan must be restored from valid authority
+		}
+		plan = event.ItemPlan
+	} else if plan == nil || plan.Digest != event.ItemPlanDigest {
+		return nil, errors.New("item plan digest does not match replay state") // refusal:by-design world-action: a persisted plan digest mismatch requires authority restoration
+	}
+	entry, ok := itemPlanEntryForID(*plan, event.ItemID)
+	if !ok || itemPlanEntryDigest(entry) != event.ItemPlanEntryDigest {
+		return nil, errors.New("item plan selected entry does not match replay state") // refusal:by-design world-action: a persisted selected entry mismatch requires authority restoration
+	}
+	roots, ok := canonicalWorkItemRoots(entry.EditRoots, event.BeginWorktree)
+	if !ok || event.WorkUnit != entry.WorkUnit || event.EvidenceGoal != entry.EvidenceGoal ||
+		event.MaxAttempts != entry.MaxAttempts || event.MaxChangedLines != entry.MaxChangedLines ||
+		!runtimeItemBindingEqual(entry.ID, roots, event.ItemID, event.ItemEditRoots) {
+		return nil, errors.New("item plan selected binding does not match replay state") // refusal:by-design world-action: a persisted selected binding mismatch requires authority restoration
+	}
+	request := BeginAttemptRequest{ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
+		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines, ItemID: event.ItemID,
+		ItemEditRoots: event.ItemEditRoots, itemPlan: &itemPlanBinding{Plan: *cloneItemPlan(plan), ItemID: event.ItemID, EntryDigest: event.ItemPlanEntryDigest,
+			Workspace: event.BeginWorktree, Change: record.Change}}
+	if runtimeBeginRequestDigest(request) != record.RequestDigest {
+		return nil, errors.New("item plan begin request digest does not match record") // refusal:by-design world-action: a persisted begin request digest mismatch requires authority restoration
+	}
+	return cloneItemPlan(plan), nil
+}
+
+func runtimeItemBindingEqual(leftID string, leftRoots []string, rightID string, rightRoots []string) bool {
+	if leftID != rightID || len(leftRoots) != len(rightRoots) {
+		return false
+	}
+	for index := range leftRoots {
+		if leftRoots[index] != rightRoots[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func runtimeBeginRequestDigest(request BeginAttemptRequest) string {
+	if request.itemPlan != nil {
+		return runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v3", struct {
+			ExpectedRevision string
+			RequestID        string
+			WorkUnit         string
+			EvidenceGoal     string
+			MaxAttempts      int
+			MaxChangedLines  int
+			ItemID           string
+			ItemEditRoots    []string
+			Plan             itemPlanCandidate
+			SelectedItemID   string
+			EntryDigest      string
+			Workspace        string
+			Change           string
+		}{ExpectedRevision: request.ExpectedRevision, RequestID: request.RequestID, WorkUnit: request.WorkUnit,
+			EvidenceGoal: request.EvidenceGoal, MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
+			ItemID: request.ItemID, ItemEditRoots: request.ItemEditRoots, Plan: request.itemPlan.Plan,
+			SelectedItemID: request.itemPlan.ItemID, EntryDigest: request.itemPlan.EntryDigest,
+			Workspace: request.itemPlan.Workspace, Change: request.itemPlan.Change})
+	}
+	if request.ItemID == "" {
+		return runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v1", request)
+	}
+	return runtimeValueHash("gentle-ai.sdd-runtime-begin-request/v2", request)
 }
 
 // runtimeRevisionShapeObservation describes a rejected sha256:<64-lowercase-hex>
@@ -3089,42 +3803,134 @@ func runtimeResetStructurallyPermitted(status RuntimeStatus) bool {
 	return last.Outcome == AttemptFailed || last.Outcome == AttemptInterrupted
 }
 
-// runtimeChainFailedEvidence derives the unmanaged-remediation binding from
-// the immutable attempt chain (#1974 slice 2): the most recent settled
-// AttemptFailed attempt's EvidenceRevision, provided no AttemptPassed
-// settlement follows it. Running and interrupted attempts between the failure
-// and its correction are honest audit records, not semantic successors, and
-// audited resets, rescopes, and advances never appear in the chain at all, so
-// none of them sever the binding. The first passed settlement after the
-// failure DOES sever it: that pass is the one correction the failed evidence
-// admits, so a later correction claiming the same revision finds no failed
-// evidence in the chain and is refused -- the same anti-laundering budget the
-// live evidence pointer used to enforce, now immune to that pointer being
-// wiped. Evaluated by RuntimeStore.Finish and applyRuntimeFinishEvent in
-// lockstep, so a committed correction always replays deterministically.
-func runtimeChainFailedEvidence(attempts []RuntimeAttempt) (string, bool) {
-	failed, ok := runtimeChainFailedAttempt(attempts)
+// runtimeLineageFailedAttempt derives the one unresolved remediation obligation
+// visible to the current objective. Reset, rescope, and advance successors keep
+// their predecessor lineage; unrelated objectives never enter this set.
+func runtimeLineageFailedAttempt(status RuntimeStatus) (RuntimeAttempt, bool) {
+	lineage, ok := runtimeObjectiveLineage(status)
 	if !ok {
-		return "", false
+		return RuntimeAttempt{}, false
 	}
-	return failed.EvidenceRevision, true
-}
-
-// runtimeChainFailedAttempt is runtimeChainFailedEvidence's whole record. The
-// evidence revision alone answers "which failure does this correction repair";
-// #2621 also has to answer "which objective was that failure recorded under",
-// so the authority a reset carries can be matched against the exact failure it
-// terminated rather than against any failure that happens to precede it.
-func runtimeChainFailedAttempt(attempts []RuntimeAttempt) (RuntimeAttempt, bool) {
-	for index := len(attempts) - 1; index >= 0; index-- {
-		switch attempts[index].Outcome {
-		case AttemptPassed:
-			return RuntimeAttempt{}, false
+	var failed RuntimeAttempt
+	for _, attempt := range status.Attempts {
+		if !lineage[attempt.ObjectiveID] {
+			continue
+		}
+		switch attempt.Outcome {
 		case AttemptFailed:
-			return attempts[index], true
+			failed = attempt
+		case AttemptPassed:
+			if failed.EvidenceRevision != "" && attempt.RemediatesEvidenceRevision == failed.EvidenceRevision {
+				failed = RuntimeAttempt{}
+			}
 		}
 	}
-	return RuntimeAttempt{}, false
+	return failed, failed.EvidenceRevision != ""
+}
+
+func runtimeObjectiveLineage(status RuntimeStatus) (map[string]bool, bool) {
+	objective := status.runtimeObjective()
+	if objective == nil {
+		if status.ownership.objectives == nil || status.LastReset == nil {
+			return nil, false
+		}
+		owner := status.ownership.objectives[status.LastReset.PreviousObjectiveID]
+		if owner == nil || owner.objective == nil {
+			return nil, false
+		}
+		objective = owner.objective
+	}
+	if status.ownership.objectives == nil {
+		return map[string]bool{objective.ID: true}, true
+	}
+	if status.validateRuntimeLineage() != nil {
+		return nil, false
+	}
+	lineage := map[string]bool{}
+	for id := objective.ID; ; {
+		lineage[id] = true
+		if status.ownership.roots[id] {
+			return lineage, true
+		}
+		id = status.ownership.parents[id]
+	}
+}
+
+func (status RuntimeStatus) validateRuntimeLineage() error {
+	if status.ownership.objectives == nil {
+		return nil
+	}
+	for start := range status.ownership.objectives {
+		seen := map[string]bool{}
+		for id := start; ; {
+			if seen[id] || status.ownership.objectives[id] == nil || status.ownership.objectives[id].objective == nil {
+				return errors.New("runtime objective lineage is contradictory") // refusal:by-design world-action: immutable replay ancestry disagrees with its own transition records and requires authority restoration
+			}
+			seen[id] = true
+			if status.ownership.roots[id] {
+				break
+			}
+			parent, ok := status.ownership.parents[id]
+			if !ok || parent == "" {
+				return errors.New("runtime objective lineage is incomplete") // refusal:by-design world-action: immutable replay ancestry is missing a required transition and requires authority restoration
+			}
+			id = parent
+		}
+	}
+	return nil
+}
+
+func runtimeLineageFailedEvidence(status RuntimeStatus) (string, bool) {
+	failed, ok := runtimeLineageFailedAttempt(status)
+	return failed.EvidenceRevision, ok
+}
+
+func runtimeLineageDischargedFailure(status RuntimeStatus, named string) (string, int, bool) {
+	if named == "" {
+		return "", 0, false
+	}
+	lineage, ok := runtimeObjectiveLineage(status)
+	if !ok {
+		return "", 0, false
+	}
+	for _, attempt := range status.Attempts {
+		if lineage[attempt.ObjectiveID] && attempt.Outcome == AttemptPassed && attempt.RemediatesEvidenceRevision == named {
+			return named, attempt.Ordinal, true
+		}
+	}
+	return "", 0, false
+}
+
+func runtimeLineageCorrection(status RuntimeStatus) (RuntimeAttempt, RuntimeAttempt, bool) {
+	objective := status.runtimeObjective()
+	if objective == nil && status.ownership.objectives != nil && status.LastReset != nil {
+		owner := status.ownership.objectives[status.LastReset.PreviousObjectiveID]
+		if owner != nil {
+			objective = owner.objective
+		}
+	}
+	lineage, ok := runtimeObjectiveLineage(status)
+	if !ok || objective == nil {
+		return RuntimeAttempt{}, RuntimeAttempt{}, false
+	}
+	var failed RuntimeAttempt
+	for _, attempt := range status.Attempts {
+		if !lineage[attempt.ObjectiveID] {
+			continue
+		}
+		if attempt.Outcome == AttemptFailed {
+			failed = attempt
+			continue
+		}
+		if attempt.Outcome == AttemptPassed && failed.EvidenceRevision != "" &&
+			attempt.RemediatesEvidenceRevision == failed.EvidenceRevision {
+			if attempt.ObjectiveID == objective.ID {
+				return failed, attempt, true
+			}
+			failed = RuntimeAttempt{}
+		}
+	}
+	return RuntimeAttempt{}, RuntimeAttempt{}, false
 }
 
 // runtimeEvidenceOnlyRetryAuthorized reports whether an audited reset or rescope
@@ -3191,6 +3997,21 @@ func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string
 		CandidateIdentity string `json:"candidate_identity"`
 		Generation        int    `json:"generation"`
 	}{Change: change, WorkUnit: workUnit, EvidenceGoal: evidenceGoal, CandidateIdentity: candidateIdentity, Generation: generation})
+}
+
+func runtimeObjectiveIDForBinding(change, workUnit, evidenceGoal, candidateIdentity string, generation int, itemID string, roots []string) string {
+	if itemID == "" {
+		return runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity, generation)
+	}
+	return runtimeValueHash(runtimeObjectiveSchemaV3, struct {
+		Change            string   `json:"change"`
+		WorkUnit          string   `json:"work_unit"`
+		EvidenceGoal      string   `json:"evidence_goal"`
+		CandidateIdentity string   `json:"candidate_identity"`
+		Generation        int      `json:"generation"`
+		ItemID            string   `json:"item_id"`
+		ItemEditRoots     []string `json:"item_edit_roots"`
+	}{Change: change, WorkUnit: workUnit, EvidenceGoal: evidenceGoal, CandidateIdentity: candidateIdentity, Generation: generation, ItemID: itemID, ItemEditRoots: roots})
 }
 
 func runtimeObjectiveIDV1(change, evidenceGoal, candidateIdentity string, generation int) string {

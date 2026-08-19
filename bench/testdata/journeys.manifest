@@ -20,6 +20,7 @@ j108-sdd-post-review-verify-report-is-natively-bound
 j109-sdd-legacy-post-review-report-requires-current-attestation
 j11-unborn-head
 j110-approved-unborn-intended-candidate-requires-staging
+j111-sdd-concurrent-item-join-barrier
 j12-rejected-capture-then-recapture
 j13-next-transition-runs-verbatim
 j14-abandon-needs-a-hand-built-token
