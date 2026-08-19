@@ -12,7 +12,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/changeowner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/repository"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -60,29 +62,39 @@ const (
 type Phase string
 
 const (
-	PhasePropose   Phase = "propose"
-	PhaseSpec      Phase = "spec"
-	PhaseDesign    Phase = "design"
-	PhaseTasks     Phase = "tasks"
-	PhaseApply     Phase = "apply"
-	PhaseVerify    Phase = "verify"
-	PhaseRemediate Phase = "remediate"
-	PhaseArchive   Phase = "archive"
+	PhaseExplore      Phase = "explore"
+	PhaseBlueprint    Phase = "blueprint"
+	PhasePropose      Phase = "propose"
+	PhaseApproveGate1 Phase = "approve-gate-1"
+	PhaseApproveGate2 Phase = "approve-gate-2"
+	PhaseApproveGate3 Phase = "approve-gate-3"
+	PhaseSpec         Phase = "spec"
+	PhaseDesign       Phase = "design"
+	PhaseTasks        Phase = "tasks"
+	PhaseApply        Phase = "apply"
+	PhaseVerify       Phase = "verify"
+	PhaseRemediate    Phase = "remediate"
+	PhaseArchive      Phase = "archive"
 )
 
 type ArtifactPaths struct {
-	Proposal      []string `json:"proposal"`
-	Specs         []string `json:"specs"`
-	Design        []string `json:"design"`
-	Tasks         []string `json:"tasks"`
-	ApplyProgress []string `json:"applyProgress"`
-	VerifyReport  []string `json:"verifyReport"`
-	ReviewPolicy  []string `json:"reviewPolicy"`
-	ReviewLedger  []string `json:"reviewLedger"`
-	ReviewReceipt []string `json:"reviewReceipt"`
-	ReviewBundle  []string `json:"reviewBundle"`
-	ReviewContext []string `json:"reviewContext"`
-	ReviewState   []string `json:"reviewState"`
+	Explore             []string `json:"explore"`
+	Blueprint           []string `json:"blueprint"`
+	Proposal            []string `json:"proposal"`
+	Gate1Scope          []string `json:"gate1Scope"`
+	Gate2Technical      []string `json:"gate2Technical"`
+	Gate3Implementation []string `json:"gate3Implementation"`
+	Specs               []string `json:"specs"`
+	Design              []string `json:"design"`
+	Tasks               []string `json:"tasks"`
+	ApplyProgress       []string `json:"applyProgress"`
+	VerifyReport        []string `json:"verifyReport"`
+	ReviewPolicy        []string `json:"reviewPolicy"`
+	ReviewLedger        []string `json:"reviewLedger"`
+	ReviewReceipt       []string `json:"reviewReceipt"`
+	ReviewBundle        []string `json:"reviewBundle"`
+	ReviewContext       []string `json:"reviewContext"`
+	ReviewState         []string `json:"reviewState"`
 }
 
 type PlanningHome struct {
@@ -108,7 +120,7 @@ func (reasons blockerReasons) forRoute(nextRecommended string) []string {
 
 func (reasons blockerReasons) finalize(nextRecommended string, accumulated []string) []string {
 	switch Phase(nextRecommended) {
-	case PhasePropose, PhaseSpec, PhaseDesign, PhaseTasks:
+	case PhaseExplore, PhaseBlueprint, PhasePropose, PhaseSpec, PhaseDesign, PhaseTasks:
 		return append([]string{}, accumulated...)
 	default:
 		return append(append([]string{}, reasons.expectedPlanning...), accumulated...)
@@ -116,13 +128,18 @@ func (reasons blockerReasons) finalize(nextRecommended string, accumulated []str
 }
 
 type Dependencies struct {
-	Proposal DependencyState `json:"proposal"`
-	Specs    DependencyState `json:"specs"`
-	Design   DependencyState `json:"design"`
-	Tasks    DependencyState `json:"tasks"`
-	Apply    DependencyState `json:"apply"`
-	Verify   DependencyState `json:"verify"`
-	Archive  DependencyState `json:"archive"`
+	Explore             DependencyState `json:"explore"`
+	Blueprint           DependencyState `json:"blueprint"`
+	Proposal            DependencyState `json:"proposal"`
+	Gate1Scope          DependencyState `json:"gate1Scope"`
+	Gate2Technical      DependencyState `json:"gate2Technical"`
+	Gate3Implementation DependencyState `json:"gate3Implementation"`
+	Specs               DependencyState `json:"specs"`
+	Design              DependencyState `json:"design"`
+	Tasks               DependencyState `json:"tasks"`
+	Apply               DependencyState `json:"apply"`
+	Verify              DependencyState `json:"verify"`
+	Archive             DependencyState `json:"archive"`
 }
 
 type ActionContext struct {
@@ -235,10 +252,29 @@ type Status struct {
 	// granted choice names the exact runnable grant invocation. Structural
 	// absence (nil, omitempty) everywhere else — the same optional-block
 	// discipline ReviewOffer established.
-	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
-	PhaseInstructions *PhaseInstructions           `json:"phaseInstructions,omitempty"`
-	NextRecommended   string                       `json:"nextRecommended"`
-	BlockedReasons    []string                     `json:"blockedReasons"`
+	Consent *SDDIntegrationConsentResult `json:"consent,omitempty"`
+	// RepoProgress is Slice 4's multi-repo apply-progress block (design.md
+	// Decision 1): present exactly when declaredRepoSlugs finds more than one
+	// repository slug in the tasks artifact, following the same
+	// structural-absence discipline ReviewOffer/ReVerify/Consent already
+	// established. Nil (and omitempty) for every change that declares zero or
+	// one repo -- which is every legacy fixture -- so the wire is
+	// byte-identical to before this field existed. See
+	// applyMultiRepoApplyGate.
+	RepoProgress       *RepoProgress           `json:"repoProgress,omitempty"`
+	PhaseInstructions  *PhaseInstructions      `json:"phaseInstructions,omitempty"`
+	TargetRepositories []repository.Repository `json:"targetRepositories,omitempty"`
+	// Engine is dev-orchestrator-installable-owner's change-engine-ownership
+	// field (SPEC-002): additive and `omitempty`, set only when
+	// changeowner.Resolve names an explicit, recognized dev-orchestrator
+	// marker. Every change with no marker, or an explicit gentle-orchestrator
+	// marker -- which is every legacy fixture the freeze tests exercise --
+	// leaves Engine as the empty string, so the wire is byte-identical to
+	// before this field existed. See applyForeignEngineGate for the
+	// dependency-blocking gate this field feeds.
+	Engine          string   `json:"engine,omitempty"`
+	NextRecommended string   `json:"nextRecommended"`
+	BlockedReasons  []string `json:"blockedReasons"`
 	// runtimeAttemptTokens carries the ledger's live attempt tokens alongside
 	// RuntimeStatus so status can ask the one readiness predicate the same
 	// question compact acquire asks, and name the same continuation acquire
@@ -506,18 +542,23 @@ func Resolve(options ResolveOptions) (Status, error) {
 		return Status{}, err
 	}
 	artifacts := artifactStates{
-		Proposal:      singleArtifactState(artifactPaths.Proposal),
-		Specs:         multiArtifactState(artifactPaths.Specs, filepath.Join(changeRoot, "specs")),
-		Design:        singleArtifactState(artifactPaths.Design),
-		Tasks:         singleArtifactState(artifactPaths.Tasks),
-		ApplyProgress: singleArtifactState(artifactPaths.ApplyProgress),
-		VerifyReport:  singleArtifactState(artifactPaths.VerifyReport),
-		ReviewPolicy:  singleArtifactState(artifactPaths.ReviewPolicy),
-		ReviewLedger:  singleArtifactState(artifactPaths.ReviewLedger),
-		ReviewReceipt: singleArtifactState(artifactPaths.ReviewReceipt),
-		ReviewBundle:  singleArtifactState(artifactPaths.ReviewBundle),
-		ReviewContext: singleArtifactState(artifactPaths.ReviewContext),
-		ReviewState:   singleArtifactState(artifactPaths.ReviewState),
+		Explore:             singleArtifactState(artifactPaths.Explore),
+		Blueprint:           singleArtifactState(artifactPaths.Blueprint),
+		Proposal:            singleArtifactState(artifactPaths.Proposal),
+		Gate1Scope:          singleArtifactState(artifactPaths.Gate1Scope),
+		Gate2Technical:      singleArtifactState(artifactPaths.Gate2Technical),
+		Gate3Implementation: singleArtifactState(artifactPaths.Gate3Implementation),
+		Specs:               multiArtifactState(artifactPaths.Specs, filepath.Join(changeRoot, "specs")),
+		Design:              singleArtifactState(artifactPaths.Design),
+		Tasks:               singleArtifactState(artifactPaths.Tasks),
+		ApplyProgress:       multiArtifactState(artifactPaths.ApplyProgress, filepath.Join(changeRoot, "apply-progress")),
+		VerifyReport:        singleArtifactState(artifactPaths.VerifyReport),
+		ReviewPolicy:        singleArtifactState(artifactPaths.ReviewPolicy),
+		ReviewLedger:        singleArtifactState(artifactPaths.ReviewLedger),
+		ReviewReceipt:       singleArtifactState(artifactPaths.ReviewReceipt),
+		ReviewBundle:        singleArtifactState(artifactPaths.ReviewBundle),
+		ReviewContext:       singleArtifactState(artifactPaths.ReviewContext),
+		ReviewState:         singleArtifactState(artifactPaths.ReviewState),
 	}.statesFor(ArtifactStoreOpenSpec)
 	taskProgress, err := countTaskProgress(firstPath(artifactPaths.Tasks))
 	if err != nil {
@@ -638,8 +679,12 @@ func Resolve(options ResolveOptions) (Status, error) {
 		reviewStateReason,
 		readText(firstPath(artifactPaths.ApplyProgress)),
 	)
-	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
+	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete, changeOptsIntoGates(readText(firstPath(artifactPaths.Proposal))), readText(firstPath(artifactPaths.Explore)), readText(firstPath(artifactPaths.Proposal)))
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
+	slugs := declaredRepoSlugs(readText(firstPath(artifactPaths.Tasks)))
+	repoProgress := buildRepoProgress(slugs, applyProgressStateBySlug(artifactPaths.ApplyProgress))
+	targetRepos := resolveTargetRepositories(slugs, workspaceRoot)
+	applyMultiRepoApplyGate(&dependencies, &nextRecommended, &blockedReasons, repoProgress)
 	if staleAllowAuthority != nil || staleEvidenceUnmanaged || (reviewDisabled && runtimeRemediationComplete) {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
@@ -721,6 +766,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
 	}
 	status := baseStatus(ArtifactStoreOpenSpec, workspaceRoot, grantedRoots, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
+	if owner, engineErr := changeowner.Resolve(changeRoot); engineErr == nil && owner == changeowner.EngineDev {
+		status.Engine = string(changeowner.EngineDev)
+	}
 	status.Consent = consent
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
@@ -732,6 +780,8 @@ func Resolve(options ResolveOptions) (Status, error) {
 	status.RuntimeStatus = runtimeStatus
 	status.runtimeAttemptTokens = runtimeAttemptTokens
 	status.ReviewTransaction = reviewState
+	status.RepoProgress = repoProgress
+	status.TargetRepositories = targetRepos
 	if governingRef == nil {
 		if staleReviewAuthority != nil {
 			applyReviewGateEvaluation(&status, *staleReviewAuthority)
@@ -758,6 +808,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	} else {
 		applyNativeRuntimeRouting(&status)
 	}
+	applyForeignEngineGate(&status)
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
@@ -870,6 +921,43 @@ func applyEnabledUnmanagedRemediationAuthorityRouting(status *Status, reviewDisa
 	}
 	blockReviewGate(status, reviewtransaction.GateInvalidated,
 		"a disabled/unmanaged correction repaired failed evidence without a bounded review transaction or receipt; enabled receipt-driven delivery requires bounded review authority for the corrected candidate; "+reviewGateFreshReviewContinuation)
+}
+
+// applyForeignEngineGate is change-engine-ownership's sddstatus-side
+// enforcement point (SPEC-002's Data Flow): when Status.Engine names
+// dev-orchestrator, gentle-orchestrator's own status gate refuses to route
+// any further work into a change it does not own, mirroring the two Go-side
+// checks dev-orchestrator itself already enforces (RouteIntent's
+// AssertCanWrite, GenerateContextForAgent's ResolveMarked check). It runs
+// last, immediately before BlockedReasons.finalize, so it overrides every
+// other next-recommended decision computed earlier in Resolve --
+// foreign-engine ownership is an absolute block, not one signal among many.
+//
+// A change with Engine == "" (no marker, or an explicit
+// gentle-orchestrator marker) is unaffected: this only gates changes
+// dev-orchestrator explicitly claimed.
+func applyForeignEngineGate(status *Status) {
+	if status == nil || status.Engine != string(changeowner.EngineDev) {
+		return
+	}
+	status.Dependencies.Explore = DependencyBlocked
+	status.Dependencies.Blueprint = DependencyBlocked
+	status.Dependencies.Proposal = DependencyBlocked
+	status.Dependencies.Gate1Scope = DependencyBlocked
+	status.Dependencies.Gate2Technical = DependencyBlocked
+	status.Dependencies.Gate3Implementation = DependencyBlocked
+	status.Dependencies.Specs = DependencyBlocked
+	status.Dependencies.Design = DependencyBlocked
+	status.Dependencies.Tasks = DependencyBlocked
+	status.Dependencies.Apply = DependencyBlocked
+	status.Dependencies.Verify = DependencyBlocked
+	status.Dependencies.Archive = DependencyBlocked
+	status.NextRecommended = "blocked-foreign-engine"
+	change := "<unresolved>"
+	if status.ChangeName != nil {
+		change = *status.ChangeName
+	}
+	status.BlockedReasons = append(status.BlockedReasons, changeowner.RefusalMessage(change, changeowner.EngineDev, changeowner.EngineGentle))
 }
 
 func applyNativeRuntimeErrorRouting(status *Status, runtimeErr error) {
@@ -1003,18 +1091,23 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 
 	artifactPaths := engramArtifactPaths(changeName, artifactsByType)
 	artifacts := artifactStates{
-		Proposal:      engramArtifactState(artifactsByType["proposal"]),
-		Specs:         engramArtifactState(artifactsByType["spec"]),
-		Design:        engramArtifactState(artifactsByType["design"]),
-		Tasks:         engramArtifactState(artifactsByType["tasks"]),
-		ApplyProgress: engramArtifactState(artifactsByType["apply-progress"]),
-		VerifyReport:  engramArtifactState(artifactsByType["verify-report"]),
-		ReviewPolicy:  engramArtifactState(artifactsByType["review/policy"]),
-		ReviewLedger:  engramArtifactState(artifactsByType["review/ledger"]),
-		ReviewReceipt: engramArtifactState(artifactsByType["review/receipt"]),
-		ReviewBundle:  engramArtifactState(artifactsByType["review/chain-bundle"]),
-		ReviewContext: engramArtifactState(artifactsByType["review/gate-context"]),
-		ReviewState:   engramArtifactState(artifactsByType["review/transaction"]),
+		Explore:             engramArtifactState(artifactsByType["explore"]),
+		Blueprint:           engramArtifactState(artifactsByType["blueprint"]),
+		Proposal:            engramArtifactState(artifactsByType["proposal"]),
+		Gate1Scope:          engramArtifactState(artifactsByType["gate-1-scope"]),
+		Gate2Technical:      engramArtifactState(artifactsByType["gate-2-technical"]),
+		Gate3Implementation: engramArtifactState(artifactsByType["gate-3-implementation"]),
+		Specs:               engramArtifactState(artifactsByType["spec"]),
+		Design:              engramArtifactState(artifactsByType["design"]),
+		Tasks:               engramArtifactState(artifactsByType["tasks"]),
+		ApplyProgress:       engramArtifactState(artifactsByType["apply-progress"]),
+		VerifyReport:        engramArtifactState(artifactsByType["verify-report"]),
+		ReviewPolicy:        engramArtifactState(artifactsByType["review/policy"]),
+		ReviewLedger:        engramArtifactState(artifactsByType["review/ledger"]),
+		ReviewReceipt:       engramArtifactState(artifactsByType["review/receipt"]),
+		ReviewBundle:        engramArtifactState(artifactsByType["review/chain-bundle"]),
+		ReviewContext:       engramArtifactState(artifactsByType["review/gate-context"]),
+		ReviewState:         engramArtifactState(artifactsByType["review/transaction"]),
 	}.statesFor(ArtifactStoreEngram)
 	taskProgress := countTaskProgressText(artifactsByType["tasks"].Content)
 	specCounts := countSpecRequirementsAndScenarios([]string{artifactsByType["spec"].Content})
@@ -1087,8 +1180,12 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	if remediationState.Reason != "" {
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
 	}
-	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete)
+	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyReportCurrent, verifyResult.Passing, remediationState.Complete, changeOptsIntoGates(artifactsByType["proposal"].Content), artifactsByType["explore"].Content, artifactsByType["proposal"].Content)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, verifyReportCurrent, remediationState)
+	slugs := declaredRepoSlugs(artifactsByType["tasks"].Content)
+	repoProgress := buildRepoProgress(slugs, engramApplyProgressStateBySlug(artifactsByType))
+	targetRepos := resolveTargetRepositories(slugs, workspaceRoot)
+	applyMultiRepoApplyGate(&dependencies, &nextRecommended, &blockedReasons, repoProgress)
 	if staleAllowAuthority != nil || staleEvidenceUnmanaged || (reviewDisabled && runtimeRemediationComplete) {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
@@ -1130,6 +1227,14 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 
 	changeRoot := fmt.Sprintf("engram:sdd/%s", changeName)
 	status := baseStatus(ArtifactStoreEngram, workspaceRoot, nil, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
+	// The Engram backend has no filesystem changeRoot for changeowner.Resolve
+	// to read, so ResolveFromContents applies the exact same
+	// explore-before-proposal precedence against the artifact contents
+	// already fetched from Engram, sharing one precedence implementation with
+	// the OpenSpec path above instead of re-deriving it here.
+	if owner, engineErr := changeowner.ResolveFromContents(artifactsByType["explore"].Content, artifactsByType["proposal"].Content); engineErr == nil && owner == changeowner.EngineDev {
+		status.Engine = string(changeowner.EngineDev)
+	}
 	status.PlanningHome = PlanningHome{Mode: ActionModeRepoLocal, Path: "engram:sdd"}
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
@@ -1141,6 +1246,8 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	status.RuntimeStatus = runtimeStatus
 	status.runtimeAttemptTokens = runtimeAttemptTokens
 	status.ReviewTransaction = reviewState
+	status.RepoProgress = repoProgress
+	status.TargetRepositories = targetRepos
 	if governingRef == nil {
 		if staleReviewAuthority != nil {
 			applyReviewGateEvaluation(&status, *staleReviewAuthority)
@@ -1167,6 +1274,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	} else {
 		applyNativeRuntimeRouting(&status)
 	}
+	applyForeignEngineGate(&status)
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction
@@ -1327,7 +1435,17 @@ func projectFromGitConfig(content string) string {
 	return ""
 }
 
-var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress|verify-report|review/(?:transaction|policy|ledger|receipt|chain-bundle|gate-context)|state|archive-report)$`)
+// engramTitlePattern's apply-progress alternative gained an OPTIONAL,
+// non-capturing `/{repo-slug}` suffix so `sdd/{change}/apply-progress`
+// (bare, single-repo) and `sdd/{change}/apply-progress/{repo-slug}` (scoped,
+// multi-repo) both match. Because the slug lives inside a non-capturing
+// group, matches[2] is still the ONE thing it always was -- either
+// "apply-progress" or "apply-progress/{slug}" as a whole string -- so the
+// two-capture-group shape (and therefore every `len(matches) != 3` guard
+// downstream) is completely unchanged. This is deliberate: a naive third
+// capture group would turn `len(matches)` into 4 and silently blind both
+// guards to every legitimate match, bare or scoped alike.
+var engramTitlePattern = regexp.MustCompile(`^sdd/([^/]+)/(proposal|spec|design|tasks|apply-progress(?:/[a-z0-9][a-z0-9-]*)?|verify-report|review/(?:transaction|policy|ledger|receipt|chain-bundle|gate-context)|state|archive-report)$`)
 
 func collectEngramChanges(observations []engramObservation, project string) []string {
 	// An Engram-backed change has no directory to move, so nothing about the
@@ -1408,8 +1526,21 @@ func engramArtifactPaths(changeName string, artifacts map[string]engramObservati
 	if _, ok := artifacts["tasks"]; ok {
 		paths.Tasks = []string{fmt.Sprintf("sdd/%s/tasks", changeName)}
 	}
-	if _, ok := artifacts["apply-progress"]; ok {
-		paths.ApplyProgress = []string{fmt.Sprintf("sdd/%s/apply-progress", changeName)}
+	// Bare "apply-progress" (single-repo, legacy) and scoped
+	// "apply-progress/{slug}" (multi-repo) keys both land here, sorted by
+	// slug so per-repo paths are deterministic.
+	applyProgressKeys := make([]string, 0, 1)
+	for key := range artifacts {
+		if key == "apply-progress" || strings.HasPrefix(key, "apply-progress/") {
+			applyProgressKeys = append(applyProgressKeys, key)
+		}
+	}
+	if len(applyProgressKeys) > 0 {
+		sort.Strings(applyProgressKeys)
+		paths.ApplyProgress = make([]string, 0, len(applyProgressKeys))
+		for _, key := range applyProgressKeys {
+			paths.ApplyProgress = append(paths.ApplyProgress, fmt.Sprintf("sdd/%s/%s", changeName, key))
+		}
 	}
 	if _, ok := artifacts["verify-report"]; ok {
 		paths.VerifyReport = []string{fmt.Sprintf("sdd/%s/verify-report", changeName)}
@@ -1692,13 +1823,16 @@ func baseStatus(store ArtifactStore, workspaceRoot string, grantedRoots []string
 		Artifacts:     artifactStates{}.statesFor(store),
 		TaskProgress:  TaskProgress{},
 		Dependencies: Dependencies{
-			Proposal: DependencyBlocked,
-			Specs:    DependencyBlocked,
-			Design:   DependencyBlocked,
-			Tasks:    DependencyBlocked,
-			Apply:    DependencyBlocked,
-			Verify:   DependencyBlocked,
-			Archive:  DependencyBlocked,
+			Proposal:            DependencyBlocked,
+			Gate1Scope:          DependencyBlocked,
+			Gate2Technical:      DependencyBlocked,
+			Gate3Implementation: DependencyBlocked,
+			Specs:               DependencyBlocked,
+			Design:              DependencyBlocked,
+			Tasks:               DependencyBlocked,
+			Apply:               DependencyBlocked,
+			Verify:              DependencyBlocked,
+			Archive:             DependencyBlocked,
 		},
 		ApplyState: ApplyBlocked,
 		ActionContext: ActionContext{
@@ -1720,10 +1854,24 @@ func baseStatus(store ArtifactStore, workspaceRoot string, grantedRoots []string
 
 func resolveArtifactPaths(changeRoot string) (ArtifactPaths, error) {
 	paths := emptyArtifactPaths()
+	paths.Explore = existingPath(filepath.Join(changeRoot, "explore.md"))
+	paths.Blueprint = existingPath(filepath.Join(changeRoot, "blueprint.md"))
 	paths.Proposal = existingPath(filepath.Join(changeRoot, "proposal.md"))
+	paths.Gate1Scope = existingPath(filepath.Join(changeRoot, "gate-1-scope.md"))
+	paths.Gate2Technical = existingPath(filepath.Join(changeRoot, "gate-2-technical.md"))
+	paths.Gate3Implementation = existingPath(filepath.Join(changeRoot, "gate-3-implementation.md"))
 	paths.Design = existingPath(filepath.Join(changeRoot, "design.md"))
 	paths.Tasks = existingPath(filepath.Join(changeRoot, "tasks.md"))
 	paths.ApplyProgress = existingPath(filepath.Join(changeRoot, "apply-progress.md"))
+	if repoFiles, err := findApplyProgressRepoFiles(filepath.Join(changeRoot, "apply-progress")); err != nil {
+		return ArtifactPaths{}, err
+	} else if len(repoFiles) > 0 {
+		// Multi-repo layout: changeRoot/apply-progress/{slug}.md files take
+		// over from the flat single-file probe above (F4: ApplyProgress is
+		// already []string on the frozen wire, so this needs no projection
+		// change).
+		paths.ApplyProgress = repoFiles
+	}
 	paths.VerifyReport = existingPath(filepath.Join(changeRoot, "verify-report.md"))
 	paths.ReviewLedger = existingPath(filepath.Join(changeRoot, "reviews", "ledger.json"))
 	paths.ReviewPolicy = existingPath(filepath.Join(changeRoot, "reviews", "policy.md"))
@@ -1748,18 +1896,21 @@ func resolveArtifactPaths(changeRoot string) (ArtifactPaths, error) {
 
 func emptyArtifactPaths() ArtifactPaths {
 	return ArtifactPaths{
-		Proposal:      []string{},
-		Specs:         []string{},
-		Design:        []string{},
-		Tasks:         []string{},
-		ApplyProgress: []string{},
-		VerifyReport:  []string{},
-		ReviewLedger:  []string{},
-		ReviewPolicy:  []string{},
-		ReviewReceipt: []string{},
-		ReviewBundle:  []string{},
-		ReviewContext: []string{},
-		ReviewState:   []string{},
+		Proposal:            []string{},
+		Gate1Scope:          []string{},
+		Gate2Technical:      []string{},
+		Gate3Implementation: []string{},
+		Specs:               []string{},
+		Design:              []string{},
+		Tasks:               []string{},
+		ApplyProgress:       []string{},
+		VerifyReport:        []string{},
+		ReviewLedger:        []string{},
+		ReviewPolicy:        []string{},
+		ReviewReceipt:       []string{},
+		ReviewBundle:        []string{},
+		ReviewContext:       []string{},
+		ReviewState:         []string{},
 	}
 }
 
@@ -1786,6 +1937,29 @@ func findSpecFiles(specsRoot string) ([]string, error) {
 			return []string{}, nil
 		}
 		return nil, err
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// findApplyProgressRepoFiles globs changeRoot/apply-progress/*.md for the
+// multi-repo layout. A missing directory (the legacy single-repo case,
+// which never creates one) is not an error -- it simply means "no scoped
+// files", and the flat apply-progress.md probe stands.
+func findApplyProgressRepoFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var files []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		files = append(files, filepath.Join(dir, entry.Name()))
 	}
 	sort.Strings(files)
 	return files, nil
@@ -2004,29 +2178,125 @@ func resolveApplyState(coreReady bool, taskProgress TaskProgress) ApplyState {
 	return ApplyReady
 }
 
-func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskProgress, applyState ApplyState, coreReady, verifyReportCurrent, verifyReportPassing, remediationComplete bool) Dependencies {
-	dependencies := Dependencies{
-		Proposal: artifactDependency(artifacts["proposal"]),
-		Specs:    artifactDependency(artifacts["specs"]),
-		Design:   artifactDependency(artifacts["design"]),
-		Tasks:    artifactDependency(artifacts["tasks"]),
-		Apply:    DependencyBlocked,
-		Verify:   DependencyBlocked,
-		Archive:  DependencyBlocked,
+// gatesEnabledPattern matches an opt-in "Gates: required" (or "enabled")
+// declaration in a change's proposal artifact, mirroring the
+// repositoryFieldPattern convention used by declaredRepoSlugs. A change that
+// never declares this returns false, and Human Gates become a structural
+// no-op for it (see resolveDependencies).
+var gatesEnabledPattern = regexp.MustCompile(`(?im)^\s*gates:\s*(required|enabled|true)\s*$`)
+
+// changeOptsIntoGates reports whether proposalText opts this change into
+// Human Gates. Empty or non-matching input returns false.
+func changeOptsIntoGates(proposalText string) bool {
+	if strings.TrimSpace(proposalText) == "" {
+		return false
 	}
-	if applyState == ApplyReady {
-		dependencies.Apply = DependencyReady
-	} else if applyState == ApplyAllDone {
-		dependencies.Apply = DependencyAllDone
+	return gatesEnabledPattern.MatchString(proposalText)
+}
+
+func resolveDependencies(artifacts map[string]ArtifactState, taskProgress TaskProgress, applyState ApplyState, coreReady, verifyReportCurrent, verifyReportPassing, remediationComplete, gatesRequired bool, exploreText string, proposalText string) Dependencies {
+	// P1: Discovery Classification
+	isGreenfield := strings.Contains(exploreText, "type: greenfield") || strings.Contains(proposalText, "type: greenfield") || strings.Contains(exploreText, "architecture:") || strings.Contains(proposalText, "architecture:")
+
+	exploreState := artifactDependency(artifacts["explore"])
+	if artifacts["explore"] == ArtifactDone {
+		exploreDone := strings.Contains(exploreText, "### Recommendation") || strings.Contains(exploreText, "### Approaches")
+		if !exploreDone {
+			exploreState = DependencyBlocked
+		}
+	} else if artifacts["explore"] == ArtifactMissing && !isGreenfield {
+		// For existing projects without an explore artifact, it is skipped.
+		exploreState = DependencyAllDone
 	}
 
-	if verifyReportCurrent && coreReady && taskProgress.AllComplete && verifyReportPassing {
-		dependencies.Verify = DependencyAllDone
-	} else if coreReady && applyState == ApplyAllDone && (!verifyReportCurrent || remediationComplete) {
-		dependencies.Verify = DependencyReady
+	dependencies := Dependencies{
+		Blueprint:           DependencyBlocked,
+		Explore:             DependencyBlocked,
+		Proposal:            DependencyBlocked,
+		Gate1Scope:          DependencyBlocked,
+		Specs:               DependencyBlocked,
+		Design:              DependencyBlocked,
+		Gate2Technical:      DependencyBlocked,
+		Tasks:               DependencyBlocked,
+		Gate3Implementation: DependencyBlocked,
+		Apply:               DependencyBlocked,
+		Verify:              DependencyBlocked,
+		Archive:             DependencyBlocked,
 	}
-	if dependencies.Verify == DependencyAllDone && taskProgress.AllComplete {
-		dependencies.Archive = DependencyReady
+
+	if exploreState == DependencyAllDone {
+		dependencies.Explore = DependencyAllDone
+		if isGreenfield {
+			if artifacts["blueprint"] == ArtifactDone {
+				dependencies.Blueprint = DependencyAllDone
+				dependencies.Proposal = artifactDependency(artifacts["proposal"])
+			} else {
+				dependencies.Blueprint = DependencyReady
+			}
+		} else {
+			dependencies.Blueprint = DependencyAllDone
+			dependencies.Proposal = artifactDependency(artifacts["proposal"])
+		}
+	} else {
+		dependencies.Explore = DependencyReady
+	}
+
+	// Human Gates are opt-in (declared via a "Gates: required" line in the
+	// change's proposal, mirroring the declaredRepoSlugs "repository:" field
+	// convention). A change that never opts in keeps Gate1Scope/Gate2Technical/
+	// Gate3Implementation at DependencyAllDone unconditionally -- a structural
+	// no-op -- so its Specs/Design/Tasks/Apply/Verify/Archive routing is
+	// byte-identical to the pre-Gates behavior. This is what keeps every
+	// existing change (and every test fixture written before Gates existed)
+	// unaffected.
+	if !gatesRequired {
+		dependencies.Gate1Scope = DependencyAllDone
+		dependencies.Gate2Technical = DependencyAllDone
+		dependencies.Gate3Implementation = DependencyAllDone
+	}
+
+	if dependencies.Proposal == DependencyAllDone {
+		if !gatesRequired || artifacts["gate-1-scope"] == ArtifactDone {
+			dependencies.Gate1Scope = DependencyAllDone
+			dependencies.Specs = artifactDependency(artifacts["specs"])
+			dependencies.Design = artifactDependency(artifacts["design"])
+		} else {
+			dependencies.Gate1Scope = DependencyReady
+		}
+	}
+
+	if dependencies.Specs == DependencyAllDone && dependencies.Design == DependencyAllDone {
+		if !gatesRequired || artifacts["gate-2-technical"] == ArtifactDone {
+			dependencies.Gate2Technical = DependencyAllDone
+			dependencies.Tasks = artifactDependency(artifacts["tasks"])
+		} else {
+			dependencies.Gate2Technical = DependencyReady
+		}
+	}
+
+	if dependencies.Tasks == DependencyAllDone {
+		if !gatesRequired || artifacts["gate-3-implementation"] == ArtifactDone {
+			dependencies.Gate3Implementation = DependencyAllDone
+		} else {
+			dependencies.Gate3Implementation = DependencyReady
+		}
+	}
+
+	if dependencies.Gate3Implementation == DependencyAllDone {
+		if applyState == ApplyReady {
+			dependencies.Apply = DependencyReady
+		} else if applyState == ApplyAllDone {
+			dependencies.Apply = DependencyAllDone
+		}
+
+		if verifyReportCurrent && coreReady && taskProgress.AllComplete && verifyReportPassing {
+			dependencies.Verify = DependencyAllDone
+		} else if coreReady && applyState == ApplyAllDone && (!verifyReportCurrent || remediationComplete) {
+			dependencies.Verify = DependencyReady
+		}
+		if dependencies.Verify == DependencyAllDone && taskProgress.AllComplete {
+			dependencies.Archive = DependencyReady
+		}
 	}
 	return dependencies
 }
@@ -2059,8 +2329,17 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, ve
 	// Route toward the next missing planning artifact in dependency order.
 	// Missing planning artifacts are the expected output of planning phases,
 	// not genuine blockers. Reserve resolve-blockers for genuine anomalies.
+	if dependencies.Explore != DependencyAllDone {
+		return "sdd-explore"
+	}
+	if dependencies.Blueprint != DependencyAllDone {
+		return "solution-architect"
+	}
 	if dependencies.Proposal != DependencyAllDone {
 		return string(PhasePropose)
+	}
+	if dependencies.Gate1Scope != DependencyAllDone {
+		return string(PhaseApproveGate1)
 	}
 	if dependencies.Specs != DependencyAllDone {
 		return string(PhaseSpec)
@@ -2068,8 +2347,14 @@ func resolveNextRecommended(dependencies Dependencies, applyState ApplyState, ve
 	if dependencies.Design != DependencyAllDone {
 		return string(PhaseDesign)
 	}
+	if dependencies.Gate2Technical != DependencyAllDone {
+		return string(PhaseApproveGate2)
+	}
 	if dependencies.Tasks != DependencyAllDone {
 		return string(PhaseTasks)
+	}
+	if dependencies.Gate3Implementation != DependencyAllDone {
+		return string(PhaseApproveGate3)
 	}
 
 	// Genuine anomaly: all planning artifacts are done but apply is still blocked.
@@ -2330,4 +2615,22 @@ func contains(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func resolveTargetRepositories(slugs []string, workspaceRoot string) []repository.Repository {
+	if len(slugs) == 0 {
+		return nil
+	}
+	registryPath := filepath.Join(workspaceRoot, "docs", "repository-registry.md")
+	registry, err := repository.ParseRegistry(registryPath)
+	if err != nil || len(registry) == 0 {
+		return nil
+	}
+	var targets []repository.Repository
+	for _, slug := range slugs {
+		if repo, ok := registry[slug]; ok {
+			targets = append(targets, repo)
+		}
+	}
+	return targets
 }

@@ -50,6 +50,11 @@ type InstallState struct {
 	Preset                 model.PresetID      `json:"preset,omitempty"`
 	SDDMode                model.SDDModeID     `json:"sdd_mode,omitempty"`
 	StrictTDD              bool                `json:"strict_tdd,omitempty"`
+	// DevOrchestrator records whether the user opted in to installing
+	// dev-orchestrator as a second, equal mode: primary OpenCode agent.
+	// False (zero value) is default-off; omitted from JSON for backward
+	// compatibility with state files written before this feature existed.
+	DevOrchestrator bool `json:"dev_orchestrator,omitempty"`
 	// CommunityTools records optional tools explicitly selected in the Gentle AI
 	// installer. Configured distinguishes a completed empty selection from legacy
 	// state files that predate persistence of this choice.
@@ -188,6 +193,7 @@ func (s *InstallState) SetSelection(selection model.Selection) {
 	s.Components = append([]model.ComponentID(nil), selection.Components...)
 	s.Skills = append([]model.SkillID(nil), selection.Skills...)
 	s.Preset, s.SDDMode, s.StrictTDD = selection.Preset, selection.SDDMode, selection.StrictTDD
+	s.DevOrchestrator = selection.DevOrchestrator
 }
 
 func (s InstallState) RestoreSelection(selection *model.Selection) {
@@ -197,6 +203,7 @@ func (s InstallState) RestoreSelection(selection *model.Selection) {
 	selection.Components = append([]model.ComponentID(nil), s.Components...)
 	selection.Skills = append([]model.SkillID(nil), s.Skills...)
 	selection.Preset, selection.SDDMode, selection.StrictTDD = s.Preset, s.SDDMode, s.StrictTDD
+	selection.DevOrchestrator = s.DevOrchestrator
 }
 
 // MergeAgents returns a new InstallState that combines existing with the
@@ -235,6 +242,7 @@ func MergeAgents(existing InstallState, newAgents []string) InstallState {
 		Preset:                      existing.Preset,
 		SDDMode:                     existing.SDDMode,
 		StrictTDD:                   existing.StrictTDD,
+		DevOrchestrator:             existing.DevOrchestrator,
 		CommunityTools:              existing.CommunityTools,
 		CommunityToolsConfigured:    existing.CommunityToolsConfigured,
 		ModelAssignments:            existing.ModelAssignments,

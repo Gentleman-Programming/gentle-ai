@@ -10,7 +10,7 @@ import (
 func TestPublicBundledSkillsMatchEmbeddedAssets(t *testing.T) {
 	for _, skill := range []string{"systemic-issue-triage", "gentle-ai-bench"} {
 		t.Run(skill, func(t *testing.T) {
-			source, err := os.ReadFile(filepath.Join("..", "..", "skills", skill, "SKILL.md"))
+			source, err := os.ReadFile(filepath.Join("..", "..", "skills", "legacy", skill, "SKILL.md"))
 			if err != nil {
 				t.Fatalf("ReadFile(public source) error = %v", err)
 			}

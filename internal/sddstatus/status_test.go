@@ -817,33 +817,59 @@ func TestResolveNextRecommendedPlanningRouting(t *testing.T) {
 			wantNext: "propose",
 		},
 		{
-			name: "proposal only routes to spec",
+			name: "proposal only routes to approve-gate-1",
 			seed: func(t *testing.T, root string) {
-				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
+			},
+			wantNext: "approve-gate-1",
+		},
+		{
+			name: "proposal and gate-1 routes to spec",
+			seed: func(t *testing.T, root string) {
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-1-scope.md"), "Aprobado\n")
 			},
 			wantNext: "spec",
 		},
 		{
-			name: "proposal and specs but no design routes to design",
+			name: "proposal specs and design but no gate-2 routes to approve-gate-2",
 			seed: func(t *testing.T, root string) {
-				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\n")
-				write(t, filepath.Join(root, "openspec", "changes", "thin", "specs", "core", "spec.md"), "# Spec\n")
-			},
-			wantNext: "design",
-		},
-		{
-			name: "proposal specs and design but no tasks routes to tasks",
-			seed: func(t *testing.T, root string) {
-				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-1-scope.md"), "Aprobado\n")
 				write(t, filepath.Join(root, "openspec", "changes", "thin", "specs", "core", "spec.md"), "# Spec\n")
 				write(t, filepath.Join(root, "openspec", "changes", "thin", "design.md"), "# Design\n")
+			},
+			wantNext: "approve-gate-2",
+		},
+		{
+			name: "all planning done with pending tasks and gate-2 routes to tasks",
+			seed: func(t *testing.T, root string) {
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-1-scope.md"), "Aprobado\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "specs", "core", "spec.md"), "# Spec\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "design.md"), "# Design\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-2-technical.md"), "Aprobado\n")
 			},
 			wantNext: "tasks",
 		},
 		{
-			name: "all planning done with pending tasks routes to apply",
+			name: "all planning done and tasks pending routes to approve-gate-3",
 			seed: func(t *testing.T, root string) {
 				seedReadyChange(t, root, "thin", "- [ ] 1.1 Work\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-1-scope.md"), "Aprobado\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-2-technical.md"), "Aprobado\n")
+			},
+			wantNext: "approve-gate-3",
+		},
+		{
+			name: "all planning done and tasks pending and gate-3 routes to apply",
+			seed: func(t *testing.T, root string) {
+				seedReadyChange(t, root, "thin", "- [ ] 1.1 Work\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-1-scope.md"), "Aprobado\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-2-technical.md"), "Aprobado\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "gate-3-implementation.md"), "Aprobado\n")
 			},
 			wantNext: "apply",
 		},
@@ -862,12 +888,12 @@ func TestResolveNextRecommendedPlanningRouting(t *testing.T) {
 			wantNext: "propose",
 		},
 		{
-			name: "proposal and design but no specs routes to spec",
+			name: "proposal and design but no specs routes to approve-gate-1",
 			seed: func(t *testing.T, root string) {
-				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\n")
+				write(t, filepath.Join(root, "openspec", "changes", "thin", "proposal.md"), "# Proposal\nGates: required\n")
 				write(t, filepath.Join(root, "openspec", "changes", "thin", "design.md"), "# Design\n")
 			},
-			wantNext: "spec",
+			wantNext: "approve-gate-1",
 		},
 	}
 
@@ -1204,9 +1230,118 @@ func equalStringPtr(left *string, right *string) bool {
 	return *left == *right
 }
 
+// TestResolveExposesDevOrchestratorEngineAndBlocksGentleOrchestrator covers
+// SPEC-002's positive path (Status.Engine == "dev-orchestrator" for a marked
+// change) together with applyForeignEngineGate's SPEC-002 Data Flow gate
+// (dependencies blocked, nextRecommended == "blocked-foreign-engine"). It
+// exists as a permanent regression guard: sdd-verify's review of
+// dev-orchestrator-installable-owner found this positive path was previously
+// exercised only by a temporary, uncommitted diagnostic test.
+func TestResolveExposesDevOrchestratorEngineAndBlocksGentleOrchestrator(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "dev-owned-change", "# Tasks\n\n- [ ] 1.1 Work\n")
+	write(t, filepath.Join(changeRoot, "proposal.md"), "---\nid: dev-owned-change\nengine: dev-orchestrator\n---\n# Proposal\n")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "dev-owned-change"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if status.Engine != "dev-orchestrator" {
+		t.Fatalf("Status.Engine = %q, want %q", status.Engine, "dev-orchestrator")
+	}
+	if status.NextRecommended != "blocked-foreign-engine" {
+		t.Fatalf("NextRecommended = %q, want %q", status.NextRecommended, "blocked-foreign-engine")
+	}
+	blockedDeps := map[string]DependencyState{
+		"Explore": status.Dependencies.Explore, "Proposal": status.Dependencies.Proposal,
+		"Specs": status.Dependencies.Specs, "Design": status.Dependencies.Design,
+		"Tasks": status.Dependencies.Tasks, "Apply": status.Dependencies.Apply,
+		"Verify": status.Dependencies.Verify, "Archive": status.Dependencies.Archive,
+	}
+	for name, state := range blockedDeps {
+		if state != DependencyBlocked {
+			t.Errorf("Dependencies.%s = %q, want %q for a foreign (dev-orchestrator-owned) change", name, state, DependencyBlocked)
+		}
+	}
+	if len(status.BlockedReasons) == 0 {
+		t.Fatal("BlockedReasons is empty, want the ownership refusal message")
+	}
+}
+
+// TestResolveUnmarkedChangeOmitsEngineAndIsUnblocked confirms SPEC-001's
+// "Unmarked legacy change" default and SPEC-002's legacy-shape-freeze
+// scenario: a change with no `engine:` marker anywhere gets Engine == "" and
+// is not affected by applyForeignEngineGate.
+func TestResolveUnmarkedChangeOmitsEngineAndIsUnblocked(t *testing.T) {
+	root := t.TempDir()
+	seedReadyChange(t, root, "unmarked-change", "# Tasks\n\n- [ ] 1.1 Work\n")
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "unmarked-change"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	if status.Engine != "" {
+		t.Fatalf("Status.Engine = %q, want empty for an unmarked change", status.Engine)
+	}
+	if status.NextRecommended == "blocked-foreign-engine" {
+		t.Fatal("NextRecommended = \"blocked-foreign-engine\", want an unmarked change to be unaffected by the foreign-engine gate")
+	}
+}
+
 func ptrValue(value *string) string {
 	if value == nil {
 		return "<nil>"
 	}
 	return *value
+}
+
+func TestTargetRepositoriesInjection(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// mock repository-registry.md
+	registryDir := filepath.Join(tempDir, "docs")
+	if err := os.MkdirAll(registryDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	registryPath := filepath.Join(registryDir, "repository-registry.md")
+	registryContent := `
+| Repository (gitlab_path) | repo-slug | Owner | Type | Purpose | Profile |
+|---|---|---|---|---|---|
+| gp-apps-cross/Pagos | gp-apps-cross-pagos | gp-apps-cross | backend (.NET, Clean Architecture) | Payments backend | skills/repo-profiles/payments-api/SKILL.md |
+`
+	if err := os.WriteFile(registryPath, []byte(registryContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// mock tasks.md
+	changeDir := filepath.Join(tempDir, "openspec", "changes", "test-change")
+	if err := os.MkdirAll(changeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	tasksPath := filepath.Join(changeDir, "tasks.md")
+	if err := os.WriteFile(tasksPath, []byte("repository: gp-apps-cross-pagos"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	changeName := "test-change"
+	status, err := Resolve(ResolveOptions{
+		WorkspaceRoot: tempDir,
+		ChangeName:    changeName,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(status.TargetRepositories) != 1 {
+		t.Fatalf("expected 1 target repository, got %d", len(status.TargetRepositories))
+	}
+
+	if status.TargetRepositories[0].Slug != "gp-apps-cross-pagos" {
+		t.Errorf("expected slug gp-apps-cross-pagos, got %s", status.TargetRepositories[0].Slug)
+	}
+	if status.TargetRepositories[0].GitlabPath != "gp-apps-cross/Pagos" {
+		t.Errorf("expected gitlabPath gp-apps-cross/Pagos, got %s", status.TargetRepositories[0].GitlabPath)
+	}
 }

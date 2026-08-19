@@ -56,10 +56,24 @@ type StatusV1Projection struct {
 	// nil Consent — every status that is not blocked(edit_authority_missing),
 	// which is every legacy shape the freeze tests exercise — produces
 	// byte-identical output to before this field existed.
-	Consent           *SDDIntegrationConsentResult `json:"consent,omitempty"`
-	PhaseInstructions *phaseInstructionsV1         `json:"phaseInstructions,omitempty"`
-	NextRecommended   string                       `json:"nextRecommended"`
-	BlockedReasons    []string                     `json:"blockedReasons"`
+	Consent *SDDIntegrationConsentResult `json:"consent,omitempty"`
+	// RepoProgress projects Status.RepoProgress (Slice 4 of
+	// dev-orchestrator-p1-foundations, design.md Decision 1) onto the wire
+	// under the same omitempty-pointer discipline as ReviewOffer/ReVerify/
+	// Consent above: nil for every change declaring zero or one repo slug --
+	// every legacy shape the freeze tests exercise -- produces byte-identical
+	// output to before this field existed.
+	RepoProgress      *RepoProgress        `json:"repoProgress,omitempty"`
+	PhaseInstructions *phaseInstructionsV1 `json:"phaseInstructions,omitempty"`
+	// Engine projects Status.Engine (dev-orchestrator-installable-owner,
+	// SPEC-002) onto the wire under the same omitempty discipline as
+	// RepoProgress above: empty for every change with no marker or an
+	// explicit gentle-orchestrator marker -- every legacy shape the freeze
+	// tests exercise -- so the wire is byte-identical to before this field
+	// existed.
+	Engine          string   `json:"engine,omitempty"`
+	NextRecommended string   `json:"nextRecommended"`
+	BlockedReasons  []string `json:"blockedReasons"`
 }
 
 type planningHomeV1 struct {
@@ -187,6 +201,7 @@ func ProjectStatusV1(status Status) (StatusV1Projection, error) {
 			Reason:                 status.RemediationState.Reason,
 		},
 		ReviewTransaction: status.ReviewTransaction,
+		Engine:            status.Engine,
 		NextRecommended:   status.NextRecommended,
 		BlockedReasons:    status.BlockedReasons,
 	}
@@ -200,6 +215,7 @@ func ProjectStatusV1(status Status) (StatusV1Projection, error) {
 	projected.ReviewOffer = status.ReviewOffer
 	projected.ReVerify = status.ReVerify
 	projected.Consent = status.Consent
+	projected.RepoProgress = status.RepoProgress
 	if status.PhaseInstructions != nil {
 		projected.PhaseInstructions = &phaseInstructionsV1{
 			Apply:     status.PhaseInstructions.Apply,
@@ -286,7 +302,15 @@ func legacyApplyState(value ApplyState) bool {
 func legacyNextRecommended(value string) bool {
 	switch value {
 	case "apply", "verify", "remediate", "archive", "review", "resolve-review",
-		"resolve-blockers", "sdd-new", "select-change", "propose", "spec", "design", "tasks":
+		"resolve-blockers", "sdd-new", "select-change", "propose", "spec", "design", "tasks",
+		"approve-gate-1", "approve-gate-2", "approve-gate-3", "sdd-explore", "solution-architect",
+		// blocked-foreign-engine is dev-orchestrator-installable-owner's
+		// change-engine-ownership gate (SPEC-002): gentle-orchestrator's own
+		// status refuses to route further work into a change it does not
+		// own. It must be in this whitelist or ProjectStatusV1 would hard
+		// error on every foreign-owned change instead of surfacing the block
+		// to legacy v1 clients.
+		"blocked-foreign-engine":
 		return true
 	default:
 		return false

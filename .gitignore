@@ -22,6 +22,9 @@
 .DS_Store
 Thumbs.db
 
+# Secrets
+.env
+
 # Docker
 *.tar
 cmd/gentle-ai/main
@@ -36,3 +39,5 @@ dist/
 # Engram local runtime state (project sync chunks are intentionally versioned)
 .engram/engram.db
 .engram/cloud.json
+
+mcp.json

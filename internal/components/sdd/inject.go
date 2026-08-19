@@ -73,6 +73,15 @@ type InjectOptions struct {
 	// inject into SDD phase sub-agent prompts. Empty means disabled; normal SDD
 	// installs must leave it empty unless the Community Tool path enabled CodeGraph.
 	CodeGraphGuidanceMarkdown string
+
+	// DevOrchestrator opts in to installing dev-orchestrator as a second,
+	// equal mode: primary OpenCode agent alongside gentle-orchestrator. The
+	// zero value (false) is default-off: install output MUST remain
+	// byte-identical to pre-feature behavior when this is false. When true,
+	// the sdd-overlay-devorchestrator.json fragment is merged into the
+	// in-memory overlay bytes, overriding dev-orchestrator's existing
+	// mode: subagent, hidden: true entry.
+	DevOrchestrator bool
 }
 
 func (opts InjectOptions) orchestratorPolicyRenderOptions() OrchestratorRenderOptions {
@@ -471,6 +480,16 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// NOT contain model fields — otherwise the deep merge overwrites
 			// whatever the user already has in opencode.json.
 			overlayBytes := []byte(overlayContent)
+			if opts.DevOrchestrator {
+				devOrchestratorFragment, err := assets.Read("opencode/sdd-overlay-devorchestrator.json")
+				if err != nil {
+					return InjectionResult{}, fmt.Errorf("read dev-orchestrator overlay fragment: %w", err)
+				}
+				overlayBytes, err = filemerge.MergeJSONObjects(overlayBytes, []byte(devOrchestratorFragment))
+				if err != nil {
+					return InjectionResult{}, fmt.Errorf("merge dev-orchestrator overlay fragment: %w", err)
+				}
+			}
 			if adapter.Agent() == model.AgentKilocode {
 				overlayBytes, err = stripOpenCodeNativeFallbackAgents(overlayBytes)
 				if err != nil {

@@ -21,6 +21,9 @@ func RenderDryRun(result InstallResult) string {
 	if result.Selection.SDDMode != "" {
 		_, _ = fmt.Fprintf(b, "SDD mode: %s\n", result.Selection.SDDMode)
 	}
+	if result.Selection.DevOrchestrator {
+		_, _ = fmt.Fprintln(b, "dev-orchestrator: enabled")
+	}
 	_, _ = fmt.Fprintf(b, "Components order: %s\n", joinComponentIDs(result.Resolved.OrderedComponents))
 	_, _ = fmt.Fprintf(b, "Auto-added dependencies: %s\n", joinComponentIDs(result.Resolved.AddedDependencies))
 	_, _ = fmt.Fprintf(b, "Platform decision: %s\n", formatPlatformDecision(result.Review.PlatformDecision))

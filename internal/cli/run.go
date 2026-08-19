@@ -332,6 +332,7 @@ func mergeFullInstallState(existing, fresh state.InstallState) state.InstallStat
 	merged.InstalledAgents = fresh.InstalledAgents
 	merged.SelectionConfigured, merged.Components, merged.Skills = fresh.SelectionConfigured, fresh.Components, fresh.Skills
 	merged.Preset, merged.SDDMode, merged.StrictTDD = fresh.Preset, fresh.SDDMode, fresh.StrictTDD
+	merged.DevOrchestrator = fresh.DevOrchestrator
 	merged.CommunityTools, merged.CommunityToolsConfigured = fresh.CommunityTools, fresh.CommunityToolsConfigured
 	merged.ClaudeModelAssignments, merged.ClaudePhaseAssignments = fresh.ClaudeModelAssignments, fresh.ClaudePhaseAssignments
 	merged.KiroModelAssignments, merged.CodexModelAssignments = fresh.KiroModelAssignments, fresh.CodexModelAssignments
@@ -1639,6 +1640,7 @@ func (s componentApplyStep) Run() error {
 				CodexPhaseModelAssignments:  s.selection.CodexPhaseModelAssignments,
 				WorkspaceDir:                s.workspaceDir,
 				StrictTDD:                   s.selection.StrictTDD,
+				DevOrchestrator:             s.selection.DevOrchestrator,
 				Profiles:                    s.selection.Profiles,
 				CodeGraphGuidanceMarkdown:   codeGraphGuidanceMarkdownForSDD(s.homeDir, s.selection.CommunityTools),
 			}

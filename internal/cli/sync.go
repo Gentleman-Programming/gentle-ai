@@ -46,6 +46,7 @@ type SyncFlags struct {
 	SDDMode            string
 	SDDProfileStrategy string
 	StrictTDD          bool
+	DevOrchestrator    bool
 	IncludePermissions bool
 	IncludeTheme       bool
 	DryRun             bool
@@ -61,13 +62,14 @@ type SyncFlags struct {
 	Profiles []model.Profile
 	// rawProfiles and rawProfilePhases hold the raw string values from
 	// --profile and --profile-phase flags before parsing into model.Profile.
-	rawProfiles      []string
-	rawProfilePhases []string
-	skillsSet        bool
-	sddModeSet       bool
-	strictTDDSet     bool
-	permissionsSet   bool
-	themeSet         bool
+	rawProfiles        []string
+	rawProfilePhases   []string
+	skillsSet          bool
+	sddModeSet         bool
+	strictTDDSet       bool
+	devOrchestratorSet bool
+	permissionsSet     bool
+	themeSet           bool
 }
 
 // SyncResult holds the outcome of a sync execution.
@@ -117,6 +119,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	fs.StringVar(&opts.SDDMode, "sdd-mode", "", "SDD orchestrator mode: single or multi (default: single)")
 	fs.StringVar(&opts.SDDProfileStrategy, "sdd-profile-strategy", "", "OpenCode SDD profile sync strategy: generated-multi or external-single-active (default: auto-detect)")
 	fs.BoolVar(&opts.StrictTDD, "strict-tdd", false, "enable strict TDD mode for SDD agents (RED → GREEN → REFACTOR)")
+	fs.BoolVar(&opts.DevOrchestrator, "dev-orchestrator", false, "install dev-orchestrator as a second, equal mode: primary OpenCode agent (default: off)")
 	fs.BoolVar(&opts.IncludePermissions, "include-permissions", false, "include permissions component in sync")
 	fs.BoolVar(&opts.IncludeTheme, "include-theme", false, "include theme component in sync")
 	fs.StringVar(&opts.OpenCodeBackgroundSubagents, "opencode-background-subagents", "", "--opencode-background-subagents=auto|on|off; env: GENTLE_AI_OPENCODE_BACKGROUND_SUBAGENTS; eligible versions use a managed launcher")
@@ -147,6 +150,8 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 			opts.sddModeSet = true
 		case "strict-tdd":
 			opts.strictTDDSet = true
+		case "dev-orchestrator":
+			opts.devOrchestratorSet = true
 		case "include-permissions":
 			opts.permissionsSet = true
 		case "include-theme":
@@ -190,6 +195,7 @@ FLAGS
   --sdd-mode single|multi            SDD orchestrator mode
   --sdd-profile-strategy <strategy>  OpenCode SDD profile sync strategy
   --strict-tdd                       Enable strict TDD mode for SDD agents
+  --dev-orchestrator                 Install dev-orchestrator as a second, equal primary OpenCode agent (default: off)
   --include-permissions              Include permissions component
   --include-theme                    Include theme component
   --profile <name:provider/model>    Sync a named SDD profile
@@ -396,6 +402,7 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 		SDDMode:            sddMode,
 		SDDProfileStrategy: model.SDDProfileStrategyID(flags.SDDProfileStrategy),
 		StrictTDD:          flags.StrictTDD,
+		DevOrchestrator:    flags.DevOrchestrator,
 		Skills:             skillIDs,
 		Profiles:           flags.Profiles,
 		// Preset is set to full-gentleman so selectedSkillIDs() returns the
@@ -422,6 +429,9 @@ func RestorePersistedSelection(selection *model.Selection, persisted state.Insta
 	}
 	if flags.strictTDDSet {
 		selection.StrictTDD = explicit.StrictTDD
+	}
+	if flags.devOrchestratorSet {
+		selection.DevOrchestrator = explicit.DevOrchestrator
 	}
 	setSelectionComponent(selection, model.ComponentPermission, flags.permissionsSet, flags.IncludePermissions)
 	setSelectionComponent(selection, model.ComponentTheme, flags.themeSet, flags.IncludeTheme)
@@ -1102,6 +1112,7 @@ func (s componentSyncStep) Run() error {
 				CodexPhaseModelAssignments:         s.selection.CodexPhaseModelAssignments,
 				WorkspaceDir:                       s.workspaceDir,
 				StrictTDD:                          s.selection.StrictTDD,
+				DevOrchestrator:                    s.selection.DevOrchestrator,
 				PreserveOpenCodeOrchestratorPrompt: profileStrategy == model.SDDProfileStrategyExternalSingleActive,
 				Profiles:                           profiles,
 				CodeGraphGuidanceMarkdown:          codeGraphGuidanceMarkdownForSDD(s.homeDir, s.selection.CommunityTools),
@@ -1992,6 +2003,9 @@ func RenderSyncReport(result SyncResult) string {
 		}
 		if len(compParts) > 0 {
 			fmt.Fprintf(&b, "Managed components: %s\n", strings.Join(compParts, ", "))
+		}
+		if result.Selection.DevOrchestrator {
+			fmt.Fprintln(&b, "dev-orchestrator: enabled")
 		}
 		fmt.Fprintf(&b, "Prepare steps: %d\n", len(result.Plan.Prepare))
 		fmt.Fprintf(&b, "Apply steps: %d\n", len(result.Plan.Apply))

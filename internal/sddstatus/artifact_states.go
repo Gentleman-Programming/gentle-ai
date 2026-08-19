@@ -14,18 +14,23 @@ package sddstatus
 // as a build-time input rather than a post-hoc relabel, removes the ability
 // for the two to disagree instead of teaching the projection to tolerate it.
 type artifactStates struct {
-	Proposal      ArtifactState
-	Specs         ArtifactState
-	Design        ArtifactState
-	Tasks         ArtifactState
-	ApplyProgress ArtifactState
-	VerifyReport  ArtifactState
-	ReviewPolicy  ArtifactState
-	ReviewLedger  ArtifactState
-	ReviewReceipt ArtifactState
-	ReviewBundle  ArtifactState
-	ReviewContext ArtifactState
-	ReviewState   ArtifactState
+	Explore             ArtifactState
+	Blueprint           ArtifactState
+	Proposal            ArtifactState
+	Gate1Scope          ArtifactState
+	Gate2Technical      ArtifactState
+	Gate3Implementation ArtifactState
+	Specs               ArtifactState
+	Design              ArtifactState
+	Tasks               ArtifactState
+	ApplyProgress       ArtifactState
+	VerifyReport        ArtifactState
+	ReviewPolicy        ArtifactState
+	ReviewLedger        ArtifactState
+	ReviewReceipt       ArtifactState
+	ReviewBundle        ArtifactState
+	ReviewContext       ArtifactState
+	ReviewState         ArtifactState
 }
 
 // artifactStateField binds one wire key to its artifactStates field and to the
@@ -61,7 +66,12 @@ func (field artifactStateField) declaredBy(store ArtifactStore) bool {
 // and contextFiles, while "its artifact-state entry is present only for Engram
 // status and omitted otherwise".
 var artifactStateFields = []artifactStateField{
+	{key: "explore", field: func(states *artifactStates) *ArtifactState { return &states.Explore }},
+	{key: "blueprint", field: func(states *artifactStates) *ArtifactState { return &states.Blueprint }},
 	{key: "proposal", field: func(states *artifactStates) *ArtifactState { return &states.Proposal }},
+	{key: "gate-1-scope", field: func(states *artifactStates) *ArtifactState { return &states.Gate1Scope }},
+	{key: "gate-2-technical", field: func(states *artifactStates) *ArtifactState { return &states.Gate2Technical }},
+	{key: "gate-3-implementation", field: func(states *artifactStates) *ArtifactState { return &states.Gate3Implementation }},
 	{key: "specs", field: func(states *artifactStates) *ArtifactState { return &states.Specs }},
 	{key: "design", field: func(states *artifactStates) *ArtifactState { return &states.Design }},
 	{key: "tasks", field: func(states *artifactStates) *ArtifactState { return &states.Tasks }},

@@ -1,0 +1,29 @@
+{
+  "agent": {
+    "dev-orchestrator": {
+      "mode": "primary",
+      "hidden": false,
+      "permission": {
+        "task": {
+          "__replace__": {
+            "*": "deny",
+            "dev-explorer": "allow",
+            "dev-proposer": "allow",
+            "dev-specifier": "allow",
+            "dev-designer": "allow",
+            "dev-task-planner": "allow",
+            "solution-architect": "allow",
+            "project-bootstrap": "allow",
+            "backend-implementer": "allow",
+            "frontend-implementer": "allow",
+            "database-specialist": "allow",
+            "dev-verifier": "allow"
+          }
+        }
+      },
+      "tools": {
+        "task": true
+      }
+    }
+  }
+}

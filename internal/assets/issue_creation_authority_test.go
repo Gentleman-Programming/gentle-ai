@@ -37,7 +37,7 @@ func TestIssueCreationAuthorityBoundary(t *testing.T) {
 		t.Fatal("embedded issue-creation authority must retain canonical frontmatter identity name: issue-creation")
 	}
 
-	collaborationPath := filepath.Join(repositoryRoot, "skills", "gentle-ai-collab-perfect", "SKILL.md")
+	collaborationPath := filepath.Join(repositoryRoot, "skills", "legacy", "gentle-ai-collab-perfect", "SKILL.md")
 	collaboration, err := os.ReadFile(collaborationPath)
 	if err != nil {
 		t.Fatalf("read collaboration skill: %v", err)

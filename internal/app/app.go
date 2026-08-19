@@ -101,6 +101,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDAttempt(cli.CanonicalizeSDDAttemptRevisionArgs(args[1:]), stdout)
 		case "sdd-verify-validate":
 			return cli.RunSDDVerifyValidate(args[1:], stdout)
+		case "sdd-verify-gate":
+			return cli.RunSDDVerifyGate(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
 		case "review":
@@ -805,6 +807,9 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	}
 	if overrides.StrictTDD != nil {
 		selection.StrictTDD = *overrides.StrictTDD
+	}
+	if overrides.DevOrchestrator != nil {
+		selection.DevOrchestrator = *overrides.DevOrchestrator
 	}
 	if len(overrides.Profiles) > 0 {
 		selection.Profiles = overrides.Profiles

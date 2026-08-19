@@ -1,0 +1,8 @@
+change: CHG-000
+description: "Description of the cross-repo change"
+repositories:
+  repo-name:
+    branch: feature/CHG-000
+    merge_request: null
+dependencies:
+  - repo-name-A before repo-name-B
