@@ -7515,6 +7515,68 @@ func TestInjectOpenCodeNativeFallbackOwnership(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeNativeFallbackOwnershipRetainsValuesWhenSourcesDisappear(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	firstAssignments := map[string]model.ModelAssignment{
+		"sdd-mid":     {ProviderID: "first", ModelID: "mid", Effort: "low"},
+		"sdd-explore": {ProviderID: "first", ModelID: "explore", Effort: "medium"},
+	}
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: firstAssignments}); err != nil {
+		t.Fatalf("first Inject() error = %v", err)
+	}
+
+	want := map[string]nativeFallbackAssignment{
+		"general": {Model: "first/mid", Variant: "low"},
+		"explore": {Model: "first/explore", Variant: "medium"},
+	}
+	assertState := func(label string) {
+		t.Helper()
+		got, err := readNativeFallbackAssignments(settingsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for role, expected := range want {
+			if got[role] != expected {
+				t.Fatalf("%s fallback[%s] = %#v, want %#v", label, role, got[role], expected)
+			}
+		}
+
+		raw, err := os.ReadFile(nativeFallbackOwnershipPath(settingsPath))
+		if err != nil {
+			t.Fatalf("%s ownership read error = %v", label, err)
+		}
+		var ownership nativeFallbackOwnership
+		if err := json.Unmarshal(raw, &ownership); err != nil {
+			t.Fatalf("%s ownership decode error = %v", label, err)
+		}
+		if ownership.Schema != nativeFallbackOwnershipSchema || ownership.Version != 1 {
+			t.Fatalf("%s ownership header = %q/%d, want %q/1", label, ownership.Schema, ownership.Version, nativeFallbackOwnershipSchema)
+		}
+		if !equalNativeFallbackAssignments(ownership.Agents, want) {
+			t.Fatalf("%s ownership agents = %#v, want %#v", label, ownership.Agents, want)
+		}
+	}
+	assertState("first sync")
+
+	// In multi mode, sdd-mid and sdd-explore are the managed derivation sources.
+	// When both disappear, retain the last managed values and ownership metadata;
+	// source absence is not authorization to delete existing OpenCode settings.
+	if _, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{OpenCodeModelAssignments: map[string]model.ModelAssignment{}}); err != nil {
+		t.Fatalf("second Inject() error = %v", err)
+	}
+	assertState("source-removal sync")
+}
+
 func TestReadNativeFallbackAssignmentsReturnsEmptyMapWithoutAgent(t *testing.T) {
 	settingsPath := filepath.Join(t.TempDir(), "opencode.json")
 	if err := os.WriteFile(settingsPath, []byte(`{"model":"openai/gpt-5"}`), 0o644); err != nil {
