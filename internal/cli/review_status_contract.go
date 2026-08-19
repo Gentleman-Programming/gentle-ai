@@ -737,9 +737,20 @@ func (result ReviewTargetStatusResult) validateSubmissionDescriptors() error {
 		if err != nil {
 			return err
 		}
+		// Every token names the correction request's own frozen target, never
+		// the live workspace identity in result.TargetIdentity. The two differ
+		// as soon as the consumer applies the bounded correction before
+		// forecasting it, and a descriptor that mixes them is unsatisfiable
+		// because its repository-context handle can only ever commit to the
+		// frozen candidate (issue #3194).
+		if arguments, err := reviewTransitionArgumentMap(input.Arguments); err != nil || len(arguments) != 3 ||
+			arguments["lineage"] != result.Authority.LineageID || arguments["expected-revision"] != result.Authority.Revision ||
+			arguments["target"] != transition.CorrectionRequest.TargetIdentity {
+			return errors.New("correction transition lacks the frozen candidate binding") // refusal:by-design world-action: only STATUS can issue a complete frozen-candidate binding
+		}
 		want := reviewCorrectionPlanSubmission(result.Contract, ReviewTransitionBinding{
 			LineageID: result.Authority.LineageID, Revision: result.Authority.Revision,
-			TargetIdentity: result.TargetIdentity, RepositoryContext: context,
+			TargetIdentity: transition.CorrectionRequest.TargetIdentity, RepositoryContext: context,
 		}, *transition.CorrectionRequest)
 		if want == nil || !reflect.DeepEqual(*input.Submission, *want) {
 			return errors.New("correction submission descriptor is not provider-bound") // refusal:by-design world-action: only a provider code fix can bind descriptor tokens to its request
