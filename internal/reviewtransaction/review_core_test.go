@@ -176,6 +176,13 @@ func TestReviewCoreFinalizeApprovedIssuesReceiptRef(t *testing.T) {
 	}
 }
 
+func TestReviewCoreFinalizeHistoricalCausalityCannotApprove(t *testing.T) {
+	authority := historicalNewLineageAuthority("historical-finalize", NewLineageStateReviewing, CausalIntroduced, "CRITICAL")
+	if transition, err := (ReviewCore{}).Next(context.Background(), authority, CoreRequest{Kind: CoreRequestFinalize, AdvanceRequest: &FinalizeAdvanceRequest{CapturedLensResults: authority.CapturedLensNames()}}); err != nil || transition.Kind != CoreTransitionEscalate {
+		t.Fatalf("historical finalize = %#v, %v; want escalate", transition, err)
+	}
+}
+
 // TestReviewCoreFinalizeAdvancesNonTerminalWithAdvanceRequest is C6's own
 // RED/GREEN evidence (verify-report CRITICAL, "ReviewCore-owned transitions
 // in finalize"): given an explicit AdvanceRequest, finalize itself decides

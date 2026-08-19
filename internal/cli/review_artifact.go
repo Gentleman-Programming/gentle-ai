@@ -1019,9 +1019,6 @@ type ReviewFacadeCaptureResultNewLineageResult struct {
 // Wave 5 fix cycle 3: capture-result validates and persists findings, and
 // finalize feeds them into the EXISTING AdmitCandidateCausalFindings, reused
 // rather than duplicated. ProofRefs (a list) joins into Proof (a single
-// string) with "; ". The location is the first causal reference so the
-// store-owned capture can require it and every proof ref to be fully inside
-// frozen added hunks without adding another persisted representation.
 func newLineageCapturedFindings(findings []facadeFinding) []reviewtransaction.FindingEvidence {
 	converted := make([]reviewtransaction.FindingEvidence, len(findings))
 	for index, finding := range findings {

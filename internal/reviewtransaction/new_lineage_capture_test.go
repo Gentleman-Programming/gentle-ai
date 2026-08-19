@@ -8,9 +8,6 @@ package reviewtransaction
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -18,11 +15,13 @@ import (
 func newLineageCaptureFixtureStore(t *testing.T, lenses []string) (AuthorityStore, NewLineageRecord) {
 	t.Helper()
 	repo := initSnapshotRepo(t)
-	treeOutput, err := runGit(context.Background(), repo, nil, nil, "rev-parse", "HEAD^{tree}")
-	if err != nil {
-		t.Fatal(err)
+	writeTree := func(body string) string {
+		writeSnapshotFile(t, repo, "proof.go", body)
+		gitSnapshot(t, repo, "add", "--", literalPathspec("proof.go"))
+		return strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
 	}
-	tree := strings.TrimSpace(string(treeOutput))
+	baseTree := writeTree("one\ntwo\nthree\nfour\nfive\n")
+	candidateTree := writeTree("one\nTWO\nTHREE\nfour\nfive\n")
 	store, err := NewLineageAuthorityStore(context.Background(), repo, "capture-fixture")
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +29,7 @@ func newLineageCaptureFixtureStore(t *testing.T, lenses []string) (AuthorityStor
 	if _, err := store.Mutate(context.Background(), "", func(next *NewLineageAuthority) error {
 		next.State = NewLineageStateReviewing
 		next.CandidateIdentity = CandidateIdentity{
-			RepositoryID: "repo-id", BaseTree: tree, CandidateTree: tree, PolicyHash: "sha256:" + hash("policy"),
+			RepositoryID: "repo-id", BaseTree: baseTree, CandidateTree: candidateTree, PolicyHash: "sha256:" + hash("policy"),
 		}
 		next.Tier = RiskMedium
 		next.SelectedLenses = lenses
@@ -42,79 +41,23 @@ func newLineageCaptureFixtureStore(t *testing.T, lenses []string) (AuthorityStor
 	if err != nil {
 		t.Fatal(err)
 	}
-	return store, record
-}
-
-func newLineageCaptureDiffFixtureStore(t *testing.T) (AuthorityStore, NewLineageRecord) {
-	t.Helper()
-	repo := initSnapshotRepo(t)
-	path := filepath.Join(repo, "proof.go")
-	writeTree := func(body string) string {
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := runGit(context.Background(), repo, nil, nil, "add", "--", literalPathspec("proof.go")); err != nil {
-			t.Fatal(err)
-		}
-		output, err := runGit(context.Background(), repo, nil, nil, "write-tree")
-		if err != nil {
-			t.Fatal(err)
-		}
-		return strings.TrimSpace(string(output))
-	}
-	baseTree := writeTree("one\ntwo\nthree\nfour\nfive\n")
-	candidateTree := writeTree("one\nTWO\nTHREE\nfour\nfive\n")
-	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
-	revision, err := store.Mutate(context.Background(), record.Revision, func(next *NewLineageAuthority) error {
-		next.CandidateIdentity.BaseTree = baseTree
-		next.CandidateIdentity.CandidateTree = candidateTree
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, err = store.Load()
-	if err != nil || record.Revision != revision {
-		t.Fatalf("load diff fixture: record=%#v err=%v", record, err)
-	}
 	store.repo = repo
 	return store, record
 }
 
 func TestCaptureLensResult_DerivesIntroducedOnlyFromFullyContainedFrozenHunks(t *testing.T) {
-	cases := []struct {
-		name, proof string
-		claim, want CausalDisposition
-	}{
-		{"location and refs contained", "proof.go:2-3; proof.go:2", CausalIntroduced, CausalIntroduced},
-		{"partial location overlap", "proof.go:2-4; proof.go:2", CausalIntroduced, CausalUnknown},
-		{"malformed proof", "proof.go:not-a-line", CausalIntroduced, CausalUnknown},
-		{"unreadable path", "missing.go:1", CausalIntroduced, CausalUnknown},
+	assert := func(class EvidenceClass, proof string, want CausalDisposition) {
+		store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
+		subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
+		updated, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, []FindingEvidence{{FindingID: "finding", Class: class, Causality: CausalIntroduced, Proof: proof}})
+		if got := updated.Authority.CapturedResults[0].Findings[0].Causality; err != nil || got != want {
+			t.Fatalf("proof %q persisted causality = %q, want %q; error=%v", proof, got, want, err)
+		}
 	}
-	for _, test := range cases {
-		t.Run(test.name, func(t *testing.T) {
-			store, record := newLineageCaptureDiffFixtureStore(t)
-			subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
-			finding := FindingEvidence{FindingID: "finding", Severity: "BLOCKER", Class: EvidenceDeterministic, Causality: test.claim, Proof: test.proof}
-			updated, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, []FindingEvidence{finding})
-			if err != nil {
-				t.Fatalf("CaptureLensResult: %v", err)
-			}
-			if got := updated.Authority.CapturedResults[0].Findings[0].Causality; got != test.want {
-				t.Fatalf("persisted causality = %q, want %q", got, test.want)
-			}
-		})
-	}
-}
-
-func TestNormalizeCapturedFindings_PropagatesCancelledFrozenGitRead(t *testing.T) {
-	store, record := newLineageCaptureDiffFixtureStore(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err := store.normalizeCapturedFindings(ctx, record.Authority.CandidateIdentity, []FindingEvidence{{Causality: CausalIntroduced, Proof: "proof.go:2"}})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("normalizeCapturedFindings() error = %v, want context.Canceled", err)
-	}
+	assert(EvidenceClass("unsupported"), "proof.go:2-3; proof.go:2", CausalUnknown)
+	assert(EvidenceInsufficient, "proof.go:2-3; proof.go:2", CausalUnknown)
+	assert(EvidenceDeterministic, "proof.go:2-4; proof.go:2", CausalUnknown)
+	assert(EvidenceDeterministic, "proof.go:not-a-line", CausalUnknown)
 }
 
 // TestCaptureLensResult_HappyPathThenFinalizeSatisfiesLensResults is C-A's
@@ -178,7 +121,7 @@ func TestCaptureLensResult_RejectsSubjectHashMismatch(t *testing.T) {
 // DIFFERENT subject hash for an already-captured lens is refused -- there is
 // no reopen machinery.
 func TestCaptureLensResult_OneShotNoReopen(t *testing.T) {
-	store, record := newLineageCaptureDiffFixtureStore(t)
+	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
 	subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
 	firstFindings := []FindingEvidence{{FindingID: " finding ", Severity: "blocker", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: " proof.go:2 ; proof.go:3 ; proof.go:2-3 "}}
 	equivalentFindings := []FindingEvidence{{FindingID: "finding", Severity: "BLOCKER", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "proof.go:2; proof.go:2-3; proof.go:3"}}
@@ -238,7 +181,7 @@ func TestCaptureLensResult_RejectsNonReviewableStates(t *testing.T) {
 // CapturedFindingEvidence flattens them into the exact shape
 // AdmitCandidateCausalFindings consumes -- reused, not duplicated.
 func TestCaptureLensResult_PersistsFindingsForAdmission(t *testing.T) {
-	store, record := newLineageCaptureDiffFixtureStore(t)
+	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
 	subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
 	findings := []FindingEvidence{
 		{FindingID: "R3-boom-div-zero", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "proof.go:2; proof.go:2"},

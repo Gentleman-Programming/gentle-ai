@@ -220,9 +220,6 @@ func TestReviewFacadeCaptureResultNewLineage_MediumTierFinalizeAllowsAllFiveGate
 	}
 }
 
-// TestReviewFacadeCaptureResultNewLineage_SevereUnknownEscalates proves an
-// unreadable frozen location downgrades the provider's introduced claim to
-// persisted unknown, which severe finalize evidence must fail closed on.
 func TestReviewFacadeCaptureResultNewLineage_SevereUnknownEscalates(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)
@@ -280,8 +277,6 @@ func TestReviewFacadeCaptureResultNewLineage_SevereUnknownEscalates(t *testing.T
 	}
 }
 
-// TestReviewFacadeCaptureResultNewLineage_NonCausalFindingDoesNotBlock proves
-// that a WARNING persisted as unknown remains informational.
 func TestReviewFacadeCaptureResultNewLineage_NonCausalFindingDoesNotBlock(t *testing.T) {
 	reviewEnabledHome(t)
 	repo := initReviewCLIRepo(t)

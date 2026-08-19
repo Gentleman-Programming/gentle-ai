@@ -36,6 +36,10 @@ func EvaluateNewLineageGate(ctx context.Context, root string, record NewLineageR
 		BaseTree: record.Authority.CandidateIdentity.BaseTree, CandidateTree: record.Authority.CandidateIdentity.CandidateTree,
 		PolicyHash: record.Authority.CandidateIdentity.PolicyHash,
 	}
+	if !record.Authority.CapturedCausalityAllowsApproval() {
+		context.Denial = &GateDenial{Stage: "new-lineage-validate", Code: "captured-causality-not-authorizing"}
+		return NativeGateEvaluation{Result: GateInvalidated, Reason: "captured causality cannot authorize", Context: context}
+	}
 	switch transition.Kind {
 	case CoreTransitionContinue:
 		// Mirrors EvaluateLegacyGate's own derivation (legacy_projection.go):

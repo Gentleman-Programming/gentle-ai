@@ -2734,8 +2734,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		}
 		if newFound {
 			if strings.TrimSpace(*admissionFindingsPath) != "" {
-				// refusal:by-design operator-knowledge: remove --admission-findings; new-lineage causality comes only from prior store-owned capture
-				return reviewPreflightError(errors.New("new-lineage finalize refuses --admission-findings alternate causal input; causality is written only by store-owned capture from frozen candidate evidence"))
+				return reviewPreflightError(errors.New("new-lineage finalize refuses --admission-findings alternate causal input; causality is written only by store-owned capture from frozen candidate evidence")) // refusal:by-design world-action: alternate caller-owned causality would bypass frozen store-owned evidence and has no safe recovery on this lineage
 			}
 			// The legacy reviewer-result ARTIFACT ingestion pipeline
 			// (readFacadeReviewerArtifacts, readCapturedReviewerResults) is bound to
@@ -2750,8 +2749,6 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 					return reviewPreflightError(fmt.Errorf("new-lineage finalize does not yet support --%s; retry with `gentle-ai review finalize --lineage %s` and, if needed, --failed", unsupported, *lineage))
 				}
 			}
-			// New-lineage finalize accepts no alternate causal input. Its helper
-			// reads only the causality already persisted by store-owned capture.
 			newTerminalAtEntry := newRecord.Authority.State == reviewtransaction.NewLineageStateApproved || newRecord.Authority.State == reviewtransaction.NewLineageStateEscalated
 			if !newTerminalAtEntry {
 				if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
