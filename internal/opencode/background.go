@@ -689,7 +689,8 @@ func (p *ActivationPlan) Apply() error {
 			return p.failAndRollback(fmt.Errorf("add managed OpenCode bin directory %q to PATH: %w", BinDir(p.homeDir), err))
 		}
 		if p.goos != "windows" {
-			p.effective = pathResolvesTo(os.Getenv("PATH"), POSIXLauncherPath(p.homeDir), p.goos)
+			pathValue := activationPathAfterAdd(p.options.Path, os.Getenv("PATH"), BinDir(p.homeDir), p.goos)
+			p.effective = pathResolvesTo(pathValue, POSIXLauncherPath(p.homeDir), p.goos)
 			if p.effective {
 				p.activationReason = activationReasonApplied
 			} else {
@@ -863,6 +864,34 @@ func IsManagedLauncher(path string, data []byte) bool {
 }
 
 func windowsTargetSafe(target string) bool { return !strings.Contains(target, "%") }
+
+func activationPathAfterAdd(configured, refreshed, managedDir, goos string) string {
+	if pathEntryPresent(splitPath(configured, goos), managedDir, goos) {
+		return configured
+	}
+	for _, entry := range splitPath(refreshed, goos) {
+		if !samePath(strings.Trim(strings.TrimSpace(entry), `"`), managedDir, goos) {
+			continue
+		}
+		separator := ":"
+		if goos == "windows" {
+			separator = ";"
+		}
+		return entry + separator + configured
+	}
+	return configured
+}
+
+func pathEntryPresent(entries []string, candidate, goos string) bool {
+	candidate = strings.Trim(strings.TrimSpace(candidate), `"`)
+	for _, entry := range entries {
+		entry = strings.Trim(strings.TrimSpace(entry), `"`)
+		if entry != "" && samePath(entry, candidate, goos) {
+			return true
+		}
+	}
+	return false
+}
 
 func pathResolvesTo(pathValue, launcher, goos string) bool {
 	for _, entry := range splitPath(pathValue, goos) {
