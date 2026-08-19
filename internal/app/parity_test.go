@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -164,22 +165,26 @@ func TestGuardFlowLinuxDryRunPropagatesDecision(t *testing.T) {
 func TestRunArgsNoCommandLaunchesTUI(t *testing.T) {
 	withTerminalStreams(t)
 	origRunTUI := runTUI
-	t.Cleanup(func() { runTUI = origRunTUI })
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	t.Cleanup(func() {
+		runTUI = origRunTUI
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+	})
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
+	wantErr := errors.New("mock TUI reached")
 	runTUI = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
-		return nil, errors.New("mock TUI error: no TTY")
+		return nil, wantErr
 	}
 
 	var buf bytes.Buffer
 	err := RunArgs(nil, &buf)
-	// With no args, RunArgs now launches the TUI via Bubbletea.
-	// In a headless/test environment without a TTY, this returns an error
-	// about opening /dev/tty. That's expected — the TUI requires a terminal.
-	if err == nil {
-		// If no error, we're somehow in a TTY — that's fine too.
-		return
-	}
-	if !strings.Contains(err.Error(), "TTY") && !strings.Contains(err.Error(), "tty") && !strings.Contains(err.Error(), "mock TUI") {
-		t.Fatalf("RunArgs(nil) unexpected error = %v; want TTY-related error or nil", err)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("RunArgs(nil) error = %v, want exact mocked TUI error", err)
 	}
 }
 
