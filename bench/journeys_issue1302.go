@@ -172,7 +172,7 @@ func issue1302DriveJoin(r *journeyRun) error {
 
 func issue1302Journeys() []Journey {
 	return []Journey{{
-		ID:     "j106-sdd-concurrent-item-join-barrier",
+		ID:     "j111-sdd-concurrent-item-join-barrier",
 		Review: reviewUntouched,
 		Title:  "Concurrent SDD items join only after immutable settlement and coordinator projection",
 		Source: "https://github.com/Gentleman-Programming/gentle-ai/issues/1302",
