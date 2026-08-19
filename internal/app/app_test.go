@@ -678,13 +678,15 @@ func TestTUIExecuteWithBackgroundPublishesChoiceAndPreservesState(t *testing.T) 
 	}
 }
 
-func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.T) {
+func TestTuiInstallOnThenSyncPreservesCanonicalAndRefusesTamperedOpenCodeActivation(t *testing.T) {
 	home := t.TempDir()
 	previousUserHomeDir := appUserHomeDir
 	appUserHomeDir = func() (string, error) { return home, nil }
 	t.Cleanup(func() { appUserHomeDir = previousUserHomeDir })
 	binDir := writeFakeOpenCodeRuntime(t)
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// The activation fixture models a supported login shell without invoking it.
+	t.Setenv("SHELL", "/bin/zsh")
 
 	selection := model.Selection{Agents: []model.AgentID{model.AgentOpenCode}, Components: []model.ComponentID{model.ComponentPersona, model.ComponentSDD}, SDDMode: model.SDDModeSingle}
 	resolved := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentOpenCode}, OrderedComponents: []model.ComponentID{model.ComponentPersona, model.ComponentSDD}}
@@ -699,25 +701,27 @@ func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.
 	if err != nil {
 		t.Fatalf("ReadFile(launcher): %v", err)
 	}
+	if !opencodeactivation.IsManagedLauncher(launcher, before) {
+		t.Fatal("TUI install launcher is not canonical managed content")
+	}
 	if !strings.Contains(string(before), "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS") {
 		t.Fatalf("TUI install launcher missing background environment: %s", before)
 	}
-	stale := strings.Replace(string(before), "=true", "=stale", 1)
-	if err := os.WriteFile(launcher, []byte(stale), 0o755); err != nil {
-		t.Fatalf("WriteFile(stale launcher): %v", err)
-	}
 
-	changed, err := tuiSync(home)(nil)
-	if err != nil {
-		t.Fatalf("TUI sync error = %v", err)
-	}
-	after, err := os.ReadFile(launcher)
-	if err != nil {
-		t.Fatalf("ReadFile(refreshed launcher): %v", err)
-	}
-	if string(after) != string(before) || !slices.Contains(changed, launcher) {
-		t.Fatalf("TUI sync launcher/changed files = %q/%v, want refreshed launcher and changed path", after, changed)
-	}
+	t.Run("canonical sync is idempotent", func(t *testing.T) {
+		changed, err := tuiSync(home)(nil)
+		if err != nil {
+			t.Fatalf("TUI sync error = %v", err)
+		}
+		after, err := os.ReadFile(launcher)
+		if err != nil {
+			t.Fatalf("ReadFile(canonical launcher): %v", err)
+		}
+		if !bytes.Equal(after, before) || slices.Contains(changed, launcher) {
+			t.Fatalf("canonical TUI sync launcher/changed files = %q/%v, want unchanged launcher", after, changed)
+		}
+	})
+
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	settings, err := os.ReadFile(settingsPath)
 	if err != nil {
@@ -726,6 +730,29 @@ func TestTuiInstallOnThenSyncPreservesAndRefreshesOpenCodeActivation(t *testing.
 	if !strings.Contains(string(settings), `\u003c!-- gentle-ai:opencode-background-subagents --\u003e`) {
 		t.Fatalf("TUI sync did not preserve OpenCode background policy in SDD settings")
 	}
+
+	stale := strings.Replace(string(before), "=true", "=stale", 1)
+	if stale == string(before) {
+		t.Fatal("canonical launcher fixture did not contain the expected environment assignment")
+	}
+	if err := os.WriteFile(launcher, []byte(stale), 0o755); err != nil {
+		t.Fatalf("WriteFile(stale launcher): %v", err)
+	}
+
+	t.Run("tampered launcher is refused and preserved", func(t *testing.T) {
+		changed, err := tuiSync(home)(nil)
+		if err == nil || !strings.Contains(err.Error(), "user-owned OpenCode launcher collision") {
+			t.Fatalf("TUI sync error = %v, want user-owned launcher refusal", err)
+		}
+		after, readErr := os.ReadFile(launcher)
+		if readErr != nil {
+			t.Fatalf("ReadFile(preserved launcher): %v", readErr)
+		}
+		if string(after) != stale || slices.Contains(changed, launcher) {
+			t.Fatalf("tampered TUI sync launcher/changed files = %q/%v, want preserved launcher and no launcher change", after, changed)
+		}
+	})
+
 	persisted, err := state.Read(home)
 	if err != nil {
 		t.Fatalf("state.Read: %v", err)

@@ -803,6 +803,42 @@ func TestActivationReportIncludesReasonForPreparedAndAppliedPlans(t *testing.T) 
 	}
 }
 
+func TestActivationEffectivenessUsesPreparedPathSnapshot(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(target, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	managedDir := BinDir(home)
+	ambientDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ambientDir, "opencode"), []byte("ambient executable"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", ambientDir)
+	plan, err := PrepareActivation(home, ActivationOptions{
+		OS:    "linux",
+		Path:  managedDir,
+		Shell: "/bin/zsh",
+		RunVersion: func(string) (string, error) {
+			return "1.15.11", nil
+		},
+		AddToUserPath: func(string) error { return nil },
+		ResolveTarget: func(string, string, string) (string, error) { return target, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Effective() {
+		t.Fatal("activation reported ineffective despite the prepared PATH snapshot resolving the managed launcher")
+	}
+	if got, want := plan.Report().ActivationReason, activationReasonApplied; got != want {
+		t.Fatalf("activation reason = %q, want %q", got, want)
+	}
+}
+
 func TestCRLFProfileActivationIsIdempotentAndPreservesBytesAndMode(t *testing.T) {
 	home := t.TempDir()
 	profile := filepath.Join(home, ".zprofile")

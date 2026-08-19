@@ -38,7 +38,7 @@ func TestBuildPlanRemovesOnlyOwnedOpenCodeLaunchers(t *testing.T) {
 		}
 		content := []byte("user launcher")
 		if index == 0 {
-			content = ownedOpenCodeLauncher(path)
+			content = canonicalOwnedOpenCodeLauncher(t, path)
 		}
 		if err := os.WriteFile(path, content, 0o755); err != nil {
 			t.Fatal(err)
@@ -94,7 +94,7 @@ func TestUninstallPreservesManagedLauncherSymlink(t *testing.T) {
 	homeDir := t.TempDir()
 	path := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)[0]
 	target := filepath.Join(t.TempDir(), "launcher-target")
-	targetContent := ownedOpenCodeLauncher(path)
+	targetContent := canonicalOwnedOpenCodeLauncher(t, path)
 	if err := os.WriteFile(target, targetContent, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +118,15 @@ func TestUninstallPreservesManagedLauncherSymlink(t *testing.T) {
 	if data, err := os.ReadFile(target); err != nil || string(data) != string(targetContent) {
 		t.Fatalf("launcher target after uninstall = %q, %v", data, err)
 	}
+}
+
+func canonicalOwnedOpenCodeLauncher(t *testing.T, path string) []byte {
+	t.Helper()
+	content := ownedOpenCodeLauncher(path)
+	if !opencodeactivation.IsManagedLauncher(path, content) {
+		t.Fatalf("owned launcher fixture drifted from canonical content for %q", path)
+	}
+	return content
 }
 
 func ownedOpenCodeLauncher(path string) []byte {

@@ -555,7 +555,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	for _, component := range r.selection.Components {
-		apply = append(apply, componentSyncStep{
+		step := componentSyncStep{
 			id:               "sync:component:" + string(component),
 			component:        component,
 			homeDir:          r.homeDir,
@@ -564,7 +564,11 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			selection:        r.selection,
 			changedFiles:     &r.changedFiles,
 			backgroundPolicy: r.backgroundPolicy,
-		})
+		}
+		if r.backgroundActivation != nil {
+			step.backgroundReady = &r.runtimeReady
+		}
+		apply = append(apply, step)
 	}
 	if needsCompatibilitySkillsRefresh(r.selection.Components) {
 		apply = append(apply, compatibilitySkillsRefreshStep{
@@ -842,6 +846,7 @@ type componentSyncStep struct {
 	changedFiles *[]string // accumulates absolute paths of files that actually changed
 
 	backgroundPolicy bool
+	backgroundReady  *bool
 }
 
 type codeGraphGuidanceSyncStep struct {
@@ -1007,6 +1012,10 @@ func (s componentSyncStep) ID() string {
 	return s.id
 }
 
+func (s componentSyncStep) backgroundPolicyEnabled() bool {
+	return s.backgroundPolicy && (s.backgroundReady == nil || *s.backgroundReady)
+}
+
 func (s componentSyncStep) Run() error {
 	adapters := resolveAdapters(s.agents)
 
@@ -1106,9 +1115,9 @@ func (s componentSyncStep) Run() error {
 				Profiles:                           profiles,
 				CodeGraphGuidanceMarkdown:          codeGraphGuidanceMarkdownForSDD(s.homeDir, s.selection.CommunityTools),
 			}
-			opts.IncludeOpenCodeBackgroundPolicy = s.backgroundPolicy && adapter.Agent() == model.AgentOpenCode
+			opts.IncludeOpenCodeBackgroundPolicy = s.backgroundPolicyEnabled() && adapter.Agent() == model.AgentOpenCode
 			inject := sdd.Inject
-			if s.backgroundPolicy {
+			if s.backgroundPolicyEnabled() {
 				inject = injectSDD
 			}
 			res, err := inject(targetDir, adapter, sddMode, opts)
@@ -1585,7 +1594,7 @@ func runSyncWithSelection(homeDir string, selection model.Selection, background 
 	rt.backgroundActivation = background.activationPlan
 	if rt.backgroundActivation != nil {
 		rt.runtimeReady = rt.backgroundActivation.Effective()
-		rt.backgroundPolicy = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
+		rt.backgroundPolicy = background.Effective == model.OpenCodeBackgroundOn
 	} else {
 		// Preserve the programmatic/TUI seam's historical behavior. CLI sync
 		// supplies an activation plan; direct callers do not.
@@ -1856,9 +1865,9 @@ func RunSync(args []string) (SyncResult, error) {
 		background.activationPlan = backgroundActivation
 		rt.backgroundActivation = backgroundActivation
 		rt.runtimeReady = backgroundActivation != nil && backgroundActivation.Effective()
-		rt.backgroundPolicy = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
+		rt.backgroundPolicy = background.Effective == model.OpenCodeBackgroundOn
 		result.Background = background
-		result.BackgroundPolicyEnabled = rt.backgroundPolicy
+		result.BackgroundPolicyEnabled = rt.runtimeReady && background.Effective == model.OpenCodeBackgroundOn
 		rt.piBackgroundProjection = preparePiBackgroundProjection(homeDir, &piBackground, containsAgent(agentIDs, model.AgentPi))
 		result.PiBackground = piBackground
 		result.Plan = rt.stagePlan()
