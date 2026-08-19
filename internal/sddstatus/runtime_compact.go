@@ -120,6 +120,8 @@ type CompactAcquireRequest struct {
 	RemediatesEvidenceRevision string
 }
 
+// CompactSettleRequest closes the live attempt identified by Token through the
+// compact orchestration boundary.
 type CompactSettleRequest struct {
 	Token              string
 	RequestID          string
@@ -217,6 +219,11 @@ func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
 	}
 	active := in.Status.runtimeActiveAttempt()
 	activeToken := ""
+	if active == nil && in.Status.runtimeActiveCount() > 0 {
+		// Multiple item owners have no singular active attempt. Use the
+		// deterministic compatibility owner when reporting a foreign token.
+		_, active = in.Status.runtimeCompatibilityActive()
+	}
 	if active != nil {
 		activeToken = in.AttemptTokens[active.Ordinal]
 	}
@@ -251,7 +258,9 @@ func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
 	case in.Status.runtimeActiveCount() > 0:
 		if active == nil {
 			_, active = in.Status.runtimeCompatibilityActive()
-			activeToken = in.AttemptTokens[active.Ordinal]
+			if active != nil {
+				activeToken = in.AttemptTokens[active.Ordinal]
+			}
 		}
 		return compactBlocked(CompactBlockActiveAttempt, activeToken), true
 	default:
@@ -283,13 +292,13 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 			return result, nil
 		}
 		if !errors.Is(err, reviewtransaction.ErrStoreLockContended) {
-			return store.compactMutationFailure(err, false, begin), nil
+			return store.compactMutationFailure(err, nil, begin), nil
 		}
 		select {
 		case <-ctx.Done():
 			return CompactAttemptResult{}, ctx.Err()
 		case <-deadline.C:
-			return store.compactMutationFailure(fmt.Errorf("%w: acquire retry timed out after %s: %w", ErrRuntimeConcurrentUpdate, timeout, reviewtransaction.ErrStoreLockContended), false, begin), nil
+			return store.compactMutationFailure(fmt.Errorf("%w: acquire retry timed out after %s: %w", ErrRuntimeConcurrentUpdate, timeout, reviewtransaction.ErrStoreLockContended), nil, begin), nil
 		case <-ticker.C:
 		}
 	}
@@ -398,7 +407,7 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 			return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 		}
 		if _, err := store.finishTarget(ctx, finish, target); err != nil {
-			return store.compactMutationFailure(err, true, BeginAttemptRequest{}), nil
+			return store.compactMutationFailure(err, &request, BeginAttemptRequest{}), nil
 		}
 		return store.compactSettleResult(&request)
 	}
@@ -449,7 +458,7 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}
 	if _, err := store.finishTarget(ctx, finish, target); err != nil {
-		result := store.compactMutationFailure(err, true, BeginAttemptRequest{})
+		result := store.compactMutationFailure(err, &request, BeginAttemptRequest{})
 		if result.State == CompactStateComplete {
 			return store.compactSettleResult(&request)
 		}
@@ -467,7 +476,7 @@ func (store RuntimeStore) HandoffCompact(ctx context.Context, request CompactHan
 	if errors.As(err, &publication) && publication.Committed {
 		return CompactAttemptResult{State: CompactStateProceed}, nil
 	}
-	return store.compactMutationFailure(err, false, BeginAttemptRequest{}), nil
+	return store.compactMutationFailure(err, nil, BeginAttemptRequest{}), nil
 }
 
 // unmanagedRemediationSettleable reports whether a settle carrying
@@ -624,11 +633,11 @@ func compactItemSettlement(replay runtimeReplay, request CompactSettleRequest) *
 		SettlementRequestID: request.RequestID}
 }
 
-func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin BeginAttemptRequest) CompactAttemptResult {
+func (store RuntimeStore) compactMutationFailure(err error, settle *CompactSettleRequest, begin BeginAttemptRequest) CompactAttemptResult {
 	var publication *RuntimePublicationError
 	if errors.As(err, &publication) && publication.Committed {
-		if settle {
-			result, _ := store.compactSettleResult(nil, publication.Revision)
+		if settle != nil {
+			result, _ := store.compactSettleResult(settle, publication.Revision)
 			return result
 		}
 		replay, loadErr := store.load()

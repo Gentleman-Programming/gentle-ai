@@ -54,6 +54,12 @@ type workItemMetadata struct {
 	EvidenceGoal    string    `json:"evidenceGoal"`
 }
 
+type invalidWorkItemError struct{ reason string }
+
+func (err invalidWorkItemError) Error() string { return errInvalidWorkItem.Error() + ": " + err.reason }
+
+func (invalidWorkItemError) Unwrap() error { return errInvalidWorkItem }
+
 // itemPlanCandidate is the portable immutable item metadata proposed by an
 // artifact resolver. RuntimeStore, not this candidate, decides whether to
 // retain or authorize it.
@@ -99,7 +105,7 @@ func applyWorkItemProjection(status *Status, tasks string) {
 	if err != nil {
 		status.Dependencies.Apply = DependencyBlocked
 		status.NextRecommended = "resolve-blockers"
-		status.BlockedReasons = append(status.BlockedReasons, fmt.Sprintf("work item metadata is invalid: %v; correct the metadata block and rerun `gentle-ai sdd-status --cwd %s --json`", err, status.ActionContext.WorkspaceRoot))
+		status.BlockedReasons = append(status.BlockedReasons, fmt.Sprintf("work item metadata is invalid: %v", err))
 		return
 	}
 	status.Items = items
@@ -299,7 +305,9 @@ func validateWorkItem(item workItemMetadata, workspace string) error {
 	return nil
 }
 
-func invalidWorkItem(_ string, _ ...any) error { return errInvalidWorkItem }
+func invalidWorkItem(format string, args ...any) error {
+	return invalidWorkItemError{reason: fmt.Sprintf(format, args...)}
+}
 
 func workItemRootsAllowed(roots []string, context ActionContext) bool {
 	allowed := make([]string, 0, len(context.AllowedEditRoots))
@@ -372,7 +380,11 @@ func ResolveItemAcquire(options ResolveOptions, itemID, requestID string) (Begin
 		if err != nil {
 			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: invalid item plan candidate: %w", err)
 		}
-		entry, _ := itemPlanEntryForID(plan, item.ID)
+		entry, ok := itemPlanEntryForID(plan, item.ID)
+		if !ok {
+			// refusal:by-design world-action: generated plan authority is inconsistent and must be restored.
+			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: projected item %q is absent from its generated plan", item.ID)
+		}
 		workspace, ok := prospectiveWorkItemPath(status.ActionContext.WorkspaceRoot)
 		if !ok || status.ChangeName == nil {
 			return BeginAttemptRequest{}, fmt.Errorf("item-selected acquire refused: unresolved item plan origin") // refusal:by-design operator-knowledge: resolve the selected item from a workspace with one resolved change
@@ -405,9 +417,13 @@ func newItemPlanCandidate(items []WorkItem, retained *itemPlanCandidate) (itemPl
 		initiallyDone := item.Done
 		if retained != nil {
 			entry, ok := itemPlanEntryForID(*retained, item.ID)
-			if !ok || entry.InitiallyDone == nil {
+			if !ok {
 				// refusal:by-design world-action: retained immutable authority is incomplete and must be restored.
-				return itemPlanCandidate{}, errors.New("retained item plan has no initial completion snapshot")
+				return itemPlanCandidate{}, fmt.Errorf("retained item plan does not contain projected item %q", item.ID)
+			}
+			if entry.InitiallyDone == nil {
+				// refusal:by-design world-action: retained immutable authority is incomplete and must be restored.
+				return itemPlanCandidate{}, fmt.Errorf("retained item plan entry %q has no initial completion snapshot", item.ID)
 			}
 			initiallyDone = *entry.InitiallyDone
 		}

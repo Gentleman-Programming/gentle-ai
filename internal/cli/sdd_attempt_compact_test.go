@@ -469,20 +469,23 @@ func TestRunSDDAttemptConcurrentDisjointItemsSettleByToken(t *testing.T) {
 	if second.State != "proceed" || second.ItemSettlement == nil || second.ItemSettlement.ItemID != "b" || second.ItemSettlement.AttemptOrdinal != 2 {
 		t.Fatalf("remaining settlement=%#v", second)
 	}
-	recordsDir := filepath.Join(repo, ".git", "gentle-ai", "sdd-runtime", "v1", change, "records")
-	beforeReplay := snapshotRuntimeAuthorityFiles(t, recordsDir)
+	store, err := sddstatus.OpenRuntimeStore(context.Background(), repo, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeReplay := snapshotRuntimeAuthorityFiles(t, store.Dir)
 	replayed, replayPayload := runCompactSDDAttempt(t, settleA)
-	afterReplay := snapshotRuntimeAuthorityFiles(t, recordsDir)
+	afterReplay := snapshotRuntimeAuthorityFiles(t, store.Dir)
 	if !reflect.DeepEqual(replayed.ItemSettlement, first.ItemSettlement) || !reflect.DeepEqual(beforeReplay, afterReplay) {
-		t.Fatalf("first settlement replay=%#v payload=%s first=%s", replayed, replayPayload, firstPayload)
+		t.Fatalf("first settlement replay=%#v payload=%s first=%s\nbefore=%v\nafter=%v", replayed, replayPayload, firstPayload, beforeReplay, afterReplay)
 	}
 	for _, token := range []string{"", cliAttemptHash('f')} {
-		before := snapshotRuntimeAuthorityFiles(t, recordsDir)
+		before := snapshotRuntimeAuthorityFiles(t, store.Dir)
 		var foreignOutput bytes.Buffer
 		err := RunSDDAttempt(compactSettleArgs(repo, change, token, "foreign-"+fmt.Sprint(len(token)), "passed"), &foreignOutput)
 		var blocked compactAttemptOutput
 		_ = json.Unmarshal(foreignOutput.Bytes(), &blocked)
-		if (err == nil && blocked.State != "blocked") || !reflect.DeepEqual(before, snapshotRuntimeAuthorityFiles(t, recordsDir)) {
+		if (err == nil && blocked.State != "blocked") || !reflect.DeepEqual(before, snapshotRuntimeAuthorityFiles(t, store.Dir)) {
 			t.Fatalf("foreign token=%q err=%v output=%s", token, err, foreignOutput.String())
 		}
 	}
@@ -636,6 +639,9 @@ func snapshotRuntimeAuthorityFiles(t *testing.T, root string) map[string]string 
 			return err
 		}
 		if entry.IsDir() {
+			return nil
+		}
+		if entry.Name() == "LOCK" {
 			return nil
 		}
 		payload, err := os.ReadFile(path)

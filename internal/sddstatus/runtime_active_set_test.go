@@ -28,14 +28,14 @@ func TestRuntimeActiveSetCompatibilityProjection(t *testing.T) {
 
 func TestRuntimeFinishEventTargetsExactActiveOwner(t *testing.T) {
 	replay := syntheticMultiActiveReplay()
-	event := &runtimeFinishEvent{Ordinal: 2, Outcome: AttemptPassed, FinishCandidateIdentity: "done", FinishCandidateTree: "done", EvidenceRevision: runtimeTestHash('b')}
+	event := &runtimeFinishEvent{Ordinal: 2, Outcome: AttemptPassed, ChangedLines: 7, FinishCandidateIdentity: "done", FinishCandidateTree: "done", EvidenceRevision: runtimeTestHash('b')}
 	if err := applyRuntimeFinishEvent(&replay, event, false); err != nil {
 		t.Fatal(err)
 	}
 	if replay.Status.runtimeActiveCount() != 1 || replay.Status.runtimeActiveAttemptForOrdinal(1) == nil || replay.Status.runtimeActiveAttemptForOrdinal(2) != nil || replay.Status.Attempts[0].Outcome != AttemptRunning || replay.Status.Attempts[1].Outcome != AttemptPassed || replay.Status.Complete || replay.Status.NextAction != RuntimeActionFinish {
 		t.Fatalf("exact finish = %#v", replay.Status)
 	}
-	if got := replay.Accounting.buckets[runtimeObjectiveAccountingKey{"b", 2}]; got.lines != 0 || replay.Accounting.buckets[runtimeObjectiveAccountingKey{"a", 1}].lines != 0 {
+	if got := replay.Accounting.buckets[runtimeObjectiveAccountingKey{"b", 2}]; got.lines != 7 || replay.Accounting.buckets[runtimeObjectiveAccountingKey{"a", 1}].lines != 0 {
 		t.Fatalf("accounting = %#v", replay.Accounting)
 	}
 }
@@ -44,5 +44,23 @@ func TestRuntimeLifecycleRefusesSyntheticMultiActive(t *testing.T) {
 	status := syntheticMultiActiveReplay().Status
 	if status.runtimeActiveCount() != 2 || status.runtimeActiveAttempt() != nil {
 		t.Fatalf("synthetic state = %#v", status)
+	}
+}
+
+func TestRuntimeReadinessUsesCompatibilityTokenForForeignMultiActiveOwner(t *testing.T) {
+	replay := syntheticMultiActiveReplay()
+	replay.AttemptTokens = map[int]string{1: "owner-a", 2: "owner-b"}
+	replay.Status.ownership.roots["a"], replay.Status.ownership.roots["b"] = true, true
+	result, terminal := runtimeReadiness(runtimeReadinessInput{Status: replay.Status, AttemptTokens: replay.AttemptTokens, PresentedToken: "foreign"})
+	if !terminal || result.State != CompactStateBlocked || result.Reason != CompactBlockActiveAttempt || result.Token != "owner-a" {
+		t.Fatalf("foreign multi-owner readiness = %#v terminal=%t", result, terminal)
+	}
+}
+
+func TestRuntimeActiveAttemptFailsClosedForDanglingOwner(t *testing.T) {
+	status := syntheticMultiActiveReplay().Status
+	delete(status.ownership.objectives, "a")
+	if status.runtimeActiveAttemptForOrdinal(1) != nil || status.runtimeActiveAttempt() != nil {
+		t.Fatalf("dangling owner remained active: %#v", status)
 	}
 }

@@ -206,6 +206,33 @@ func TestCompactSettleUsesTokenTargetForItemSettlement(t *testing.T) {
 	}
 }
 
+func TestCompactItemSettleRecoversCommittedPublicationWithOriginalRequest(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "item-publication-recovery")
+	store.ReviewDisabled = true
+	root := filepath.Join(repo, "item")
+	mkdir(t, root)
+	acquired, err := store.Acquire(context.Background(), CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{RequestID: "item-acquire", WorkUnit: "apply", EvidenceGoal: "prove item target", MaxAttempts: 1, MaxChangedLines: 20, ItemID: "item-a", ItemEditRoots: []string{root}}})
+	if err != nil || acquired.State != CompactStateProceed {
+		t.Fatalf("item acquire = %#v, %v", acquired, err)
+	}
+	appendRuntimeLedgerFile(t, repo, "item work\n")
+	request := CompactSettleRequest{Token: acquired.Token, RequestID: "item-settle", Outcome: AttemptPassed, EvidenceRevision: runtimeTestHash('a'), Diagnosis: "passed", HarnessDisposition: HarnessReused, CleanupEvidence: "clean", ProcessEvidence: "none"}
+	failNextCompactStoreSync(t, store)
+	result, err := store.Settle(context.Background(), request)
+	if err != nil || result.State != CompactStateComplete || result.ItemSettlement == nil || result.ItemSettlement.SettlementRequestID != request.RequestID || result.ItemSettlement.EvidenceRevision != request.EvidenceRevision {
+		t.Fatalf("committed item settle = %#v, %v", result, err)
+	}
+	status, err := store.Status()
+	if err != nil || result.ItemSettlement.AttemptOrdinal != 1 || status.Revision == acquired.Token || status.ActiveAttempt != nil {
+		t.Fatalf("committed item settle status=%#v result=%#v err=%v", status, result, err)
+	}
+	replayed, err := store.Settle(context.Background(), request)
+	if err != nil || !reflect.DeepEqual(replayed, result) {
+		t.Fatalf("committed item settle replay=%#v want %#v err=%v", replayed, result, err)
+	}
+}
+
 // TestCompactAcquireTokenProvesOwnershipWithoutMutation reproduces #2291's
 // deadlock shape: a parent acquires (proceed + token), then launches an
 // actor that is a distinct call/process and cannot re-acquire without

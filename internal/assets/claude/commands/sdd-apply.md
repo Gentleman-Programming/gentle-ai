@@ -18,7 +18,7 @@ Implement the remaining incomplete tasks for the active SDD change.
 STATUS GATE:
 Read `~/.claude/skills/_shared/sdd-status-contract.md` and produce structured status before acting. If `$ARGUMENTS` is missing or ambiguous, ask the user to choose and STOP. Do not guess. Continue only when status says apply is `ready`, spec/design/tasks exist, and `actionContext` allows implementation edits. If status reports `workspace-planning` with no allowed edit roots, STOP before launching apply or editing inline. Carry `contextFiles`, task progress, dependency states, and `actionContext` into the native sub-agent prompt when delegating.
 
-ENGRAM PERSISTENCE (artifact store mode: engram):
+ENGRAM PERSISTENCE (artifact store mode: engram, non-item execution only):
 CRITICAL: mem_search returns 300-char PREVIEWS, not full content. You MUST call mem_get_observation(id) for EVERY artifact.
 STEP A — SEARCH (get IDs only):
   mem_search(query: "sdd/{change-name}/spec", project: "{project}") → save spec_id

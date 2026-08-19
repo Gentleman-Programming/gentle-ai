@@ -1212,6 +1212,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		applyNativeRuntimeRouting(&status)
 	}
 	applyWorkItemProjection(&status, artifactsByType["tasks"].Content)
+	applyRetainedItemPlanJoinRouting(&status)
 	status.BlockedReasons = blockedReasons.finalize(status.NextRecommended, status.BlockedReasons)
 	if runtimeRemediationComplete && status.Dependencies.Verify == DependencyReady && status.Dependencies.Archive == DependencyBlocked && status.NextRecommended == string(PhaseVerify) {
 		status.verifyRefreshReason = runtimeRemediationVerifyRefreshInstruction

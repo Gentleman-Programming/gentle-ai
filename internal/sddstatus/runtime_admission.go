@@ -196,7 +196,7 @@ func (store RuntimeStore) AdmissionStatus(ctx context.Context, request BeginAtte
 		return status, nil
 	}
 	if _, admissionErr := store.runtimeBeginAdmission(ctx, replay, normalized); admissionErr != nil {
-		if blocked := store.compactMutationFailure(admissionErr, false, normalized); blocked.State == CompactStateBlocked {
+		if blocked := store.compactMutationFailure(admissionErr, nil, normalized); blocked.State == CompactStateBlocked {
 			status.BlockedReason, status.BlockedExit = blocked.Reason, blocked.Exit
 		}
 	}

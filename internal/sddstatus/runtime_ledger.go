@@ -458,7 +458,11 @@ func (status RuntimeStatus) runtimeActiveAttempt() *RuntimeAttempt {
 		return nil
 	}
 	for _, objectiveID := range status.ownership.active {
-		return status.ownership.objectives[objectiveID].active
+		owner := status.ownership.objectives[objectiveID]
+		if owner == nil || owner.objective == nil || owner.active == nil {
+			return nil
+		}
+		return owner.active
 	}
 	return nil
 }
@@ -474,7 +478,11 @@ func (status RuntimeStatus) runtimeActiveAttemptForOrdinal(ordinal int) *Runtime
 	if objectiveID == "" || status.ownership.objectives[objectiveID] == nil {
 		return nil
 	}
-	return status.ownership.objectives[objectiveID].active
+	owner := status.ownership.objectives[objectiveID]
+	if owner == nil || owner.objective == nil || owner.active == nil {
+		return nil
+	}
+	return owner.active
 }
 
 func (status RuntimeStatus) runtimeActiveCount() int { return len(status.ownership.active) }
@@ -498,6 +506,9 @@ func (status RuntimeStatus) runtimeCompatibilityActive() (*RuntimeObjective, *Ru
 	if owner == nil {
 		return nil, nil
 	}
+	if owner.objective == nil || owner.active == nil {
+		return nil, nil
+	}
 	return owner.objective, owner.active
 }
 
@@ -506,7 +517,7 @@ func (status RuntimeStatus) runtimeObjectiveForAttempt(attempt *RuntimeAttempt) 
 		return nil
 	}
 	owner := status.ownership.objectives[attempt.ObjectiveID]
-	if owner == nil || owner.objective.Generation != attempt.ObjectiveGeneration {
+	if owner == nil || owner.objective == nil || owner.objective.Generation != attempt.ObjectiveGeneration {
 		return nil
 	}
 	return owner.objective
@@ -3852,7 +3863,7 @@ func (status RuntimeStatus) validateRuntimeLineage() error {
 	for start := range status.ownership.objectives {
 		seen := map[string]bool{}
 		for id := start; ; {
-			if seen[id] || status.ownership.objectives[id] == nil {
+			if seen[id] || status.ownership.objectives[id] == nil || status.ownership.objectives[id].objective == nil {
 				return errors.New("runtime objective lineage is contradictory") // refusal:by-design world-action: immutable replay ancestry disagrees with its own transition records and requires authority restoration
 			}
 			seen[id] = true
@@ -3892,8 +3903,14 @@ func runtimeLineageDischargedFailure(status RuntimeStatus, named string) (string
 
 func runtimeLineageCorrection(status RuntimeStatus) (RuntimeAttempt, RuntimeAttempt, bool) {
 	objective := status.runtimeObjective()
+	if objective == nil && status.ownership.objectives != nil && status.LastReset != nil {
+		owner := status.ownership.objectives[status.LastReset.PreviousObjectiveID]
+		if owner != nil {
+			objective = owner.objective
+		}
+	}
 	lineage, ok := runtimeObjectiveLineage(status)
-	if !ok {
+	if !ok || objective == nil {
 		return RuntimeAttempt{}, RuntimeAttempt{}, false
 	}
 	var failed RuntimeAttempt

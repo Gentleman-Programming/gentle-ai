@@ -1,6 +1,7 @@
 package sddstatus
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -31,11 +32,13 @@ func TestWorkItemsFailClosedForInvalidMetadata(t *testing.T) {
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"workUnit":"verify"`, `"workUnit":"build"`, 1),
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"dependsOn":["build"]`, `"dependsOn":["verify"]`, 1),
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"dependsOn":["build"]`, `"dependsOn":["missing"]`, 1),
+		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"dependsOn":[]`, `"dependsOn":["verify"]`, 1),
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"maxAttempts":2`, `"maxAttempts":0`, 1),
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"src"`, `"../escape"`, 1),
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"dependsOn":[],`, "", 1),
 		strings.Replace(itemTasks("- [ ] build: Build\n- [ ] verify: Verify"), `"dependsOn":[]`, `"dependsOn":null`, 1),
 		itemTasks("- [ ] build: Build\n- [ ] verify: Verify") + "\n<!-- gentle-ai.sdd-items/v1\n{",
+		itemTasks("- [ ] build: Build\n- [ ] verify: Verify\n- [ ] extra: Extra"),
 	} {
 		if items, present, err := projectWorkItems(text, itemStatus(t)); !present || err == nil || items != nil {
 			t.Fatalf("items=%#v present=%v err=%v", items, present, err)
@@ -48,6 +51,24 @@ func TestWorkItemsFailClosedForInvalidMetadata(t *testing.T) {
 	applyWorkItemProjection(&status, "<!-- gentle-ai.sdd-items/v1\n{}\n-->")
 	if status.Dependencies.Apply != DependencyBlocked || status.NextRecommended != "resolve-blockers" {
 		t.Fatalf("invalid metadata status = %#v", status)
+	}
+	if len(status.BlockedReasons) != 1 || !strings.Contains(status.BlockedReasons[0], "items must not be empty") || strings.Count(status.BlockedReasons[0], "rerun `gentle-ai sdd-status") != 1 {
+		t.Fatalf("invalid metadata diagnostic = %#v", status.BlockedReasons)
+	}
+}
+
+func TestNewItemPlanCandidateNamesRetainedAuthorityFailure(t *testing.T) {
+	retained, err := newItemPlanCandidate([]WorkItem{{ID: "build", WorkUnit: "build", EvidenceGoal: "compile", MaxAttempts: 1, MaxChangedLines: 1, EditRoots: []string{"src"}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newItemPlanCandidate([]WorkItem{{ID: "verify", WorkUnit: "verify", EvidenceGoal: "test", MaxAttempts: 1, MaxChangedLines: 1, EditRoots: []string{"src"}}}, &retained); err == nil || !strings.Contains(err.Error(), "does not contain projected item \"verify\"") {
+		t.Fatalf("missing retained item error = %v", err)
+	}
+	retained.Items[0].InitiallyDone = nil
+	retained.Digest = itemPlanDigest(retained)
+	if _, err := newItemPlanCandidate([]WorkItem{{ID: "build", WorkUnit: "build", EvidenceGoal: "compile", MaxAttempts: 1, MaxChangedLines: 1, EditRoots: []string{"src"}}}, &retained); err == nil || !strings.Contains(err.Error(), "entry \"build\" has no initial completion snapshot") {
+		t.Fatalf("missing retained snapshot error = %v", err)
 	}
 }
 
@@ -137,6 +158,54 @@ func TestResolveItemAcquireUsesEquivalentOpenSpecAndEngramMetadata(t *testing.T)
 		openSpec.itemPlan == nil || engram.itemPlan == nil || !reflect.DeepEqual(openSpec.itemPlan, engram.itemPlan) ||
 		openSpec.itemPlan.Plan.Items[0].EditRoots[0] != "src" {
 		t.Fatalf("OpenSpec=%#v Engram=%#v", openSpec, engram)
+	}
+}
+
+func TestResolveEngramStatusRetainedItemPlanBlocksVerifyAndArchiveUntilJoined(t *testing.T) {
+	root := initRuntimeLedgerRepo(t)
+	for _, dir := range []string{"build", "verify"} {
+		if err := os.Mkdir(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const change = "engram-item-join"
+	store := mustRuntimeStore(t, root, change)
+	plan, err := newItemPlanCandidate([]WorkItem{
+		{ID: "build", WorkUnit: "build", EvidenceGoal: "compile", MaxAttempts: 1, MaxChangedLines: 20, EditRoots: []string{"build"}},
+		{ID: "verify", WorkUnit: "verify", EvidenceGoal: "test", MaxAttempts: 1, MaxChangedLines: 20, EditRoots: []string{"verify"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), runtimePlanRequest(t, store, plan, "build", "engram-build"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Finish(context.Background(), FinishAttemptRequest{ExpectedRevision: started.Revision, RequestID: "engram-build-finish", Outcome: AttemptPassed, EvidenceRevision: runtimeTestHash('a'), Diagnosis: "passed", HarnessDisposition: HarnessReused, CleanupEvidence: "clean", ProcessEvidence: "none"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, ".engram"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runRuntimeLedgerGit(t, root, "remote", "add", "origin", "git@github.com:Gentleman-Programming/gentle-ai.git")
+	tasks := itemTasks("- [x] build: Build\n- [x] verify: Verify")
+	base := []engramObservation{
+		{Title: "sdd/engram-item-join/proposal", Content: "# Proposal\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/engram-item-join/spec", Content: "### Requirement: Item\n#### Scenario: Join\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/engram-item-join/design", Content: "# Design\n", Project: "gentle-ai", Scope: "project"},
+		{Title: "sdd/engram-item-join/tasks", Content: tasks, Project: "gentle-ai", Scope: "project"},
+	}
+	for _, report := range []string{"", boundedVerifyEnvelope(shaID("a"), "pass")} {
+		observations := append([]engramObservation{}, base...)
+		if report != "" {
+			observations = append(observations, engramObservation{Title: "sdd/engram-item-join/verify-report", Content: report, Project: "gentle-ai", Scope: "project"})
+		}
+		restore := stubEngramExport(t, observations)
+		status, ok, err := resolveEngramStatus(root, change, false, true)
+		restore()
+		if err != nil || !ok || status.NextRecommended != string(PhaseApply) || status.Dependencies.Verify != DependencyBlocked || status.Dependencies.Archive != DependencyBlocked {
+			t.Fatalf("report=%q Engram join routing = %#v ok=%v err=%v", report, status, ok, err)
+		}
 	}
 }
 

@@ -38,10 +38,19 @@ func holdRuntimeLock(t *testing.T, store RuntimeStore) *reviewtransaction.Author
 func TestCompactAcquireRetriesHeldAuthorityLock(t *testing.T) {
 	ctx, store, plan := retryStore(t)
 	lock := holdRuntimeLock(t, store)
+	contended := make(chan struct{}, 1)
+	store.acquireAttemptObserved = func(err error) {
+		if errors.Is(err, reviewtransaction.ErrStoreLockContended) {
+			select {
+			case contended <- struct{}{}:
+			default:
+			}
+		}
+	}
 	request := CompactAcquireRequest{BeginAttemptRequest: runtimePlanRequest(t, store, plan, "a", "wait")}
 	result := make(chan compactAcquireOutcome, 1)
 	go func() { got, err := store.Acquire(ctx, request); result <- compactAcquireOutcome{got, err} }()
-	time.Sleep(30 * time.Millisecond)
+	<-contended
 	if err := lock.Release(); err != nil {
 		t.Fatal(err)
 	}
@@ -67,9 +76,9 @@ func TestCompactAcquireRetryDeadlineAndCancellation(t *testing.T) {
 				defer cancel()
 				go func() { time.Sleep(25 * time.Millisecond); cancel() }()
 			}
-			started := time.Now()
+			observed := 0
+			store.acquireAttemptObserved = func(error) { observed++ }
 			result, err := store.Acquire(ctx, CompactAcquireRequest{BeginAttemptRequest: runtimePlanRequest(t, store, plan, "a", tc.name)})
-			elapsed := time.Since(started)
 			if countRuntimeRecords(t, store.Dir) != 0 {
 				t.Fatal("contended acquire published")
 			}
@@ -77,8 +86,8 @@ func TestCompactAcquireRetryDeadlineAndCancellation(t *testing.T) {
 				if !errors.Is(err, context.Canceled) {
 					t.Fatalf("cancel=%#v %v", result, err)
 				}
-			} else if err != nil || result.State != CompactStateBlocked || result.Reason != CompactBlockInvalidContinuation || elapsed < 50*time.Millisecond || elapsed > 180*time.Millisecond {
-				t.Fatalf("deadline=%#v %v elapsed=%s", result, err, elapsed)
+			} else if err != nil || result.State != CompactStateBlocked || result.Reason != CompactBlockInvalidContinuation || observed < 2 {
+				t.Fatalf("deadline=%#v %v observed=%d", result, err, observed)
 			}
 		})
 	}
@@ -185,12 +194,21 @@ func TestConcurrentOverlappingAcquireReloadsSemanticRefusal(t *testing.T) {
 func TestCompactAcquireContentionReplaysSameRequest(t *testing.T) {
 	ctx, store, plan := retryStore(t)
 	lock := holdRuntimeLock(t, store)
+	contended := make(chan struct{}, 1)
+	store.acquireAttemptObserved = func(err error) {
+		if errors.Is(err, reviewtransaction.ErrStoreLockContended) {
+			select {
+			case contended <- struct{}{}:
+			default:
+			}
+		}
+	}
 	request := CompactAcquireRequest{BeginAttemptRequest: runtimePlanRequest(t, store, plan, "a", "same-request")}
 	results := make(chan compactAcquireOutcome, 2)
 	for range 2 {
 		go func() { result, err := store.Acquire(ctx, request); results <- compactAcquireOutcome{result, err} }()
 	}
-	time.Sleep(30 * time.Millisecond)
+	<-contended
 	if err := lock.Release(); err != nil {
 		t.Fatal(err)
 	}
@@ -205,9 +223,8 @@ func TestCompactAcquireDoesNotRetryNonTransientFailures(t *testing.T) {
 	store.acquireRetryPoll = 100 * time.Millisecond
 	broken := store
 	broken.Repo = filepath.Join(store.Repo, "missing")
-	started := time.Now()
 	result, err := broken.Acquire(ctx, CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{RequestID: "candidate", WorkUnit: "a", EvidenceGoal: "a", MaxAttempts: 1, MaxChangedLines: 1}})
-	if err != nil || result.Reason != CompactBlockCandidateUnavailable || time.Since(started) >= store.acquireRetryPoll || countRuntimeRecords(t, store.Dir) != 0 {
+	if err != nil || result.Reason != CompactBlockCandidateUnavailable || countRuntimeRecords(t, store.Dir) != 0 {
 		t.Fatalf("candidate=%#v err=%v", result, err)
 	}
 	first, err := store.Acquire(ctx, CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{RequestID: "conflict", WorkUnit: "a", EvidenceGoal: "a", MaxAttempts: 1, MaxChangedLines: 1}})
@@ -215,9 +232,8 @@ func TestCompactAcquireDoesNotRetryNonTransientFailures(t *testing.T) {
 		t.Fatalf("first=%#v %v", first, err)
 	}
 	before := countRuntimeRecords(t, store.Dir)
-	started = time.Now()
 	result, err = store.Acquire(ctx, CompactAcquireRequest{BeginAttemptRequest: BeginAttemptRequest{RequestID: "conflict", WorkUnit: "other", EvidenceGoal: "other", MaxAttempts: 1, MaxChangedLines: 1}})
-	if err != nil || result.Reason != CompactBlockInvalidContinuation || time.Since(started) >= store.acquireRetryPoll || countRuntimeRecords(t, store.Dir) != before {
+	if err != nil || result.Reason != CompactBlockInvalidContinuation || countRuntimeRecords(t, store.Dir) != before {
 		t.Fatalf("request conflict=%#v err=%v records=%d", result, err, countRuntimeRecords(t, store.Dir))
 	}
 }
@@ -230,9 +246,8 @@ func TestCompactAcquireNonTransientClassifierRunsOnce(t *testing.T) {
 	concurrentAcquire(t, ctx, store, plan, "a", "owner")
 	observed = 0
 	before := countRuntimeRecords(t, store.Dir)
-	started := time.Now()
 	result, err := store.Acquire(ctx, CompactAcquireRequest{BeginAttemptRequest: runtimePlanRequest(t, store, plan, "a", "overlap")})
-	if err != nil || result.Reason != CompactBlockActiveAttempt || observed != 1 || time.Since(started) >= store.acquireRetryPoll || countRuntimeRecords(t, store.Dir) != before {
+	if err != nil || result.Reason != CompactBlockActiveAttempt || observed != 1 || countRuntimeRecords(t, store.Dir) != before {
 		t.Fatalf("semantic refusal result=%#v err=%v observed=%d records=%d", result, err, observed, countRuntimeRecords(t, store.Dir))
 	}
 
@@ -258,11 +273,10 @@ func TestCompactAcquireDoesNotRetryBareConcurrentUpdate(t *testing.T) {
 		return nil, reviewtransaction.ErrConcurrentUpdate
 	}
 
-	started := time.Now()
 	result, err := store.Acquire(ctx, CompactAcquireRequest{BeginAttemptRequest: runtimePlanRequest(t, store, plan, "a", "bare-concurrent-update")})
 	if err != nil || len(observed) != 1 || !errors.Is(observed[0], ErrRuntimeConcurrentUpdate) ||
 		errors.Is(observed[0], reviewtransaction.ErrStoreLockContended) || result.State != CompactStateBlocked ||
-		result.Reason != CompactBlockInvalidContinuation || time.Since(started) >= store.acquireRetryPoll || countRuntimeRecords(t, store.Dir) != 0 {
+		result.Reason != CompactBlockInvalidContinuation || countRuntimeRecords(t, store.Dir) != 0 {
 		t.Fatalf("bare concurrent update result=%#v err=%v observed=%v", result, err, observed)
 	}
 	// Committed-publication recovery remains covered by

@@ -506,6 +506,9 @@ func runtimeTestItemPlan(t *testing.T) itemPlanCandidate {
 func runtimePlanRequest(t *testing.T, store RuntimeStore, plan itemPlanCandidate, itemID, requestID string) BeginAttemptRequest {
 	t.Helper()
 	entry, ok := itemPlanEntryForID(plan, itemID)
+	if !ok {
+		t.Fatalf("item plan entry %q", itemID)
+	}
 	roots, ok := canonicalWorkItemRoots(entry.EditRoots, store.Workspace)
 	if !ok {
 		t.Fatal("canonical roots")

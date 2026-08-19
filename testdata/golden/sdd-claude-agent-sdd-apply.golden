@@ -27,16 +27,16 @@ Execute all steps from the skill directly in this context window:
 7. In item-selected mode, settle before projection and return the result; never write OpenSpec/Engram or mark tasks
 8. The coordinator alone re-resolves status and idempotently merges apply-progress plus OpenSpec/Engram/hybrid task updates; stop on any partial failure
 
-## Engram Save (mandatory)
+## Engram Save (mandatory for non-item execution)
 
-After completing work, call `mem_save` with:
+After completing non-item work, call `mem_save` with:
 - title: `"sdd/{change-name}/apply-progress"`
 - topic_key: `"sdd/{change-name}/apply-progress"`
 - type: `"architecture"`
 - project: `{project-name from context}`
 - capture_prompt: `false` when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
 
-Also update the tasks artifact with `[x]` marks via `mem_update` (engram) or file edit (openspec/hybrid).
+For non-item execution, also update the tasks artifact with `[x]` marks via `mem_update` (engram) or file edit (openspec/hybrid).
 
 ## Result Contract
 
