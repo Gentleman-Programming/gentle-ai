@@ -27,6 +27,10 @@ type Orchestrator struct {
 	IntentRouter  *intent.Router
 	SkillResolver *skill.Resolver
 	DBRouter      *db.Router
+	// TraceManager validates phase-transition traceability (Implements /
+	// OriginatesFrom) between a source artifact and the artifact being
+	// generated for. See GenerateContextForAgent's sourceArtifact parameter.
+	TraceManager trace.Manager
 	// agentRegistry is loaded once from the canonical claude/agents/*.md files
 	// embedded in internal/assets.FS. It is the single source of truth for
 	// agent permissions — no static map to drift.
@@ -49,6 +53,7 @@ func New(workspaceRoot string) *Orchestrator {
 		IntentRouter:  intent.New(workspaceRoot),
 		SkillResolver: skill.New(workspaceRoot),
 		DBRouter:      db.New(),
+		TraceManager:  trace.NewManager(),
 		agentRegistry: registry,
 	}
 }
@@ -78,6 +83,16 @@ func (o *Orchestrator) ExecuteBatches(ctx stdctx.Context, batches []batch.Execut
 
 // GenerateContextForAgent coordinates the Skills Resolver, Repository Resolver, and Trace Resolver
 // to produce a complete Context Package for delegation.
+//
+// sourceArtifact, when non-empty, is the workspace-relative path to the
+// artifact this phase transition originates from (e.g. the proposal.md a
+// spec.md must implement or originate from). When set, the Traceability
+// Manager (per the documented Notion architecture flow, "Arquitectura de
+// nuestros agentes") validates that primaryArtifact declares
+// Implements/OriginatesFrom the source artifact's ID before the context
+// package is built, failing the same way the strict-enforcement checks
+// below it do. An empty sourceArtifact skips the check entirely — the first
+// artifact of a change has no predecessor to trace to.
 func (o *Orchestrator) GenerateContextForAgent(
 	executionID string,
 	agentName string,
@@ -87,6 +102,7 @@ func (o *Orchestrator) GenerateContextForAgent(
 	requiredSkills []string,
 	expectedType string,
 	expectedID string,
+	sourceArtifact string,
 ) (*context.Package, error) {
 
 	// 1. Trace Resolver
@@ -101,6 +117,15 @@ func (o *Orchestrator) GenerateContextForAgent(
 			if node != nil {
 				traceNode = *node
 			}
+		}
+	}
+
+	// 1.5 Traceability Manager (phase-transition validation)
+	if sourceArtifact != "" && primaryArtifact != "" {
+		absSource := filepath.Join(o.WorkspaceRoot, sourceArtifact)
+		absDest := filepath.Join(o.WorkspaceRoot, primaryArtifact)
+		if err := o.TraceManager.ValidatePhaseTransition(absSource, absDest); err != nil {
+			return nil, fmt.Errorf("strict enforcement: %w", err)
 		}
 	}
 
@@ -239,10 +264,11 @@ func (o *Orchestrator) GenerateAgentPrompt(
 	requiredSkills []string,
 	expectedType string,
 	expectedID string,
+	sourceArtifact string,
 	baseInstruction string,
 ) (string, error) {
 	pkg, err := o.GenerateContextForAgent(
-		executionID, agentName, primaryArtifact, repoNames, architectureID, requiredSkills, expectedType, expectedID,
+		executionID, agentName, primaryArtifact, repoNames, architectureID, requiredSkills, expectedType, expectedID, sourceArtifact,
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate context package: %w", err)

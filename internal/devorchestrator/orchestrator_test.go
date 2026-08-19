@@ -72,6 +72,7 @@ db_impact: simple
 		[]string{"backend-implementer"},
 		"COMMIT",
 		"APPLY-123",
+		"",
 	)
 
 	if err != nil {
@@ -153,6 +154,7 @@ func TestRouteIntentThenGenerateContextPreservesProvenance(t *testing.T) {
 		nil,
 		"",
 		"",
+		"",
 	)
 	if err != nil {
 		t.Fatalf("GenerateContextForAgent() error = %v", err)
@@ -164,6 +166,74 @@ func TestRouteIntentThenGenerateContextPreservesProvenance(t *testing.T) {
 	if len(pkg.Trace.OriginatesFrom) != 1 || pkg.Trace.OriginatesFrom[0] != "issue-42" {
 		t.Errorf("Trace.OriginatesFrom = %v, want [\"issue-42\"] -- RouteIntent's frontmatter field must match trace.Node's yaml tag", pkg.Trace.OriginatesFrom)
 	}
+}
+
+// TestGenerateContextForAgent_TraceabilityManagerEnforcement wires the
+// Traceability Manager (internal/devorchestrator/trace.Manager) into
+// GenerateContextForAgent's phase-transition check, per the documented
+// Notion architecture flow ("Arquitectura de nuestros agentes":
+// TRACE/REPORES/SKILLRES -> CONTEXT). Before this test, trace.Manager
+// existed and was unit-tested in isolation, but nothing in the orchestrator
+// package ever called it -- this is the gap this fix closes.
+func TestGenerateContextForAgent_TraceabilityManagerEnforcement(t *testing.T) {
+	tempDir := t.TempDir()
+
+	writeArtifact := func(relPath, content string) string {
+		absPath := filepath.Join(tempDir, relPath)
+		if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", relPath, err)
+		}
+		if err := os.WriteFile(absPath, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", relPath, err)
+		}
+		return relPath
+	}
+
+	t.Run("dest declaring Implements the source ID proceeds", func(t *testing.T) {
+		orch := New(tempDir)
+		source := writeArtifact("openspec/changes/trace-ok/proposal.md", "---\nid: PROP-900\n---\n# Proposal\n")
+		dest := writeArtifact("openspec/changes/trace-ok/spec.md", "---\nid: SPEC-900\nimplements:\n  - PROP-900\n---\n# Spec\n")
+
+		pkg, err := orch.GenerateContextForAgent(
+			"EXEC-TRACE-OK", "dev-specifier", dest, nil, "", nil, "", "", source,
+		)
+		if err != nil {
+			t.Fatalf("GenerateContextForAgent() error = %v, want nil for a dest that implements the source", err)
+		}
+		if pkg.Trace.ID != "SPEC-900" {
+			t.Errorf("Trace.ID = %q, want SPEC-900", pkg.Trace.ID)
+		}
+	})
+
+	t.Run("dest not declaring the source ID is refused", func(t *testing.T) {
+		orch := New(tempDir)
+		source := writeArtifact("openspec/changes/trace-bad/proposal.md", "---\nid: PROP-901\n---\n# Proposal\n")
+		dest := writeArtifact("openspec/changes/trace-bad/spec.md", "---\nid: SPEC-901\n---\n# Spec, missing implements/originates-from\n")
+
+		_, err := orch.GenerateContextForAgent(
+			"EXEC-TRACE-BAD", "dev-specifier", dest, nil, "", nil, "", "", source,
+		)
+		if err == nil {
+			t.Fatal("expected an error for a dest that does not declare the source ID, got nil")
+		}
+		if !strings.Contains(err.Error(), "strict enforcement") {
+			t.Errorf("expected error to mention strict enforcement, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "traceability breach") {
+			t.Errorf("expected error to surface the Traceability Manager's breach message, got: %v", err)
+		}
+	})
+
+	t.Run("empty sourceArtifact skips the check entirely (backward compatible)", func(t *testing.T) {
+		orch := New(tempDir)
+		dest := writeArtifact("openspec/changes/trace-skip/proposal.md", "---\nid: PROP-902\n---\n# Proposal, no predecessor\n")
+
+		if _, err := orch.GenerateContextForAgent(
+			"EXEC-TRACE-SKIP", "dev-proposer", dest, nil, "", nil, "", "", "",
+		); err != nil {
+			t.Fatalf("GenerateContextForAgent() error = %v, want nil when sourceArtifact is empty", err)
+		}
+	})
 }
 
 func TestGenerateContextForAgent_StrictRegistryEnforcement(t *testing.T) {
@@ -182,6 +252,7 @@ func TestGenerateContextForAgent_StrictRegistryEnforcement(t *testing.T) {
 		nil,
 		"SPEC",
 		"SPEC-1",
+		"",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error for valid agent: %v", err)
@@ -205,6 +276,7 @@ func TestGenerateContextForAgent_StrictRegistryEnforcement(t *testing.T) {
 		nil,
 		"OUTPUT",
 		"ID-1",
+		"",
 	)
 	if err == nil {
 		t.Fatalf("expected error for unregistered agent 'custom-unknown-agent', got nil")
@@ -231,7 +303,7 @@ func TestGenerateContextForAgent_OwnershipEnforcement(t *testing.T) {
 		os.WriteFile(absArtifactPath, []byte("---\nid: gentle-owned\nengine: gentle-orchestrator\n---\n# Proposal\n"), 0644)
 
 		_, err := orch.GenerateContextForAgent(
-			"EXEC-FOREIGN", "dev-explorer", artifactPath, nil, "", nil, "", "",
+			"EXEC-FOREIGN", "dev-explorer", artifactPath, nil, "", nil, "", "", "",
 		)
 		if err == nil {
 			t.Fatalf("expected error for gentle-orchestrator-owned change, got nil")
@@ -254,7 +326,7 @@ func TestGenerateContextForAgent_OwnershipEnforcement(t *testing.T) {
 		os.WriteFile(absArtifactPath, []byte("---\nid: dev-owned\nengine: dev-orchestrator\n---\n# Proposal\n"), 0644)
 
 		_, err := orch.GenerateContextForAgent(
-			"EXEC-OWN", "dev-explorer", artifactPath, nil, "", nil, "", "",
+			"EXEC-OWN", "dev-explorer", artifactPath, nil, "", nil, "", "", "",
 		)
 		if err != nil {
 			t.Fatalf("expected no error for dev-orchestrator-owned change, got: %v", err)
