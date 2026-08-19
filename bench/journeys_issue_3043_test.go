@@ -56,6 +56,67 @@ func TestIssue3043FreshShellRequiresConvergentManagedReadiness(t *testing.T) {
 			wantOK: true,
 		},
 		{
+			name: "duplicate sync marker",
+			output: "issue3043:sync\nOpenCode background runtime ready: true\nOpenCode background activation status: ready\nissue3043:sync\n" +
+				"issue3043:doctor\n[ok]  opencode:managed_activation managed OpenCode launcher resolves at /home/.gentle-ai/bin/opencode\n",
+		},
+		{
+			name: "duplicate doctor marker",
+			output: "issue3043:sync\nOpenCode background runtime ready: true\nOpenCode background activation status: ready\n" +
+				"issue3043:doctor\nissue3043:doctor\n[ok]  opencode:managed_activation managed OpenCode launcher resolves at /home/.gentle-ai/bin/opencode\n",
+		},
+		{
+			name: "malformed sync marker lookalike",
+			output: "issue3043:sync-invalid\nissue3043:sync\nOpenCode background runtime ready: true\nOpenCode background activation status: ready\n" +
+				"issue3043:doctor\n[ok]  opencode:managed_activation managed OpenCode launcher resolves at /home/.gentle-ai/bin/opencode\n",
+		},
+		{
+			name: "malformed doctor marker lookalike",
+			output: "issue3043:sync\nOpenCode background runtime ready: true\nOpenCode background activation status: ready\n" +
+				"issue3043:doctor\nissue3043:doctor-extra\n[ok]  opencode:managed_activation managed OpenCode launcher resolves at /home/.gentle-ai/bin/opencode\n",
+		},
+		{
+			name: "duplicate runtime conclusion",
+			output: "issue3043:sync\nOpenCode background runtime ready: true\nOpenCode background runtime ready: true\nOpenCode background activation status: ready\n" +
+				"issue3043:doctor\n[ok]  opencode:managed_activation managed OpenCode launcher resolves at /home/.gentle-ai/bin/opencode\n",
+		},
+		{
+			name: "duplicate activation conclusion",
+			output: "issue3043:sync\nOpenCode background runtime ready: true\nOpenCode background activation status: ready\nOpenCode background activation status: ready\n" +
+				"issue3043:doctor\n[ok]  opencode:managed_activation managed OpenCode launcher resolves at /home/.gentle-ai/bin/opencode\n",
+		},
+		{
+			name: "contradictory activation conclusions",
+			output: "issue3043:sync\nOpenCode background runtime ready: true\nOpenCode background activation status: ready\nOpenCode background activation status: pending\n" +
+				"issue3043:doctor\n[ok]  opencode:managed_activation managed OpenCode launcher resolves at /home/.gentle-ai/bin/opencode\n",
+		},
+		{
+			name: "activation conclusion precedes runtime conclusion",
+			output: "issue3043:sync\nOpenCode background activation status: ready\nOpenCode background runtime ready: true\n" +
+				"issue3043:doctor\n[ok]  opencode:managed_activation managed OpenCode launcher resolves at /home/.gentle-ai/bin/opencode\n",
+		},
+		{
+			name: "malformed runtime status suffix",
+			output: "issue3043:sync\nOpenCode background runtime ready: true-invalid\nOpenCode background activation status: ready\n" +
+				"issue3043:doctor\n[ok]  opencode:managed_activation managed OpenCode launcher resolves at /home/.gentle-ai/bin/opencode\n",
+		},
+		{
+			name: "malformed activation status suffix",
+			output: "issue3043:sync\nOpenCode background runtime ready: true\nOpenCode background activation status: ready-invalid\n" +
+				"issue3043:doctor\n[ok]  opencode:managed_activation managed OpenCode launcher resolves at /home/.gentle-ai/bin/opencode\n",
+		},
+		{
+			name: "duplicate doctor managed activation conclusion",
+			output: "issue3043:sync\nOpenCode background runtime ready: true\nOpenCode background activation status: ready\n" +
+				"issue3043:doctor\n[ok]  opencode:managed_activation managed OpenCode launcher resolves at /home/.gentle-ai/bin/opencode\n" +
+				"[ok]  opencode:managed_activation managed OpenCode launcher resolves at /home/.gentle-ai/bin/opencode\n",
+		},
+		{
+			name: "malformed doctor status token",
+			output: "issue3043:sync\nOpenCode background runtime ready: true\nOpenCode background activation status: ready\n" +
+				"issue3043:doctor\n[ok]invalid  opencode:managed_activation managed OpenCode launcher resolves at /home/.gentle-ai/bin/opencode\n",
+		},
+		{
 			name: "install pending is not post-apply readiness",
 			output: "issue3043:sync\nOpenCode background runtime ready: false\nOpenCode background activation status: pending\n" +
 				"issue3043:doctor\n[xx]  opencode:managed_activation bare opencode does not resolve to managed launcher\n",

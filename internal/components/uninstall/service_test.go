@@ -94,7 +94,8 @@ func TestUninstallPreservesManagedLauncherSymlink(t *testing.T) {
 	homeDir := t.TempDir()
 	path := opencodeactivation.LauncherPaths(homeDir, runtime.GOOS)[0]
 	target := filepath.Join(t.TempDir(), "launcher-target")
-	if err := os.WriteFile(target, ownedOpenCodeLauncher(path), 0o755); err != nil {
+	targetContent := ownedOpenCodeLauncher(path)
+	if err := os.WriteFile(target, targetContent, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil || os.Symlink(target, path) != nil {
@@ -113,6 +114,9 @@ func TestUninstallPreservesManagedLauncherSymlink(t *testing.T) {
 	}
 	if got, err := os.Readlink(path); err != nil || got != target {
 		t.Fatalf("launcher symlink after uninstall = %q, %v", got, err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != string(targetContent) {
+		t.Fatalf("launcher target after uninstall = %q, %v", data, err)
 	}
 }
 

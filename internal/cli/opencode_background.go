@@ -161,21 +161,26 @@ func prepareOpenCodeBackgroundActivation(homeDir string, resolution *OpenCodeBac
 	return plan, nil
 }
 
+func activationReason(resolution OpenCodeBackgroundResolution) string {
+	reason := resolution.Activation.Capability.Reason
+	if resolution.Activation.ActivationReason != "" {
+		reason = resolution.Activation.ActivationReason
+	}
+	return reason
+}
+
 func withOpenCodeBackgroundPending(report verify.Report, resolution OpenCodeBackgroundResolution, runtimeReady bool, agents []model.AgentID) verify.Report {
 	if !containsAgent(agents, model.AgentOpenCode) || resolution.Effective != model.OpenCodeBackgroundOn || runtimeReady {
 		return report
 	}
 	capability := resolution.Activation.Capability
-	switch capability.Status {
-	case opencodeactivation.CapabilityUnsupported:
+	switch resolution.Activation.ResolvedStatus() {
+	case opencodeactivation.ActivationStatusUnsupported:
 		report.FinalNote += fmt.Sprintf(" OpenCode background activation is unsupported (%s); execution stays foreground.", capability.Reason)
-	case opencodeactivation.CapabilityUnknown:
-		report.FinalNote += fmt.Sprintf(" OpenCode background activation status is unknown (%s); execution stays foreground.", capability.Reason)
+	case opencodeactivation.ActivationStatusUnknown:
+		report.FinalNote += fmt.Sprintf(" OpenCode background activation status is unknown (%s); execution stays foreground.", activationReason(resolution))
 	default:
-		reason := capability.Reason
-		if resolution.Activation.ActivationReason != "" {
-			reason = resolution.Activation.ActivationReason
-		}
+		reason := activationReason(resolution)
 		report.FinalNote += " OpenCode background policy is prepared but runtime activation remains pending"
 		if reason != "" {
 			report.FinalNote += " (" + reason + ")"
@@ -202,13 +207,7 @@ func reportWithNote(report verify.Report, note string) verify.Report {
 
 func renderOpenCodeBackgroundActivation(resolution OpenCodeBackgroundResolution) string {
 	activation := resolution.Activation
-	status := string(activation.Capability.Status)
-	if status == "" {
-		status = "unknown"
-	}
-	if activation.Capability.Ready() && !activation.Effective {
-		status = "pending"
-	}
+	status := string(activation.ResolvedStatus())
 	paths := "none"
 	if len(activation.LauncherPaths) > 0 {
 		paths = strings.Join(activation.LauncherPaths, ", ")

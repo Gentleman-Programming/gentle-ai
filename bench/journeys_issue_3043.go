@@ -102,45 +102,106 @@ func issue3043FreshShellCommand(binary string) string {
 }
 
 func issue3043AssertFreshShellOutput(output string) error {
-	syncMarker := issue3043SyncMarker + "\n"
-	doctorMarker := issue3043DoctorMarker + "\n"
-	syncStart := strings.Index(output, syncMarker)
-	doctorStart := strings.Index(output, doctorMarker)
-	if syncStart < 0 || doctorStart < 0 || doctorStart <= syncStart {
+	lines := strings.Split(output, "\n")
+	syncLine := -1
+	doctorLine := -1
+	for index, line := range lines {
+		if strings.HasPrefix(line, issue3043SyncMarker) && line != issue3043SyncMarker {
+			return fmt.Errorf("fresh zsh shell emitted malformed sync marker: %q", line)
+		}
+		if strings.HasPrefix(line, issue3043DoctorMarker) && line != issue3043DoctorMarker {
+			return fmt.Errorf("fresh zsh shell emitted malformed doctor marker: %q", line)
+		}
+		switch line {
+		case issue3043SyncMarker:
+			if syncLine >= 0 {
+				return fmt.Errorf("fresh zsh shell emitted duplicate sync markers: %q", output)
+			}
+			syncLine = index
+		case issue3043DoctorMarker:
+			if doctorLine >= 0 {
+				return fmt.Errorf("fresh zsh shell emitted duplicate doctor markers: %q", output)
+			}
+			doctorLine = index
+		}
+	}
+	if syncLine < 0 || doctorLine < 0 || doctorLine <= syncLine {
 		return fmt.Errorf("fresh zsh shell did not run sync followed by doctor: %q", output)
 	}
 
-	syncOutput := output[syncStart+len(syncMarker) : doctorStart]
-	doctorOutput := output[doctorStart+len(doctorMarker):]
-	runtimeReady := strings.Contains(syncOutput, "OpenCode background runtime ready: true")
-	runtimeNotReady := strings.Contains(syncOutput, "OpenCode background runtime ready: false")
-	if runtimeReady == runtimeNotReady {
-		return fmt.Errorf("fresh zsh sync did not report one post-Apply runtime readiness conclusion: %q", syncOutput)
-	}
-	if !strings.Contains(syncOutput, "OpenCode background activation status: ready") {
-		return fmt.Errorf("fresh zsh sync did not report ready managed activation after Apply: %q", syncOutput)
-	}
+	syncOutput := lines[syncLine+1 : doctorLine]
+	doctorOutput := lines[doctorLine+1:]
+	const (
+		runtimePrefix    = "OpenCode background runtime ready: "
+		activationPrefix = "OpenCode background activation status: "
+		managedCheckID   = "opencode:managed_activation"
+	)
 
-	var managedActivationLine string
-	for _, line := range strings.Split(doctorOutput, "\n") {
-		if strings.Contains(line, "opencode:managed_activation") {
-			managedActivationLine = line
-			break
+	var runtimeValues []string
+	runtimeIndex := -1
+	var activationValues []string
+	activationIndex := -1
+	for index, line := range syncOutput {
+		if strings.HasPrefix(line, runtimePrefix) {
+			runtimeValues = append(runtimeValues, strings.TrimPrefix(line, runtimePrefix))
+			if runtimeIndex < 0 {
+				runtimeIndex = index
+			}
+		}
+		if strings.HasPrefix(line, activationPrefix) {
+			activationValues = append(activationValues, strings.TrimPrefix(line, activationPrefix))
+			if activationIndex < 0 {
+				activationIndex = index
+			}
 		}
 	}
-	if managedActivationLine == "" {
-		return fmt.Errorf("fresh zsh doctor did not report managed OpenCode activation: %q", doctorOutput)
+	if len(runtimeValues) != 1 {
+		return fmt.Errorf("fresh zsh sync did not report exactly one post-Apply runtime readiness conclusion: %q", syncOutput)
 	}
-	doctorReady := strings.Contains(managedActivationLine, "[ok]")
-	doctorNotReady := strings.Contains(managedActivationLine, "[xx]")
-	if doctorReady == doctorNotReady {
-		return fmt.Errorf("fresh zsh doctor did not report one managed activation conclusion: %q", managedActivationLine)
+	if len(activationValues) != 1 {
+		return fmt.Errorf("fresh zsh sync did not report exactly one managed activation conclusion: %q", syncOutput)
 	}
-	if runtimeReady != doctorReady {
-		return fmt.Errorf("fresh zsh sync and doctor disagree about managed activation: sync_ready=%t doctor_ready=%t", runtimeReady, doctorReady)
+	if runtimeIndex >= activationIndex {
+		return fmt.Errorf("fresh zsh sync reported activation before runtime readiness: %q", syncOutput)
 	}
-	if !runtimeReady {
-		return fmt.Errorf("fresh zsh managed activation remained not ready: sync=%q doctor=%q", syncOutput, managedActivationLine)
+	if runtimeValues[0] != "true" {
+		return fmt.Errorf("fresh zsh sync did not report exact post-Apply runtime readiness value true: %q", runtimeValues[0])
+	}
+	if activationValues[0] != "ready" {
+		return fmt.Errorf("fresh zsh sync did not report exact ready managed activation value: %q", activationValues[0])
+	}
+
+	var managedActivationStatuses []string
+	for _, line := range doctorOutput {
+		fields := strings.Fields(line)
+		managedCheck := false
+		for _, field := range fields {
+			if field == managedCheckID || strings.HasPrefix(field, managedCheckID) {
+				managedCheck = true
+				break
+			}
+		}
+		if !managedCheck {
+			continue
+		}
+		if len(fields) < 3 || fields[1] != managedCheckID {
+			return fmt.Errorf("fresh zsh doctor reported malformed managed OpenCode activation fields: %q", line)
+		}
+		managedActivationStatuses = append(managedActivationStatuses, fields[0])
+	}
+	if len(managedActivationStatuses) != 1 {
+		return fmt.Errorf("fresh zsh doctor did not report exactly one managed activation conclusion: %q", doctorOutput)
+	}
+	doctorStatus := managedActivationStatuses[0]
+	if doctorStatus != "[ok]" && doctorStatus != "[xx]" {
+		return fmt.Errorf("fresh zsh doctor reported malformed managed activation status token: %q", doctorStatus)
+	}
+	doctorReady := doctorStatus == "[ok]"
+	if runtimeValues[0] == "true" && !doctorReady {
+		return fmt.Errorf("fresh zsh sync and doctor disagree about managed activation: sync_ready=true doctor_ready=%t", doctorReady)
+	}
+	if !doctorReady {
+		return fmt.Errorf("fresh zsh managed activation remained not ready: sync=%q doctor=%q", syncOutput, doctorOutput)
 	}
 	return nil
 }

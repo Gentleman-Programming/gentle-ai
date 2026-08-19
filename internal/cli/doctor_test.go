@@ -16,6 +16,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
@@ -808,34 +809,72 @@ func TestRunDoctor_HomeDirError(t *testing.T) {
 }
 
 func TestCheckManagedOpenCodeActivationRequiresOwnedLauncherResolution(t *testing.T) {
-	original := lookPathFn
-	t.Cleanup(func() { lookPathFn = original })
+	originalPathValue := pathValueFn
+	originalGOOS := doctorGOOS
+	t.Cleanup(func() {
+		pathValueFn = originalPathValue
+		doctorGOOS = originalGOOS
+	})
+	doctorGOOS = "linux"
 	home := t.TempDir()
-	managed := filepath.Join(home, ".gentle-ai", "bin", "opencode")
-
-	lookPathFn = func(string) (string, error) { return "/opt/homebrew/bin/opencode", nil }
-	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusFail || !strings.Contains(got.Detail, "start a new supported login shell") {
-		t.Fatalf("external OpenCode result = %#v, want actionable failure", got)
-	}
-	lookPathFn = func(string) (string, error) { return managed, nil }
+	managed := opencode.POSIXLauncherPath(home)
+	pathValueFn = func() string { return filepath.Dir(managed) }
 	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(managed, []byte("#!/bin/sh\n# "+opencode.OwnershipMarker+"\necho user\n"), 0o755); err != nil {
+	if err := os.WriteFile(managed, []byte("#!/bin/sh\n# "+opencode.OwnershipMarker+" belongs to user\necho user\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusFail {
-		t.Fatalf("incidental marker result = %#v, want failure", got)
+		t.Fatalf("incidental marker result = %#v", got)
 	}
 	if err := os.WriteFile(managed, []byte("#!/bin/sh\n# "+opencode.OwnershipMarker+"\nset -eu\nif [ -z \"${OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS+x}\" ]; then\n  export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\nfi\nexec '/old/opencode' \"$@\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusPass {
+		t.Fatalf("managed launcher result = %#v", got)
+	}
+	if err := os.Chmod(managed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusFail {
+		t.Fatalf("non-executable managed launcher result = %#v", got)
+	}
+}
+
+func TestCheckManagedOpenCodeActivationRejectsExternalAndSymlink(t *testing.T) {
+	originalPathValue := pathValueFn
+	originalGOOS := doctorGOOS
+	t.Cleanup(func() {
+		pathValueFn = originalPathValue
+		doctorGOOS = originalGOOS
+	})
+	doctorGOOS = "linux"
+	home := t.TempDir()
+	managed := opencode.POSIXLauncherPath(home)
+	externalDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(externalDir, "opencode"), []byte("external"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pathValueFn = func() string { return externalDir }
+	got := checkManagedOpenCodeActivation(home)
+	if got.Status != CheckStatusFail || !strings.Contains(got.Detail, "start a new supported login shell") {
+		t.Fatalf("external OpenCode result = %#v, want actionable failure", got)
+	}
+	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	managedBytes := []byte("#!/bin/sh\n# " + opencode.OwnershipMarker + "\nset -eu\nif [ -z \"${OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS+x}\" ]; then\n  export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\nfi\nexec '/old/opencode' \"$@\"\n")
+	if err := os.WriteFile(managed, managedBytes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pathValueFn = func() string { return filepath.Dir(managed) }
+	if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusPass {
 		t.Fatalf("managed OpenCode result = %#v, want pass", got)
 	}
 	if runtime.GOOS != "windows" {
 		linkTarget := filepath.Join(t.TempDir(), "generated-opencode")
-		if err := os.WriteFile(linkTarget, []byte("#!/bin/sh\n# "+opencode.OwnershipMarker+"\nset -eu\nif [ -z \"${OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS+x}\" ]; then\n  export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true\nfi\nexec '/old/opencode' \"$@\"\n"), 0o755); err != nil {
+		if err := os.WriteFile(linkTarget, managedBytes, 0o755); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Remove(managed); err != nil || os.Symlink(linkTarget, managed) != nil {
@@ -844,6 +883,88 @@ func TestCheckManagedOpenCodeActivationRequiresOwnedLauncherResolution(t *testin
 		if got := checkManagedOpenCodeActivation(home); got.Status != CheckStatusFail {
 			t.Fatalf("symlink result = %#v, want failure", got)
 		}
+	}
+}
+
+func TestManagedOpenCodeActivationMatchesActivationForMalformedPATHEntries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX PATH semantics are not portable on Windows")
+	}
+	originalGOOS := doctorGOOS
+	t.Cleanup(func() { doctorGOOS = originalGOOS })
+	doctorGOOS = "linux"
+
+	home := t.TempDir()
+	managed := opencode.POSIXLauncherPath(home)
+	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managed, []byte(`#!/bin/sh
+# `+opencode.OwnershipMarker+`
+set -eu
+if [ -z "${OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS+x}" ]; then
+  export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
+fi
+exec '/old/opencode' "$@"
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workingDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workingDir, "opencode"), []byte("shadowing executable"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name string
+		path string
+	}{
+		{name: "quoted and space-padded entry", path: "  \"" + filepath.Dir(managed) + "\"  "},
+		{name: "empty entry resolves current directory with ErrDot", path: string(os.PathListSeparator) + filepath.Dir(managed)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("PATH", tt.path)
+			if strings.Contains(tt.name, "empty") {
+				t.Chdir(workingDir)
+			}
+			activationEffective := opencode.ManagedLauncherEffective(tt.path, managed, "linux")
+			doctorEffective := checkManagedOpenCodeActivation(home).Status == CheckStatusPass
+			if activationEffective != doctorEffective {
+				t.Fatalf("activation effective = %t, doctor effective = %t for PATH %q", activationEffective, doctorEffective, tt.path)
+			}
+			if activationEffective {
+				t.Fatalf("malformed PATH entry reported managed launcher effective for PATH %q", tt.path)
+			}
+		})
+	}
+}
+
+func TestCheckManagedOpenCodeActivationWindowsFailsClosedAsUnknown(t *testing.T) {
+	originalPathValue := pathValueFn
+	originalGOOS := doctorGOOS
+	t.Cleanup(func() {
+		pathValueFn = originalPathValue
+		doctorGOOS = originalGOOS
+	})
+	doctorGOOS = "windows"
+	home := t.TempDir()
+	pathValueFn = func() string { return t.TempDir() }
+
+	got := checkManagedOpenCodeActivation(home)
+	if got.Status != CheckStatusFail {
+		t.Fatalf("Windows unverifiable activation = %#v, want fail-closed check", got)
+	}
+	if !strings.Contains(got.Detail, "activation status: unknown") {
+		t.Fatalf("Windows unverifiable activation detail = %q, want unknown status", got.Detail)
+	}
+}
+
+func TestCheckManagedOpenCodeStatusOffIsIntentional(t *testing.T) {
+	got := checkManagedOpenCodeStatus(t.TempDir(), model.OpenCodeBackgroundOff)
+	if got.Status != CheckStatusPass {
+		t.Fatalf("off activation check = %#v, want pass", got)
+	}
+	if !strings.Contains(got.Detail, "activation status: off") || strings.Contains(got.Detail, "pending") {
+		t.Fatalf("off activation detail = %q, want intentional off status", got.Detail)
 	}
 }
 
