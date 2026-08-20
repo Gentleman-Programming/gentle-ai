@@ -352,17 +352,19 @@ func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string,
 		if err != nil {
 			return nil, fmt.Errorf("build shared prompt file reference for %q: %w", phase, err)
 		}
+		tools := map[string]any{
+			"read":  true,
+			"write": true,
+			"edit":  true,
+			"bash":  true,
+		}
+		grantOpenCodeSDDPhaseEngramTools(tools)
 		entry := map[string]any{
 			"mode":        "subagent",
 			"hidden":      true,
 			"description": phaseDescriptions[phase],
 			"prompt":      prompt,
-			"tools": map[string]any{
-				"read":  true,
-				"write": true,
-				"edit":  true,
-				"bash":  true,
-			},
+			"tools":       tools,
 		}
 		// Issue #557: consult fallback when the profile did not set the phase,
 		// so generated *-{name} agents stay consistent with what the user sees
