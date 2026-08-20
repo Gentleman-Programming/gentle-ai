@@ -11,13 +11,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
-// Regression test for issue #3473.
-//
-// The reported machine had Codex and Cursor installed but selected only
-// OpenCode in Gentle AI. Because the CodeGraph sync steps discovered agents
-// from the filesystem instead of from the persisted selection, every sync
-// rewrote ~/.codex/AGENTS.md and ~/.cursor/rules/gentle-ai.mdc. The install-time
-// selection is the only authority over what sync writes.
+// Regression test for issue. The reported machine had Codex and Cursor
+// installed but selected only OpenCode. Because the CodeGraph sync steps
+// discovered agents from the filesystem rather than the persisted selection,
+// every sync rewrote ~/.codex/AGENTS.md and ~/.cursor/rules/gentle-ai.mdc.
 func TestSyncNeverWritesOutsideSelectedAgents(t *testing.T) {
 	home := t.TempDir()
 
@@ -27,7 +24,7 @@ func TestSyncNeverWritesOutsideSelectedAgents(t *testing.T) {
 
 	// OpenCode is selected and already has effective CodeGraph MCP wiring, so
 	// the reconcile path stays quiet and no installer subprocess is spawned.
-	writeSyncScopeFile(t, filepath.Join(opencodeDir, "opencode.json"), `{
+	mustWriteFile(t, filepath.Join(opencodeDir, "opencode.json"), []byte(`{
   "mcp": {
     "codegraph": {
       "type": "local",
@@ -35,16 +32,16 @@ func TestSyncNeverWritesOutsideSelectedAgents(t *testing.T) {
       "command": ["codegraph", "serve", "--mcp"]
     }
   }
-}`)
+}`))
 	// A managed guidance marker makes CodeGraph report as configured.
-	writeSyncScopeFile(t, filepath.Join(opencodeDir, "AGENTS.md"),
-		"<!-- gentle-ai:codegraph-guidance -->\nstale\n<!-- /gentle-ai:codegraph-guidance -->\n")
+	mustWriteFile(t, filepath.Join(opencodeDir, "AGENTS.md"),
+		[]byte("<!-- gentle-ai:codegraph-guidance -->\nstale\n<!-- /gentle-ai:codegraph-guidance -->\n"))
 
 	// Codex and Cursor exist on the machine but were never selected.
 	codexBefore := "user codex instructions\n"
 	cursorBefore := "user cursor rules\n"
-	writeSyncScopeFile(t, codexPrompt, codexBefore)
-	writeSyncScopeFile(t, cursorPrompt, cursorBefore)
+	mustWriteFile(t, codexPrompt, []byte(codexBefore))
+	mustWriteFile(t, cursorPrompt, []byte(cursorBefore))
 
 	if err := state.Write(home, state.InstallState{
 		InstalledAgents: []string{string(model.AgentOpenCode)},
@@ -77,27 +74,13 @@ func TestSyncNeverWritesOutsideSelectedAgents(t *testing.T) {
 		}
 	}
 
-	assertSyncScopeUnchanged(t, codexPrompt, codexBefore)
-	assertSyncScopeUnchanged(t, cursorPrompt, cursorBefore)
-}
-
-func writeSyncScopeFile(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("MkdirAll(%q): %v", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("WriteFile(%q): %v", path, err)
-	}
-}
-
-func assertSyncScopeUnchanged(t *testing.T, path, want string) {
-	t.Helper()
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(%q): %v", path, err)
-	}
-	if string(got) != want {
-		t.Errorf("sync rewrote unselected agent file %q:\n--- got ---\n%s\n--- want ---\n%s", path, got, want)
+	for path, want := range map[string]string{codexPrompt: codexBefore, cursorPrompt: cursorBefore} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q): %v", path, err)
+		}
+		if string(got) != want {
+			t.Errorf("sync rewrote unselected agent file %q:\n--- got ---\n%s\n--- want ---\n%s", path, got, want)
+		}
 	}
 }

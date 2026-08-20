@@ -354,10 +354,12 @@ func writeInstalledAgentsState(t *testing.T, home string, ids ...model.AgentID) 
 	}
 }
 
-// TestDiscoverSelected_ExcludesUnselectedInstalledAgents is the regression test
-// for issue #3473: an agent whose config dir exists but which the user never
-// selected must not be returned to any writer.
-func TestDiscoverSelected_ExcludesUnselectedInstalledAgents(t *testing.T) {
+// TestDiscoverSelected_HonoursSelectionInBothDirections is the regression test
+// Scope is the intersection: an agent installed but never
+// selected is excluded (the reported bug — Codex and Cursor were rewritten on
+// every sync), and an agent selected but not installed is excluded too, so
+// selection never conjures a config directory that is not there.
+func TestDiscoverSelected_HonoursSelectionInBothDirections(t *testing.T) {
 	home := t.TempDir()
 
 	opencodeDir := filepath.Join(home, ".config", "opencode")
@@ -368,41 +370,14 @@ func TestDiscoverSelected_ExcludesUnselectedInstalledAgents(t *testing.T) {
 			t.Fatalf("MkdirAll(%q): %v", dir, err)
 		}
 	}
-
-	writeInstalledAgentsState(t, home, model.AgentOpenCode)
-
-	reg := newStubRegistry(t,
-		stubAdapter{agent: model.AgentOpenCode, configDir: opencodeDir},
-		stubAdapter{agent: model.AgentCodex, configDir: codexDir},
-		stubAdapter{agent: model.AgentCursor, configDir: cursorDir},
-	)
-
-	got := DiscoverSelected(reg, home)
-
-	if len(got) != 1 {
-		t.Fatalf("DiscoverSelected() returned %d agents, want 1; got %v", len(got), got)
-	}
-	if got[0].ID != model.AgentOpenCode {
-		t.Errorf("DiscoverSelected() agent = %q, want %q", got[0].ID, model.AgentOpenCode)
-	}
-}
-
-// TestDiscoverSelected_IntersectsWithFilesystem verifies a selected agent whose
-// config dir does not exist is still excluded — selection scopes discovery, it
-// does not create config dirs for agents that are not there.
-func TestDiscoverSelected_IntersectsWithFilesystem(t *testing.T) {
-	home := t.TempDir()
-
-	opencodeDir := filepath.Join(home, ".config", "opencode")
-	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	// .claude intentionally NOT created, though it is selected.
+	// .claude is selected below but deliberately never created on disk.
 
 	writeInstalledAgentsState(t, home, model.AgentOpenCode, model.AgentClaudeCode)
 
 	reg := newStubRegistry(t,
 		stubAdapter{agent: model.AgentOpenCode, configDir: opencodeDir},
+		stubAdapter{agent: model.AgentCodex, configDir: codexDir},
+		stubAdapter{agent: model.AgentCursor, configDir: cursorDir},
 		stubAdapter{agent: model.AgentClaudeCode, configDir: filepath.Join(home, ".claude")},
 	)
 
@@ -415,27 +390,43 @@ func TestDiscoverSelected_IntersectsWithFilesystem(t *testing.T) {
 
 // TestDiscoverSelected_FallsBackToFilesystemWithoutState verifies pre-state
 // installs keep the old behaviour: no persisted selection means every detected
-// agent is in scope.
+// agent stays in scope, so this scoping never strands a legacy user.
 func TestDiscoverSelected_FallsBackToFilesystemWithoutState(t *testing.T) {
 	home := t.TempDir()
-
-	claudeDir := filepath.Join(home, ".claude")
 	codexDir := filepath.Join(home, ".codex")
-	for _, dir := range []string{claudeDir, codexDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("MkdirAll(%q): %v", dir, err)
-		}
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
 	}
 
-	reg := newStubRegistry(t,
-		stubAdapter{agent: model.AgentClaudeCode, configDir: claudeDir},
-		stubAdapter{agent: model.AgentCodex, configDir: codexDir},
-	)
+	reg := newStubRegistry(t, stubAdapter{agent: model.AgentCodex, configDir: codexDir})
 
-	got := DiscoverSelected(reg, home)
+	if got := DiscoverSelected(reg, home); len(got) != 1 || got[0].ID != model.AgentCodex {
+		t.Fatalf("DiscoverSelected() = %v, want the detected agent (filesystem fallback)", got)
+	}
+}
 
-	if len(got) != 2 {
-		t.Fatalf("DiscoverSelected() returned %d agents, want 2 (filesystem fallback); got %v", len(got), got)
+// TestDiscoverSelected_FailsClosedOnUnreadableState verifies that a present but
+// undecodable state file scopes to nothing rather than widening to every agent
+// on the machine. Treating "selection unknown" as "selection absent" would
+// reinstate the very behaviour this scoping prevents.
+func TestDiscoverSelected_FailsClosedOnUnreadableState(t *testing.T) {
+	home := t.TempDir()
+
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".gentle-ai"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".gentle-ai", "state.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	reg := newStubRegistry(t, stubAdapter{agent: model.AgentCodex, configDir: codexDir})
+
+	if got := DiscoverSelected(reg, home); len(got) != 0 {
+		t.Fatalf("DiscoverSelected() = %v, want none on unreadable state", got)
 	}
 }
 
