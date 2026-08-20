@@ -371,9 +371,18 @@ install_binary() {
     local checksums_url="https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/${LATEST_VERSION}/checksums.txt"
 
     # Create temp directory — clean up on exit
-    local tmpdir
+    local tmpdir=""
+    local stage_file=""
+    local sudo_stage_file=""
+    cleanup_install() {
+        rm -f "${stage_file:-}" 2>/dev/null
+        if [ -n "${sudo_stage_file:-}" ] && command -v sudo &>/dev/null; then
+            sudo rm -f "$sudo_stage_file" 2>/dev/null
+        fi
+        [ -n "${tmpdir:-}" ] && rm -rf "$tmpdir"
+    }
     tmpdir="$(mktemp -d)"
-    trap '[ -n "${tmpdir:-}" ] && rm -rf "$tmpdir"' EXIT
+    trap cleanup_install EXIT
 
     # Download archive
     info "Downloading ${archive_name}..."
@@ -458,41 +467,28 @@ install_binary() {
 
     # Install binary
     info "Installing to ${install_dir}/${BINARY_NAME}..."
-    local stage_file="${install_dir}/.${BINARY_NAME}.tmp.$$"
-
-    cleanup_stage() {
-        rm -f "$stage_file" 2>/dev/null
-    }
-    trap cleanup_stage EXIT
-
-    if cp "${tmpdir}/${BINARY_NAME}" "$stage_file" 2>/dev/null && \
+    if stage_file="$(mktemp "${install_dir}/.${BINARY_NAME}.tmp.XXXXXX" 2>/dev/null)" && \
+       cp "${tmpdir}/${BINARY_NAME}" "$stage_file" 2>/dev/null && \
        chmod +x "$stage_file" 2>/dev/null && \
        mv -f "$stage_file" "${install_dir}/${BINARY_NAME}" 2>/dev/null; then
-        trap - EXIT
+        stage_file=""
     elif command -v sudo &>/dev/null; then
+        rm -f "${stage_file:-}" 2>/dev/null
+        stage_file=""
         warn "Permission denied. Trying with sudo..."
-        local sudo_stage_file="${install_dir}/.${BINARY_NAME}.tmp.sudo.$$"
-        cleanup_sudo_stage() {
-            sudo rm -f "$sudo_stage_file" 2>/dev/null
-            rm -f "$stage_file" 2>/dev/null
-        }
-        trap cleanup_sudo_stage EXIT
-
-        if sudo cp "${tmpdir}/${BINARY_NAME}" "$sudo_stage_file" && \
+        if sudo_stage_file="$(sudo mktemp "${install_dir}/.${BINARY_NAME}.tmp.sudo.XXXXXX")" && \
+           sudo cp "${tmpdir}/${BINARY_NAME}" "$sudo_stage_file" && \
            sudo chmod +x "$sudo_stage_file" && \
            sudo mv -f "$sudo_stage_file" "${install_dir}/${BINARY_NAME}"; then
-            trap - EXIT
+            sudo_stage_file=""
         else
-            cleanup_sudo_stage
-            trap - EXIT
             fatal "Cannot write to ${install_dir} even with sudo."
         fi
     else
-        cleanup_stage
-        trap - EXIT
         fatal "Cannot write to ${install_dir}. Run with sudo or use --dir to specify a writable directory."
     fi
 
+    cleanup_install
     success "Installed ${BINARY_NAME} to ${install_dir}/${BINARY_NAME}"
 
     # Check if install dir is in PATH
