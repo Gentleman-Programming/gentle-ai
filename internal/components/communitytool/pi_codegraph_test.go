@@ -445,6 +445,7 @@ func TestVerifyPiMCPUsesInjectedEffectiveProbe(t *testing.T) {
 		wantErr     bool
 		wantPending bool
 		wantTyped   bool
+		wantCause   error
 	}{
 		{name: "successful initialized read-only explore", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{validTool}}},
 		{name: "successful unindexed initialized read-only explore requires project path", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{{Name: validTool.Name, InputSchema: map[string]any{
@@ -476,7 +477,7 @@ func TestVerifyPiMCPUsesInjectedEffectiveProbe(t *testing.T) {
 		{name: "pending health with missing explore tool remains fatal", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true}, probeErr: ErrPiCodeGraphAdapterHealthUnavailable, wantErr: true},
 		{name: "pending health with malformed explore schema remains fatal", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{{Name: "codegraph_explore", InputSchema: map[string]any{"type": "object"}}}}, probeErr: ErrPiCodeGraphAdapterHealthUnavailable, wantErr: true},
 		{name: "validated capability with unavailable adapter health becomes pending", probe: PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true, Tools: []PiCodeGraphMCPTool{validTool}}, probeErr: ErrPiCodeGraphAdapterHealthUnavailable, wantPending: true},
-		{name: "transport EOF during probe becomes pending", probe: PiCodeGraphMCPProbeResult{}, probeErr: fmt.Errorf("MCP initialize: %w", io.EOF), wantPending: true, wantTyped: true},
+		{name: "transport EOF during probe becomes pending", probe: PiCodeGraphMCPProbeResult{}, probeErr: fmt.Errorf("MCP initialize: %w", io.EOF), wantPending: true, wantTyped: true, wantCause: io.EOF},
 		{name: "non-EOF error containing EOF string remains fatal", probe: PiCodeGraphMCPProbeResult{}, probeErr: fmt.Errorf("failed to parse EOF_CONFIG"), wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -490,8 +491,13 @@ func TestVerifyPiMCPUsesInjectedEffectiveProbe(t *testing.T) {
 					t.Fatalf("verifyPiMCP() error = %v, want pending adapter health", err)
 				}
 				var pendingErr *piCodeGraphPendingError
-				if tt.wantTyped && !errors.As(err, &pendingErr) {
-					t.Fatalf("verifyPiMCP() error = %T %v, want typed pending error", err, err)
+				if tt.wantTyped {
+					if !errors.As(err, &pendingErr) {
+						t.Fatalf("verifyPiMCP() error = %T %v, want typed pending error", err, err)
+					}
+					if !errors.Is(err, tt.wantCause) {
+						t.Fatalf("verifyPiMCP() error = %v, want original cause %v", err, tt.wantCause)
+					}
 				}
 				return
 			}
