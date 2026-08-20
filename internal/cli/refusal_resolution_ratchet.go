@@ -1,13 +1,6 @@
-// This file is the by-design envelope layer of the refusal ratchet: a
-// closed-vocabulary marker form for asset and prompt collectors proving every
-// terminal directive either names a runnable `gentle-ai review <verb>`
-// continuation or declares a closed-vocabulary shape explaining why no
-// command can honestly exist there.
-//
-// What this file does NOT do: walk a document. ParseByDesignEnvelope parses
-// ONE directive line. Document-walking helpers for the asset and prompt
-// collectors live in refusal_resolution_ratchet_assets.go and reuse
-// ParseByDesignEnvelope per line.
+// This file is the by-design envelope parser for the refusal ratchet.
+// It parses one directive line; document-walking helpers (asset and
+// prompt collectors) live elsewhere and reuse this parser.
 package cli
 
 import (
@@ -15,9 +8,8 @@ import (
 	"regexp"
 )
 
-// RefusalRatchetByDesignShapes is the closed by-design vocabulary shared with
-// the bench classifier (bench/classify.go); both sides read the same three
-// keys, so the ratchet header and the bench JSON stay in agreement.
+// RefusalRatchetByDesignShapes is shared with bench/classify.go so
+// the ratchet header and the bench JSON agree on the same three keys.
 var RefusalRatchetByDesignShapes = map[string]bool{
 	"operator-knowledge": true, // the product cannot know a value only the operator has
 	"world-action":       true, // the exit is an action in the world, not a command
@@ -33,8 +25,6 @@ var RefusalRatchetByDesignShapes = map[string]bool{
 var byDesignMarkerRegexp = regexp.MustCompile(`<!--\s*by-design:\s*([a-z-]+)\s*-->`)
 
 // byDesignVerbRegexp captures the verb in `gentle-ai review <verb>` references.
-// Requiring the literal " review " (with surrounding spaces) keeps the verb
-// namespace unambiguous.
 var byDesignVerbRegexp = regexp.MustCompile(`gentle-ai review ([a-z][a-z-]*)`)
 
 // ByDesignEnvelope is one parsed directive from an envelope reason field, an
