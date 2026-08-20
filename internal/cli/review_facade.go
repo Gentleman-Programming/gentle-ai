@@ -3071,7 +3071,8 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	}
 	// A zero-transition next-transition request is a read-only routing projection;
 	// correction routing may intentionally describe a live target not frozen yet.
-	if !terminalAtEntry && pendingAtEntry == nil && (len(plan.Transitions) > 0 || !*nextTransition) {
+	// A forecast-only plan is exempt for the reason documented on the field.
+	if !terminalAtEntry && pendingAtEntry == nil && !plan.CorrectionForecastOnly && (len(plan.Transitions) > 0 || !*nextTransition) {
 		if err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateLiveSnapshot(ctx, plan.Candidate); err != nil {
 			return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
 				fmt.Errorf("validate FINALIZE live target: %v", err))
@@ -3314,6 +3315,17 @@ type facadeFinalizePlan struct {
 	Candidate        reviewtransaction.Snapshot
 	Evidence         []byte
 	CapturedEvidence *reviewtransaction.CapturedVerificationEvidence
+	// CorrectionForecastOnly marks the one plan whose single transition admits
+	// no candidate content: BeginCorrection records a declared line count
+	// against the frozen budget and reads no repository state at all. Its
+	// candidate therefore does not have to still be the live workspace, which
+	// is what lets a consumer forecast a correction it has already written --
+	// the honest order, since a line count cannot be known before editing
+	// (issue #3194). The frozen candidate's own Git evidence is still proven
+	// by the unconditional ValidateEvidence above, and the real correction
+	// size is still measured against the fix diff when the correction is
+	// accepted, so the frozen budget stays enforced either way.
+	CorrectionForecastOnly bool
 }
 
 // prepareFacadeFinalizePlan performs every deterministic validation before the
@@ -3340,6 +3352,10 @@ func prepareFacadeFinalizePlan(ctx context.Context, repo, revision, storeDir str
 			return plan, err
 		}
 		appendState("review/begin-fix")
+		// Only when the forecast is the whole plan. A call that completed the
+		// review first admitted candidate content in the same breath, and that
+		// content must still describe the live workspace.
+		plan.CorrectionForecastOnly = len(plan.Transitions) == 1
 	}
 	if state.State == reviewtransaction.StateCorrectionRequired && entryState == reviewtransaction.StateCorrectionRequired && entryProposed &&
 		captured != nil && captured.Record.Outcome == reviewtransaction.VerificationOutcomeProceduralFailure {

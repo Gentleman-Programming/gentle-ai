@@ -308,9 +308,19 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		if input.CorrectionRequest == nil {
 			return reviewStopTransition("corrupted_or_unverifiable_authority")
 		}
+		// The forecast is a declaration about the frozen reviewed candidate and
+		// its frozen budget, so every token names that candidate -- exactly
+		// like the validation branch above names its own corrected target. It
+		// must not name the live workspace snapshot `binding` carries: a
+		// consumer that already applied the bounded correction moved the live
+		// identity, while the repository-context handle and the correction
+		// request stay bound to the frozen one, and the resulting descriptor
+		// could never be satisfied by any substitution (issue #3194).
+		correctionBinding := binding
+		correctionBinding.TargetIdentity = input.CorrectionRequest.TargetIdentity
 		transition := reviewCollectTransition("correction_plan_required", ReviewTransitionInput{
 			Name: "correction_lines", Schema: "gentle-ai.review-correction-plan/v1", CaptureOperation: "external.plan_correction",
-			Arguments: reviewBindingArguments(binding), Submission: reviewCorrectionPlanSubmission(input.Contract, binding, *input.CorrectionRequest),
+			Arguments: reviewBindingArguments(correctionBinding), Submission: reviewCorrectionPlanSubmission(input.Contract, correctionBinding, *input.CorrectionRequest),
 		})
 		transition.CorrectionRequest = input.CorrectionRequest
 		return transition
