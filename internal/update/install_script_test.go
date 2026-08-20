@@ -208,6 +208,7 @@ func TestInstallScriptAtomicBinaryReplacement(t *testing.T) {
 		name        string
 		failCommand string
 		existing    bool
+		fakeSudo    bool
 		wantSuccess bool
 	}{
 		{name: "first install", wantSuccess: true},
@@ -216,6 +217,7 @@ func TestInstallScriptAtomicBinaryReplacement(t *testing.T) {
 		{name: "cp failure", failCommand: "cp", existing: true},
 		{name: "chmod failure", failCommand: "chmod", existing: true},
 		{name: "mv failure", failCommand: "mv", existing: true},
+		{name: "sudo fallback", failCommand: "cp", existing: true, fakeSudo: true, wantSuccess: true},
 	}
 
 	for _, tt := range tests {
@@ -245,8 +247,20 @@ func TestInstallScriptAtomicBinaryReplacement(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				wrapper := fmt.Sprintf("#!/bin/sh\n[ \"$FAIL_COMMAND\" = %q ] && exit 1\nexec %q \"$@\"\n", command, realCommand)
+				wrapper := fmt.Sprintf("#!/bin/sh\nif [ -z \"${INSTALL_TEST_PRIVILEGED:-}\" ] && [ \"$FAIL_COMMAND\" = %q ]; then exit 1; fi\nexec %q \"$@\"\n", command, realCommand)
 				if err := os.WriteFile(filepath.Join(fakeBin, command), []byte(wrapper), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			sudoLog := filepath.Join(root, "sudo.log")
+			if tt.fakeSudo {
+				sudoScript := `#!/bin/sh
+printf '%s\n' "$1" >> "$SUDO_LOG"
+export INSTALL_TEST_PRIVILEGED=1
+exec "$@"
+`
+				if err := os.WriteFile(filepath.Join(fakeBin, "sudo"), []byte(sudoScript), 0o755); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -257,13 +271,34 @@ func TestInstallScriptAtomicBinaryReplacement(t *testing.T) {
 				"cleanup_install() { rm -f \"${stage_file:-}\" 2>/dev/null; [ -n \"${tmpdir:-}\" ] && rm -rf \"$tmpdir\"; }\n" +
 				"trap cleanup_install EXIT\nreplace_binary() {\n" + replacement + "}\nreplace_binary\n"
 			cmd := exec.Command("bash", "-c", fixture, "bash", installDir, tmpDir)
-			cmd.Env = append(os.Environ(), "PATH="+fakeBin, "FAIL_COMMAND="+tt.failCommand)
+			env := append(os.Environ(), "PATH="+fakeBin, "FAIL_COMMAND="+tt.failCommand, "INSTALL_TEST_PRIVILEGED=")
+			if tt.fakeSudo {
+				env = append(env, "SUDO_LOG="+sudoLog)
+			}
+			cmd.Env = env
 			out, runErr := cmd.CombinedOutput()
 			if tt.wantSuccess && runErr != nil {
 				t.Fatalf("replacement failed: %v\n%s", runErr, out)
 			}
 			if !tt.wantSuccess && runErr == nil {
 				t.Fatalf("replacement unexpectedly succeeded when %s failed", tt.failCommand)
+			}
+			if tt.fakeSudo {
+				delegated, err := os.ReadFile(sudoLog)
+				if err != nil {
+					t.Fatalf("read sudo command log: %v", err)
+				}
+				wantDelegated := "mktemp\ncp\nchmod\nmv"
+				if got := strings.TrimSpace(string(delegated)); got != wantDelegated {
+					t.Fatalf("sudo delegated commands = %q, want %q", got, wantDelegated)
+				}
+				sudoResidue, err := filepath.Glob(filepath.Join(installDir, ".gentle-ai.tmp.sudo.*"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(sudoResidue) != 0 {
+					t.Fatalf("sudo staging residue remains: %v", sudoResidue)
+				}
 			}
 
 			got, readErr := os.ReadFile(binary)
