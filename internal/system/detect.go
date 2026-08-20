@@ -263,3 +263,12 @@ func SetCodeGraphPlatformSupportedForTest(v *bool) {
 	codeGraphPlatformSupportedOverride = v
 	overrideMu.Unlock()
 }
+
+// PRoot detection
+
+var (
+	prootMu sync.Mutex
+	prootInfoCache *PRootInfo
+)
+
+// PRootInfo is defined in internal/system/proot.go

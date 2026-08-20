@@ -754,7 +754,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	for _, tool := range r.selection.CommunityTools {
-		if tool == model.CommunityToolCodeGraph && !system.CodeGraphPlatformSupported() {
+		if tool == model.CommunityToolCodeGraph && !system.CodeGraphPlatformSupportedWithProot() {
 			// Skip CodeGraph on platforms without native binaries (e.g., Termux/Android).
 			// The npm package @colbymchenry/codegraph requires platform-specific native
 			// binaries that are not published for Android/Termux. Users on these platforms
@@ -813,7 +813,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		})
 	}
 	if containsAgent(r.resolved.Agents, model.AgentPi) {
-		selected := r.selection.HasCommunityTool(model.CommunityToolCodeGraph) && system.CodeGraphPlatformSupported()
+		selected := r.selection.HasCommunityTool(model.CommunityToolCodeGraph) && system.CodeGraphPlatformSupportedWithProot()
 		stepID := "community-tool:pi-codegraph-reconcile"
 		if !selected {
 			stepID = "community-tool:pi-codegraph-deselect"
