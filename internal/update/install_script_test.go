@@ -205,6 +205,30 @@ func TestInstallScriptAtomicBinaryReplacement(t *testing.T) {
 	}
 	replacement := script[start : start+end]
 
+	cleanupStartMarker := "    cleanup_install() {\n"
+	cleanupFunctionEndMarker := "    }\n"
+	tmpdirAssignmentMarker := "    tmpdir=\"$(mktemp -d)\"\n"
+	cleanupTrapMarker := "    trap cleanup_install EXIT\n"
+	cleanupStart := strings.Index(script, cleanupStartMarker)
+	if cleanupStart < 0 {
+		t.Fatal("scripts/install.sh is missing cleanup_install function")
+	}
+	cleanupBodyStart := cleanupStart + len(cleanupStartMarker)
+	cleanupFunctionEndRelative := strings.Index(script[cleanupBodyStart:], cleanupFunctionEndMarker)
+	if cleanupFunctionEndRelative < 0 {
+		t.Fatal("could not locate end of cleanup_install function")
+	}
+	cleanupFunctionEnd := cleanupBodyStart + cleanupFunctionEndRelative + len(cleanupFunctionEndMarker)
+	if !strings.HasPrefix(script[cleanupFunctionEnd:], tmpdirAssignmentMarker) {
+		t.Fatal("could not locate tmpdir assignment after cleanup_install function")
+	}
+	trapStart := cleanupFunctionEnd + len(tmpdirAssignmentMarker)
+	if !strings.HasPrefix(script[trapStart:], cleanupTrapMarker) {
+		t.Fatal("could not locate cleanup_install EXIT trap")
+	}
+	cleanupSnippet := script[cleanupStart:cleanupFunctionEnd] +
+		script[trapStart:trapStart+len(cleanupTrapMarker)]
+
 	tests := []struct {
 		name                  string
 		failCommand           string
@@ -262,7 +286,31 @@ func TestInstallScriptAtomicBinaryReplacement(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				wrapper := fmt.Sprintf("#!/bin/sh\nif [ -z \"${INSTALL_TEST_PRIVILEGED:-}\" ] && [ \"$FAIL_COMMAND\" = %q ]; then\n    if [ %t = true ]; then printf 'partial-copy' > \"$2\"; fi\n    exit 1\nfi\nif [ -n \"${INSTALL_TEST_PRIVILEGED:-}\" ] && [ \"$FAIL_PRIVILEGED_COMMAND\" = %q ]; then exit 1; fi\nexec %q \"$@\"\n", command, tt.partialCopy && command == "cp", command, realCommand)
+				wrapper := fmt.Sprintf(`#!/bin/sh
+if [ %q = "mktemp" ]; then
+    if [ -z "${INSTALL_TEST_INSTALL_DIR:-}" ]; then
+        printf 'missing INSTALL_TEST_INSTALL_DIR\n' >&2
+        exit 1
+    fi
+    if [ -n "${INSTALL_TEST_PRIVILEGED:-}" ]; then
+        expected="${INSTALL_TEST_INSTALL_DIR}/.gentle-ai.tmp.sudo.XXXXXX"
+    else
+        expected="${INSTALL_TEST_INSTALL_DIR}/.gentle-ai.tmp.XXXXXX"
+    fi
+    if [ "$#" -ne 1 ] || [ "${1:-}" != "$expected" ]; then
+        printf 'unexpected mktemp template: %%s (want %%s)\n' "${1:-}" "$expected" >&2
+        exit 1
+    fi
+fi
+if [ -z "${INSTALL_TEST_PRIVILEGED:-}" ] && [ "${FAIL_COMMAND:-}" = %q ]; then
+    if [ %t = true ]; then printf 'partial-copy' > "$2"; fi
+    exit 1
+fi
+if [ -n "${INSTALL_TEST_PRIVILEGED:-}" ] && [ "${FAIL_PRIVILEGED_COMMAND:-}" = %q ]; then
+    exit 1
+fi
+exec %q "$@"
+`, command, command, tt.partialCopy && command == "cp", command, realCommand)
 				if err := os.WriteFile(filepath.Join(fakeBin, command), []byte(wrapper), 0o755); err != nil {
 					t.Fatal(err)
 				}
@@ -281,12 +329,12 @@ exec "$@"
 			}
 
 			fixture := "set -eu\n" +
-				"BINARY_NAME=gentle-ai\ninstall_dir=$1\ntmpdir=$2\nstage_file=\nsudo_stage_file=\n" +
+				"BINARY_NAME=gentle-ai\ninstall_dir=\"$1\"\ntmpdir=\"$2\"\nstage_file=\nsudo_stage_file=\n" +
 				"info() { :; }\nwarn() { :; }\nfatal() { return 1; }\n" +
-				"cleanup_install() { rm -f \"${stage_file:-}\" 2>/dev/null; if [ -n \"${sudo_stage_file:-}\" ] && command -v sudo &>/dev/null; then sudo rm -f \"$sudo_stage_file\" 2>/dev/null; fi; [ -n \"${tmpdir:-}\" ] && rm -rf \"$tmpdir\"; }\n" +
-				"trap cleanup_install EXIT\nreplace_binary() {\n" + replacement + "}\nreplace_binary\n"
+				cleanupSnippet +
+				"replace_binary() {\n" + replacement + "}\nreplace_binary\n"
 			cmd := exec.Command("bash", "-c", fixture, "bash", installDir, tmpDir)
-			env := append(os.Environ(), "PATH="+fakeBin, "FAIL_COMMAND="+tt.failCommand, "FAIL_PRIVILEGED_COMMAND="+tt.privilegedFailCommand, "INSTALL_TEST_PRIVILEGED=")
+			env := append(os.Environ(), "PATH="+fakeBin, "FAIL_COMMAND="+tt.failCommand, "FAIL_PRIVILEGED_COMMAND="+tt.privilegedFailCommand, "INSTALL_TEST_INSTALL_DIR="+installDir, "INSTALL_TEST_PRIVILEGED=")
 			if tt.fakeSudo {
 				env = append(env, "SUDO_LOG="+sudoLog)
 			}
