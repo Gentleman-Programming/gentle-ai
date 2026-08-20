@@ -1723,7 +1723,7 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		}
 	}
 	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
-		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
+		for _, path := range communitytool.CodeGraphManagedPaths(homeDir, resolved.Agents...) {
 			paths[path] = struct{}{}
 		}
 	}

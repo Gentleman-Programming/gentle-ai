@@ -155,6 +155,75 @@ func TestBackupTargetsSnapshotCrossAgentCodeGraphGuidance(t *testing.T) {
 	}
 }
 
+func TestBackupTargetsFilterCodeGraphPathsByResolvedAgents(t *testing.T) {
+	home := t.TempDir()
+	for _, dir := range []string{
+		filepath.Join(home, ".claude"),
+		filepath.Join(home, ".config", "opencode"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	selection := model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph}}
+	paths := map[model.AgentID][]string{
+		model.AgentClaudeCode: {
+			filepath.Join(home, ".claude", "CLAUDE.md"),
+			filepath.Join(home, ".claude.json"),
+		},
+		model.AgentOpenCode: {
+			filepath.Join(home, ".config", "opencode", "AGENTS.md"),
+			filepath.Join(home, ".config", "opencode", "opencode.json"),
+			filepath.Join(home, ".config", "opencode", "opencode.jsonc"),
+		},
+	}
+
+	tests := []struct {
+		name     string
+		resolved []model.AgentID
+		included []model.AgentID
+		excluded []model.AgentID
+	}{
+		{
+			name:     "selected Claude excludes detected OpenCode",
+			resolved: []model.AgentID{model.AgentClaudeCode},
+			included: []model.AgentID{model.AgentClaudeCode},
+			excluded: []model.AgentID{model.AgentOpenCode},
+		},
+		{
+			name:     "selected OpenCode excludes detected Claude",
+			resolved: []model.AgentID{model.AgentOpenCode},
+			included: []model.AgentID{model.AgentOpenCode},
+			excluded: []model.AgentID{model.AgentClaudeCode},
+		},
+		{
+			name:     "empty filter includes every detected agent",
+			included: []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			targets := backupTargets(home, "", ScopeGlobal, selection, planner.ResolvedPlan{Agents: tt.resolved})
+			for _, agent := range tt.included {
+				for _, path := range paths[agent] {
+					if !slices.Contains(targets, path) {
+						t.Fatalf("backup targets = %v, missing selected %s path %q", targets, agent, path)
+					}
+				}
+			}
+			for _, agent := range tt.excluded {
+				for _, path := range paths[agent] {
+					if slices.Contains(targets, path) {
+						t.Fatalf("backup targets = %v, contains unselected %s path %q", targets, agent, path)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestPiCodeGraphReconcileStepRollbackRemovesDynamicPackageOverlay(t *testing.T) {
 	home := t.TempDir()
 	overlay := filepath.Join(home, ".pi", "agent", "subagents", "package.md")
