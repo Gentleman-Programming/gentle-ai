@@ -1,47 +1,27 @@
 // This file is the by-design envelope layer of the refusal ratchet: a
-// closed-vocabulary marker form that asset and prompt collectors use to
-// prove every terminal directive (an imperative sentence that routes the
-// reader to a CLI verb) either names a runnable `gentle-ai review <verb>`
+// closed-vocabulary marker form for asset and prompt collectors proving every
+// terminal directive either names a runnable `gentle-ai review <verb>`
 // continuation or declares a closed-vocabulary shape explaining why no
 // command can honestly exist there.
 //
-// The two layers MUST agree on the closed vocabulary. refusalRatchetByDesignShapes
-// (test-only, in refusal_resolution_ratchet_test.go) and the ByDesign* constants
-// in bench/classify.go already pin each other; the production-side
-// byDesignShapeSet below is the third copy and TestByDesignEnvelopeVocabularyMatch
-// pins it against refusalRatchetByDesignShapes so the three cannot fork.
-//
-// What this file does NOT do: walk a document. ParseByDesignEnvelope parses ONE
-// directive line; ParseMarkdownByDesignEnvelope (in
-// refusal_resolution_ratchet_assets.go) walks a whole document and threads the
-// named-verb resolver through ReviewDispatchableReviewVerbs, failing closed on
-// any verb that does not dispatch.
+// What this file does NOT do: walk a document. ParseByDesignEnvelope parses
+// ONE directive line. Document-walking helpers for the asset and prompt
+// collectors live in refusal_resolution_ratchet_assets.go and reuse
+// ParseByDesignEnvelope per line.
 package cli
 
 import (
 	"fmt"
 	"regexp"
-	"strings"
 )
 
-// ByDesignShape is one of the closed by-design shapes the ratchet accepts.
-// Mirrored from refusalRatchetByDesignShapes for production callers.
-type ByDesignShape string
-
-const (
-	byDesignOperatorKnowledge ByDesignShape = "operator-knowledge"
-	byDesignWorldAction       ByDesignShape = "world-action"
-	byDesignHumanAuthority    ByDesignShape = "human-authority"
-)
-
-// byDesignShapeSet is the production-side closed by-design vocabulary. It MUST
-// stay identical to refusalRatchetByDesignShapes and to the ByDesign* constants
-// in bench/classify.go; TestByDesignEnvelopeVocabularyMatch enforces the
-// mechanical half of that, the bench classifier pins its own half.
-var byDesignShapeSet = map[string]bool{
-	"operator-knowledge": true,
-	"world-action":       true,
-	"human-authority":    true,
+// RefusalRatchetByDesignShapes is the closed by-design vocabulary shared with
+// the bench classifier (bench/classify.go); both sides read the same three
+// keys, so the ratchet header and the bench JSON stay in agreement.
+var RefusalRatchetByDesignShapes = map[string]bool{
+	"operator-knowledge": true, // the product cannot know a value only the operator has
+	"world-action":       true, // the exit is an action in the world, not a command
+	"human-authority":    true, // the block is a human decision by design
 }
 
 // byDesignMarkerRegexp matches the markdown marker form:
@@ -49,18 +29,12 @@ var byDesignShapeSet = map[string]bool{
 //	<!-- by-design: <shape> -->
 //
 // where <shape> is one of the closed vocabulary. The marker is invisible to
-// commonmark and to most renderers; the prefix `by-design:` is intentionally
-// shorter than the Go source prefix (the // refusalRatchetMarkerHint marker
-// defined in refusal_resolution_ratchet_test.go) so the two never collide,
-// but both parse against the same closed shape set.
+// commonmark and to most renderers.
 var byDesignMarkerRegexp = regexp.MustCompile(`<!--\s*by-design:\s*([a-z-]+)\s*-->`)
 
 // byDesignVerbRegexp captures the verb in `gentle-ai review <verb>` references.
 // Requiring the literal " review " (with surrounding spaces) keeps the verb
-// namespace unambiguous: the existing refusalRatchetNamedContinuationRegexp
-// matches every `gentle-ai <anything>`, which is the broader structural
-// check; this narrower regex is the gate the dispatchability check runs
-// against.
+// namespace unambiguous.
 var byDesignVerbRegexp = regexp.MustCompile(`gentle-ai review ([a-z][a-z-]*)`)
 
 // ByDesignEnvelope is one parsed directive from an envelope reason field, an
@@ -76,9 +50,8 @@ type ByDesignEnvelope struct {
 	// Verb is the dispatched review verb iff the directive names one.
 	Verb string
 	// Shape is the by-design shape iff the directive declares one.
-	Shape ByDesignShape
-	// Literal is the verbatim directive text the envelope parsed. Used for
-	// error reporting and for the per-(file, directive-text) baseline key.
+	Shape string
+	// Literal is the verbatim directive text the envelope parsed.
 	Literal string
 }
 
@@ -93,12 +66,9 @@ func (e ByDesignEnvelope) IsAnnotated() bool { return e.Shape != "" }
 // satisfies, or an error when the line is contradictory (names a verb AND
 // declares a marker), declares an unknown shape, or carries neither.
 //
-// The caller decides which lines to pass in. The asset walker (in
-// refusal_resolution_ratchet_assets.go) pre-filters for `gentle-ai review `
-// or `by-design:` substrings; callers that skip that pre-filter will see the
-// "neither" error for any prose-only line. This is intentional: a line that
-// carries no marker and no verb is a violation at every site the collector
-// touches, so the parser fails loudly rather than passing it silently.
+// The caller decides which lines to pass in. Lines that carry no marker and
+// no verb produce a "neither" error -- a line at every site the collector
+// touches must name an exit or declare a by-design shape.
 func ParseByDesignEnvelope(line string, lineNo int) (ByDesignEnvelope, error) {
 	env := ByDesignEnvelope{Line: lineNo, Literal: line}
 
@@ -106,8 +76,8 @@ func ParseByDesignEnvelope(line string, lineNo int) (ByDesignEnvelope, error) {
 	verb := byDesignVerbRegexp.FindStringSubmatch(line)
 
 	if marker != nil {
-		shape := ByDesignShape(marker[1])
-		if !byDesignShapeSet[string(shape)] {
+		shape := marker[1]
+		if !RefusalRatchetByDesignShapes[shape] {
 			// refusal:by-design world-action: an unknown marker shape is a fixture bug; repair the markdown, no command can fix it
 			return ByDesignEnvelope{}, fmt.Errorf("line %d: marker shape %q is not in the closed vocabulary (operator-knowledge, world-action, human-authority)", lineNo, marker[1])
 		}
@@ -138,12 +108,4 @@ func ParseByDesignEnvelope(line string, lineNo int) (ByDesignEnvelope, error) {
 		return ByDesignEnvelope{}, fmt.Errorf("line %d: directive carries neither a runnable review-verb continuation nor a by-design marker; the operator has no exit", lineNo)
 	}
 	return env, nil
-}
-
-// byDesignDirectivePreFilter is the quick scan ParseMarkdownByDesignEnvelope
-// uses before invoking ParseByDesignEnvelope. Lines that match neither
-// substring are skipped silently -- prose may mention `gentle-ai` in passing
-// without being a directive.
-func byDesignDirectivePreFilter(line string) bool {
-	return strings.Contains(line, "gentle-ai review ") || strings.Contains(line, "by-design:")
 }

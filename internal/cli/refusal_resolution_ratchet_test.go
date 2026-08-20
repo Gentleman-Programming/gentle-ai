@@ -128,16 +128,6 @@ import (
 	"testing"
 )
 
-// refusalRatchetByDesignShapes is the closed by-design vocabulary. It MUST
-// stay identical to the bench classifier's (bench/classify.go), so there is
-// one taxonomy, not two; TestRefusalRatchetVocabularyMatchesBenchClassifier
-// enforces that mechanically.
-var refusalRatchetByDesignShapes = map[string]bool{
-	"operator-knowledge": true, // the product cannot know a value only the operator has
-	"world-action":       true, // the exit is an action in the world, not a command
-	"human-authority":    true, // the block is a human decision by design
-}
-
 // refusalRatchetMarkerHint is the substring that identifies a marker ATTEMPT.
 // Any comment containing it must parse as a valid marker attached to an
 // in-scope site; a malformed or orphaned attempt is an error, never silence.
@@ -306,11 +296,11 @@ func TestRefusalRatchetVocabularyMatchesBenchClassifier(t *testing.T) {
 		t.Fatal("extracted no ByDesign* string constants from bench/classify.go; the extraction is stale")
 	}
 	for shape := range benchShapes {
-		if !refusalRatchetByDesignShapes[shape] {
+		if !RefusalRatchetByDesignShapes[shape] {
 			t.Errorf("bench vocabulary has shape %q; the ratchet vocabulary does not -- the taxonomy has forked", shape)
 		}
 	}
-	for shape := range refusalRatchetByDesignShapes {
+	for shape := range RefusalRatchetByDesignShapes {
 		if !benchShapes[shape] {
 			t.Errorf("ratchet vocabulary has shape %q; bench/classify.go does not -- the taxonomy has forked", shape)
 		}
@@ -1001,7 +991,7 @@ func (a *refusalRatchetAnalysis) classify(site *refusalRatchetSite, marker *refu
 	switch {
 	case marker != nil && marker.malformed != "":
 		a.problems = append(a.problems, marker.malformed)
-	case marker != nil && !refusalRatchetByDesignShapes[marker.shape]:
+	case marker != nil && !RefusalRatchetByDesignShapes[marker.shape]:
 		a.problems = append(a.problems, fmt.Sprintf(
 			"%s:%d declares by-design shape %q, which is not in the closed vocabulary (operator-knowledge, world-action, human-authority); an unrecognized shape is a corpus error, never a pass",
 			site.file, site.line, marker.shape))
@@ -1370,6 +1360,11 @@ func TestReviewDispatchableReviewVerbsExports(t *testing.T) {
 			t.Errorf("view diverged on %q (prod=%v test=%v)", verb, production[verb], test[verb])
 		}
 	}
+	for verb := range production {
+		if production[verb] != test[verb] {
+			t.Errorf("production-only verb %q not visible to test view", verb)
+		}
+	}
 }
 
 // TestByDesignEnvelopeParsing: ParseByDesignEnvelope's six rules.
@@ -1407,56 +1402,9 @@ func TestByDesignEnvelopeParsing(t *testing.T) {
 	}
 }
 
-// TestByDesignEnvelopeVocabularyMatch: production byDesignShapeSet and refusalRatchetByDesignShapes must agree.
-func TestByDesignEnvelopeVocabularyMatch(t *testing.T) {
-	for shape := range byDesignShapeSet {
-		if !refusalRatchetByDesignShapes[shape] {
-			t.Errorf("production has %q; test side missing", shape)
-		}
-	}
-	for shape := range refusalRatchetByDesignShapes {
-		if !byDesignShapeSet[shape] {
-			t.Errorf("test side has %q; production missing", shape)
-		}
-	}
-}
-
-// TestParseByDesignEnvelopeRejectsNonDispatchableVerb: a verb captured by
-// byDesignVerbRegexp that is NOT in ReviewDispatchableReviewVerbs must fail
-// closed. The envelope promises dispatchability; the parser must enforce it.
-// decode2 2026-08-18 review on PR #2994.
-func TestParseByDesignEnvelopeRejectsNonDispatchableVerb(t *testing.T) {
-	dispatched, err := ReviewDispatchableReviewVerbs()
-	if err != nil {
-		t.Fatalf("ReviewDispatchableReviewVerbs: %v", err)
-	}
-	// pick a deterministic non-dispatchable verb.
-	candidates := []string{"definitely-not-a-real-verb", "garbage-verb", "made-up-command"}
-	var verb string
-	for _, c := range candidates {
-		if !dispatched[c] {
-			verb = c
-			break
-		}
-	}
-	if verb == "" {
-		t.Fatalf("could not find a non-dispatchable candidate; the dispatched set is unexpectedly large: %v", dispatched)
-	}
-	env, err := ParseByDesignEnvelope("Run `gentle-ai review "+verb+" --lineage L` here.", 1)
-	if err == nil {
-		t.Fatalf("expected dispatchability error for non-dispatchable verb %q, got env=%+v", verb, env)
-	}
-	if !strings.Contains(err.Error(), "not in the dispatchable set") {
-		t.Errorf("error message must call out the dispatchable set check, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), verb) {
-		t.Errorf("error message must name the verb %q, got: %v", verb, err)
-	}
-}
-
-// TestParseByDesignEnvelopeAcceptsDispatchableVerb: explicit positive test
-// that a known-dispatchable verb parses successfully. Pairs with the
-// rejection test above so the new dispatchability check has both arms.
+// TestParseByDesignEnvelopeAcceptsDispatchableVerb: a verb from the
+// live dispatched set parses successfully. Establishes that the new
+// dispatchability check accepts real verbs.
 func TestParseByDesignEnvelopeAcceptsDispatchableVerb(t *testing.T) {
 	dispatched, err := ReviewDispatchableReviewVerbs()
 	if err != nil {

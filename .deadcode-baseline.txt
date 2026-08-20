@@ -14,7 +14,6 @@ internal/cli/doctor.go	checkToolBinaries
 internal/cli/refusal_resolution_ratchet.go	ByDesignEnvelope.IsAnnotated
 internal/cli/refusal_resolution_ratchet.go	ByDesignEnvelope.IsNamed
 internal/cli/refusal_resolution_ratchet.go	ParseByDesignEnvelope
-internal/cli/refusal_resolution_ratchet.go	byDesignDirectivePreFilter
 internal/cli/restore.go	RunRestoreWithFn
 internal/cli/restore.go	RunRestoreWithFnAndInput
 internal/cli/review_facade.go	emitFacadeGateEvaluation
