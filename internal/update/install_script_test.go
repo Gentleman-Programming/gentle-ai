@@ -2,6 +2,7 @@ package update
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -205,11 +206,14 @@ func TestInstallScriptAtomicBinaryReplacement(t *testing.T) {
 	replacement := script[start : start+end]
 
 	tests := []struct {
-		name        string
-		failCommand string
-		existing    bool
-		fakeSudo    bool
-		wantSuccess bool
+		name                  string
+		failCommand           string
+		privilegedFailCommand string
+		existing              bool
+		fakeSudo              bool
+		partialCopy           bool
+		wantPrivilegedCleanup bool
+		wantSuccess           bool
 	}{
 		{name: "first install", wantSuccess: true},
 		{name: "replacement", existing: true, wantSuccess: true},
@@ -218,6 +222,15 @@ func TestInstallScriptAtomicBinaryReplacement(t *testing.T) {
 		{name: "chmod failure", failCommand: "chmod", existing: true},
 		{name: "mv failure", failCommand: "mv", existing: true},
 		{name: "sudo fallback", failCommand: "cp", existing: true, fakeSudo: true, wantSuccess: true},
+		{
+			name:                  "privileged partial copy then mv failure",
+			failCommand:           "cp",
+			privilegedFailCommand: "mv",
+			existing:              true,
+			fakeSudo:              true,
+			partialCopy:           true,
+			wantPrivilegedCleanup: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -233,8 +246,10 @@ func TestInstallScriptAtomicBinaryReplacement(t *testing.T) {
 			}
 
 			binary := filepath.Join(installDir, "gentle-ai")
+			oldBinary := []byte("old")
+			oldDigest := sha256.Sum256(oldBinary)
 			if tt.existing {
-				if err := os.WriteFile(binary, []byte("old"), 0o755); err != nil {
+				if err := os.WriteFile(binary, oldBinary, 0o755); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -247,7 +262,7 @@ func TestInstallScriptAtomicBinaryReplacement(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				wrapper := fmt.Sprintf("#!/bin/sh\nif [ -z \"${INSTALL_TEST_PRIVILEGED:-}\" ] && [ \"$FAIL_COMMAND\" = %q ]; then exit 1; fi\nexec %q \"$@\"\n", command, realCommand)
+				wrapper := fmt.Sprintf("#!/bin/sh\nif [ -z \"${INSTALL_TEST_PRIVILEGED:-}\" ] && [ \"$FAIL_COMMAND\" = %q ]; then\n    if [ %t = true ]; then printf 'partial-copy' > \"$2\"; fi\n    exit 1\nfi\nif [ -n \"${INSTALL_TEST_PRIVILEGED:-}\" ] && [ \"$FAIL_PRIVILEGED_COMMAND\" = %q ]; then exit 1; fi\nexec %q \"$@\"\n", command, tt.partialCopy && command == "cp", command, realCommand)
 				if err := os.WriteFile(filepath.Join(fakeBin, command), []byte(wrapper), 0o755); err != nil {
 					t.Fatal(err)
 				}
@@ -268,10 +283,10 @@ exec "$@"
 			fixture := "set -eu\n" +
 				"BINARY_NAME=gentle-ai\ninstall_dir=$1\ntmpdir=$2\nstage_file=\nsudo_stage_file=\n" +
 				"info() { :; }\nwarn() { :; }\nfatal() { return 1; }\n" +
-				"cleanup_install() { rm -f \"${stage_file:-}\" 2>/dev/null; [ -n \"${tmpdir:-}\" ] && rm -rf \"$tmpdir\"; }\n" +
+				"cleanup_install() { rm -f \"${stage_file:-}\" 2>/dev/null; if [ -n \"${sudo_stage_file:-}\" ] && command -v sudo &>/dev/null; then sudo rm -f \"$sudo_stage_file\" 2>/dev/null; fi; [ -n \"${tmpdir:-}\" ] && rm -rf \"$tmpdir\"; }\n" +
 				"trap cleanup_install EXIT\nreplace_binary() {\n" + replacement + "}\nreplace_binary\n"
 			cmd := exec.Command("bash", "-c", fixture, "bash", installDir, tmpDir)
-			env := append(os.Environ(), "PATH="+fakeBin, "FAIL_COMMAND="+tt.failCommand, "INSTALL_TEST_PRIVILEGED=")
+			env := append(os.Environ(), "PATH="+fakeBin, "FAIL_COMMAND="+tt.failCommand, "FAIL_PRIVILEGED_COMMAND="+tt.privilegedFailCommand, "INSTALL_TEST_PRIVILEGED=")
 			if tt.fakeSudo {
 				env = append(env, "SUDO_LOG="+sudoLog)
 			}
@@ -289,15 +304,11 @@ exec "$@"
 					t.Fatalf("read sudo command log: %v", err)
 				}
 				wantDelegated := "mktemp\ncp\nchmod\nmv"
+				if tt.wantPrivilegedCleanup {
+					wantDelegated += "\nrm"
+				}
 				if got := strings.TrimSpace(string(delegated)); got != wantDelegated {
 					t.Fatalf("sudo delegated commands = %q, want %q", got, wantDelegated)
-				}
-				sudoResidue, err := filepath.Glob(filepath.Join(installDir, ".gentle-ai.tmp.sudo.*"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if len(sudoResidue) != 0 {
-					t.Fatalf("sudo staging residue remains: %v", sudoResidue)
 				}
 			}
 
@@ -325,18 +336,28 @@ exec "$@"
 					if readErr != nil {
 						t.Fatal(readErr)
 					}
-					if string(got) != "old" {
+					if string(got) != string(oldBinary) {
 						t.Fatalf("installed binary = %q, want old content preserved", got)
+					}
+					if gotDigest := sha256.Sum256(got); gotDigest != oldDigest {
+						t.Fatalf("installed binary digest = %x, want old digest %x", gotDigest, oldDigest)
 					}
 				}
 			}
 
-			residue, globErr := filepath.Glob(filepath.Join(installDir, ".gentle-ai.tmp.*"))
+			regularResidue, globErr := filepath.Glob(filepath.Join(installDir, ".gentle-ai.tmp.??????"))
 			if globErr != nil {
 				t.Fatal(globErr)
 			}
-			if len(residue) != 0 {
-				t.Fatalf("staging residue remains: %v", residue)
+			if len(regularResidue) != 0 {
+				t.Fatalf("regular staging residue remains: %v", regularResidue)
+			}
+			privilegedResidue, globErr := filepath.Glob(filepath.Join(installDir, ".gentle-ai.tmp.sudo.*"))
+			if globErr != nil {
+				t.Fatal(globErr)
+			}
+			if len(privilegedResidue) != 0 {
+				t.Fatalf("privileged staging residue remains: %v", privilegedResidue)
 			}
 			if _, statErr := os.Stat(tmpDir); !os.IsNotExist(statErr) {
 				t.Fatalf("download temp directory remains: %v", statErr)
