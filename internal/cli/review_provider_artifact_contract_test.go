@@ -33,8 +33,8 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 		"schemas/result-artifact.schema.json":    "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
 		"schemas/start.schema.json":              "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
 		"schemas/start-v2.schema.json":           "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
-		"schemas/status.schema.json":             "250d2c646b8822b38eaefafd2bfdefa1134cc23a00e553a7201f33257573149a",
-		"schemas/status-v2.schema.json":          "dd9914b647a1d9edc4ecdcbed4f0c800b39ec290912d5c2a4cc6ba3098d5f21e",
+		"schemas/status.schema.json":             "634e81390389648842ba2fa2572c9ce0d8e920ab406ce6c8b35a828b488963d4",
+		"schemas/status-v2.schema.json":          "bbb8655bad2e33ad65c3f953c704ea6804c103140a8acb49ee311251fe1c5c12",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -56,7 +56,7 @@ func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 		"fixtures/status.fixture.json":       "4cd77906bacdca35d8f99773de147211d2b05fe34dd1b999011ead09e84be7a5",
 		"schemas/capabilities.schema.json":   "7ab061ed27bd3b929d6033cc20f56097e851f4454ca14a815255748b50191248",
 		"schemas/consent.schema.json":        "b2b4465338497f11927de91cb2e5da12b6cb4a1039afe05aebe1abbf53b21858",
-		"schemas/status.schema.json":         "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
+		"schemas/status.schema.json":         "74a6ce72aef46ea03ab510a365742fcf4aa503888c7d7e56ea7e0c6afbdcce46",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -89,7 +89,7 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 		// the emitter legitimately publishes once the relay handshake is
 		// declared. Deliberate, not drift.
 		"schemas/consent-v3.schema.json": "f56b1809c1bff21713795ef37a095c6ecfdbbb3cf928bcf604b8d5f33be3dea5",
-		"schemas/status.schema.json":     "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
+		"schemas/status.schema.json":     "74a6ce72aef46ea03ab510a365742fcf4aa503888c7d7e56ea7e0c6afbdcce46",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -106,7 +106,7 @@ func TestReviewProviderArtifactV21ContractsArePinned(t *testing.T) {
 func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
 	want := map[string]string{
-		"fixtures/status-v5.fixture.json": "1a6d002c9691c87e50687f8d5f3e59013e9229d93004028f746bfcda7947d5fc",
+		"fixtures/status-v5.fixture.json": "8f3ca8967b85dd2972d0de834bfa86de552b540ed3f35d665c308b1595f1de5b",
 		// Cross-lane battery conformance fix: live negotiated STATUS publishes
 		// the top-level repository_context reference (review_status_contract.go's
 		// ReviewTargetStatusResult, populated since the recovered-units merges),
@@ -120,7 +120,7 @@ func TestReviewProviderArtifactV25StatusContractsArePinned(t *testing.T) {
 		// input with a capture-result submission descriptor, which the
 		// submission oneOf and the no-submission allOf rule both rejected.
 		// Deliberate, not drift.
-		"schemas/status-v5.schema.json": "4dd17e863725edb20e9cbb85d9614dfdc07ef6c9257aa789f4c9e8835400483e",
+		"schemas/status-v5.schema.json": "c43a3905f4b349417b711a5d6562f1bf819af27d7b06250b9eade859462e1b6b",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))

@@ -48,7 +48,14 @@
   "candidates": [],
   "next_transition": {
     "kind": "stop",
-    "reason_code": "manual_intervention_required"
+    "reason_code": "manual_intervention_required",
+    "stop": {
+      "statement": "This review reached an unrecoverable state. Ask a maintainer to inspect the review record directly, or run `gentle-ai review mode disable --scope clone --cwd <repo>` (omitting --scope disables it for every repository on the machine) to deliver under ordinary repository policy instead.",
+      "off_path": {
+        "note": "To deliver under ordinary repository policy instead, disable review for this repository.",
+        "command": "gentle-ai review mode disable --scope clone --cwd <repo>"
+      }
+    }
   },
   "forecast": {
     "horizon": "terminal",

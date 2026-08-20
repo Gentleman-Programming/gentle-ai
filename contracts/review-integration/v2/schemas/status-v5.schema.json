@@ -73,7 +73,8 @@
         "reason_code": {"type": "string", "pattern": "^[a-z0-9_]+$"},
         "execute": {"$ref": "../../v1/schemas/status-v2.schema.json#/$defs/transition_execution"},
         "collect": {"$ref": "#/$defs/transition_collection"},
-        "correction_request": {"$ref": "../../v1/schemas/correction-plan-request.schema.json"}
+        "correction_request": {"$ref": "../../v1/schemas/correction-plan-request.schema.json"},
+        "stop": {"$ref": "#/$defs/transition_stop"}
       },
       "allOf": [
         {"if": {"properties": {"kind": {"const": "execute"}}, "required": ["kind"]}, "then": {"required": ["execute"], "not": {"required": ["collect"]}}},
@@ -88,6 +89,20 @@
         ]}}}}}}},
         {"if": {"properties": {"reason_code": {"enum": ["verification_evidence_required", "correction_repository_verification_required"]}}, "required": ["reason_code"]}, "then": {"properties": {"kind": {"const": "collect"}, "collect": {"properties": {"inputs": {"minItems": 1, "maxItems": 1, "items": {"properties": {"capture_operation": {"const": "review.capture-evidence"}}, "required": ["capture_operation", "submission"]}}}}}}}
       ]
+    },
+    "transition_stop": {
+      "type": "object", "additionalProperties": false, "required": ["statement"],
+      "properties": {
+        "statement": {"type": "string", "minLength": 1},
+        "commands": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "off_path": {
+          "type": "object", "additionalProperties": false, "required": ["note", "command"],
+          "properties": {
+            "note": {"type": "string", "minLength": 1},
+            "command": {"type": "string", "minLength": 1}
+          }
+        }
+      }
     },
     "transition_collection": {
       "type": "object", "additionalProperties": false, "required": ["inputs"],

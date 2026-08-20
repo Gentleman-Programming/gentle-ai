@@ -337,12 +337,8 @@ func TestReviewNextTransitionCollectAndStopCarryNoCommand(t *testing.T) {
 	if stop.Execute != nil {
 		t.Fatalf("stop transition = %#v, want no execute payload", stop)
 	}
-	payload, err := json.Marshal(stop)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(payload), "\"command\"") {
-		t.Fatalf("stop transition payload = %s, want no command field", payload)
+	if stop.Stop == nil || stop.Stop.Statement == "" {
+		t.Fatalf("stop transition = %#v, want structured stop continuation", stop)
 	}
 	binding := ReviewTransitionBinding{
 		LineageID:      "review-collect-no-command",
@@ -356,7 +352,7 @@ func TestReviewNextTransitionCollectAndStopCarryNoCommand(t *testing.T) {
 	if collect.Collect.Inputs[0].Arguments[0].Token == "" {
 		t.Fatal("native collect input carries no token, so this test would pass vacuously")
 	}
-	payload, err = json.Marshal(collect)
+	payload, err := json.Marshal(collect)
 	if err != nil {
 		t.Fatal(err)
 	}

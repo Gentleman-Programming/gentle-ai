@@ -1104,3 +1104,62 @@ func reviewSchemaRegexpEngine(pattern string) (jsonschema.Regexp, error) {
 	}
 	return reviewSchemaRegexp{pattern: pattern, re: re}, nil
 }
+
+// TestReviewStopTransitionEmitsStructuredContinuations verifies that every stop
+// transition emitted by reviewStopTransition carries structured continuations
+// (statement, runnable commands, and/or off-path exit) so consuming adapters
+// and runtime agents do not invent their own menus (#3384).
+func TestReviewStopTransitionEmitsStructuredContinuations(t *testing.T) {
+	source, err := os.ReadFile("review_next_transition.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches := reviewStopTransitionCallRegexp.FindAllStringSubmatch(string(source), -1)
+	if len(matches) == 0 {
+		t.Fatal("found no reviewStopTransition calls")
+	}
+	for _, match := range matches {
+		code := match[1]
+		transition := reviewStopTransition(code)
+		if transition.Kind != reviewNextTransitionStop {
+			t.Errorf("stop reason %q: kind = %q, want stop", code, transition.Kind)
+		}
+		if transition.ReasonCode != code {
+			t.Errorf("stop reason %q: reason_code = %q, want %q", code, transition.ReasonCode, code)
+		}
+		if transition.Stop == nil {
+			t.Errorf("stop reason %q: Stop is nil, want structured continuation", code)
+			continue
+		}
+		if strings.TrimSpace(transition.Stop.Statement) == "" {
+			t.Errorf("stop reason %q: Stop.Statement is empty", code)
+		}
+		hasContinuation := (transition.Stop.OffPath != nil && transition.Stop.OffPath.Command != "") || len(transition.Stop.Commands) > 0
+		if !hasContinuation {
+			t.Errorf("stop reason %q: Stop has neither OffPath nor Commands", code)
+		}
+		if transition.Stop.OffPath != nil {
+			if transition.Stop.OffPath.Command != reviewModeDisableCloneCommand {
+				t.Errorf("stop reason %q: OffPath.Command = %q, want %q", code, transition.Stop.OffPath.Command, reviewModeDisableCloneCommand)
+			}
+			if strings.TrimSpace(transition.Stop.OffPath.Note) == "" {
+				t.Errorf("stop reason %q: OffPath.Note is empty", code)
+			}
+		}
+
+		// Ensure clean JSON serialization and deserialization
+		payload, err := json.Marshal(transition)
+		if err != nil {
+			t.Errorf("stop reason %q: json.Marshal failed: %v", code, err)
+			continue
+		}
+		var decoded ReviewNextTransition
+		if err := json.Unmarshal(payload, &decoded); err != nil {
+			t.Errorf("stop reason %q: json.Unmarshal failed: %v", code, err)
+			continue
+		}
+		if decoded.Stop == nil || decoded.Stop.Statement != transition.Stop.Statement {
+			t.Errorf("stop reason %q: roundtrip mismatch: got %#v, want %#v", code, decoded.Stop, transition.Stop)
+		}
+	}
+}

@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -20,13 +21,30 @@ const (
 
 // ReviewNextTransition is the sole negotiated routing decision. Its execute
 // form is complete, its collect form identifies one externally supplied input,
-// and its stop form intentionally contains no command-shaped data.
+// and its stop form carries structured continuations and exit guidance.
 type ReviewNextTransition struct {
 	Kind              string                                   `json:"kind"`
 	ReasonCode        string                                   `json:"reason_code"`
 	Execute           *ReviewTransitionExecution               `json:"execute,omitempty"`
 	Collect           *ReviewTransitionCollection              `json:"collect,omitempty"`
 	CorrectionRequest *reviewtransaction.CorrectionPlanRequest `json:"correction_request,omitempty"`
+	Stop              *ReviewTransitionStop                    `json:"stop,omitempty"`
+}
+
+// ReviewTransitionStop carries structured machine-readable continuations for a
+// stop transition: the narrative statement explaining why execution stopped,
+// any runnable follow-up commands, and the documented off-path exit.
+type ReviewTransitionStop struct {
+	Statement string                       `json:"statement"`
+	Commands  []string                     `json:"commands,omitempty"`
+	OffPath   *ReviewTransitionStopOffPath `json:"off_path,omitempty"`
+}
+
+// ReviewTransitionStopOffPath names the documented deliberate exit outside the
+// review lifecycle.
+type ReviewTransitionStopOffPath struct {
+	Note    string `json:"note"`
+	Command string `json:"command"`
 }
 
 type ReviewTransitionExecution struct {
@@ -1242,8 +1260,42 @@ func reviewCollectTransition(reason string, inputs ...ReviewTransitionInput) Rev
 	return ReviewNextTransition{Kind: reviewNextTransitionCollect, ReasonCode: reason, Collect: &ReviewTransitionCollection{Inputs: collected}}
 }
 
+var reviewCommandInStatementRegexp = regexp.MustCompile("`([^`]+)`")
+
+func newReviewTransitionStop(reason string) ReviewTransitionStop {
+	statement, ok := reviewStopReasonNarration[reason]
+	if !ok {
+		statement = reviewReasonDescription(reason)
+	}
+	stop := ReviewTransitionStop{
+		Statement: statement,
+	}
+	if strings.Contains(statement, reviewConsentOffPathCommand) || strings.Contains(statement, reviewModeDisableCloneCommand) {
+		stop.OffPath = &ReviewTransitionStopOffPath{
+			Note:    "To deliver under ordinary repository policy instead, disable review for this repository.",
+			Command: reviewModeDisableCloneCommand,
+		}
+	}
+	matches := reviewCommandInStatementRegexp.FindAllStringSubmatch(statement, -1)
+	seen := make(map[string]bool)
+	for _, m := range matches {
+		cmd := m[1]
+		if strings.HasPrefix(cmd, "gentle-ai ") {
+			if strings.HasPrefix(cmd, "gentle-ai review mode disable") {
+				continue
+			}
+			if !seen[cmd] {
+				seen[cmd] = true
+				stop.Commands = append(stop.Commands, cmd)
+			}
+		}
+	}
+	return stop
+}
+
 func reviewStopTransition(reason string) ReviewNextTransition {
-	return ReviewNextTransition{Kind: reviewNextTransitionStop, ReasonCode: reason}
+	stop := newReviewTransitionStop(reason)
+	return ReviewNextTransition{Kind: reviewNextTransitionStop, ReasonCode: reason, Stop: &stop}
 }
 
 func reviewReasonDescription(reason string) string {
