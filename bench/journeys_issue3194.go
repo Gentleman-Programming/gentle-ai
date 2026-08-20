@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -147,11 +146,11 @@ func proveIssue3194CorrectionContinues(r *journeyRun) error {
 }
 
 func issue3194ProposedCorrectionLines(r *journeyRun) (int, error) {
-	common, err := gitOut(r.sandbox, r.sandbox.Repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	statePath, err := storeStatePath(r.sandbox, issue3194Lineage)
 	if err != nil {
 		return 0, err
 	}
-	stateBytes, err := os.ReadFile(filepath.Join(strings.TrimSpace(common), "gentle-ai", "review-transactions", "v2", issue3194Lineage, "review-state.json"))
+	stateBytes, err := os.ReadFile(statePath)
 	if err != nil {
 		return 0, err
 	}
