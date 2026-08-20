@@ -371,7 +371,6 @@ func TestDiscoverSelected_HonoursSelectionInBothDirections(t *testing.T) {
 		}
 	}
 	// .claude is selected below but deliberately never created on disk.
-
 	writeInstalledAgentsState(t, home, model.AgentOpenCode, model.AgentClaudeCode)
 
 	reg := newStubRegistry(t,
@@ -390,7 +389,10 @@ func TestDiscoverSelected_HonoursSelectionInBothDirections(t *testing.T) {
 
 // TestDiscoverSelected_FallsBackToFilesystemWithoutState verifies pre-state
 // installs keep the old behaviour: no persisted selection means every detected
-// agent stays in scope, so this scoping never strands a legacy user.
+// agent stays in scope. A readable state.json listing no agents means the same
+// and must not be read as "the user chose nothing" — update/cooldown.go writes
+// exactly that before any install completes, so scoping to zero there would
+// turn sync into a permanent silent no-op.
 func TestDiscoverSelected_FallsBackToFilesystemWithoutState(t *testing.T) {
 	home := t.TempDir()
 	codexDir := filepath.Join(home, ".codex")
@@ -400,8 +402,11 @@ func TestDiscoverSelected_FallsBackToFilesystemWithoutState(t *testing.T) {
 
 	reg := newStubRegistry(t, stubAdapter{agent: model.AgentCodex, configDir: codexDir})
 
-	if got := DiscoverSelected(reg, home); len(got) != 1 || got[0].ID != model.AgentCodex {
-		t.Fatalf("DiscoverSelected() = %v, want the detected agent (filesystem fallback)", got)
+	for _, stage := range []string{"no state file", "state with an empty agent list"} {
+		if got := DiscoverSelected(reg, home); len(got) != 1 || got[0].ID != model.AgentCodex {
+			t.Fatalf("DiscoverSelected() with %s = %v, want the detected agent", stage, got)
+		}
+		writeInstalledAgentsState(t, home)
 	}
 }
 

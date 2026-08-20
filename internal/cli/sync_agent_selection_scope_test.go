@@ -66,7 +66,6 @@ func TestSyncNeverWritesOutsideSelectedAgents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSyncWithSelection() error = %v", err)
 	}
-
 	for _, path := range result.ChangedFiles {
 		if strings.Contains(path, string(filepath.Separator)+".codex"+string(filepath.Separator)) ||
 			strings.Contains(path, string(filepath.Separator)+".cursor"+string(filepath.Separator)) {

@@ -207,8 +207,8 @@ func CodeGraphGuidancePaths(homeDir string) []string {
 	return codeGraphGuidancePathsFor(reg, homeDir, agents.DiscoverSelected(reg, homeDir))
 }
 
-// codeGraphGuidancePathsFor resolves guidance file paths for a given agent set,
-// letting the write and backup scopes share one path resolution.
+// codeGraphGuidancePathsFor resolves guidance paths for a given agent set, so
+// the write and backup scopes share one resolution.
 func codeGraphGuidancePathsFor(reg *agents.Registry, homeDir string, installed []agents.InstalledAgent) []string {
 	paths := make([]string, 0, len(installed))
 	for _, installedAgent := range installed {
@@ -226,11 +226,10 @@ func codeGraphGuidancePathsFor(reg *agents.Registry, homeDir string, installed [
 
 // CodeGraphManagedPaths returns every file CodeGraph setup or managed guidance
 // may update, for every DETECTED agent. Sync and install use it purely as the
-// backup and changed-file accounting set.
-//
-// It is deliberately broader than the write set: what we back up must cover
-// what the third-party installer might touch, not only what we intend to write.
-// Its blind-install path passes no --target and picks its own agents.
+// backup and changed-file accounting set. It is deliberately broader than the
+// write set: what we back up must cover what the third-party installer might
+// touch, not only what we intend to write — its blind-install path passes no
+// --target and picks its own agents.
 func CodeGraphManagedPaths(homeDir string) []string {
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {

@@ -77,12 +77,10 @@ func ConfigRootsForBackup(reg *Registry, homeDir string) []string {
 
 // SelectedAgentIDs returns the agent IDs the user chose at install time, as
 // persisted in ~/.gentle-ai/state.json (installed_agents). It is the single
-// authority for "which agents did the user pick".
-//
-// An empty result conflates two cases: no selection was ever persisted (installs
-// predating state persistence), or the state file could not be read. Read-only
-// callers may treat both as "fall back to filesystem discovery"; callers that
-// WRITE must use DiscoverSelected, which fails closed on unreadable state.
+// authority for "which agents did the user pick". An empty result conflates
+// "never persisted" (pre-state installs) with "unreadable": read-only callers
+// may treat both as "fall back to filesystem", but callers that WRITE must use
+// DiscoverSelected, which fails closed on unreadable state.
 func SelectedAgentIDs(homeDir string) []model.AgentID {
 	ids, _ := persistedSelection(homeDir)
 	return ids
@@ -90,8 +88,8 @@ func SelectedAgentIDs(homeDir string) []model.AgentID {
 
 // persistedSelection reports the selection and whether the state was
 // intelligible. A confirmed-absent file is the legacy case — nothing to scope
-// by, but nothing wrong — so it reports usable with no ids. Any other failure
-// reports unusable: the selection is unknown, not empty.
+// by, nothing wrong — so it reports usable with no ids. Any other failure
+// reports unusable: unknown, not empty.
 func persistedSelection(homeDir string) (ids []model.AgentID, usable bool) {
 	s, err := state.Read(homeDir)
 	if err != nil {
@@ -118,8 +116,8 @@ func DiscoverSelected(reg *Registry, homeDir string) []InstalledAgent {
 	selected, usable := persistedSelection(homeDir)
 	if !usable {
 		// Fail closed: the selection is unknown, not absent. Widening to every
-		// detected agent here would reinstate the behaviour this scoping
-		// exists to prevent. Callers surface the unreadable file themselves.
+		// detected agent would reinstate what this scoping prevents. No error
+		// escapes here, so a caller wanting the cause must read state itself.
 		return nil
 	}
 

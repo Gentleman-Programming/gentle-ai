@@ -60,10 +60,10 @@ func TestInjectCodeGraphGuidanceSkipsUnselectedAgents(t *testing.T) {
 	}
 }
 
-// TestCodeGraphPathSetsSplitWriteScopeFromBackupScope pins the asymmetry the
-// two path sets exist to express: we WRITE only to selected agents, but we BACK
-// UP every detected agent, because the third-party installer can reach files we
-// never intended to write and rollback must still be able to restore them.
+// TestCodeGraphPathSetsSplitWriteScopeFromBackupScope pins the asymmetry: we
+// WRITE only to selected agents but BACK UP every detected one, because the
+// third-party installer can reach files we never meant to write and rollback
+// must still restore them.
 func TestCodeGraphPathSetsSplitWriteScopeFromBackupScope(t *testing.T) {
 	home, _, codexPrompt, cursorPrompt := selectOnlyOpenCodeWithCodexAndCursorPresent(t)
 
