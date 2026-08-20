@@ -1144,15 +1144,17 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		if strings.TrimSpace(*authorizationFile) == "" {
 			return errors.New("review recover requires a non-empty path for --maintainer-authorization-file") // refusal:by-design operator-knowledge: operator must provide a valid non-empty file path or - for stdin
 		}
+	}
+	authorizationProvided := authProvided || authFileProvided
+	if authorizationProvided && (strings.TrimSpace(*reason) == "" || strings.TrimSpace(*actor) == "") {
+		return errors.New("review recover requires --reason and --actor when --maintainer-authorization or --maintainer-authorization-file is supplied") // refusal:by-design operator-knowledge: operator must provide reason and actor when supplying maintainer authorization
+	}
+	if authFileProvided {
 		rawAuth, err := readFacadeBytes(*authorizationFile)
 		if err != nil {
 			return fmt.Errorf("read --maintainer-authorization-file: %w", err)
 		}
 		*authorization = trimSingleTrailingNewline(string(rawAuth))
-	}
-	authorizationProvided := authProvided || authFileProvided
-	if authorizationProvided && (strings.TrimSpace(*reason) == "" || strings.TrimSpace(*actor) == "") {
-		return errors.New("review recover requires --reason and --actor when --maintainer-authorization or --maintainer-authorization-file is supplied") // refusal:by-design operator-knowledge: operator must provide reason and actor when supplying maintainer authorization
 	}
 	builder := reviewtransaction.SnapshotBuilder{Repo: *cwd}
 	root, err := resolveReviewMutationRoot(context.Background(), *cwd)

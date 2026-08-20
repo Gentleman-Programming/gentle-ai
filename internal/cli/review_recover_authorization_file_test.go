@@ -54,6 +54,48 @@ func TestReviewRecoverAuthorizationFileAndStdin(t *testing.T) {
 	}
 }
 
+func TestReviewRecoverAuthorizationFileValidatesMetadataBeforeReadingStdin(t *testing.T) {
+	const want = "review recover requires --reason and --actor when --maintainer-authorization or --maintainer-authorization-file is supplied"
+	for _, test := range []struct {
+		name   string
+		actor  string
+		reason string
+	}{
+		{name: "missing actor", reason: "manual recovery"},
+		{name: "missing reason", actor: "Maintainer <maintainer@example.com>"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reader, writer, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldStdin := os.Stdin
+			os.Stdin = reader
+			t.Cleanup(func() {
+				os.Stdin = oldStdin
+				_ = reader.Close()
+				_ = writer.Close()
+			})
+			if err := reader.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			err = RunReviewRecover([]string{
+				"--predecessor-lineage", "predecessor",
+				"--expected-predecessor-revision", "revision",
+				"--successor-lineage", "successor",
+				"--disposition", "invalidated",
+				"--actor", test.actor,
+				"--reason", test.reason,
+				"--maintainer-authorization-file", "-",
+			}, io.Discard)
+			if err == nil || err.Error() != want {
+				t.Fatalf("RunReviewRecover error = %v, want %q", err, want)
+			}
+		})
+	}
+}
+
 func TestReviewRecoverNonDerivableErrorIncludesTemplate(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "docs/non-derivable.md", "# non-derivable recovery\n", 0o644)
