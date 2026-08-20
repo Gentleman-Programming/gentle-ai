@@ -457,13 +457,9 @@ func setSelectionComponent(selection *model.Selection, component model.Component
 // When --agents is provided explicitly, callers should pass those IDs directly
 // instead of calling DiscoverAgents.
 func DiscoverAgents(homeDir string) []model.AgentID {
-	// Try reading persisted state first.
-	s, err := state.Read(homeDir)
-	if err == nil && len(s.InstalledAgents) > 0 {
-		ids := make([]model.AgentID, 0, len(s.InstalledAgents))
-		for _, a := range s.InstalledAgents {
-			ids = append(ids, model.AgentID(a))
-		}
+	// Try the persisted selection first — agents.SelectedAgentIDs is the single
+	// authority for what the user chose at install time.
+	if ids := agents.SelectedAgentIDs(homeDir); len(ids) > 0 {
 		return ids
 	}
 

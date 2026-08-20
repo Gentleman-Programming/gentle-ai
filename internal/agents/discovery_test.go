@@ -8,6 +8,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
@@ -336,5 +337,119 @@ func TestConfigRootsForBackup_WithDefaultRegistryCoversCreatedDirs(t *testing.T)
 		if _, ok := rootSet[want]; !ok {
 			t.Errorf("ConfigRootsForBackup() missing %q in roots %v", want, roots)
 		}
+	}
+}
+
+// ─── DiscoverSelected ────────────────────────────────────────────────────
+
+// writeInstalledAgentsState persists an install state listing only ids.
+func writeInstalledAgentsState(t *testing.T, home string, ids ...model.AgentID) {
+	t.Helper()
+	installed := make([]string, 0, len(ids))
+	for _, id := range ids {
+		installed = append(installed, string(id))
+	}
+	if err := state.Write(home, state.InstallState{InstalledAgents: installed}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+}
+
+// TestDiscoverSelected_ExcludesUnselectedInstalledAgents is the regression test
+// for issue #3473: an agent whose config dir exists but which the user never
+// selected must not be returned to any writer.
+func TestDiscoverSelected_ExcludesUnselectedInstalledAgents(t *testing.T) {
+	home := t.TempDir()
+
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	codexDir := filepath.Join(home, ".codex")
+	cursorDir := filepath.Join(home, ".cursor")
+	for _, dir := range []string{opencodeDir, codexDir, cursorDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+
+	writeInstalledAgentsState(t, home, model.AgentOpenCode)
+
+	reg := newStubRegistry(t,
+		stubAdapter{agent: model.AgentOpenCode, configDir: opencodeDir},
+		stubAdapter{agent: model.AgentCodex, configDir: codexDir},
+		stubAdapter{agent: model.AgentCursor, configDir: cursorDir},
+	)
+
+	got := DiscoverSelected(reg, home)
+
+	if len(got) != 1 {
+		t.Fatalf("DiscoverSelected() returned %d agents, want 1; got %v", len(got), got)
+	}
+	if got[0].ID != model.AgentOpenCode {
+		t.Errorf("DiscoverSelected() agent = %q, want %q", got[0].ID, model.AgentOpenCode)
+	}
+}
+
+// TestDiscoverSelected_IntersectsWithFilesystem verifies a selected agent whose
+// config dir does not exist is still excluded — selection scopes discovery, it
+// does not create config dirs for agents that are not there.
+func TestDiscoverSelected_IntersectsWithFilesystem(t *testing.T) {
+	home := t.TempDir()
+
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// .claude intentionally NOT created, though it is selected.
+
+	writeInstalledAgentsState(t, home, model.AgentOpenCode, model.AgentClaudeCode)
+
+	reg := newStubRegistry(t,
+		stubAdapter{agent: model.AgentOpenCode, configDir: opencodeDir},
+		stubAdapter{agent: model.AgentClaudeCode, configDir: filepath.Join(home, ".claude")},
+	)
+
+	got := DiscoverSelected(reg, home)
+
+	if len(got) != 1 || got[0].ID != model.AgentOpenCode {
+		t.Fatalf("DiscoverSelected() = %v, want only %q", got, model.AgentOpenCode)
+	}
+}
+
+// TestDiscoverSelected_FallsBackToFilesystemWithoutState verifies pre-state
+// installs keep the old behaviour: no persisted selection means every detected
+// agent is in scope.
+func TestDiscoverSelected_FallsBackToFilesystemWithoutState(t *testing.T) {
+	home := t.TempDir()
+
+	claudeDir := filepath.Join(home, ".claude")
+	codexDir := filepath.Join(home, ".codex")
+	for _, dir := range []string{claudeDir, codexDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+
+	reg := newStubRegistry(t,
+		stubAdapter{agent: model.AgentClaudeCode, configDir: claudeDir},
+		stubAdapter{agent: model.AgentCodex, configDir: codexDir},
+	)
+
+	got := DiscoverSelected(reg, home)
+
+	if len(got) != 2 {
+		t.Fatalf("DiscoverSelected() returned %d agents, want 2 (filesystem fallback); got %v", len(got), got)
+	}
+}
+
+// TestSelectedAgentIDs verifies the persisted selection round-trips, and that
+// "nothing persisted" is an empty slice — which callers read as "fall back to
+// the filesystem", not as "no agents".
+func TestSelectedAgentIDs(t *testing.T) {
+	if got := SelectedAgentIDs(t.TempDir()); len(got) != 0 {
+		t.Fatalf("SelectedAgentIDs() without state = %v, want empty", got)
+	}
+
+	home := t.TempDir()
+	writeInstalledAgentsState(t, home, model.AgentOpenCode, model.AgentCodex)
+	if got := SelectedAgentIDs(home); len(got) != 2 || got[0] != model.AgentOpenCode || got[1] != model.AgentCodex {
+		t.Fatalf("SelectedAgentIDs() = %v, want [opencode codex]", got)
 	}
 }

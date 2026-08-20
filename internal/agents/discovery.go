@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 // InstalledAgent pairs an agent ID with its resolved config root directory.
@@ -72,4 +73,60 @@ func ConfigRootsForBackup(reg *Registry, homeDir string) []string {
 	}
 
 	return dirs
+}
+
+// SelectedAgentIDs returns the agent IDs the user explicitly chose at install
+// time, as persisted in ~/.gentle-ai/state.json (installed_agents).
+//
+// This is the single authority for "which agents did the user pick". An empty
+// result means no selection was ever persisted — users who installed before
+// state persistence existed — and callers must fall back to filesystem
+// discovery rather than treating it as "no agents".
+func SelectedAgentIDs(homeDir string) []model.AgentID {
+	s, err := state.Read(homeDir)
+	if err != nil || len(s.InstalledAgents) == 0 {
+		return nil
+	}
+
+	ids := make([]model.AgentID, 0, len(s.InstalledAgents))
+	for _, a := range s.InstalledAgents {
+		ids = append(ids, model.AgentID(a))
+	}
+	return ids
+}
+
+// DiscoverSelected returns the installed agents the user actually selected.
+//
+// It is the discovery entry point for every code path that WRITES managed
+// files. DiscoverInstalled alone answers "what exists on this machine", which
+// is not the same question: an IDE the user never chose in Gentle AI still has
+// a config directory, and writing into it violates the install-time selection
+// (issue #3473).
+//
+// The persisted selection is intersected with filesystem discovery, so this
+// keeps both guarantees at once: never touch an unselected agent, and never
+// create a config directory for an agent that is not installed.
+//
+// When no selection was persisted, the filesystem result is returned unchanged
+// for backward compatibility with pre-state installs.
+func DiscoverSelected(reg *Registry, homeDir string) []InstalledAgent {
+	installed := DiscoverInstalled(reg, homeDir)
+
+	selected := SelectedAgentIDs(homeDir)
+	if len(selected) == 0 {
+		return installed
+	}
+
+	allowed := make(map[model.AgentID]struct{}, len(selected))
+	for _, id := range selected {
+		allowed[id] = struct{}{}
+	}
+
+	var out []InstalledAgent
+	for _, agent := range installed {
+		if _, ok := allowed[agent.ID]; ok {
+			out = append(out, agent)
+		}
+	}
+	return out
 }

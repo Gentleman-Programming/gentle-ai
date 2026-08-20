@@ -159,17 +159,22 @@ func CleanLegacyCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, erro
 	return result, nil
 }
 
-// InjectCodeGraphGuidance writes the shared CodeGraph lifecycle guidance to all
-// detected supported agents. Detection is intentionally based on existing agent
-// config directories so standalone Community Tools setup does not create agent
-// configs for tools the user does not use.
+// InjectCodeGraphGuidance writes the shared CodeGraph lifecycle guidance to the
+// supported agents the user selected at install time.
+//
+// Discovery goes through agents.DiscoverSelected, which intersects the
+// persisted selection with existing agent config directories. That keeps the
+// original property — standalone Community Tools setup never creates agent
+// configs for tools the user does not use — while also honouring the
+// install-time selection, so guidance never lands in an IDE the user declined
+// in Gentle AI (issue #3473).
 func InjectCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, error) {
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
 		return GuidanceInjectionResult{}, err
 	}
 
-	installed := agents.DiscoverInstalled(reg, homeDir)
+	installed := agents.DiscoverSelected(reg, homeDir)
 	result := GuidanceInjectionResult{}
 	for _, installedAgent := range installed {
 		adapter, ok := reg.Get(installedAgent.ID)
@@ -192,14 +197,14 @@ func InjectCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, error) {
 }
 
 // CodeGraphGuidancePaths returns the system prompt files that the CodeGraph
-// guidance injector may touch for currently detected supported agents.
+// guidance injector may touch, scoped to the selected supported agents.
 func CodeGraphGuidancePaths(homeDir string) []string {
 	reg, err := agents.NewDefaultRegistry()
 	if err != nil {
 		return nil
 	}
 
-	installed := agents.DiscoverInstalled(reg, homeDir)
+	installed := agents.DiscoverSelected(reg, homeDir)
 	paths := make([]string, 0, len(installed))
 	for _, installedAgent := range installed {
 		adapter, ok := reg.Get(installedAgent.ID)
@@ -214,7 +219,7 @@ func CodeGraphGuidancePaths(homeDir string) []string {
 	return paths
 }
 
-// CodeGraphManagedPaths returns every detected agent file that CodeGraph setup
+// CodeGraphManagedPaths returns every selected-agent file that CodeGraph setup
 // or managed guidance may update. Sync uses this complete set for backup and
 // changed-file accounting before invoking the upstream installer.
 func CodeGraphManagedPaths(homeDir string) []string {
@@ -224,7 +229,7 @@ func CodeGraphManagedPaths(homeDir string) []string {
 	}
 
 	paths := append([]string(nil), CodeGraphGuidancePaths(homeDir)...)
-	for _, installedAgent := range agents.DiscoverInstalled(reg, homeDir) {
+	for _, installedAgent := range agents.DiscoverSelected(reg, homeDir) {
 		adapter, ok := reg.Get(installedAgent.ID)
 		if !ok || !isCodeGraphCompatibleAgent(installedAgent.ID) {
 			continue
@@ -257,7 +262,7 @@ func NeedsOpenCodeCodeGraphReconcile(homeDir string) bool {
 	if !ok {
 		return false
 	}
-	detected := slices.ContainsFunc(agents.DiscoverInstalled(reg, homeDir), func(agent agents.InstalledAgent) bool {
+	detected := slices.ContainsFunc(agents.DiscoverSelected(reg, homeDir), func(agent agents.InstalledAgent) bool {
 		return agent.ID == model.AgentOpenCode
 	})
 	if !detected {
