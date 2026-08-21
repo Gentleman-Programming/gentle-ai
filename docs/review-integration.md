@@ -298,6 +298,7 @@ One recovery-only target expands an approved base-diff receipt into the exact st
 | `staged_delivery_candidate_required` | Stage every reviewed path exactly as it was reviewed, then re-run `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --lineage <id> --projection staged --gate pre-commit --next-transition`. STATUS returns `review.validate` only when that staged candidate exactly matches the approved receipt. |
 | `staged_workspace_overlay_recovery_unavailable` | Terminal for a fresh target — staged projection combined with `--workspace-overlay` is recovery-only. Pass `--lineage <id>` to recover an existing lineage, or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh. |
 | `unchanged_or_unverified_authority` | Terminal — the single correction attempt for this lineage is already consumed without a verified candidate change. `gentle-ai review start` on this exact unchanged candidate only resumes this same lineage, not a fresh one. Change the candidate content first, then run `gentle-ai review start` to begin a genuinely new lineage. |
+| `unachievable_reviewer_attempt` | Terminal — a selected review lens could not achieve an admitted result within bounded attempts; inspect reviewer failures or adjust repository context before retrying a new review |
 
 ### Retry one failed final verification
 

@@ -163,6 +163,9 @@ var reviewStopReasonNarration = map[string]string{
 		"`gentle-ai review start` on this exact unchanged candidate only resumes this same review, not a fresh one -- change the " +
 		"candidate content first, then run `gentle-ai review start` to begin a genuinely new one, or run `" +
 		reviewModeDisableCloneCommand + "` " + reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
+	"unachievable_reviewer_attempt": "A reviewer lens could not achieve a completed result after multiple attempts. " +
+		"Inspect the reviewer errors or run `" + reviewModeDisableCloneCommand + "` " +
+		reviewModeDisableCloneCaveat + " to deliver under ordinary repository policy instead.",
 }
 
 // reviewConsentPromptNarration registers the one-time RDD consent prompt's

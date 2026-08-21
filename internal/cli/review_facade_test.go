@@ -2803,3 +2803,49 @@ func assertFacadeReceiptReplayRejected(t *testing.T, fixture facadeReceiptPendin
 		t.Fatalf("unsafe replay mutated receipt: before %q/%v after %q/%v", beforeReceipt, receiptErr, afterReceipt, afterReceiptErr)
 	}
 }
+
+func TestFinalizeBlockedOnUnachievedSlot(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, started, store, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+
+	// Capture unachievable attempt
+	frozen, err := reviewerArtifactFrozenContext(context.Background(), repo, record.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, err := reviewtransaction.NewArtifactSubject(record.State, record.Revision, frozen, lens, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := reviewtransaction.CaptureReviewerAttemptRequest{
+		StoreDir:          store.Dir,
+		LineageID:         started.LineageID,
+		TargetIdentity:    record.State.InitialSnapshot.Identity,
+		AuthorityRevision: record.Revision,
+		Lens:              lens,
+		SelectedOrder:     0,
+		SubjectHash:       subject.SubjectHash,
+		Admission: reviewtransaction.ArtifactAdmission{
+			Schema:      reviewtransaction.ArtifactAdmissionSchema,
+			Decision:    reviewtransaction.ArtifactAdmissionUnachievable,
+			SubjectHash: subject.SubjectHash,
+			Diagnostic:  "provider model refused",
+		},
+		RawPayload:       []byte("model refusal"),
+		CanonicalPayload: []byte("model refusal"),
+	}
+	if _, err := store.CaptureUnachievableReviewerAttempt(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+
+	// Finalize must be rejected and must NOT issue a receipt
+	err = RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--captured-results"}, io.Discard)
+	if err == nil {
+		t.Fatal("finalize must be rejected when a slot is unachieved")
+	}
+
+	if _, err := os.Stat(store.ReceiptPath()); !os.IsNotExist(err) {
+		t.Fatalf("receipt must not be published on unachieved slot: %v", err)
+	}
+}

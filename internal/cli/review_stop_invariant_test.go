@@ -153,6 +153,11 @@ var reviewStopInvariantClassification = map[string]reviewStopDisposition{
 		Terminal:      false,
 		Justification: "caller-continuable: stage every reviewed path to restore the exact pre-commit candidate, then re-run explicit-lineage STATUS with `--projection staged`; the documented command is concrete and the index change neither mutates nor extends approval",
 	},
+	"unachievable_reviewer_attempt": {
+		Terminal:      true,
+		Justification: "a selected review lens reached its bounded attempt limit without producing an admitted result; requires maintainer or user inspection of the reviewer failure",
+		ToolFault:     reviewStopToolFault(false),
+	},
 }
 
 type reviewStopDisposition struct {

@@ -1152,3 +1152,79 @@ func TestReviewCaptureResultRejectsNestedEnvelope(t *testing.T) {
 		t.Fatalf("expected nested_envelope in error, got: %v", err)
 	}
 }
+
+func TestReviewCaptureResultUnachievableAttemptDiscovery(t *testing.T) {
+	reviewEnabledHome(t)
+	repo, started, store, record := newArtifactReview(t, false)
+	lens := record.State.SelectedLenses[0]
+
+	// Before any attempt, discovery returns 0 artifacts
+	discovered, err := discoverCapturedReviewerArtifacts(context.Background(), repo, store.Dir, record.State, record.Revision)
+	if err != nil {
+		t.Fatalf("discover before attempt: %v", err)
+	}
+	if len(discovered) != 0 {
+		t.Fatalf("discovered = %d, want 0", len(discovered))
+	}
+
+	// Capture unachievable attempt
+	frozen, err := reviewerArtifactFrozenContext(context.Background(), repo, record.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, err := reviewtransaction.NewArtifactSubject(record.State, record.Revision, frozen, lens, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := reviewtransaction.CaptureReviewerAttemptRequest{
+		StoreDir:          store.Dir,
+		LineageID:         started.LineageID,
+		TargetIdentity:    record.State.InitialSnapshot.Identity,
+		AuthorityRevision: record.Revision,
+		Lens:              lens,
+		SelectedOrder:     0,
+		SubjectHash:       subject.SubjectHash,
+		Admission: reviewtransaction.ArtifactAdmission{
+			Schema:      reviewtransaction.ArtifactAdmissionSchema,
+			Decision:    reviewtransaction.ArtifactAdmissionUnachievable,
+			SubjectHash: subject.SubjectHash,
+			Diagnostic:  "provider model refused",
+		},
+		RawPayload:       []byte("model refusal"),
+		CanonicalPayload: []byte("model refusal"),
+	}
+	attemptRec, err := store.CaptureUnachievableReviewerAttempt(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CaptureUnachievableReviewerAttempt: %v", err)
+	}
+	if attemptRec.AttemptIndex != 1 {
+		t.Fatalf("AttemptIndex = %d, want 1", attemptRec.AttemptIndex)
+	}
+
+	// Result slot must remain unoccupied
+	completedSlot, err := reviewtransaction.ReadCompactReviewerResultSlot(store.Dir, 0, lens)
+	if err != nil || completedSlot.Occupied {
+		t.Fatalf("completedSlot occupied = %v, err = %v", completedSlot.Occupied, err)
+	}
+
+	// discoverCapturedReviewerArtifacts must discover the attempt with ArtifactAdmissionUnachievable
+	discovered, err = discoverCapturedReviewerArtifacts(context.Background(), repo, store.Dir, record.State, record.Revision)
+	if err != nil {
+		t.Fatalf("discover after unachievable attempt: %v", err)
+	}
+	if len(discovered) != 1 {
+		t.Fatalf("discovered = %d, want 1", len(discovered))
+	}
+	if discovered[0].AdmissionDecision != reviewtransaction.ArtifactAdmissionUnachievable {
+		t.Fatalf("AdmissionDecision = %q, want unachievable", discovered[0].AdmissionDecision)
+	}
+	if discovered[0].Lens != lens || discovered[0].SelectedOrder != 0 {
+		t.Fatalf("unexpected discovered artifact: %#v", discovered[0])
+	}
+
+	// readCapturedReviewerResults must fail closed on unachieved slot
+	_, err = readCapturedReviewerResults(context.Background(), repo, store.Dir, record.State, record.Revision)
+	if err == nil {
+		t.Fatal("readCapturedReviewerResults must fail on unachieved slot")
+	}
+}

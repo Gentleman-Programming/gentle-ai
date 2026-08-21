@@ -985,3 +985,110 @@ func writePrivateReviewerCaptureFile(
 		t.Fatal(err)
 	}
 }
+
+func TestReviewerAttemptRecordPersistence(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "reviewer-attempt-persistence")
+	admission := ArtifactAdmission{
+		Schema:          ArtifactAdmissionSchema,
+		Decision:        ArtifactAdmissionUnachievable,
+		SubjectHash:     fixture.request.ArtifactSubject.SubjectHash,
+		RawSHA256:       payloadSHA256([]byte("provider refusal")),
+		CanonicalSHA256: payloadSHA256([]byte("provider refusal")),
+		Diagnostic:      "reviewer provider refused inspection",
+	}
+	req := CaptureReviewerAttemptRequest{
+		StoreDir:          fixture.store.Dir,
+		LineageID:         fixture.state.LineageID,
+		TargetIdentity:    fixture.state.InitialSnapshot.Identity,
+		AuthorityRevision: fixture.request.ExpectedRevision,
+		Lens:              LensReliability,
+		SelectedOrder:     0,
+		SubjectHash:       fixture.request.ArtifactSubject.SubjectHash,
+		Admission:         admission,
+		RawPayload:        []byte("provider refusal"),
+		CanonicalPayload:  []byte("provider refusal"),
+	}
+
+	record1, err := fixture.store.CaptureUnachievableReviewerAttempt(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CaptureUnachievableReviewerAttempt 1: %v", err)
+	}
+	if record1.AttemptIndex != 1 || record1.Schema != ReviewerAttemptRecordSchema ||
+		record1.Lens != LensReliability || record1.SelectedOrder != 0 ||
+		record1.Admission.Decision != ArtifactAdmissionUnachievable {
+		t.Fatalf("record1 = %#v", record1)
+	}
+
+	attemptPath1 := filepath.Join(fixture.store.Dir, CompactReviewerAttemptsDir, fmt.Sprintf("00-%s-01.json", LensReliability))
+	if _, err := os.Stat(attemptPath1); err != nil {
+		t.Fatalf("attempt file 1 missing: %v", err)
+	}
+	if _, err := os.Stat(attemptPath1 + ".sha256"); err != nil {
+		t.Fatalf("attempt sidecar 1 missing: %v", err)
+	}
+
+	// Completed result slot must NOT be created or occupied
+	completedSlot, err := ReadCompactReviewerResultSlot(fixture.store.Dir, 0, LensReliability)
+	if err != nil || completedSlot.Occupied {
+		t.Fatalf("completed slot occupied or error: slot=%#v err=%v", completedSlot, err)
+	}
+	if _, found, err := fixture.store.ResolveAdmittedReviewerResult(
+		context.Background(), fixture.request.ExpectedRevision, fixture.request.TargetIdentity,
+		fixture.request.FrozenContext, fixture.request.ArtifactSubject,
+	); err != nil || found {
+		t.Fatalf("ResolveAdmittedReviewerResult found uncompleted slot: found=%t err=%v", found, err)
+	}
+
+	// Capture 2nd attempt
+	record2, err := fixture.store.CaptureUnachievableReviewerAttempt(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CaptureUnachievableReviewerAttempt 2: %v", err)
+	}
+	if record2.AttemptIndex != 2 {
+		t.Fatalf("record2.AttemptIndex = %d, want 2", record2.AttemptIndex)
+	}
+	attemptPath2 := filepath.Join(fixture.store.Dir, CompactReviewerAttemptsDir, fmt.Sprintf("00-%s-02.json", LensReliability))
+	if _, err := os.Stat(attemptPath2); err != nil {
+		t.Fatalf("attempt file 2 missing: %v", err)
+	}
+
+	// Read attempts back
+	attempts, err := ReadCompactReviewerAttempts(fixture.store.Dir, 0, LensReliability)
+	if err != nil {
+		t.Fatalf("ReadCompactReviewerAttempts: %v", err)
+	}
+	if len(attempts) != 2 || attempts[0].AttemptIndex != 1 || attempts[1].AttemptIndex != 2 {
+		t.Fatalf("attempts = %#v, want 2 attempts", attempts)
+	}
+
+	// Discover attempts across slots
+	discovered, err := DiscoverReviewerSlotAttempts(fixture.store.Dir, fixture.state, fixture.request.ExpectedRevision)
+	if err != nil {
+		t.Fatalf("DiscoverReviewerSlotAttempts: %v", err)
+	}
+	if len(discovered[0]) != 2 {
+		t.Fatalf("discovered[0] = %#v, want 2 attempts", discovered[0])
+	}
+}
+
+func TestAttemptPathEscapesStoreDir(t *testing.T) {
+	fixture := newCompactReviewerCaptureFixture(t, "attempt-escape")
+	req := CaptureReviewerAttemptRequest{
+		StoreDir:          "../escape",
+		LineageID:         fixture.state.LineageID,
+		TargetIdentity:    fixture.state.InitialSnapshot.Identity,
+		AuthorityRevision: fixture.request.ExpectedRevision,
+		Lens:              LensReliability,
+		SelectedOrder:     0,
+		SubjectHash:       fixture.request.ArtifactSubject.SubjectHash,
+		Admission: ArtifactAdmission{
+			Schema:   ArtifactAdmissionSchema,
+			Decision: ArtifactAdmissionUnachievable,
+		},
+		RawPayload:       []byte("raw"),
+		CanonicalPayload: []byte("canonical"),
+	}
+	if _, err := fixture.store.CaptureUnachievableReviewerAttempt(context.Background(), req); err == nil {
+		t.Fatal("expected error on escaping storeDir, got nil")
+	}
+}

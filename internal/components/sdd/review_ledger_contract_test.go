@@ -402,7 +402,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// #3249 registers Pi as an immutable-reviewer runtime in the shared
 	// contract's advertised-runtimes paragraph, so the hash moved.
 	// Deliberate, not drift.
-	const want = "c478b283aeceb83e3c5d74453a0ecd7a66d154ed2d7ef84337f8ccc60a916966"
+	// #3442 adds unachievable_reviewer_attempt stop-reason row, so the
+	// hash moved. Deliberate, not drift.
+	const want = "0b54e282f370171732b664042513b3910355f2fcc90c1f3d40c3d7a845457a84"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -617,8 +619,11 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// #3249: the advertised-runtimes paragraph gains Pi's host relay
 		// (+247 characters in both renderings, ~62 tokens, still over 15%
 		// headroom). Deliberate, not drift.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_179, maxCharacters: 26_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_524, maxCharacters: 41_000},
+		// #3442: the stop-reason table gains unachievable_reviewer_attempt
+		// (+366 characters in both renderings, ~92 tokens, still over 15%
+		// headroom). Deliberate, not drift.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 22_545, maxCharacters: 26_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 34_890, maxCharacters: 41_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

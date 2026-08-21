@@ -16,6 +16,7 @@ const (
 	reviewNextTransitionCollect     = "collect"
 	reviewNextTransitionStop        = "stop"
 	reviewTargetedValidationPurpose = "targeted-validation"
+	maxReviewerAttemptsPerSlot      = 3
 )
 
 // ReviewNextTransition is the sole negotiated routing decision. Its execute
@@ -222,7 +223,25 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 		if artifactErr != nil {
 			return reviewStopTransition("captured_artifacts_unverifiable")
 		}
-		if len(artifacts) != len(selectedLenses) {
+		admitted := make(map[int]bool, len(selectedLenses))
+		unachievedAttempts := make(map[int]int, len(selectedLenses))
+		completedArtifacts := make([]ReviewTransitionArtifact, 0, len(selectedLenses))
+		for _, artifact := range artifacts {
+			if isAdmittedArtifact(artifact) {
+				admitted[artifact.SelectedOrder] = true
+				completedArtifacts = append(completedArtifacts, artifact)
+			} else if isUnachievableArtifact(artifact) {
+				unachievedAttempts[artifact.SelectedOrder]++
+			} else {
+				return reviewStopTransition("captured_artifacts_unverifiable")
+			}
+		}
+		for order := range selectedLenses {
+			if !admitted[order] && unachievedAttempts[order] >= maxReviewerAttemptsPerSlot {
+				return reviewStopTransition("unachievable_reviewer_attempt")
+			}
+		}
+		if len(completedArtifacts) != len(selectedLenses) {
 			return reviewMissingCaptureTransition(binding, selectedLenses, artifacts, input.CaptureContext, input.RuntimeAgent)
 		}
 		if input.ProviderRole == reviewerprovider.RoleRefuter {
@@ -239,7 +258,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 				ReviewTransitionArgument{Name: "contract", Value: input.Contract},
 				ReviewTransitionArgument{Name: "agent", Value: string(input.RuntimeAgent)})
 		}
-		return reviewExecuteTransition("captured_results_ready", "review.finalize", arguments, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, binding, artifacts)
+		return reviewExecuteTransition("captured_results_ready", "review.finalize", arguments, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, binding, completedArtifacts)
 	case reviewtransaction.StateCorrectionRequired:
 		if status.Action == reviewtransaction.TargetStatusActionRecover {
 			return reviewRecoveryCollection(status, binding, input)
@@ -523,20 +542,28 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 		}
 		transitionContext.CorrectionRequest = &request
 	}
-	if state.State == reviewtransaction.StateReviewing && artifactErr == nil && len(artifacts) != len(state.SelectedLenses) {
-		return reviewMissingCaptureTransition(reviewTransitionBinding(status.Authority, status.TargetIdentity, transitionContext.RepositoryContext), state.SelectedLenses, artifacts, transitionContext.CaptureContext, transitionContext.RuntimeAgent)
-	}
 	if state.State == reviewtransaction.StateReviewing && artifactErr == nil {
-		arguments := []ReviewTransitionArgument{{Name: "lineage", Value: state.LineageID}, {Name: "captured_results", Value: "true"}}
-		if reviewProviderCaptureRuntime(transitionContext.RuntimeAgent) {
-			// Finalize's preflight refuses --agent outside the negotiated v2
-			// contract, so the rendered transition must carry the contract
-			// its own consumer will demand.
-			arguments = append(arguments,
-				ReviewTransitionArgument{Name: "contract", Value: transitionContext.Contract},
-				ReviewTransitionArgument{Name: "agent", Value: string(transitionContext.RuntimeAgent)})
+		allCompleted := true
+		admittedCount := 0
+		for _, artifact := range artifacts {
+			if !isAdmittedArtifact(artifact) {
+				allCompleted = false
+				break
+			}
+			admittedCount++
 		}
-		return reviewExecuteTransition("captured_results_ready", "review.finalize", arguments, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, reviewTransitionBinding(status.Authority, status.TargetIdentity), artifacts)
+		if allCompleted && admittedCount == len(state.SelectedLenses) {
+			arguments := []ReviewTransitionArgument{{Name: "lineage", Value: state.LineageID}, {Name: "captured_results", Value: "true"}}
+			if reviewProviderCaptureRuntime(transitionContext.RuntimeAgent) {
+				// Finalize's preflight refuses --agent outside the negotiated v2
+				// contract, so the rendered transition must carry the contract
+				// its own consumer will demand.
+				arguments = append(arguments,
+					ReviewTransitionArgument{Name: "contract", Value: transitionContext.Contract},
+					ReviewTransitionArgument{Name: "agent", Value: string(transitionContext.RuntimeAgent)})
+			}
+			return reviewExecuteTransition("captured_results_ready", "review.finalize", arguments, []ReviewTransitionArgument{{Name: "state", Value: "reviewing"}, {Name: "captured_artifacts", Value: "complete"}}, reviewTransitionBinding(status.Authority, status.TargetIdentity), artifacts)
+		}
 	}
 	return newReviewNextTransition(status, state.SelectedLenses, artifacts, transitionContext.CapturedEvidence, artifactErr, reviewNextTransitionInput{
 		Contract: transitionContext.Contract, RepositoryContext: transitionContext.RepositoryContext, ValidationRequest: transitionContext.ValidationRequest,
@@ -545,18 +572,38 @@ func reviewFinalizeNextTransition(state reviewtransaction.CompactState, revision
 	})
 }
 
+func isAdmittedArtifact(artifact ReviewTransitionArtifact) bool {
+	return artifact.AdmissionDecision == reviewtransaction.ArtifactAdmissionCompleted || artifact.AdmissionDecision == ""
+}
+
+func isUnachievableArtifact(artifact ReviewTransitionArtifact) bool {
+	return artifact.AdmissionDecision == reviewtransaction.ArtifactAdmissionUnachievable
+}
+
 func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLenses []string, artifacts []ReviewTransitionArtifact, context *reviewCaptureContext, runtime ...model.AgentID) ReviewNextTransition {
 	providerRuntime := model.AgentID("")
 	if len(runtime) > 0 && (reviewProviderCaptureRuntime(runtime[0]) || reviewProviderHostRelayMaterializeRuntime(runtime[0])) {
 		providerRuntime = runtime[0]
 	}
-	captured := make(map[int]bool, len(artifacts))
+	admitted := make(map[int]bool, len(selectedLenses))
+	unachievedAttempts := make(map[int]int, len(selectedLenses))
 	for _, artifact := range artifacts {
-		captured[artifact.SelectedOrder] = true
+		if isAdmittedArtifact(artifact) {
+			admitted[artifact.SelectedOrder] = true
+		} else if isUnachievableArtifact(artifact) {
+			unachievedAttempts[artifact.SelectedOrder]++
+		} else {
+			return reviewStopTransition("captured_artifacts_unverifiable")
+		}
+	}
+	for order := range selectedLenses {
+		if !admitted[order] && unachievedAttempts[order] >= maxReviewerAttemptsPerSlot {
+			return reviewStopTransition("unachievable_reviewer_attempt")
+		}
 	}
 	inputs := make([]ReviewTransitionInput, 0)
 	for order, lens := range selectedLenses {
-		if !captured[order] {
+		if !admitted[order] {
 			inputs = append(inputs, reviewCaptureInput(binding, lens, order, context, providerRuntime))
 		}
 	}
@@ -1292,6 +1339,8 @@ func reviewReasonDescription(reason string) string {
 		return "Native stop transition required by authority"
 	case "captured_artifacts_unverifiable":
 		return "Captured artifacts failed verification or are missing"
+	case "unachievable_reviewer_attempt":
+		return "Reviewer lens could not achieve a completed result after bounded attempts"
 	case "corrected_candidate_unavailable":
 		return "Corrected candidate is unavailable for forecasted correction"
 	case "pre_pr_selector_unrepresentable":

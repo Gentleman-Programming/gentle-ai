@@ -528,3 +528,18 @@ func TestReferenceOutsideRepositoryRecognizesOnlyCanonicalRepositoryPaths(t *tes
 		})
 	}
 }
+
+func TestAdmitArtifactUnachievableNonAdmission(t *testing.T) {
+	subject, _, _ := admittedArtifactFixture(t)
+	unachievableAdmission := ArtifactAdmission{
+		Schema:          ArtifactAdmissionSchema,
+		Decision:        ArtifactAdmissionUnachievable,
+		SubjectHash:     subject.SubjectHash,
+		RawSHA256:       payloadSHA256([]byte("provider refusal")),
+		CanonicalSHA256: payloadSHA256([]byte("provider refusal")),
+		Diagnostic:      "reviewer provider refused inspection",
+	}
+	if err := unachievableAdmission.Validate(subject); err == nil {
+		t.Fatalf("ArtifactAdmission.Validate() unexpectedly succeeded for unachievable admission: %#v", unachievableAdmission)
+	}
+}

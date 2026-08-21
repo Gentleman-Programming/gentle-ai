@@ -24,6 +24,7 @@ const (
 	ArtifactAdmissionAmbiguous       ArtifactAdmissionDecision = "ambiguous"
 	ArtifactAdmissionOutOfScope      ArtifactAdmissionDecision = "out_of_scope"
 	ArtifactAdmissionBindingMismatch ArtifactAdmissionDecision = "binding_mismatch"
+	ArtifactAdmissionUnachievable    ArtifactAdmissionDecision = "unachievable"
 )
 
 type ArtifactInspectionStatus string

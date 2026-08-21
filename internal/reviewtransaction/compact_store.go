@@ -32,6 +32,9 @@ const (
 	compactFinalizeJournalFileName = "finalize-attempt-journal.json"
 	// CompactReviewerResultsDir holds captured reviewer result artifacts.
 	CompactReviewerResultsDir = "reviewer-results"
+	// CompactReviewerAttemptsDir holds unachievable reviewer attempt records.
+	CompactReviewerAttemptsDir  = "reviewer-attempts"
+	ReviewerAttemptRecordSchema = "gentle-ai.review-attempt-record/v1"
 )
 const CompactTransportSchema = "gentle-ai.review-transport/v2"
 const LegacyReadOnlyErrorCode = "legacy_v1_read_only"

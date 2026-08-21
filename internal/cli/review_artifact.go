@@ -441,6 +441,24 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		}
 		rawPayload, err = adapter.Review(ctx, request.Invocation)
 		if err != nil {
+			req := reviewtransaction.CaptureReviewerAttemptRequest{
+				StoreDir:          store.Dir,
+				LineageID:         state.LineageID,
+				TargetIdentity:    state.InitialSnapshot.Identity,
+				AuthorityRevision: record.Revision,
+				Lens:              *lens,
+				SelectedOrder:     *order,
+				SubjectHash:       subject.SubjectHash,
+				Admission: reviewtransaction.ArtifactAdmission{
+					Schema:      reviewtransaction.ArtifactAdmissionSchema,
+					Decision:    reviewtransaction.ArtifactAdmissionUnachievable,
+					SubjectHash: subject.SubjectHash,
+					Diagnostic:  err.Error(),
+				},
+				RawPayload:       []byte(err.Error()),
+				CanonicalPayload: []byte(err.Error()),
+			}
+			_, _ = store.CaptureUnachievableReviewerAttempt(ctx, req)
 			return reviewPreflightError(fmt.Errorf("invoke provider reviewer: %w", err))
 		}
 	} else {
@@ -451,6 +469,26 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	}
 	admitted, err := reviewProviderAdmitRaw(ctx, root, state, record.Revision, frozen, subject, rawPayload)
 	if err != nil {
+		if providerExecution {
+			req := reviewtransaction.CaptureReviewerAttemptRequest{
+				StoreDir:          store.Dir,
+				LineageID:         state.LineageID,
+				TargetIdentity:    state.InitialSnapshot.Identity,
+				AuthorityRevision: record.Revision,
+				Lens:              *lens,
+				SelectedOrder:     *order,
+				SubjectHash:       subject.SubjectHash,
+				Admission: reviewtransaction.ArtifactAdmission{
+					Schema:      reviewtransaction.ArtifactAdmissionSchema,
+					Decision:    reviewtransaction.ArtifactAdmissionUnachievable,
+					SubjectHash: subject.SubjectHash,
+					Diagnostic:  err.Error(),
+				},
+				RawPayload:       rawPayload,
+				CanonicalPayload: rawPayload,
+			}
+			_, _ = store.CaptureUnachievableReviewerAttempt(ctx, req)
+		}
 		return reviewPreflightError(err)
 	}
 	frozen, subject = admitted.Frozen, admitted.Subject
@@ -710,27 +748,47 @@ func discoverCapturedReviewerArtifacts(ctx context.Context, repo, storeDir strin
 		if err != nil {
 			return nil, fmt.Errorf("read captured reviewer result %d: %w", order, err)
 		}
-		if !slot.Occupied {
+		if slot.Occupied {
+			if reviewtransaction.ReviewerResultDigestIsQuarantined(state, order, slot.Digest) {
+				continue
+			}
+			artifact := reviewResultArtifact{
+				Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, SHA256: slot.Digest,
+				LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Lens: lens, SelectedOrder: order,
+			}
+			_, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, slot.Payload, slot.Digest, state, revision, order, frozen)
+			if err != nil {
+				return nil, fmt.Errorf("verify captured reviewer admission %d: %w", order, err)
+			}
+			artifact.SubjectHash = subject.SubjectHash
+			artifact.AdmissionDecision = reviewtransaction.ArtifactAdmissionCompleted
+			artifacts = append(artifacts, ReviewTransitionArtifact{
+				Schema: artifact.Schema, Capability: artifact.Capability, SHA256: artifact.SHA256, LineageID: artifact.LineageID,
+				TargetIdentity: artifact.TargetIdentity, Lens: artifact.Lens, SelectedOrder: artifact.SelectedOrder,
+				SubjectHash: artifact.SubjectHash, AdmissionDecision: artifact.AdmissionDecision,
+			})
 			continue
 		}
-		if reviewtransaction.ReviewerResultDigestIsQuarantined(state, order, slot.Digest) {
-			continue
-		}
-		artifact := reviewResultArtifact{
-			Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, SHA256: slot.Digest,
-			LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Lens: lens, SelectedOrder: order,
-		}
-		_, subject, err := decodeBoundAdmittedReviewerResult(ctx, repo, slot.Payload, slot.Digest, state, revision, order, frozen)
+		attempts, err := reviewtransaction.ReadCompactReviewerAttempts(storeDir, order, lens)
 		if err != nil {
-			return nil, fmt.Errorf("verify captured reviewer admission %d: %w", order, err)
+			return nil, fmt.Errorf("read captured reviewer attempts %d: %w", order, err)
 		}
-		artifact.SubjectHash = subject.SubjectHash
-		artifact.AdmissionDecision = reviewtransaction.ArtifactAdmissionCompleted
-		artifacts = append(artifacts, ReviewTransitionArtifact{
-			Schema: artifact.Schema, Capability: artifact.Capability, SHA256: artifact.SHA256, LineageID: artifact.LineageID,
-			TargetIdentity: artifact.TargetIdentity, Lens: artifact.Lens, SelectedOrder: artifact.SelectedOrder,
-			SubjectHash: artifact.SubjectHash, AdmissionDecision: artifact.AdmissionDecision,
-		})
+		for _, att := range attempts {
+			if att.LineageID == state.LineageID && att.AuthorityRevision == revision &&
+				att.TargetIdentity == state.InitialSnapshot.Identity && att.Lens == lens && att.SelectedOrder == order {
+				artifacts = append(artifacts, ReviewTransitionArtifact{
+					Schema:            reviewResultArtifactSchema,
+					Capability:        reviewResultArtifactCapability,
+					SHA256:            att.RawSHA256,
+					LineageID:         state.LineageID,
+					TargetIdentity:    state.InitialSnapshot.Identity,
+					Lens:              lens,
+					SelectedOrder:     order,
+					SubjectHash:       att.SubjectHash,
+					AdmissionDecision: reviewtransaction.ArtifactAdmissionUnachievable,
+				})
+			}
+		}
 	}
 	return artifacts, nil
 }
