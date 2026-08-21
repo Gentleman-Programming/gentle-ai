@@ -184,16 +184,16 @@ const (
 // clone-local compare-and-set token. The projection carries no time cutoff: it
 // answers "may review start now", never "which bytes are approved".
 type RDDModeStatus struct {
-	Schema       string           `json:"schema"`
-	Global       RDDMode          `json:"global"`
-	CloneLocal   RDDMode          `json:"clone_local"`
-	Effective    RDDMode          `json:"effective"`
-	Source       RDDModeSource    `json:"source"`
-	Revision     string           `json:"revision,omitempty"`
-	Reach        RDDModeReach     `json:"reach,omitempty"`
-	Controller   RDDController    `json:"controller"`
-	DeliveryGate RDDDeliveryGate  `json:"delivery_gate"`
-	Enforcement  Enforcement      `json:"enforcement"`
+	Schema       string          `json:"schema"`
+	Global       RDDMode         `json:"global"`
+	CloneLocal   RDDMode         `json:"clone_local"`
+	Effective    RDDMode         `json:"effective"`
+	Source       RDDModeSource   `json:"source"`
+	Revision     string          `json:"revision,omitempty"`
+	Reach        RDDModeReach    `json:"reach,omitempty"`
+	Controller   RDDController   `json:"controller"`
+	DeliveryGate RDDDeliveryGate `json:"delivery_gate"`
+	Enforcement  Enforcement     `json:"enforcement"`
 }
 
 // Enabled reports whether new receipt-driven development may start.
@@ -468,7 +468,7 @@ func SetCloneLocalRDDMode(
 	if err := publishPrivateRARImmutable(filepath.Join(dir, rddModeGenerationName(record.Generation)), payload); err != nil {
 		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
 	}
-controller, gate := probeEnforcementDimensions(ctx, repo)
+	controller, gate := probeEnforcementDimensions(ctx, repo)
 	status := rddModeStatus(globalMode, record, true, controller, gate)
 	if !mirror.available {
 		status.Reach = RDDModeReachThisBuild
