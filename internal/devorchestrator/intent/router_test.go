@@ -195,3 +195,54 @@ func TestRouteIntentSameEngineProceeds(t *testing.T) {
 		t.Fatalf("RouteIntent() error = %v, want nil for same-engine re-route", err)
 	}
 }
+
+// TestRouteIntentRefusesTraversal covers T1: a source identifier whose
+// derived change ID would escape openspec/changes/<id> must be refused with
+// a typed containment error and zero filesystem side effects -- no
+// directory or file created anywhere under the workspace root.
+func TestRouteIntentRefusesTraversal(t *testing.T) {
+	cases := []struct {
+		name     string
+		sourceID string
+	}{
+		{"parent traversal", "../../etc"},
+		{"deep traversal", "../../../secret.md"},
+		{"absolute path", "/etc/passwd"},
+		{"nul byte", "bad\x00id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			router := New(tempDir)
+
+			_, err := router.RouteIntent("Add a feature.", tc.sourceID)
+			if !errors.Is(err, ErrIdentifierContainment) {
+				t.Fatalf("RouteIntent() error = %v, want ErrIdentifierContainment", err)
+			}
+
+			entries, statErr := os.ReadDir(tempDir)
+			if statErr != nil {
+				t.Fatalf("failed to read workspace root: %v", statErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("RouteIntent() created filesystem entries on refusal: %v", entries)
+			}
+		})
+	}
+}
+
+// TestRouteIntentAcceptsWellFormedID covers T1's acceptance side: an
+// identifier with no traversal segments or separators resolves inside the
+// intended change tree and normal routing proceeds.
+func TestRouteIntentAcceptsWellFormedID(t *testing.T) {
+	tempDir := t.TempDir()
+	router := New(tempDir)
+
+	res, err := router.RouteIntent("Add a feature.", "well-formed-id")
+	if err != nil {
+		t.Fatalf("RouteIntent() error = %v, want nil for a well-formed identifier", err)
+	}
+	if res.ChangeID != "well-formed-id" {
+		t.Fatalf("ChangeID = %q, want well-formed-id", res.ChangeID)
+	}
+}
