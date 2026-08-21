@@ -5,23 +5,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 )
 
-const packageBinName = "gentle-pi-models"
+// MaxPackageManifestBytes is the maximum accepted package.json size; resolution reads one extra byte to detect overflow.
+const MaxPackageManifestBytes, packageBinName = 64 << 10, "gentle-pi-models"
 
 type parserError struct {
 	Path, Kind string
 	Cause      error
 }
-
 type PackageError parserError
 type ManifestError parserError
 type BinError parserError
-
 type UnsafeBinError struct {
 	Path, Reason string
 	Cause        error
@@ -40,8 +40,7 @@ func (e *BinError) Unwrap() error      { return e.Cause }
 func (e *UnsafeBinError) Error() string {
 	return fmt.Sprintf("unsafe %s bin %q: %s", packageBinName, e.Path, e.Reason)
 }
-func (e *UnsafeBinError) Unwrap() error { return e.Cause }
-
+func (e *UnsafeBinError) Unwrap() error                  { return e.Cause }
 func packageError(path, kind string, cause error) error  { return &PackageError{path, kind, cause} }
 func manifestError(path, kind string, cause error) error { return &ManifestError{path, kind, cause} }
 func binError(path, kind string, cause error) error      { return &BinError{path, kind, cause} }
@@ -72,9 +71,17 @@ func ResolvePackageBin(packageRoot string) (string, error) {
 		return "", packageError(packageRoot, missingKind(err, "missing-package", "package-unavailable"), err)
 	}
 	manifestPath := filepath.Join(packageRoot, "package.json")
-	data, err := os.ReadFile(manifestPath)
+	file, err := os.Open(manifestPath)
 	if err != nil {
 		return "", manifestError(manifestPath, missingKind(err, "missing-manifest", "unreadable-manifest"), err)
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, MaxPackageManifestBytes+1))
+	if err != nil {
+		return "", manifestError(manifestPath, "unreadable-manifest", err)
+	}
+	if len(data) > MaxPackageManifestBytes {
+		return "", manifestError(manifestPath, "manifest-too-large", errors.New("package manifest exceeds maximum size"))
 	}
 	document, err := decodeManifest(data)
 	if err != nil {
@@ -114,7 +121,6 @@ func ResolvePackageBin(packageRoot string) (string, error) {
 	}
 	return filepath.Clean(canonicalTarget), nil
 }
-
 func selectPackageBin(document map[string]json.RawMessage, manifestPath string) (string, error) {
 	raw, ok := document["bin"]
 	if !ok {
@@ -150,9 +156,8 @@ func selectPackageBin(document map[string]json.RawMessage, manifestPath string) 
 		if err := json.Unmarshal(raw, &entries); err != nil || entries == nil {
 			return "", binError(manifestPath, "malformed-bin", err)
 		}
-		var exists bool
-		target, exists = entries[packageBinName]
-		if !exists {
+		target, ok = entries[packageBinName]
+		if !ok {
 			return "", binError(manifestPath, "absent-bin", nil)
 		}
 		if target == "" {
@@ -163,7 +168,6 @@ func selectPackageBin(document map[string]json.RawMessage, manifestPath string) 
 	}
 	return target, nil
 }
-
 func unsafeBinPath(value string) string {
 	if value == "" {
 		return "empty bin path"
@@ -174,19 +178,15 @@ func unsafeBinPath(value string) string {
 	if strings.ContainsRune(value, '\\') {
 		return "unsafe platform separator"
 	}
-	for _, component := range strings.Split(value, "/") {
-		if component == ".." {
-			return "lexical parent traversal"
-		}
+	if strings.Contains("/"+value+"/", "/../") {
+		return "lexical parent traversal"
 	}
 	return ""
 }
-
 func windowsDrivePath(value string) bool {
 	return len(value) >= 2 && value[1] == ':' &&
 		((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= 'A' && value[0] <= 'Z'))
 }
-
 func pathWithin(root, value string) bool {
 	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(value))
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
@@ -194,11 +194,7 @@ func pathWithin(root, value string) bool {
 
 type jsonObjectScope uint8
 
-const (
-	otherObject jsonObjectScope = iota
-	manifestObject
-	binObject
-)
+const otherObject, manifestObject, binObject jsonObjectScope = iota, iota + 1, iota + 2
 
 type duplicateJSONKeyError struct {
 	Key string
@@ -208,7 +204,6 @@ type duplicateJSONKeyError struct {
 func (e *duplicateJSONKeyError) Error() string {
 	return fmt.Sprintf("duplicate JSON object key %q", e.Key)
 }
-
 func decodeManifest(data []byte) (map[string]json.RawMessage, error) {
 	var document map[string]json.RawMessage
 	if err := json.Unmarshal(data, &document); err != nil {
@@ -222,7 +217,6 @@ func decodeManifest(data []byte) (map[string]json.RawMessage, error) {
 	}
 	return document, nil
 }
-
 func scanJSONValue(decoder *json.Decoder, scope jsonObjectScope) error {
 	token, err := decoder.Token()
 	if err != nil {
