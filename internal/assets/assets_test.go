@@ -2009,6 +2009,79 @@ func TestOpenCodeSingleOverlaySubagentsAreReachable(t *testing.T) {
 	}
 }
 
+// devOrchestratorPhaseAuthoringKeyPattern matches any JSON object key that
+// would let a caller author, set, or mutate a phase value. H-11 requires the
+// overlay to reference dispatch state for DISPLAY ONLY — phase is always read
+// from sddstatus.StatusV1Projection, never authored by devorchestrator (spec
+// "No Phase Authority", decisions #2986 Q5).
+var devOrchestratorPhaseAuthoringKeyPattern = regexp.MustCompile(`(?i)^(set|write|author|mutate)?phase$`)
+
+// collectJSONKeys walks a decoded JSON document and returns every object key
+// found at any depth, so the phase-authority guard below inspects the whole
+// fragment, not just its top level.
+func collectJSONKeys(t *testing.T, node any, out map[string]struct{}) {
+	t.Helper()
+	switch v := node.(type) {
+	case map[string]any:
+		for key, val := range v {
+			out[key] = struct{}{}
+			collectJSONKeys(t, val, out)
+		}
+	case []any:
+		for _, item := range v {
+			collectJSONKeys(t, item, out)
+		}
+	}
+}
+
+// TestOpenCodeSDDOverlayDevOrchestratorPhaseDisplayIsReadOnly pins H-11: the
+// dev-orchestrator overlay fragment MUST reference the journal/projection's
+// dispatch state for display only, and MUST NOT introduce any field that lets
+// the overlay author or mutate phase. This asserts both halves structurally:
+// no phase-authoring key exists anywhere in the fragment, no write-capable
+// tool is newly granted, and a read-only status reference is present.
+func TestOpenCodeSDDOverlayDevOrchestratorPhaseDisplayIsReadOnly(t *testing.T) {
+	const assetPath = "opencode/sdd-overlay-devorchestrator.json"
+	raw := MustRead(assetPath)
+
+	var root map[string]any
+	if err := json.Unmarshal([]byte(raw), &root); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", assetPath, err)
+	}
+
+	keys := map[string]struct{}{}
+	collectJSONKeys(t, root, keys)
+	for key := range keys {
+		if devOrchestratorPhaseAuthoringKeyPattern.MatchString(key) {
+			t.Fatalf("%q must not introduce a phase-authoring field, found key %q", assetPath, key)
+		}
+	}
+
+	agents, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing agent map", assetPath)
+	}
+	orchestrator, ok := agents["dev-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing dev-orchestrator agent", assetPath)
+	}
+	if tools, ok := orchestrator["tools"].(map[string]any); ok {
+		for _, writeCapableTool := range []string{"write", "edit", "bash"} {
+			if v, present := tools[writeCapableTool]; present && v == true {
+				t.Fatalf("%q must not grant write-capable tool %q — display is read-only", assetPath, writeCapableTool)
+			}
+		}
+	}
+
+	description, _ := orchestrator["description"].(string)
+	if !strings.Contains(description, "gentle-ai dev-orchestrator status") {
+		t.Fatalf("%q dev-orchestrator description must reference the read-only `gentle-ai dev-orchestrator status` command for dispatch-state display", assetPath)
+	}
+	if !strings.Contains(strings.ToLower(description), "read-only") && !strings.Contains(strings.ToLower(description), "never") {
+		t.Fatalf("%q dev-orchestrator description must state the reference is read-only / never authors phase", assetPath)
+	}
+}
+
 // TestCommandsDoNotUseEchoNPwd guards against the nested-subshell pattern
 // `echo -n "$(pwd)"` (and the basename variant) that causes Claude Code v2.1.113+
 // to reject slash commands with "Unhandled node type: string". Use the plain pwd

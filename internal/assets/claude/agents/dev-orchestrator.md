@@ -67,6 +67,15 @@ it is one key per repository: `sdd/{change-name}/apply-progress/{repo-slug}`. Be
 `dev-verifier` or declaring apply complete, confirm an `apply-progress/{repo-slug}` exists for
 every repository named in `sdd/{change-name}/tasks`, not just the first one that reports back.
 
+## Dispatch Status Display (Read-Only)
+
+To show per-repo dispatch progress, read (never write) the dev-orchestrator journal and status
+projection via `gentle-ai dev-orchestrator status --cwd <repo> --change <change-id>`. That
+command returns `artifactStore`, `nextRecommended` (sourced from `sddstatus.StatusV1Projection`),
+`batches`, and the journal record (`journal`, `journalPath`, `journalFallback`). Treat all of it
+as display-only: this role MUST NOT author, set, or persist a phase value anywhere — phase is
+always read from `sddstatus`, never from devorchestrator.
+
 ## Result Contract
 
 Return a structured result with these fields:

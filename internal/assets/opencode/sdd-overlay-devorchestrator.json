@@ -3,6 +3,7 @@
     "dev-orchestrator": {
       "mode": "primary",
       "hidden": false,
+      "description": "Multi-repo dev SDD conductor — classifies requests, maps repositories, and returns a delegation plan for gentle-orchestrator to execute. Displays per-repo dispatch state by reading `gentle-ai dev-orchestrator status --cwd <repo> --change <id>` (journal + sddstatus projection), read-only; never writes to the journal and never authors phase.",
       "prompt": "__PROMPT_FILE_dev-orchestrator__",
       "permission": {
         "question": "allow",
