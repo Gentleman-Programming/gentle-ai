@@ -56,13 +56,16 @@ func TestRunDevOrchestratorRoute(t *testing.T) {
 
 func TestRunDevOrchestratorContext(t *testing.T) {
 	root := t.TempDir()
-	artifactPath := filepath.Join(root, "openspec", "changes", "feature", "proposal.md")
+	// explore.md (not proposal.md): dev-explorer's AllowedArtifactTypes is
+	// {requirement, bug, feature, exploration} (H-08), and explore.md is the
+	// canonical filename that derives "exploration".
+	artifactPath := filepath.Join(root, "openspec", "changes", "feature", "explore.md")
 	writeSDDStatusFile(t, artifactPath, "---\nid: feature-1\n---\n# Proposal\n")
 
 	var stdout bytes.Buffer
 	err := RunDevOrchestrator([]string{
 		"context", "--cwd", root, "--agent", "dev-explorer",
-		"--artifact", "openspec/changes/feature/proposal.md",
+		"--artifact", "openspec/changes/feature/explore.md",
 	}, &stdout)
 	if err != nil {
 		t.Fatalf("RunDevOrchestrator(context) error = %v", err)

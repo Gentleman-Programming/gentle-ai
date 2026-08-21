@@ -43,7 +43,9 @@ db_impact: high-risk
 ---
 # Proposal content
 `
-	artifactPath := "openspec/changes/feature/proposal.md"
+	// task.md (not proposal.md): backend-implementer's AllowedArtifactTypes
+	// is {task, spec, design-fragment} (H-08).
+	artifactPath := "openspec/changes/feature/task.md"
 	absArtifactPath := filepath.Join(tempDir, artifactPath)
 	os.MkdirAll(filepath.Dir(absArtifactPath), 0755)
 	os.WriteFile(absArtifactPath, []byte(artifactContent), 0644)
@@ -146,7 +148,10 @@ func TestRouteIntentThenGenerateContextPreservesProvenance(t *testing.T) {
 	tempDir := t.TempDir()
 	orch := New(tempDir)
 
-	result, err := orch.RouteIntent("Add a new payments export job", "issue-42")
+	// Intent text contains "explore" so RouteIntent's heuristic writes
+	// explore.md (type "exploration"), which dev-explorer's
+	// AllowedArtifactTypes actually admits (H-08).
+	result, err := orch.RouteIntent("Explore a new payments export job", "issue-42")
 	if err != nil {
 		t.Fatalf("RouteIntent() error = %v", err)
 	}
@@ -200,8 +205,12 @@ func TestGenerateContextForAgent_TraceabilityManagerEnforcement(t *testing.T) {
 		source := writeArtifact("openspec/changes/trace-ok/proposal.md", "---\nid: PROP-900\n---\n# Proposal\n")
 		dest := writeArtifact("openspec/changes/trace-ok/spec.md", "---\nid: SPEC-900\nimplements:\n  - PROP-900\n---\n# Spec\n")
 
+		// dev-designer (not dev-specifier): this test is about the
+		// Traceability Manager wiring, not about which agent it is called
+		// with. dev-designer's AllowedArtifactTypes includes "spec" (H-08);
+		// dev-specifier's does not.
 		pkg, err := orch.GenerateContextForAgent(
-			"EXEC-TRACE-OK", "dev-specifier", dest, nil, "", nil, "", "", source,
+			"EXEC-TRACE-OK", "dev-designer", dest, nil, "", nil, "", "", source,
 		)
 		if err != nil {
 			t.Fatalf("GenerateContextForAgent() error = %v, want nil for a dest that implements the source", err)
@@ -232,7 +241,9 @@ func TestGenerateContextForAgent_TraceabilityManagerEnforcement(t *testing.T) {
 
 	t.Run("empty sourceArtifact skips the check entirely (backward compatible)", func(t *testing.T) {
 		orch := New(tempDir)
-		dest := writeArtifact("openspec/changes/trace-skip/proposal.md", "---\nid: PROP-902\n---\n# Proposal, no predecessor\n")
+		// explore.md (not proposal.md): dev-proposer's AllowedArtifactTypes
+		// is {requirement, bug, feature, exploration} (H-08).
+		dest := writeArtifact("openspec/changes/trace-skip/explore.md", "---\nid: PROP-902\n---\n# Proposal, no predecessor\n")
 
 		if _, err := orch.GenerateContextForAgent(
 			"EXEC-TRACE-SKIP", "dev-proposer", dest, nil, "", nil, "", "", "",
@@ -358,7 +369,11 @@ func TestGenerateContextForAgent_OwnershipEnforcement(t *testing.T) {
 		tempDir := t.TempDir()
 		orch := New(tempDir)
 
-		artifactPath := "openspec/changes/dev-owned/proposal.md"
+		// explore.md (not proposal.md): dev-explorer's AllowedArtifactTypes
+		// is {requirement, bug, feature, exploration} (H-08). explore.md is
+		// still one of changeowner's artifactCandidates, so the ownership
+		// marker is read exactly as before.
+		artifactPath := "openspec/changes/dev-owned/explore.md"
 		absArtifactPath := filepath.Join(tempDir, artifactPath)
 		os.MkdirAll(filepath.Dir(absArtifactPath), 0755)
 		os.WriteFile(absArtifactPath, []byte("---\nid: dev-owned\nengine: dev-orchestrator\n---\n# Proposal\n"), 0644)
@@ -368,6 +383,87 @@ func TestGenerateContextForAgent_OwnershipEnforcement(t *testing.T) {
 		)
 		if err != nil {
 			t.Fatalf("expected no error for dev-orchestrator-owned change, got: %v", err)
+		}
+	})
+}
+
+// TestGenerateContextForAgent_OwnershipPrecedesArtifactType covers the
+// spec's Refusal Precedence Ordering requirement's "Ownership refusal
+// preempts artifact-type refusal" scenario: an artifact that is BOTH
+// foreign-owned AND filename-mismatched for the target agent must be
+// refused with the ownership error, and the artifact-type check must never
+// run or surface its own error.
+func TestGenerateContextForAgent_OwnershipPrecedesArtifactType(t *testing.T) {
+	tempDir := t.TempDir()
+	orch := New(tempDir)
+
+	// proposal.md's derived type ("proposal") is NOT in dev-explorer's
+	// AllowedArtifactTypes ({requirement, bug, feature, exploration}) --
+	// if artifact-type enforcement ran before ownership, this would refuse
+	// with ErrArtifactTypeMismatch instead of the ownership error.
+	artifactPath := "openspec/changes/gentle-owned-mismatch/proposal.md"
+	absArtifactPath := filepath.Join(tempDir, artifactPath)
+	os.MkdirAll(filepath.Dir(absArtifactPath), 0755)
+	os.WriteFile(absArtifactPath, []byte("---\nid: gentle-owned-mismatch\nengine: gentle-orchestrator\n---\n# Proposal\n"), 0644)
+
+	_, err := orch.GenerateContextForAgent(
+		"EXEC-PRECEDENCE-OWNERSHIP", "dev-explorer", artifactPath, nil, "", nil, "", "", "",
+	)
+	if err == nil {
+		t.Fatal("expected an error for a foreign-owned, type-mismatched change, got nil")
+	}
+	if errors.Is(err, ErrArtifactTypeMismatch) {
+		t.Fatalf("artifact-type check ran/refused before ownership: %v", err)
+	}
+	if !strings.Contains(err.Error(), "gentle-owned-mismatch") || !strings.Contains(err.Error(), "gentle-orchestrator") {
+		t.Errorf("expected the ownership refusal message (naming change and owner), got: %v", err)
+	}
+}
+
+// TestGenerateContextForAgent_ArtifactTypeEnforcement covers H-08's core
+// scenarios directly: a matching filename-derived type dispatches, a
+// mismatched one is refused with the typed error, and a non-canonical
+// filename stays unclassified and is never rejected.
+func TestGenerateContextForAgent_ArtifactTypeEnforcement(t *testing.T) {
+	writeArtifact := func(t *testing.T, tempDir, relPath string) string {
+		absPath := filepath.Join(tempDir, relPath)
+		if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+			t.Fatalf("MkdirAll(%s) error = %v", relPath, err)
+		}
+		if err := os.WriteFile(absPath, []byte("---\nid: art-1\n---\n# Artifact\n"), 0644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", relPath, err)
+		}
+		return relPath
+	}
+
+	t.Run("matching type is dispatched", func(t *testing.T) {
+		tempDir := t.TempDir()
+		artifactPath := writeArtifact(t, tempDir, "openspec/changes/match/task.md")
+		if _, err := New(tempDir).GenerateContextForAgent(
+			"EXEC-TYPE-MATCH", "backend-implementer", artifactPath, nil, "", nil, "", "", "",
+		); err != nil {
+			t.Fatalf("GenerateContextForAgent() error = %v, want nil for a matching artifact type", err)
+		}
+	})
+
+	t.Run("mismatched type is refused", func(t *testing.T) {
+		tempDir := t.TempDir()
+		artifactPath := writeArtifact(t, tempDir, "openspec/changes/mismatch/proposal.md")
+		_, err := New(tempDir).GenerateContextForAgent(
+			"EXEC-TYPE-MISMATCH", "backend-implementer", artifactPath, nil, "", nil, "", "", "",
+		)
+		if !errors.Is(err, ErrArtifactTypeMismatch) {
+			t.Fatalf("GenerateContextForAgent() error = %v, want ErrArtifactTypeMismatch", err)
+		}
+	})
+
+	t.Run("non-canonical filename is unclassified, not rejected", func(t *testing.T) {
+		tempDir := t.TempDir()
+		artifactPath := writeArtifact(t, tempDir, "openspec/changes/unclassified/notes.md")
+		if _, err := New(tempDir).GenerateContextForAgent(
+			"EXEC-UNCLASSIFIED", "backend-implementer", artifactPath, nil, "", nil, "", "", "",
+		); err != nil {
+			t.Fatalf("GenerateContextForAgent() error = %v, want nil for a non-canonical filename", err)
 		}
 	})
 }
