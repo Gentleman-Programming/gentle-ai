@@ -55,7 +55,7 @@ func TestConcurrentEngine_ExecuteBatches_Parallelism(t *testing.T) {
 	}
 
 	start := time.Now()
-	errs := engine.ExecuteBatches(context.Background(), batches, prompts)
+	errs, _ := engine.ExecuteBatches(context.Background(), batches, prompts)
 	duration := time.Since(start)
 
 	if len(errs) != 0 {
@@ -115,7 +115,7 @@ func TestConcurrentEngine_ExecuteBatches_IgnoresNotReady(t *testing.T) {
 	}
 	prompts := map[string]string{}
 
-	errs := engine.ExecuteBatches(context.Background(), batches, prompts)
+	errs, _ := engine.ExecuteBatches(context.Background(), batches, prompts)
 
 	if len(errs) != 0 {
 		t.Fatalf("expected no errors, got %v", errs)
@@ -139,7 +139,7 @@ func TestConcurrentEngine_ExecuteBatches_CollectsErrors(t *testing.T) {
 	}
 	prompts := map[string]string{}
 
-	errs := engine.ExecuteBatches(context.Background(), batches, prompts)
+	errs, _ := engine.ExecuteBatches(context.Background(), batches, prompts)
 
 	if len(errs) != 1 {
 		t.Fatalf("expected exactly 1 error, got %d", len(errs))
@@ -153,5 +153,118 @@ func TestConcurrentEngine_ExecuteBatches_CollectsErrors(t *testing.T) {
 	expectedPrefix := "agent agent-a failed on repo \"fail-repo\""
 	if err.Error()[:len(expectedPrefix)] != expectedPrefix {
 		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+// FlakyRunner fails the first FailCount calls for a given RepoName, then
+// succeeds on every call after that -- used to prove bounded retry recovers
+// a transient failure (H-09a).
+type FlakyRunner struct {
+	mu         sync.Mutex
+	FailCount  int
+	CallCounts map[string]int
+}
+
+func (r *FlakyRunner) Run(_ context.Context, b batch.ExecutionBatch, _ string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.CallCounts == nil {
+		r.CallCounts = make(map[string]int)
+	}
+	r.CallCounts[b.RepoName]++
+	if r.CallCounts[b.RepoName] <= r.FailCount {
+		return errors.New("transient failure")
+	}
+	return nil
+}
+
+// AlwaysFailRunner fails every call, unconditionally.
+type AlwaysFailRunner struct {
+	mu        sync.Mutex
+	CallCount int
+}
+
+func (r *AlwaysFailRunner) Run(_ context.Context, _ batch.ExecutionBatch, _ string) error {
+	r.mu.Lock()
+	r.CallCount++
+	r.mu.Unlock()
+	return errors.New("permanent failure")
+}
+
+// TestConcurrentEngine_ExecuteBatches_RetriesTransientFailureThenSucceeds
+// covers H-09a: a dispatch failing once then succeeding within the retry
+// bound is recorded succeeded, with the attempt count never exceeding the
+// bound. The injected Sleep never actually waits.
+func TestConcurrentEngine_ExecuteBatches_RetriesTransientFailureThenSucceeds(t *testing.T) {
+	runner := &FlakyRunner{FailCount: 1}
+	engine := New(runner, 1)
+	engine.MaxAttempts = 3
+	engine.BaseBackoff = 10 * time.Millisecond
+	var sleepCalls []time.Duration
+	engine.Sleep = func(d time.Duration) { sleepCalls = append(sleepCalls, d) }
+
+	batches := []batch.ExecutionBatch{{RepoName: "flaky-repo", AgentName: "agent-a", Ready: true}}
+	errs, attempts := engine.ExecuteBatches(context.Background(), batches, map[string]string{})
+
+	if len(errs) != 0 {
+		t.Fatalf("expected no errors after recovering within the retry bound, got %v", errs)
+	}
+	if got := attempts["flaky-repo"]; got != 2 {
+		t.Errorf("attempts[flaky-repo] = %d, want 2 (one failure then one success)", got)
+	}
+	if got := attempts["flaky-repo"]; got > engine.MaxAttempts {
+		t.Errorf("attempts[flaky-repo] = %d, exceeded configured MaxAttempts %d", got, engine.MaxAttempts)
+	}
+	if len(sleepCalls) == 0 {
+		t.Error("expected the injected backoff Sleep to be called at least once between attempts")
+	}
+}
+
+// TestConcurrentEngine_ExecuteBatches_ExhaustsRetriesRecordsFailure covers
+// H-09a: a dispatch failing every attempt up to the bound is recorded
+// failed, called exactly MaxAttempts times (no circuit breaker cutting it
+// short, no extra attempt beyond the bound; H-09b's rollback is out of scope).
+func TestConcurrentEngine_ExecuteBatches_ExhaustsRetriesRecordsFailure(t *testing.T) {
+	runner := &AlwaysFailRunner{}
+	engine := New(runner, 1)
+	engine.MaxAttempts = 3
+	engine.BaseBackoff = 10 * time.Millisecond
+	engine.Sleep = func(time.Duration) {} // no-op: never actually wait in tests
+
+	batches := []batch.ExecutionBatch{{RepoName: "doomed-repo", AgentName: "agent-a", Ready: true}}
+	errs, attempts := engine.ExecuteBatches(context.Background(), batches, map[string]string{})
+
+	if _, failed := errs["doomed-repo"]; !failed {
+		t.Fatalf("expected doomed-repo to be recorded as failed, got errs = %v", errs)
+	}
+	if got := attempts["doomed-repo"]; got != engine.MaxAttempts {
+		t.Errorf("attempts[doomed-repo] = %d, want exactly MaxAttempts (%d)", got, engine.MaxAttempts)
+	}
+	if runner.CallCount != engine.MaxAttempts {
+		t.Errorf("runner called %d times, want exactly MaxAttempts (%d) -- no circuit breaker should cut retries short", runner.CallCount, engine.MaxAttempts)
+	}
+	if len(errs) != 1 {
+		t.Errorf("expected exactly 1 failed repo recorded, got %d: %v", len(errs), errs)
+	}
+}
+
+// TestConcurrentEngine_ExecuteBatches_ZeroMaxAttemptsPreservesSingleAttempt
+// proves MaxAttempts <= 0 (the zero value returned by New) preserves the
+// exact pre-H-09a behavior of a single, non-retried attempt per repo.
+func TestConcurrentEngine_ExecuteBatches_ZeroMaxAttemptsPreservesSingleAttempt(t *testing.T) {
+	runner := &AlwaysFailRunner{}
+	engine := New(runner, 1) // MaxAttempts left at its zero value
+
+	batches := []batch.ExecutionBatch{{RepoName: "doomed-repo", AgentName: "agent-a", Ready: true}}
+	errs, attempts := engine.ExecuteBatches(context.Background(), batches, map[string]string{})
+
+	if _, failed := errs["doomed-repo"]; !failed {
+		t.Fatalf("expected doomed-repo to be recorded as failed, got errs = %v", errs)
+	}
+	if got := attempts["doomed-repo"]; got != 1 {
+		t.Errorf("attempts[doomed-repo] = %d, want exactly 1 (MaxAttempts<=0 preserves single-attempt behavior)", got)
+	}
+	if runner.CallCount != 1 {
+		t.Errorf("runner called %d times, want exactly 1", runner.CallCount)
 	}
 }
