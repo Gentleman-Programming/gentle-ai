@@ -28,12 +28,15 @@ func TestGenerateContextForAgent(t *testing.T) {
 		t.Fatalf("Failed to create registry: %v", err)
 	}
 
-	// Setup mock primary artifact with frontmatter
+	// Setup mock primary artifact with frontmatter. db_impact is high-risk,
+	// not simple: dbImpactSkills only injects database-specialist for
+	// db.ImpactHighRisk (see the design-deviation note in the apply-progress
+	// artifact for why db.ImpactSimple no longer injects it).
 	artifactContent := `---
 id: feature-123
 implements:
   - spec-01
-db_impact: simple
+db_impact: high-risk
 ---
 # Proposal content
 `
@@ -91,7 +94,7 @@ db_impact: simple
 		}
 	}
 	if !hasDB {
-		t.Errorf("expected database-specialist skill to be injected due to DB impact: simple")
+		t.Errorf("expected database-specialist skill to be injected due to DB impact: high-risk")
 	}
 
 	if pkg == nil {

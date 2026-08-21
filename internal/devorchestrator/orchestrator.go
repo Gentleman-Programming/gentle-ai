@@ -177,15 +177,20 @@ func (o *Orchestrator) GenerateContextForAgent(
 		}
 	}
 
-	// 3.7 Evaluate DB Impact and Resolve Skills
+	// 3.7 Evaluate DB Impact and Resolve Skills. dbImpactSkills below (design
+	// decision D6) replaces the single hardcoded
+	// `impact == ImpactSimple && agentName == "backend-implementer"` check
+	// with a declarative (impact, agentName) matrix, so db.ImpactHighRisk is
+	// consumed distinctly instead of being silently ignored, and
+	// frontend-implementer gets a schema-impact-aware branch when impact is
+	// high risk.
+	var dbImpact db.Impact
 	if primaryArtifact != "" {
 		absPath := filepath.Join(o.WorkspaceRoot, primaryArtifact)
 		data, err := os.ReadFile(absPath)
 		if err == nil {
-			impact := o.DBRouter.EvaluateImpact(string(data))
-			if impact == db.ImpactSimple && agentName == "backend-implementer" {
-				requiredSkills = append(requiredSkills, "database-specialist")
-			}
+			dbImpact = o.DBRouter.EvaluateImpact(string(data))
+			requiredSkills = append(requiredSkills, dbImpactSkills(dbImpact, agentName)...)
 		}
 	}
 
@@ -241,6 +246,7 @@ func (o *Orchestrator) GenerateContextForAgent(
 		ArchitectureProfile: architectureProfile,
 		ExpectedType:        expectedType,
 		ExpectedID:          expectedID,
+		DBImpact:            string(dbImpact),
 	}
 
 	pkg := context.Build(req)
@@ -250,6 +256,45 @@ func (o *Orchestrator) GenerateContextForAgent(
 	pkg.Permissions.Git = contract.Permissions.Git
 
 	return &pkg, nil
+}
+
+// dbImpactSkills is the declarative (impact, agentName) matrix from design
+// decision D6, corrected after review: it replaces the single hardcoded
+// `impact == ImpactSimple && agentName == "backend-implementer"` check that
+// used to leave db.ImpactHighRisk entirely unhandled -- the highest-risk DB
+// changes were exactly the ones that never got the specialist.
+//
+// database-specialist is injected only for db.ImpactHighRisk, not
+// db.ImpactSimple: skills/agents/database-specialist/SKILL.md describes
+// itself as handling "complex database migrations, schema changes, and
+// high-risk DB tasks", not simple ones. The original single-`if` check had
+// it backwards -- wired to the low-risk case while the genuinely high-risk
+// path got nothing. This also satisfies spec H-05's first scenario: the
+// resolved skill set for backend-implementer now differs measurably between
+// db.ImpactSimple (nil) and db.ImpactHighRisk ({database-specialist}).
+//
+// frontend-implementer's schema-impact-aware branch (spec H-05's second
+// scenario) resolves to database-specialist as well -- a real skill, not an
+// invented "frontend-schema-impact" name with no corresponding
+// skills/**/SKILL.md content anywhere in the workspace. The
+// schema-impact-specific signal itself is the rendered `db_impact: <value>`
+// field in the prompt (see context.Package.DBImpact / promptTemplate),
+// matching design decision D6's own rationale for that field.
+//
+// It returns the additional required skills to inject, or nil when nothing
+// applies. TestDBImpactSkillsResolveOnDisk guards every skill name this
+// function can ever emit against the real workspace skills/ directory, so a
+// future dangling reference fails the build instead of surfacing as a
+// runtime hard-fail after CLI wiring.
+func dbImpactSkills(impact db.Impact, agentName string) []string {
+	if impact != db.ImpactHighRisk {
+		return nil
+	}
+	switch agentName {
+	case "backend-implementer", "frontend-implementer":
+		return []string{"database-specialist"}
+	}
+	return nil
 }
 
 // GenerateAgentPrompt is a convenience wrapper that generates the context package
