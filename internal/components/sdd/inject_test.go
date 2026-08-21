@@ -2603,12 +2603,14 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 
 	// Empty mode defaults to single — gentle-orchestrator + 2 native fallback agents +
 	// 10 SDD sub-agents + 3 JD agents + 4 review agents + 1 batched refuter +
-	// 12 dev-role agents + 1 review-validator = 34 agents.
+	// 1 review-validator = 22 agents. The 12 dev-orchestrator role agents are
+	// NOT here: they ship in the opt-in dev-orchestrator overlay, so an opt-out
+	// install must never receive them (see TestInjectOpenCodeOptOutOmitsDevRoleAgents).
 	if _, ok := agentMap["gentle-orchestrator"]; !ok {
 		t.Fatal("missing gentle-orchestrator agent")
 	}
-	if len(agentMap) != 34 {
-		t.Fatalf("agent count = %d, want 34", len(agentMap))
+	if len(agentMap) != 22 {
+		t.Fatalf("agent count = %d, want 22", len(agentMap))
 	}
 
 	// Verify orchestrator mode is "primary".
@@ -2637,8 +2639,10 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 	}
 
 	// Verify sub-agents are present with mode "subagent".
+	// The 12 dev-orchestrator role agents are deliberately absent: they ship in
+	// the opt-in dev-orchestrator overlay and are covered by
+	// TestInjectOpenCodeDevOrchestratorOptInInstallsEveryDevRole.
 	subAgents := []string{"sdd-init", "sdd-apply", "sdd-verify", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-archive", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter", "review-validator"}
-	subAgents = append(subAgents, opencodemodel.DevRolePhases()...)
 	for _, subAgent := range subAgents {
 		raw, ok := agentMap[subAgent]
 		if !ok {
@@ -7279,6 +7283,60 @@ func TestInjectOpenCodeOptOutMatchesGoldenSingle(t *testing.T) {
 	}
 }
 
+// TestInjectOpenCodeOptOutOmitsDevRoleAgents locks in the opt-out boundary for
+// the dev-orchestrator role family. The 12 DevRolePhases() agents used to live
+// in sdd-overlay-single.json, which meant a user who opted OUT of the
+// dev-orchestrator feature still received every dev-* agent in their config.
+// They now ship only in the opt-in sdd-overlay-devorchestrator.json overlay, so
+// an opt-out install must contain none of them — neither as agent definitions
+// nor as gentle-orchestrator task allow-list entries.
+func TestInjectOpenCodeOptOutOmitsDevRoleAgents(t *testing.T) {
+	mockNoPackageManager(t)
+
+	for _, mode := range []model.SDDModeID{"", model.SDDModeMulti} {
+		name := string(mode)
+		if name == "" {
+			name = "single"
+		}
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			if _, err := Inject(home, opencodeAdapter(), mode); err != nil {
+				t.Fatalf("Inject(%q) error = %v", mode, err)
+			}
+
+			content, err := os.ReadFile(opencodeAdapter().SettingsPath(home))
+			if err != nil {
+				t.Fatalf("ReadFile(opencode.json) error = %v", err)
+			}
+
+			root := map[string]any{}
+			if err := json.Unmarshal(content, &root); err != nil {
+				t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+			}
+			agentMap, ok := root["agent"].(map[string]any)
+			if !ok {
+				t.Fatalf("opencode.json agent key has unexpected type: %T", root["agent"])
+			}
+
+			orch, ok := agentMap["gentle-orchestrator"].(map[string]any)
+			if !ok {
+				t.Fatal("missing gentle-orchestrator agent")
+			}
+			permission, _ := orch["permission"].(map[string]any)
+			taskAllow, _ := permission["task"].(map[string]any)
+
+			for _, role := range opencodemodel.DevRolePhases() {
+				if _, exists := agentMap[role]; exists {
+					t.Errorf("opt-out install leaked dev role agent %q", role)
+				}
+				if _, exists := taskAllow[role]; exists {
+					t.Errorf("opt-out install leaked dev role %q into gentle-orchestrator permission.task", role)
+				}
+			}
+		})
+	}
+}
+
 func TestInjectOpenCodeOptOutMatchesGoldenMulti(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()
@@ -7341,6 +7399,78 @@ func TestInjectOpenCodeDevOrchestratorOptInFlipsToPrimary(t *testing.T) {
 	}
 	if task, _ := toolsRaw["task"].(bool); !task {
 		t.Fatal("dev-orchestrator tools.task = false, want true")
+	}
+}
+
+// TestInjectOpenCodeDevOrchestratorOptInInstallsEveryDevRole is the relocated
+// home of the positive dev-role install coverage that used to ride along in
+// TestInjectOpenCodeEmptySDDModeDefaultsSingle. Opting in must deliver all 12
+// DevRolePhases() agents: dev-orchestrator as the visible primary that can task
+// the other 11, and each of those 11 as a hidden leaf subagent whose prompt
+// resolved from its __PROMPT_FILE_<role>__ placeholder to a settings-relative
+// prompt file reference.
+func TestInjectOpenCodeDevOrchestratorOptInInstallsEveryDevRole(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+
+	if _, err := Inject(home, opencodeAdapter(), "", InjectOptions{DevOrchestrator: true}); err != nil {
+		t.Fatalf("Inject(single, DevOrchestrator=true) error = %v", err)
+	}
+
+	content, err := os.ReadFile(opencodeAdapter().SettingsPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("opencode.json agent key has unexpected type: %T", root["agent"])
+	}
+
+	orch, ok := agentMap["dev-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatal("opt-in install missing dev-orchestrator agent")
+	}
+	permission, _ := orch["permission"].(map[string]any)
+	taskAllow, _ := permission["task"].(map[string]any)
+	if replaced, ok := taskAllow["__replace__"].(map[string]any); ok {
+		taskAllow = replaced
+	}
+
+	for _, role := range opencodemodel.DevRolePhases() {
+		agent, ok := agentMap[role].(map[string]any)
+		if !ok {
+			t.Errorf("opt-in install missing dev role agent %q", role)
+			continue
+		}
+
+		// Every role prompt must have been rewritten from its placeholder to a
+		// settings-relative prompt file reference.
+		wantPrompt := "{file:./prompts/sdd/" + role + ".md}"
+		if prompt, _ := agent["prompt"].(string); prompt != wantPrompt {
+			t.Errorf("dev role %q prompt = %q, want %q", role, prompt, wantPrompt)
+		}
+
+		if role == "dev-orchestrator" {
+			if mode, _ := agent["mode"].(string); mode != "primary" {
+				t.Errorf("dev-orchestrator mode = %q, want %q", mode, "primary")
+			}
+			continue
+		}
+		if mode, _ := agent["mode"].(string); mode != "subagent" {
+			t.Errorf("dev role %q mode = %q, want %q", role, mode, "subagent")
+		}
+		if hidden, _ := agent["hidden"].(bool); !hidden {
+			t.Errorf("dev role %q hidden = false, want true", role)
+		}
+		// The allow-list opens with "*": "deny", so a role without an explicit
+		// entry ships unreachable (SPEC-005).
+		if got, _ := taskAllow[role].(string); got != "allow" {
+			t.Errorf("dev-orchestrator permission.task[%s] = %v, want allow", role, taskAllow[role])
+		}
 	}
 }
 

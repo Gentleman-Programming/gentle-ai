@@ -670,12 +670,15 @@ func TestGenerateProfileOverlay_ToolsUseReplaceSentinel(t *testing.T) {
 }
 
 func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
+	// The 12 dev-orchestrator role agents live in the opt-in
+	// sdd-overlay-devorchestrator.json overlay, so gentle-orchestrator must
+	// NOT allow-list them in either default overlay. Their allow-list is
+	// asserted by TestDevOrchestratorOverlayTaskPermissions_ExplicitAllowlist.
 	tests := []struct {
 		name      string
 		assetPath string
-		devRoles  bool
 	}{
-		{name: "single", assetPath: "opencode/sdd-overlay-single.json", devRoles: true},
+		{name: "single", assetPath: "opencode/sdd-overlay-single.json"},
 		{name: "multi", assetPath: "opencode/sdd-overlay-multi.json"},
 	}
 
@@ -697,14 +700,60 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 			}
 
 			expected := expectedTaskPermissions("")
-			if tt.devRoles {
-				for _, role := range opencode.DevRolePhases() {
-					expected[role] = "allow"
+			for _, role := range opencode.DevRolePhases() {
+				if _, exists := taskMap[role]; exists {
+					t.Errorf("permission.task must not allow-list dev role %q: it belongs to the opt-in dev-orchestrator overlay", role)
 				}
 			}
 			assertExactTaskPermissions(t, taskMap, expected)
 		})
 	}
+}
+
+// TestDevOrchestratorOverlayTaskPermissions_ExplicitAllowlist is the relocated
+// home of the dev-role task allow-list coverage. The 12 DevRolePhases() agents
+// moved out of the single overlay into the opt-in dev-orchestrator overlay, so
+// dev-orchestrator — not gentle-orchestrator — is the primary that must be able
+// to delegate to them. The allow-list opens with "*": "deny", so every role
+// subagent needs an explicit entry or it ships unreachable (SPEC-005).
+func TestDevOrchestratorOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
+	const assetPath = "opencode/sdd-overlay-devorchestrator.json"
+
+	var root map[string]any
+	if err := json.Unmarshal([]byte(assets.MustRead(assetPath)), &root); err != nil {
+		t.Fatalf("unmarshal %s: %v", assetPath, err)
+	}
+
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing agent map", assetPath)
+	}
+	orch, ok := agentMap["dev-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q missing dev-orchestrator agent", assetPath)
+	}
+	permission, ok := orch["permission"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q dev-orchestrator missing permission", assetPath)
+	}
+	taskWrapper, ok := permission["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("%q dev-orchestrator missing permission.task", assetPath)
+	}
+	taskMap, hasSentinel := taskWrapper["__replace__"].(map[string]any)
+	if !hasSentinel {
+		t.Fatal("task block must use __replace__ sentinel to discard stale wildcards on sync")
+	}
+
+	// dev-orchestrator delegates to every role EXCEPT itself.
+	expected := map[string]any{"*": "deny"}
+	for _, role := range opencode.DevRolePhases() {
+		if role == "dev-orchestrator" {
+			continue
+		}
+		expected[role] = "allow"
+	}
+	assertExactTaskPermissions(t, taskMap, expected)
 }
 
 func TestDefaultOverlayToolsUseReplaceSentinel(t *testing.T) {
