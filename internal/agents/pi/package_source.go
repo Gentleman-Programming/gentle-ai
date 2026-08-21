@@ -10,20 +10,17 @@ import (
 	"strings"
 )
 
-const piTargetPackageName = "gentle-pi"
-
-var (
-	ErrPackageNotConfigured = errors.New("gentle-pi is not declared in Pi settings")
-	ErrInvalidPiRoot        = errors.New("Pi settings root must be absolute")
+const (
+	piTargetPackageName                                                           = "gentle-pi"
+	settingsErrorFormat                                                           = "Pi settings error (%s, scope=%s) at %q: %v"
+	notConfiguredErrorFormat                                                      = "Pi package is not configured (scope=%s) at %q"
+	SettingsScopeProject, SettingsScopeUser, SettingsScopeNone PackageSourceScope = "project", "user", "none"
 )
+
+var ErrPackageNotConfigured, ErrInvalidPiRoot = errors.New("gentle-pi is not declared in Pi settings"), errors.New("Pi settings root must be absolute")
 
 type PackageSourceScope string
-
-const (
-	SettingsScopeProject PackageSourceScope = "project"
-	SettingsScopeUser    PackageSourceScope = "user"
-	SettingsScopeNone    PackageSourceScope = "none"
-)
+type piScope = PackageSourceScope
 
 type PackageSourceSelection struct {
 	Source                      string
@@ -42,11 +39,11 @@ type NotConfiguredError struct {
 }
 
 func (e *SettingsError) Error() string {
-	return fmt.Sprintf("Pi settings error (%s, scope=%s) at %q: %v", e.Kind, e.Scope, e.Path, e.Cause)
+	return fmt.Sprintf(settingsErrorFormat, e.Kind, e.Scope, e.Path, e.Cause)
 }
 func (e *SettingsError) Unwrap() error { return e.Cause }
 func (e *NotConfiguredError) Error() string {
-	return fmt.Sprintf("Pi package is not configured (scope=%s) at %q", e.Scope, e.Path)
+	return fmt.Sprintf(notConfiguredErrorFormat, e.Scope, e.Path)
 }
 func (e *NotConfiguredError) Unwrap() error { return e.Cause }
 func SelectPackageSource(cwd, agentDir string) (PackageSourceSelection, error) {
@@ -76,20 +73,17 @@ func SelectPackageSource(cwd, agentDir string) (PackageSourceSelection, error) {
 			}
 		}
 	}
-	return PackageSourceSelection{Scope: SettingsScopeNone, CWD: resolvedCWD, AgentDir: resolvedAgentDir}, &NotConfiguredError{
-		Path: userPath, Scope: SettingsScopeNone, ProjectPath: projectPath, UserPath: userPath,
-		CWD: resolvedCWD, AgentDir: resolvedAgentDir, Cause: ErrPackageNotConfigured,
-	}
+	return PackageSourceSelection{Scope: SettingsScopeNone, CWD: resolvedCWD, AgentDir: resolvedAgentDir}, &NotConfiguredError{userPath, projectPath, userPath, resolvedCWD, resolvedAgentDir, SettingsScopeNone, ErrPackageNotConfigured}
 }
 func resolvePiAgentDir(explicit string) (string, error) {
-	if strings.TrimSpace(explicit) != "" {
-		return absolutePiRoot(explicit, "agentDir")
+	if strings.TrimSpace(explicit) == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		explicit = CodeGraphPaths(home).AgentDir
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return absolutePiRoot(CodeGraphPaths(home).AgentDir, "agentDir")
+	return absolutePiRoot(explicit, "agentDir")
 }
 func absolutePiRoot(value, label string) (string, error) {
 	value = strings.TrimSpace(value)
@@ -193,12 +187,8 @@ func parsePiPackageDeclaration(raw json.RawMessage) (piPackageDeclaration, error
 	return declaration, nil
 }
 func isGentlePiDeclaration(declaration piPackageDeclaration) bool {
-	if declaration.Name == piTargetPackageName {
-		return true
-	}
 	source := strings.TrimSpace(declaration.Source)
-	return source == piTargetPackageName || source == "npm:"+piTargetPackageName || strings.HasPrefix(source, "npm:"+piTargetPackageName+"@")
+	return declaration.Name == piTargetPackageName || source == piTargetPackageName ||
+		source == "npm:"+piTargetPackageName || strings.HasPrefix(source, "npm:"+piTargetPackageName+"@")
 }
-func settingsFailure(path string, scope PackageSourceScope, kind string, cause error) error {
-	return &SettingsError{Path: path, Scope: scope, Kind: kind, Cause: cause}
-}
+func settingsFailure(p string, s piScope, k string, c error) error { return &SettingsError{p, k, s, c} }

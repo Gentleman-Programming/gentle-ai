@@ -18,7 +18,6 @@ func writePiSettings(t *testing.T, path, body string) {
 		t.Fatal(err)
 	}
 }
-
 func TestSelectPackageSourcePrecedenceAndFallback(t *testing.T) {
 	cases := []struct {
 		name, project, user, source string
@@ -174,7 +173,6 @@ func TestSelectPackageSourceIsReadOnlyOnSuccessAndFailure(t *testing.T) {
 		})
 	}
 }
-
 func snapshotPiTree(t *testing.T, root string) string {
 	var entries []string
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
