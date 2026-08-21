@@ -110,7 +110,7 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 		}})
 	}
 	checks = append(checks,
-		doctor.Check{ID: doctor.CheckStateJSON, Run: func(context.Context) doctor.Result { return checkStateJSON(homeDir) }},
+		doctor.Check{ID: doctor.CheckStateJSON, Run: func(ctx context.Context) doctor.Result { return checkStateJSON(ctx, homeDir) }},
 		doctor.Check{ID: doctor.CheckInstalledAssetVersion, Run: func(context.Context) doctor.Result { return checkInstalledAssetVersion(homeDir) }},
 		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx, homeDir, installedAgents) }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
@@ -374,7 +374,7 @@ func appendUniqueExt(exts []string, ext string) []string {
 }
 
 // checkStateJSON validates ~/.gentle-ai/state.json and agent config dirs.
-func checkStateJSON(homeDir string) CheckResult {
+func checkStateJSON(ctx context.Context, homeDir string) CheckResult {
 	const id = doctor.CheckStateJSON
 	statePath := state.Path(homeDir)
 
@@ -415,12 +415,15 @@ func checkStateJSON(homeDir string) CheckResult {
 	}
 
 	if len(missing) > 0 {
-		return CheckResult{
+		result := CheckResult{
 			Name:   id,
 			Status: CheckStatusWarn,
 			Detail: fmt.Sprintf("state lists %d agent(s) whose config dirs are missing: %s", len(missing), strings.Join(missing, ", ")),
-			Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to restore missing config files"),
 		}
+		if doctor.PreflightRemedySync(ctx, homeDir) {
+			result.Remedy = doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to restore missing config files")
+		}
+		return result
 	}
 
 	return CheckResult{

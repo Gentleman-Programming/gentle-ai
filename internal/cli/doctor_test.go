@@ -298,7 +298,7 @@ func TestExecutableExtensionsFor(t *testing.T) {
 func TestCheckStateJSON_Missing(t *testing.T) {
 	homeDir := t.TempDir()
 
-	got := checkStateJSON(homeDir)
+	got := checkStateJSON(context.Background(), homeDir)
 
 	if got.Status != CheckStatusWarn {
 		t.Errorf("expected warn for missing state, got %s", got.Status)
@@ -318,7 +318,7 @@ func TestCheckStateJSON_Malformed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := checkStateJSON(homeDir)
+	got := checkStateJSON(context.Background(), homeDir)
 
 	if got.Status != CheckStatusFail {
 		t.Errorf("expected fail for malformed state, got %s", got.Status)
@@ -339,7 +339,7 @@ func TestCheckStateJSON_AgentConfigDirMissing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := checkStateJSON(homeDir)
+	got := checkStateJSON(context.Background(), homeDir)
 
 	if got.Status != CheckStatusWarn {
 		t.Errorf("expected warn for missing config dir, got %s", got.Status)
@@ -365,7 +365,7 @@ func TestCheckStateJSON_OK(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := checkStateJSON(homeDir)
+	got := checkStateJSON(context.Background(), homeDir)
 
 	if got.Status != CheckStatusPass {
 		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
@@ -715,6 +715,59 @@ func TestCheckDiskSpace_StatError(t *testing.T) {
 }
 
 // --- RunDoctor integration test ---
+
+func TestRunDoctor_GatesSyncRemedyOnPackageOwnedPreflight(t *testing.T) {
+	origLookPath := lookPathFn
+	origAvail := availableBytesFn
+	origPathDirs := pathDirsFn
+	origHomeDir := osUserHomeDirDoctor
+	defer func() {
+		lookPathFn = origLookPath
+		availableBytesFn = origAvail
+		pathDirsFn = origPathDirs
+		osUserHomeDirDoctor = origHomeDir
+	}()
+
+	homeDir := t.TempDir()
+	stateDir := filepath.Join(homeDir, ".gentle-ai")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(`{"installed_agents":["claude-code"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeDoctorEngramConfig(t, homeDir, "engram", []string{"mcp", "--tools=agent"})
+
+	lookPathFn = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+	availableBytesFn = func(string) (int64, error) { return diskWarnThreshold * 2, nil }
+	pathDirsFn = func() []string { return []string{"/usr/local/bin"} }
+	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, nil)
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	tests := []struct {
+		name       string
+		ctx        context.Context
+		wantRemedy bool
+	}{
+		{name: "preflight cannot prove the contract", ctx: canceled, wantRemedy: false},
+		{name: "supported preflight preserves the remedy", ctx: context.Background(), wantRemedy: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := RunDoctor(tt.ctx, &buf); err != nil {
+				t.Fatalf("RunDoctor returned error: %v", err)
+			}
+			gotRemedy := strings.Contains(buf.String(), "Remedy: Run 'gentle-ai sync' to restore missing config files")
+			if gotRemedy != tt.wantRemedy {
+				t.Fatalf("sync remedy present = %v, want %v\noutput:\n%s", gotRemedy, tt.wantRemedy, buf.String())
+			}
+		})
+	}
+}
 
 func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 	// Mock all external dependencies.
