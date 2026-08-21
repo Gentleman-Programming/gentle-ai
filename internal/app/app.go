@@ -103,6 +103,11 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDVerifyValidate(args[1:], stdout)
 		case "sdd-verify-gate":
 			return cli.RunSDDVerifyGate(args[1:], stdout)
+		case "dev-orchestrator":
+			// Always compiled: this verb is not gated on the
+			// --dev-orchestrator install opt-in, which only selects overlay
+			// packaging, not command reachability.
+			return cli.RunDevOrchestrator(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
 		case "review":
