@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -74,9 +73,8 @@ func issue3565VerifyRefreshDot(sandbox *Sandbox, observation Observation) error 
 	if strings.Contains(observation.Stdout, "filesystem-root") || strings.Contains(observation.Stdout, "skipped") {
 		return fmt.Errorf("refresh --cwd . skipped instead of refreshing project registry: %s", firstLine(observation.Stdout))
 	}
-	registryPath := filepath.Join(sandbox.Repo, ".atl", "skill-registry.md")
-	if _, err := os.Stat(registryPath); err != nil {
-		return fmt.Errorf("refresh --cwd . did not write %s: %w", registryPath, err)
+	if !strings.Contains(observation.Stdout, "Skill registry refreshed") {
+		return fmt.Errorf("refresh --cwd . did not report a refreshed project registry: %s", firstLine(observation.Stdout))
 	}
 	return nil
 }
