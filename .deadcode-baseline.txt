@@ -24,7 +24,9 @@ internal/agents/pi/capability_probe.go	boundedTransportOutput.Write
 internal/agents/pi/capability_probe.go	cloneTransportBytes
 internal/agents/pi/capability_probe.go	drainTransportOutput
 internal/agents/pi/capability_probe.go	transportError
+internal/agents/pi/capability_probe_process_unix.go	finishTransportProcess
 internal/agents/pi/capability_probe_process_unix.go	runModelRoutingProcess
+internal/agents/pi/capability_probe_process_unix.go	transportEnvironment
 internal/agents/pi/model_routing.go	BinError.Error
 internal/agents/pi/model_routing.go	BinError.Unwrap
 internal/agents/pi/model_routing.go	ManifestError.Error

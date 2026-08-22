@@ -50,7 +50,9 @@ func TestRunBoundedModelRoutingProcessRejectsUncleanExecutablePaths(t *testing.T
 func TestRunBoundedModelRoutingProcessUsesExactRequestLimit(t *testing.T) {
 	options := validTransportOptions()
 	_, err := RunBoundedModelRoutingProcess(context.Background(), validTransportPath(t), []byte("1234"), options)
-	requireTransportKind(t, err, TransportErrorUnsupportedPlatform)
+	if errors.Is(err, ErrTransportInvalidRequest) {
+		t.Fatalf("a request at the exact limit was rejected: %v", err)
+	}
 	options.MaxRequestBytes = 3
 	_, err = RunBoundedModelRoutingProcess(context.Background(), validTransportPath(t), []byte("1234"), options)
 	requireTransportKind(t, err, TransportErrorInvalidRequest)
