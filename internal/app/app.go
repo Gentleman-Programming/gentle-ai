@@ -356,6 +356,13 @@ func resolveSkillRegistryDirs(cwd string) (string, string, error) {
 			return "", "", fmt.Errorf("resolve cwd: %w", err)
 		}
 	}
+	// Canonicalize cwd before project-identity decisions so explicit relative
+	// values such as --cwd . compare against the same project root as default cwd.
+	absCWD, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve cwd: %w", err)
+	}
+	cwd = absCWD
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", "", fmt.Errorf("resolve home directory: %w", err)
