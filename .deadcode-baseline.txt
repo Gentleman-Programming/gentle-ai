@@ -72,6 +72,7 @@ internal/agents/pi/model_routing_candidates.go	canonicalRoutingExecutable
 internal/agents/pi/model_routing_candidates.go	enumerateModelRoutingPATH
 internal/agents/pi/model_routing_candidates.go	modelRoutingExecutableNames
 internal/agents/pi/model_routing_candidates.go	routingPathErrorKind
+internal/agents/pi/model_routing_inspection.go	ModelRoutingAuthenticated.UnmarshalJSON
 internal/agents/pi/package_root.go	ResolvePackageRoot
 internal/agents/pi/package_source.go	NotConfiguredError.Error
 internal/agents/pi/package_source.go	NotConfiguredError.Unwrap
