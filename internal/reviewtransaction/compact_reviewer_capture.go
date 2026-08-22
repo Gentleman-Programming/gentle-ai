@@ -243,6 +243,9 @@ func (store CompactStore) CaptureAdmittedReviewerResult(
 					return err
 				}
 			}
+			if err := store.CheckRoleResultStorageReadiness(ctx); err != nil {
+				return err
+			}
 			published, err = publishCompactAdmittedReviewerResult(
 				store.Dir,
 				expected,

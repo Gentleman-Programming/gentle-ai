@@ -4,10 +4,103 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
+
+func TestReviewResultStorageReadiness(t *testing.T) {
+	t.Run("safe lifecycle leaves no artifacts", func(t *testing.T) {
+		store := CompactStore{Dir: t.TempDir()}
+		if err := store.CheckRoleResultStorageReadiness(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		assertEmptyReadinessStore(t, store.Dir)
+	})
+
+	t.Run("unsupported owner mode is typed and cleaned", func(t *testing.T) {
+		store := CompactStore{Dir: t.TempDir()}
+		original := createReviewResultReadinessDirectory
+		createReviewResultReadinessDirectory = func(path string) (bool, error) {
+			if err := os.Mkdir(path, 0o700); err != nil {
+				return false, err
+			}
+			return false, errUnsafeRARAuthorityPath
+		}
+		t.Cleanup(func() { createReviewResultReadinessDirectory = original })
+		err := store.CheckRoleResultStorageReadiness(t.Context())
+		var cause *ReviewResultStorageNotReadyError
+		if !errors.Is(err, ErrReviewResultStorageNotReady) || !errors.As(err, &cause) ||
+			!errors.Is(cause.Cause, errUnsafeRARAuthorityPath) {
+			t.Fatalf("readiness error = %T %v", err, err)
+		}
+		assertEmptyReadinessStore(t, store.Dir)
+	})
+
+	for _, stage := range []string{"payload-published", "digest-published", "cleanup-started"} {
+		t.Run("injected "+stage+" failure cleans scratch", func(t *testing.T) {
+			store := CompactStore{Dir: t.TempDir()}
+			injected := errors.New("injected " + stage)
+			original := reviewResultStorageReadinessHook
+			reviewResultStorageReadinessHook = func(got string) error {
+				if got == stage {
+					return injected
+				}
+				return nil
+			}
+			t.Cleanup(func() { reviewResultStorageReadinessHook = original })
+			err := store.CheckRoleResultStorageReadiness(t.Context())
+			if !errors.Is(err, ErrReviewResultStorageNotReady) || !errors.Is(err, injected) {
+				t.Fatalf("readiness error = %v", err)
+			}
+			assertEmptyReadinessStore(t, store.Dir)
+		})
+	}
+
+	t.Run("concurrent probes use independent scratch", func(t *testing.T) {
+		store := CompactStore{Dir: t.TempDir()}
+		const probes = 8
+		errs := make(chan error, probes)
+		var group sync.WaitGroup
+		for range probes {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				errs <- store.CheckRoleResultStorageReadiness(t.Context())
+			}()
+		}
+		group.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		assertEmptyReadinessStore(t, store.Dir)
+	})
+}
+
+func assertEmptyReadinessStore(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("readiness left artifacts: %v", entries)
+	}
+	for _, path := range []string{
+		filepath.Join(dir, CompactReviewerResultsDir, "00-"+LensReliability+".json"),
+		filepath.Join(dir, compactRefuterResultsDir, compactRefuterResultFile),
+		filepath.Join(dir, "receipt.json"),
+	} {
+		if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("readiness created authority artifact %q: %v", path, err)
+		}
+	}
+}
 
 func TestCompactRoleResultSlotsPreserveImmutablePublicationSemantics(t *testing.T) {
 	revision := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
