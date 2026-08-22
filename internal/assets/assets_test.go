@@ -538,6 +538,59 @@ func TestOpenCodeBackgroundPolicyMarkersAreBalanced(t *testing.T) {
 	}
 }
 
+// TestOpenCodeBackgroundPolicyDefinesDeterministicRouting pins the semantic
+// contract that lets the orchestrator choose background versus foreground work
+// without inventing runtime guarantees.
+func TestOpenCodeBackgroundPolicyDefinesDeterministicRouting(t *testing.T) {
+	content := MustRead("opencode/background-subagents.md")
+	for _, required := range []string{
+		"the parent MUST request `background: true`",
+		"eligible independent, non-mutating work",
+		"concrete non-overlapping work",
+		"does not need that result before its next action",
+		"repository exploration/mapping",
+		"external/web research",
+		"independent planning inputs",
+		"read-only audits/reviews outside formal RDD",
+		"independent long-running test/build/lint/check-only verification",
+		"does not mutate shared source, generated artifacts, repository state, or files needed by concurrent work",
+		"If that isolation cannot be established, run it in the foreground.",
+		"provider or network failure",
+		"no silent retries or duplicate launches",
+		"results are needed only at a later join",
+		"At the parent level, keep no more than 2 background tasks active concurrently.",
+		"join only through completion notifications",
+		"never poll, sleep, run status checks, or proactively read results",
+		"foreground for immediate next-step dependencies",
+		"user decisions or interaction",
+		"dependent SDD phases and gatekeepers",
+		"SDD apply or any writer",
+		"Any same-worktree or shared mutation is foreground.",
+		"archive or closure",
+		"lifecycle gates",
+		"formal RDD/4R reviewers, refuters, validators, or Judgment Day actors",
+		"A background failure still emits a completion/failure notification",
+		"Never silently retry",
+		"explicit reclassification",
+		"must not duplicate active work",
+		"Do not duplicate launches or overlap files or topics",
+		"Never run parallel writers in one worktree",
+		"Background work is process-local and non-durable",
+		"restarting the parent process loses all background jobs",
+		"Do not claim durable scheduling, recovery, isolation, or runtime activity",
+		"safe foreground fallback",
+		"If `background` is absent from the Task schema",
+		"capability is disabled or unknown",
+	} {
+		if !strings.Contains(content, required) {
+			t.Errorf("background policy missing routing contract %q", required)
+		}
+	}
+	if strings.Contains(content, "Use OpenCode's Task tool with `background: true` only for") {
+		t.Fatal("background policy retains an ambiguous allow-only routing rule")
+	}
+}
+
 // TestOpenCodeReviewTransportPluginContract pins the adapter-minimality
 // boundary: the plugin correlates one host Task with one Go process, while Go
 // owns all prompt, schema, admission, and capture semantics.

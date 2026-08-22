@@ -39,26 +39,25 @@ func TestOpenCodeBackgroundPolicyComposition(t *testing.T) {
 	if strings.Count(enabled, openCodeBackgroundPolicyMarker) != 1 || strings.Count(enabled, openCodeBackgroundPolicyEnd) != 1 {
 		t.Fatal("enabled OpenCode composition duplicated policy markers")
 	}
+	// The asset test owns the full policy vocabulary; composition only checks
+	// representative routing, safety, and fallback semantics survive injection.
 	for _, sentinel := range []string{
-		"background: true",
-		"independent, read-only exploration, audit, or review",
-		"foreground tasks when the result is needed before the next action",
-		"user decisions",
-		"SDD apply",
-		"dependent verify evidence",
-		"archive",
-		"formal RDD/4R lenses",
-		"refuters",
-		"fix validators",
-		"Judgment Day actors",
-		"no more than 2 concurrent background tasks",
-		"do not poll, sleep, run status checks, or proactively read",
-		"Do not duplicate launches or work, and do not overlap files or topics",
-		"Never run parallel writers in one worktree",
-		"process-local and non-durable",
-		"restart loses them",
-		"`background` is absent from the Task tool schema",
-		"capability is disabled or unknown",
+		"the parent MUST request `background: true`",
+		"eligible independent, non-mutating work",
+		"independent long-running test/build/lint/check-only verification",
+		"does not mutate shared source, generated artifacts, repository state, or files needed by concurrent work",
+		"If that isolation cannot be established, run it in the foreground.",
+		"At the parent level, keep no more than 2 background tasks active concurrently.",
+		"parent must join only through completion notifications",
+		"Any same-worktree or shared mutation is foreground.",
+		"formal RDD/4R reviewers, refuters, validators, or Judgment Day actors",
+		"A background failure still emits a completion/failure notification",
+		"Do not duplicate launches or overlap files or topics",
+		"Background work is process-local and non-durable",
+		"restarting the parent process loses all background jobs",
+		"Do not claim durable scheduling, recovery, isolation, or runtime activity",
+		"safe foreground fallback",
+		"If `background` is absent from the Task schema",
 	} {
 		if !strings.Contains(enabled, sentinel) {
 			t.Fatalf("enabled OpenCode composition missing policy sentinel %q", sentinel)
