@@ -25,12 +25,19 @@ func NewAdapter() *Adapter {
 	}
 }
 
-// antigravityVariantDir retains Gentle AI's legacy settings/skills selection.
+// antigravityVariantDir returns the resolved variant directory under ~/.gemini.
+// Checks IDE, then Desktop, falls back to CLI.
 func (a *Adapter) antigravityVariantDir(homeDir string) string {
-	desktop := filepath.Join(homeDir, ".gemini", "antigravity-desktop")
-	if stat := a.statPath(desktop); stat.err == nil {
+	ideDir := filepath.Join(homeDir, ".gemini", "antigravity-ide")
+	if stat := a.statPath(ideDir); stat.err == nil && stat.isDir {
+		return ideDir
+	}
+
+	desktop := a.antigravityRoot(homeDir)
+	if stat := a.statPath(desktop); stat.err == nil && stat.isDir {
 		return desktop
 	}
+
 	return filepath.Join(homeDir, ".gemini", "antigravity-cli")
 }
 
@@ -56,7 +63,8 @@ func (a *Adapter) Tier() model.SupportTier {
 
 func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, string, bool, error) {
 	configPath := a.GlobalConfigDir(homeDir)
-	for _, evidence := range []string{a.antigravityRoot(homeDir), a.migratedMarker(homeDir), a.antigravityVariantDir(homeDir)} {
+	ideDir := filepath.Join(homeDir, ".gemini", "antigravity-ide")
+	for _, evidence := range []string{a.migratedMarker(homeDir), ideDir, a.antigravityRoot(homeDir), a.antigravityVariantDir(homeDir)} {
 		stat := a.statPath(evidence)
 		if stat.err == nil {
 			return true, "", configPath, true, nil
@@ -84,7 +92,11 @@ func (a *Adapter) GlobalConfigDir(homeDir string) string {
 	if stat := a.statPath(a.migratedMarker(homeDir)); stat.err == nil {
 		return filepath.Join(homeDir, ".gemini", "config")
 	}
-	if stat := a.statPath(a.antigravityRoot(homeDir)); stat.err == nil {
+	ideDir := filepath.Join(homeDir, ".gemini", "antigravity-ide")
+	if stat := a.statPath(ideDir); stat.err == nil && stat.isDir {
+		return ideDir
+	}
+	if stat := a.statPath(a.antigravityRoot(homeDir)); stat.err == nil && stat.isDir {
 		return a.antigravityRoot(homeDir)
 	}
 	if stat := a.statPath(a.antigravityVariantDir(homeDir)); stat.err == nil {
@@ -122,7 +134,7 @@ func (a *Adapter) MCPStrategy() model.MCPStrategy {
 // --- MCP ---
 
 func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
-	return filepath.Join(a.antigravityVariantDir(homeDir), "mcp_config.json")
+	return filepath.Join(homeDir, ".gemini", "config", "mcp_config.json")
 }
 
 // --- Optional capabilities ---

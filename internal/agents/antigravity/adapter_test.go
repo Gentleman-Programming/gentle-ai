@@ -31,32 +31,38 @@ func makeStatFn(existingDirs ...string) func(string) statResult {
 func TestAntigravityVariantDir(t *testing.T) {
 	home := t.TempDir()
 	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
-	desktopDir := filepath.Join(home, ".gemini", "antigravity-desktop")
+	desktopDir := filepath.Join(home, ".gemini", "antigravity")
+	ideDir := filepath.Join(home, ".gemini", "antigravity-ide")
 
 	tests := []struct {
 		name         string
 		existingDirs []string
-		wantSuffix   string // last two path segments expected
+		wantDir      string
 	}{
 		{
 			name:         "only CLI dir exists resolves to CLI",
 			existingDirs: []string{cliDir},
-			wantSuffix:   filepath.Join(".gemini", "antigravity-cli"),
+			wantDir:      cliDir,
 		},
 		{
 			name:         "only Desktop dir exists resolves to Desktop",
 			existingDirs: []string{desktopDir},
-			wantSuffix:   filepath.Join(".gemini", "antigravity-desktop"),
+			wantDir:      desktopDir,
 		},
 		{
-			name:         "both exist prefers Desktop",
-			existingDirs: []string{cliDir, desktopDir},
-			wantSuffix:   filepath.Join(".gemini", "antigravity-desktop"),
+			name:         "only IDE dir exists resolves to IDE",
+			existingDirs: []string{ideDir},
+			wantDir:      ideDir,
+		},
+		{
+			name:         "all exist prefers IDE over Desktop over CLI",
+			existingDirs: []string{cliDir, desktopDir, ideDir},
+			wantDir:      ideDir,
 		},
 		{
 			name:         "neither exists falls back to CLI",
 			existingDirs: []string{},
-			wantSuffix:   filepath.Join(".gemini", "antigravity-cli"),
+			wantDir:      cliDir,
 		},
 	}
 
@@ -64,9 +70,8 @@ func TestAntigravityVariantDir(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			a := &Adapter{statPath: makeStatFn(tt.existingDirs...)}
 			got := a.antigravityVariantDir(home)
-			want := filepath.Join(home, tt.wantSuffix)
-			if got != want {
-				t.Fatalf("antigravityVariantDir() = %q, want %q", got, want)
+			if got != tt.wantDir {
+				t.Fatalf("antigravityVariantDir() = %q, want %q", got, tt.wantDir)
 			}
 		})
 	}
@@ -77,7 +82,7 @@ func TestAntigravityVariantDir(t *testing.T) {
 func TestDetect(t *testing.T) {
 	home := t.TempDir()
 	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
-	desktopDir := filepath.Join(home, ".gemini", "antigravity-desktop")
+	desktopDir := filepath.Join(home, ".gemini", "antigravity")
 
 	tests := []struct {
 		name            string
@@ -174,14 +179,15 @@ func TestConfigPathsCLIOnly(t *testing.T) {
 	if got := a.SettingsPath(home); got != filepath.Join(cliDir, "settings.json") {
 		t.Fatalf("SettingsPath() = %q, want %q", got, filepath.Join(cliDir, "settings.json"))
 	}
-	if got := a.MCPConfigPath(home, "ctx7"); got != filepath.Join(cliDir, "mcp_config.json") {
-		t.Fatalf("MCPConfigPath() = %q, want Gentle AI CLI path", got)
+	wantMCP := filepath.Join(home, ".gemini", "config", "mcp_config.json")
+	if got := a.MCPConfigPath(home, "ctx7"); got != wantMCP {
+		t.Fatalf("MCPConfigPath() = %q, want %q", got, wantMCP)
 	}
 }
 
 func TestConfigPathsDesktopOnly(t *testing.T) {
 	home := t.TempDir()
-	desktopDir := filepath.Join(home, ".gemini", "antigravity-desktop")
+	desktopDir := filepath.Join(home, ".gemini", "antigravity")
 	a := &Adapter{statPath: makeStatFn(desktopDir)}
 
 	if got := a.GlobalConfigDir(home); got != desktopDir {
@@ -193,22 +199,48 @@ func TestConfigPathsDesktopOnly(t *testing.T) {
 	if got := a.SettingsPath(home); got != filepath.Join(desktopDir, "settings.json") {
 		t.Fatalf("SettingsPath() = %q, want %q", got, filepath.Join(desktopDir, "settings.json"))
 	}
-	if got := a.MCPConfigPath(home, "ctx7"); got != filepath.Join(desktopDir, "mcp_config.json") {
-		t.Fatalf("MCPConfigPath() = %q, want Gentle AI desktop path", got)
+	wantMCP := filepath.Join(home, ".gemini", "config", "mcp_config.json")
+	if got := a.MCPConfigPath(home, "ctx7"); got != wantMCP {
+		t.Fatalf("MCPConfigPath() = %q, want %q", got, wantMCP)
 	}
 }
 
-func TestConfigPathsBothExistPrefersDesktop(t *testing.T) {
+func TestConfigPathsIDEOnly(t *testing.T) {
+	home := t.TempDir()
+	ideDir := filepath.Join(home, ".gemini", "antigravity-ide")
+	a := &Adapter{statPath: makeStatFn(ideDir)}
+
+	if got := a.GlobalConfigDir(home); got != ideDir {
+		t.Fatalf("GlobalConfigDir() = %q, want %q", got, ideDir)
+	}
+	if got := a.SkillsDir(home); got != filepath.Join(ideDir, "skills") {
+		t.Fatalf("SkillsDir() = %q, want %q", got, filepath.Join(ideDir, "skills"))
+	}
+	if got := a.SettingsPath(home); got != filepath.Join(ideDir, "settings.json") {
+		t.Fatalf("SettingsPath() = %q, want %q", got, filepath.Join(ideDir, "settings.json"))
+	}
+	wantMCP := filepath.Join(home, ".gemini", "config", "mcp_config.json")
+	if got := a.MCPConfigPath(home, "ctx7"); got != wantMCP {
+		t.Fatalf("MCPConfigPath() = %q, want %q", got, wantMCP)
+	}
+}
+
+func TestConfigPathsAllExistPrefersIDE(t *testing.T) {
 	home := t.TempDir()
 	cliDir := filepath.Join(home, ".gemini", "antigravity-cli")
-	desktopDir := filepath.Join(home, ".gemini", "antigravity-desktop")
-	a := &Adapter{statPath: makeStatFn(cliDir, desktopDir)}
+	desktopDir := filepath.Join(home, ".gemini", "antigravity")
+	ideDir := filepath.Join(home, ".gemini", "antigravity-ide")
+	a := &Adapter{statPath: makeStatFn(cliDir, desktopDir, ideDir)}
 
-	if got := a.GlobalConfigDir(home); got != desktopDir {
-		t.Fatalf("GlobalConfigDir() = %q, want %q (should prefer Desktop)", got, desktopDir)
+	if got := a.GlobalConfigDir(home); got != ideDir {
+		t.Fatalf("GlobalConfigDir() = %q, want %q (should prefer IDE)", got, ideDir)
 	}
-	if got := a.SkillsDir(home); got != filepath.Join(desktopDir, "skills") {
-		t.Fatalf("SkillsDir() = %q, want %q", got, filepath.Join(desktopDir, "skills"))
+	if got := a.SkillsDir(home); got != filepath.Join(ideDir, "skills") {
+		t.Fatalf("SkillsDir() = %q, want %q", got, filepath.Join(ideDir, "skills"))
+	}
+	wantMCP := filepath.Join(home, ".gemini", "config", "mcp_config.json")
+	if got := a.MCPConfigPath(home, "ctx7"); got != wantMCP {
+		t.Fatalf("MCPConfigPath() = %q, want %q", got, wantMCP)
 	}
 }
 

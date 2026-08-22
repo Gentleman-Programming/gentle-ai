@@ -2017,7 +2017,11 @@ func RenderSyncReport(result SyncResult) string {
 
 	if len(result.ChangedFiles) > 0 {
 		for _, path := range result.ChangedFiles {
-			fmt.Fprintf(&b, "  - %s\n", path)
+			suffix := ""
+			if strings.HasSuffix(path, filepath.Join(".gemini", "config", "mcp_config.json")) {
+				suffix = " (shared global configuration)"
+			}
+			fmt.Fprintf(&b, "  - %s%s\n", path, suffix)
 		}
 	}
 

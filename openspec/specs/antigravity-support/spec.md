@@ -17,15 +17,17 @@ The system MUST expose Antigravity as `antigravity` and MUST NOT expose a separa
 
 ### Requirement: Antigravity writes to the supported config surface
 
-The system MUST write Antigravity settings, MCP config, plugins, and skills under `~/.gemini/antigravity-cli/`.
+The system MUST write Antigravity settings and skills under the resolved variant directory (IDE → Desktop → CLI fallback), MCP config to the shared global location, and the Engram plugin under `~/.gemini/config/plugins/` when migrated or `<variantDir>/plugins/` otherwise.
 
 #### Scenario: Antigravity files are installed
 
 - GIVEN the installer runs for `antigravity`
 - WHEN SDD, Engram, or permission components are applied
-- THEN settings are initialized at `~/.gemini/antigravity-cli/settings.json`
-- AND MCP config is merged at `~/.gemini/antigravity-cli/mcp_config.json`
-- AND skills are installed under `~/.gemini/antigravity-cli/skills/`.
+- THEN settings are initialized at `<variantDir>/settings.json`
+- AND MCP config is merged at `~/.gemini/config/mcp_config.json`
+- AND skills are installed under `<variantDir>/skills/`
+- AND Engram plugin is installed under `~/.gemini/config/plugins/gentle-ai-engram/` when `.migrated` is present, or `<variantDir>/plugins/gentle-ai-engram/` otherwise
+- WHERE `<variantDir>` is the first existing directory among `~/.gemini/antigravity-ide/`, `~/.gemini/antigravity/` (Desktop), or `~/.gemini/antigravity-cli/` (fallback).
 
 ### Requirement: Antigravity uses dynamic subagents
 
