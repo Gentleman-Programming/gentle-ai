@@ -83,10 +83,23 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 	if err := os.WriteFile(filepath.Join(repo, ".git", "info", "attributes"), []byte("*.txt binary\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	blocked := runNegotiatedReviewStart(t, repo, lineage)
-	if blocked.Action != string(reviewtransaction.CompactStartBlocked) || blocked.BaseTree != frozenBase || blocked.CandidateTree != frozenCandidate ||
-		!reflect.DeepEqual(*blocked.ChangedPathManifest, frozenManifest) {
-		t.Fatalf("blocked START did not retain frozen context: %#v", blocked)
+	var blockedOutput bytes.Buffer
+	err = RunReview(boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage,
+	}), &blockedOutput)
+	if err == nil {
+		t.Fatalf("changed-candidate negotiated START unexpectedly succeeded:\n%s", blockedOutput.String())
+	}
+	failure := decodeReviewIntegrationFailure(t, blockedOutput.Bytes())
+	if failure.Code != reviewIntegrationInvalidRequestCode || failure.NextAction != "review.status" {
+		t.Fatalf("changed-candidate START refusal = %#v", failure)
+	}
+	for _, forbidden := range []string{
+		"base_tree", "candidate_tree", "changed_path_manifest", "artifact_subjects", frozenBase, frozenCandidate,
+	} {
+		if bytes.Contains(blockedOutput.Bytes(), []byte(forbidden)) {
+			t.Fatalf("changed-candidate START leaked frozen authority context %q:\n%s", forbidden, blockedOutput.String())
+		}
 	}
 }
 
@@ -110,7 +123,7 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 		}
 	})
 
-	t.Run("recovery selection", func(t *testing.T) {
+	t.Run("recovery selection fails closed for a changed candidate", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
 		writeReviewStartCandidate(t, repo, "tracked.txt", "candidate before escalation\n", 0o644)
 		lineage := "review-start-context-recovery"
@@ -118,10 +131,49 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 		completeNegotiatedStartReview(t, repo, created, false)
 
 		writeReviewStartCandidate(t, repo, "tracked.txt", "replacement target after escalation\n", 0o644)
-		recovery := runNegotiatedReviewStart(t, repo, lineage)
-		if recovery.Action != string(reviewtransaction.CompactStartBlocked) || recovery.LineageID != lineage ||
-			recovery.BaseTree != created.BaseTree || recovery.CandidateTree != created.CandidateTree || !reflect.DeepEqual(*recovery.ChangedPathManifest, *created.ChangedPathManifest) {
-			t.Fatalf("recovery START = %#v", recovery)
+		var statusOutput bytes.Buffer
+		if err := RunReview([]string{
+			"status", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage, "--next-transition",
+		}, &statusOutput); err != nil {
+			t.Fatalf("negotiated STATUS for the changed candidate: %v\n%s", err, statusOutput.String())
+		}
+		var status ReviewTargetStatusResult
+		decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+		if status.Action != reviewtransaction.TargetStatusActionRecover || status.Authority == nil || status.Authority.LineageID != lineage ||
+			status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
+			status.NextTransition.ReasonCode != "recovery_authorization_required" {
+			t.Fatalf("STATUS did not route the changed candidate to recovery collection:\n%s", statusOutput.String())
+		}
+		if status.NextTransition.Execute != nil && status.NextTransition.Execute.Operation == "review.start" {
+			t.Fatalf("STATUS incorrectly routed the changed candidate to review.start:\n%s", statusOutput.String())
+		}
+
+		var startOutput bytes.Buffer
+		err := RunReview(boundNegotiatedStartArgs(t, []string{
+			"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", lineage,
+		}), &startOutput)
+		if err == nil {
+			t.Fatalf("negotiated START for the changed candidate unexpectedly succeeded:\n%s", startOutput.String())
+		}
+		failure := decodeReviewIntegrationFailure(t, startOutput.Bytes())
+		if failure.Code != reviewIntegrationInvalidRequestCode || failure.Phase != "preflight" ||
+			failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "not_evaluated" ||
+			!failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityNotReplayable ||
+			failure.NextAction != "review.status" || failure.LineageID != lineage {
+			t.Fatalf("changed-candidate START refusal = %#v", failure)
+		}
+		for _, forbidden := range []string{
+			"base_tree", "candidate_tree", "changed_path_manifest", "artifact_subjects",
+			created.BaseTree, created.CandidateTree,
+		} {
+			if bytes.Contains(startOutput.Bytes(), []byte(forbidden)) {
+				t.Fatalf("changed-candidate START leaked frozen authority context %q:\n%s", forbidden, startOutput.String())
+			}
+		}
+		for _, subject := range created.ArtifactSubjects {
+			if bytes.Contains(startOutput.Bytes(), []byte(subject.SubjectHash)) {
+				t.Fatalf("changed-candidate START leaked artifact subject %q:\n%s", subject.SubjectHash, startOutput.String())
+			}
 		}
 	})
 }

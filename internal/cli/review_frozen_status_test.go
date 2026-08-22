@@ -66,6 +66,31 @@ func TestExplicitFrozenReviewingStatusResumesPendingCandidateAfterDrift(t *testi
 			}
 		})
 	}
+	t.Run("negotiated START keeps the reviewing authority continuation neutral", func(t *testing.T) {
+		repo, _, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, nil)
+		writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'live drift'\n", 0o644)
+
+		status := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
+		if status.NextTransition == nil || status.NextTransition.ReasonCode != "reviewer_results_required" {
+			t.Fatalf("reviewing authority STATUS = %#v", status)
+		}
+
+		var output bytes.Buffer
+		err := RunReview(boundNegotiatedStartArgs(t, []string{
+			"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", record.State.LineageID,
+		}), &output)
+		if err == nil {
+			t.Fatalf("negotiated START for a drifted reviewing authority unexpectedly succeeded:\n%s", output.String())
+		}
+		failure := decodeReviewIntegrationFailure(t, output.Bytes())
+		if failure.Code != reviewIntegrationInvalidRequestCode || failure.NextAction != "review.status" {
+			t.Fatalf("reviewing-authority START refusal = %#v", failure)
+		}
+		const wantCause = "the selected authority governs a different candidate; rerun negotiated STATUS to receive the authoritative next transition"
+		if failure.Cause != wantCause {
+			t.Fatalf("reviewing-authority START continuation = %q, want %q", failure.Cause, wantCause)
+		}
+	})
 }
 
 func TestExplicitFrozenReviewingStatusUsesFrozenUntrackedScope(t *testing.T) {

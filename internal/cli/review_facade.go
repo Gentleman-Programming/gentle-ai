@@ -2230,6 +2230,13 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return fmt.Errorf("start compact facade review: %w", err)
 	}
 	authority := started.Record.State
+	// guard:population start-authority-target-binding fail-closed: legitimate selected authorities govern the freshly requested negotiated START snapshot; different-candidate authorities are excluded and routed back to STATUS
+	if negotiated && authority.InitialSnapshot.Identity != snapshot.Identity {
+		return reviewPreflightRefusal(reviewPreflightReason{
+			Code: reviewIntegrationInvalidRequestCode, Message: "The negotiated review START target conflicts with the selected recovery authority; re-derive the exact next transition before retrying.",
+			NextAction: "review.status",
+		}, errors.New("the selected authority governs a different candidate; rerun negotiated STATUS to receive the authoritative next transition"))
+	}
 	legacyResult := reviewFacadeStartResultFor(started.Action, started.LensesRequired, authority)
 	if !negotiated {
 		// Output-only projections of facts this start already computed. Both
