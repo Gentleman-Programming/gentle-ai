@@ -12,6 +12,7 @@ Before you dive in, please read this guide fully. We have a structured workflow 
 - [AI-Assisted Contributions](#ai-assisted-contributions)
 - [Label System](#label-system)
 - [Development Setup](#development-setup)
+- [Hermes — Knowledge-Layer Agent](#hermes--knowledge-layer-agent)
 - [Testing](#testing)
 - [Running the Cross-Lane Battery](#running-the-cross-lane-battery)
 - [Commit Convention](#commit-convention)
@@ -120,6 +121,24 @@ go build -o gentle-ai ./cmd/gentle-ai
 ```bash
 ./gentle-ai
 ```
+
+---
+
+## Hermes — Knowledge-Layer Agent
+
+Hermes is a detect-only knowledge-layer integration. Install Hermes separately
+before running Gentle AI; Gentle AI detects an existing installation and
+configures it, but does not install the agent.
+
+Hermes supports:
+
+- **Skills** in `~/.hermes/skills/`
+- **System prompt** in `~/.hermes/SOUL.md`, using marker-based Markdown sections
+- **MCP servers** in `~/.hermes/config.yaml`, using Hermes's YAML configuration format
+
+Hermes does not support subagents, slash commands, or output styles. When
+changing Hermes integration code, start with `internal/agents/hermes/adapter.go`
+and keep its global `~/.hermes` paths and manual-install boundary intact.
 
 ---
 
