@@ -7194,6 +7194,7 @@ func TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	legacyCmd := `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	canonicalCmd := `powershell -NoProfile -Command 'if (Test-Path env:CLAUDE_PROJECT_DIR) { $dir = $env:CLAUDE_PROJECT_DIR } else { $dir = $PWD }; gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "$dir"; exit 0'`
 	initial := fmt.Sprintf(`{
   "hooks": {
     "UserPromptSubmit": [
@@ -7222,15 +7223,47 @@ func TestEnsureClaudeSkillRegistryHookReplacesLegacyPOSIXCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(data)
-	if strings.Contains(text, legacyCmd) {
-		t.Errorf("legacy POSIX literal still present after migration:\n%s", text)
+	var gotRoot map[string]any
+	if err := json.Unmarshal(data, &gotRoot); err != nil {
+		t.Fatalf("settings.json is not valid JSON after migration: %v\n%s", err, data)
 	}
-	if !strings.Contains(text, "powershell") {
-		t.Errorf("canonical PowerShell literal missing after migration:\n%s", text)
+	hooks, ok := gotRoot["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks key missing or wrong shape after migration: %v", gotRoot["hooks"])
 	}
-	if strings.Count(text, "gentle-ai skill-registry refresh") != 1 {
-		t.Errorf("hook command count != 1 after migration:\n%s", text)
+	ups, ok := hooks["UserPromptSubmit"].([]any)
+	if !ok {
+		t.Fatalf("UserPromptSubmit missing after migration: %v", hooks["UserPromptSubmit"])
+	}
+	var legacyCount, canonicalCount int
+	for _, item := range ups {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		innerHooks, ok := itemMap["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, h := range innerHooks {
+			hMap, ok := h.(map[string]any)
+			if !ok {
+				continue
+			}
+			cmd, _ := hMap["command"].(string)
+			switch cmd {
+			case legacyCmd:
+				legacyCount++
+			case canonicalCmd:
+				canonicalCount++
+			}
+		}
+	}
+	if legacyCount != 0 {
+		t.Errorf("legacy POSIX literal still present %d time(s) after migration:\n%s", legacyCount, data)
+	}
+	if canonicalCount != 1 {
+		t.Errorf("canonical PowerShell literal count = %d, want 1 after migration:\n%s", canonicalCount, data)
 	}
 }
 
@@ -7360,14 +7393,22 @@ func TestInject_ClaudeCodeInstallsReviewStopHook(t *testing.T) {
 // TestClaudeUserPromptSubmitHookExecutesPowerShellCommandWithSpecialChars
 // runs the canonical Windows UserPromptSubmit hook command through pwsh
 // (PowerShell Core) against a fake gentle-ai on PATH, capturing argv,
-// stdin, env, and exit code. It exercises a CLAUDE_PROJECT_DIR with the
+// env, and exit code. It exercises a CLAUDE_PROJECT_DIR with the
 // characters that historically broke the legacy POSIX literal under
-// PowerShell 5.1: spaces, apostrophes, and a path traversal segment.
+// Windows PowerShell 5.1: spaces, an apostrophe, and a path-traversal
+// segment.
 //
-// Skipped when pwsh is unavailable: the test depends on real PowerShell
-// argument reconstruction, which is what we are verifying. The canonical
-// command line itself is platform-aware, so running under pwsh on Linux
-// exercises the same reconstruction logic as on Windows.
+// CI caveat: this test runs on pwsh (PowerShell Core 7.x) under Linux,
+// not on Windows PowerShell 5.1 where the original bug was filed. PS 5.1
+// and pwsh 7.x have different argument-parsing rules for some edge
+// cases (notably $ expansion inside double-quoted strings, backtick
+// escaping). The canonical literal avoids PS-5.1-only constructs (no
+// ${VAR:-DEFAULT}, no || true), so pwsh coverage is a strong sanity check,
+// not a proof of PS 5.1 correctness. A maintainer with a Windows host can
+// rerun the same harness against powershell.exe (5.1) to close that gap.
+//
+// Skipped when pwsh is unavailable, or on Windows hosts where /bin/sh
+// (the fake gentle-ai interpreter) is not present.
 
 // TestPruneLegacyClaudeHookPreservesSiblingsWithinSameItem verifies that when
 // an outer UserPromptSubmit entry contains the legacy literal alongside a
@@ -7446,6 +7487,14 @@ func TestClaudeUserPromptSubmitHookExecutesPowerShellCommandWithSpecialChars(t *
 	pwshPath, err := exec.LookPath("pwsh")
 	if err != nil {
 		t.Skip("pwsh (PowerShell Core) is not installed; cannot exercise the PowerShell command literal")
+	}
+	if runtime.GOOS == "windows" {
+		// The fake gentle-ai below uses POSIX /bin/sh. On Windows this
+		// requires git-bash or WSL; skip cleanly otherwise instead of
+		// failing the whole suite.
+		if _, statErr := os.Stat("/bin/sh"); statErr != nil {
+			t.Skip("/bin/sh not available on this Windows host; cannot run the fake gentle-ai")
+		}
 	}
 
 	root := t.TempDir()
