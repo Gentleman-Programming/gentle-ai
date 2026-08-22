@@ -36,7 +36,7 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "cursor", Path: filepath.Join(homeDir, ".cursor")},
 		{Agent: "vscode-copilot", Path: vscodeCopilotGlobalConfigDir(homeDir)},
 		{Agent: "codex", Path: filepath.Join(homeDir, ".codex")},
-		{Agent: "antigravity", Path: filepath.Join(homeDir, ".gemini", "antigravity-cli")},
+		{Agent: "antigravity", Path: antigravityConfigDir(homeDir)},
 		{Agent: "windsurf", Path: filepath.Join(homeDir, ".codeium", "windsurf")},
 		{Agent: "kimi", Path: filepath.Join(homeDir, ".kimi")},
 		{Agent: "qwen-code", Path: filepath.Join(homeDir, ".qwen")},
@@ -46,6 +46,31 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "trae-ide", Path: filepath.Join(homeDir, ".trae")},
 		{Agent: "hermes", Path: filepath.Join(homeDir, ".hermes")},
 	}
+}
+
+// antigravityConfigDir mirrors antigravity.Adapter.GlobalConfigDir
+// without importing the agents package (import cycle). Returns the resolved
+// directory: migrated (.migrated marker) → IDE → Desktop → CLI fallback.
+//
+// TODO(follow-up): remove this shim once the system ← agents import cycle is
+// resolved and ScanConfigs delegates directly to agents.DiscoverInstalled.
+func antigravityConfigDir(homeDir string) string {
+	migrated := filepath.Join(homeDir, ".gemini", "config", ".migrated")
+	if info, err := os.Stat(migrated); err == nil && !info.IsDir() {
+		return filepath.Join(homeDir, ".gemini", "config")
+	}
+
+	ideDir := filepath.Join(homeDir, ".gemini", "antigravity-ide")
+	if info, err := os.Stat(ideDir); err == nil && info.IsDir() {
+		return ideDir
+	}
+
+	desktop := filepath.Join(homeDir, ".gemini", "antigravity")
+	if info, err := os.Stat(desktop); err == nil && info.IsDir() {
+		return desktop
+	}
+
+	return filepath.Join(homeDir, ".gemini", "antigravity-cli")
 }
 
 // vscodeCopilotGlobalConfigDir returns ~/.copilot, the GlobalConfigDir used by
