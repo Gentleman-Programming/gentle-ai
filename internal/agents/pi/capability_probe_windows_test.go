@@ -3,12 +3,21 @@
 package pi
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 func writeWindowsTransportInterpreter(t *testing.T, path string) string {
@@ -20,14 +29,6 @@ func writeWindowsTransportInterpreter(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return path
-}
-
-func TestWindowsTransportDispatchIsTypedUnsupported(t *testing.T) {
-	_, err := RunBoundedModelRoutingProcess(context.Background(), validTransportPath(t), nil, validTransportOptions())
-	requireTransportKind(t, err, TransportErrorUnsupportedPlatform)
-	if errors.Is(err, &TransportError{Kind: TransportErrorInvalidPath}) || !errors.Is(err, errors.ErrUnsupported) {
-		t.Fatalf("unsupported dispatch error=%v", err)
-	}
 }
 
 func TestWindowsTransportCommandPlanNativeIsDirectAndCopySafe(t *testing.T) {
@@ -150,5 +151,200 @@ func TestWindowsTransportEnvironmentIsCanonicalAndSecretFree(t *testing.T) {
 				t.Fatalf("environment=%q; want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func init() {
+	if len(os.Args) > 1 {
+		if os.Args[1] == "transport-descendant" {
+			if len(os.Args) != 3 {
+				os.Exit(2)
+			}
+			writeWindowsTransportEvidence(os.Args[2], fmt.Sprintf("%d\nready\n", os.Getpid()))
+			select {}
+		}
+		return
+	}
+	request, _ := io.ReadAll(os.Stdin)
+	if bytes.HasPrefix(request, []byte("hang:")) {
+		path := string(request[5:])
+		if err := exec.Command(os.Args[0], "transport-descendant", path).Start(); err != nil {
+			os.Exit(2)
+		}
+		select {}
+	}
+	switch string(request) {
+	case "stdout":
+		_, _ = os.Stdout.Write([]byte("abcd"))
+	case "stdout-overflow":
+		_, _ = os.Stdout.Write([]byte("abcdef"))
+	case "stderr", "stderr-overflow":
+		_, _ = os.Stderr.Write([]byte("stderr-secret"))
+	case "both-overflow":
+		_, _ = os.Stdout.Write([]byte("abcde"))
+		_, _ = os.Stderr.Write([]byte("wxyza"))
+	case "nonzero":
+		os.Exit(7)
+	default:
+		cwd, _ := os.Getwd()
+		_, _ = fmt.Fprintf(os.Stdout, "%x\n%d\n%s\n%s", request, len(os.Args)-1, cwd, os.Getenv("AWS_SECRET"))
+	}
+	os.Exit(0)
+}
+func writeWindowsTransportEvidence(path, data string) {
+	if err := os.WriteFile(path+".tmp", []byte(data), 0o600); err != nil || os.Rename(path+".tmp", path) != nil {
+		os.Exit(2)
+	}
+}
+func TestWindowsTransportUsesNativeAndBatchContracts(t *testing.T) {
+	helper := windowsTransportTestExecutable(t)
+	t.Setenv("AWS_SECRET", "must-not-cross")
+	request := []byte("first\nsecond\x00line\n")
+	for _, ext := range []string{".exe", ".cmd", ".bat"} {
+		t.Run(ext, func(t *testing.T) {
+			executable := helper
+			if ext != ".exe" {
+				executable = filepath.Join(t.TempDir(), "script path with spaces"+ext)
+				if err := os.WriteFile(executable, []byte("@echo off\r\n\""+helper+"\"\r\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			o := validTransportOptions()
+			o.Timeout, o.MaxRequestBytes, o.MaxStdoutBytes, o.MaxStderrBytes = 5*time.Second, len(request), 8192, 8192
+			result, err := RunBoundedModelRoutingProcess(context.Background(), executable, request, o)
+			if err != nil || result.ExitCode != 0 || result.StderrBytes != 0 {
+				t.Fatalf("result=%+v error=%v", result, err)
+			}
+			parts := strings.Split(string(result.Stdout), "\n")
+			wantCWD := filepath.Clean(filepath.VolumeName(executable) + string(filepath.Separator))
+			if len(parts) != 4 || parts[0] != fmt.Sprintf("%x", request) || parts[1] != "0" || !strings.EqualFold(filepath.Clean(parts[2]), wantCWD) || parts[3] != "" {
+				t.Fatalf("helper record=%q", result.Stdout)
+			}
+		})
+	}
+}
+func TestWindowsTransportBoundsAndNonDisclosure(t *testing.T) {
+	helper := windowsTransportTestExecutable(t)
+	for _, tc := range []struct {
+		name, request, output string
+		stdout, stderr, count int
+		kind                  TransportErrorKind
+		code                  int
+	}{
+		{"stdout exact", "stdout", "abcd", 4, 32, 0, "", 0}, {"stdout overflow", "stdout-overflow", "abcde", 4, 32, 0, TransportErrorStdoutOverflow, 0},
+		{"stderr exact", "stderr", "", 32, 32, 13, "", 0}, {"stderr overflow", "stderr-overflow", "", 32, 4, 13, TransportErrorStderrOverflow, 0},
+		{"both overflow", "both-overflow", "abcde", 4, 4, 5, TransportErrorStdoutOverflow, 0}, {"nonzero", "nonzero", "", 32, 32, 0, TransportErrorNonzeroExit, 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := validTransportOptions()
+			o.Timeout, o.MaxRequestBytes, o.MaxStdoutBytes, o.MaxStderrBytes = 5*time.Second, len(tc.request), tc.stdout, tc.stderr
+			result, err := RunBoundedModelRoutingProcess(context.Background(), helper, []byte(tc.request), o)
+			if tc.kind == "" && err != nil {
+				t.Fatal(err)
+			} else if tc.kind != "" {
+				requireTransportKind(t, err, tc.kind)
+			}
+			if string(result.Stdout) != tc.output || result.StderrBytes != tc.count || result.ExitCode != tc.code || strings.Contains(fmt.Sprint(err, result), "stderr-secret") {
+				t.Fatalf("result=%+v error=%v", result, err)
+			}
+		})
+	}
+}
+func TestWindowsTransportCancelAndTimeoutReapDescendants(t *testing.T) {
+	helper := windowsTransportTestExecutable(t)
+	deadline := time.Now().Add(30 * time.Second)
+	if d, ok := t.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	for _, tc := range []struct {
+		name   string
+		cancel bool
+		kind   TransportErrorKind
+		cause  error
+	}{
+		{"cancel", true, TransportErrorCanceled, context.Canceled}, {"timeout", false, TransportErrorTimeout, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			evidencePath := filepath.Join(t.TempDir(), "process.evidence")
+			ctx, stop := context.WithCancel(context.Background())
+			defer stop()
+			done := make(chan error, 1)
+			go func() {
+				o := validTransportOptions()
+				o.Timeout, o.MaxRequestBytes = 5*time.Second, len("hang:")+len(evidencePath)
+				_, err := RunBoundedModelRoutingProcess(ctx, helper, []byte("hang:"+evidencePath), o)
+				done <- err
+			}()
+			data := waitWindowsTransportEvidence(t, evidencePath, deadline)
+			fields := strings.Fields(string(data))
+			if len(fields) < 2 {
+				t.Fatalf("malformed readiness evidence %q", data)
+			}
+			pid, err := strconv.Atoi(fields[0])
+			if err != nil || pid <= 0 {
+				t.Fatalf("descendant pid=%q error=%v", fields[0], err)
+			}
+			handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := windows.CloseHandle(handle); err != nil {
+					t.Errorf("close descendant handle: %v", err)
+				}
+			}()
+			if tc.cancel {
+				stop()
+			}
+			select {
+			case err = <-done:
+			case <-time.After(time.Until(deadline)):
+				t.Fatal("transport did not return")
+			}
+			requireTransportKind(t, err, tc.kind)
+			if !errors.Is(err, tc.cause) {
+				t.Fatalf("termination cause was not preserved: %v", err)
+			}
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				t.Fatal("test deadline expired before descendant reap")
+			}
+			status, err := windows.WaitForSingleObject(handle, uint32(remaining/time.Millisecond))
+			if err != nil || status != windows.WAIT_OBJECT_0 {
+				t.Fatalf("descendant status=%d error=%v", status, err)
+			}
+		})
+	}
+}
+func windowsTransportTestExecutable(t *testing.T) string {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return executable
+}
+
+func waitWindowsTransportEvidence(t *testing.T, path string, deadline time.Time) []byte {
+	t.Helper()
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return data
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("process evidence did not become readable")
+	return nil
+}
+
+func TestWindowsTransportSetupFailurePreservesCause(t *testing.T) {
+	oldSet := windowsTransportSetInformationJobObject
+	windowsTransportSetInformationJobObject = func(windows.Handle, uint32, uintptr, uint32) (int, error) { return 0, errors.New("configure seam") }
+	defer func() { windowsTransportSetInformationJobObject = oldSet }()
+	command := exec.Command(os.Args[0], "-test.run=^TestWindowsTransportCommandPlanNativeIsDirectAndCopySafe$")
+	_, err := startWindowsTransportProcessTree(command)
+	if err == nil || !strings.Contains(err.Error(), "configure seam") {
+		t.Fatalf("setup error=%v; want preserved configure failure", err)
 	}
 }

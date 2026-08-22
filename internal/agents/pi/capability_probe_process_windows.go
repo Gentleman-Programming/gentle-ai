@@ -3,17 +3,200 @@
 package pi
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
+	"time"
 	"unicode"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-func runModelRoutingProcess(context.Context, string, []byte, ModelRoutingProcessOptions) (ModelRoutingProcessResult, error) {
-	return ModelRoutingProcessResult{}, transportError(TransportErrorUnsupportedPlatform, ErrTransportUnsupportedPlatform)
+var (
+	ntResumeTransportProcess                 = windows.NewLazySystemDLL("ntdll.dll").NewProc("NtResumeProcess")
+	windowsTransportCreateJobObject          = windows.CreateJobObject
+	windowsTransportSetInformationJobObject  = windows.SetInformationJobObject
+	windowsTransportOpenProcess              = windows.OpenProcess
+	windowsTransportAssignProcessToJobObject = windows.AssignProcessToJobObject
+	windowsTransportTerminateJobObject       = windows.TerminateJobObject
+	windowsTransportCloseHandle              = windows.CloseHandle
+	windowsTransportResumeProcess            = resumeWindowsTransportProcess
+)
+
+const windowsTransportReapTimeout = 500 * time.Millisecond
+
+var errWindowsTransportReapTimeout = errors.New("Windows transport process did not finish after termination")
+
+func runModelRoutingProcess(ctx context.Context, executable string, request []byte, o ModelRoutingProcessOptions) (ModelRoutingProcessResult, error) {
+	runCtx, cancel := context.WithTimeout(ctx, o.Timeout)
+	defer cancel()
+
+	command, err := newWindowsTransportCommand(executable)
+	if err != nil {
+		return ModelRoutingProcessResult{}, err
+	}
+	command.Stdin = bytes.NewReader(request)
+	stdout, stderr := &boundedTransportOutput{limit: o.MaxStdoutBytes}, &boundedTransportOutput{limit: o.MaxStderrBytes}
+	command.Stdout, command.Stderr = stdout, stderr
+	closeJob, err := startWindowsTransportProcessTree(command)
+	if err != nil {
+		return ModelRoutingProcessResult{}, transportError(TransportErrorStart, err)
+	}
+
+	wait := make(chan error, 1)
+	go func() { wait <- command.Wait() }()
+	complete := func(waitErr error) (ModelRoutingProcessResult, error) {
+		result, processErr := finishTransportProcess(stdout, stderr, waitErr)
+		if closeErr := closeJob(false); closeErr != nil {
+			return result, transportError(TransportErrorTermination, errors.Join(closeErr, processErr))
+		}
+		return result, processErr
+	}
+
+	select {
+	case waitErr := <-wait:
+		return complete(waitErr)
+	case <-runCtx.Done():
+		select {
+		case waitErr := <-wait:
+			return complete(waitErr)
+		default:
+		}
+		cleanupErr := closeJob(true)
+		waitErr, timedOut := waitWindowsTransport(wait)
+		if timedOut {
+			cleanupErr = errors.Join(cleanupErr, killWindowsTransportProcess(command))
+			waitErr, timedOut = waitWindowsTransport(wait)
+		}
+		if timedOut {
+			cleanupErr = errors.Join(cleanupErr, errWindowsTransportReapTimeout)
+		} else {
+			var exitErr *exec.ExitError
+			if waitErr != nil && !errors.As(waitErr, &exitErr) {
+				cleanupErr = errors.Join(cleanupErr, waitErr)
+			}
+		}
+		result, _ := finishTransportProcess(stdout, stderr, waitErr)
+		if cleanupErr != nil {
+			return result, transportError(TransportErrorTermination, errors.Join(runCtx.Err(), cleanupErr))
+		}
+		kind := TransportErrorCanceled
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			kind = TransportErrorTimeout
+		}
+		return result, transportError(kind, runCtx.Err())
+	}
+}
+func newWindowsTransportCommand(executable string) (*exec.Cmd, error) {
+	plan, err := newWindowsTransportCommandPlan(executable, os.Environ())
+	if err != nil {
+		return nil, err
+	}
+	command := exec.Command(plan.Executable(), plan.Arguments()...)
+	command.Dir, command.Env = plan.WorkingDirectory(), plan.Environment()
+	return command, nil
+}
+func startWindowsTransportProcessTree(command *exec.Cmd) (func(bool) error, error) {
+	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED}
+	if err := command.Start(); err != nil {
+		return nil, err
+	}
+	jobHandle, err := windowsTransportCreateJobObject(nil, nil)
+	if err != nil {
+		return nil, errors.Join(err, (&windowsTransportJob{handle: jobHandle}).close(false), killAndReapWindowsTransport(command))
+	}
+	job := &windowsTransportJob{handle: jobHandle}
+	var process windows.Handle
+	closeProcess := func() error {
+		if process == 0 {
+			return nil
+		}
+		handle := process
+		process = 0
+		return windowsTransportCloseHandle(handle)
+	}
+	fail := func(cause error, assigned bool) (func(bool) error, error) {
+		return nil, errors.Join(cause, job.close(assigned), closeProcess(), killAndReapWindowsTransport(command))
+	}
+	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE}}
+	if _, err = windowsTransportSetInformationJobObject(job.handle, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+		return fail(err, false)
+	}
+	process, err = windowsTransportOpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_SUSPEND_RESUME, false, uint32(command.Process.Pid))
+	if err != nil {
+		return fail(err, false)
+	}
+	if err = windowsTransportAssignProcessToJobObject(job.handle, process); err != nil {
+		return fail(err, false)
+	}
+	if err = windowsTransportResumeProcess(process); err != nil {
+		return fail(err, true)
+	}
+	if err = closeProcess(); err != nil {
+		return fail(err, true)
+	}
+	return func(terminate bool) error { return job.close(terminate) }, nil
+}
+
+type windowsTransportJob struct{ handle windows.Handle }
+
+func (job *windowsTransportJob) close(terminate bool) error {
+	if job == nil || job.handle == 0 {
+		return nil
+	}
+	handle := job.handle
+	job.handle = 0
+	if terminate {
+		return errors.Join(windowsTransportTerminateJobObject(handle, 1), windowsTransportCloseHandle(handle))
+	}
+	return windowsTransportCloseHandle(handle)
+}
+func resumeWindowsTransportProcess(process windows.Handle) error {
+	if err := ntResumeTransportProcess.Find(); err != nil {
+		return err
+	}
+	if status, _, _ := ntResumeTransportProcess.Call(uintptr(process)); status != 0 {
+		return windows.NTStatus(status)
+	}
+	return nil
+}
+
+func killWindowsTransportProcess(command *exec.Cmd) error {
+	if err := command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	return nil
+}
+
+func killAndReapWindowsTransport(command *exec.Cmd) error {
+	cleanupErr := killWindowsTransportProcess(command)
+	wait := make(chan error, 1)
+	go func() { wait <- command.Wait() }()
+	waitErr, timedOut := waitWindowsTransport(wait)
+	if timedOut {
+		return errors.Join(cleanupErr, errWindowsTransportReapTimeout)
+	}
+	var exitErr *exec.ExitError
+	if waitErr != nil && !errors.As(waitErr, &exitErr) {
+		cleanupErr = errors.Join(cleanupErr, waitErr)
+	}
+	return cleanupErr
+}
+
+func waitWindowsTransport(wait <-chan error) (error, bool) {
+	select {
+	case waitErr := <-wait:
+		return waitErr, false
+	case <-time.After(windowsTransportReapTimeout):
+		return nil, true
+	}
 }
 
 type windowsTransportCommandPlan struct {
