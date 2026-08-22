@@ -112,7 +112,10 @@ func waitTerminalBurnReady(process *terminalBurnProcess, path string) error {
 		select {
 		case err := <-process.done:
 			process.done <- err
-			return fmt.Errorf("held FINALIZE contender exited before admission barrier: %v", err)
+			if err != nil {
+				return fmt.Errorf("held FINALIZE contender exited before admission barrier: %w", err)
+			}
+			return errors.New("held FINALIZE contender exited before admission barrier")
 		case <-timeout.C:
 			return errors.New("timed out waiting for the FINALIZE contender admission barrier")
 		case <-ticker.C:
@@ -127,6 +130,7 @@ type terminalBurnFailure struct {
 	Phase                  string   `json:"phase"`
 	Code                   string   `json:"code"`
 	Message                string   `json:"message"`
+	Cause                  string   `json:"cause"`
 	MutationOutcome        string   `json:"mutation_outcome"`
 	AuthorityApplicability string   `json:"authority_applicability"`
 	RetrySafe              bool     `json:"retry_safe"`
@@ -145,7 +149,7 @@ func requireTerminalBurnLoser(observation Observation) error {
 	if err := json.Unmarshal([]byte(payload), &fields); err != nil {
 		return fmt.Errorf("parse negotiated FINALIZE loser: %w", err)
 	}
-	for _, name := range []string{"schema", "contract", "operation", "phase", "code", "message", "mutation_outcome", "authority_applicability", "retry_safe", "replayability", "lineage_id", "required_inputs", "next_action"} {
+	for _, name := range []string{"schema", "contract", "operation", "phase", "code", "message", "cause", "mutation_outcome", "authority_applicability", "retry_safe", "replayability", "lineage_id", "required_inputs", "next_action"} {
 		if _, ok := fields[name]; !ok {
 			return fmt.Errorf("negotiated FINALIZE loser omitted contract field %q", name)
 		}
@@ -155,9 +159,9 @@ func requireTerminalBurnLoser(observation Observation) error {
 		return fmt.Errorf("decode negotiated FINALIZE loser: %w", err)
 	}
 	if failure.Schema != "gentle-ai.review-integration.failure/v2" || failure.Contract != terminalBurnContract || failure.Operation != "review.finalize" ||
-		failure.Phase == "" || failure.Code == "" || failure.Message == "" || failure.MutationOutcome == "" || failure.MutationOutcome == "committed" ||
-		failure.AuthorityApplicability == "" || (failure.Replayability != "not_replayable" && failure.Replayability != "exact_replay_safe" && failure.Replayability != "status_required" && failure.Replayability != "manual_action_required") ||
-		failure.LineageID != terminalBurnLineage || failure.RequiredInputs == nil || failure.NextAction == "" {
+		failure.Phase == "" || failure.Code != "operation_outcome_unknown" || failure.Message == "" || failure.Cause == "" || failure.MutationOutcome != "unknown" ||
+		failure.AuthorityApplicability != "not_evaluated" || failure.RetrySafe || failure.Replayability != "status_required" ||
+		failure.LineageID != terminalBurnLineage || failure.RequiredInputs == nil || failure.NextAction != "review.status" {
 		return fmt.Errorf("negotiated FINALIZE loser classification = %+v", failure)
 	}
 	return nil
@@ -166,7 +170,7 @@ func requireTerminalBurnLoser(observation Observation) error {
 func recordTerminalBurnObservation(run *journeyRun, observation Observation) error {
 	gitCalls := run.sandbox.gitCallsSince()
 	if gitCalls == nil {
-		return errors.New("Git subprocess count for direct FINALIZE observation was unavailable")
+		return errors.New("git subprocess count for direct FINALIZE observation was unavailable")
 	}
 	record := run.accumulator.observe(run.step, observation, gitCalls, false)
 	run.accumulator.records = append(run.accumulator.records, record)
