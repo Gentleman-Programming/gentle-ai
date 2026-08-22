@@ -112,6 +112,11 @@ func TestNegotiatedReviewStartContextIsFrozenWhileLegacyBytesStayPrivate(t *test
 			t.Fatalf("changed-workspace START leaked frozen authority context %q:\n%s", forbidden, conflictOutput.String())
 		}
 	}
+	for _, subject := range resumed.ArtifactSubjects {
+		if bytes.Contains(conflictOutput.Bytes(), []byte(subject.SubjectHash)) {
+			t.Fatalf("changed-workspace START leaked artifact subject %q:\n%s", subject.SubjectHash, conflictOutput.String())
+		}
+	}
 	after, err := os.ReadFile(store.StatePath())
 	if err != nil || !bytes.Equal(after, before) {
 		t.Fatalf("changed-workspace START conflict changed frozen authority: %v", err)
@@ -171,8 +176,13 @@ func TestNegotiatedReviewStartContextCoversCreatedReuseAndRecovery(t *testing.T)
 		decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
 		if status.Action != reviewtransaction.TargetStatusActionRecover || status.Authority == nil || status.Authority.LineageID != lineage ||
 			status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionCollect ||
-			status.NextTransition.ReasonCode != "recovery_authorization_required" {
+			status.NextTransition.ReasonCode != "recovery_authorization_required" || status.NextTransition.Collect == nil ||
+			len(status.NextTransition.Collect.Inputs) != 1 {
 			t.Fatalf("STATUS did not return the authoritative recovery route:\n%s", statusOutput.String())
+		}
+		input := status.NextTransition.Collect.Inputs[0]
+		if input.Schema != "gentle-ai.review-recovery-authorization/v1" || input.CaptureOperation != "external.authorize_recovery" {
+			t.Fatalf("recovery collection input = %q via %q, want the recovery authorization schema", input.Schema, input.CaptureOperation)
 		}
 		if status.NextTransition.Execute != nil && status.NextTransition.Execute.Operation == "review.start" {
 			t.Fatalf("STATUS incorrectly routed the changed candidate to review.start:\n%s", statusOutput.String())

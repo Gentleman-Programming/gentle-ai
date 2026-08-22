@@ -67,16 +67,20 @@ func TestExplicitFrozenReviewingStatusResumesPendingCandidateAfterDrift(t *testi
 		})
 	}
 	t.Run("atomic START conflict keeps the reviewing STATUS route and context private", func(t *testing.T) {
-		repo, _, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, nil)
+		repo, store, record := frozenReviewingStatusFixture(t, reviewtransaction.TargetCurrentChanges, nil)
 		writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'live drift'\n", 0o644)
 
 		status := explicitFrozenReviewingStatus(t, repo, record.State.LineageID)
 		if status.NextTransition == nil || status.NextTransition.ReasonCode != "reviewer_results_required" {
 			t.Fatalf("reviewing authority STATUS = %#v", status)
 		}
+		before, err := os.ReadFile(store.StatePath())
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		var output bytes.Buffer
-		err := RunReview(boundNegotiatedStartArgs(t, []string{
+		err = RunReview(boundNegotiatedStartArgs(t, []string{
 			"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--lineage", record.State.LineageID,
 		}), &output)
 		if err == nil {
@@ -93,6 +97,10 @@ func TestExplicitFrozenReviewingStatusResumesPendingCandidateAfterDrift(t *testi
 			if bytes.Contains(output.Bytes(), []byte(forbidden)) {
 				t.Fatalf("reviewing-authority START leaked frozen context %q:\n%s", forbidden, output.String())
 			}
+		}
+		after, err := os.ReadFile(store.StatePath())
+		if err != nil || !bytes.Equal(after, before) {
+			t.Fatalf("reviewing-authority START conflict changed exact authority: %v", err)
 		}
 	})
 }
