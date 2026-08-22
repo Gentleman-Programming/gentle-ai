@@ -3,9 +3,12 @@ package reviewtransaction
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -19,7 +22,124 @@ const (
 	compactRefuterResultFile           = "batch.json"
 	compactTargetedValidatorResultsDir = "targeted-validator-results"
 	compactTargetedValidatorResultFile = "result.json"
+	reviewResultReadinessAttempts      = 8
 )
+
+// ErrReviewResultStorageNotReady classifies compact role-result storage that
+// cannot currently uphold the private immutable publication contract.
+var ErrReviewResultStorageNotReady = errors.New("review result storage is not ready")
+
+// ReviewResultStorageNotReadyError preserves the concrete readiness failure.
+type ReviewResultStorageNotReadyError struct{ Cause error }
+
+func (err *ReviewResultStorageNotReadyError) Error() string {
+	return fmt.Sprintf("%v: %v", ErrReviewResultStorageNotReady, err.Cause)
+}
+
+func (err *ReviewResultStorageNotReadyError) Unwrap() []error {
+	return []error{ErrReviewResultStorageNotReady, err.Cause}
+}
+
+var (
+	createReviewResultReadinessDirectory = createPrivateRARDirectory
+	reviewResultStorageReadinessHook     = func(string) error { return nil }
+)
+
+// CheckRoleResultStorageReadiness proves the compact store can safely publish
+// and read private immutable role-result pairs without addressing a real slot.
+func (store CompactStore) CheckRoleResultStorageReadiness(ctx context.Context) (result error) {
+	if ctx == nil {
+		return reviewResultStorageNotReady(errors.New("readiness context is nil"))
+	}
+	if err := ctx.Err(); err != nil {
+		return reviewResultStorageNotReady(err)
+	}
+	var scratch string
+	defer func() {
+		if scratch == "" {
+			return
+		}
+		if err := cleanupReviewResultReadiness(scratch); err != nil {
+			result = errors.Join(result, reviewResultStorageNotReady(err))
+		}
+	}()
+	for range reviewResultReadinessAttempts {
+		name := make([]byte, 8)
+		if _, err := rand.Read(name); err != nil {
+			return reviewResultStorageNotReady(err)
+		}
+		candidate := filepath.Join(store.Dir, ".review-result-readiness-"+hex.EncodeToString(name))
+		created, err := createReviewResultReadinessDirectory(candidate)
+		if errors.Is(err, fs.ErrExist) || err == nil && !created {
+			continue
+		}
+		scratch = candidate
+		if err != nil {
+			return reviewResultStorageNotReady(err)
+		}
+		break
+	}
+	if scratch == "" {
+		return reviewResultStorageNotReady(errors.New("readiness scratch allocation exhausted"))
+	}
+	if err := reviewResultStorageReadinessHook("directory-created"); err != nil {
+		return reviewResultStorageNotReady(err)
+	}
+	payload := []byte("review-result-readiness\n")
+	digest := []byte(compactPreservedPayloadDigest(payload) + "\n")
+	payloadPath, digestPath := filepath.Join(scratch, "payload"), filepath.Join(scratch, "payload.sha256")
+	if err := publishPrivateRARImmutable(payloadPath, payload); err != nil {
+		return reviewResultStorageNotReady(err)
+	}
+	if err := reviewResultStorageReadinessHook("payload-published"); err != nil {
+		return reviewResultStorageNotReady(err)
+	}
+	if err := publishPrivateRARImmutable(digestPath, digest); err != nil {
+		return reviewResultStorageNotReady(err)
+	}
+	if err := reviewResultStorageReadinessHook("digest-published"); err != nil {
+		return reviewResultStorageNotReady(err)
+	}
+	var conflict *RARAuthorityConflictError
+	if err := publishPrivateRARImmutable(payloadPath, []byte("conflict\n")); !errors.As(err, &conflict) {
+		return reviewResultStorageNotReady(errors.Join(errors.New("immutable conflicting publication was not refused safely"), err))
+	}
+	readPayload, err := readPrivateCompactReviewerFile(payloadPath, int64(len(payload)))
+	if err != nil || !bytes.Equal(readPayload, payload) {
+		return reviewResultStorageNotReady(errors.Join(errors.New("readiness payload readback mismatch"), err))
+	}
+	readDigest, err := readPrivateCompactReviewerFile(digestPath, int64(len(digest)))
+	if err != nil || !bytes.Equal(readDigest, digest) {
+		return reviewResultStorageNotReady(errors.Join(errors.New("readiness digest readback mismatch"), err))
+	}
+	return nil
+}
+
+func reviewResultStorageNotReady(cause error) error {
+	return &ReviewResultStorageNotReadyError{Cause: cause}
+}
+
+func cleanupReviewResultReadiness(scratch string) error {
+	var cleanup error
+	cleanup = errors.Join(cleanup, reviewResultStorageReadinessHook("cleanup-started"))
+	for _, path := range []string{filepath.Join(scratch, "payload.sha256"), filepath.Join(scratch, "payload")} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			cleanup = errors.Join(cleanup, err)
+		}
+	}
+	if err := os.Remove(scratch); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		cleanup = errors.Join(cleanup, err)
+	}
+	if err := SyncReviewDirectory(filepath.Dir(scratch)); err != nil {
+		cleanup = errors.Join(cleanup, err)
+	}
+	if _, err := os.Lstat(scratch); err == nil {
+		cleanup = errors.Join(cleanup, errors.New("readiness scratch remains"))
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		cleanup = errors.Join(cleanup, fmt.Errorf("verify readiness scratch removal: %w", err))
+	}
+	return cleanup
+}
 
 type compactRoleResultSlotKind string
 
@@ -177,6 +297,9 @@ func (store CompactStore) captureAdmittedRoleResult(
 			return err
 		}
 		if err := prepare(state); err != nil {
+			return err
+		}
+		if err := store.CheckRoleResultStorageReadiness(ctx); err != nil {
 			return err
 		}
 		_, err = publishCompactRoleResultSlot(store.Dir, key, payload)

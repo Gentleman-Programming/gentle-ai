@@ -24,6 +24,75 @@ type compactReviewerCaptureFixture struct {
 	path    string
 }
 
+func TestReviewResultStoragePublication(t *testing.T) {
+	for _, role := range []string{"lens", "refuter"} {
+		t.Run(role+" revalidates after admission without publication", func(t *testing.T) {
+			fixture := newCompactReviewerCaptureFixture(t, "storage-change-"+role)
+			before, err := os.ReadFile(fixture.store.StatePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := reviewResultStorageReadinessHook
+			t.Cleanup(func() { reviewResultStorageReadinessHook = original })
+			changeStorage := func() {
+				reviewResultStorageReadinessHook = func(stage string) error {
+					if stage == "directory-created" {
+						return errors.New("storage changed after admission")
+					}
+					return nil
+				}
+			}
+			var captureErr error
+			var slotPath string
+			if role == "lens" {
+				request := fixture.request
+				request.PreparePublication = func(CompactState) error { changeStorage(); return nil }
+				_, captureErr = fixture.store.CaptureAdmittedReviewerResult(t.Context(), request)
+				slotPath = fixture.path
+			} else {
+				slotPath = filepath.Join(fixture.store.Dir, compactRefuterResultsDir, compactRefuterResultFile)
+				captureErr = fixture.store.CaptureAdmittedRefuterResult(t.Context(), CompactAdmittedRefuterResultRequest{
+					ExpectedRevision:   fixture.request.ExpectedRevision,
+					TargetIdentity:     fixture.request.TargetIdentity,
+					Payload:            []byte("{}\n"),
+					PreparePublication: func(CompactState) error { changeStorage(); return nil },
+				})
+			}
+			if !errors.Is(captureErr, ErrReviewResultStorageNotReady) {
+				t.Fatalf("capture error = %v", captureErr)
+			}
+			after, err := os.ReadFile(fixture.store.StatePath())
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("capture changed authority: %v", err)
+			}
+			for _, path := range []string{slotPath, slotPath + ".sha256", fixture.store.ReceiptPath()} {
+				if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
+					t.Fatalf("capture published %q: %v", path, err)
+				}
+			}
+		})
+	}
+
+	t.Run("stale binding wins before readiness", func(t *testing.T) {
+		fixture := newCompactReviewerCaptureFixture(t, "storage-stale-precedence")
+		checks := 0
+		original := reviewResultStorageReadinessHook
+		reviewResultStorageReadinessHook = func(string) error { checks++; return errors.New("must not run") }
+		t.Cleanup(func() { reviewResultStorageReadinessHook = original })
+		err := fixture.store.CaptureAdmittedRefuterResult(t.Context(), CompactAdmittedRefuterResultRequest{
+			ExpectedRevision: hash("stale-storage-binding"),
+			TargetIdentity:   fixture.request.TargetIdentity,
+			Payload:          []byte("{}\n"),
+			PreparePublication: func(CompactState) error {
+				return errors.New("stale authority invoked preparation")
+			},
+		})
+		if err == nil || checks != 0 {
+			t.Fatalf("stale capture error = %v, readiness checks = %d", err, checks)
+		}
+	})
+}
+
 func newCompactReviewerCaptureFixture(
 	t *testing.T,
 	lineage string,
