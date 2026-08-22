@@ -2058,7 +2058,13 @@ func pruneLegacyClaudeHook(root map[string]any, legacy string) {
 			continue
 		}
 		if len(kept) == 0 {
-			return
+			// Every inner hook in this item was legacy; drop the whole
+			// item. Falling through with `continue` (instead of `return`)
+			// is what lets the post-loop `len(pruned) == 0` check below
+			// delete the UserPromptSubmit key entirely when no outer
+			// entries survive. An early `return` here skips that branch
+			// and leaves a half-pruned, empty entry on disk.
+			continue
 		}
 		copyMap := make(map[string]any, len(itemMap))
 		for k, v := range itemMap {

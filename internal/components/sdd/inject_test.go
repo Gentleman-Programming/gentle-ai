@@ -7368,6 +7368,41 @@ func TestInject_ClaudeCodeInstallsReviewStopHook(t *testing.T) {
 // argument reconstruction, which is what we are verifying. The canonical
 // command line itself is platform-aware, so running under pwsh on Linux
 // exercises the same reconstruction logic as on Windows.
+
+// TestPruneLegacyClaudeHookDeletesUserPromptSubmitWhenAllEntriesPruned
+// documents the destructive edge case: if every inner hook under every outer
+// UserPromptSubmit entry matches the legacy literal, the prune removes all of
+// them and deletes the UserPromptSubmit key entirely. A user whose only
+// reason to have a UserPromptSubmit block was the legacy skill-registry hook
+// will see the whole key disappear. This is intentional — an empty
+// UserPromptSubmit block is semantically equivalent to no block — but the test
+// guards against silent behavioral drift.
+func TestPruneLegacyClaudeHookDeletesUserPromptSubmitWhenAllEntriesPruned(t *testing.T) {
+	legacy := `gentle-ai skill-registry refresh --quiet --no-gitignore --cwd "${CLAUDE_PROJECT_DIR:-$PWD}" || true`
+	root := map[string]any{
+		"hooks": map[string]any{
+			"UserPromptSubmit": []any{
+				map[string]any{
+					"matcher": "",
+					"hooks": []any{
+						map[string]any{"type": "command", "command": legacy},
+					},
+				},
+			},
+		},
+	}
+
+	pruneLegacyClaudeHook(root, legacy)
+
+	hooks, ok := root["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks key missing after prune: %v", root["hooks"])
+	}
+	if _, present := hooks["UserPromptSubmit"]; present {
+		t.Errorf("UserPromptSubmit key still present after pruning its only entry; want deleted: %v", hooks["UserPromptSubmit"])
+	}
+}
+
 func TestClaudeUserPromptSubmitHookExecutesPowerShellCommandWithSpecialChars(t *testing.T) {
 	pwshPath, err := exec.LookPath("pwsh")
 	if err != nil {
