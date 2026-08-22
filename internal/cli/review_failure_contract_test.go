@@ -139,6 +139,90 @@ func TestNegotiatedReviewContractFailuresArePreMutationAndLegacyErrorsStayCompat
 	}
 }
 
+func TestNegotiatedFinalizeParserFailuresArePreflight(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		args      []string
+		wantCause string
+	}{
+		{
+			name:      "unsupported flag",
+			args:      []string{"finalize", "--contract", ReviewIntegrationContractV1, "--base-ref", "origin/main"},
+			wantCause: "flag provided but not defined: -base-ref",
+		},
+		{
+			name:      "boolean flag has detached value",
+			args:      []string{"finalize", "--contract", ReviewIntegrationContractV1, "--failed", "true"},
+			wantCause: "boolean flag --failed takes --failed or --failed=true, not a separate value; got \"true\"",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := RunReview(tt.args, &output); err == nil {
+				t.Fatal("parser failure succeeded")
+			}
+			failure := decodeReviewIntegrationFailure(t, output.Bytes())
+			if failure.Operation != ReviewIntegrationOperationFinalize || failure.Phase != "preflight" ||
+				failure.Code != "invalid_request" || failure.MutationOutcome != ReviewMutationNotStarted ||
+				!failure.RetrySafe || failure.NextAction != "correct_request" ||
+				!strings.Contains(failure.Cause, tt.wantCause) {
+				t.Fatalf("parser failure = %#v", failure)
+			}
+		})
+	}
+
+	t.Run("equals boolean value reaches finalize processing", func(t *testing.T) {
+		repo := initReviewCLIRepo(t)
+		if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\ncandidate\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		started := startFacadeReview(t, repo)
+		evidence := filepath.Join(t.TempDir(), "evidence.txt")
+		if err := os.WriteFile(evidence, []byte("focused verification failed\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		args := []string{
+			"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
+			"--evidence", evidence, "--failed=true",
+		}
+		args = append(args, facadeReviewerResultArgs(t, repo, started)...)
+		var output bytes.Buffer
+		if err := RunReview(args, &output); err != nil {
+			t.Fatalf("--failed=true finalize: %v\n%s", err, output.String())
+		}
+		var result ReviewFacadeFinalizeResult
+		decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &result)
+		if result.State != reviewtransaction.StateEscalated {
+			t.Fatalf("--failed=true finalize state = %q, want escalated", result.State)
+		}
+		record, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record.State.State != reviewtransaction.StateEscalated {
+			t.Fatalf("--failed=true authoritative state = %q, want escalated", record.State.State)
+		}
+		var journal struct {
+			Attempts []reviewtransaction.FinalizeAttempt `json:"attempts"`
+		}
+		payload, err := os.ReadFile(store.FinalizeAttemptJournalPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(payload, &journal); err != nil {
+			t.Fatal(err)
+		}
+		if len(journal.Attempts) != 1 || journal.Attempts[0].Request.FailedDigest != reviewtransaction.FinalizeAttemptValueDigest("failed", true) {
+			t.Fatalf("--failed=true persisted finalize request = %#v", journal.Attempts)
+		}
+	})
+}
+
 func TestNegotiatedReviewV2FailureUsesSuccessorEnvelope(t *testing.T) {
 	var output bytes.Buffer
 	err := RunReview([]string{"start", "--contract", ReviewIntegrationContractV2, "unexpected"}, &output)
