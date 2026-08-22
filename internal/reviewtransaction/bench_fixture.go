@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // benchCrashAtPhaseFired makes the deterministic crash-position hook below
@@ -16,6 +17,7 @@ import (
 // following resume run are always separate processes, so no explicit reset
 // between them is needed or possible.
 var benchCrashAtPhaseFired bool
+var benchFinalizeAdmissionBarrierFired bool
 
 // init overrides compactReclaimPhaseHook — the exact seam
 // TestAuthorityDispositionResumeCrashPositionMatrix (authority_disposition_resume_test.go)
@@ -46,5 +48,36 @@ func init() {
 			}
 		}
 		return original(ctx, current, record)
+	}
+
+	// GENTLE_AI_BENCH_FINALIZE_ADMISSION_BARRIER is a bench-only process
+	// barrier. It publishes readiness, then lets the harness release this real
+	// FINALIZE after a competing process has completed the terminal burn.
+	originalFinalizeAdmissionHook := finalizeAttemptAdmissionHook
+	finalizeAttemptAdmissionHook = func(ctx context.Context, lineageID string) error {
+		if target := os.Getenv("GENTLE_AI_BENCH_FINALIZE_ADMISSION_BARRIER"); target != "" && !benchFinalizeAdmissionBarrierFired {
+			parts := strings.SplitN(target, "|", 3)
+			if len(parts) == 3 && parts[0] == lineageID {
+				benchFinalizeAdmissionBarrierFired = true
+				if err := os.WriteFile(parts[1], []byte("ready\n"), 0o600); err != nil {
+					return err
+				}
+				ticker := time.NewTicker(10 * time.Millisecond)
+				defer ticker.Stop()
+				for {
+					if _, err := os.Stat(parts[2]); err == nil {
+						return nil
+					} else if !os.IsNotExist(err) {
+						return err
+					}
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-ticker.C:
+					}
+				}
+			}
+		}
+		return originalFinalizeAdmissionHook(ctx, lineageID)
 	}
 }

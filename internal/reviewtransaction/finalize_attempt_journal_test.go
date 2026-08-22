@@ -267,6 +267,27 @@ func TestFinalizeAttemptCompletionSyncFailureIsSafelyReplayable(t *testing.T) {
 	}
 }
 
+func TestFinalizeAttemptLateAfterBurnCannotRecreateLineage(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state, store, _ := approvedCompactRevisionFixture(t, repo, "finalize-late-after-burn")
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := finalizeAttemptTestRequest(state.LineageID, record.Revision, "late attempt")
+	if err := BurnApprovedCompactAuthority(context.Background(), repo, state.LineageID, record.Revision); err != nil {
+		t.Fatalf("burn approved compact authority: %v", err)
+	}
+
+	if _, _, err := store.BeginFinalizeAttempt(context.Background(), request); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("late finalize attempt after burn = %v, want absent authority", err)
+	}
+	if _, err := os.Lstat(store.Dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("late finalize attempt recreated burned lineage: %v", err)
+	}
+}
+
 func finalizeAttemptTestRequest(lineage, revision, evidence string) FinalizeAttemptRequest {
 	request := FinalizeAttemptRequest{
 		LineageID: lineage, ExpectedRevision: revision,

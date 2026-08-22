@@ -19,6 +19,10 @@ const finalizeAttemptJournalSchema = "gentle-ai.review-finalize-attempt-journal/
 
 var writeFinalizeAttemptAtomic = writeAtomic
 
+// finalizeAttemptAdmissionHook is inert in product binaries. The bench_fixture
+// build uses it only to hold a real concurrent FINALIZE before lock admission.
+var finalizeAttemptAdmissionHook = func(context.Context, string) error { return nil }
+
 // FinalizeAttemptRequest is a content-bound FINALIZE invocation. Input paths
 // intentionally do not appear here: paths are transport, their payloads are
 // the authority-relevant request.
@@ -157,11 +161,21 @@ func (store CompactStore) ReconcileFinalizeAttempt(ctx context.Context, request 
 	if err := validateFinalizeAttemptRequest(store.lineageID, request); err != nil {
 		return FinalizeAttempt{}, false, err
 	}
+	if err := finalizeAttemptAdmissionHook(ctx, store.lineageID); err != nil {
+		return FinalizeAttempt{}, false, err
+	}
 	lock, err := acquireStoreLock(store.lockPath)
 	if err != nil {
 		return FinalizeAttempt{}, false, err
 	}
 	defer lock.release()
+	// The shared maintenance and compact version locks are held here, so this
+	// absence check cannot race a terminal burn. A late contender must not treat
+	// a burned lineage's missing journal as a fresh attempt: writing it would
+	// recreate authoritative lineage state below the already-burned path.
+	if _, err := os.Stat(store.StatePath()); err != nil {
+		return FinalizeAttempt{}, false, err
+	}
 	journal, err := store.loadFinalizeAttemptJournalLocked()
 	if err != nil {
 		return FinalizeAttempt{}, false, err
