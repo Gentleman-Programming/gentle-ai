@@ -474,6 +474,7 @@ const (
 	activationReasonApplied      = "managed OpenCode launcher activation is active"
 	activationReasonPathPending  = "managed OpenCode launcher was written but is not currently reachable through PATH"
 	activationReasonDeactivation = "deactivation does not require an OpenCode runtime probe"
+	profilePendingReason         = "OpenCode managed profile update is pending"
 )
 
 type launcherSnapshot struct {
@@ -484,12 +485,13 @@ type launcherSnapshot struct {
 }
 
 type profileChange struct {
-	path        string
-	before      launcherSnapshot
-	desired     []byte
-	changed     bool
-	writeResult filemerge.WriteResult
-	applied     bool
+	path          string
+	before        launcherSnapshot
+	desired       []byte
+	changed       bool
+	profileReason string
+	writeResult   filemerge.WriteResult
+	applied       bool
 }
 
 // ActivationPlan is a prepared, reversible launcher transaction. Preparation
@@ -565,9 +567,13 @@ func PrepareActivation(homeDir string, options ActivationOptions) (*ActivationPl
 			return nil, err
 		}
 		plan.profiles = []profileChange{change}
-		plan.effective = pathResolvesTo(options.Path, POSIXLauncherPath(homeDir), options.OS)
-		if !plan.effective {
-			plan.activationReason = "managed launcher is persisted for future login shells; start a new login shell before running opencode"
+		if change.profileReason != "" {
+			plan.activationReason = change.profileReason
+		} else {
+			plan.effective = pathResolvesTo(options.Path, POSIXLauncherPath(homeDir), options.OS)
+			if !plan.effective {
+				plan.activationReason = "managed launcher is persisted for future login shells; start a new login shell before running opencode"
+			}
 		}
 	}
 	for _, path := range paths {
@@ -613,7 +619,10 @@ func PrepareDeactivation(homeDir string, options ActivationOptions) (*Activation
 			if err != nil {
 				return nil, err
 			}
-			if change.changed {
+			if change.profileReason != "" {
+				plan.activationReason = change.profileReason
+			}
+			if change.changed || change.profileReason != "" {
 				plan.profiles = append(plan.profiles, change)
 			}
 		}
@@ -671,6 +680,9 @@ func (p *ActivationPlan) RestartRequired() bool {
 	if p == nil {
 		return false
 	}
+	if p.profileBlocked() {
+		return false
+	}
 	if p.action == activationActionOn {
 		return p.capability.Ready()
 	}
@@ -687,6 +699,9 @@ func (p *ActivationPlan) RestartGuidance() string {
 	if p == nil {
 		return ""
 	}
+	if p.profileBlocked() {
+		return ""
+	}
 	if p.capability.RestartGuidance != "" {
 		return p.capability.RestartGuidance
 	}
@@ -697,6 +712,15 @@ func (p *ActivationPlan) RestartGuidance() string {
 }
 
 // ChangedPaths returns paths changed by the last successful Apply call.
+func (p *ActivationPlan) profileBlocked() bool {
+	for _, change := range p.profiles {
+		if change.profileReason != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *ActivationPlan) ChangedPaths() []string {
 	if p == nil {
 		return nil
@@ -724,6 +748,10 @@ func (p *ActivationPlan) Apply() error {
 	for i := range p.profiles {
 		p.profiles[i].writeResult = filemerge.WriteResult{}
 		p.profiles[i].applied = false
+	}
+	if p.profileBlocked() {
+		p.applied = true
+		return nil
 	}
 	if p.action == activationActionOn {
 		if !p.capability.Ready() {
@@ -927,7 +955,7 @@ func loginProfile(homeDir, shell string) (string, bool) {
 		return filepath.Join(homeDir, ".zprofile"), true
 	case "bash":
 		path := filepath.Join(homeDir, ".bash_profile")
-		_, err := os.Stat(path)
+		_, err := os.Lstat(path)
 		return path, err == nil
 	default:
 		return "", false
@@ -943,35 +971,154 @@ func profileBlock(binDir string, endings ...string) string {
 }
 
 func addProfileChange(path, binDir string) (profileChange, error) {
-	before, err := readLauncherSnapshot(path)
+	before, reason, err := readProfileSnapshot(path)
 	if err != nil {
 		return profileChange{}, err
 	}
-	if hasProfileBlock(before.data, binDir) {
-		return profileChange{path: path, before: before}, nil
+	if reason != "" {
+		return profileChange{path: path, before: before, profileReason: reason}, nil
 	}
-	desired := append([]byte(nil), before.data...)
-	eol := profileLineEnding(desired)
-	if len(desired) > 0 && !bytes.HasSuffix(desired, []byte(eol)) {
-		desired = append(desired, eol...)
+	desired, changed, err := rewriteProfileBlock(before.data, binDir, false)
+	if err != nil {
+		return profileChange{path: path, before: before, profileReason: profileMarkerRefusal(path)}, nil
 	}
-	desired = append(desired, profileBlock(binDir, eol)...)
-	return profileChange{path: path, before: before, desired: desired, changed: true}, nil
+	return profileChange{path: path, before: before, desired: desired, changed: changed}, nil
 }
 
-func removeProfileChange(path, binDir string) (profileChange, error) {
-	before, err := readLauncherSnapshot(path)
+func removeProfileChange(path, _ string) (profileChange, error) {
+	before, reason, err := readProfileSnapshot(path)
 	if err != nil || !before.exists {
 		return profileChange{}, err
 	}
-	desired := append([]byte(nil), before.data...)
-	for _, eol := range []string{"\n", "\r\n"} {
-		desired = []byte(strings.ReplaceAll(string(desired), profileBlock(binDir, eol), ""))
+	if reason != "" {
+		return profileChange{path: path, before: before, profileReason: reason}, nil
 	}
-	if bytes.Equal(desired, before.data) {
-		return profileChange{path: path, before: before, desired: before.data}, nil
+	desired, changed, err := rewriteProfileBlock(before.data, "", true)
+	if err != nil {
+		return profileChange{path: path, before: before, profileReason: profileMarkerRefusal(path)}, nil
 	}
-	return profileChange{path: path, before: before, desired: desired, changed: true}, nil
+	return profileChange{path: path, before: before, desired: desired, changed: changed}, nil
+}
+
+func profileMarkerRefusal(path string) string {
+	return fmt.Sprintf("%s: login profile %q contains malformed, nested, unbalanced, or multiple managed launcher markers; no profile content was changed", profilePendingReason, path)
+}
+
+func profileSafetyReason(path string, info os.FileInfo) string {
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		return fmt.Sprintf("%s: login profile %q uses unsupported symlink topology; refusing to follow or mutate its target", profilePendingReason, path)
+	case !info.Mode().IsRegular():
+		return fmt.Sprintf("%s: login profile %q uses unsupported non-regular topology; refusing to modify it", profilePendingReason, path)
+	case info.Mode().Perm()&0o222 == 0:
+		return fmt.Sprintf("%s: login profile %q is read-only (mode %04o); refusing to modify it", profilePendingReason, path, info.Mode().Perm())
+	default:
+		return ""
+	}
+}
+
+func readProfileSnapshot(path string) (launcherSnapshot, string, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return launcherSnapshot{}, "", nil
+	}
+	if err != nil {
+		return launcherSnapshot{}, "", fmt.Errorf("inspect OpenCode shell profile %q: %w", path, err)
+	}
+	if reason := profileSafetyReason(path, info); reason != "" {
+		return launcherSnapshot{exists: true, mode: info.Mode().Perm()}, reason, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return launcherSnapshot{}, "", fmt.Errorf("read OpenCode shell profile %q: %w", path, err)
+	}
+	return launcherSnapshot{exists: true, data: data, mode: info.Mode().Perm()}, "", nil
+}
+
+type profileBlockRange struct {
+	start, end int
+	eol        string
+}
+
+var (
+	errMalformedProfile = errors.New("managed profile markers are malformed")
+	profileBlockPattern = regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(profileStart) + `\r?\nexport PATH='(([^'\r\n]|'\\'')*)':"\$PATH"\r?\n` + regexp.QuoteMeta(profileEnd) + `\r?\n`)
+)
+
+func parseManagedProfileBlock(data []byte) (*profileBlockRange, error) {
+	text := string(data)
+	if strings.Count(text, profileStart) == 0 && strings.Count(text, profileEnd) == 0 {
+		return nil, nil
+	}
+	if strings.Count(text, profileStart) != 1 || strings.Count(text, profileEnd) != 1 {
+		return nil, errMalformedProfile
+	}
+	matches := profileBlockPattern.FindStringSubmatchIndex(text)
+	if len(matches) < 4 {
+		return nil, errMalformedProfile
+	}
+	start, end := matches[0], matches[1]
+	raw := text[matches[2]:matches[3]]
+	binDir, ok := parseProfileExport("export PATH='" + raw + "':\"$PATH\"")
+	if !ok {
+		return nil, errMalformedProfile
+	}
+	eol := "\n"
+	if strings.HasPrefix(text[start+len(profileStart):], "\r\n") {
+		eol = "\r\n"
+	}
+	if text[start:end] != profileBlock(binDir, eol) {
+		return nil, errMalformedProfile
+	}
+	return &profileBlockRange{start: start, end: end, eol: eol}, nil
+}
+
+func parseProfileExport(line string) (string, bool) {
+	const prefix = "export PATH='"
+	const suffix = "':\"$PATH\""
+	if !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, suffix) {
+		return "", false
+	}
+	raw := line[len(prefix) : len(line)-len(suffix)]
+	if raw == "" {
+		return "", false
+	}
+	parts := strings.Split(raw, "'\\''")
+	for _, part := range parts {
+		if strings.Contains(part, "'") {
+			return "", false
+		}
+	}
+	binDir := strings.Join(parts, "'")
+	return binDir, shellQuote(binDir) == "'"+raw+"'"
+}
+
+func rewriteProfileBlock(data []byte, binDir string, remove bool) ([]byte, bool, error) {
+	block, err := parseManagedProfileBlock(data)
+	if err != nil {
+		return nil, false, err
+	}
+	if block == nil {
+		if remove {
+			return append([]byte(nil), data...), false, nil
+		}
+		desired := append([]byte(nil), data...)
+		eol := profileLineEnding(desired)
+		if len(desired) > 0 && !bytes.HasSuffix(desired, []byte(eol)) {
+			desired = append(desired, eol...)
+		}
+		desired = append(desired, profileBlock(binDir, eol)...)
+		return desired, true, nil
+	}
+	replacement := []byte(nil)
+	if !remove {
+		replacement = []byte(profileBlock(binDir, block.eol))
+	}
+	desired := make([]byte, 0, len(data)-(block.end-block.start)+len(replacement))
+	desired = append(desired, data[:block.start]...)
+	desired = append(desired, replacement...)
+	desired = append(desired, data[block.end:]...)
+	return desired, !bytes.Equal(desired, data), nil
 }
 
 func RemoveManagedProfileBlock(path, binDir string) (bool, error) {
@@ -1034,10 +1181,6 @@ func profileLineEnding(data []byte) string {
 		return "\r\n"
 	}
 	return "\n"
-}
-
-func hasProfileBlock(data []byte, binDir string) bool {
-	return bytes.Contains(data, []byte(profileBlock(binDir))) || bytes.Contains(data, []byte(profileBlock(binDir, "\r\n")))
 }
 
 func profileMode(change *profileChange) os.FileMode {
