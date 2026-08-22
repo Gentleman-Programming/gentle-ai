@@ -652,14 +652,120 @@ func TestActivationIsIdempotentAndOffRemovesOnlyOwnedFiles(t *testing.T) {
 	if err := os.WriteFile(path, before, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Deactivate(home, options); err != nil {
+	removed, err := Deactivate(home, options)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got, want := removed.ChangedPaths(), []string{path, filepath.Join(home, ".zprofile")}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("successful deactivation changed paths = %v, want %v", got, want)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("owned launcher stat error = %v, want absent", err)
 	}
-	if _, err := Deactivate(home, options); err != nil {
+	noOp, err := Deactivate(home, options)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got := noOp.ChangedPaths(); len(got) != 0 {
+		t.Fatalf("no-op deactivation changed paths = %v, want none", got)
+	}
+}
+
+func TestDeactivationTreatsConcurrentDeletionAsFailure(t *testing.T) {
+	home := t.TempDir()
+	path := POSIXLauncherPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(posixLauncher("/old/opencode")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	removeCalled := false
+	plan, err := PrepareDeactivation(home, ActivationOptions{
+		OS: "linux",
+		RemoveFile: func(candidate string) error {
+			if candidate != path {
+				t.Fatalf("RemoveFile path = %q, want %q", candidate, path)
+			}
+			removeCalled = true
+			if err := os.Remove(candidate); err != nil {
+				return err
+			}
+			return os.ErrNotExist
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err == nil || !strings.Contains(err.Error(), "disappeared after revalidation during removal") {
+		t.Fatalf("Apply() error = %v, want concurrent-deletion revalidation failure", err)
+	}
+	if !removeCalled {
+		t.Fatal("RemoveFile was not called")
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("externally deleted launcher = %v, want absent", err)
+	}
+	if got := plan.ChangedPaths(); len(got) != 0 {
+		t.Fatalf("ChangedPaths() = %v, want no successful removals", got)
+	}
+}
+
+func TestWindowsDeactivationRollbackPreservesConcurrentDeletion(t *testing.T) {
+	home := t.TempDir()
+	first := WindowsCMDPath(home)
+	second := WindowsPS1Path(home)
+	if err := os.MkdirAll(filepath.Dir(first), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(first, []byte(windowsCMDLauncher(`C:\old\opencode.exe`)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte(windowsPS1Launcher(`C:\old\opencode.exe`)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	removeCalls := 0
+	plan, err := PrepareDeactivation(home, ActivationOptions{
+		OS: "windows",
+		RemoveFile: func(path string) error {
+			removeCalls++
+			if path == second {
+				if _, err := os.Lstat(first); !os.IsNotExist(err) {
+					t.Fatalf("earlier launcher before later deletion = %v, want absent", err)
+				}
+			}
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+			if path == second {
+				return os.ErrNotExist
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err == nil || !strings.Contains(err.Error(), "disappeared after revalidation during removal") {
+		t.Fatalf("Apply() error = %v, want concurrent-deletion revalidation failure", err)
+	}
+	if got, want := removeCalls, 2; got != want {
+		t.Fatalf("RemoveFile calls = %d, want %d", got, want)
+	}
+	got, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := windowsCMDLauncher(`C:\old\opencode.exe`); string(got) != want {
+		t.Fatalf("plan-owned earlier launcher = %q, want restored snapshot %q", got, want)
+	}
+	if _, err := os.Lstat(second); !os.IsNotExist(err) {
+		t.Fatalf("externally deleted later launcher = %v, want absent", err)
+	}
+	if got := plan.ChangedPaths(); len(got) != 0 {
+		t.Fatalf("ChangedPaths() = %v, want no pending rollback state", got)
 	}
 }
 
