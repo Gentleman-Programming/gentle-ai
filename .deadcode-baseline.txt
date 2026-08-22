@@ -16,6 +16,15 @@ internal/agents/pi/capabilities.go	hasTopLevelAlternativeOperationRepresentation
 internal/agents/pi/capabilities.go	malformedCapabilities
 internal/agents/pi/capabilities.go	requiredCapabilitiesOperation
 internal/agents/pi/capabilities.go	validateCapabilitiesOperations
+internal/agents/pi/capability_probe.go	RunBoundedModelRoutingProcess
+internal/agents/pi/capability_probe.go	TransportError.Error
+internal/agents/pi/capability_probe.go	TransportError.Is
+internal/agents/pi/capability_probe.go	TransportError.Unwrap
+internal/agents/pi/capability_probe.go	boundedTransportOutput.Write
+internal/agents/pi/capability_probe.go	cloneTransportBytes
+internal/agents/pi/capability_probe.go	drainTransportOutput
+internal/agents/pi/capability_probe.go	transportError
+internal/agents/pi/capability_probe_process_unix.go	runModelRoutingProcess
 internal/agents/pi/model_routing.go	BinError.Error
 internal/agents/pi/model_routing.go	BinError.Unwrap
 internal/agents/pi/model_routing.go	ManifestError.Error
